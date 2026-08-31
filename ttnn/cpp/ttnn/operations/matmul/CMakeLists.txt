@@ -9,70 +9,19 @@ set(MATMUL_REGISTRY_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/device/config/registr
 set(MATMUL_REGISTRY_GENERATED_DIR ${MATMUL_REGISTRY_SOURCE_DIR}/checked_in)
 set(MATMUL_REGISTRY_GENERATED_SOURCE ${MATMUL_REGISTRY_GENERATED_DIR}/matmul_registry_data.cpp)
 set(MATMUL_REGISTRY_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/matmul_registry)
-set(MATMUL_REGISTRY_BUILD_HEADER ${MATMUL_REGISTRY_BUILD_DIR}/matmul_registry_build_attestation.hpp)
-set(MATMUL_REGISTRY_BUILD_EMITTER ${MATMUL_REGISTRY_SOURCE_DIR}/codegen/emit_build_attestation.py)
-set(MATMUL_REGISTRY_SEMANTIC_MANIFEST ${MATMUL_REGISTRY_SOURCE_DIR}/semantic_dependencies.txt)
-
-file(STRINGS ${MATMUL_REGISTRY_SEMANTIC_MANIFEST} MATMUL_REGISTRY_SEMANTIC_PATHS)
-list(FILTER MATMUL_REGISTRY_SEMANTIC_PATHS EXCLUDE REGEX "^[ \t]*(#|$)")
-set(MATMUL_REGISTRY_SEMANTIC_DEPENDENCIES)
-foreach(path IN LISTS MATMUL_REGISTRY_SEMANTIC_PATHS)
-    list(APPEND MATMUL_REGISTRY_SEMANTIC_DEPENDENCIES ${PROJECT_SOURCE_DIR}/${path})
-endforeach()
-
-set(MATMUL_REGISTRY_BUILD_FACT_ARGUMENTS)
-foreach(
-    fact
-    IN
-    ITEMS
-        cmake_build_type=${CMAKE_BUILD_TYPE}
-        cmake_cxx_compiler_id=${CMAKE_CXX_COMPILER_ID}
-        cmake_cxx_compiler_target=${CMAKE_CXX_COMPILER_TARGET}
-        cmake_cxx_compiler_version=${CMAKE_CXX_COMPILER_VERSION}
-        cmake_cxx_flags=${CMAKE_CXX_FLAGS}
-        cmake_cxx_flags_debug=${CMAKE_CXX_FLAGS_DEBUG}
-        cmake_cxx_flags_release=${CMAKE_CXX_FLAGS_RELEASE}
-        cmake_cxx_flags_relwithdebinfo=${CMAKE_CXX_FLAGS_RELWITHDEBINFO}
-        cmake_cxx_standard=${CMAKE_CXX_STANDARD}
-        cmake_system_name=${CMAKE_SYSTEM_NAME}
-        cmake_system_processor=${CMAKE_SYSTEM_PROCESSOR}
-        enable_code_timers=${ENABLE_CODE_TIMERS}
-        enable_distributed=${ENABLE_DISTRIBUTED}
-        tt_enable_light_metal_trace=${TT_ENABLE_LIGHT_METAL_TRACE}
-        tt_enable_lto=${TT_ENABLE_LTO}
-        tt_metal_skip_linking=${TT_METAL_SKIP_LINKING}
-        tt_metal_use_emule=${TT_METAL_USE_EMULE}
-        tt_umd_build_simulation=${TT_UMD_BUILD_SIMULATION}
-        tt_unity_builds=${TT_UNITY_BUILDS}
-        tt_use_system_sfpi=${TT_USE_SYSTEM_SFPI}
-)
-    list(
-        APPEND
-        MATMUL_REGISTRY_BUILD_FACT_ARGUMENTS
-        --fact
-        ${fact}
-    )
-endforeach()
-
-add_custom_command(
-    OUTPUT
-        ${MATMUL_REGISTRY_BUILD_HEADER}
-    COMMAND
-        ${Python3_EXECUTABLE} ${MATMUL_REGISTRY_BUILD_EMITTER} --root ${PROJECT_SOURCE_DIR} --manifest
-        ${MATMUL_REGISTRY_SEMANTIC_MANIFEST} --header ${MATMUL_REGISTRY_BUILD_HEADER}
-        ${MATMUL_REGISTRY_BUILD_FACT_ARGUMENTS}
-    DEPENDS
-        ${MATMUL_REGISTRY_BUILD_EMITTER}
-        ${MATMUL_REGISTRY_SEMANTIC_MANIFEST}
-        ${MATMUL_REGISTRY_SEMANTIC_DEPENDENCIES}
-    VERBATIM
-)
-add_custom_target(matmul_registry_build_attestation DEPENDS ${MATMUL_REGISTRY_BUILD_HEADER})
-add_dependencies(ttnn_op_matmul matmul_registry_build_attestation)
 
 # Registry promotion remains an offline release step. Normal TTNN builds never
 # regenerate or parse the reviewed table; they only emit private running-build
 # digests from the closed semantic manifest and build facts above.
+#
+# The four static_asserts in the generated table walk every entry at compile
+# time, which exceeds the stock constexpr step budget at this table size. The
+# flag is a ceiling, not an allocation: it costs nothing when it is not reached.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(MATMUL_REGISTRY_CONSTEXPR_BUDGET -fconstexpr-steps=200000000)
+else()
+    set(MATMUL_REGISTRY_CONSTEXPR_BUDGET -fconstexpr-ops-limit=200000000)
+endif()
 set_source_files_properties(
     ${MATMUL_REGISTRY_GENERATED_SOURCE}
     PROPERTIES
@@ -80,6 +29,8 @@ set_source_files_properties(
             TRUE
         SKIP_UNITY_BUILD_INCLUSION
             ON
+        COMPILE_OPTIONS
+            "${MATMUL_REGISTRY_CONSTEXPR_BUDGET}"
 )
 
 tt_reuse_precompile_headers(ttnn_op_matmul TTNN::PCHFull)

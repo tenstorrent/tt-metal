@@ -17,7 +17,6 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
-#include "ttnn/operations/matmul/device/config/registry/matmul_registry_compatibility.hpp"
 #include "ttnn/operations/matmul/device/config/registry/matmul_registry_exact.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 
@@ -52,7 +51,6 @@ enum class ResolutionReason : std::uint8_t {
     UnsupportedSemantics,
     IncompleteRequest,
     InconsistentRequest,
-    CompatibilityUnavailable,
     DeviceAttestationUnavailable,
     DeviceQueryFailed,
     DeviceUninitialized,
@@ -119,7 +117,6 @@ bool has_nondefault_v1_tile_transpose(const tt::tt_metal::Tile& tile) noexcept;
 struct Eligibility {
     CallSemantics call;
     IoContractStatus io_contract_status = IoContractStatus::Resolved;
-    CompatibilityStatus compatibility_status = CompatibilityStatus::Compatible;
     bool trace_capture_active = false;
     bool has_program_config = false;
     bool has_compute_kernel_config = false;
@@ -193,7 +190,7 @@ struct DeviceRequest {
 struct MatmulRegistryRequest {
     static constexpr std::size_t kMaxActivationParameters = 8;
 
-    std::uint32_t schema_version = 1;
+    std::uint32_t schema_version = compact::kKeySchemaVersion;
     CallSemantics call;
     WorkloadRequest workload;
     TensorRequest input_a;
@@ -210,6 +207,11 @@ struct MatmulRegistryRequest {
     std::optional<std::uint32_t> activation_op = std::nullopt;
     std::array<std::uint32_t, kMaxActivationParameters> activation_param_f32_bits{};
     std::uint8_t activation_param_count = 0;
+    // A caller-supplied compute kernel config extends the exact lookup key. A
+    // measured recipe is only evidence for the CKC it was measured with, so an
+    // explicit caller CKC must equal the entry's for the recipe to apply.
+    // Absent (the common case) the registry still supplies the entry's CKC.
+    std::optional<compact::ComputeKernelDescriptor> compute_kernel_config = std::nullopt;
 
     bool operator==(const MatmulRegistryRequest&) const = default;
 };
@@ -226,8 +228,7 @@ RegistryRequestInspection inspect_registry_request(
     CallSemantics call_semantics,
     const ttnn::prim::MatmulParams& parameters,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
-    bool trace_capture_active,
-    RegistryCompatibilityProvider compatibility_provider = production_registry_compatibility);
+    bool trace_capture_active);
 
 std::optional<compact::KeyDescriptor> compact_registry_key(const MatmulRegistryRequest& request) noexcept;
 
@@ -276,6 +277,10 @@ std::optional<MatmulProgramConfig> materialize_registry_program_config(
     std::optional<compact::ComputeKernelDescriptor> compute_kernel_config);
 std::optional<DeviceComputeKernelConfig> materialize_registry_compute_kernel_config(
     const compact::ComputeKernelDescriptor& descriptor);
+// Inverse of the above. Returns nullopt for a config the compact key cannot
+// spell, which keeps such calls on the legacy path instead of mis-keying them.
+std::optional<compact::ComputeKernelDescriptor> compact_compute_kernel_config(
+    const DeviceComputeKernelConfig& config) noexcept;
 
 Resolution resolve_with_compact_table_for_testing(
     const MatmulRegistryRequest& request,
@@ -308,12 +313,6 @@ struct StatsSnapshot {
     bool mode_is_frozen = false;
     Mode frozen_mode = Mode::Off;
     std::size_t exact_entry_count = 0;
-    std::uint16_t compatibility_schema_version = 0;
-    compact::Sha256 expected_semantic_source_sha256{};
-    compact::Sha256 expected_build_identity_sha256{};
-    compact::Sha256 expected_runtime_capability_sha256{};
-    compact::Sha256 actual_semantic_source_sha256{};
-    compact::Sha256 actual_build_identity_sha256{};
     std::array<DomainStatsSnapshot, kOperationDomainCount> domains{};
 };
 

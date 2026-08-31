@@ -21,8 +21,7 @@ RegistryRequestInspection inspect_registry_request(
     const CallSemantics call_semantics,
     const ttnn::prim::MatmulParams& parameters,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
-    const bool trace_capture_active,
-    const RegistryCompatibilityProvider compatibility_provider) {
+    const bool trace_capture_active) {
     const auto io_contract = resolve_matmul_io_contract(IoContractRequest{
         .input_a_dtype = input_tensor_a.dtype(),
         .input_a_tile = input_tensor_a.tensor_spec().tile(),
@@ -77,9 +76,6 @@ RegistryRequestInspection inspect_registry_request(
         return inspection;
     }
     const auto device_arch = devices.front()->arch();
-    inspection.eligibility.compatibility_status = compatibility_provider != nullptr
-                                                      ? compatibility_provider(*device_a)
-                                                      : CompatibilityStatus::DeviceAttestationUnavailable;
 
     const auto a_logical = utilities::get_matmul_tensor_logical_shape(input_tensor_a, parameters.transpose_a);
     const auto b_logical = utilities::get_matmul_tensor_logical_shape(input_tensor_b, parameters.transpose_b);
@@ -115,8 +111,17 @@ RegistryRequestInspection inspect_registry_request(
         }
     }
 
+    std::optional<compact::ComputeKernelDescriptor> compute_kernel_config;
+    if (parameters.compute_kernel_config.has_value()) {
+        compute_kernel_config = compact_compute_kernel_config(*parameters.compute_kernel_config);
+        if (!compute_kernel_config.has_value()) {
+            // Unspellable in the compact key: stay on the legacy path.
+            return inspection;
+        }
+    }
+
     inspection.request = MatmulRegistryRequest{
-        .schema_version = 1,
+        .schema_version = compact::kKeySchemaVersion,
         .call = call_semantics,
         .workload =
             WorkloadRequest{
@@ -157,6 +162,7 @@ RegistryRequestInspection inspect_registry_request(
         .activation_op = activation_op,
         .activation_param_f32_bits = activation_params,
         .activation_param_count = activation_param_count,
+        .compute_kernel_config = compute_kernel_config,
     };
     return inspection;
 }
@@ -221,16 +227,17 @@ bool try_apply_registry_parameters(
         return false;
     }
 
+    auto caller_compute_kernel_config = parameters.compute_kernel_config;
     try {
-        // Preflight proved both fields were absent. Commit only the paired
-        // registry-owned axes; caller-owned state never participates in this
-        // assignment and a partial failure can restore the proven empty state.
+        // Preflight proved program_config absent, and lookup proved any
+        // caller CKC equals the entry's, so this assignment is either a fill
+        // or a no-op. A partial failure restores the caller's original state.
         parameters.program_config = std::move(dispatch.materialized_parameters->program_config);
         parameters.compute_kernel_config = dispatch.materialized_parameters->compute_kernel_config;
         return true;
     } catch (...) {
         parameters.program_config.reset();
-        parameters.compute_kernel_config.reset();
+        parameters.compute_kernel_config = std::move(caller_compute_kernel_config);
         circuit_break_domain(call_semantics.domain);
         return false;
     }

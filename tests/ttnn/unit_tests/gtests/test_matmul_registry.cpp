@@ -42,21 +42,26 @@ CallSemantics semantics(const OperationDomain domain) {
     return domain == OperationDomain::Addmm ? addmm_call_semantics(1.0F, 0.0F) : CallSemantics{.domain = domain};
 }
 
-MatmulRegistryRequest request(const OperationDomain domain = OperationDomain::DenseMatmul) {
+// A caller-supplied compute kernel config is a key axis under schema 2, so it
+// belongs on the request rather than being declined before lookup.
+MatmulRegistryRequest request(
+    const OperationDomain domain = OperationDomain::DenseMatmul,
+    const std::optional<compact::ComputeKernelDescriptor> caller_kernel = std::nullopt) {
     return MatmulRegistryRequest{
-        .schema_version = 1,
+        .schema_version = 2,
         .call = semantics(domain),
         .workload = {.logical_m = 64, .logical_k = 64, .logical_n = 64, .padded_m = 64, .padded_k = 64, .padded_n = 64},
         .input_a = tensor_request(),
         .input_b = tensor_request(),
         .output = tensor_request(),
-        .device = {
-            .architecture = static_cast<std::uint32_t>(tt::ARCH::BLACKHOLE),
-            .device_count = 1,
-            .mesh_rows = 1,
-            .mesh_cols = 1,
-            .compute_grid_x = 13,
-            .compute_grid_y = 10}};
+        .device =
+            {.architecture = static_cast<std::uint32_t>(tt::ARCH::BLACKHOLE),
+             .device_count = 1,
+             .mesh_rows = 1,
+             .mesh_cols = 1,
+             .compute_grid_x = 13,
+             .compute_grid_y = 10},
+        .compute_kernel_config = caller_kernel};
 }
 
 MatmulRegistryRequest checked_in_request(const OperationDomain domain = OperationDomain::DenseMatmul) {
@@ -68,8 +73,8 @@ MatmulRegistryRequest checked_in_request(const OperationDomain domain = Operatio
     return result;
 }
 
-Eligibility eligibility(const OperationDomain domain = OperationDomain::DenseMatmul) {
-    return Eligibility{.call = semantics(domain)};
+Eligibility eligibility(const OperationDomain domain = OperationDomain::DenseMatmul, const bool caller_kernel = false) {
+    return Eligibility{.call = semantics(domain), .has_compute_kernel_config = caller_kernel};
 }
 
 compact::ComputeKernelDescriptor kernel(const compact::ThrottleLevel throttle = compact::ThrottleLevel::NoThrottle) {
@@ -157,7 +162,7 @@ compact::ProgramConfigDescriptor multicast_2d_program() {
 compact::TableMetadata metadata(const bool exact = true) {
     return compact::TableMetadata{
         .lock_schema_version = 2,
-        .key_schema_version = 1,
+        .key_schema_version = 2,
         .exact_recipe_evidence_schema_version = exact ? std::uint16_t{2} : std::uint16_t{0},
         .matmul_kernel_equivalence_schema_version = exact ? std::uint16_t{1} : std::uint16_t{0},
         .content_sha256 = digest(1),
@@ -171,6 +176,9 @@ compact::ProgramConfigExactEntry exact_entry(
     const std::optional<std::uint16_t> grid_x = std::nullopt) {
     auto key = *compact_registry_key(runtime_request);
     key.compute_grid_x = grid_x.value_or(key.compute_grid_x);
+    // Schema 2 keys the compute-kernel knobs, and compact::entries_bind_key_compute_kernel
+    // requires every entry's key to name exactly the knobs its recipe was measured at.
+    key.compute_kernel = ckc;
     return compact::ProgramConfigExactEntry{
         .entry_id = digest(11), .key = key, .program_config = program, .compute_kernel_config = ckc};
 }
@@ -186,18 +194,20 @@ TEST(MatmulConfigRegistry, BlackholeKeyUsesNativeArchitectureAndPortablePhysical
 
 TEST(MatmulConfigRegistry, ExactMatchPreservesHarvestedGridCohorts) {
     auto live = request();
+    // The three cohorts share one knob vector, so the harvested grid is the only
+    // axis separating them; the program config is what identifies the winner.
     const std::array entries{
-        exact_entry(live, reuse_program(2), kernel(compact::ThrottleLevel::Throttle1), 11),
-        exact_entry(live, reuse_program(2), kernel(compact::ThrottleLevel::Throttle2), 12),
-        exact_entry(live, reuse_program(2), kernel(compact::ThrottleLevel::Throttle3), 13)};
+        exact_entry(live, reuse_program(2), kernel(), 11),
+        exact_entry(live, reuse_program(3), kernel(), 12),
+        exact_entry(live, reuse_program(4), kernel(), 13)};
     for (const std::uint32_t grid_x : {11U, 12U, 13U}) {
         live.device.compute_grid_x = grid_x;
         const auto result = resolve_with_compact_table_for_testing(live, eligibility(), metadata(), entries);
         EXPECT_EQ(result.reason, ResolutionReason::CertifiedMatch);
         ASSERT_TRUE(result.program_config.has_value());
-        EXPECT_EQ(result.program_config->compute_grid_x, 2);
+        EXPECT_EQ(result.program_config->compute_grid_x, grid_x - 9);
         ASSERT_TRUE(result.compute_kernel_config.has_value());
-        EXPECT_EQ(result.compute_kernel_config->throttle_level, static_cast<compact::ThrottleLevel>(grid_x - 10));
+        EXPECT_EQ(*result.compute_kernel_config, kernel());
     }
     live.device.compute_grid_x = 10;
     EXPECT_EQ(
@@ -217,13 +227,15 @@ TEST(MatmulConfigRegistry, ExactArchitectureNeverCrossMatches) {
 
 TEST(MatmulConfigRegistry, KernelEquivalentPublicWrappersReuseDenseMeasurements) {
     const auto dense = request();
-    const auto entry = exact_entry(dense, reuse_program(2), kernel(compact::ThrottleLevel::Throttle3));
+    const auto entry = exact_entry(dense, reuse_program(4));
     for (const auto domain : {OperationDomain::Linear, OperationDomain::Addmm}) {
         const auto result = resolve_with_compact_table_for_testing(
             request(domain), eligibility(domain), metadata(), std::span{&entry, std::size_t{1}});
         EXPECT_EQ(result.reason, ResolutionReason::CertifiedMatch);
+        ASSERT_TRUE(result.program_config.has_value());
+        EXPECT_EQ(result.program_config->compute_grid_x, 4);
         ASSERT_TRUE(result.compute_kernel_config.has_value());
-        EXPECT_EQ(result.compute_kernel_config->throttle_level, compact::ThrottleLevel::Throttle3);
+        EXPECT_EQ(*result.compute_kernel_config, kernel());
     }
 }
 
@@ -281,22 +293,20 @@ TEST(MatmulConfigRegistry, KernelEquivalentWrapperFallbackStillFailsClosedBefore
 TEST(MatmulConfigRegistry, OperationSpecificRecipePrecedesDenseWrapperFallback) {
     const auto dense = request();
     const auto linear = request(OperationDomain::Linear);
-    const std::array entries{
-        exact_entry(dense, reuse_program(2), kernel(compact::ThrottleLevel::Throttle1)),
-        exact_entry(linear, reuse_program(2), kernel(compact::ThrottleLevel::Throttle4))};
+    const std::array entries{exact_entry(dense, reuse_program(2)), exact_entry(linear, reuse_program(4))};
     const auto result =
         resolve_with_compact_table_for_testing(linear, eligibility(OperationDomain::Linear), metadata(), entries);
     EXPECT_EQ(result.reason, ResolutionReason::CertifiedMatch);
-    ASSERT_TRUE(result.compute_kernel_config.has_value());
-    EXPECT_EQ(result.compute_kernel_config->throttle_level, compact::ThrottleLevel::Throttle4);
+    ASSERT_TRUE(result.program_config.has_value());
+    EXPECT_EQ(result.program_config->compute_grid_x, 4);
 
     auto unproven = metadata();
     unproven.matmul_kernel_equivalence_schema_version = 0;
     const auto direct_result =
         resolve_with_compact_table_for_testing(linear, eligibility(OperationDomain::Linear), unproven, entries);
     EXPECT_EQ(direct_result.reason, ResolutionReason::CertifiedMatch);
-    ASSERT_TRUE(direct_result.compute_kernel_config.has_value());
-    EXPECT_EQ(direct_result.compute_kernel_config->throttle_level, compact::ThrottleLevel::Throttle4);
+    ASSERT_TRUE(direct_result.program_config.has_value());
+    EXPECT_EQ(direct_result.program_config->compute_grid_x, 4);
 }
 
 TEST(MatmulConfigRegistry, ExactKeyBindsBothInputAndOutputDtypes) {
@@ -323,11 +333,34 @@ TEST(MatmulConfigRegistry, ExactKeyBindsBothInputAndOutputDtypes) {
 
 TEST(MatmulConfigRegistry, ExactCarriesPairedRecipe) {
     const auto req = request();
-    const auto entry = exact_entry(req, reuse_program(2), kernel(compact::ThrottleLevel::Throttle3));
+    const auto entry = exact_entry(req, reuse_program(2));
     const auto result = resolve_with_compact_table_for_testing(req, eligibility(), metadata(), {&entry, 1});
     EXPECT_EQ(result.reason, ResolutionReason::CertifiedMatch);
+    ASSERT_TRUE(result.program_config.has_value());
+    EXPECT_EQ(result.program_config->compute_grid_x, 2);
     ASSERT_TRUE(result.compute_kernel_config.has_value());
-    EXPECT_EQ(result.compute_kernel_config->throttle_level, compact::ThrottleLevel::Throttle3);
+    EXPECT_EQ(*result.compute_kernel_config, entry.compute_kernel_config);
+}
+
+// Schema 2 moved the compute-kernel knobs into the key. A caller-supplied
+// config is therefore matched, not bypassed: it answers only from a measurement
+// taken at those knobs, and falls back when none exists.
+TEST(MatmulConfigRegistry, CallerComputeKernelConfigIsKeyedAndMatchedExactly) {
+    const auto measured = kernel(compact::ThrottleLevel::Throttle4);
+    const auto asked = request(OperationDomain::DenseMatmul, measured);
+    const auto entry = exact_entry(asked, reuse_program(2), measured);
+    const auto eligible = eligibility(OperationDomain::DenseMatmul, true);
+
+    const auto hit = resolve_with_compact_table_for_testing(asked, eligible, metadata(), {&entry, 1});
+    EXPECT_EQ(hit.reason, ResolutionReason::CertifiedMatch);
+    ASSERT_TRUE(hit.compute_kernel_config.has_value());
+    EXPECT_EQ(*hit.compute_kernel_config, measured);
+
+    const auto other = request(OperationDomain::DenseMatmul, kernel(compact::ThrottleLevel::Throttle5));
+    const auto miss = resolve_with_compact_table_for_testing(other, eligible, metadata(), {&entry, 1});
+    EXPECT_EQ(miss.reason, ResolutionReason::EmptyRegistry);
+    EXPECT_FALSE(miss.program_config.has_value());
+    EXPECT_FALSE(miss.compute_kernel_config.has_value());
 }
 
 TEST(MatmulConfigRegistry, EmptyAndMalformedArtifactsFallBack) {
@@ -352,10 +385,11 @@ TEST(MatmulConfigRegistry, EveryExplicitTuningAxisBypassesBeforeLookup) {
     RuntimeStateReset reset;
     const auto req = request();
     ttnn::prim::MatmulParams legacy;
-    for (const auto axis : {0, 1, 2}) {
+    // A caller compute kernel config is no longer an override axis: it
+    // extends the exact lookup key and is matched during lookup instead.
+    for (const auto axis : {0, 2}) {
         auto eligible = eligibility();
         eligible.has_program_config = axis == 0;
-        eligible.has_compute_kernel_config = axis == 1;
         eligible.has_user_core_grid = axis == 2;
         EXPECT_EQ(preflight_v1_eligibility(eligible), ResolutionReason::ExplicitOverride);
         const auto dispatched = resolve_for_dispatch(Mode::On, req, eligible, legacy);
@@ -502,9 +536,11 @@ TEST(MatmulConfigRegistry, ComputeKernelMaterializationCoversThrottleZeroThrough
 }
 
 TEST(MatmulConfigRegistry, PairedMaterializationPreservesAllCallerOwnedState) {
-    const auto req = request();
-    const auto entry = exact_entry(req, multicast_2d_program(), kernel(compact::ThrottleLevel::Throttle4));
-    const auto selected = resolve_with_compact_table_for_testing(req, eligibility(), metadata(), {&entry, 1});
+    const auto ckc = kernel(compact::ThrottleLevel::Throttle4);
+    const auto req = request(OperationDomain::DenseMatmul, ckc);
+    const auto entry = exact_entry(req, multicast_2d_program(), ckc);
+    const auto selected = resolve_with_compact_table_for_testing(
+        req, eligibility(OperationDomain::DenseMatmul, true), metadata(), {&entry, 1});
     ttnn::prim::MatmulParams legacy;
     legacy.output_dtype = DataType::FLOAT32;
     legacy.user_run_batched = false;
@@ -536,130 +572,6 @@ TEST(MatmulConfigRegistry, AddmmRequiresExactSafeScalarSemantics) {
     EXPECT_EQ(preflight_v1_eligibility(bad), ResolutionReason::MalformedOperationSemantics);
     bad.call = addmm_call_semantics(1.0F, 1.0F);
     EXPECT_EQ(preflight_v1_eligibility(bad), ResolutionReason::UnsupportedSemantics);
-}
-
-DeviceCompatibilityFacts compatible_device_facts() {
-    return DeviceCompatibilityFacts{
-        .architecture = static_cast<std::uint32_t>(tt::ARCH::BLACKHOLE),
-        .board_class = AttestationBoardClass::BlackholeGalaxy,
-        .cluster_class = AttestationClusterClass::BlackholeGalaxy,
-        .device_initialized = true,
-        .remote_only = false,
-        .active_sub_device_manager_is_default = true,
-        .device_count = 1,
-        .mesh_rows = 1,
-        .mesh_cols = 1,
-        .compute_grid_x = 12,
-        .compute_grid_y = 10,
-        .physical_grid_x = 17,
-        .physical_grid_y = 12,
-        .logical_grid_x = 17,
-        .logical_grid_y = 12,
-        .dram_grid_x = 8,
-        .dram_grid_y = 2,
-        .tensix_harvesting_mask = 1,
-        .num_hw_cqs = 2,
-        .num_dram_channels = 8,
-        .l1_size_per_core = 1'495'040,
-        .dram_size_per_channel = 2'147'483'648,
-        .firmware_bundle_present = true,
-        .firmware_bundle_major = 1,
-        .firmware_bundle_minor = 2,
-        .firmware_bundle_patch = 3,
-        .ethernet_firmware_present = true,
-        .ethernet_firmware_major = 4,
-        .ethernet_firmware_minor = 5,
-        .ethernet_firmware_patch = 6};
-}
-
-TEST(MatmulConfigRegistry, DeviceCompatibilityDigestIsDeterministicAndFailsClosed) {
-    constexpr std::array<std::uint8_t, 3> abc{'a', 'b', 'c'};
-    EXPECT_EQ(registry_sha256(abc), (compact::Sha256{0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40,
-                                                     0xde, 0x5d, 0xae, 0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17,
-                                                     0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad}));
-    const auto facts = compatible_device_facts();
-    const auto first = derive_device_compatibility(facts);
-    const auto second = derive_device_compatibility(facts);
-    EXPECT_EQ(first.status, DeviceCompatibilityStatus::Success);
-    EXPECT_EQ(first.runtime_capability_sha256, second.runtime_capability_sha256);
-    EXPECT_NE(first.runtime_capability_sha256, compact::Sha256{});
-
-    auto same_capability = facts;
-    same_capability.tensix_harvesting_mask = 2;
-    EXPECT_EQ(derive_device_compatibility(same_capability).runtime_capability_sha256, first.runtime_capability_sha256);
-    same_capability = facts;
-    same_capability.tensix_harvesting_mask = 0;
-    same_capability.compute_grid_x = 13;
-    EXPECT_EQ(derive_device_compatibility(same_capability).runtime_capability_sha256, first.runtime_capability_sha256);
-    same_capability = facts;
-    same_capability.tensix_harvesting_mask = 3;
-    same_capability.compute_grid_x = 11;
-    EXPECT_EQ(derive_device_compatibility(same_capability).runtime_capability_sha256, first.runtime_capability_sha256);
-
-    auto invalid = facts;
-    invalid.firmware_bundle_present = false;
-    EXPECT_EQ(derive_device_compatibility(invalid).status, DeviceCompatibilityStatus::FirmwareUnavailable);
-    invalid = facts;
-    invalid.compute_grid_x = 13;
-    EXPECT_EQ(derive_device_compatibility(invalid).status, DeviceCompatibilityStatus::InvalidCapability);
-    invalid = facts;
-    invalid.remote_only = true;
-    EXPECT_EQ(derive_device_compatibility(invalid).status, DeviceCompatibilityStatus::RemoteDevice);
-}
-
-TEST(MatmulConfigRegistry, CompatibilityRequiresIndependentExpectedAndActualDigests) {
-    const auto device = derive_device_compatibility(compatible_device_facts());
-    auto expected = metadata();
-    expected.compatibility_schema_version = kRegistryCompatibilitySchemaVersion;
-    expected.build_identity_sha256 = digest(3);
-    expected.runtime_capability_sha256 = device.runtime_capability_sha256;
-    BuildCompatibilityDigests actual{
-        .semantic_source_sha256 = expected.semantic_source_sha256,
-        .build_identity_sha256 = expected.build_identity_sha256};
-    EXPECT_EQ(validate_registry_compatibility(expected, actual, device), CompatibilityStatus::Compatible);
-
-    actual.semantic_source_sha256 = digest(4);
-    EXPECT_EQ(validate_registry_compatibility(expected, actual, device), CompatibilityStatus::SemanticSourceMismatch);
-    actual.semantic_source_sha256 = expected.semantic_source_sha256;
-    actual.build_identity_sha256 = digest(4);
-    EXPECT_EQ(validate_registry_compatibility(expected, actual, device), CompatibilityStatus::BuildIdentityMismatch);
-    actual.build_identity_sha256 = expected.build_identity_sha256;
-    auto changed_device = device;
-    changed_device.runtime_capability_sha256 = digest(5);
-    EXPECT_EQ(
-        validate_registry_compatibility(expected, actual, changed_device),
-        CompatibilityStatus::RuntimeCapabilityMismatch);
-    expected.compatibility_schema_version = 0;
-    EXPECT_EQ(validate_registry_compatibility(expected, actual, device), CompatibilityStatus::CompatibilityUnavailable);
-    expected.compatibility_schema_version = kRegistryCompatibilitySchemaVersion;
-    auto unavailable_device = device;
-    unavailable_device.status = DeviceCompatibilityStatus::FirmwareUnavailable;
-    EXPECT_EQ(
-        validate_registry_compatibility(expected, actual, unavailable_device),
-        CompatibilityStatus::FirmwareUnavailable);
-}
-
-TEST(MatmulConfigRegistry, CompatibilityFailureIsTypedAndCountedWithoutMutation) {
-    RuntimeStateReset reset;
-    auto eligible = eligibility();
-    eligible.compatibility_status = CompatibilityStatus::BuildIdentityMismatch;
-    const auto dispatched =
-        resolve_for_dispatch(Mode::Shadow, checked_in_request(), eligible, ttnn::prim::MatmulParams{});
-    EXPECT_EQ(dispatched.resolution.reason, ResolutionReason::BuildIdentityMismatch);
-    EXPECT_EQ(dispatched.action, ExecutionAction::Fallback);
-    EXPECT_FALSE(dispatched.materialized_parameters.has_value());
-    const auto snapshot = stats_snapshot().domains[0];
-    EXPECT_EQ(snapshot.fallbacks, 1U);
-    EXPECT_EQ(snapshot.reasons[static_cast<std::size_t>(ResolutionReason::BuildIdentityMismatch)], 1U);
-}
-
-TEST(MatmulConfigRegistry, UnpromotedCheckedTableExposesFailClosedAttestationMetadata) {
-    const auto snapshot = stats_snapshot();
-    EXPECT_EQ(snapshot.compatibility_schema_version, 0);
-    EXPECT_EQ(snapshot.expected_build_identity_sha256, compact::Sha256{});
-    EXPECT_EQ(snapshot.expected_runtime_capability_sha256, compact::Sha256{});
-    EXPECT_NE(snapshot.actual_semantic_source_sha256, compact::Sha256{});
-    EXPECT_NE(snapshot.actual_build_identity_sha256, compact::Sha256{});
 }
 
 }  // namespace

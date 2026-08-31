@@ -46,29 +46,6 @@ ExecutionAction execution_action(const Mode mode, const Resolution& resolution) 
     return mode == Mode::Shadow ? ExecutionAction::ObserveOnly : ExecutionAction::Fallback;
 }
 
-ResolutionReason compatibility_reason(const CompatibilityStatus status) noexcept {
-    switch (status) {
-        case CompatibilityStatus::Compatible: return ResolutionReason::CertifiedMatch;
-        case CompatibilityStatus::CompatibilityUnavailable: return ResolutionReason::CompatibilityUnavailable;
-        case CompatibilityStatus::DeviceAttestationUnavailable: return ResolutionReason::DeviceAttestationUnavailable;
-        case CompatibilityStatus::DeviceQueryFailed: return ResolutionReason::DeviceQueryFailed;
-        case CompatibilityStatus::DeviceUninitialized: return ResolutionReason::DeviceUninitialized;
-        case CompatibilityStatus::RemoteDevice: return ResolutionReason::RemoteDevice;
-        case CompatibilityStatus::NotOneChipDevice: return ResolutionReason::NotOneChipDevice;
-        case CompatibilityStatus::ActiveSubDeviceManager: return ResolutionReason::ActiveSubDeviceManager;
-        case CompatibilityStatus::UnsupportedArchitecture: return ResolutionReason::UnsupportedArchitecture;
-        case CompatibilityStatus::UnsupportedBoard: return ResolutionReason::UnsupportedBoard;
-        case CompatibilityStatus::UnsupportedCluster: return ResolutionReason::UnsupportedCluster;
-        case CompatibilityStatus::BoardClusterMismatch: return ResolutionReason::BoardClusterMismatch;
-        case CompatibilityStatus::FirmwareUnavailable: return ResolutionReason::FirmwareUnavailable;
-        case CompatibilityStatus::InvalidDeviceCapability: return ResolutionReason::InvalidDeviceCapability;
-        case CompatibilityStatus::SemanticSourceMismatch: return ResolutionReason::SemanticSourceMismatch;
-        case CompatibilityStatus::BuildIdentityMismatch: return ResolutionReason::BuildIdentityMismatch;
-        case CompatibilityStatus::RuntimeCapabilityMismatch: return ResolutionReason::RuntimeCapabilityMismatch;
-    }
-    return ResolutionReason::CompatibilityUnavailable;
-}
-
 void record_resolution(
     const Mode mode,
     const OperationDomain domain,
@@ -97,6 +74,7 @@ std::optional<compact::DataType> compact_dtype(const tt::tt_metal::DataType dtyp
         case tt::tt_metal::DataType::BFLOAT16: return compact::DataType::BFloat16;
         case tt::tt_metal::DataType::BFLOAT8_B: return compact::DataType::BFloat8B;
         case tt::tt_metal::DataType::FLOAT32: return compact::DataType::Float32;
+        case tt::tt_metal::DataType::BFLOAT4_B: return compact::DataType::BFloat4B;
         default: return std::nullopt;
     }
 }
@@ -135,6 +113,40 @@ std::optional<compact::TensorDescriptor> compact_tensor(const TensorRequest& ten
         .tile_width = static_cast<std::uint16_t>(tensor.tile_width)};
 }
 
+// The compute-kernel knobs a matmul call that supplies none actually runs at,
+// mirrored from create_matmul_attributes() and init_device_compute_kernel_config()
+// in matmul_device_operation.cpp. The key has to name a knob vector, and for a
+// default call that vector is not unknown -- it is this one, so this is what it
+// is keyed at. Preflight has already rejected a caller program config and a
+// caller core grid, which is exactly the state in which create_matmul_attributes
+// raises fidelity, so the has_program_config/has_user_grid terms of its rule are
+// constant here and are not repeated.
+compact::ComputeKernelDescriptor default_compute_kernel(const MatmulRegistryRequest& request) noexcept {
+    const auto is_low_precision = [](const tt::tt_metal::DataType dtype) {
+        return dtype == tt::tt_metal::DataType::BFLOAT8_B || dtype == tt::tt_metal::DataType::BFLOAT4_B;
+    };
+    const bool inputs_low_precision =
+        is_low_precision(request.input_a.dtype) && is_low_precision(request.input_b.dtype);
+    const bool inputs_float32 = request.input_a.dtype == tt::tt_metal::DataType::FLOAT32 &&
+                                request.input_b.dtype == tt::tt_metal::DataType::FLOAT32;
+    auto fidelity = inputs_low_precision ? compact::MathFidelity::LoFi : compact::MathFidelity::HiFi2;
+    if (inputs_float32) {
+        // Hardware bug #38306: HiFi4 with fp32 accumulation can be wrong on
+        // Wormhole, so TTNN drops to HiFi3 there and only there.
+        fidelity = request.device.architecture == static_cast<std::uint32_t>(tt::ARCH::WORMHOLE_B0)
+                       ? compact::MathFidelity::HiFi3
+                       : compact::MathFidelity::HiFi4;
+    }
+    const bool output_float32 = request.output.dtype == tt::tt_metal::DataType::FLOAT32;
+    return compact::ComputeKernelDescriptor{
+        .math_fidelity = fidelity,
+        .throttle_level = compact::ThrottleLevel::NoThrottle,
+        .math_approx_mode = compact::kMathApproxModeIsInertAt,
+        .fp32_dest_acc_en = output_float32,
+        .packer_l1_acc = !output_float32,
+        .dst_full_sync_en = false};
+}
+
 std::optional<compact::Domain> compact_domain(const OperationDomain domain) noexcept {
     switch (domain) {
         case OperationDomain::DenseMatmul: return compact::Domain::DenseMatmul;
@@ -157,7 +169,7 @@ std::optional<tt::tt_metal::Tile> transpose_matmul_tile(const tt::tt_metal::Tile
 }
 
 bool metadata_supports_direct_bank(const compact::TableMetadata& metadata, const bool has_exact_entries) noexcept {
-    if (metadata.lock_schema_version != 2 || metadata.key_schema_version != 1) {
+    if (metadata.lock_schema_version != 2 || metadata.key_schema_version != compact::kKeySchemaVersion) {
         return false;
     }
     if (has_exact_entries && metadata.exact_recipe_evidence_schema_version != 2) {
@@ -166,7 +178,12 @@ bool metadata_supports_direct_bank(const compact::TableMetadata& metadata, const
     const auto is_nonzero = [](const compact::Sha256& digest) {
         return std::any_of(digest.begin(), digest.end(), [](const std::uint8_t byte) { return byte != 0; });
     };
-    return is_nonzero(metadata.content_sha256) && is_nonzero(metadata.semantic_source_sha256);
+    // content_sha256 alone proves the table is populated and internally consistent:
+    // it is zero for the empty unpromoted lock, so a blank table still fail-closes.
+    // semantic_source_sha256 was produced by the semantic-manifest attestation that
+    // this seam no longer carries; with no producer, gating on it would reject every
+    // lookup against a perfectly good table.
+    return is_nonzero(metadata.content_sha256);
 }
 
 Resolution resolve_from_tables(
@@ -205,6 +222,8 @@ Resolution resolve_from_tables(
         dense_key.domain = compact::Domain::DenseMatmul;
         dense_key.alpha_f32_bits = 0;
         dense_key.beta_f32_bits = 0;
+        // key.compute_kernel is deliberately carried across unchanged: only the
+        // operation domain is being widened here, never the numerics.
         exact = compact::lookup_program_config_exact(dense_key, exact_entries);
     }
     if (exact != nullptr) {
@@ -340,7 +359,7 @@ std::optional<compact::KeyDescriptor> compact_registry_key(const MatmulRegistryR
         device.compute_grid_y > std::numeric_limits<std::uint16_t>::max()) {
         return std::nullopt;
     }
-    return compact::KeyDescriptor{
+    return compact::normalize_key_compute_kernel(compact::KeyDescriptor{
         .architecture = device.architecture,
         .bcast_batch_present = request.bcast_batch.has_value(),
         .bcast_batch = request.bcast_batch.value_or(false),
@@ -370,7 +389,11 @@ std::optional<compact::KeyDescriptor> compact_registry_key(const MatmulRegistryR
         .untilize_out = request.untilize_out,
         .domain = *domain,
         .alpha_f32_bits = request.call.alpha_f32_bits.value_or(0),
-        .beta_f32_bits = request.call.beta_f32_bits.value_or(0)};
+        .beta_f32_bits = request.call.beta_f32_bits.value_or(0),
+        // A caller-supplied config is what the kernel will run at, so it is what
+        // the table is asked about; absent one, the call runs at TTNN's own
+        // defaults, so those are.
+        .compute_kernel = request.compute_kernel_config.value_or(default_compute_kernel(request))});
 }
 
 ResolutionReason preflight_v1_eligibility(const Eligibility& eligibility) noexcept {
@@ -390,7 +413,10 @@ ResolutionReason preflight_v1_eligibility(const Eligibility& eligibility) noexce
     if (eligibility.io_contract_status != IoContractStatus::Resolved) {
         return ResolutionReason::InconsistentIoContract;
     }
-    if (eligibility.has_program_config || eligibility.has_compute_kernel_config || eligibility.has_user_core_grid) {
+    // A caller-supplied compute kernel config is keyed, not declined: it is
+    // matched against the entry's measured CKC during lookup. Program config
+    // and core grid remain registry-owned axes we must not override.
+    if (eligibility.has_program_config || eligibility.has_user_core_grid) {
         return ResolutionReason::ExplicitOverride;
     }
     if (eligibility.has_bias || eligibility.has_activation || eligibility.transpose_a || eligibility.transpose_b ||
@@ -401,10 +427,6 @@ ResolutionReason preflight_v1_eligibility(const Eligibility& eligibility) noexce
         (is_addmm && *eligibility.call.beta_f32_bits != 0 && *eligibility.call.beta_f32_bits != 0x80000000U)) {
         return ResolutionReason::UnsupportedSemantics;
     }
-    if (const auto reason = compatibility_reason(eligibility.compatibility_status);
-        reason != ResolutionReason::CertifiedMatch) {
-        return reason;
-    }
     return ResolutionReason::CertifiedMatch;
 }
 
@@ -414,7 +436,7 @@ ResolutionReason validate_v1_request_envelope(
     if (preflight != ResolutionReason::CertifiedMatch) {
         return preflight;
     }
-    if (request.schema_version != 1) {
+    if (request.schema_version != compact::kKeySchemaVersion) {
         return ResolutionReason::IncompleteRequest;
     }
     const auto parameter_count =
@@ -426,6 +448,7 @@ ResolutionReason validate_v1_request_envelope(
     if (request.call != eligibility.call || request.transpose_a != eligibility.transpose_a ||
         request.transpose_b != eligibility.transpose_b || request.has_bias != eligibility.has_bias ||
         request.has_activation != eligibility.has_activation || request.untilize_out != eligibility.untilize_out ||
+        request.compute_kernel_config.has_value() != eligibility.has_compute_kernel_config ||
         request.bcast_batch.has_value() != eligibility.has_bcast_batch ||
         request.run_batched != eligibility.input_b_batched ||
         request.has_activation != request.activation_op.has_value() ||
@@ -557,6 +580,35 @@ std::optional<DeviceComputeKernelConfig> materialize_registry_compute_kernel_con
         .throttle_level = throttle};
 }
 
+std::optional<compact::ComputeKernelDescriptor> compact_compute_kernel_config(
+    const DeviceComputeKernelConfig& config) noexcept {
+    compact::MathFidelity fidelity;
+    switch (config.math_fidelity) {
+        case tt::tt_metal::MathFidelity::LoFi: fidelity = compact::MathFidelity::LoFi; break;
+        case tt::tt_metal::MathFidelity::HiFi2: fidelity = compact::MathFidelity::HiFi2; break;
+        case tt::tt_metal::MathFidelity::HiFi3: fidelity = compact::MathFidelity::HiFi3; break;
+        case tt::tt_metal::MathFidelity::HiFi4: fidelity = compact::MathFidelity::HiFi4; break;
+        default: return std::nullopt;
+    }
+    compact::ThrottleLevel throttle;
+    switch (config.throttle_level) {
+        case compute_throttle_utils::ThrottleLevel::NO_THROTTLE: throttle = compact::ThrottleLevel::NoThrottle; break;
+        case compute_throttle_utils::ThrottleLevel::LEVEL_1: throttle = compact::ThrottleLevel::Throttle1; break;
+        case compute_throttle_utils::ThrottleLevel::LEVEL_2: throttle = compact::ThrottleLevel::Throttle2; break;
+        case compute_throttle_utils::ThrottleLevel::LEVEL_3: throttle = compact::ThrottleLevel::Throttle3; break;
+        case compute_throttle_utils::ThrottleLevel::LEVEL_4: throttle = compact::ThrottleLevel::Throttle4; break;
+        case compute_throttle_utils::ThrottleLevel::LEVEL_5: throttle = compact::ThrottleLevel::Throttle5; break;
+        default: return std::nullopt;
+    }
+    return compact::ComputeKernelDescriptor{
+        .math_fidelity = fidelity,
+        .throttle_level = throttle,
+        .math_approx_mode = config.math_approx_mode,
+        .fp32_dest_acc_en = config.fp32_dest_acc_en,
+        .packer_l1_acc = config.packer_l1_acc,
+        .dst_full_sync_en = config.dst_full_sync_en};
+}
+
 std::optional<ttnn::prim::MatmulParams> materialize_parameters_for_execution(
     const Resolution& resolution, const ttnn::prim::MatmulParams& legacy_parameters) {
     if (resolution.reason != ResolutionReason::CertifiedMatch || !resolution.key || !resolution.program_config ||
@@ -669,14 +721,6 @@ StatsSnapshot stats_snapshot() noexcept {
     snapshot.mode_is_frozen = mode != kModeUninitialized;
     snapshot.frozen_mode = snapshot.mode_is_frozen ? static_cast<Mode>(mode) : Mode::Off;
     snapshot.exact_entry_count = generated::program_config_exact_entries().size();
-    const auto& metadata = generated::metadata();
-    const auto actual_build = compiled_build_compatibility();
-    snapshot.compatibility_schema_version = metadata.compatibility_schema_version;
-    snapshot.expected_semantic_source_sha256 = metadata.semantic_source_sha256;
-    snapshot.expected_build_identity_sha256 = metadata.build_identity_sha256;
-    snapshot.expected_runtime_capability_sha256 = metadata.runtime_capability_sha256;
-    snapshot.actual_semantic_source_sha256 = actual_build.semantic_source_sha256;
-    snapshot.actual_build_identity_sha256 = actual_build.build_identity_sha256;
     for (std::size_t domain = 0; domain < stats.size(); ++domain) {
         const auto& source = stats[domain];
         auto& destination = snapshot.domains[domain];
