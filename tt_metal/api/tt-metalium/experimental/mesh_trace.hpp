@@ -154,4 +154,7 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
+// Parody with EnqueueMeshWorkload
+void EnqueueMeshTrace(MeshCommandQueue& mesh_cq, MeshTrace& mesh_trace, bool blocking);
+
 }  // namespace tt::tt_metal::distributed::experimental
