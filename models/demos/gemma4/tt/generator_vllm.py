@@ -1212,7 +1212,19 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             # outputs and a B=1 -> B=32 bucket switch corrupts every user;
             # forcing the per-user loop makes both cases clean. Unbounded is
             # unaffected and keeps the batched-prefill TTFT win.
-            and not self._bounded_sliding_kv_cache
+            # Extended 2026-08-31 from bounded-only to ALL serving modes.
+            # Measured (P150x8/12B unbounded, conc 4-32; same on WH under parity):
+            # the batched flow receives correct per-slot tokens and writes
+            # correct per-slot KV, but returns garbage last-token logits for
+            # the batched users -- distinct prompts 1/4 coherent, and the
+            # corrupt band on both platforms is exactly the shapes where
+            # batching engages (clean at 32x4096 = the 131072 ceiling ->
+            # sequential). The bounded-only rationale above was this same bug
+            # misattributed. Every validated coverage-matrix number ran the
+            # sequential path. Re-enable (debt #1, 7-19x TTFT prize) requires
+            # fixing the batched deferred-lm-head logits extraction behind the
+            # identity gate. Escape hatch for that work: G4_FORCE_BATCH_PREFILL=1.
+            and os.environ.get("G4_FORCE_BATCH_PREFILL", "0") == "1"
         )
         use_sequential = batch_size > 1 and not will_batch
 
