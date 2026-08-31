@@ -260,8 +260,7 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers):
 
 
 def _decode_metadata(metadata_msg) -> dict:
-    """Read the packed [1,1,1,3] metadata device tensor to host: {slot_id, actual_start, actual_end}.
-    This is the device->host half of the round trip the traced path avoids (see _socket_next)."""
+    """Read the packed [1,1,1,3] metadata device tensor to host: {slot_id, actual_start, actual_end}."""
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
     return {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
 
@@ -276,17 +275,17 @@ def _is_shutdown_sentinel(meta: dict) -> bool:
     )
 
 
-def _socket_next(h2d_service, *, decode_meta: bool) -> tuple:
+def _socket_next(h2d_service) -> tuple:
     """Block on the next producer push: returns (tt_tokens, meta, metadata_msg). The device metadata
     tensor is returned (not discarded) so it can be propagated into the model's per-layer ack send.
     Used only by the unbounded request loop (rank 0 input).
 
-    decode_meta=False (traced path) skips the device->host read of the metadata: the per-chunk scalars
-    are consumed on-device straight from metadata_msg, so meta is returned None and no to_torch runs."""
+    The metadata is always read to host: the scalars are tiny and the read is what lets the loop see the
+    in-band shutdown sentinel, which is the runner's graceful teardown path under trace and eager alike."""
     tt_tokens, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         h2d_service, metadata_size_bytes=METADATA_SIZE_BYTES
     )
-    return tt_tokens, _decode_metadata(metadata_msg) if decode_meta else None, metadata_msg
+    return tt_tokens, _decode_metadata(metadata_msg), metadata_msg
 
 
 def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_size: int, hidden_size: int):
@@ -336,21 +335,16 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
     return inbound, outbound
 
 
-def _d2d_recv(inbound, *, decode_meta: bool) -> tuple:
+def _d2d_recv(inbound) -> tuple:
     """Drain the next chunk that landed in the inbound receiver backing into a fresh device tensor. The
     returned tensor already has the embedding-output sharding, so it feeds runtime.prefill with no
-    reshard. Pairs with the upstream rank's _d2d_send.
-
-    decode_meta=False (traced path) skips the device->host read of the inline metadata: meta is returned
-    None and the per-chunk scalars are consumed on-device straight from metadata_msg."""
+    reshard. Pairs with the upstream rank's _d2d_send."""
     t0 = time.perf_counter()
     act, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         inbound, metadata_size_bytes=METADATA_SIZE_BYTES
     )
-    meta = _decode_metadata(metadata_msg) if decode_meta else None
-    where = (
-        f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}" if meta is not None else "(on-device)"
-    )
+    meta = _decode_metadata(metadata_msg)
+    where = f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}"
     logger.info(f"[pp] RECV-d2d {where} [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
     return act, meta, metadata_msg
 
@@ -453,23 +447,20 @@ def _compute_and_send(
     """Run one chunk: prefill into the engine-owned kv_caches, forward the output downstream (non-last
     rank) and grant the outbound sender so it ships over fabric. Returns the compute-start epoch
     (NTP-comparable). CHUNK_START is logged BEFORE the forward, with this chunk's metadata, so the
-    slot/KV-range is visible per rank even if prefill_chunk hangs. On the traced path meta is None (the
-    scalars live on-device in metadata_msg), so the range is logged as (on-device). The trailing metadata
-    is kept after compute_start so the c=/compute_start= fields stay parseable (plot_pipeline_trace.py)."""
+    slot/KV-range is visible per rank even if prefill_chunk hangs. The trailing metadata is kept after
+    compute_start so the c=/compute_start= fields stay parseable (plot_pipeline_trace.py)."""
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
     t_start = time.time()
     t_perf = time.perf_counter()
-    where = (
-        f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})" if meta is not None else "(on-device)"
-    )
+    where = f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     logger.info(f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} {where}")
     out = runtime.prefill_chunk(
         inp,
         kv_caches,
-        slot_id=meta["slot_id"] if meta is not None else None,
-        actual_start=meta["actual_start"] if meta is not None else None,
-        actual_end=meta["actual_end"] if meta is not None else None,
+        slot_id=meta["slot_id"],
+        actual_start=meta["actual_start"],
+        actual_end=meta["actual_end"],
         request_id=c,
         d2h_service=d2h_service,
         metadata_msg=metadata_msg,
@@ -537,19 +528,16 @@ def run_request_loop(
     as a hard fallback, until SIGTERM/SIGKILL. No fixed chunk bound, no trace input, no PCC, no
     migration — the runner serves; migration is issued from outside (migration_driver.py).
 
-    Traced path (cfg.use_trace): the per-chunk metadata is consumed on-device straight from metadata_msg
-    (no device->host->device round trip), so the host never sees the scalars and the in-band shutdown
-    sentinel cannot be detected. Trace serving therefore relies ONLY on SIGTERM/SIGKILL for teardown —
-    the producer's PREFILL_SEND_SHUTDOWN sentinel is ignored. Run untraced if graceful in-band shutdown
-    is required."""
+    The per-chunk metadata is read to host on every chunk (traced and eager alike): the scalars are tiny
+    and the read is what lets the loop see the in-band shutdown sentinel and drain gracefully. Trace
+    replay still consumes the metadata on-device from the persistent buffer; this host read is only the
+    small sentinel/logging copy alongside it."""
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
-    decode_meta = not cfg.use_trace  # untraced needs host scalars (logging + sentinel); traced consumes on-device
     logger.info(
         f"[pp rank {rank}/{num_ranks}] request (unbounded) loop start "
-        f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'} "
-        f"metadata={'host' if decode_meta else 'on-device'})"
+        f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
     )
     t0 = time.perf_counter()
     c = 0
@@ -557,10 +545,10 @@ def run_request_loop(
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
-            inp, meta, metadata_msg = _socket_next(h2d_service, decode_meta=decode_meta)  # slot/start/end from producer
+            inp, meta, metadata_msg = _socket_next(h2d_service)  # slot/start/end from producer
         else:
-            inp, meta, metadata_msg = _d2d_recv(d2d_in, decode_meta=decode_meta)
-        if meta is not None and _is_shutdown_sentinel(meta):
+            inp, meta, metadata_msg = _d2d_recv(d2d_in)
+        if _is_shutdown_sentinel(meta):
             # End of stream: drop the throwaway payload + its metadata tensor, hand the sentinel to the
             # next rank so it too unblocks and exits, then fall through to the graceful drain below.
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
