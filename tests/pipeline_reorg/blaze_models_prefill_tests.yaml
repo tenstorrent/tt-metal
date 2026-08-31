@@ -579,7 +579,7 @@
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
-    export TT_METAL_PROGRAM_DISPATCH_FANOUT=4
+    export TT_METAL_PROGRAM_DISPATCH_FANOUT=1
     export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
     export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
