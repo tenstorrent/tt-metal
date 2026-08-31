@@ -48,6 +48,16 @@ def pytest_addoption(parser):
         help="Provide a JSON file defining per-decoder precision and fidelity settings",
     )
     parser.addoption(
+        "--tracy_decode",
+        action="store_true",
+        default=False,
+        help="Configure the run for Tracy profiling of the decode phase: disables Metal "
+        "trace and caps generation at 2 tokens. Both are required -- trace replay under "
+        "the profiler raises 'Device data mismatch', and a long decode loop overflows the "
+        "device marker buffer. The `decode` signpost means tt-perf-report defaults to the "
+        "decode phase. Not for measurement: the decode average degrades to one sample.",
+    )
+    parser.addoption(
         "--use_hf_rope",
         action="store_true",
         default=False,
