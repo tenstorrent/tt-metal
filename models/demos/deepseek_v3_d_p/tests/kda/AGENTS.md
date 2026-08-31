@@ -22,7 +22,8 @@ Run every device test through `scripts/run_safe_pytest.sh`. A passing hardware r
 - `model/test_real_weights.py` checks output and both states against the independent Torch reference.
 - `perf/test_layer_perf.py` checks those endpoints on synchronized eager and trace-replay forwards,
   then gates the median of five warm trace-replay samples. Its 900-second item timeout covers a cold CPU-oracle cache.
-  Timing repetitions are not accuracy or determinism samples.
+  Timing repetitions are not accuracy or determinism samples. The SP2xTP4 case also logs a non-additive,
+  overlap-aware per-device-program breakdown from one separate warm eager forward once after the five gated samples.
 - Use synchronized trace wall time for routine latency and Tracy only for targeted attribution.
 
 ## Catalogue
