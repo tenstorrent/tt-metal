@@ -64,11 +64,17 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
 from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
 from ...encoders.qwen3vl.vision_qwen3vl import vision_cu_seqlens
 from ...layers.audio_ops import weights_variant
+from ...layers.lora import LoRAMixin
+from ...lora.apply import apply_entries
+from ...lora.keys import parse_adapter
+from ...lora.promote import promote_to_lora
+from ...lora.route import named_modules
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3.adaln_cache_minimax_h3 import MiniMaxH3AdalnCache
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
+from ...models.transformers.minimax_h3.lora_targets_minimax_h3 import is_host_path, minimax_h3_fusion_groups
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import DEFAULT_TILE_SIZE, MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
@@ -76,7 +82,7 @@ from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch
-from .adaln_precompute import precompute_adaln_table, request_step_timesteps
+from .adaln_precompute import MiniMaxH3AdalnLoraFold, precompute_adaln_table, request_step_timesteps
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
 from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
 from .conditioning import encode_keyframes, keyframe_condition_noise
@@ -256,9 +262,18 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
+        lora_path: str | os.PathLike | None = None,
+        lora_strength: float = 1.0,
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
+        # An adapter is applied after the base weights load, never fused into them, so the 62 GB
+        # weight cache stays adapter-independent and one copy serves every adapter and strength.
+        self.lora_path = None if lora_path is None else Path(lora_path)
+        self.lora_strength = float(lora_strength)
+        self._lora_entries: list | None = None
+        self._lora_digest: str | None = None
+        self._lora_report = None
         # Only consult the preset for what the caller left unset, so an untuned shape with every
         # parallel setting supplied runs rather than raising -- the escape hatch `create_pipeline`
         # documents. `coresident` is residency rather than parallelism and has a safe default, so it
@@ -874,8 +889,69 @@ class MiniMaxH3Pipeline:
             mesh_device=self.mesh_device,
             get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
         )
+        self._apply_lora(model)
         self._transformer = model
         return model
+
+    # ------------------------------------------------------------------ adapter
+
+    def _lora_identity(self) -> str:
+        """A cache-key term that changes whenever the adapter's effect changes.
+
+        Content-hashed rather than path-keyed: adapters get overwritten in place during a sweep,
+        and a stale AdaLN table modulates every block slightly wrong at every step with nothing
+        downstream able to notice.
+        """
+        if self.lora_path is None:
+            return "lora=none"
+        if self._lora_digest is None:
+            digest = hashlib.sha256()
+            with self.lora_path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(16 << 20), b""):
+                    digest.update(chunk)
+            self._lora_digest = digest.hexdigest()[:16]
+        return f"lora={self._lora_digest}@{self.lora_strength:g}"
+
+    def _lora_adapter_entries(self) -> list:
+        """Parse the adapter once; both halves are read from this."""
+        if self._lora_entries is None:
+            entries, stats = parse_adapter(self.lora_path)
+            logger.info(f"adapter {self.lora_path.name}: {stats}")
+            self._lora_entries = entries
+        return self._lora_entries
+
+    def _adaln_lora_fold(self):
+        """The adapter's host half, or None when there is no adapter."""
+        if self.lora_path is None:
+            return None
+        host = [entry for entry in self._lora_adapter_entries() if is_host_path(entry.path)]
+        logger.info(f"folding {len(host)} AdaLN adapter entries into the precomputed table")
+        return MiniMaxH3AdalnLoraFold(host, strength=self.lora_strength)
+
+    def _apply_lora(self, model: MiniMaxH3Transformer3DModel) -> None:
+        """Bind the adapter's device half onto a freshly loaded transformer.
+
+        Fuse mode, so the delta merges into the weights once and every forward runs the unmodified
+        base path with its fused kernels intact. A capacity of one keeps each Linear's uploaded
+        factors resident, which makes a strength change a re-bind rather than a re-upload -- and
+        makes the unbind subtract exactly the delta the bind added.
+        """
+        if self.lora_path is None:
+            return
+        t0 = time.time()
+        promoted = promote_to_lora(model)
+        for _, module in named_modules(model):
+            if isinstance(module, LoRAMixin):
+                module.set_lora_cache_capacity(1)
+        device_entries = [entry for entry in self._lora_adapter_entries() if not is_host_path(entry.path)]
+        self._lora_report = apply_entries(
+            model,
+            device_entries,
+            groups=minimax_h3_fusion_groups(model),
+            strength=self.lora_strength,
+            name=self.lora_path.name,
+        )
+        logger.info(f"{self._lora_report.summary()} over {promoted} promoted linears in {time.time() - t0:.1f}s")
 
     def _adaln_cache_path(self, num_inference_steps: int) -> Path:
         """Disk location for a built table.
@@ -904,6 +980,9 @@ class MiniMaxH3Pipeline:
                 self.transformer_config["num_layers"],
                 self.transformer_config["hidden_size"],
                 self.transformer_config["freq_dim"],
+                # The adapter's AdaLN half is folded in while the table is built, so a table built
+                # with one adapter must never be served to a run with another -- or with none.
+                self._lora_identity(),
             )
         )
         return cache_dir / f"{hashlib.sha256(key.encode()).hexdigest()[:32]}.adaln.pt"
@@ -942,13 +1021,23 @@ class MiniMaxH3Pipeline:
                 f"{self.transformer_subfolder}/ (reads the checkpoint)"
             )
             t0 = time.time()
+            fold = self._adaln_lora_fold()
             table = precompute_adaln_table(
                 self.weights_dir / self.transformer_subfolder,
                 step_timesteps,
                 num_layers=self.transformer_config["num_layers"],
                 hidden_size=self.transformer_config["hidden_size"],
                 freq_dim=self.transformer_config["freq_dim"],
+                weight_hook=fold,
             )
+            if fold is not None:
+                unapplied = fold.unapplied()
+                if unapplied:
+                    msg = (
+                        f"{len(unapplied)} AdaLN adapter target(s) matched no checkpoint key "
+                        f"({', '.join(unapplied[:5])}); the table would be built from unadapted weights"
+                    )
+                    raise KeyError(msg)
             logger.info(f"AdaLN table built in {time.time() - t0:.1f}s ({table.nbytes() / 1e9:.3f} GB); caching")
             is_distributed = ttnn.using_distributed_env()
             try:

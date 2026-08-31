@@ -91,13 +91,7 @@ def apply_adapter(
     name: str = "",
     expect: Mapping[str, int] | None = None,
 ) -> AdapterReport:
-    """Load an adapter onto ``model``.
-
-    ``is_host`` marks adapter paths the model deliberately does not hold as device parameters --
-    MiniMax-H3 precomputes its AdaLN projections on host, so their adapters have no module to bind
-    to and are handed back for the caller to fold in elsewhere. Marking a path is an assertion that
-    someone else applies it; failing to mark one surfaces as an unresolved key rather than as
-    silence.
+    """Parse an adapter and load it onto ``model``. See :func:`apply_entries` for the arguments.
 
     ``expect`` asserts per-kind tensor counts, normally taken from the adapter's own metadata. A
     coverage check is the only thing that catches a target map that quietly misses a subset of the
@@ -107,8 +101,32 @@ def apply_adapter(
     logger.info(f"adapter {name or source}: {stats}")
     if expect is not None:
         _assert_counts(stats, expect)
+    return apply_entries(model, entries, groups=groups, is_host=is_host, strength=strength, name=name or str(source))
 
-    report = AdapterReport(name=name or str(source), strength=strength)
+
+def apply_entries(
+    model: Module,
+    entries: Sequence[AdapterEntry],
+    *,
+    groups: Sequence[FusionGroup] = (),
+    is_host: Callable[[str], bool] | None = None,
+    strength: float = 1.0,
+    name: str = "",
+) -> AdapterReport:
+    """Load already-parsed adapter entries onto ``model``.
+
+    Split out from :func:`apply_adapter` so a caller that needs the host half separately -- the
+    MiniMax-H3 pipeline folds it into the AdaLN precompute -- parses the file once instead of
+    twice; the published adapters are 1.5 to 5.3 GB.
+
+    ``is_host`` marks adapter paths the model deliberately does not hold as device parameters --
+    MiniMax-H3 precomputes its AdaLN projections on host, so their adapters have no module to bind
+    to and are handed back for the caller to fold in elsewhere. Marking a path is an assertion that
+    someone else applies it; failing to mark one surfaces as an unresolved key rather than as
+    silence.
+
+    """
+    report = AdapterReport(name=name, strength=strength)
     device_entries = []
     for entry in entries:
         if entry.kind == "set_weight":
