@@ -276,7 +276,6 @@ SANCTIONED_IMPLEMENTATION_IMPORTS = {
         "import helpers",
         "import helpers.golden_generators as goldens_mod",
         "import helpers.golden_generators as implementation",
-        "import helpers.llk_pytest_plugin as plugin",
     },
 }
 
@@ -292,6 +291,7 @@ def test_no_consumer_module_reaches_past_the_facade():
     exceptions are intentional instead of pinning a count.
     """
     offenders: dict[str, list[str]] = {}
+    seen: dict[str, set[str]] = {}
 
     for path in sorted(FIXTURE_ROOT.rglob("*.py")):
         if "__pycache__" in path.parts:
@@ -303,6 +303,7 @@ def test_no_consumer_module_reaches_past_the_facade():
             for line in path.read_text().splitlines()
             if line.strip().startswith(("import helpers", "from helpers"))
         ]
+        seen[rel] = set(found)
         unsanctioned = [line for line in found if line not in allowed]
         if unsanctioned:
             offenders[rel] = unsanctioned
@@ -313,6 +314,19 @@ def test_no_consumer_module_reaches_past_the_facade():
         + "\nEither reach it through tt_llk_harness (adding the name to "
         "__all__ if missing), or add a justified entry to "
         "SANCTIONED_IMPLEMENTATION_IMPORTS."
+    )
+
+    # An exemption that no longer matches anything is worse than none: it sits
+    # there pre-authorising an import nobody reviewed, in the file most likely
+    # to be edited next. Make going stale a failure rather than a slow leak.
+    stale = {
+        rel: sorted(allowed - seen.get(rel, set()))
+        for rel, allowed in SANCTIONED_IMPLEMENTATION_IMPORTS.items()
+        if allowed - seen.get(rel, set())
+    }
+    assert not stale, (
+        "SANCTIONED_IMPLEMENTATION_IMPORTS lists exemptions that match nothing "
+        f"any more: {stale}. Remove them."
     )
 
 

@@ -140,10 +140,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // hardware configure").
     //
     // The datacopy driver this fixture mirrors calls its op init before
-    // hw_configure. That is latent rather than broken today because the
-    // sanitizer is compiled out -- LLK_SAN_ENABLE is not defined anywhere in
-    // this repo, so llk::san::* resolves to the stub branch of
-    // common/sanitizer/api.h.
+    // hw_configure. That is latent rather than broken today because these tests
+    // compile with the sanitizer stubbed: the tt-llk harness compile flags do
+    // not define LLK_SAN_ENABLE, so llk::san::* resolves to the stub branch of
+    // common/sanitizer/api.h. It is live machinery elsewhere -- metal's JIT
+    // build emits -DLLK_SAN_ENABLE when TT_METAL_LLK_SANITIZER is set
+    // (tt_metal/jit_build/build.cpp) -- so the ordering requirement above is
+    // real, just unenforced in this suite.
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     // copy srca to dest
     _llk_math_eltwise_unary_datacopy_init_wrapper_<
