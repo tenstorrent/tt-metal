@@ -81,20 +81,6 @@ namespace program_cache::detail {
 struct ProgramCache;
 }  // namespace program_cache::detail
 
-namespace experimental {
-std::map<ChipId, IDevice*> CreateDevices(
-    ContextId context_id,
-    const std::vector<ChipId>& device_ids,
-    uint8_t num_hw_cqs,
-    size_t l1_small_size,
-    size_t trace_region_size,
-    const DispatchCoreConfig& dispatch_core_config,
-    const std::vector<uint32_t>& l1_bank_remap,
-    size_t worker_l1_size,
-    bool init_profiler,
-    bool initialize_fabric_and_dispatch_fw);
-}  // namespace experimental
-
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
@@ -172,8 +158,8 @@ MeshDeviceImpl::ScopedDevices::ScopedDevices(
     ContextId context_id) :
     context_id_(context_id) {
     auto local_devices = extract_locals(all_device_ids);
-    opened_local_devices_ = tt_metal::experimental::CreateDevices(
-        context_id,
+    auto& ctx = MetalContext::instance(context_id);
+    ctx.initialize_device_manager(
         local_devices,
         num_command_queues,
         l1_small_size,
@@ -183,6 +169,12 @@ MeshDeviceImpl::ScopedDevices::ScopedDevices(
         worker_l1_size,
         /* init_profiler */ false,
         /* initialize_fabric_and_dispatch_fw */ false);
+    const bool is_galaxy = ctx.get_cluster().is_galaxy_cluster();
+    for (IDevice* device : ctx.device_manager()->get_all_active_devices()) {
+        if (!is_galaxy || !device->is_mmio_capable()) {
+            opened_local_devices_.emplace(device->id(), device);
+        }
+    }
 
     for (auto device_id : active_device_ids) {
         if (device_id.is_local()) {

@@ -54,13 +54,15 @@ namespace rt_arg {
 constexpr uint32_t reader_num_scalars = 3 + 6;  // q/k/w addrs + schedule {row_group0..max_bands}
 constexpr uint32_t mcast_args_per_dir = 8;      // role, rect(xs,ys,xe,ye), sender(sx,sy), ndst
 constexpr uint32_t reader_num_mcast_dirs = 2;   // K column, then Q/W row
-constexpr uint32_t fused_rt_width = 6;          // {ring_size, ring_index, fwd, bwd, sem0, sem1}
+// {ring_size, ring_index, fwd, bwd, sem0, sem1, split_enabled, split_shard_id, split_second_half_wait}
+// (the kernel-side RingSDPAOpReceiver consumes all nine; this consumer runs with split forwarding off)
+constexpr uint32_t fused_rt_width = 9;
 constexpr uint32_t reader_k_batch_offset = reader_num_scalars + reader_num_mcast_dirs * mcast_args_per_dir;  // 25
 constexpr uint32_t reader_kv_len_tiles = reader_k_batch_offset + 1;                                          // 26
 constexpr uint32_t reader_fused_rt_base = reader_kv_len_tiles + 1;                                           // 27
-constexpr uint32_t reader_k_local_addr = reader_fused_rt_base + fused_rt_width;                              // 33
-constexpr uint32_t reader_k_local_batch_offset = reader_k_local_addr + 1;                                    // 34
-constexpr uint32_t reader_band_perm_base = reader_k_local_batch_offset + 1;                                  // 35
+constexpr uint32_t reader_k_local_addr = reader_fused_rt_base + fused_rt_width;                              // 36
+constexpr uint32_t reader_k_local_batch_offset = reader_k_local_addr + 1;                                    // 37
+constexpr uint32_t reader_band_perm_base = reader_k_local_batch_offset + 1;                                  // 38
 // Compute RT: schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, then perm.
 constexpr uint32_t compute_band_perm_base = 6 + 4;  // 10
 // Writer RT: out addr, schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, perm.
@@ -69,7 +71,7 @@ constexpr uint32_t writer_band_perm_base = 1 + 6 + 4;  // 11
 // compute/writer read their perm at 10/11). A drift here would silently desync the kernels -> this fails to build.
 static_assert(
     reader_k_batch_offset == 25 && reader_kv_len_tiles == 26 && reader_fused_rt_base == 27 &&
-        reader_k_local_addr == 33 && reader_k_local_batch_offset == 34 && reader_band_perm_base == 35 &&
+        reader_k_local_addr == 36 && reader_k_local_batch_offset == 37 && reader_band_perm_base == 38 &&
         compute_band_perm_base == 10 && writer_band_perm_base == 11,
     "indexer_score fused rt_arg slot layout drifted from the kernel-side expectations");
 }  // namespace rt_arg
@@ -481,7 +483,7 @@ ProgramDescriptor build_ring_program_descriptor(
     const uint32_t kv_len_tiles = pcache.kv_len_tiles;
 
     std::vector<uint32_t> fused_rt;
-    sdpa_sig.push_ring_sdpa_fused_op_rt_args(fused_rt);  // {ring_size, ring_index, fwd, bwd, sem0, sem1}
+    sdpa_sig.push_ring_sdpa_fused_op_rt_args(fused_rt);  // the fused_rt_width-wide block (see rt_arg above)
 
     // ---- Step E: band-visit reorder (local-first, then remote by ring arrival) --------------------------
     // shard_order / band_readiness are computed above (hoisted so the band->column assignment can balance
@@ -555,10 +557,10 @@ ProgramDescriptor build_ring_program_descriptor(
             // Reader tail (sequential push; slots named in rt_arg, matched positionally by the kernel).
             reader_rt.push_back(k_batch_page_offset);        // rt_arg::reader_k_batch_offset (25)
             reader_rt.push_back(kv_len_tiles);               // rt_arg::reader_kv_len_tiles (26)
-            reader_rt.append(fused_rt);                      // rt_arg::reader_fused_rt_base (27..32): ring/dir/sems
-            reader_rt.push_back(k_local.buffer());           // rt_arg::reader_k_local_addr (33): local SP shard address
+            reader_rt.append(fused_rt);             // rt_arg::reader_fused_rt_base (27..35): ring/dir/sems/split
+            reader_rt.push_back(k_local.buffer());  // rt_arg::reader_k_local_addr (36): local SP shard address
             reader_rt.push_back(k_local_batch_page_offset);  // selected slot in the original local cache
-            reader_rt.append(band_perm);                     // rt_arg::reader_band_perm_base (35..): band-visit perm
+            reader_rt.append(band_perm);                     // rt_arg::reader_band_perm_base (38..): band-visit perm
             reader_kernel.emplace_runtime_args(core, reader_rt);
 
             KernelDescriptor::RTArgList compute_rt;
@@ -626,7 +628,14 @@ ProgramDescriptor build_ring_program_descriptor(
             // (compute_cols_x,1), ...) instead of running off the right grid edge as row-major would.
             ttnn::ccl::CoreAllocationStrategy::COL_MAJOR,
             args.cache_batch_idx,
-            gather_valid_height_tiles(args, k_local));
+            gather_valid_height_tiles(args, k_local),
+            /*slot_id=*/std::nullopt,
+            /*kv_actual_isl=*/std::nullopt,
+            /*chunk_local_tiles=*/0,
+            /*kv_cache_num_layers=*/1,
+            /*kv_cache_layer_idx=*/0,
+            // This consumer's FusedRingGate has no split-shard second-half wait; keep the gather unsplit.
+            /*split_forwarding_enabled=*/false);
     }
 
     log_debug(
@@ -730,10 +739,12 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
 
         // kernel_idx: reader=0, writer=1, compute=2; AG workers are 3..6.
         // The fused rt_arg namespace is file-local, but this .cpp participates in unity builds alongside
-        // the classic factory's same-named namespace. Keep these literals synchronized with its static_assert.
+        // the classic factory's same-named namespace. Keep these literals synchronized with its static_assert
+        // (reader_k_batch_offset=25, reader_kv_len_tiles=26, reader_k_local_batch_offset=37 — past the
+        // 9-wide fused block at 27..35 and k_local_addr at 36).
         patch_field(0, 25u, k_batch_page_offset);
         patch_field(0, 26u, pcache.kv_len_tiles);
-        patch_field(0, 34u, k_local_batch_page_offset);
+        patch_field(0, 37u, k_local_batch_page_offset);
         // compute: kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles (slots [6, perm_base)).
         patch_field(2, 6u, pcache.kv_len_tiles);
         patch_field(2, 7u, geom.chunk_start_tiles);
