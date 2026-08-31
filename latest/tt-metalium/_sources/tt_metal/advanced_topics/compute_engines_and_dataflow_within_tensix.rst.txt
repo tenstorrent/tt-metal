@@ -236,15 +236,14 @@ Vector engine/SFPU
 
 The vector engine, or SFPU, is designed for high-throughput processing of vector data. Unlike matrix engine APIs, SFPU APIs require the user to explicitly unpack data into the ``Dst`` registers before performing computations and then pack the results back into L1 memory. This design enables easier chaining of operations.
 
-The vector engine APIs also require an initialization phase. Call ``compute_kernel_hw_startup`` once at the start of the kernel to configure the unpacker and packer for the input and output circular buffers, then ``copy_init`` to set up the unpacker for copying tiles into ``Dst``. Unlike the matrix engine, the unpacker cannot be configured for a second operand; it assumes that all input circular buffers contain the same underlying data type. As with the matrix engine, ensure that parameters are consistent between initialization and computation calls to avoid undefined behavior.
+The vector engine APIs also require an initialization phase. The ``init_sfpu`` function configures the unpacker and packer to handle the data types of the input and output circular buffers. Unlike the matrix engine, the unpacker cannot be configured for a second operand; it assumes that all input circular buffers contain the same underlying data type. As with the matrix engine, ensure that parameters are consistent between initialization and computation calls to avoid undefined behavior.
 
 For example, to compute the element-wise sum of two tiles:
 
 .. code-block:: c++
 
-    // Configure the hardware once for the CBs, then set up the tile copy.
-    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    copy_init(tt::CBIndex::c_0);
+    // Configure the (un)packer based on the data formats of the CBs.
+    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
 
     for(int i=0; i < 8; i++) {
         cb_wait_front(CBIndex::c_0, 1); cb_wait_front(CBIndex::c_1, 1);
@@ -271,16 +270,16 @@ For example, to compute the element-wise sum of two tiles:
     }
 
 .. note::
-    ``copy_init`` can be used to re-configure the unpacker to consume different data formats from circular buffers. If ``CBIndex::c_0`` and ``CBIndex::c_1`` contain different data types, the unpacking part of the above example can be rewritten as follows:
+    ``copy_tile_init`` can be used to re-configure the unpacker to consume different data formats from circular buffers. If ``CBIndex::c_0`` and ``CBIndex::c_1`` contain different data types, the unpacking part of the above example can be rewritten as follows:
 
     .. code-block:: c++
 
-        copy_init(CBIndex::c_0);
+        copy_tile_init(CBIndex::c_0);
         copy_tile(CBIndex::c_0, /*tile_offset_in_cb*/0, /*dst_offset_tiles*/0);
-        copy_init(CBIndex::c_1);
+        copy_tile_init(CBIndex::c_1);
         copy_tile(CBIndex::c_1, /*tile_offset_in_cb*/0, /*dst_offset_tiles*/1);
 
-    Note that ``copy_init`` is always needed when unpacking FP32 values into 32-bit ``Dst`` registers, and whenever you switch the unpacker to a circular buffer with a different data format; otherwise the data may be treated as 16-bit, causing a loss of precision.
+    Note that ``copy_tile_init`` is always needed when unpacking FP32 values into 32-bit ``Dst`` registers. ``init_sfpu`` assumes a 16-bit storage size and sets up the unpacker for bfloat16, which would cause a loss of precision if an explicit initialization is not performed.
 
     Similarly, the ``pack_reconfig_data_format`` function and its variants can be used to change the packer's output data format. This is necessary when a computation produces multiple tiles that must be written to circular buffers with different data formats. For example, to pack two tiles into two separate circular buffers, each with a unique data format:
 

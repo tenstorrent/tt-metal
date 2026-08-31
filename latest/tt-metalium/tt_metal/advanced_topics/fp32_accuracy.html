@@ -357,7 +357,7 @@
 <blockquote>
 <div>
 <ul class="simple">
-<li><p>Call <code class="docutils literal notranslate"><span class="pre">copy_init()</span></code> before unpacking data from a circular buffer into the Dst registers. This function reconfigures the unpacker to correctly interpret the 32-bit data from the circular buffer.</p></li>
+<li><p>Call <code class="docutils literal notranslate"><span class="pre">copy_tile_init()</span></code> before unpacking data from a circular buffer into the Dst registers. This function reconfigures the unpacker to correctly interpret the 32-bit data from the circular buffer.</p></li>
 <li><p>Call <code class="docutils literal notranslate"><span class="pre">pack_reconfig_data_format()</span></code> before packing data from Dst registers to an output circular buffer. This ensures the packer formats the data correctly for the destination.</p></li>
 </ul>
 </div>
@@ -366,7 +366,7 @@
 </ul>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>
-<p>If you are unpcking or packing to multiple circular buffers of different data formats, you must call <code class="docutils literal notranslate"><span class="pre">copy_init()</span></code> and <code class="docutils literal notranslate"><span class="pre">pack_reconfig_data_format()</span></code> each time you switch between circular buffers with different formats. Otherwise the data may be misinterpreted, leading to incorrect results.</p>
+<p>If you are unpcking or packing to multiple circular buffers of different data formats, you must call <code class="docutils literal notranslate"><span class="pre">copy_tile_init()</span></code> and <code class="docutils literal notranslate"><span class="pre">pack_reconfig_data_format()</span></code> each time you switch between circular buffers with different formats. Otherwise the data may be misinterpreted, leading to incorrect results.</p>
 </div>
 <p>The following example demonstrates a typical compute kernel structure for achieving FP32 accuracy.</p>
 <div class="highlight-cpp notranslate">
@@ -380,9 +380,8 @@
 <span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">cb_out0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_out0</span><span class="p">;</span>
 <span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span><span class="p">;</span>
 
-<span class="w">    </span><span class="c1">// Configure the hardware once for the kernel, then set up the tile copy</span>
-<span class="w">    </span><span class="n">compute_kernel_hw_startup</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="n">cb_out0</span><span class="p">);</span>
-<span class="w">    </span><span class="n">copy_init</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">);</span>
+<span class="w">    </span><span class="c1">// Initialize for a binary operation on the SFPU</span>
+<span class="w">    </span><span class="n">init_sfpu</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="n">cb_out0</span><span class="p">);</span>
 <span class="w">    </span><span class="n">add_binary_tile_init</span><span class="p">();</span>
 
 <span class="w">    </span><span class="k">for</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
@@ -394,10 +393,10 @@
 <span class="w">        </span><span class="n">tile_regs_acquire</span><span class="p">();</span>
 
 <span class="w">        </span><span class="c1">// Configure unpacker for FP32 and copy data from CB to Dst</span>
-<span class="w">        </span><span class="n">copy_init</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">);</span>
+<span class="w">        </span><span class="n">copy_tile_init</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">);</span>
 <span class="w">        </span><span class="n">copy_tile</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span><span class="w"> </span><span class="c1">// Copy tile from cb_in0 to Dst[0]</span>
 
-<span class="w">        </span><span class="n">copy_init</span><span class="p">(</span><span class="n">cb_in1</span><span class="p">);</span>
+<span class="w">        </span><span class="n">copy_tile_init</span><span class="p">(</span><span class="n">cb_in1</span><span class="p">);</span>
 <span class="w">        </span><span class="n">copy_tile</span><span class="p">(</span><span class="n">cb_in1</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span><span class="w"> </span><span class="c1">// Copy tile from cb_in1 to Dst[1]</span>
 
 <span class="w">        </span><span class="c1">// Perform computation on the SFPU</span>
@@ -433,7 +432,7 @@
 </div>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>
-<p>Failing to call <code class="docutils literal notranslate"><span class="pre">copy_init()</span></code> and <code class="docutils literal notranslate"><span class="pre">pack_reconfig_data_format()</span></code> will result in data being treated as 16-bit, leading to a loss of precision, even if <code class="docutils literal notranslate"><span class="pre">fp32_dest_acc_en</span></code> is enabled.</p>
+<p>Failing to call <code class="docutils literal notranslate"><span class="pre">copy_tile_init()</span></code> and <code class="docutils literal notranslate"><span class="pre">pack_reconfig_data_format()</span></code> will result in data being treated as 16-bit, leading to a loss of precision, even if <code class="docutils literal notranslate"><span class="pre">fp32_dest_acc_en</span></code> is enabled.</p>
 </div>
 </section>
 <section id="distinguishing-between-matrix-and-vector-engine-apis">

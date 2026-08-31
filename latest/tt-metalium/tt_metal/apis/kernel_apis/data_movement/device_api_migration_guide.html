@@ -920,66 +920,13 @@
 <span class="n">dfb</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">async_write_zeros(dst,</span> <span class="pre">size_bytes,</span> <span class="pre">{.offset_bytes</span> <span class="pre">=</span> <span class="pre">off})</span></code> zeroes <code class="docutils literal notranslate"><span class="pre">size_bytes</span></code> starting at the destination’s base plus <code class="docutils literal notranslate"><span class="pre">off</span></code> (<code class="docutils literal notranslate"><span class="pre">off</span></code> defaults to <code class="docutils literal notranslate"><span class="pre">0</span></code>). <code class="docutils literal notranslate"><span class="pre">dst</span></code> may be a <code class="docutils literal notranslate"><span class="pre">CircularBuffer</span></code>, <code class="docutils literal notranslate"><span class="pre">DataflowBuffer</span></code>, <code class="docutils literal notranslate"><span class="pre">CoreLocalMem&lt;T&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">Scratchpad&lt;T&gt;</span></code>, or <code class="docutils literal notranslate"><span class="pre">LocalTensorAccessor&lt;T&gt;</span></code>, and the base is:</p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p><code class="docutils literal notranslate"><span class="pre">dst</span></code></p></th>
-<th class="head"><p>base</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p><code class="docutils literal notranslate"><span class="pre">CircularBuffer</span></code> / <code class="docutils literal notranslate"><span class="pre">DataflowBuffer</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">get_write_ptr()</span></code></p></td>
-</tr>
-<tr class="row-odd">
-<td><p><code class="docutils literal notranslate"><span class="pre">Scratchpad&lt;T&gt;</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">get_base_address()</span></code></p></td>
-</tr>
-<tr class="row-even">
-<td><p><code class="docutils literal notranslate"><span class="pre">LocalTensorAccessor&lt;T&gt;</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">get_bank_base_address()</span></code></p></td>
-</tr>
-<tr class="row-odd">
-<td><p><code class="docutils literal notranslate"><span class="pre">CoreLocalMem&lt;T&gt;</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">get_address()</span></code></p></td>
-</tr>
-</tbody>
-</table>
-<p><code class="docutils literal notranslate"><span class="pre">offset_bytes</span></code> is in <strong>bytes</strong> for every type, including the typed handles whose <code class="docutils literal notranslate"><span class="pre">operator[]</span></code> indexes in elements.</p>
-<p>Zeroing a CB/DFB entry is the common case: legacy kernels obtained the zero target’s address from a CB (e.g. <code class="docutils literal notranslate"><span class="pre">get_write_ptr(cb_id)</span></code>), so the migrated form zeroes that same CB/DFB entry directly. The raw L1 handles cover the case where the kernel has no CB/DFB to borrow:</p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
-
-<span class="n">Scratchpad</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">pad</span><span class="p">(</span><span class="n">scratch</span><span class="o">::</span><span class="n">my_pad</span><span class="p">);</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">async_write_zeros</span><span class="p">(</span><span class="n">pad</span><span class="p">,</span><span class="w"> </span><span class="n">pad</span><span class="p">.</span><span class="n">size_in_bytes</span><span class="p">());</span><span class="w">           </span><span class="c1">// whole region</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">async_write_zeros</span><span class="p">(</span><span class="n">pad</span><span class="p">,</span><span class="w"> </span><span class="mi">64</span><span class="p">,</span><span class="w"> </span><span class="p">{.</span><span class="n">offset_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">128</span><span class="p">});</span><span class="w">     </span><span class="c1">// sub-range</span>
-
-<span class="n">LocalTensorAccessor</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">lta</span><span class="p">(</span><span class="n">tensor</span><span class="o">::</span><span class="n">my_local_tensor</span><span class="p">);</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">async_write_zeros</span><span class="p">(</span><span class="n">lta</span><span class="p">,</span><span class="w"> </span><span class="n">bytes</span><span class="p">);</span>
-
-<span class="n">CoreLocalMem</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mem</span><span class="p">(</span><span class="n">addr</span><span class="p">);</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">async_write_zeros</span><span class="p">(</span><span class="n">mem</span><span class="p">,</span><span class="w"> </span><span class="n">bytes</span><span class="p">);</span>
-
-<span class="n">noc</span><span class="p">.</span><span class="n">write_zeros_l1_barrier</span><span class="p">();</span><span class="w">                              </span><span class="c1">// one barrier covers the batch</span>
-</pre></div>
-</div>
-</section>
-<section id="alignment-and-bounds">
-<h4>Alignment and bounds<a class="headerlink" href="#alignment-and-bounds" title="Permalink to this heading"></a>
-</h4>
-<ul class="simple">
-<li><p><strong>Destination bytes are undefined until the barrier returns.</strong> Do not read or write the zeroed window between <code class="docutils literal notranslate"><span class="pre">async_write_zeros</span></code> and <code class="docutils literal notranslate"><span class="pre">write_zeros_l1_barrier()</span></code>.</p></li>
-<li><p><strong>Alignment:</strong> on Wormhole/Blackhole the zero is a NoC loopback read from the 32B-aligned hardware zeros region, so the destination address (base + <code class="docutils literal notranslate"><span class="pre">offset_bytes</span></code>) must be <code class="docutils literal notranslate"><span class="pre">NOC_L1_READ_ALIGNMENT_BYTES</span></code> (<strong>16</strong>) aligned. On Quasar the zero is an overlay iDMA transaction rather than a NoC transfer, so the NoC alignment constants do not apply and there is no alignment requirement.</p></li>
-<li><p><strong>Bounds:</strong> <code class="docutils literal notranslate"><span class="pre">offset_bytes</span> <span class="pre">+</span> <span class="pre">size_bytes</span></code> must stay inside the region — this is the caller’s responsibility and is not checked. <code class="docutils literal notranslate"><span class="pre">Scratchpad</span></code> asserts that <code class="docutils literal notranslate"><span class="pre">offset_bytes</span></code> alone is in range, but no destination type checks it against the transfer length, so an oversized <code class="docutils literal notranslate"><span class="pre">size_bytes</span></code> will run past the end of the region into whatever is next in L1.</p></li>
-</ul>
+<p><code class="docutils literal notranslate"><span class="pre">async_write_zeros(dst,</span> <span class="pre">size_bytes,</span> <span class="pre">{.offset_bytes</span> <span class="pre">=</span> <span class="pre">off})</span></code> zeroes <code class="docutils literal notranslate"><span class="pre">size_bytes</span></code> starting at <code class="docutils literal notranslate"><span class="pre">dst.get_write_ptr()</span> <span class="pre">+</span> <span class="pre">off</span></code> (<code class="docutils literal notranslate"><span class="pre">off</span></code> defaults to <code class="docutils literal notranslate"><span class="pre">0</span></code>). <code class="docutils literal notranslate"><span class="pre">dst</span></code> must be a <code class="docutils literal notranslate"><span class="pre">CircularBuffer</span></code> or <code class="docutils literal notranslate"><span class="pre">DataflowBuffer</span></code>.</p>
+<p>Zeroing a CB/DFB entry is the common case: legacy kernels obtained the zero target’s address from a CB (e.g. <code class="docutils literal notranslate"><span class="pre">get_write_ptr(cb_id)</span></code>), so the migrated form zeroes that same CB/DFB entry directly.</p>
 </section>
 <section id="zero-pages-of-a-dram-tensor">
 <h4>Zero pages of a DRAM tensor<a class="headerlink" href="#zero-pages-of-a-dram-tensor" title="Permalink to this heading"></a>
 </h4>
-<p>The DRAM overload streams zeros from a pre-zeroed L1 source (the reserved L1 zeros region is reclaimed on Quasar). The <code class="docutils literal notranslate"><span class="pre">scratch</span></code> argument accepts the same five types as the local-L1 overload.</p>
-<p>For a <strong><code class="docutils literal notranslate"><span class="pre">CircularBuffer</span></code> or <code class="docutils literal notranslate"><span class="pre">DataflowBuffer</span></code></strong> the zeros are read from its <strong>front (read) pointer</strong>, while overload (1) writes its <strong>write</strong> pointer — hence the <code class="docutils literal notranslate"><span class="pre">push_back</span></code>/<code class="docutils literal notranslate"><span class="pre">wait_front</span></code> handoff below. <strong>Reuse a <code class="docutils literal notranslate"><span class="pre">DataflowBuffer</span></code> (or <code class="docutils literal notranslate"><span class="pre">CircularBuffer</span></code>) the kernel already has</strong> — do not allocate one solely for this if possible, since CB/DFB consumes Quasar tile counter resources. Zero one entry, <code class="docutils literal notranslate"><span class="pre">push_back</span></code>/<code class="docutils literal notranslate"><span class="pre">wait_front</span></code> it to the front before streaming, then <code class="docutils literal notranslate"><span class="pre">pop_front</span></code> to release:</p>
+<p>The DRAM overload streams zeros from a pre-zeroed L1 source, read from its <strong>front (read) pointer</strong>. A CB/DFB is required to source the zeros (the reserved L1 zeros region is reclaimed on Quasar). <strong>Reuse a <code class="docutils literal notranslate"><span class="pre">DataflowBuffer</span></code> (or <code class="docutils literal notranslate"><span class="pre">CircularBuffer</span></code>) the kernel already has</strong> — do not allocate one solely for this if possible, since CB/DFB consumes Quasar tile counter resources. Zero one entry, <code class="docutils literal notranslate"><span class="pre">push_back</span></code>/<code class="docutils literal notranslate"><span class="pre">wait_front</span></code> it to the front before streaming, then <code class="docutils literal notranslate"><span class="pre">pop_front</span></code> to release:</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
 <span class="n">DataflowBuffer</span><span class="w"> </span><span class="nf">dfb</span><span class="p">(</span><span class="n">dfb_id</span><span class="p">);</span><span class="w">              </span><span class="c1">// a DFB the kernel already owns</span>
@@ -1005,22 +952,7 @@
 </pre></div>
 </div>
 <p><strong>Each call zeroes within a single page:</strong> <code class="docutils literal notranslate"><span class="pre">offset_bytes</span> <span class="pre">+</span> <span class="pre">size_bytes</span></code> must not exceed the tensor’s aligned page size. Zero a multi-page region by looping over <code class="docutils literal notranslate"><span class="pre">page_id</span></code>.</p>
-<p>For the <strong>raw L1 handles</strong> (<code class="docutils literal notranslate"><span class="pre">CoreLocalMem</span></code>, <code class="docutils literal notranslate"><span class="pre">Scratchpad</span></code>, <code class="docutils literal notranslate"><span class="pre">LocalTensorAccessor</span></code>) the source and destination addresses are the same, so neither the read/write-pointer distinction nor the handoff applies — zero it, barrier, then pass the same handle. This is the only single-kernel form available on Quasar, where a DM kernel cannot self-loop a DFB:</p>
-<div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">Noc</span><span class="w"> </span><span class="n">noc</span><span class="p">;</span>
-<span class="n">Scratchpad</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">pad</span><span class="p">(</span><span class="n">scratch</span><span class="o">::</span><span class="n">pad</span><span class="p">);</span>
-<span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">out</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessor</span><span class="p">(</span><span class="n">tensor</span><span class="o">::</span><span class="n">out</span><span class="p">);</span>
-
-<span class="n">noc</span><span class="p">.</span><span class="n">async_write_zeros</span><span class="p">(</span><span class="n">pad</span><span class="p">,</span><span class="w"> </span><span class="n">pad</span><span class="p">.</span><span class="n">size_in_bytes</span><span class="p">());</span><span class="w">   </span><span class="c1">// 1. pre-zero the L1 source</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">write_zeros_l1_barrier</span><span class="p">();</span>
-
-<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">page_start</span><span class="p">;</span><span class="w"> </span><span class="n">p</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">page_end</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">p</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="c1">// 2. stream it to DRAM pages</span>
-<span class="w">    </span><span class="n">noc</span><span class="p">.</span><span class="n">async_write_zeros</span><span class="p">(</span><span class="n">out</span><span class="p">,</span><span class="w"> </span><span class="n">page_size</span><span class="p">,</span><span class="w"> </span><span class="p">{.</span><span class="n">page_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">p</span><span class="p">},</span><span class="w"> </span><span class="n">pad</span><span class="p">);</span>
-<span class="p">}</span>
-<span class="n">noc</span><span class="p">.</span><span class="n">write_zeros_dram_barrier</span><span class="p">();</span>
-</pre></div>
-</div>
-<p>Any buffer the kernel already owns can be reused (i.e. it needn’t be one dedicated to zeroing). The pre-zeroed prefix must cover at least <code class="docutils literal notranslate"><span class="pre">min(page_size,</span> <span class="pre">NOC_MAX_BURST_SIZE)</span></code> bytes; this is asserted for a <code class="docutils literal notranslate"><span class="pre">DataflowBuffer</span></code> (via <code class="docutils literal notranslate"><span class="pre">get_entry_size()</span></code>) and is the caller’s responsibility for the other scratch types. This overload pairs with <code class="docutils literal notranslate"><span class="pre">write_zeros_dram_barrier()</span></code>.</p>
+<p>Any buffer the kernel already owns can be reused (i.e. it needn’t be one dedicated to zeroing). The pre-zeroed prefix must cover at least <code class="docutils literal notranslate"><span class="pre">min(page_size,</span> <span class="pre">NOC_MAX_BURST_SIZE)</span></code> bytes. This overload pairs with <code class="docutils literal notranslate"><span class="pre">write_zeros_dram_barrier()</span></code>.</p>
 </section>
 <section id="barriers-and-the-quasar-command-buffer-contract">
 <h4>Barriers and the Quasar command-buffer contract<a class="headerlink" href="#barriers-and-the-quasar-command-buffer-contract" title="Permalink to this heading"></a>
