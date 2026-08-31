@@ -238,15 +238,15 @@ def _build_and_prefill(
 @torch.no_grad()
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "num_command_queues": 2}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "num_command_queues": 2}],
     indirect=["device_params"],
     ids=["fabric_1d"],
 )
 @pytest.mark.parametrize(
     "mesh_device,tp_size",
     [
-        pytest.param(8, 1, id="pp8_tp1_8chip"),
-        pytest.param(32, 4, id="pp8_tp4_32chip"),
+        pytest.param((8, 1), 1, id="pp8_tp1_8chip"),
+        pytest.param((8, 4), 4, id="pp8_tp4_32chip"),
     ],
     indirect=["mesh_device"],
 )
