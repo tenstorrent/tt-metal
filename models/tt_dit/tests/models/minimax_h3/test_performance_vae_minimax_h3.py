@@ -437,11 +437,13 @@ def test_encode_stage(mesh_device, case):
     # `profile` stays False: its per-forward sync would serialize the encode wave streaming and
     # measure a schedule production never runs. The cost is attribution -- `device` times the
     # enqueue and the wait lands in `readback` -- so flip it on only to chase a split, not a total.
-    # `pixel_norm` matches the pipeline: conv_in carries the normalize and pixels upload as uint8.
+    # `pixel_norm` and bf16 match the pipeline: conv_in carries the normalize, pixels upload
+    # as uint8, and the encoders compute bf16 (4.2x the fp32 wave at PCC 99.998%).
     vae = MiniMaxH3Vae(
         config,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
+        dtype=ttnn.bfloat16,
         pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
     )
     vae.load_encoder_state(_encode_stage_state(weights_dir))

@@ -439,7 +439,10 @@ class MiniMaxH3Vae(Module):
             )
             # `_pxnorm` keys the cache: the fold rewrites conv_in's weight and bias, so cached
             # bytes from a fold-less build must never load into a folded encoder or vice versa.
+            # The dtype tag does the same for the prepared-weight bytes, which are dtype-specific.
             variant = "_pxnorm" if self.pixel_norm is not None else ""
+            if self.dtype != ttnn.float32:
+                variant += f"_{str(self.dtype).rsplit('.', 1)[-1].lower()}"
             self._load_submodel(
                 encoder,
                 f"vae_encoder_t{num_frames}_h{height}_w{width}_taps{temporal_taps}{variant}",
