@@ -25,7 +25,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
-#include <internal/graph_tracking.hpp>
+#include <internal/graph_function_abort.hpp>
 #include <type_traits>
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/operation_concepts.hpp"

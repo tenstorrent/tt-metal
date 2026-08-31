@@ -27,7 +27,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
-#include <internal/graph_tracking.hpp>
+#include <internal/graph_function_abort.hpp>
 #include <unordered_map>
 
 using namespace tt::tt_metal;

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <graph_tracking.hpp>
-#include <internal/graph_tracking.hpp>
+#include <internal/graph_function_abort.hpp>
 
 #include <algorithm>
 #include <any>

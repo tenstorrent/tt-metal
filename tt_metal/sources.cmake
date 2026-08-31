@@ -133,7 +133,7 @@ set(TT_METAL_PUBLIC_API
     api/internal/cluster_noc_helpers.hpp
     api/internal/disaggregation/kv_chunk_address_table.hpp
     api/internal/fabric.hpp
-    api/internal/graph_tracking.hpp
+    api/internal/graph_function_abort.hpp
     api/tt-metalium/kernel_types.hpp
     api/tt-metalium/math.hpp
     api/tt-metalium/maybe_remote.hpp
