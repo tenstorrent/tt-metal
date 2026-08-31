@@ -37,13 +37,15 @@ run_leg() { # leg node
     local leg="$1" node="$2"
     local rt="$OUT/rt-$ROW-$leg"
     rm -rf "$rt"; mkdir -p "$rt"
+    rm -f "$OUT/trace-$ROW-$leg.log"
     ( cd "$TESTS" && \
       RUNNER_TEMP="$rt" CHIP_ARCH=blackhole TT_METAL_SIMULATOR="$SIM" \
-      TTSIM_TRACE_SFPU_STREAM=1 LLK_HOME="$(dirname "$TESTS")" \
+      TTSIM_TRACE_SFPU_STREAM=1 TTSIM_TRACE_SFPU_FILE="$OUT/trace-$ROW-$leg.log" \
+      LLK_HOME="$(dirname "$TESTS")" \
       .venv/bin/python -m pytest -q -s --run-simulator "python_tests/$node" \
-      > "$OUT/trace-$ROW-$leg.log" 2>&1 ) || {
+      > "$OUT/pytest-$ROW-$leg.log" 2>&1 ) || {
         echo "ERROR: $leg leg pytest failed; tail:" >&2
-        tail -5 "$OUT/trace-$ROW-$leg.log" >&2
+        tail -5 "$OUT/pytest-$ROW-$leg.log" >&2
         return 1
     }
     grep -q "SFPUJO I" "$OUT/trace-$ROW-$leg.log" || {

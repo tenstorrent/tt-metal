@@ -2198,7 +2198,17 @@ def parse_trace(path):
 # ---------------------------------------------------------------------------
 
 
-def run_trace(recs, B, dst, tile=None, validate=False, tag="", journal=None, isa=None):
+def run_trace(
+    recs,
+    B,
+    dst,
+    tile=None,
+    validate=False,
+    tag="",
+    journal=None,
+    isa=None,
+    stop_at=None,
+):
     isa = isa or Isa()
     ex = Executor(B, isa, dst, tag, journal=journal)
     pending_group = []
@@ -2231,6 +2241,8 @@ def run_trace(recs, B, dst, tile=None, validate=False, tag="", journal=None, isa
             continue
         flush_group()
         if kind == "I":
+            if stop_at is not None and ex.n_exec >= stop_at:
+                break
             _, _, inst, aux0, aux1 = rec
             ex.current_v = next_v[i] if not B.symbolic else None
             ex.exec_inst(inst, aux0, aux1)
@@ -2381,6 +2393,43 @@ def align_generations(adopt_sem, adopt_hand):
     return build(adopt_sem), build(adopt_hand)
 
 
+def canon_hash(se, he):
+    """Cheap structural hash of the (sem, hand) pair with symbols renamed by
+    first occurrence — dedupes per-datum queries without z3.simplify (which
+    is quadratic-ish on deep FP-approximation chains)."""
+    import hashlib
+
+    h = hashlib.sha256()
+    symmap = {}
+    for expr in (se, he):
+        seen = {}
+        stack = [(expr, False)]
+        order = 0
+        while stack:
+            e, done = stack.pop()
+            eid = e.get_id()
+            if eid in seen:
+                h.update(b"R%d" % seen[eid])
+                continue
+            seen[eid] = order
+            order += 1
+            d = e.decl()
+            k = d.kind()
+            if k == z3.Z3_OP_UNINTERPRETED:
+                idx = symmap.setdefault(d.name(), len(symmap))
+                h.update(b"S%d" % idx)
+                continue
+            if k == z3.Z3_OP_BNUM:
+                h.update(b"N%d:%d" % (e.size(), e.as_long()))
+                continue
+            params = ",".join(str(p) for p in d.params())
+            h.update(("O%d(%s)%d" % (k, params, e.num_args())).encode())
+            for c in reversed(e.children()):
+                stack.append((c, False))
+        h.update(b"|")
+    return h.digest()
+
+
 def canonicalize(expr_pair, symbols_order):
     """Rename the dst symbols appearing in a (sem, hand) expression pair to
     canonical x0,x1,... in first-use order for structural dedup."""
@@ -2469,6 +2518,165 @@ def domain_constraints(symbols, domain, tags=None):
     return cons
 
 
+# ---------------------------------------------------------------------------
+# Exhaustive fallback: compile a z3 QF_BV term over ONE 16-bit symbol to a
+# vectorized numpy function and evaluate all 2^16 inputs.  For bf16-input
+# rows this decides the query exactly (and yields divergence COUNTS) far
+# faster than bit-blasting deep FP-approximation chains.
+# ---------------------------------------------------------------------------
+
+
+def z3_to_numpy(expr, sym):
+    import numpy as np
+
+    K = z3.Z3_OP_UNINTERPRETED
+    memo = {}
+
+    def mask(width):
+        return (
+            np.uint64((1 << width) - 1) if width < 64 else np.uint64(0xFFFFFFFFFFFFFFFF)
+        )
+
+    def ev(e, x):
+        key = e.get_id()
+        if key in memo:
+            return memo[key]
+        d = e.decl()
+        k = d.kind()
+        if k == z3.Z3_OP_BNUM:
+            r = np.uint64(e.as_long())
+        elif k == K:
+            if d.name() != sym:
+                raise ValueError("unexpected symbol " + d.name())
+            r = x
+        else:
+            ch = [ev(c, x) for c in e.children()]
+            w = e.size() if z3.is_bv(e) else None
+            if k == z3.Z3_OP_BADD:
+                r = ch[0]
+                for c in ch[1:]:
+                    r = (r + c) & mask(w)
+            elif k == z3.Z3_OP_BSUB:
+                r = (ch[0] - ch[1]) & mask(w)
+            elif k == z3.Z3_OP_BMUL:
+                r = ch[0]
+                for c in ch[1:]:
+                    r = (r * c) & mask(w)
+            elif k == z3.Z3_OP_BAND:
+                r = ch[0]
+                for c in ch[1:]:
+                    r = r & c
+            elif k == z3.Z3_OP_BOR:
+                r = ch[0]
+                for c in ch[1:]:
+                    r = r | c
+            elif k == z3.Z3_OP_BXOR:
+                r = ch[0]
+                for c in ch[1:]:
+                    r = r ^ c
+            elif k == z3.Z3_OP_BNOT:
+                r = (~ch[0]) & mask(w)
+            elif k == z3.Z3_OP_BSHL:
+                sh = np.minimum(ch[1], np.uint64(63))
+                r = (ch[0] << sh) & mask(w)
+                r = np.where(ch[1] >= np.uint64(w), np.uint64(0), r)
+            elif k == z3.Z3_OP_BLSHR:
+                sh = np.minimum(ch[1], np.uint64(63))
+                r = ch[0] >> sh
+                r = np.where(ch[1] >= np.uint64(w), np.uint64(0), r)
+            elif k == z3.Z3_OP_BASHR:
+                wm = e.children()[0].size()
+                sign = (ch[0] >> np.uint64(wm - 1)) & np.uint64(1)
+                sh = np.minimum(ch[1], np.uint64(wm - 1))
+                ext = ((np.uint64(1) << sh) - np.uint64(1)) << (np.uint64(wm) - sh)
+                r = ((ch[0] >> sh) | np.where(sign != 0, ext, np.uint64(0))) & mask(wm)
+            elif k == z3.Z3_OP_CONCAT:
+                r = ch[0]
+                for c, cc in zip(ch[1:], e.children()[1:]):
+                    r = ((r << np.uint64(cc.size())) | c) & mask(w)
+            elif k == z3.Z3_OP_EXTRACT:
+                hi, lo = d.params()
+                r = (ch[0] >> np.uint64(lo)) & mask(hi - lo + 1)
+            elif k == z3.Z3_OP_ZERO_EXT:
+                r = ch[0]
+            elif k == z3.Z3_OP_SIGN_EXT:
+                wm = e.children()[0].size()
+                sign = (ch[0] >> np.uint64(wm - 1)) & np.uint64(1)
+                ext = (mask(w) >> np.uint64(wm)) << np.uint64(wm)
+                r = ch[0] | np.where(sign != 0, ext, np.uint64(0))
+            elif k == z3.Z3_OP_ITE:
+                r = np.where(ch[0], ch[1], ch[2])
+            elif k == z3.Z3_OP_EQ:
+                r = ch[0] == ch[1]
+            elif k == z3.Z3_OP_DISTINCT:
+                r = ch[0] != ch[1]
+            elif k == z3.Z3_OP_ULT:
+                r = ch[0] < ch[1]
+            elif k == z3.Z3_OP_ULEQ:
+                r = ch[0] <= ch[1]
+            elif k == z3.Z3_OP_UGT:
+                r = ch[0] > ch[1]
+            elif k == z3.Z3_OP_UGEQ:
+                r = ch[0] >= ch[1]
+            elif k in (z3.Z3_OP_SLT, z3.Z3_OP_SLEQ, z3.Z3_OP_SGT, z3.Z3_OP_SGEQ):
+                wm = e.children()[0].size()
+                half = np.uint64(1 << (wm - 1))
+                a = ch[0] ^ half
+                b = ch[1] ^ half
+                r = {
+                    z3.Z3_OP_SLT: a < b,
+                    z3.Z3_OP_SLEQ: a <= b,
+                    z3.Z3_OP_SGT: a > b,
+                    z3.Z3_OP_SGEQ: a >= b,
+                }[k]
+            elif k == z3.Z3_OP_NOT:
+                r = ~ch[0]
+            elif k == z3.Z3_OP_AND:
+                r = ch[0]
+                for c in ch[1:]:
+                    r = r & c
+            elif k == z3.Z3_OP_OR:
+                r = ch[0]
+                for c in ch[1:]:
+                    r = r | c
+            elif k == z3.Z3_OP_TRUE:
+                r = np.bool_(True)
+            elif k == z3.Z3_OP_FALSE:
+                r = np.bool_(False)
+            else:
+                raise ValueError("z3->numpy: unhandled op kind %d (%s)" % (k, d.name()))
+        memo[key] = r
+        return r
+
+    def run(x):
+        memo.clear()
+        return ev(expr, x)
+
+    return run
+
+
+def exhaustive16(se, he, sym_name, constraints=()):
+    """Evaluate both exprs over all 2^16 values of the single 16-bit symbol
+    (restricted to any domain constraints).  Returns (n_diff, witness|None)."""
+    import numpy as np
+
+    x = np.arange(65536, dtype=np.uint64)
+    vs = z3_to_numpy(se, sym_name)(x) & np.uint64(0xFFFF)
+    vh = z3_to_numpy(he, sym_name)(x) & np.uint64(0xFFFF)
+    diff = vs != vh
+    for con in constraints:
+        diff = diff & z3_to_numpy(con, sym_name)(x)
+    n = int(diff.sum())
+    if n == 0:
+        return 0, None
+    i = int(np.argmax(diff))
+    return n, {
+        "inputs": {sym_name: i},
+        "sem_out16": "0x%04x" % int(vs[i]),
+        "hand_out16": "0x%04x" % int(vh[i]),
+    }
+
+
 def prove_row(
     sem_final, hand_final, symbols, timeout_ms, out_dir, row, domain=None, tags=None
 ):
@@ -2489,18 +2697,14 @@ def prove_row(
             he = symbols.get(skey)
         if se is None or he is None:
             continue
-        se = z3.simplify(Symbolic._bv(se, 16) if isinstance(se, int) else se)
-        he = z3.simplify(Symbolic._bv(he, 16) if isinstance(he, int) else he)
+        se = Symbolic._bv(se, 16) if isinstance(se, int) else se
+        he = Symbolic._bv(he, 16) if isinstance(he, int) else he
         if se.eq(he):
             n_trivial += 1
             continue
-        syms = collect_symbols(se)
-        for nm, s in collect_symbols(he).items():
-            syms.setdefault(nm, s)
-        order = list(syms.values())
-        key = canonicalize((se, he), order)
+        key = canon_hash(se, he)
         if key not in queries:
-            queries[key] = (cell, se, he, order)
+            queries[key] = (cell, se, he, None)
     details = {
         "cells": len(all_cells),
         "trivially_equal": n_trivial,
@@ -2519,6 +2723,30 @@ def prove_row(
     )
     witness = None
     for qi, (key, (cell, se, he, order)) in enumerate(queries.items()):
+        syms_all = collect_symbols(se)
+        syms_all.update(collect_symbols(he))
+        if len(syms_all) == 1 and next(iter(syms_all.values())).size() == 16:
+            nm = next(iter(syms_all))
+            t0 = time.time()
+            try:
+                n_diff, wit16 = exhaustive16(
+                    se, he, nm, [c for c in cons_by_sym.get(nm, ())]
+                )
+            except (ValueError, ImportError) as exc:
+                n_diff, wit16 = None, None
+                details.setdefault("exhaustive_errors", []).append(str(exc))
+            if n_diff is not None:
+                dt = time.time() - t0
+                details["solver_times"].append(
+                    (str(cell), "exhaustive16:%d-diffs" % n_diff, round(dt, 3))
+                )
+                if n_diff:
+                    verdict = "DIVERGENT"
+                    wit16["cell"] = list(cell)
+                    wit16["diff_count_2^16"] = n_diff
+                    witness = wit16
+                    break
+                continue
         s = z3.Solver()
         s.set("timeout", timeout_ms)
         s.add(se != he)
@@ -2580,6 +2808,12 @@ def main():
         "--timeout", type=int, default=3600, help="z3 timeout per query (s)"
     )
     ap.add_argument(
+        "--first-epoch",
+        action="store_true",
+        help="compare only the first input epoch (truncate each trace before "
+        "its first generation-1 adoption; sidesteps cross-epoch alignment)",
+    )
+    ap.add_argument(
         "--domain-json",
         default=None,
         help="documented-contract domain entries (JSON list); "
@@ -2626,6 +2860,23 @@ def main():
         _emit(args, result, t_start)
         return 1
     symbols = {}
+    stop_sem = stop_hand = None
+    if args.first_epoch:
+        gen1_sem = [
+            n for n, m in journal_sem.items() if any(g >= 1 for g in m.values())
+        ]
+        gen1_hand = [
+            n for n, m in journal_hand.items() if any(g >= 1 for g in m.values())
+        ]
+        stop_sem = min(gen1_sem) if gen1_sem else None
+        stop_hand = min(gen1_hand) if gen1_hand else None
+        journal_sem = {
+            n: m for n, m in journal_sem.items() if stop_sem is None or n < stop_sem
+        }
+        journal_hand = {
+            n: m for n, m in journal_hand.items() if stop_hand is None or n < stop_hand
+        }
+        result["first_epoch"] = {"stop_sem": stop_sem, "stop_hand": stop_hand}
     try:
         dst_sem = Dst(Symbolic, symbols)
         run_trace(
@@ -2636,6 +2887,7 @@ def main():
             validate=False,
             tag="sem",
             journal=journal_sem,
+            stop_at=stop_sem,
         )
         dst_hand = Dst(Symbolic, symbols)
         run_trace(
@@ -2646,6 +2898,7 @@ def main():
             validate=False,
             tag="hand",
             journal=journal_hand,
+            stop_at=stop_hand,
         )
     except ScopeRefusal as e:
         result["verdict"] = "SCOPE-REFUSED"
