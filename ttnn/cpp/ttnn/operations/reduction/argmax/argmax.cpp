@@ -200,9 +200,24 @@ bool accelerated_engines_can_serve(
     }
     // The accelerated readers page their writes off the preallocated output, so
     // a prealloc whose logical shape is not the reduction output shape would
-    // leave results unwritten or write past the tensor's page count. The scalar
-    // readers tolerate it, so demote instead of turning a call that used to
-    // work into an error.
+    // leave results unwritten or write past the tensor's page count.
+    //
+    // The scalar readers do NOT handle such a prealloc correctly either. They
+    // page off the reduction output shape and ignore the prealloc's own, so
+    // they are right exactly when the prealloc's TRAILING dim matches, and
+    // silently short-write otherwise. Measured on Blackhole, input
+    // [1, 1, 32, 2048] with keepdim = false (output shape [1, 1, 32]): a
+    // [1, 1, 32, 1] prealloc comes back with element 0 correct and the other
+    // 31 left at zero, while [32], [1, 32] and [1, 1, 1, 32] -- same trailing
+    // dim, different rank -- all come back fully correct. Nothing here should
+    // be relied on: pass the reduction output shape.
+    //
+    // This stays a demote rather than becoming a TT_FATAL because promoting it
+    // would reject the mis-handled shapes on only this arch/layout/dtype/dim
+    // combination while every other route kept returning the same wrong data,
+    // and would turn the correct-result cases above into hard errors. Making
+    // the scalar readers page off the prealloc they were given is the actual
+    // fix, and it is not this change.
     if (optional_output_tensor.has_value() &&
         optional_output_tensor->logical_shape() != ttnn::Shape(ttnn::prim::get_output_shape(input, dim, keepdim))) {
         return false;
@@ -281,7 +296,7 @@ constexpr uint32_t kSfpuMinRows = 32;
 // epilogue can actually afford they win by 1.9x-13.9x. H = 32 is the case that
 // splits: comparing each engine at the core count its own factory picks, at
 // V = 32768 RVV still edges the SFPU (84.6 us on 63 cores vs 87.0 us on 40 --
-// RVV 1.03x) while at V = 262144 the SFPU wins (215.3 us on 130 cores vs
+// RVV 1.03x) while at V = 262144 the SFPU wins (215.2 us on 130 cores vs
 // 203.8 us on 111 -- RVV 0.95x). 32 is chosen as the simple H-only boundary
 // that gets both large-V cases right in the direction that matters: every H
 // below it goes to RVV, where the margin is large and unambiguous, and
@@ -320,14 +335,12 @@ ArgMaxEngine select_argmax_engine(
     // but it is still a divergence: a caller that asked for the scalar
     // readers' exact behaviour must never be routed to it.
     //
-    // Rank 1 is excluded for a different reason. It reaches the accelerated
-    // engines because the RVV engine served it before (see
-    // accelerated_engines_can_serve), and nothing has ever run it on the SFPU
-    // kernels -- not a test, not a measurement. It cannot reach the
-    // H >= kSfpuMinRows branch below (rank 1 is H == 1 by construction), and at
-    // H == 1 the SFPU is the measured LOSER by 12-14x at equal core counts
-    // (see the table above), so there is nothing to win by making an
-    // unexercised shape class the first caller of that combination.
+    // The `rank >= 2` term is redundant today -- argmax_rows_per_tile_row
+    // answers 1 for rank 1, which cannot clear kSfpuMinRows -- and is kept only
+    // to state the intent explicitly: nothing has ever run rank 1 on the SFPU
+    // kernels, and at H == 1 the SFPU is the measured loser by 12-14x (table
+    // above), so it must not become the first caller of that combination if
+    // either of those two definitions moves.
     const int32_t rank = static_cast<int32_t>(input.logical_shape().rank());
     const bool sfpu_can_serve = !exact_special_values && rank >= 2;
 

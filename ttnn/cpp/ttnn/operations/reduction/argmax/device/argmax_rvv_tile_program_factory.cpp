@@ -29,23 +29,34 @@
 // total order with a smallest-global-index tie-break, not an IEEE compare
 // (see reader_argmax_rvv_tile.cpp).
 //
-// Core-count heuristic — DERIVED FROM MEASUREMENT, and deliberately NOT the
-// SFPU engine's. Both engines pay a per-core cost that grows linearly in the
-// core count (a shared ~0.44 us/core per-program dispatch floor, measured as
-// the slope of every curve past its knee), so both optima have the form
+// Core-count heuristic — AN EMPIRICAL FIT, and deliberately NOT the SFPU
+// engine's. Both engines pay a per-core cost that grows linearly in the core
+// count (a shared ~0.44 us/core per-program dispatch floor, measured as the
+// slope of every curve past its knee), so both optima have the form
 // sqrt(per-core-work / floor). What differs is the work: the SFPU pass is
 // flat in H, so sqrt(1.5 * w_tiles) is right for it, while this engine's scan
 // is per ROW, so its optimum must grow with H too. Using the SFPU formula
 // here cost up to 1.85x at H == 1 (see below).
 //
-// The fitted rule is
+// That argument fixes the SHAPE of the rule -- sqrt(w_tiles * (H + c1)) / c2
+// -- and nothing more. The two constants were picked by grid search over the
+// sweep tabulated below, scored on the worst per-shape ratio to the measured
+// optimum. They are FITTED PARAMETERS:
 //
 //     num_cores = ceil(sqrt(w_tiles * (h_logical + 2)) / 3)
 //
-// capped by the grid and by w_tiles. The `+ 2` is the per-tile cost that does
-// NOT scale with H (NOC streaming and chunk-loop overhead) expressed in
-// row-equivalents; the 9 = 3^2 in the denominator is the ratio of that
-// per-row-per-tile scan cost to the per-core dispatch floor.
+// capped by the grid and by w_tiles.
+//
+// Do NOT read the 2 and the 3 back as physical quantities; they are not, and
+// they do not reconcile with the per-tile constants quoted above. Those
+// (0.043 us/tile for the first row, 0.019 us/tile per further row, 0.44 us per
+// core) make the per-tile cost 0.019 * (H + 1.26) and so put the closed-form
+// optimum at sqrt(w_tiles * (H + 1.26)) / 4.81 -- different in both constants.
+// Nor does that closed form track the measurements: at H == 1 it asks for
+// 4 / 11 / 21 cores at V = 4096 / 32768 / 131072, where the sweep's
+// optima are 6 / 24 / 40. The fitted rule is used because the sweep endorses
+// it (worst case 1.08x off the per-shape optimum, table below), not because it
+// can be derived from a cost model.
 //
 // Measured on a Blackhole p150 (13x10 = 130-core compute grid) by trace
 // replay of throughput-mode captures -- per-op DEVICE time with host dispatch

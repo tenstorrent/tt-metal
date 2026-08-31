@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import threading
 from itertools import chain
 
@@ -13,6 +14,7 @@ import torch
 import ttnn
 
 from loguru import logger
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_equal
 
 TEST_PADDING_VALUE = -42
@@ -115,14 +117,54 @@ def _argmax_nc_nd_rank5():
     ]
 
 
+# On Blackhole ttnn.argmax routes TILE / bfloat16 / last-dim / width-multiple-of-32 inputs
+# onto the accelerated engines, and of those the ones with H < 32 -- which includes every
+# rank-1 shape, H == 1 by construction -- onto the RVV engine, whose kernel runs on TRISC2's
+# Zve32f vector unit (accelerated_engines_can_serve + select_argmax_engine in
+# ttnn/cpp/ttnn/operations/reduction/argmax/argmax.cpp). ttsim does not implement that unit:
+#
+#   ERROR: UnsupportedFunctionality: rv32_v_alu: babyrisc non-compliant V extension is
+#   explicitly out of scope
+#
+# and ttsim's error path is _Exit(1), so such a case kills the pytest/xdist worker rather
+# than failing. That is a property of where argmax routes on Blackhole, not of what these
+# cases test: they keep running on silicon and on every other architecture, and the TILE
+# cases that route to the SFPU engine or fall back to the scalar readers keep running here.
+def _routes_to_rvv(tensor_shape, tensor_layout, dim, dtype):
+    if tensor_layout != TL or dtype != torch.bfloat16 or dim is None:
+        return False
+    rank = len(tensor_shape)
+    if rank < 1 or 0 in tensor_shape:
+        return False
+    if dim % rank != rank - 1:  # reduction over the last dim only
+        return False
+    if tensor_shape[-1] % 32 != 0:  # the reduction dim must fill whole tiles
+        return False
+    return rank < 2 or tensor_shape[-2] < 32  # H >= 32 goes to the SFPU engine instead
+
+
+skip_rvv_routed_on_sim = pytest.mark.skipif(
+    is_blackhole() and bool(os.environ.get("TT_METAL_SIMULATOR")),
+    reason=(
+        "TILE bfloat16 last-dim argmax routes to the Blackhole RVV engine, whose TRISC2 "
+        "Zve32f kernel ttsim does not implement (UnsupportedFunctionality: rv32_v_alu)"
+    ),
+)
+
+
 def argmax_torch_ttnn_cases():
-    yield from chain(
+    for case in chain(
         _argmax_misc_and_rank_special(),
         _argmax_row_major_wide_reduce_last_dim(),
         _argmax_nc_hw_mixed_shapes(),
         _argmax_nc_nd_rank4(),
         _argmax_nc_nd_rank5(),
-    )
+    ):
+        tensor_shape, tensor_layout, dim, _keepdim, dtype = case
+        if _routes_to_rvv(tensor_shape, tensor_layout, dim, dtype):
+            yield pytest.param(*case, marks=skip_rvv_routed_on_sim)
+        else:
+            yield case
 
 
 @pytest.mark.parametrize(

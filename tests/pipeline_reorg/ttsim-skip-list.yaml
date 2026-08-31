@@ -40,15 +40,23 @@ blackhole:
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
-  # is_blackhole() is true under ttsim, so run_for_blackhole would let these run;
-  # the accelerated engines (TRISC2 Zve32f, SFPU) may not be modelled there.
-  - tests/ttnn/unit_tests/operations/reduce/test_argmax_rvv.py
+  # 175 tests, all passing on the pinned ttsim, but ~20 ttsim worker-minutes: +5-8 min
+  # wall onto a step measured at 23.9-36.5 min against its 40 min cap, and sim_bh_p150
+  # is allocated to the minute (680) in .github/time_budget.yaml.
   - tests/ttnn/unit_tests/operations/reduce/test_argmax_sfpu.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
+
+  # babyrisc V extension (TRISC2 Zve32f), which the RVV argmax kernel is built on:
+  #   ERROR: UnsupportedFunctionality: rv32_v_alu: babyrisc non-compliant V extension
+  #   is explicitly out of scope
+  # ttsim v1.10.3. That error path is _Exit(1), so this kills the xdist worker rather
+  # than failing a single test. run_for_blackhole() does not gate it: is_blackhole() is
+  # true under ttsim.
+  - tests/ttnn/unit_tests/operations/reduce/test_argmax_rvv.py
 
   # tensix_cfg_wr32 reg=119 (THCON_SEC1_REG1, the fp8/LF8 SEC1 config)
   - tests/ttnn/unit_tests/base_functionality/test_to_layout.py::test_to_layout_fp8_input_to_tile
