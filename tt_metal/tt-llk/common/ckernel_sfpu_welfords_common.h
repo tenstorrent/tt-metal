@@ -1100,6 +1100,12 @@ sfpi_inline void _load_mean_m2_from_dst_group_(std::uint32_t group_id)
     TT_SFPLOAD(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, m2_tile_offset + (group_id << 2));
 }
 
+sfpi_inline void _two_pass_switch_group_(std::uint32_t save_group_id, std::uint32_t restore_group_id)
+{
+    _store_mean_m2_to_dst_group_(save_group_id);
+    _load_mean_m2_from_dst_group_(restore_group_id);
+}
+
 /*
  * @brief Stores the mean and variance values to the tile in the dst reg.
  *

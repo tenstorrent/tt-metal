@@ -161,6 +161,12 @@ inline void llk_math_welfords_sfpu_load_mean_m2_from_dst(std::uint32_t mean_dst_
     _llk_math_welfords_sfpu_params_(ckernel::sfpu::_load_mean_m2_from_dst_group_, mean_dst_idx, group_id);
 }
 
+inline void llk_math_two_pass_sfpu_switch_group(
+    std::uint32_t mean_dst_idx, std::uint32_t save_group_id, std::uint32_t restore_group_id) {
+    _llk_math_welfords_sfpu_params_(
+        ckernel::sfpu::_two_pass_switch_group_, mean_dst_idx, save_group_id, restore_group_id);
+}
+
 template <std::size_t reciprocal_size>
 inline void llk_math_welfords_sfpu_store_mean_var_to_dst_raw(
     std::uint32_t mean_dst_idx,

@@ -204,9 +204,8 @@ void kernel_main() {
 
         for (std::uint32_t i = 0; i < block_h; ++i) {
             if (i > 0) {
-                welford_save_state(mean_dst, active_group);
+                two_pass_stats_switch_group(mean_dst, active_group, 0);
                 active_group = 0;
-                welford_restore_state(mean_dst, active_group);
             }
 
             // This indicates the smallest group that is yet to be processed for this block
@@ -258,9 +257,8 @@ void kernel_main() {
                     // We update the min_group so we never revisit this group again.
                     ++min_group;
                     if (min_group < num_groups) {
-                        welford_save_state(mean_dst, active_group);
+                        two_pass_stats_switch_group(mean_dst, active_group, min_group);
                         active_group = min_group;
-                        welford_restore_state(mean_dst, active_group);
                     }
                     channels_left = num_channels_per_group;
 
@@ -295,9 +293,8 @@ void kernel_main() {
         active_group = 0;
         for (std::uint32_t i = 0; i < block_h; ++i) {
             if (i > 0) {
-                welford_save_state(mean_dst, active_group);
+                two_pass_stats_switch_group(mean_dst, active_group, 0);
                 active_group = 0;
-                welford_restore_state(mean_dst, active_group);
             }
             std::uint32_t min_group = 0;
             std::uint32_t channels_left = num_channels_per_group;
@@ -321,9 +318,8 @@ void kernel_main() {
                     }
                     ++min_group;
                     if (min_group < num_groups) {
-                        welford_save_state(mean_dst, active_group);
+                        two_pass_stats_switch_group(mean_dst, active_group, min_group);
                         active_group = min_group;
-                        welford_restore_state(mean_dst, active_group);
                     }
                     channels_left = num_channels_per_group;
                     if (group_offset == tile_width) {

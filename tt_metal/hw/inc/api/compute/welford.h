@@ -319,6 +319,11 @@ ALWI void welford_restore_state(std::uint32_t mean_dst_idx, std::uint32_t group_
     MATH((llk_math_welfords_sfpu_load_mean_m2_from_dst(mean_dst_idx, group_id)));
 }
 
+ALWI void two_pass_stats_switch_group(
+    std::uint32_t mean_dst_idx, std::uint32_t save_group_id, std::uint32_t restore_group_id) {
+    MATH((llk_math_two_pass_sfpu_switch_group(mean_dst_idx, save_group_id, restore_group_id)));
+}
+
 template <std::size_t reciprocal_size>
 ALWI void welford_finalize_to_face(
     std::uint32_t mean_dst_idx,

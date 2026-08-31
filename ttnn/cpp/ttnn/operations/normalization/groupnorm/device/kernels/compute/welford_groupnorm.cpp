@@ -121,6 +121,11 @@ void kernel_main() {
     // True when the statistics intake CB is configured with UnpackToDestFp32.
     constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
     constexpr bool fp32_sfpu_normalizer = get_named_compile_time_arg_val("fp32_sfpu_normalizer") != 0;
+#ifdef SFPU_OP_INIT_ACTIVATION
+    constexpr bool has_fused_activation = true;
+#else
+    constexpr bool has_fused_activation = false;
+#endif
     constexpr uint32_t dfb_normalize_in_fp32_id = get_named_compile_time_arg_val("cb_normalize_in_fp32");
     constexpr uint32_t dfb_ex_global_fp32_id = get_named_compile_time_arg_val("cb_ex_global_fp32");
     constexpr uint32_t dfb_ex2pe_fp32_id = get_named_compile_time_arg_val("cb_ex2pe_fp32");
@@ -267,9 +272,8 @@ void kernel_main() {
         // First statistics traversal: accumulate sums relative to each group's first value.
         for (uint32_t mt = 0; mt < block_h; ++mt) {
             if (mt > 0) {
-                welford_save_state(mean_dst, active_group);
+                two_pass_stats_switch_group(mean_dst, active_group, 0);
                 active_group = 0;
-                welford_restore_state(mean_dst, active_group);
             }
 
             uint32_t min_group = 0;
@@ -310,9 +314,8 @@ void kernel_main() {
 
                     ++min_group;
                     if (min_group < num_groups) {
-                        welford_save_state(mean_dst, active_group);
+                        two_pass_stats_switch_group(mean_dst, active_group, min_group);
                         active_group = min_group;
-                        welford_restore_state(mean_dst, active_group);
                     }
                     channels_left = num_channels_per_group;
                     if (group_offset == tile_width) {
@@ -348,9 +351,8 @@ void kernel_main() {
         active_group = 0;
         for (uint32_t mt = 0; mt < block_h; ++mt) {
             if (mt > 0) {
-                welford_save_state(mean_dst, active_group);
+                two_pass_stats_switch_group(mean_dst, active_group, 0);
                 active_group = 0;
-                welford_restore_state(mean_dst, active_group);
             }
             uint32_t min_group = 0;
             uint32_t channels_left = num_channels_per_group;
@@ -379,9 +381,8 @@ void kernel_main() {
                     }
                     ++min_group;
                     if (min_group < num_groups) {
-                        welford_save_state(mean_dst, active_group);
+                        two_pass_stats_switch_group(mean_dst, active_group, min_group);
                         active_group = min_group;
-                        welford_restore_state(mean_dst, active_group);
                     }
                     channels_left = num_channels_per_group;
                     if (group_offset == tile_width) {
@@ -552,9 +553,6 @@ void kernel_main() {
 
                             // // b. (x - u) * 1/[sqrt(Var + eps)]
                             dfb_xmm.wait_front(1);
-                            // fp32: reset SrcA to dfb_xmm (fp32); stage a left SrcA on dfb_in0. The reconfig has to
-                            // precede the init: the init's LLK assert checks that the unpack config registers already
-                            // describe these operands.
                             if constexpr (enable_fp32_reconfig) {
                                 reconfig_data_format_srca(dfb_in0_id, dfb_xmm_id);
                             }
@@ -660,11 +658,23 @@ void kernel_main() {
                         mul_tiles_bcast_rows(dfb_x_id, dfb_gamma_id, 0, nt, dst0);
                         tile_regs_commit();
                         dfb_x.pop_front(1);
-                        dfb_x.reserve_back(1);
+                        if constexpr (do_beta || has_fused_activation) {
+                            dfb_x.reserve_back(1);
+                        } else {
+                            dfb_out.reserve_back(1);
+                        }
                         tile_regs_wait();
-                        pack_tile(dst0, dfb_x_id);
+                        if constexpr (do_beta || has_fused_activation) {
+                            pack_tile(dst0, dfb_x_id);
+                        } else {
+                            pack_tile(dst0, dfb_out_id);
+                        }
                         tile_regs_release();
-                        dfb_x.push_back(1);
+                        if constexpr (do_beta || has_fused_activation) {
+                            dfb_x.push_back(1);
+                        } else {
+                            dfb_out.push_back(1);
+                        }
                     }
 
                     if constexpr (do_beta) {
@@ -683,52 +693,62 @@ void kernel_main() {
                         add_tiles_bcast_rows(dfb_x_id, dfb_beta_id, 0, nt, dst0);
                         tile_regs_commit();
                         dfb_x.pop_front(1);
-                        dfb_x.reserve_back(1);
+                        if constexpr (has_fused_activation) {
+                            dfb_x.reserve_back(1);
+                        } else {
+                            dfb_out.reserve_back(1);
+                        }
                         tile_regs_wait();
-                        pack_tile(dst0, dfb_x_id);
+                        if constexpr (has_fused_activation) {
+                            pack_tile(dst0, dfb_x_id);
+                        } else {
+                            pack_tile(dst0, dfb_out_id);
+                        }
                         tile_regs_release();
-                        dfb_x.push_back(1);
+                        if constexpr (has_fused_activation) {
+                            dfb_x.push_back(1);
+                        } else {
+                            dfb_out.push_back(1);
+                        }
                     }
 
-                    // Write out the final output
-                    if constexpr (enable_fp32_reconfig) {
-                        reconfig_data_format_srca(dfb_x_id);
-                    }
-                    reconfig_data_format_srcb(do_beta ? dfb_beta_id : dfb_xmm_id, dfb_x_id);
-                    copy_init(dfb_x_id);
+                    if constexpr ((!do_gamma && !do_beta) || has_fused_activation) {
+                        // Without affine parameters, move the normalized tile to the output CB.
+                        // A fused activation also needs the affine result back in DEST before output.
+                        if constexpr (enable_fp32_reconfig) {
+                            reconfig_data_format_srca(dfb_x_id);
+                        }
+                        reconfig_data_format_srcb(do_beta ? dfb_beta_id : dfb_xmm_id, dfb_x_id);
+                        copy_init(dfb_x_id);
 
-                    dfb_x.wait_front(1);
-                    tile_regs_acquire();
-                    copy_tile(dfb_x_id, 0, dst0);
+                        dfb_x.wait_front(1);
+                        tile_regs_acquire();
+                        copy_tile(dfb_x_id, 0, dst0);
 #ifdef SFPU_OP_INIT_ACTIVATION
-                    // Optional fused unary activation (e.g. SiLU). Applied here, after gamma and
-                    // beta and on the final output tile still in DEST, so the result equals
-                    // <act>(group_norm(x)) with the activation consuming the fp32 DEST value rather
-                    // than the rounded output a standalone activation op would read back.
-                    // Safe w.r.t. welford's SFPU replay state: this is the POST stage, all welford
-                    // accumulation for the batch is already finished.
-                    SFPU_OP_INIT_ACTIVATION
-                    SFPU_OP_FUNC_ACTIVATION
+                        // Apply the activation after affine and before the output is rounded.
+                        SFPU_OP_INIT_ACTIVATION
+                        SFPU_OP_FUNC_ACTIVATION
 #endif
-                    tile_regs_commit();
-                    dfb_x.pop_front(1);
-                    dfb_out.reserve_back(1);
-                    tile_regs_wait();
+                        tile_regs_commit();
+                        dfb_x.pop_front(1);
+                        dfb_out.reserve_back(1);
+                        tile_regs_wait();
 #ifndef UNTILIZE_OUT
-                    // Packer was last set for bf16 dfb_x; reconfigure to dfb_out_id (may be fp32) before pack, restore
-                    // after. Only needed when out differs from dfb_x (fp32 path); no-op gated out for bf16.
-                    if constexpr (enable_fp32_reconfig) {
-                        pack_reconfig_data_format(dfb_out_id);
-                    }
+                        // Packer was last set for bf16 dfb_x; reconfigure to dfb_out_id (may be fp32) before pack,
+                        // then restore it. This compiles out for the bf16 path.
+                        if constexpr (enable_fp32_reconfig) {
+                            pack_reconfig_data_format(dfb_out_id);
+                        }
 #endif
-                    pack_tile(dst0, dfb_out_id);
+                        pack_tile(dst0, dfb_out_id);
 #ifndef UNTILIZE_OUT
-                    if constexpr (enable_fp32_reconfig) {
-                        pack_reconfig_data_format(dfb_x_id);
-                    }
+                        if constexpr (enable_fp32_reconfig) {
+                            pack_reconfig_data_format(dfb_x_id);
+                        }
 #endif
-                    tile_regs_release();
-                    dfb_out.push_back(1);
+                        tile_regs_release();
+                        dfb_out.push_back(1);
+                    }
                 }
             }
 
