@@ -45,6 +45,10 @@ def _flat_row_index(row_ids: torch.Tensor, device) -> ttnn.Tensor:
     )
 
 
+def _round_up_to_tile(n: int) -> int:
+    return ((n + 31) // 32) * 32
+
+
 def _fold_cameras_into_batch(tensor, bs: int, num_cams: int, seq_len: int, embed_dims: int):
     """``[num_cams, seq_len, bs, embed_dims]`` -> ``[bs * num_cams, seq_len, embed_dims]``.
 
@@ -55,15 +59,6 @@ def _fold_cameras_into_batch(tensor, bs: int, num_cams: int, seq_len: int, embed
     folded = ttnn.permute(ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT), (2, 0, 1, 3))
     folded = ttnn.reshape(folded, (bs * num_cams, seq_len, embed_dims))
     return ttnn.to_layout(folded, ttnn.TILE_LAYOUT)
-
-
-def _index_dtype(num_rows: int):
-    """Narrowest index dtype ``ttnn.scatter_add`` accepts that still addresses ``num_rows``.
-
-    The scatter index is widened across embed_dims on device, so it is the largest tensor in the
-    aggregation — the width choice is worth more than it looks.
-    """
-    return ttnn.uint16 if num_rows <= 0xFFFF else ttnn.uint32
 
 
 class TTSpatialCrossAttention:
@@ -120,6 +115,21 @@ class TTSpatialCrossAttention:
         # apply it, so sharing one namespace makes the inner attention project
         # with the SCA's matrix and the SCA apply that matrix a second time.
         self.deformable_attention = TTMSDeformableAttention(deform_config, device, params.deformable_attention)
+
+        # ``embedding_bw`` reads its weight argument for one number, the row count, and never
+        # touches the data. Kept per shape so the allocation happens once instead of per call.
+        self._slot_tables = {}
+
+    def _slot_table(self, bs: int, slot_stride: int, dtype):
+        key = (bs, slot_stride, dtype)
+        if key not in self._slot_tables:
+            self._slot_tables[key] = ttnn.zeros(
+                (1, 1, bs * slot_stride, self.embed_dims),
+                device=self.device,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+            )
+        return self._slot_tables[key]
 
     def forward(
         self,
@@ -345,33 +355,23 @@ class TTSpatialCrossAttention:
         # The scatter target carries one row past num_queries. Padded slots address that sentinel
         # row and it is sliced off, so whatever deformable attention produced for them is discarded
         # without their value having to be zero.
-        scatter_src = ttnn.to_layout(
-            ttnn.reshape(queries_output, (bs, self.num_cams * rebatch_len, self.embed_dims)),
-            ttnn.ROW_MAJOR_LAYOUT,
+        # ``embedding_bw`` is the row-wise scatter-add: it accumulates one grad row per index, which
+        # is what this is. ``scatter_add`` takes an index per *element*, so it needs the row id
+        # widened across embed_dims, and it transposes input, index and source to put the scatter
+        # axis last and transposes the result back — four permutes and a repeat that this does not
+        # need. It is the same asymmetry that made ``embedding`` beat ``gather`` on the rebatch.
+        slot_stride = _round_up_to_tile(num_queries + 1)
+        scatter_grad = ttnn.reshape(queries_output, (1, 1, bs * self.num_cams * rebatch_len, self.embed_dims))
+        scatter_index = _flat_row_index(
+            query_ids + (torch.arange(bs, dtype=torch.int32) * slot_stride).reshape(bs, 1, 1), self.device
         )
-        # Uploaded as one id per row and widened on device; materializing the embed_dims copies on
-        # host would put a multi-megabyte index on the bus.
-        scatter_index = ttnn.repeat(
-            ttnn.from_torch(
-                query_ids.reshape(bs, self.num_cams * rebatch_len, 1),
-                device=self.device,
-                dtype=_index_dtype(num_queries + 1),
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            ),
-            ttnn.Shape((1, 1, self.embed_dims)),
+        slots = ttnn.embedding_bw(scatter_index, self._slot_table(bs, slot_stride, queries_output.dtype), scatter_grad)
+        # The table is padded to a tile boundary per batch item so this split lands on one.
+        slots = ttnn.slice(
+            ttnn.reshape(slots, (bs, slot_stride, self.embed_dims)),
+            (0, 0, 0),
+            (bs, num_queries, self.embed_dims),
         )
-        slots = ttnn.scatter_add(
-            ttnn.zeros(
-                (bs, num_queries + 1, self.embed_dims),
-                device=self.device,
-                dtype=queries_output.dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            ),
-            dim=1,
-            index=scatter_index,
-            src=scatter_src,
-        )
-        slots = ttnn.to_layout(ttnn.slice(slots, (0, 0, 0), (bs, num_queries, self.embed_dims)), ttnn.TILE_LAYOUT)
 
         if ENABLE_LOGGING:
             logger.info("SCA Feature Aggregation Complete")
