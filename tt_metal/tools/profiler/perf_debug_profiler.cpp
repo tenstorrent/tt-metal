@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cmath>
+#include <deque>
 #include <queue>
 #include "tools/profiler/perf_debug_profiler.hpp"
 
@@ -50,6 +51,7 @@
 #include "impl/kernels/kernel.hpp"  // DramConfig (a DRISC kernel is not in the public headers yet)
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "hostdevcommon/fabric_router_sync.h"
 #include "hostdevcommon/profiler_common.h"
 
 #include "tools/profiler/spsc_marker_decode.hpp"
@@ -2037,6 +2039,693 @@ void PerfDebugProfiler::check_sync_drift_at_close() {
     }
 }
 
+// ---- FABRIC ROUTER SYNC: host side of the in-router device-to-device clock sync -----------------
+//
+// The device half lives in the fabric router itself (fabric_router_sync_hook.hpp): at a host-set
+// cadence the two routers on a link run Cristian's algorithm over raw 16 B eth messages and emit
+// each timestamp as a self-timestamping PP_SYNC packet into their own SPSC rings, which the DRISC
+// fillers sweep like any other marker. This host half:
+//
+//   1. DISCOVERS the routers: one fabric-claimed channel per spanning-tree link (plus every extra
+//      link that closes a cycle, kept as a CLOSURE edge -- measured, never composed), reads each
+//      hook's L1 block address from the AERISC fabric scratch words, and writes both ends' configs
+//      (the LOWER chip id initiates; a config of zeros means disabled, so a router that never gets
+//      one stays inert).
+//   2. AGGREGATES: the receiver's decode threads relay every PP_SYNC packet to one sink; this
+//      thread joins T0/T2 (initiator's stream) with T1 (responder's stream) by (round, idx),
+//      min-RTT solves each round with the same eth_sync::solve the resident-pair path uses, and
+//      tracks a per-edge offset series (rate from ROUND deltas -- the within-round rate of
+//      back-to-back samples is meaningless).
+//   3. COMPOSES the tree into per-device corrections against the ROOT device's timeline. The
+//      correction is expressed against what each device's HOST ANCHOR already encodes:
+//
+//        corr_D = f_D * (AH_root - AH_D) + (AD_D - AD_root) - measured(D minus root)
+//
+//      i.e. (the anchor-implied device-vs-root offset) minus (the eth-measured one) -- anchors
+//      absorb the huge power-on offsets, the eth link supplies the ns-class truth, and corr_D is
+//      the small anchor error the link can see. Root's correction is 0 by construction.
+//      Published through the same grow-only ratchet + common-baseline mechanics as the eth
+//      tracker (the baseline rides through the ratchet and cancels in every difference).
+//
+// MUTUAL EXCLUSION: when the resident-pair eth tracker owns the corrections
+// (TT_METAL_PERF_DEBUG_ETH_TRACK_HZ set), this path still MEASURES -- that is the planes=2
+// cross-check -- but does not publish; at teardown it prints the disagreement between the two
+// instruments on each shared link.
+
+namespace {
+double fabric_sync_hz() {
+    static const double v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ");
+        return (s != nullptr && *s != '\0') ? std::strtod(s, nullptr) : 0.0;
+    }();
+    return v;
+}
+}  // namespace
+
+struct PerfDebugProfiler::FabricSyncState {
+    static constexpr uint32_t kNSamples = tt::tt_fabric::router_sync::kMaxSamples;
+
+    struct End {
+        uint32_t chip = 0;
+        CoreCoord logical;
+        CoreCoord virt;
+        uint32_t blk_addr = 0;
+    };
+    struct Round {
+        uint64_t t0[kNSamples] = {}, t1[kNSamples] = {}, t2[kNSamples] = {};
+        uint32_t got0 = 0, got1 = 0, got2 = 0;  // bitmasks by sample idx
+        std::chrono::steady_clock::time_point first_seen;
+    };
+    struct Edge {
+        End init, resp;  // init = lower chip id; measured offset is resp MINUS init
+        bool in_tree = false;
+        std::map<uint32_t, Round> pending;  // by 17-bit wire round (wraps; joins are per-round)
+        // solved series
+        bool have = false;
+        int64_t off_last = 0;   // resp - init, cycles, at ref_last (init clock)
+        uint64_t ref_last = 0;
+        double rate = 1.0;  // d(resp)/d(init), from ROUND deltas
+        std::deque<std::pair<uint64_t, int64_t>> series;  // (mid_ref, offset) for the rate fit
+        // stats
+        uint64_t rounds_solved = 0, rounds_partial = 0, rounds_dropped = 0;
+        uint64_t trips_total = 0;
+        uint64_t rtt_min = ~0ull;
+        int64_t off_min = 0, off_max = 0;
+        double residual_last = 0.0;
+        uint64_t stray_samples = 0;  // which/side mismatches (should stay 0)
+    };
+    std::vector<Edge> edges;
+    // (chip << 32 | vx << 16 | vy) -> (edge index, 0 = initiator end, 1 = responder end)
+    std::unordered_map<uint64_t, std::pair<size_t, int>> end_by_core;
+    uint32_t root = 0;
+    std::unordered_map<uint32_t, size_t> parent_edge;  // chip -> tree edge toward root
+    // host anchors snapshot (what the Tracy transforms encode), taken at start
+    struct Anchor {
+        int64_t host_ns = 0;
+        uint64_t dev = 0;
+        double f = 0.0;  // cycles per ns
+        bool valid = false;
+    };
+    std::unordered_map<uint32_t, Anchor> anchors;
+    // sink queue: decode threads push, the aggregator swaps out
+    std::mutex mu;
+    std::vector<perf_debug::PerfDebugSyncSample> q;
+    uint64_t sink_samples = 0;
+    std::thread th;
+    std::atomic<bool> stop{false};
+    bool publish = false;
+    int64_t baseline = 0;
+    bool disabled_devices = false;
+
+    static uint64_t core_key(uint32_t chip, uint32_t vx, uint32_t vy) {
+        return (static_cast<uint64_t>(chip) << 32) | (static_cast<uint64_t>(vx) << 16) | vy;
+    }
+    // Composition uses each edge's LATEST solved offset, never a cross-clock extrapolation: the
+    // reference instants live in different chips' clock domains (absolute offsets are minutes), so
+    // an out-of-domain (t - ref) times (rate - 1) would inject microseconds of false correction.
+    // Cross-edge measurement skew is bounded by one round period; at ~ppm relative rates that is
+    // nanoseconds, and the ring closure MEASURES what it actually costs. `rate` is a statistic.
+};
+
+// Install the receiver sink. Must run BEFORE receiver_->start(); the sink only enqueues (decode
+// threads must never block on the aggregator).
+void PerfDebugProfiler::install_fabric_sync_sink() {
+    if (fabric_sync_hz() <= 0.0 || receiver_ == nullptr) {
+        return;
+    }
+    if (MetalContext::instance().get_fabric_config() == tt::tt_fabric::FabricConfig::DISABLED) {
+        return;
+    }
+    auto* st = new FabricSyncState();
+    fabric_sync_ = st;
+    receiver_->set_sync_sink([st](const perf_debug::PerfDebugSyncSample& s) {
+        std::lock_guard<std::mutex> lk(st->mu);
+        st->q.push_back(s);
+        st->sink_samples++;
+    });
+}
+
+void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    if (fabric_sync_ == nullptr) {
+        return;
+    }
+    auto* st = fabric_sync_;
+    const double hz = fabric_sync_hz();
+    const auto context_id = mesh_device->impl().get_context_id();
+    auto& cluster = MetalContext::instance(context_id).get_cluster();
+    const auto& hal = MetalContext::instance().hal();
+    const auto devices = mesh_device->get_devices();
+
+    uint64_t scratch_addr = 0;
+    try {
+        scratch_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::FABRIC_ROUTER_SYNC_SCRATCH);
+    } catch (const std::exception& e) {
+        log_warning(tt::LogMetal, "[perf-debug profiler] FABRIC SYNC: no router scratch on this arch ({}); off", e.what());
+        return;
+    }
+
+    // ---- discover one claimed channel per link: BFS tree edges + cycle-closing CLOSURE edges ----
+    auto pair_key = [](uint32_t a, uint32_t b) {
+        return (static_cast<uint64_t>(std::min(a, b)) << 32) | std::max(a, b);
+    };
+    std::set<uint64_t> seen_pairs;
+    std::set<int> visited;
+    std::queue<IDevice*> bfs;
+    st->root = static_cast<uint32_t>(devices.front()->id());
+    visited.insert(devices.front()->id());
+    bfs.push(devices.front());
+    auto find_dev = [&](int id) -> IDevice* {
+        for (IDevice* d : devices) {
+            if (d->id() == id) {
+                return d;
+            }
+        }
+        return nullptr;
+    };
+    while (!bfs.empty()) {
+        IDevice* a = bfs.front();
+        bfs.pop();
+        for (const CoreCoord& ec : a->get_active_ethernet_cores(true)) {
+            std::tuple<ChipId, CoreCoord> peer;
+            try {
+                peer = a->get_connected_ethernet_core(ec);
+            } catch (const std::exception&) {
+                continue;
+            }
+            const int pid = static_cast<int>(std::get<0>(peer));
+            IDevice* b = find_dev(pid);
+            if (b == nullptr) {
+                continue;  // leaves the mesh
+            }
+            const uint64_t pk = pair_key(a->id(), pid);
+            if (seen_pairs.count(pk) != 0) {
+                continue;  // one channel per chip pair is enough for a clock
+            }
+            // The hook lives in ROUTERS: only a channel CLAIMED on both ends carries it.
+            if (!eth_core_is_fabric_claimed(static_cast<uint32_t>(a->id()), ec) ||
+                !eth_core_is_fabric_claimed(static_cast<uint32_t>(pid), std::get<1>(peer))) {
+                continue;
+            }
+            seen_pairs.insert(pk);
+            FabricSyncState::Edge e;
+            const bool a_initiates = a->id() < pid;
+            FabricSyncState::End ea{static_cast<uint32_t>(a->id()), ec, CoreCoord{}, 0};
+            FabricSyncState::End eb{static_cast<uint32_t>(pid), std::get<1>(peer), CoreCoord{}, 0};
+            e.init = a_initiates ? ea : eb;
+            e.resp = a_initiates ? eb : ea;
+            e.in_tree = visited.count(pid) == 0;
+            if (e.in_tree) {
+                visited.insert(pid);
+                bfs.push(b);
+                // parent hop for the BFS CHILD (pid). The edge's init/resp orientation is chosen by
+                // chip id, not by tree direction -- the composition walk checks which end the child is.
+                st->parent_edge[static_cast<uint32_t>(pid)] = st->edges.size();
+            }
+            st->edges.push_back(std::move(e));
+        }
+    }
+    if (st->edges.empty()) {
+        log_warning(tt::LogMetal, "[perf-debug profiler] FABRIC SYNC: no fabric-claimed links found; off");
+        return;
+    }
+
+    // ---- discovery handshake + config write on every end ----
+    auto virt_of = [&](const FabricSyncState::End& en) {
+        return cluster.get_virtual_coordinate_from_logical_coordinates(en.chip, en.logical, CoreType::ETH);
+    };
+    auto read_blk = [&](FabricSyncState::End& en) -> bool {
+        en.virt = virt_of(en);
+        uint32_t w[3] = {0, 0, 0};
+        const auto t0 = std::chrono::steady_clock::now();
+        while (std::chrono::steady_clock::now() - t0 < std::chrono::seconds(3)) {
+            cluster.read_core(w, sizeof(w), tt_cxy_pair(en.chip, en.virt), scratch_addr);
+            if (w[0] == tt::tt_fabric::router_sync::kDiscMagic && w[1] != 0) {
+                en.blk_addr = w[1];
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return false;
+    };
+    size_t kept = 0;
+    for (auto& e : st->edges) {
+        if (!read_blk(e.init) || !read_blk(e.resp)) {
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] FABRIC SYNC: router hook not discovered on {} ({},{}) <-> {} ({},{}) "
+                "(no scratch magic; is the hook compiled in?); link dropped",
+                e.init.chip, e.init.logical.x, e.init.logical.y,
+                e.resp.chip, e.resp.logical.x, e.resp.logical.y);
+            e.init.blk_addr = 0;
+            continue;
+        }
+        kept++;
+    }
+    if (kept == 0) {
+        log_warning(tt::LogMetal, "[perf-debug profiler] FABRIC SYNC: no link discovered its hooks; off");
+        return;
+    }
+
+    // Anchors snapshot: what the per-device Tracy transforms encode; the corrections below are the
+    // measured deviation FROM these.
+    for (const auto& ctx : devices_) {
+        FabricSyncState::Anchor an;
+        an.valid = ctx.anchor_valid && ctx.freq_ghz > 0.0;
+        an.host_ns = ctx.anchor_host;
+        an.dev = ctx.anchor_dev;
+        an.f = ctx.freq_ghz;
+        st->anchors[ctx.chip_id] = an;
+    }
+
+    // Publication policy: the resident-pair tracker wins when both are up (planes=2 cross-check runs
+    // both on purpose -- this path then only measures and reports).
+    st->publish = (eth_track_hz() == 0);
+
+    // ---- write configs: responder first, magic last ----
+    using namespace tt::tt_fabric::router_sync;
+    auto write_cfg = [&](const FabricSyncState::End& en, bool initiator, uint64_t interval, uint32_t peer_blk) {
+        uint32_t body[7];  // flags .. peer_blk (Cfg minus magic)
+        body[0] = kFlagEnabled | (initiator ? kFlagInitiator : 0);
+        body[1] = static_cast<uint32_t>(interval & 0xFFFFFFFFu);
+        body[2] = static_cast<uint32_t>(interval >> 32);
+        body[3] = FabricSyncState::kNSamples;
+        body[4] = 1u << 21;  // first_wait ~1.55 ms: responder poll cadence + a context-switch stretch
+        body[5] = 1u << 19;  // next_wait ~0.39 ms: mid-round tolerance for the peer's context switch
+        body[6] = peer_blk;
+        cluster.write_core(body, sizeof(body), tt_cxy_pair(en.chip, en.virt), en.blk_addr + 4);
+        const uint32_t magic = kCfgMagic;
+        cluster.write_core(&magic, sizeof(magic), tt_cxy_pair(en.chip, en.virt), en.blk_addr);
+    };
+    for (auto& e : st->edges) {
+        if (e.init.blk_addr == 0) {
+            continue;
+        }
+        const int aiclk_mhz = cluster.get_device_aiclk(e.init.chip);
+        const double cyc_per_s = (aiclk_mhz > 0 ? aiclk_mhz : 1350) * 1e6;
+        const uint64_t init_interval = static_cast<uint64_t>(cyc_per_s / hz);
+        const uint64_t resp_interval = std::min<uint64_t>(init_interval / 4, 1u << 17);  // <= ~97 us poll
+        write_cfg(e.resp, false, resp_interval, e.init.blk_addr);
+        write_cfg(e.init, true, init_interval, e.resp.blk_addr);
+        st->end_by_core[FabricSyncState::core_key(e.init.chip, e.init.virt.x, e.init.virt.y)] = {
+            static_cast<size_t>(&e - st->edges.data()), 0};
+        st->end_by_core[FabricSyncState::core_key(e.resp.chip, e.resp.virt.x, e.resp.virt.y)] = {
+            static_cast<size_t>(&e - st->edges.data()), 1};
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] FABRIC SYNC link {} ({},{}) -> {} ({},{}): {} rounds/s x {} samples "
+            "in-router on the CLAIMED channel{}",
+            e.init.chip, e.init.logical.x, e.init.logical.y,
+            e.resp.chip, e.resp.logical.x, e.resp.logical.y,
+            hz, FabricSyncState::kNSamples, e.in_tree ? "" : " [closure edge]");
+    }
+
+    // ---- the aggregator thread ----
+    const auto& ctx = receiver_->capture_context();
+    st->th = std::thread([this, st, &ctx]() {
+        std::vector<perf_debug::PerfDebugSyncSample> batch;
+        uint64_t last_log_solved = 0;
+        auto last_pub = std::chrono::steady_clock::now();
+        while (!st->stop.load(std::memory_order_relaxed)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            {
+                std::lock_guard<std::mutex> lk(st->mu);
+                batch.swap(st->q);
+            }
+            // route samples into per-edge pending rounds
+            for (const auto& s : batch) {
+                if (s.dev >= ctx.devices.size() || s.lane >= ctx.devices[s.dev].lanes.size() ||
+                    s.idx >= FabricSyncState::kNSamples) {
+                    continue;
+                }
+                const auto& li = ctx.devices[s.dev].lanes[s.lane];
+                const auto it = st->end_by_core.find(FabricSyncState::core_key(li.chip_id, li.virtual_x, li.virtual_y));
+                if (it == st->end_by_core.end()) {
+                    continue;  // an eth core we did not configure (another plane's router)
+                }
+                auto& e = st->edges[it->second.first];
+                const bool from_init = it->second.second == 0;
+                const bool ok = from_init ? (s.which == 0 || s.which == 2) : (s.which == 1);
+                if (!ok) {
+                    e.stray_samples++;
+                    continue;
+                }
+                auto& r = e.pending[s.round];
+                if (r.got0 == 0 && r.got1 == 0 && r.got2 == 0) {
+                    r.first_seen = std::chrono::steady_clock::now();
+                }
+                if (s.which == 0) {
+                    r.t0[s.idx] = s.ts;
+                    r.got0 |= 1u << s.idx;
+                } else if (s.which == 1) {
+                    r.t1[s.idx] = s.ts;
+                    r.got1 |= 1u << s.idx;
+                } else {
+                    r.t2[s.idx] = s.ts;
+                    r.got2 |= 1u << s.idx;
+                }
+            }
+            batch.clear();
+            // solve rounds that are complete, or stale enough that the missing packets are lost
+            const auto now_tp = std::chrono::steady_clock::now();
+            for (auto& e : st->edges) {
+                for (auto it = e.pending.begin(); it != e.pending.end();) {
+                    auto& r = it->second;
+                    const uint32_t full = (1u << FabricSyncState::kNSamples) - 1;
+                    const bool complete = (r.got0 & r.got1 & r.got2) == full;
+                    const bool stale = now_tp - r.first_seen > std::chrono::milliseconds(complete ? 0 : 700);
+                    if (!complete && !stale) {
+                        ++it;
+                        continue;
+                    }
+                    std::vector<eth_sync::Trip> trips;
+                    const uint32_t have = r.got0 & r.got1 & r.got2;
+                    for (uint32_t i = 0; i < FabricSyncState::kNSamples; i++) {
+                        if ((have & (1u << i)) == 0 || r.t2[i] < r.t0[i]) {
+                            continue;
+                        }
+                        const uint64_t mid = r.t0[i] + (r.t2[i] - r.t0[i]) / 2;
+                        trips.push_back(eth_sync::Trip{
+                            r.t0[i], r.t1[i], r.t2[i],
+                            static_cast<int64_t>(r.t1[i]) - static_cast<int64_t>(mid),
+                            r.t2[i] - r.t0[i], mid});
+                    }
+                    if (trips.size() < 4) {
+                        e.rounds_dropped++;
+                        it = e.pending.erase(it);
+                        continue;
+                    }
+                    auto sol = eth_sync::solve(std::move(trips), 0.25);
+                    if (!sol.valid) {
+                        e.rounds_dropped++;
+                        it = e.pending.erase(it);
+                        continue;
+                    }
+                    complete ? e.rounds_solved++ : e.rounds_partial++;
+                    e.trips_total += sol.n_total;
+                    e.rtt_min = std::min(e.rtt_min, sol.rtt_min);
+                    e.residual_last = sol.residual_rms;
+                    if (!e.have) {
+                        e.off_min = e.off_max = sol.offset;
+                    }
+                    e.off_min = std::min(e.off_min, sol.offset);
+                    e.off_max = std::max(e.off_max, sol.offset);
+                    e.off_last = sol.offset;
+                    e.ref_last = sol.mid_ref;
+                    e.have = true;
+                    e.series.emplace_back(sol.mid_ref, sol.offset);
+                    if (e.series.size() > 256) {
+                        e.series.pop_front();
+                    }
+                    // rate from ROUND deltas, least squares, once the baseline is long enough
+                    if (e.series.size() >= 8 && (e.series.back().first - e.series.front().first) > (1ull << 30)) {
+                        double sx = 0, sy = 0, sxx = 0, sxy = 0;
+                        const uint64_t x0 = e.series.front().first;
+                        const double n = static_cast<double>(e.series.size());
+                        for (const auto& [m, o] : e.series) {
+                            const double x = static_cast<double>(m - x0);
+                            const double y = static_cast<double>(o - e.series.front().second);
+                            sx += x; sy += y; sxx += x * x; sxy += x * y;
+                        }
+                        const double den = n * sxx - sx * sx;
+                        if (den > 0) {
+                            e.rate = 1.0 + (n * sxy - sx * sy) / den;
+                        }
+                    }
+                    it = e.pending.erase(it);
+                }
+                // hard cap on pending rounds (drain hiccup): drop oldest
+                while (e.pending.size() > 64) {
+                    e.pending.erase(e.pending.begin());
+                    e.rounds_dropped++;
+                }
+            }
+            // compose + publish corrections
+            if (now_tp - last_pub > std::chrono::milliseconds(40)) {
+                last_pub = now_tp;
+                publish_fabric_sync_corrections();
+            }
+            // periodic per-link line
+            uint64_t solved = 0;
+            for (const auto& e : st->edges) {
+                solved += e.rounds_solved + e.rounds_partial;
+            }
+            if (solved - last_log_solved >= 200) {
+                last_log_solved = solved;
+                for (const auto& e : st->edges) {
+                    if (!e.have) {
+                        continue;
+                    }
+                    log_info(
+                        tt::LogMetal,
+                        "[perf-debug profiler] FABRIC SYNC {} -> {}: {} rounds ({} partial, {} dropped), "
+                        "offset {} cy (span {}), rtt_min {} cy, rate {:+.3f} ppm, residual {:.1f} cy{}",
+                        e.init.chip, e.resp.chip, e.rounds_solved, e.rounds_partial, e.rounds_dropped,
+                        e.off_last, e.off_max - e.off_min, e.rtt_min, (e.rate - 1.0) * 1e6, e.residual_last,
+                        e.in_tree ? "" : " [closure]");
+                }
+                log_fabric_sync_closure(false);
+            }
+        }
+    });
+    log_info(
+        tt::LogMetal,
+        "[perf-debug profiler] FABRIC SYNC: {} in-router link(s) at {} Hz -- t0/t1/t2 ride the profiler "
+        "drain as PP_SYNC packets; corrections {} (root chip {})",
+        kept, hz, st->publish ? "PUBLISHED centrally" : "measure-only (eth tracker owns corrections)", st->root);
+}
+
+// Compose tree edges into per-chip (chip minus root) offsets at a common instant, convert to
+// anchor-relative corrections, ratchet, publish.
+void PerfDebugProfiler::publish_fabric_sync_corrections() {
+    auto* st = fabric_sync_;
+    if (st == nullptr) {
+        return;
+    }
+    bool any = false;
+    for (const auto& e : st->edges) {
+        any = any || (e.in_tree && e.have);
+    }
+    if (!any) {
+        return;
+    }
+    // delta[chip] = chip clock MINUS root clock, composed from each edge's latest solved offset
+    std::unordered_map<uint32_t, int64_t> delta;
+    delta[st->root] = 0;
+    bool all = true;
+    for (const auto& [chip, _] : st->parent_edge) {
+        int64_t d = 0;
+        uint32_t cur = chip;
+        bool ok = true;
+        int hops = 0;
+        while (cur != st->root && hops++ < 8) {
+            auto it = st->parent_edge.find(cur);
+            if (it == st->parent_edge.end() || !st->edges[it->second].have) {
+                ok = false;
+                break;
+            }
+            const auto& e = st->edges[it->second];
+            const int64_t off = e.off_last;  // resp - init, latest solved round
+            if (e.resp.chip == cur) {
+                d += off;  // cur is the resp end; parent is init
+                cur = e.init.chip;
+            } else {
+                d -= off;
+                cur = e.resp.chip;
+            }
+        }
+        if (ok && cur == st->root) {
+            delta[chip] = d;
+        } else {
+            all = false;
+        }
+    }
+    if (!all || !st->publish) {
+        return;
+    }
+    // corr = (anchor-implied delta) - (measured delta); root = 0 by construction
+    const auto ra = st->anchors.find(st->root);
+    if (ra == st->anchors.end() || !ra->second.valid) {
+        return;
+    }
+    std::unordered_map<uint32_t, int64_t> corr;
+    for (const auto& [chip, d] : delta) {
+        const auto a = st->anchors.find(chip);
+        if (a == st->anchors.end() || !a->second.valid) {
+            return;  // a device without an anchor cannot take a correction against one
+        }
+        const double anchor_implied =
+            a->second.f * static_cast<double>(ra->second.host_ns - a->second.host_ns) +
+            static_cast<double>(static_cast<int64_t>(a->second.dev - ra->second.dev));
+        corr[chip] = static_cast<int64_t>(std::llround(anchor_implied)) - d;
+    }
+    // the tracker's ratchet mechanics, verbatim: common baseline keeps every published value
+    // non-decreasing and cancels out of every cross-device difference
+    for (const auto& [chip, c] : corr) {
+        const int64_t prev = perf_debug::get_zone_ts_correction(chip);
+        const int64_t need = prev - c;
+        if (need > st->baseline) {
+            st->baseline = need;
+        }
+    }
+    for (const auto& [chip, c] : corr) {
+        perf_debug::set_zone_ts_correction(chip, c + st->baseline);
+    }
+}
+
+// Ring closure: every non-tree edge's measured offset vs the tree-composed prediction. THE accuracy
+// bound for the full-planes configuration -- it shares no link with the prediction.
+void PerfDebugProfiler::log_fabric_sync_closure(bool final_report) {
+    auto* st = fabric_sync_;
+    if (st == nullptr) {
+        return;
+    }
+    for (const auto& e : st->edges) {
+        if (e.in_tree || !e.have) {
+            continue;
+        }
+        // compose init->resp through the tree from each edge's latest solved offset
+        auto delta_of = [&](uint32_t chip, bool& ok) -> int64_t {
+            int64_t d = 0;
+            uint32_t cur = chip;
+            int hops = 0;
+            ok = true;
+            while (cur != st->root && hops++ < 8) {
+                auto it = st->parent_edge.find(cur);
+                if (it == st->parent_edge.end() || !st->edges[it->second].have) {
+                    ok = false;
+                    return 0;
+                }
+                const auto& pe = st->edges[it->second];
+                const int64_t off = pe.off_last;
+                if (pe.resp.chip == cur) {
+                    d += off;
+                    cur = pe.init.chip;
+                } else {
+                    d -= off;
+                    cur = pe.resp.chip;
+                }
+            }
+            ok = ok && cur == st->root;
+            return d;
+        };
+        bool ok1 = false, ok2 = false;
+        const int64_t di = delta_of(e.init.chip, ok1);
+        const int64_t dr = delta_of(e.resp.chip, ok2);
+        if (!ok1 || !ok2) {
+            continue;
+        }
+        const int64_t predicted = dr - di;  // resp - init via the tree
+        const int64_t closure = e.off_last - predicted;
+        const double freq = st->anchors.count(e.init.chip) != 0 && st->anchors[e.init.chip].valid
+                                ? st->anchors[e.init.chip].f
+                                : 1.35;
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] FABRIC SYNC RING CLOSURE {} -> {}: measured {} cy vs tree {} cy -> "
+            "closure {:+} cy ({:+.2f} ns){}",
+            e.init.chip, e.resp.chip, e.off_last, predicted, closure,
+            static_cast<double>(closure) / freq, final_report ? " [final]" : "");
+    }
+}
+
+// Early half of teardown: stop the DEVICES (no new rounds) while the drain is still sweeping, so
+// the last in-flight round's packets still reach the aggregator.
+void PerfDebugProfiler::fabric_sync_disable_devices() {
+    auto* st = fabric_sync_;
+    if (st == nullptr || st->disabled_devices) {
+        return;
+    }
+    st->disabled_devices = true;
+    auto& cluster = MetalContext::instance().get_cluster();
+    const uint32_t zero = 0;
+    for (const auto& e : st->edges) {
+        if (e.init.blk_addr == 0) {
+            continue;
+        }
+        // initiator first (stops new rounds), then the responder; flags = 0 disables at the next
+        // deadline while the config magic stays valid
+        cluster.write_core(&zero, sizeof(zero), tt_cxy_pair(e.init.chip, e.init.virt), e.init.blk_addr + 4);
+        cluster.write_core(&zero, sizeof(zero), tt_cxy_pair(e.resp.chip, e.resp.virt), e.resp.blk_addr + 4);
+    }
+}
+
+void PerfDebugProfiler::stop_fabric_sync() {
+    auto* st = fabric_sync_;
+    if (st == nullptr) {
+        return;
+    }
+    fabric_sync_disable_devices();
+    st->stop.store(true);
+    if (st->th.joinable()) {
+        st->th.join();
+    }
+    auto& cluster = MetalContext::instance().get_cluster();
+    for (const auto& e : st->edges) {
+        if (e.init.blk_addr == 0) {
+            continue;
+        }
+        uint32_t stat_i = 0, stat_r = 0;
+        try {
+            const auto& hal = MetalContext::instance().hal();
+            const uint64_t scratch =
+                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::FABRIC_ROUTER_SYNC_SCRATCH);
+            cluster.read_core(&stat_i, sizeof(stat_i), tt_cxy_pair(e.init.chip, e.init.virt), scratch + 8);
+            cluster.read_core(&stat_r, sizeof(stat_r), tt_cxy_pair(e.resp.chip, e.resp.virt), scratch + 8);
+        } catch (const std::exception&) {
+        }
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] FABRIC SYNC {} -> {} FINAL: {} rounds solved ({} partial, {} dropped, "
+            "{} stray), offset last {} cy span {} cy, rtt_min {} cy, rate {:+.3f} ppm | device init "
+            "ok/fail {}/{} resp {}/{}{}",
+            e.init.chip, e.resp.chip, e.rounds_solved, e.rounds_partial, e.rounds_dropped, e.stray_samples,
+            e.off_last, e.off_max - e.off_min, e.rtt_min == ~0ull ? 0ull : e.rtt_min, (e.rate - 1.0) * 1e6,
+            stat_i >> 8, stat_i & 0xFF, stat_r >> 8, stat_r & 0xFF, e.in_tree ? "" : " [closure]");
+    }
+    log_fabric_sync_closure(true);
+    // planes=2 cross-check: when the resident-pair tracker measured the same links on FREE channels,
+    // print the two instruments' disagreement per shared chip pair.
+    if (eth_track_ != nullptr) {
+        for (const auto& e : st->edges) {
+            if (!e.have) {
+                continue;
+            }
+            for (const auto& ed : eth_track_->edges) {
+                const bool same = (ed.snd_chip == e.init.chip && ed.rcv_chip == e.resp.chip) ||
+                                  (ed.snd_chip == e.resp.chip && ed.rcv_chip == e.init.chip);
+                if (!same || !ed.have) {
+                    continue;
+                }
+                // tracker: measured = init-fit linear - corr_edge. The fit's reference lives in
+                // the tracker SENDER's clock; convert the hook's instant into that domain first
+                // (same chip -> same clock; otherwise shift by the measured link offset).
+                const uint64_t t_snd = (ed.snd_chip == e.init.chip)
+                                           ? e.ref_last
+                                           : static_cast<uint64_t>(static_cast<int64_t>(e.ref_last) + e.off_last);
+                const double dtf = static_cast<double>(static_cast<int64_t>(t_snd - ed.ref0));
+                const int64_t tracker_meas =
+                    ed.off0 + static_cast<int64_t>(std::llround(dtf * (ed.rate0 - 1.0))) - ed.corr_edge;
+                const int64_t hook_meas = (ed.snd_chip == e.init.chip) ? e.off_last : -e.off_last;
+                const double freq = st->anchors.count(e.init.chip) != 0 && st->anchors[e.init.chip].valid
+                                        ? st->anchors[e.init.chip].f
+                                        : 1.35;
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] FABRIC SYNC vs ETH TRACKER on {} <-> {}: hook {} cy, tracker {} cy "
+                    "-> disagreement {:+} cy ({:+.2f} ns) [two instruments, two channels, same link]",
+                    e.init.chip, e.resp.chip, hook_meas, tracker_meas, hook_meas - tracker_meas,
+                    static_cast<double>(hook_meas - tracker_meas) / freq);
+            }
+        }
+    }
+    log_info(
+        tt::LogMetal,
+        "[perf-debug profiler] FABRIC SYNC: {} samples reached the sink end to end",
+        st->sink_samples);
+    delete st;
+    fabric_sync_ = nullptr;
+}
+
 void PerfDebugProfiler::reanchor_after_boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     if (!eth_sync_late() || !eth_sync_enabled() || devices_.empty() || tracy_ == nullptr) {
         return;
@@ -2971,6 +3660,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
             }
         };
         receiver_ = std::make_unique<perf_debug::PerfDebugReceiver>(std::move(rcfg), std::move(rdevs));
+        install_fabric_sync_sink();
         if (tracy_push_enabled()) {
             tracy_consumer_ = std::make_unique<perf_debug::PerfDebugTracyConsumer>(tracy_.get());
             // An ordinary paired-contract consumer, like the ops CSV. Zones arrive END-ordered, so
@@ -2992,6 +3682,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     // After every device has its anchor: the eth samples are rendered through those anchors, so drawing
     // them any earlier would map them with an anchor that does not exist yet.
     emit_eth_sync_lanes();
+    start_fabric_sync(mesh_device);
     if (!devices_.empty()) {
         log_info(
             tt::LogMetal,
@@ -4579,6 +5270,11 @@ void PerfDebugProfiler::stop() {
     // lets the zone-name harvest run against already-compiled kernels.
     fire_sync_events();
 
+    // Stop the in-router sync DEVICES first (no new rounds), while the fillers are still sweeping,
+    // so the final in-flight round's packets still reach the aggregator. The host half joins later,
+    // next to the other trackers.
+    fabric_sync_disable_devices();
+
     // ---- ROLE SPLIT: quiesce in the right ORDER, before the per-DRISC teardown loop below ----
     //
     // The loop below tears each DRISC down completely -- stop=1, wait for done, read results, stop=2 -- one
@@ -5190,6 +5886,7 @@ void PerfDebugProfiler::stop() {
     }
     // Last, with the drainers quiesced so the links are quiet and nothing else is competing for the NoC.
     stop_drift_corrector();
+    stop_fabric_sync();  // before stop_eth_tracker: the teardown cross-check reads the tracker's edges
     stop_eth_tracker();
     cross_path_tracking_test();
     check_sync_drift_at_close();

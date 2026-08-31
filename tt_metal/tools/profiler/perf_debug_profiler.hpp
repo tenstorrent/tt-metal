@@ -298,6 +298,18 @@ private:
     void start_eth_tracker(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
     void stop_eth_tracker();
 
+    // ---- IN-ROUTER device-to-device clock sync (fabric-claimed channels) ----
+    // The device half is the fabric router's sync hook (fabric_router_sync_hook.hpp); samples ride
+    // the profiler drain as PP_SYNC packets and one aggregator thread joins/solves/publishes.
+    struct FabricSyncState;
+    FabricSyncState* fabric_sync_ = nullptr;
+    void install_fabric_sync_sink();  // before receiver start: decode threads relay PP_SYNC here
+    void start_fabric_sync(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
+    void publish_fabric_sync_corrections();
+    void log_fabric_sync_closure(bool final_report);
+    void fabric_sync_disable_devices();  // early in stop(): no new rounds while the drain quiesces
+    void stop_fabric_sync();
+
     // Chips whose AI clock this profiler pinned, so stop() can release exactly those.
     std::vector<int> forced_aiclk_chips_;
 
