@@ -17,9 +17,14 @@ this file -- tune ``MODULE_RULES`` if your config differs. Anything that matches
 rule lands in the ``unclassified`` bucket and is reported separately so the breakdown
 stays honest.
 
+The first decode iteration is dropped by default (program-cache / trace-capture
+warmup). Iteration boundaries are ``EMBED_START`` signposts, falling back to
+``EmbeddingsDeviceOperation``. Pass ``--include-first`` to keep it.
+
 Usage:
     python analyze_profile.py path/to/ops_perf_results_*.csv
     python analyze_profile.py path/to/ops_perf_results_*.csv --metric device --json out.json
+    python analyze_profile.py path/to/ops_perf_results_*.csv --include-first
 """
 
 from __future__ import annotations
@@ -152,6 +157,25 @@ class Bucket:
         rec[1] += value
 
 
+def drop_first_decode_iteration(ops: list[Op]) -> tuple[list[Op], int]:
+    """Drop ops from the first decode step.
+
+    Prefers ``EMBED_START`` signposts; falls back to the token-embedding device
+    op (hidden-size output, so the MoE hash-table gather is ignored).
+
+    Returns ``(kept, n_iterations)``. ``n_iterations == 0`` means no delimiter
+    was found and ``kept`` is the original list.
+    """
+    for pred in (
+        lambda o: o.code == "EMBED_START",
+        lambda o: o.code == "EmbeddingsDeviceOperation" and o.out_x == HIDDEN,
+    ):
+        starts = [i for i, op in enumerate(ops) if pred(op)]
+        if len(starts) >= 2:
+            return ops[starts[1] :], len(starts)
+    return ops, 0
+
+
 def parse_csv(path: str) -> list[Op]:
     ops: list[Op] = []
     with open(path, newline="") as f:
@@ -230,7 +254,7 @@ def print_report(buckets: dict[str, Bucket], total: float, metric: str, n_ops: i
     print()
 
 
-def analyze_signposts(path: str, metric: str) -> tuple[dict[str, Bucket], float]:
+def analyze_signposts(ops: list[Op], metric: str) -> tuple[dict[str, Bucket], float]:
     """Ground-truth attribution using ``_region`` Tracy signposts.
 
     Signpost markers land in the profile as pseudo-op rows whose ``OP CODE`` ends
@@ -244,30 +268,19 @@ def analyze_signposts(path: str, metric: str) -> tuple[dict[str, Bucket], float]
     buckets: dict[str, Bucket] = defaultdict(Bucket)
     stack: list[str] = []
     total = 0.0
-    with open(path, newline="") as f:
-        for row in csv.DictReader(f):
-            code = row["OP CODE"]
-            if code.endswith("_START"):
-                stack.append(code[: -len("_START")])
-                continue
-            if code.endswith("_END"):
-                name = code[: -len("_END")]
-                if name in stack:  # pop back to the matching frame (robust to gaps)
-                    del stack[stack.index(name) :]
-                continue
-            op = Op(
-                code=code,
-                device_ns=float(row.get("DEVICE KERNEL DURATION [ns]") or 0),
-                host_ns=float(row.get("HOST DURATION [ns]") or 0),
-                op_to_op_ns=float(row.get("OP TO OP LATENCY [ns]") or 0),
-                in0=(None, None),
-                in1=(None, None),
-                out0=(None, None),
-                attributes="",
-            )
-            v = getter(op)
-            buckets[stack[-1] if stack else "(outside_regions)"].add(op, v)
-            total += v
+    for op in ops:
+        code = op.code
+        if code.endswith("_START"):
+            stack.append(code[: -len("_START")])
+            continue
+        if code.endswith("_END"):
+            name = code[: -len("_END")]
+            if name in stack:  # pop back to the matching frame (robust to gaps)
+                del stack[stack.index(name) :]
+            continue
+        v = getter(op)
+        buckets[stack[-1] if stack else "(outside_regions)"].add(op, v)
+        total += v
     return buckets, total
 
 
@@ -289,9 +302,21 @@ def main() -> int:
         "or auto (signpost if markers present, else heuristic)",
     )
     ap.add_argument("--json", metavar="PATH", help="also dump the breakdown as JSON")
+    ap.add_argument(
+        "--include-first",
+        action="store_true",
+        help="keep the first decode iteration (default: drop it as warmup)",
+    )
     args = ap.parse_args()
 
     ops = parse_csv(args.csv)
+    if not args.include_first:
+        kept, n_iter = drop_first_decode_iteration(ops)
+        if n_iter >= 2:
+            print(f"  skipped first decode iteration ({n_iter - 1} of {n_iter} remaining)")
+            ops = kept
+        else:
+            print("  warning: could not detect a second decode iteration; analyzing all ops")
     has_markers = any(o.code.endswith(("_START", "_END")) for o in ops)
     use_signpost = args.mode == "signpost" or (args.mode == "auto" and has_markers)
 
@@ -299,7 +324,7 @@ def main() -> int:
         if not has_markers:
             print("  no signpost markers found in this CSV; re-run with --mode heuristic")
             return 1
-        buckets, total = analyze_signposts(args.csv, args.metric)
+        buckets, total = analyze_signposts(ops, args.metric)
         n_ops = sum(b.count for b in buckets.values())
         print("  attribution: SIGNPOST regions (ground truth)")
     else:
