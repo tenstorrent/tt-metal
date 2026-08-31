@@ -54,7 +54,10 @@ from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapt
 
 TEST_VARIANTS["kimi_k3"] = KimiK3Adapter()
 from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
-from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset, extract_routed_experts
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
+    download_infinitebench_subset,
+    extract_moe_layer_weights,
+)
 
 # Shared production-policy params for prefill block + transformer tests. LoudBox executes canonical
 # 2x4 Fabric2D and one 4x2 axis-order diagnostic; Galaxy production executes only 8x4 TorusXY.
@@ -1034,25 +1037,7 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
                 "down_proj": layer_dequant["mlp.down_proj.weight"],
             }
         else:
-            # Both lookups have to tolerate the two checkpoint shapes this repo already sees, the same
-            # way load_and_compute_layer_by_layer does: a router with no auxiliary correction bias
-            # (Mistral -- zeros are the identity for it), and stacked+fused expert tensors instead of
-            # per-expert keys. extract_routed_experts owns the second, including the gate/up split
-            # order, which is not inferable and is wrong-but-plausible if guessed.
-            gate_weight = layer_dequant["mlp.gate.weight"]
-            layer_dict["gate_weights"] = {
-                "weight": gate_weight,
-                "e_score_correction_bias": layer_dequant.get(
-                    "mlp.gate.e_score_correction_bias",
-                    torch.zeros(gate_weight.shape[0], dtype=torch.float32),
-                ),
-            }
-            layer_dict["routed_expert_weights"] = extract_routed_experts(layer_dequant, n_routed)
-            layer_dict["shared_expert_weights"] = {
-                "gate_proj": layer_dequant["mlp.shared_experts.gate_proj.weight"],
-                "up_proj": layer_dequant["mlp.shared_experts.up_proj.weight"],
-                "down_proj": layer_dequant["mlp.shared_experts.down_proj.weight"],
-            }
+            layer_dict.update(extract_moe_layer_weights(layer_dequant, n_routed=n_routed))
 
         result["layers"].append(layer_dict)
         logger.info(f"Layer {i} loaded ({'dense' if is_dense else 'MoE'})")

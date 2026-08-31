@@ -464,6 +464,35 @@ def extract_routed_experts(full_sd, n_routed=None, prefix="", hf_layer=None):
     ]
 
 
+def extract_moe_layer_weights(full_sd, n_routed=None, prefix="", hf_layer=None):
+    """The three MoE weight dicts for one layer: gate, routed experts, shared expert.
+
+    Tolerates the two checkpoint shapes this repo sees. A router with no auxiliary-loss-free
+    correction bias (Mistral Small 4: a plain softmax top-k router, `Mistral4TopkRouter` holds only
+    `weight`) gets zeros -- the TT gate always carries a bias tensor and zero is its identity in
+    every path that reads it, top-k on (logits + bias) and the sigmoid/noaux_tc affinity alike, so
+    this is exact rather than a placeholder. DeepSeek/Kimi/GLM are unaffected: their bias is present
+    and used. extract_routed_experts owns the second shape, stacked+fused expert tensors instead of
+    per-expert keys, including the gate/up split order.
+    """
+    gate_weight = full_sd[f"{prefix}mlp.gate.weight"]
+    return {
+        "gate_weights": {
+            "weight": gate_weight,
+            "e_score_correction_bias": full_sd.get(
+                f"{prefix}mlp.gate.e_score_correction_bias",
+                torch.zeros(gate_weight.shape[0], dtype=torch.float32),
+            ),
+        },
+        "routed_expert_weights": extract_routed_experts(full_sd, n_routed=n_routed, prefix=prefix, hf_layer=hf_layer),
+        "shared_expert_weights": {
+            "gate_proj": full_sd[f"{prefix}mlp.shared_experts.gate_proj.weight"],
+            "up_proj": full_sd[f"{prefix}mlp.shared_experts.up_proj.weight"],
+            "down_proj": full_sd[f"{prefix}mlp.shared_experts.down_proj.weight"],
+        },
+    }
+
+
 def extract_layer_state_dict(variant, full_sd, layer_idx, hf_layer):
     """Extract one layer's weights from HF state_dict into TtPrefillBlock format."""
     prefix = f"layers.{layer_idx}."
@@ -487,23 +516,7 @@ def extract_layer_state_dict(variant, full_sd, layer_idx, hf_layer):
     }
 
     if is_moe:
-        gate_weight = full_sd[f"{prefix}mlp.gate.weight"]
-        # Models whose router has no auxiliary-loss-free correction bias (Mistral Small 4: a plain
-        # softmax top-k router, `Mistral4TopkRouter` holds only `weight`) get zeros. The TT gate
-        # always carries a bias tensor, and zero is its identity in every path that reads it --
-        # top-k on (logits + bias) and the sigmoid/noaux_tc affinity alike -- so this is exact, not a
-        # placeholder. DeepSeek/Kimi/GLM are unaffected: their bias is present and used.
-        bias_key = f"{prefix}mlp.gate.e_score_correction_bias"
-        layer_sd["gate_weights"] = {
-            "weight": gate_weight,
-            "e_score_correction_bias": full_sd.get(bias_key, torch.zeros(gate_weight.shape[0], dtype=torch.float32)),
-        }
-        layer_sd["routed_expert_weights"] = extract_routed_experts(full_sd, prefix=prefix, hf_layer=hf_layer)
-        layer_sd["shared_expert_weights"] = {
-            "gate_proj": full_sd[f"{prefix}mlp.shared_experts.gate_proj.weight"],
-            "up_proj": full_sd[f"{prefix}mlp.shared_experts.up_proj.weight"],
-            "down_proj": full_sd[f"{prefix}mlp.shared_experts.down_proj.weight"],
-        }
+        layer_sd.update(extract_moe_layer_weights(full_sd, prefix=prefix, hf_layer=hf_layer))
     else:
         layer_sd["ffn_weights"] = {
             "gate_proj": full_sd[f"{prefix}mlp.gate_proj.weight"],
@@ -919,23 +932,7 @@ def load_and_compute_layer_by_layer(
                     "down_proj": layer_dequant["mlp.down_proj.weight"],
                 }
             else:
-                # Same two checkpoint-shape variations the random-weight path handles in
-                # `extract_layer_state_dict`: a router with no auxiliary correction bias (zeros are
-                # the identity for it), and stacked+fused expert tensors instead of per-expert keys.
-                gate_weight = layer_dequant["mlp.gate.weight"]
-                layer_dict["gate_weights"] = {
-                    "weight": gate_weight,
-                    "e_score_correction_bias": layer_dequant.get(
-                        "mlp.gate.e_score_correction_bias",
-                        torch.zeros(gate_weight.shape[0], dtype=torch.float32),
-                    ),
-                }
-                layer_dict["routed_expert_weights"] = extract_routed_experts(layer_dequant, n_routed)
-                layer_dict["shared_expert_weights"] = {
-                    "gate_proj": layer_dequant["mlp.shared_experts.gate_proj.weight"],
-                    "up_proj": layer_dequant["mlp.shared_experts.up_proj.weight"],
-                    "down_proj": layer_dequant["mlp.shared_experts.down_proj.weight"],
-                }
+                layer_dict.update(extract_moe_layer_weights(layer_dequant, n_routed=n_routed))
 
             # Build TTNN cache (device=None) - NOT accumulated in memory!
             TtPrefillBlock.build_ttnn_cache(

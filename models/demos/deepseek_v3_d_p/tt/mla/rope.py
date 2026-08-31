@@ -171,6 +171,19 @@ def write_chunk_metadata(
     )
 
 
+def _llama4_scale_geometry(hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, sp_axis: int):
+    """(heads_local, width, shard_dims) for the query-scale buffer.
+
+    The allocator and the per-chunk writer below must agree exactly -- a mismatch surfaces only as a
+    copy_host_to_device_tensor failure at runtime -- so the shape contract is stated once.
+    """
+    heads_local = hf_config.num_attention_heads // mesh_device.shape[1 - sp_axis]
+    width = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2
+    return heads_local, width, shard_dims
+
+
 def refresh_llama4_scale(
     buf: Optional[ttnn.Tensor],
     hf_config: PretrainedConfig,
@@ -190,12 +203,9 @@ def refresh_llama4_scale(
     beta = rope_scaling["llama_4_scaling_beta"]
     orig_max = rope_scaling["original_max_position_embeddings"]
     sp = mesh_device.shape[sp_axis]
-    heads_local = hf_config.num_attention_heads // mesh_device.shape[1 - sp_axis]
-    width = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
+    heads_local, width, shard_dims = _llama4_scale_geometry(hf_config, mesh_device, sp_axis)
     assert chunk_size_global % sp == 0, f"chunk_size_global ({chunk_size_global}) must divide sp ({sp})"
 
-    shard_dims = [None, None]
-    shard_dims[sp_axis] = 2
     host = ttnn.from_torch(
         llama4_scale_host(kv_actual_isl, sp, chunk_size_global // sp, heads_local, width, beta, orig_max).contiguous(),
         dtype=ttnn.bfloat16,
@@ -233,10 +243,7 @@ class RotarySetup:
         rope_scaling = getattr(self.hf_config, "rope_scaling", None) or {}
         if rope_scaling.get("llama_4_scaling_beta") is None:
             return None
-        width = self.hf_config.kv_lora_rank + self.hf_config.qk_rope_head_dim
-        heads_local = self.hf_config.num_attention_heads // self.mesh_device.shape[1 - self.sp_axis]
-        shard_dims = [None, None]
-        shard_dims[self.sp_axis] = 2
+        heads_local, width, shard_dims = _llama4_scale_geometry(self.hf_config, self.mesh_device, self.sp_axis)
         return ttnn.from_torch(
             torch.ones(1, heads_local, chunk_size_global, width, dtype=torch.bfloat16),
             device=self.mesh_device,
