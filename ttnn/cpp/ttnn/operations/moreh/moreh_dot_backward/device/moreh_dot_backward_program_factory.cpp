@@ -102,7 +102,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotBackwardOperation::ProgramFacto
                 TensorBinding{.tensor_parameter_name = OTHER, .accessor_name = "s2"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"has_input_grad", "has_other_grad", "num_tiles", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(output_grad.device().arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ---- Writer kernel ----
@@ -135,7 +135,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotBackwardOperation::ProgramFacto
             },
         .tensor_bindings = std::move(writer_tensor_bindings),
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(output_grad.device().arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // ---- Compute kernel ----
@@ -152,7 +152,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotBackwardOperation::ProgramFacto
                 DFBBinding{.dfb_spec_name = OUT1, .accessor_name = "out1", .endpoint_type = DFBEndpointType::PRODUCER},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"has_input_grad", "has_other_grad", "per_core_block_cnt"}},
-        .hw_config = ComputeHardwareConfig{ComputeGen1Config{}},
+        .hw_config = ComputeHardwareConfig{},
     };
 
     // ---- Assemble the spec ----

@@ -152,10 +152,13 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
         }},
         .compile_time_args = {{"total_tiles_per_core", total_tiles_per_core}},
         .runtime_arg_schema = {.runtime_arg_names = {"src_start_tile"}},
-        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = reader_noc,
-        }},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .gen1_specific =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = reader_noc,
+                    }},
     };
 
     KernelSpec writer{
@@ -172,10 +175,13 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
         }},
         .compile_time_args = {{"total_tiles_per_core", total_tiles_per_core}},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_start_tile"}},
-        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = writer_noc,
-        }},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .gen1_specific =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_1,
+                        .noc = writer_noc,
+                    }},
     };
 
     KernelSpec compute{
@@ -214,7 +220,7 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
         // Translates the TTNN ComputeKernelConfig this op resolves into its Metal 2.0 equivalent.
         // The helper picks the alternative matching the architecture, but that does not make the
         // program portable: the data movement kernels above are Gen1-only, so the whole factory is.
-        .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
+        .hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config),
     };
 
     // Set runtime args

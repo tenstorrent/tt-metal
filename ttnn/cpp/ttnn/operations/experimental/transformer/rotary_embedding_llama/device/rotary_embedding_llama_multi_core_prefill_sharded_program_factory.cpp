@@ -199,8 +199,8 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
     TensorParameter output_param{.unique_id = OUTPUT_PARAM, .spec = output.tensor_spec()};
 
     // hw_config — Style B (see the interleaved factory for the rationale).
-    const ComputeHardwareConfig compute_hw_config =
-        ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+    const ComputeHardwareConfig compute_hw_config{
+        .fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
 
     // ------------------------------------------------------------------
     // Reader kernel. cos_sin_sharded / trans_mat_use_global_cb move from CTAs to preprocessor defines
@@ -250,7 +250,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
              {"sin_Ht", sin_seq_len_t},
              {"rotary_Ht", rotary_seq_len_t}},
         .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
-        .hw_config = create_reader_datamovement_config(device->arch())};
+        .hw_config = create_reader_datamovement_config()};
 
     // Writer / compute — identical to the interleaved factory (shared kernel sources).
     const KernelSpec::CompilerOptions::Defines reload_define{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}};
@@ -268,7 +268,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
         .compile_time_args =
             {{"n_heads", n_heads}, {"Wt", head_dim_t}, {"Ht", seq_len_t}, {"rotary_Ht", rotary_seq_len_t}},
         .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
-        .hw_config = create_writer_datamovement_config(device->arch())};
+        .hw_config = create_writer_datamovement_config()};
 
     KernelSpec compute_spec{
         .unique_id = COMPUTE,

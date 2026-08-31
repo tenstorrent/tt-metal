@@ -132,7 +132,7 @@ ttnn::device_operation::ProgramArtifacts SplitProgramFactory::create_program_art
                 {"y_stride", y_stride_read},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"in0_tensor_tile_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // N writers of ONE source, one per chunk. Each writer is bound to its chunk's output tensor and is
@@ -177,7 +177,7 @@ ttnn::device_operation::ProgramArtifacts SplitProgramFactory::create_program_art
                     {"y_stride", y_stride_write},
                 },
             .runtime_arg_schema = {.runtime_arg_names = {"out_tensor_tile_id"}},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         });
 
         tensor_parameters.push_back(

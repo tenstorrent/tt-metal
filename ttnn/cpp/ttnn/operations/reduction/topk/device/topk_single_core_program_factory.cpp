@@ -238,7 +238,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
                  static_cast<uint32_t>(output_ind_cb_data_format == tt::DataFormat::UInt16)},  // Index format flag
             },
         .runtime_arg_schema = {.runtime_arg_names = {"id", "work_per_core"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device().arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -269,7 +269,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
                 {"total_number_of_cores", total_number_of_cores},  // Total number of cores
             },
         .runtime_arg_schema = {.runtime_arg_names = {"id", "work_per_core"}},
-        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device().arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // fp32 input: unpack the value-holding buffers straight to a 32-bit dest register so the sort's
@@ -370,7 +370,7 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
         // rows), so an index survives the sort intact, and an fp32 input, so values keep full
         // precision through it. double_buffer_dest is the inverse of the legacy dst_full_sync_en flag.
         .hw_config =
-            ComputeGen1Config{
+            ComputeHardwareConfig{
                 .enable_32_bit_dest = !uint16_output || is_fp32_input,
                 .double_buffer_dest = true,
                 .unpack_modes = std::move(compute_unpack_modes),

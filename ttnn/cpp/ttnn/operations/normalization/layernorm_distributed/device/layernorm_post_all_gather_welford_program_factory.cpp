@@ -389,7 +389,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
              {"Wt", Wt},
              {"reduce_factor", reduce_factor}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     // The shared reader always fills a reduce-scalar tile, but the Welford compute kernel derives
     // its own scaling and never reads it. The reader is then the buffer's only toucher, so it takes
@@ -416,7 +416,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = POSTWF_OUTPUT_T, .accessor_name = "dst"}},
         .compile_time_args = {{"blk", block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Welford preserves the math fidelity selection and FP32 dst-acc setting from compute_kernel_config.
@@ -451,7 +451,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
              {"fp32_dtype", static_cast<uint32_t>(fp32_dest_acc_en)},
              {"dfb_length", cb_length}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
-        .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
+        .hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config),
     };
     // Every intermediate below is private to the compute kernel: it packs into the buffer and
     // unpacks it back, so it is that buffer's only endpoint on both sides.
@@ -473,7 +473,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
             .dfb_spec_name = POSTWF_BETA, .accessor_name = "beta", .endpoint_type = m2::DFBEndpointType::CONSUMER});
     }
 
-    auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+    auto& compute_hw = std::get<m2::ComputeHardwareConfig>(compute.hw_config);
     // UnpackToDest only helps for buffers whose only consumer is an op that supports the
     // unpack-to-DEST path (copy_tile or transpose_tile in fp32 mode). For those, setting
     // the mode preserves FP32 precision by bypassing SrcA. Setting it on a buffer consumed by any
@@ -490,7 +490,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     //     recombine.
     //   - rmsnorm path: consumed by reduce_tile (FPU). Must NOT enable UnpackToDest.
     if (!is_rmsnorm && fp32_dest_acc_en && stats_data_format == tt::DataFormat::Float32) {
-        unpack_via_dest(compute_gen1, POSTWF_STATS);
+        unpack_via_dest(compute_hw, POSTWF_STATS);
     }
     // The rest of the Float32 buffers this kernel consumes take the SrcA/B path, each stated
     // individually because a Float32 buffer has no implicit default once the 32-bit Dest register is
@@ -498,29 +498,29 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     // var + epsilon, and the broadcast multiplies and adds of the gamma / beta chain.
     if (fp32_dest_acc_en) {
         // The intermediates all carry cb_data_format, which is Float32 exactly when the Dest register is.
-        unpack_via_src(compute_gen1, POSTWF_STATS_REDUCED);
-        unpack_via_src(compute_gen1, POSTWF_RECIP_SQRT_VAR);
-        unpack_via_src(compute_gen1, POSTWF_X_MINUS_MEAN);
+        unpack_via_src(compute_hw, POSTWF_STATS_REDUCED);
+        unpack_via_src(compute_hw, POSTWF_RECIP_SQRT_VAR);
+        unpack_via_src(compute_hw, POSTWF_X_MINUS_MEAN);
         if (uses_x_normed) {
-            unpack_via_src(compute_gen1, POSTWF_X_NORMED);
+            unpack_via_src(compute_hw, POSTWF_X_NORMED);
         }
         if (uses_times_gamma_out) {
-            unpack_via_src(compute_gen1, POSTWF_TIMES_GAMMA_OUT);
+            unpack_via_src(compute_hw, POSTWF_TIMES_GAMMA_OUT);
         }
         // The inputs carry their own tensor's dtype. The epsilon buffer is always Float16_b, and the
         // reduce-scalar buffer never reaches this kernel (the reader is its only endpoint).
         if (in_data_format == tt::DataFormat::Float32) {
-            unpack_via_src(compute_gen1, POSTWF_INPUT);
+            unpack_via_src(compute_hw, POSTWF_INPUT);
         }
         // A Float32 stats buffer on the layernorm path already took UnpackToDest just above.
         if (stats_data_format == tt::DataFormat::Float32 && is_rmsnorm) {
-            unpack_via_src(compute_gen1, POSTWF_STATS);
+            unpack_via_src(compute_hw, POSTWF_STATS);
         }
         if (gamma.has_value() && gamma_cb_data_format == tt::DataFormat::Float32) {
-            unpack_via_src(compute_gen1, POSTWF_GAMMA);
+            unpack_via_src(compute_hw, POSTWF_GAMMA);
         }
         if (beta.has_value() && beta_cb_data_format == tt::DataFormat::Float32) {
-            unpack_via_src(compute_gen1, POSTWF_BETA);
+            unpack_via_src(compute_hw, POSTWF_BETA);
         }
     }
 

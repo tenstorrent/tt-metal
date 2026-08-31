@@ -118,7 +118,7 @@ ttnn::device_operation::ProgramArtifacts GeluBackwardProgramFactory::create_prog
             {
                 .runtime_arg_names = {"num_tiles", "start_id", "block_height", "block_width", "num_cores_y"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // --- Writer Kernel ---
@@ -143,7 +143,7 @@ ttnn::device_operation::ProgramArtifacts GeluBackwardProgramFactory::create_prog
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // --- Compute Kernel ---
@@ -169,7 +169,7 @@ ttnn::device_operation::ProgramArtifacts GeluBackwardProgramFactory::create_prog
         unpack_modes[INPUT_DFB] = UnpackMode::UnpackToDest;
     }
 
-    ComputeGen1Config compute_hw_config{
+    ComputeHardwareConfig compute_hw_config{
         .fpu_math_fidelity = MathFidelity::HiFi4,
         .enable_32_bit_dest = fp32_dest_acc_en,
         .unpack_modes = std::move(unpack_modes),
@@ -215,7 +215,7 @@ ttnn::device_operation::ProgramArtifacts GeluBackwardProgramFactory::create_prog
             {
                 .runtime_arg_names = {"num_tiles"},
             },
-        .hw_config = ComputeHardwareConfig{std::move(compute_hw_config)},
+        .hw_config = std::move(compute_hw_config),
     };
 
     ProgramSpec spec{

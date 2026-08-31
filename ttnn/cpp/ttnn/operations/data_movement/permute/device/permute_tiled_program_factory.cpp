@@ -150,7 +150,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .compile_time_args = {{"rank", rank}, {"page_size", input_page_size}, {"num_tiles", num_tiles}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_tile", "end_tile"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 3 * rank},
     };
 
@@ -164,7 +164,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
             .dfb_spec_name = OUTPUT_CB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     Group<KernelSpec> kernels = {std::move(reader), std::move(writer)};
@@ -173,7 +173,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
     if (swap_hw) {
         bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
                                 cb_data_format == tt::DataFormat::UInt32;
-        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+        ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
         // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 for Float32 → UnpackMode::UnpackToDest.
         // Compute consumes SRC0 (c_0); the required-entry rule fires only for Float32.
         if (cb_data_format == tt::DataFormat::Float32) {
@@ -189,7 +189,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
                  DFBBinding{
                      .dfb_spec_name = OUT16, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .runtime_arg_schema = {.runtime_arg_names = {"NHtWt"}},
-            .hw_config = ComputeHardwareConfig{std::move(compute_cfg)},
+            .hw_config = std::move(compute_cfg),
         });
     }
 
@@ -442,7 +442,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
              {"tile_height", tile_shape[1]},
              {"tile_width", tile_shape[0]}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ---- Writer (own) ----
@@ -466,7 +466,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
              {"rank", rank},
              {"h_in_dest", h_in_dest}},
         .runtime_arg_schema = {.runtime_arg_names = writer_rta_names},
-        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 2 * rank},
     };
 
@@ -476,7 +476,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
     if (swap_hw) {
         bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
                                 cb_data_format == tt::DataFormat::UInt32;
-        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+        ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
         // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 for Float32 → UnpackMode::UnpackToDest.
         // Compute consumes SRC0 (c_0); the required-entry rule fires only for Float32.
         if (cb_data_format == tt::DataFormat::Float32) {
@@ -492,7 +492,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
                  DFBBinding{
                      .dfb_spec_name = OUT16, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .runtime_arg_schema = {.runtime_arg_names = {"NHtWt"}},
-            .hw_config = ComputeHardwareConfig{std::move(compute_cfg)},
+            .hw_config = std::move(compute_cfg),
         });
     }
 
@@ -783,7 +783,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     // ---- Compute config (Style B: build ComputeGen1Config directly, mirroring legacy) ----
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
                             cb_data_format == tt::DataFormat::UInt32;
-    ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
     // Metal 2.0 requires an explicit unpack_modes entry for each Float32 DFB the compute kernel consumes
     // when enable_32_bit_dest = true. Compute consumes SRC_CB (via tilize) and TILIZE_CB (self-loop).
     // Keep both the tilize input (c_0 = SRC_CB) and its output (c_1 = TILIZE_CB, which feeds the transpose)
@@ -847,7 +847,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
              {"misalignment", misalignment},
              {"read_alignment", read_alignment}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 2 * rank},
     };
 
@@ -864,7 +864,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
              DFBBinding{
                  .dfb_spec_name = OUT_CB, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
-        .hw_config = ComputeHardwareConfig{std::move(compute_cfg)},
+        .hw_config = std::move(compute_cfg),
     };
 
     KernelSpec writer{
@@ -897,7 +897,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
              {"w_blocks", w_blocks},
              {"permuted_w_dim", permuted_w_dim}},
         .runtime_arg_schema = {.runtime_arg_names = writer_rta_names},
-        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 2 * rank},
     };
 

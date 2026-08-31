@@ -186,7 +186,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"start_right", "num_right", "start_bottom", "num_bottom", "start_corner", "num_corner"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     reader_spec.compiler_options.defines = fill_defines;
 
@@ -213,7 +213,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"start_right", "num_right", "start_bottom", "num_bottom", "start_corner", "num_corner"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     writer_spec.compiler_options.defines = mask_defines;
 
@@ -230,7 +230,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
             .dfb_spec_name = BOT_MASK, .accessor_name = "bot_mask", .endpoint_type = DFBEndpointType::CONSUMER});
     }
 
-    ComputeGen1Config compute_hw{};
+    ComputeHardwareConfig compute_hw{};
     compute_hw.enable_32_bit_dest = need_fp32_dest_acc;
     if (is_fp32) {
         // Match legacy UnpackToDestFp32 on the FP32 DFBs the compute kernel consumes.
@@ -578,7 +578,7 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
                 {{"W_tiles", W_tiles}, {"has_right_pad", key.has_right_pad}, {"elem_size", input_element_size_bytes}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"shard_H_tiles", "has_bottom_pad_core", "num_work", "local_right_col"}},
-            .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
+            .hw_config = ttnn::create_reader_datamovement_config(),
         };
 
         // Writer.
@@ -606,7 +606,7 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
             .runtime_arg_schema =
                 {.runtime_arg_names =
                      {"shard_H_tiles", "has_bottom_pad_core", "num_work", "local_right_col", "has_right_pad_core"}},
-            .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         };
         writer_spec.compiler_options.defines = mask_defines;
 
@@ -626,7 +626,7 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
             compute_dfb_bindings.push_back(DFBBinding{
                 .dfb_spec_name = BOT_MASK, .accessor_name = "bot_mask", .endpoint_type = DFBEndpointType::CONSUMER});
         }
-        ComputeGen1Config compute_hw{};
+        ComputeHardwareConfig compute_hw{};
         compute_hw.enable_32_bit_dest = need_fp32_dest_acc;
         if (is_fp32) {
             compute_hw.unpack_modes.insert({DATA_IN, UnpackMode::UnpackToDest});

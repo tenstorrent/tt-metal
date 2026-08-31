@@ -292,7 +292,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         .tensor_bindings = reader_tensor_bindings,
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ---- Compute kernel ----
@@ -341,12 +341,11 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     }
 
     // Compute hardware config (Style A) + fp32 unpack modes for every Float32 DFB consumed.
-    auto compute_hw = ttnn::to_compute_hardware_config(arch, attributes.compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(attributes.compute_kernel_config);
     if (fp32_dest_acc_en) {
-        auto& gen1 = std::get<ComputeGen1Config>(compute_hw);
         auto add_unpack = [&](const DFBSpecName& name, tt::DataFormat fmt) {
             if (fmt == tt::DataFormat::Float32) {
-                gen1.unpack_modes.insert({name, tt::tt_metal::UnpackMode::UnpackToSrc});
+                compute_hw.unpack_modes.insert({name, tt::tt_metal::UnpackMode::UnpackToSrc});
             }
         };
         add_unpack(IN0, in0_cb_data_format);

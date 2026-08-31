@@ -55,7 +55,6 @@
 #include <string>
 #include <tuple>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
@@ -781,8 +780,7 @@ ProgramArtifacts create_no_bcast_artifacts(
                   "n_stride_b",
                   "c_stride_b",
                   "src_num_tiles_b"}},
-        .hw_config =
-            ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     m2::Group<m2::TensorBinding> writer_tensor_bindings;
@@ -809,8 +807,7 @@ ProgramArtifacts create_no_bcast_artifacts(
         .dfb_bindings = writer_dfb_bindings,
         .tensor_bindings = writer_tensor_bindings,
         .runtime_arg_schema = {.runtime_arg_names = writer_rt_names},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Compute: consumes pre_lhs/pre_rhs, produces out. When an operand has activations, the kernel both
@@ -854,17 +851,14 @@ ProgramArtifacts create_no_bcast_artifacts(
         compute_rt_names.push_back("atol_bits");
     }
 
-    // to_compute_hardware_config maps the common knobs and picks the arch's variant (ComputeGen1Config on
-    // Wormhole, ComputeGen2Config on Quasar); it deliberately leaves the per-DFB unpack_modes
-    // default, so set it here via std::visit — the arch-agnostic pattern main's quasar untilize factories use.
-    auto compute_hw = ttnn::to_compute_hardware_config(
-        a.device()->arch(),
-        ttnn::ComputeKernelConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .math_approx_mode = false,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-        });
-    std::visit([&](auto& cfg) { cfg.unpack_modes = unpack_modes; }, compute_hw);
+    // to_compute_hardware_config maps the common knobs and leaves per-DFB unpack_modes default, so
+    // write the table directly on the returned ComputeHardwareConfig.
+    auto compute_hw = ttnn::to_compute_hardware_config(ttnn::ComputeKernelConfig{
+        .math_fidelity = MathFidelity::HiFi4,
+        .math_approx_mode = false,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+    });
+    compute_hw.unpack_modes = unpack_modes;
 
     m2::KernelSpec compute_spec{
         .unique_id = COMPUTE,

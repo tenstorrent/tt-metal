@@ -285,7 +285,7 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
         .compile_time_args = {{"fill_eps_fp32", static_cast<uint32_t>(any_float32)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"eps", "start_tile_id", "num_tiles", "HtWt", "n_stride", "c_stride", "N", "C"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // WRITER KERNEL
@@ -357,7 +357,7 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
                   DataFormat::Float32)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_tile_id", "num_tiles", "HtWt", "n_stride", "c_stride", "N", "C"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // COMPUTE KERNEL
@@ -459,13 +459,12 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
         });
     }
 
-    auto compute_hw_config =
-        ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+    auto compute_hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
     if (fp32_dest_acc_en) {
         // Re-key of the legacy unpack_to_dest_mode vector, which was indexed by CB id. Every DFB the
         // compute kernel consumes is listed; the writer-facing output is producer-only, so it gets no
         // entry. An omitted DFB keeps the UnpackToSrc default.
-        auto& unpack_modes = std::get<ComputeGen1Config>(compute_hw_config).unpack_modes;
+        auto& unpack_modes = compute_hw_config.unpack_modes;
         for (const auto& dfb_name :
              {INPUT_DFB, BATCH_MEAN_DFB, BATCH_VAR_DFB, EPS_DFB, DEN_DFB, WEIGHT_DFB, TEMP_1_DFB, BIAS_DFB}) {
             unpack_modes[dfb_name] = UnpackMode::UnpackToDest;

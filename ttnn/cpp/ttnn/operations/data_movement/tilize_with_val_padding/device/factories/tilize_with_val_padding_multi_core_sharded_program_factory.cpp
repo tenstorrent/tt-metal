@@ -162,7 +162,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
                   "num_padded_rows",
                   "num_batches",
                   "packed_pad_value"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     /** writer
@@ -177,7 +177,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
             .endpoint_type = DFBEndpointType::CONSUMER,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     /** compute
@@ -187,11 +187,10 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     // unpack_to_dest_mode vector was Default everywhere except v[c_0] = UnpackToDestFp32 when
     // fp32_llk_acc — c_0 is this factory's staging buffer, i.e. the tilize input DFB (Default ==
     // UnpackToSrc is expressed by omitting the entry).
-    ComputeGen1Config compute_gen1{.enable_32_bit_dest = fp32_llk_acc};
+    ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_llk_acc};
     if (fp32_llk_acc) {
-        compute_gen1.unpack_modes = ComputeUnpackModes{{STAGE, UnpackMode::UnpackToDest}};
+        compute_hw.unpack_modes = ComputeUnpackModes{{STAGE, UnpackMode::UnpackToDest}};
     }
-    ComputeHardwareConfig compute_hw{std::move(compute_gen1)};
 
     spec.kernels.push_back(KernelSpec{
         .unique_id = COMPUTE,

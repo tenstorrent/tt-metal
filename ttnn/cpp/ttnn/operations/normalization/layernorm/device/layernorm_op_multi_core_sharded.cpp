@@ -353,7 +353,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .per_core_recip_lut_size = block_w,
         .reader_noc = reader_noc,
         .writer_noc = writer_noc,
-        .compute_hw = to_compute_hardware_config(device->arch(), compute_kernel_config),
+        .compute_hw = to_compute_hardware_config(compute_kernel_config),
     };
     if (operation_attributes.fused_activation.has_value()) {
         const auto& act = operation_attributes.fused_activation.value();

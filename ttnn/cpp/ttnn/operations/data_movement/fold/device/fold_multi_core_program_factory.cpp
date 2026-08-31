@@ -115,7 +115,7 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
             {DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "src0", .endpoint_type = DFBEndpointType::PRODUCER},
              DFBBinding{.dfb_spec_name = DST0, .accessor_name = "dst0", .endpoint_type = DFBEndpointType::PRODUCER}},
         .compile_time_args = make_cta(/*is_reader=*/1),
-        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     KernelSpec reader_spec{
@@ -126,7 +126,7 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
             {DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "src0", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{.dfb_spec_name = DST0, .accessor_name = "dst0", .endpoint_type = DFBEndpointType::CONSUMER}},
         .compile_time_args = make_cta(/*is_reader=*/0),
-        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     ProgramSpec spec{

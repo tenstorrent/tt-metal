@@ -206,7 +206,7 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
                 TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"},
             },
         .compile_time_args = std::move(ctime_args),
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     ProgramSpec spec{

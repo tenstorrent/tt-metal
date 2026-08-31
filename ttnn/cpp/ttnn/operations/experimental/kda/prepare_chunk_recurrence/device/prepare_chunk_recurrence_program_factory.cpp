@@ -81,7 +81,6 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const auto& g = in.g.mesh_tensor();
     const auto& beta = in.beta.mesh_tensor();
     const auto& device = q.device();
-    const auto arch = device.arch();
 
     const uint32_t num_heads = attrs.num_heads;
     const uint32_t num_chunks = attrs.num_chunks;
@@ -220,7 +219,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
             },
         .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks", "num_heads"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     m2::KernelSpec writer{
@@ -250,11 +249,11 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
             },
         .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
-    auto& unpack_modes = m2::unpack_modes(compute_hw);
+    auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
+    auto& unpack_modes = compute_hw.unpack_modes;
     unpack_modes[q_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[k_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[v_dfb] = UnpackMode::UnpackToSrc;

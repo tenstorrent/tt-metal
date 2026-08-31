@@ -138,7 +138,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
              {"aligned_page_size", aligned_page_size},
              {"size_of_valid_data_in_last_page_in_row", size_of_valid_data_in_last_page_in_row}},
         .runtime_arg_schema = {.runtime_arg_names = {"padded_X_size", "pad_value", "start_page_id", "n_block_reps"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     /** writer
@@ -155,7 +155,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     /** compute
@@ -165,11 +165,10 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
     // unpack_to_dest_mode vector was Default everywhere except v[c_0] = UnpackToDestFp32 when
     // fp32_llk_acc, i.e. UnpackToDest on the tilize input DFB (Default == UnpackToSrc is expressed by
     // omitting the entry). Both compute KernelSpecs get the same config, as in legacy.
-    ComputeGen1Config compute_gen1{.enable_32_bit_dest = fp32_llk_acc};
+    ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_llk_acc};
     if (fp32_llk_acc) {
-        compute_gen1.unpack_modes = ComputeUnpackModes{{IN, UnpackMode::UnpackToDest}};
+        compute_hw.unpack_modes = ComputeUnpackModes{{IN, UnpackMode::UnpackToDest}};
     }
-    ComputeHardwareConfig compute_hw{std::move(compute_gen1)};
 
     // One KernelSpec per legacy compute KernelDescriptor: the per-group block count stays a CTA, so
     // the two groups keep their distinct specialization instead of collapsing onto a runtime arg.

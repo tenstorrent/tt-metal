@@ -227,7 +227,7 @@ ProgramArtifacts MorehNormBackwardOperation::MorehNormBackwardProgramFactory::cr
              m2::TensorBinding{.tensor_parameter_name = T_OUTPUT_GRAD, .accessor_name = "output_grad"}},
         .compile_time_args = {{"input_grad_rank", static_cast<uint32_t>(input_grad_rank)}},
         .runtime_arg_schema = {.runtime_arg_names = {"decimal", "num_output_tiles", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     // The three per-dimension blocks (output_grad_dim, input_grad_dim, need_bcast_dim) are read as
     // runtime varargs (count = input_grad_rank each).
@@ -240,7 +240,7 @@ ProgramArtifacts MorehNormBackwardOperation::MorehNormBackwardProgramFactory::cr
             .dfb_spec_name = DX, .accessor_name = "input_grad", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = T_INPUT_GRAD, .accessor_name = "input_grad"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_input_tiles_per_core", "tile_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -261,7 +261,7 @@ ProgramArtifacts MorehNormBackwardOperation::MorehNormBackwardProgramFactory::cr
     const bool cfg_math_approx_mode = math_approx_mode;
     const bool cfg_fp32_dest_acc_en = fp32_dest_acc_en;
     auto make_compute_hw = [&]() {
-        m2::ComputeGen1Config cfg{
+        m2::ComputeHardwareConfig cfg{
             .fpu_math_fidelity = cfg_math_fidelity,
             .sfpu_precision_mode = cfg_math_approx_mode ? Precision::Approximate : Precision::Precise,
             .enable_32_bit_dest = cfg_fp32_dest_acc_en,
@@ -280,7 +280,7 @@ ProgramArtifacts MorehNormBackwardOperation::MorehNormBackwardProgramFactory::cr
                 }
             }
         }
-        return m2::ComputeHardwareConfig{cfg};
+        return cfg;
     };
 
     // Compute DFB bindings: consume the four reader-produced inputs, produce dx, self-loop the 8

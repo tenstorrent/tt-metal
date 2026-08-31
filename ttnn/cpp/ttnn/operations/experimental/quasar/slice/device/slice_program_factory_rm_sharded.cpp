@@ -291,7 +291,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
              {"src_stride_bytes", src_stride_bytes},
              {"dst_stride_bytes", dst_stride_bytes},
              {"begins_bytes", begins_bytes}},
-        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = max_varargs},
     };
 

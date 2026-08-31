@@ -424,7 +424,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
                  .accessor_name = "config",
                  .endpoint_type = metal2::DFBEndpointType::PRODUCER}},
         .compile_time_args = make_cta(/*is_reader=*/0),
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     metal2::KernelSpec reader_spec{
@@ -442,7 +442,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
                  .accessor_name = "config",
                  .endpoint_type = metal2::DFBEndpointType::CONSUMER}},
         .compile_time_args = make_cta(/*is_reader=*/1),
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     metal2::ProgramSpec spec{

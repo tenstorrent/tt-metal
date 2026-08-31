@@ -194,7 +194,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumBackwardOperation::ProgramFacto
     // resolved compute-kernel-config scalars. Reproduce those exact values on ComputeGen1Config,
     // minding the two non-1:1 transforms (math_approx_mode bool->Precision; dst_full_sync_en
     // inverted into double_buffer_dest).
-    ComputeGen1Config compute_cfg{
+    ComputeHardwareConfig compute_cfg{
         .fpu_math_fidelity = math_fidelity,
         .sfpu_precision_mode = math_approx_mode ? Precision::Approximate : Precision::Precise,
         .enable_32_bit_dest = fp32_dest_acc_en,
@@ -226,7 +226,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumBackwardOperation::ProgramFacto
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_GRAD, .accessor_name = "output_grad"}},
         .compile_time_args = {{"input_grad_rank", input_grad_rank}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_output_tiles", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     // The three variable-length per-dim RTA blocks (output_grad_dim, input_grad_dim, need_bcast_dim,
     // each of length input_grad_rank) are passed as positional runtime varargs (read kernel-side via
@@ -240,7 +240,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumBackwardOperation::ProgramFacto
             .dfb_spec_name = C16_OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_GRAD, .accessor_name = "input_grad"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     auto make_compute = [&](const KernelSpecName& id, uint32_t num_output_tiles) {
@@ -258,7 +258,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumBackwardOperation::ProgramFacto
                 {{"num_output_tiles", num_output_tiles},
                  {"wt_need_bcast", need_bcast_dim[0]},
                  {"ht_need_bcast", need_bcast_dim[1]}},
-            .hw_config = ComputeHardwareConfig{compute_cfg},
+            .hw_config = compute_cfg,
         };
     };
     KernelSpec compute_1 = make_compute(COMPUTE_1, num_cols_per_core_group_1);
