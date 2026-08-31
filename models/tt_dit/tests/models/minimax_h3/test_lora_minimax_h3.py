@@ -34,7 +34,6 @@ from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import (
 )
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
-from ....utils.check import assert_quality
 from ....utils.tensor import to_torch
 from .common import GALAXY_RING, REAL_BLOCK_CONFIG, ROPE_FREQ_DIM, TT_BLOCK_CONFIG
 
@@ -154,9 +153,12 @@ def test_lora_adapter_coverage():
     assert {entry.scale for entry in entries if entry.kind == "lora"} == {1.0}
     assert {entry.rank for entry in entries if entry.kind == "lora"} == {8}
 
+
+def test_lora_published_adapter_coverage():
+    """The same check against the real file, which is the one that can actually surprise us."""
     path = os.environ.get("MINIMAX_H3_LORA_PATH")
     if path is None:
-        pytest.skip("set MINIMAX_H3_LORA_PATH to also gate the published adapter")
+        pytest.skip("set MINIMAX_H3_LORA_PATH to gate the published adapter")
 
     real_entries, real_stats = parse_adapter(path)
     logger.info(f"{path}: {real_stats}")
@@ -266,16 +268,40 @@ def test_lora_block_weight_parity(
     assert len(report.deltas) == 3, f"expected norm1, norm2, adaln bias; got {[d.path for d in report.deltas]}"
     assert not report.host
 
-    checked = 0
+    # One bf16 ULP is the floor here and PCC cannot express it: the reference rounds
+    # `base + delta` once in fp32 while the device rounds both operands and adds in bf16, and on a
+    # norm weight -- 1.0 +/- 0.02 -- a single ULP is 39% of sigma, so PCC reads ~99.4% for a result
+    # that is correct to the last representable bit. Bound the error where it actually lives.
+    worst: list[tuple[float, str]] = []
     for (path, expected), (_, got) in zip(_named_parameters(reference), _named_parameters(adapted), strict=True):
         a = to_torch(expected.data, mesh_axes=expected.mesh_axes, composer_device=mesh_device)
         b = to_torch(got.data, mesh_axes=got.mesh_axes, composer_device=mesh_device)
-        # bf16 throughout: the reference rounds base+delta once, the device path rounds the base and
-        # the delta separately and adds. One ULP of the larger operand is the floor here.
-        assert_quality(a, b, pcc=0.9999, relative_rmse=0.02)
-        checked += 1
-    assert checked, "no parameters compared"
-    logger.info(f"{checked} parameters match at strength {strength}")
+        assert a.shape == b.shape, f"{path}: {a.shape} != {b.shape}"
+        worst.append((_max_ulp_error(a, b), path))
+
+    for ulps, path in sorted(worst, reverse=True):
+        logger.info(f"  {path:34s} {ulps:5.2f} bf16 ULP")
+    assert worst, "no parameters compared"
+
+    # Two roundings on the device side (base and delta) against one on the reference's.
+    over = [(ulps, path) for ulps, path in worst if ulps > 2.0]
+    assert not over, f"beyond bf16 rounding: {[(p, round(u, 2)) for u, p in sorted(over, reverse=True)]}"
+    logger.info(f"{len(worst)} parameters within {max(u for u, _ in worst):.2f} bf16 ULP at strength {strength}")
+
+
+def _max_ulp_error(a: torch.Tensor, b: torch.Tensor) -> float:
+    """Largest elementwise gap between two bf16-valued tensors, in ULPs of the value itself.
+
+    Scaling by each element's own exponent rather than by the tensor's range is what makes this
+    meaningful on a norm weight, where every value sits near 1.0 and a range-relative bound would
+    be satisfied by almost any error.
+    """
+    a, b = a.detach().to(torch.float64), b.detach().to(torch.float64)
+    reference = torch.maximum(a.abs(), b.abs())
+    # bf16 carries 8 significand bits; subnormals near zero would divide by zero, so floor the
+    # exponent at the smallest normal.
+    exponent = torch.floor(torch.log2(reference.clamp(min=2.0**-126)))
+    return ((a - b).abs() / torch.pow(2.0, exponent - 7)).max().item()
 
 
 def _named_parameters(module, prefix: str = ""):
