@@ -246,6 +246,23 @@ public:
 
     uint32_t get_config_buffer_address() const { return config_buffer_address_; }
 
+    /**
+     * @brief Snapshot of bytes_acked -- how much the receiver has consumed.
+     *
+     * The device writes this counter into pinned host memory after its read barrier
+     * (socket_api.h, socket_notify_sender), so "bytes_acked has advanced past my message"
+     * means the payload is in L1. Reading it is a local load; the alternative is polling
+     * device L1 over a non-posted PCIe read, which contends with the payload reads it is
+     * waiting on. barrier() cannot serve here: it waits for all outstanding bytes rather
+     * than a specific point.
+     *
+     * Volatile and unfenced -- the device updates it concurrently and callers poll it.
+     * Fence at the call site if a single sample must be ordered against other loads.
+     */
+    uint32_t bytes_acked_snapshot() const {
+        return bytes_acked_ptr_ == nullptr ? 0u : *const_cast<volatile uint32_t*>(bytes_acked_ptr_);
+    }
+
     void set_page_size(uint32_t page_size);
 
     void write(void* data, uint32_t num_pages);

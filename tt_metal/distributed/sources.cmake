@@ -36,3 +36,19 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blitz_decode_pipeline.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/internal_cluster.cpp
 )
+
+# D2H2H2DSocket -- a device-to-device channel whose middle is two hosts. Needs libfabric for
+# the host-to-host hop; there is no version of it without one, so the whole set is conditional.
+if(TT_METAL_ENABLE_LIBFABRIC)
+    list(
+        APPEND
+        DISTRIBUTED_SRC
+        ${CMAKE_CURRENT_SOURCE_DIR}/D2H2H2DSocket.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_clock.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_deliver.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_region.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_scan.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_stats.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/host_transport.cpp
+    )
+endif()

@@ -429,6 +429,30 @@ if [ "$cxx_compiler_path" == "" ]; then
     cmake_args+=("-DCMAKE_TOOLCHAIN_FILE=${toolchain_path}")
 fi
 
+# libfabric -- the host-to-host transport behind D2H2H2DSocket. DETECTED, NOT REQUIRED: a
+# machine without it builds exactly as before, minus that one socket. Probed here as well as
+# in CMake so the reason is visible in the build log rather than only in the configure output.
+#
+# TT_LIBFABRIC_ROOT=<prefix> points at a non-system install; it is forwarded so CMake's
+# pkg-config lookup searches <prefix>/lib/pkgconfig/libfabric.pc first.
+if ! command -v pkg-config >/dev/null 2>&1; then
+    echo "INFO: pkg-config not found; D2H2H2DSocket will not be built"
+elif [ -n "$TT_LIBFABRIC_ROOT" ]; then
+    if PKG_CONFIG_PATH="$TT_LIBFABRIC_ROOT/lib/pkgconfig:$PKG_CONFIG_PATH" \
+       pkg-config --exists libfabric 2>/dev/null; then
+        libfabric_version=$(PKG_CONFIG_PATH="$TT_LIBFABRIC_ROOT/lib/pkgconfig:$PKG_CONFIG_PATH" \
+                            pkg-config --modversion libfabric)
+        echo "INFO: libfabric $libfabric_version found under $TT_LIBFABRIC_ROOT"
+        cmake_args+=("-DTT_LIBFABRIC_ROOT=$TT_LIBFABRIC_ROOT")
+    else
+        echo "INFO: no libfabric.pc under $TT_LIBFABRIC_ROOT/lib/pkgconfig; D2H2H2DSocket will not be built"
+    fi
+elif pkg-config --exists libfabric 2>/dev/null; then
+    echo "INFO: libfabric $(pkg-config --modversion libfabric) found (system)"
+else
+    echo "INFO: libfabric.pc not found; D2H2H2DSocket will not be built"
+fi
+
 echo "INFO: Configuring Project"
 echo "INFO: Running: cmake "${cmake_args[@]}""
 cmake "${cmake_args[@]}"

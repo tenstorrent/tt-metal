@@ -247,6 +247,32 @@ if(TT_METAL_ENABLE_LOGGING)
     add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
 endif()
 
+# libfabric -- the host-to-host RMA transport behind D2H2H2DSocket. DETECTED, not required:
+# ON only if pkg-config finds libfabric.pc, so an ordinary build is unaffected and nothing
+# has to be installed. -DTT_LIBFABRIC_ROOT=<prefix> points at a non-system install.
+find_package(PkgConfig QUIET)
+set(TT_METAL_ENABLE_LIBFABRIC OFF)
+if(PkgConfig_FOUND)
+    if(TT_LIBFABRIC_ROOT)
+        set(_tt_saved_pkg_config_path "$ENV{PKG_CONFIG_PATH}")
+        set(ENV{PKG_CONFIG_PATH} "${TT_LIBFABRIC_ROOT}/lib/pkgconfig:${_tt_saved_pkg_config_path}")
+    endif()
+    pkg_check_modules(LIBFABRIC QUIET IMPORTED_TARGET libfabric)
+    if(TT_LIBFABRIC_ROOT)
+        set(ENV{PKG_CONFIG_PATH} "${_tt_saved_pkg_config_path}")
+    endif()
+    if(TARGET PkgConfig::LIBFABRIC)
+        # pkg_check_modules targets are NOT covered by CMAKE_FIND_PACKAGE_TARGETS_GLOBAL above,
+        # so promote explicitly or tt_metal/distributed cannot see it.
+        set_target_properties(PkgConfig::LIBFABRIC PROPERTIES IMPORTED_GLOBAL TRUE)
+        set(TT_METAL_ENABLE_LIBFABRIC ON)
+        message(STATUS "libfabric ${LIBFABRIC_VERSION}: D2H2H2DSocket enabled")
+    endif()
+endif()
+if(NOT TT_METAL_ENABLE_LIBFABRIC)
+    message(STATUS "libfabric not found: D2H2H2DSocket will not be built")
+endif()
+
 include(GNUInstallDirs)
 # GNUInstallDirs takes PROJECT_DIR verbatim, but directories should always be lowercase
 string(TOLOWER ${PROJECT_NAME} PROJECT_NAME_LOWER)
