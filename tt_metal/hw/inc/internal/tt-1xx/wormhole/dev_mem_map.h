@@ -163,16 +163,6 @@
 // cross-layer consumers in host C++, dev_msgs codegen, and RISC-V linker
 // scripts that must stay in lockstep).
 #define MEM_UTIL_SAMPLER_BASE (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
-// DO NOT grow this without fixing device init first (PLAN_ETH_AGGREGATOR.md 5t).
-// Raising it to 2048 (126 ring slots) builds cleanly and then HANGS Tensix firmware
-// init reproducibly -- every core times out in "waiting for physical cores to
-// finish", i.e. "Device N init: failed to initialize FW". Not a compile timeout (the
-// second attempt fails 12 s after the first) and not a link/size error (the build is
-// silent). MEM_MAP_END is derived from this and is the Tensix KERNEL_CONFIG base, so
-// growing the reservation shifts that base and every *_INIT_LOCAL_L1_BASE_SCRATCH
-// above it -- one of those movements is what breaks init, and which one is not yet
-// diagnosed. Worth fixing: 126 slots would make the host-side drain lossless on
-// remote chips and remove the need for an on-chip aggregator entirely.
 #define MEM_UTIL_SAMPLER_SIZE 1024
 #if (MEM_UTIL_SAMPLER_BASE % 16 != 0) || (MEM_UTIL_SAMPLER_SIZE % 16 != 0)
 #error "util sampler base and size must be 16-byte aligned"
