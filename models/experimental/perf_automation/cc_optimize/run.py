@@ -301,6 +301,20 @@ def _model_rel_from_perf_test(perf_test) -> str:
     return str(Path(s).parent)
 
 
+def _mcp_silence_timeout_ms():
+    """Per-server tool-call ceiling for the MCP client, in milliseconds, or None to leave its default.
+
+    Resolved by the same helper the bring-up harness uses, so the two agents cannot disagree about how
+    long a tool call may run. Values under 1000ms are ignored by the client, so they are not sent.
+    """
+    try:
+        from scripts.tt_hw_planner.cc_harness import _mcp_tool_timeout_ms
+    except Exception:  # noqa: BLE001
+        return None
+    ms = _mcp_tool_timeout_ms(None)
+    return ms if ms and ms >= 1000 else None
+
+
 def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, kernel_log: str) -> dict:
     env = {
         "PERF_MCP_MANIFEST": manifest_path,
@@ -353,15 +367,27 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
         _v = os.environ.get(_k)
         if _v:
             env[_k] = _v
-    return {
-        "mcpServers": {
-            "perf-mcp": {
-                "command": _python_bin(repo_root),
-                "args": [str(repo_root / CC_DIR / "perf_mcp.py")],
-                "env": env,
-            }
-        }
+    # THE CLIENT ABORTS A TOOL CALL THAT GOES QUIET, AND THE DEVICE STEPS GO QUIET. The limit is on
+    # SILENCE, not duration -- "sent no response or progress for 1800s; aborting" -- and a profile or a
+    # full-pipeline measurement holds the device far longer than that without emitting anything. On an
+    # already-optimized model every step answered inside the default and it was never reached; from an
+    # unoptimized baseline the same steps take several times longer, and profile_model was aborted every
+    # time. It persists the roofline snapshot on its LAST statement, so the snapshot was never written
+    # and the report silently fell back to a floor-only roofline with no fidelity ladder.
+    #
+    # The per-server field is what the client's own abort message names, and it overrides the
+    # MCP_TOOL_TIMEOUT environment variable for this server -- setting only the variable left the abort
+    # in place, which is how this was first missed. The run's forward-progress watchdog remains the
+    # authority on a wedge; this only stops the client giving up on work that is still running.
+    _server = {
+        "command": _python_bin(repo_root),
+        "args": [str(repo_root / CC_DIR / "perf_mcp.py")],
+        "env": env,
     }
+    _silence_ms = _mcp_silence_timeout_ms()
+    if _silence_ms:
+        _server["timeout"] = _silence_ms
+    return {"mcpServers": {"perf-mcp": _server}}
 
 
 def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:

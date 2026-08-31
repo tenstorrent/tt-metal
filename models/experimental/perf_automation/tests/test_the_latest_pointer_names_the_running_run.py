@@ -128,3 +128,26 @@ def test_a_run_that_has_not_declared_its_model_keeps_its_directory(tmp_path, mon
 
     (latest / "manifest.json").write_text("{ not json")
     assert S.report_path(tmp_path / "anything") == runs / "latest" / "RUN_REPORT.md"
+
+
+def test_the_mcp_config_carries_a_silence_ceiling():
+    """The client aborts a tool call that goes quiet, and the device steps go quiet.
+
+    "sent no response or progress for 1800s; aborting" is a SILENCE limit, and a profile holds the
+    device far longer than that emitting nothing. The client's own abort message names the per-server
+    `timeout` field as the lever, and that field overrides the MCP_TOOL_TIMEOUT environment variable --
+    setting only the variable left the abort in place, which is how this was first missed.
+    """
+    from cc_optimize.run import _mcp_config, _mcp_silence_timeout_ms
+
+    cfg = _mcp_config(
+        Path("/nonexistent-repo"),
+        "manifest.json",
+        {"perf_test": "t.py::t", "pcc_test": "p.py::p", "case": ""},
+        "0",
+        "kernel.json",
+    )
+    server = cfg["mcpServers"]["perf-mcp"]
+    assert set(("command", "args", "env")) <= set(server), "the server entry lost a required key"
+    assert server["timeout"] == _mcp_silence_timeout_ms()
+    assert server["timeout"] >= 1000, "the client ignores values below 1000ms"
