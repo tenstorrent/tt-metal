@@ -11,4 +11,5 @@ from .grpo_trainer import (
     GRPOTrainer,
     get_grpo_config,
 )
+from .one_step_async_grpo_trainer import OneStepAsyncGRPOTrainer
 from ttml.modules.lora import LoraConfig

@@ -949,7 +949,22 @@ class GRPOTrainer:
         per_device_batch_len = completions_batch_len / ddp_world_size
         return ttml.ops.unary.mean(weighted_surr_4d) * (-float(B_local) * float(Tp) / per_device_batch_len)
 
-    def train(self) -> None:
+    def _setup_training(self) -> None:
+        """One-shot training setup: validate config, build optimizer, resolve
+        the device-parallelism topology, and tokenize the dataset.
+
+        Populates the following attributes on ``self`` for the per-batch
+        helpers below to consume: ``_tokenizer``, ``_optimizer``, ``_base_lr``,
+        ``_autograd_ctx``, ``_mesh``, ``_num_devices``, ``_fsdp_enabled``,
+        ``_ddp_enabled``, ``_ddp_context_enabled``, ``_fsdp_sync_axes``,
+        ``_dp_mapper``, ``_dp_composer``, ``_grad_sync_world_size``,
+        ``_completions_per_microbatch``, ``_prompts_per_microbatch``,
+        ``_generation_batch_prompts``, ``_prompts``, ``_extra_columns``. Also
+        sets the public ``self.model`` so callers can inspect it after
+        ``train()`` has started. Isolating this makes subclasses (e.g. an
+        async trainer) able to reuse the same setup without copying its ~90
+        lines of DP/FSDP/config plumbing.
+        """
         grpo_cfg = self.config
         completer = self.completer
         tt_model = completer.model
@@ -1105,191 +1120,316 @@ class GRPOTrainer:
         prompts = [tokenizer.encode(row["prompt"]) for row in dataset]
         extra_columns = {k: list(dataset[k]) for k in dataset.column_names if k != "prompt"}
 
+        # Publish outputs onto self for the per-batch helpers.
+        self._tokenizer = tokenizer
+        self._optimizer = optimizer
+        self._base_lr = base_lr
+        self._autograd_ctx = autograd_ctx
+        self._mesh = mesh
+        self._num_devices = num_devices
+        self._fsdp_enabled = fsdp_enabled
+        self._ddp_enabled = ddp_enabled
+        self._ddp_context_enabled = ddp_context_enabled
+        self._fsdp_sync_axes = fsdp_sync_axes
+        self._dp_mapper = dp_mapper
+        self._dp_composer = dp_composer
+        self._grad_sync_world_size = grad_sync_world_size
+        self._completions_per_microbatch = completions_per_microbatch
+        self._prompts_per_microbatch = prompts_per_microbatch
+        self._generation_batch_prompts = generation_batch_prompts
+        self._prompts = prompts
+        self._extra_columns = extra_columns
+
+    def _run_rewards_and_advantages(
+        self,
+        prompts_batch: List[List[int]],
+        completions_batch: List[List[int]],
+        columns_dict: dict,
+    ) -> Tuple[np.ndarray, np.ndarray, List[str], List[str]]:
+        """Decode a batch, dispatch reward funcs, compute group-relative
+        advantages on host.
+
+        Also stashes per-component reward means into
+        ``self._reward_component_means`` (side-effect kept from the inline
+        version so the finalize step can splat it into ``self.metrics``).
+        Returns ``(rewards_np, advantages_np, prompts_strs, completions_strs)``.
+        """
+        completions_strs = [self._tokenizer.decode(c, skip_special_tokens=True) for c in completions_batch]
+        prompts_strs = [self._tokenizer.decode(p) for p in prompts_batch]
+        rewards_np, self._reward_component_means = self._compute_rewards_and_means(
+            completions_strs, prompts_strs, columns_dict
+        )
+        advantages_np = compute_advantages_host(rewards_np, self.config.num_generations)
+        return rewards_np, advantages_np, prompts_strs, completions_strs
+
+    def _run_ref_logprobs(
+        self,
+        prompts_batch: List[List[int]],
+        completions_batch: List[List[int]],
+    ) -> List[Tuple[Any, Any]]:
+        """Compute reference (old) negative log-probs for every micro-batch in
+        this generation batch, eval mode + no_grad. The result is reused across
+        every mini-epoch by ``_run_optimizer_step`` as the GRPO reference. The
+        caller owns freeing the returned tensors after the last mini-epoch.
+        """
+        probs_old_list: List[Tuple[Any, Any]] = []
+        self.model.eval()
+        with no_grad():
+            for p, c in iter_micro_batch(prompts_batch, completions_batch, self._completions_per_microbatch):
+                nlog_old, mask = self.completer.compute_nlog_probs(p, c)
+                nlog_old.set_requires_grad(False)
+                mask.set_requires_grad(False)
+                probs_old_list.append((nlog_old, mask))
+        return probs_old_list
+
+    def _run_optimizer_step(
+        self,
+        prompts_batch: List[List[int]],
+        completions_batch: List[List[int]],
+        advantages_np: np.ndarray,
+        probs_old_list: List[Tuple[Any, Any]],
+        num_steps: int,
+    ) -> float:
+        """Run one optimizer step: ``grad_accum`` fwd+bwd passes accumulating
+        into a single gradient, then LR warmup, grad sync (fsdp / ddp-context /
+        ddp), ``on_before_optimizer_step`` callbacks (through ``_time_callback``
+        so their cost lands in this step's row), ``optimizer.step()``, and
+        ``optimizer.zero_grad()``.
+
+        Returns ``warmup_factor`` so the caller can put the effective LR in the
+        metrics dict without recomputing it.
+        """
+        self.model.train()
+        self._optimizer.zero_grad()
+
+        # Accumulate gradients over every micro-batch of the generation batch
+        # before taking a single optimizer step.
+        for i, (p, c) in enumerate(
+            iter_micro_batch(prompts_batch, completions_batch, self._completions_per_microbatch),
+        ):
+            B = len(c)
+            # The advantages and the micro-batch token tensors are both sharded
+            # along axis 0 over the identical host-order slice [start : start + B],
+            # so each device pairs a completion's log-probs with that same
+            # completion's advantage.
+            start = i * self._completions_per_microbatch
+            adv_micro_np = advantages_np[start : start + B]
+            adv_slice_val = upload_micro_advantages(adv_micro_np, self._dp_mapper, self._num_devices)
+            adv_ttml = ttml.autograd.create_tensor(adv_slice_val, requires_grad=False)
+
+            nlog_old, mask_old = probs_old_list[i]
+            nlog_probs_new, mask_new = self.completer.compute_nlog_probs(p, c)
+
+            # ``len(prompts_batch)`` is the global completion count of the whole
+            # generation batch (all ``grad_accum`` micro-batches), so
+            # accumulating the per-micro-batch losses yields the mean over the
+            # full effective batch.
+            loss = self._compute_grpo_loss(
+                nlog_old,
+                nlog_probs_new,
+                mask_old,
+                adv_ttml,
+                len(prompts_batch),
+                self.config.epsilon,
+                ddp_world_size=self._grad_sync_world_size,
+            )
+
+            loss.backward(retain_graph=False)
+            ttml.autograd.AutoContext.get_instance().reset_graph()
+
+            _deallocate_tensors([nlog_probs_new, mask_new, adv_ttml, loss])
+
+        warmup_factor = 1.0 if self.config.warmup_steps == 0 else min(1.0, (num_steps + 1) / self.config.warmup_steps)
+        self._optimizer.set_lr(self._base_lr * warmup_factor)
+
+        if self._fsdp_enabled:
+            ttml.sync_gradients(self.model.parameters(), axis_names=self._fsdp_sync_axes)
+        elif self._ddp_context_enabled:
+            # Parallelism-context DDP (Llama completer): a parallelism context
+            # is initialized, so use its gradient sync. ``sync_gradients`` would
+            # be a silent no-op here — it reduces over named mesh axes, and this
+            # path opens no named mesh (``maybe_mesh()`` is None), so it would
+            # leave gradients un-averaged.
+            ttml.core.distributed.synchronize_gradients(self.model.parameters())
+        elif self._ddp_enabled:
+            # Named-mesh DDP (Qwen3 completer): no parallelism context exists,
+            # so all-reduce + average grads over the "dp" mesh axis — the same
+            # primitive FSDP uses. The loss normalization divides by
+            # ``grad_sync_world_size`` (= the "dp" axis size here), matched to
+            # this reduction.
+            ttml.sync_gradients(self.model.parameters(), axis_names=("dp",))
+
+        # Reset per-step callback timings before firing the first hook of this
+        # optimizer step. ``on_before_optimizer_step``, ``on_step_end``, and
+        # ``on_save`` all accumulate into ``self._callback_times`` so a
+        # callback's cost lands in the row for the step in which it ran, not
+        # the row after.
+        self._callback_times = {}
+        for cb in self.callbacks:
+            self._time_callback(cb, "on_before_optimizer_step", self)
+        self._optimizer.step()
+        self._optimizer.zero_grad()
+
+        return warmup_factor
+
+    def _finalize_step_and_fire_callbacks(
+        self,
+        num_steps: int,
+        warmup_factor: float,
+        rewards_np: np.ndarray,
+        completion_lens: List[int],
+        prompts_strs: List[str],
+        completions_strs: List[str],
+        rewards: List[float],
+        generation_time_s_for_step: float,
+    ) -> None:
+        """Build the per-step metrics dict, fire ``on_step_end`` for non-monitor
+        callbacks (through ``_time_callback``), optionally save a checkpoint +
+        fire ``on_save`` for non-monitor callbacks, seal ``step_time_s`` after
+        all of the above, and finally fire the monitor callback's
+        ``on_step_end`` OUTSIDE the ``step_time_s`` window.
+
+        Resets ``self._step_t0`` at the end so the next step's timer starts
+        from a clean baseline (matching the pre-refactor invariant).
+        """
+        grpo_cfg = self.config
+
+        if completion_lens:
+            mean_completion_len = sum(completion_lens) / len(completion_lens)
+            min_completion_len = min(completion_lens)
+            max_completion_len = max(completion_lens)
+        else:
+            mean_completion_len = 0.0
+            min_completion_len = 0
+            max_completion_len = 0
+
+        monitor_cb = next((cb for cb in self.callbacks if isinstance(cb, GRPOMonitor)), None)
+
+        # Build the mutable per-step metrics dict on ``self`` every step so
+        # callbacks can inject additional columns (e.g. an eval callback
+        # writing ``trainer.metrics["eval_similarity"]``) and so the built-in
+        # ``GRPOMonitor`` can accumulate per-key running stats across every
+        # step. ``step_time_s`` is filled in below, once the entire step
+        # (including non-monitor ``on_step_end`` callbacks and any checkpoint
+        # save) has completed.
+        self.metrics = {
+            "reward_mean": float(rewards_np.mean()),
+            "reward_std": float(rewards_np.std()),
+            "mean_completion_len": mean_completion_len,
+            "min_completion_len": min_completion_len,
+            "max_completion_len": max_completion_len,
+            "lr": self._base_lr * warmup_factor,
+            "generation_time_s": generation_time_s_for_step,
+            **self._callback_times,
+            **self._reward_component_means,
+        }
+        if grpo_cfg.log_completions and grpo_cfg.num_completions_to_print > 0:
+            k = grpo_cfg.num_completions_to_print
+            self.metrics["prompts"] = prompts_strs[:k]
+            self.metrics["completions"] = completions_strs[:k]
+            self.metrics["rewards"] = list(rewards[:k])
+
+        for cb in self.callbacks:
+            if cb is monitor_cb:
+                continue
+            key = self._time_callback(cb, "on_step_end", self, num_steps, **self.metrics)
+            self.metrics[key] = self._callback_times[key]
+
+        if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
+            ckpt_dir = os.path.join(grpo_cfg.output_dir, "checkpoints", f"grpo_step_{num_steps}")
+            save_checkpoint(
+                self.model,
+                num_steps,
+                grpo_cfg.output_dir,
+                dp_composer=self._dp_composer,
+                tokenizer=self._tokenizer,
+                grpo_config=grpo_cfg,
+                optimizer=self._optimizer,
+                model_source=self.model_source,
+            )
+            for cb in self.callbacks:
+                if cb is monitor_cb:
+                    continue
+                key = self._time_callback(cb, "on_save", self, num_steps, ckpt_dir)
+                self.metrics[key] = self._callback_times[key]
+
+        # Seal ``step_time_s`` after all non-monitor work is done, so it covers
+        # the full per-step wall time (generation, host post-gen, reference
+        # log-probs, training loop, non-monitor callbacks, and any checkpoint
+        # save on this step). ``GRPOMonitor``'s own cost is deliberately
+        # outside this window.
+        self.metrics["step_time_s"] = time.perf_counter() - self._step_t0
+
+        if monitor_cb is not None:
+            self._time_callback(monitor_cb, "on_step_end", self, num_steps, **self.metrics)
+
+        self._step_t0 = time.perf_counter()
+
+    def train(self) -> None:
+        """Synchronous GRPO training loop.
+
+        Composes the phase helpers above:
+
+          _setup_training()
+          for prompts_batch in iter_batched_completions(...):
+              rewards / advantages       (_run_rewards_and_advantages)
+              ref (old) log-probs        (_run_ref_logprobs)
+              for mini_epoch in num_iterations:
+                  optimizer step          (_run_optimizer_step)
+                  metrics + callbacks     (_finalize_step_and_fire_callbacks)
+        """
+        self._setup_training()
+
         num_batches = 0
         num_steps = 0
-        step_t0 = time.perf_counter()
+        self._step_t0 = time.perf_counter()
 
         for cb in self.callbacks:
             cb.on_train_begin(self)
 
         # Each iteration yields one generation (effective) batch worth of
         # completions, i.e. ``grad_accum`` micro-batches.
-        for prompts_batch, completions_batch, dataset_columns_dict, generation_time_s in iter_batched_completions(
-            completer, prompts, extra_columns, generation_batch_prompts, grpo_cfg.num_generations
+        for prompts_batch, completions_batch, columns_dict, generation_time_s in iter_batched_completions(
+            self.completer,
+            self._prompts,
+            self._extra_columns,
+            self._generation_batch_prompts,
+            self.config.num_generations,
         ):
             num_batches += 1
 
-            completions_strs = [tokenizer.decode(c, skip_special_tokens=True) for c in completions_batch]
-            prompts_strs = [tokenizer.decode(p) for p in prompts_batch]
-            rewards_np, self._reward_component_means = self._compute_rewards_and_means(
-                completions_strs, prompts_strs, dataset_columns_dict
+            rewards_np, advantages_np, prompts_strs, completions_strs = self._run_rewards_and_advantages(
+                prompts_batch, completions_batch, columns_dict
             )
             rewards = rewards_np.tolist()
-
-            advantages_np = compute_advantages_host(rewards_np, grpo_cfg.num_generations)
             completion_lens = [len(c) for c in completions_batch]
 
-            # Reference (old) log-probs for every micro-batch in the generation
-            # batch, computed once and reused across mini-epochs.
-            probs_old_list = []
-            tt_model.eval()
-            with no_grad():
-                for p, c in iter_micro_batch(prompts_batch, completions_batch, completions_per_microbatch):
-                    nlog_old, mask = completer.compute_nlog_probs(p, c)
-                    nlog_old.set_requires_grad(False)
-                    mask.set_requires_grad(False)
-                    probs_old_list.append((nlog_old, mask))
+            probs_old_list = self._run_ref_logprobs(prompts_batch, completions_batch)
 
-            for mini_epoch in range(grpo_cfg.num_iterations):
-                tt_model.train()
-                optimizer.zero_grad()
+            for mini_epoch in range(self.config.num_iterations):
+                warmup_factor = self._run_optimizer_step(
+                    prompts_batch,
+                    completions_batch,
+                    advantages_np,
+                    probs_old_list,
+                    num_steps,
+                )
 
-                # Accumulate gradients over all ``grad_accum`` micro-batches of
-                # the generation batch before taking a single optimizer step.
-                for i, (p, c) in enumerate(
-                    iter_micro_batch(prompts_batch, completions_batch, completions_per_microbatch),
-                ):
-                    B = len(c)
-                    # The advantages and the micro-batch token tensors are both
-                    # sharded along axis 0 over the identical host-order slice
-                    # [start : start + B], so each device pairs a completion's
-                    # log-probs with that same completion's advantage.
-                    start = i * completions_per_microbatch
-                    adv_micro_np = advantages_np[start : start + B]
-                    adv_slice_val = upload_micro_advantages(adv_micro_np, dp_mapper, num_devices)
-                    adv_ttml = ttml.autograd.create_tensor(adv_slice_val, requires_grad=False)
-
-                    nlog_old, mask_old = probs_old_list[i]
-                    nlog_probs_new, mask_new = completer.compute_nlog_probs(p, c)
-
-                    # ``len(prompts_batch)`` is the global completion count of the
-                    # whole generation batch (all ``grad_accum`` micro-batches), so
-                    # accumulating the per-micro-batch losses yields the mean over
-                    # the full effective batch.
-                    loss = self._compute_grpo_loss(
-                        nlog_old,
-                        nlog_probs_new,
-                        mask_old,
-                        adv_ttml,
-                        len(prompts_batch),
-                        grpo_cfg.epsilon,
-                        ddp_world_size=grad_sync_world_size,
-                    )
-
-                    loss.backward(retain_graph=False)
-                    ttml.autograd.AutoContext.get_instance().reset_graph()
-
-                    _deallocate_tensors([nlog_probs_new, mask_new, adv_ttml, loss])
-
-                warmup_factor = 1.0 if grpo_cfg.warmup_steps == 0 else min(1.0, (num_steps + 1) / grpo_cfg.warmup_steps)
-                optimizer.set_lr(base_lr * warmup_factor)
-
-                if fsdp_enabled:
-                    ttml.sync_gradients(tt_model.parameters(), axis_names=fsdp_sync_axes)
-                elif ddp_context_enabled:
-                    # Parallelism-context DDP (Llama completer): a parallelism
-                    # context is initialized, so use its gradient sync.
-                    # ``sync_gradients`` would be a silent no-op here — it reduces
-                    # over named mesh axes, and this path opens no named mesh
-                    # (``maybe_mesh()`` is None), so it would leave gradients
-                    # un-averaged.
-                    ttml.core.distributed.synchronize_gradients(tt_model.parameters())
-                elif ddp_enabled:
-                    # Named-mesh DDP (Qwen3 completer): no parallelism context
-                    # exists, so all-reduce + average grads over the "dp" mesh
-                    # axis — the same primitive FSDP uses. The loss normalization
-                    # divides by ``grad_sync_world_size`` (= the "dp" axis size
-                    # here), matched to this reduction.
-                    ttml.sync_gradients(tt_model.parameters(), axis_names=("dp",))
-
-                # Reset per-step callback timings before firing the first hook
-                # of this optimizer step. ``on_before_optimizer_step``,
-                # ``on_step_end``, and ``on_save`` all accumulate into
-                # ``self._callback_times`` so a callback's cost lands in the row
-                # for the step in which it ran, not the row after.
-                self._callback_times = {}
-                for cb in self.callbacks:
-                    self._time_callback(cb, "on_before_optimizer_step", self)
-                optimizer.step()
-                optimizer.zero_grad()
-
-                # Generation runs once per effective batch; attribute its cost to
-                # the first mini-epoch's step only.
+                # Generation runs once per effective batch; attribute its cost
+                # to the first mini-epoch's step only.
                 generation_time_s_for_step = generation_time_s if mini_epoch == 0 else 0.0
 
                 num_steps += 1
-                mean_reward = float(rewards_np.mean())
-                if completion_lens:
-                    mean_completion_len = sum(completion_lens) / len(completion_lens)
-                    min_completion_len = min(completion_lens)
-                    max_completion_len = max(completion_lens)
-                else:
-                    mean_completion_len = 0.0
-                    min_completion_len = 0
-                    max_completion_len = 0
-
-                monitor_cb = next((cb for cb in self.callbacks if isinstance(cb, GRPOMonitor)), None)
-
-                # Build the mutable per-step metrics dict on ``self`` every step
-                # so callbacks can inject additional columns (e.g. an eval
-                # callback writing ``trainer.metrics["eval_similarity"]``) and
-                # so the built-in ``GRPOMonitor`` can accumulate per-key running
-                # stats across every step. ``step_time_s`` is filled in below,
-                # once the entire step (including non-monitor ``on_step_end``
-                # callbacks and any checkpoint save) has completed.
-                self.metrics = {
-                    "reward_mean": mean_reward,
-                    "reward_std": float(rewards_np.std()),
-                    "mean_completion_len": mean_completion_len,
-                    "min_completion_len": min_completion_len,
-                    "max_completion_len": max_completion_len,
-                    "lr": base_lr * warmup_factor,
-                    "generation_time_s": generation_time_s_for_step,
-                    **self._callback_times,
-                    **self._reward_component_means,
-                }
-                if grpo_cfg.log_completions and grpo_cfg.num_completions_to_print > 0:
-                    k = grpo_cfg.num_completions_to_print
-                    self.metrics["prompts"] = prompts_strs[:k]
-                    self.metrics["completions"] = completions_strs[:k]
-                    self.metrics["rewards"] = list(rewards[:k])
-
-                for cb in self.callbacks:
-                    if cb is monitor_cb:
-                        continue
-                    key = self._time_callback(cb, "on_step_end", self, num_steps, **self.metrics)
-                    self.metrics[key] = self._callback_times[key]
-
-                if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
-                    ckpt_dir = os.path.join(grpo_cfg.output_dir, "checkpoints", f"grpo_step_{num_steps}")
-                    save_checkpoint(
-                        tt_model,
-                        num_steps,
-                        grpo_cfg.output_dir,
-                        dp_composer=dp_composer,
-                        tokenizer=tokenizer,
-                        grpo_config=grpo_cfg,
-                        optimizer=optimizer,
-                        model_source=self.model_source,
-                    )
-                    for cb in self.callbacks:
-                        if cb is monitor_cb:
-                            continue
-                        key = self._time_callback(cb, "on_save", self, num_steps, ckpt_dir)
-                        self.metrics[key] = self._callback_times[key]
-
-                # Seal ``step_time_s`` after all non-monitor work is done, so it
-                # covers the full per-step wall time (generation, host post-gen,
-                # reference log-probs, training loop, non-monitor callbacks, and
-                # any checkpoint save on this step). ``GRPOMonitor``'s own cost
-                # is deliberately outside this window.
-                step_time_s = time.perf_counter() - step_t0
-                self.metrics["step_time_s"] = step_time_s
-
-                if monitor_cb is not None:
-                    self._time_callback(monitor_cb, "on_step_end", self, num_steps, **self.metrics)
-
-                step_t0 = time.perf_counter()
+                self._finalize_step_and_fire_callbacks(
+                    num_steps,
+                    warmup_factor,
+                    rewards_np,
+                    completion_lens,
+                    prompts_strs,
+                    completions_strs,
+                    rewards,
+                    generation_time_s_for_step,
+                )
 
             for nlog_old, mask_old in probs_old_list:
                 _deallocate_tensors([nlog_old, mask_old])

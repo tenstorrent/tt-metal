@@ -142,13 +142,17 @@ class MPIRolloutClient:
         Blocks until the peer calls its matching ``connect()``."""
         self._bridge.connect()
 
-    def remote_generate(
+    def submit_remote_generate(
         self,
         prompts: List[List[int]],
         *,
         max_new_tokens: int,
-    ) -> List[List[int]]:
-        """Run inference on the ttt rank and return token-id lists."""
+    ) -> None:
+        """Send an inference request to the ttt rank without waiting for the response.
+
+        The server processes one op at a time; pair every ``submit_remote_generate``
+        with exactly one ``await_remote_generate`` before submitting again.
+        """
         req_body = json.dumps(
             {
                 "prompts": [[int(t) for t in p] for p in prompts],
@@ -159,11 +163,23 @@ class MPIRolloutClient:
         _mpi_send_bytes(req_hdr, self.peer_rank, _INFER_REQ_HDR_TAG)
         _mpi_send_bytes(req_body, self.peer_rank, _INFER_REQ_BODY_TAG)
 
+    def await_remote_generate(self) -> List[List[int]]:
+        """Block until the ttt rank returns completions for the last submitted request."""
         res_hdr = _mpi_recv_bytes(_HEADER_LEN, self.peer_rank, _INFER_RES_HDR_TAG)
         _op, body_len, _reserved = struct.unpack(_HEADER_FMT, res_hdr)
         res_body = _mpi_recv_bytes(int(body_len), self.peer_rank, _INFER_RES_BODY_TAG) if body_len else b""
         payload = json.loads(res_body.decode("utf-8")) if res_body else {}
         return [[int(t) for t in c] for c in payload.get("completions", [])]
+
+    def remote_generate(
+        self,
+        prompts: List[List[int]],
+        *,
+        max_new_tokens: int,
+    ) -> List[List[int]]:
+        """Blocking convenience wrapper: submit + await."""
+        self.submit_remote_generate(prompts, max_new_tokens=max_new_tokens)
+        return self.await_remote_generate()
 
     def send_weights(self, hf_dict: dict[str, "ttnn.Tensor"]) -> None:
         """Push a fresh HF-keyed weight dict to the ttt rank in one call.
