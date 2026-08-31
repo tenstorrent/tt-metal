@@ -17,6 +17,44 @@ bool is_supported_dtype(DataType dtype) {
            dtype == DataType::BFLOAT4_B;
 }
 
+void validate_tensor_contract(const Tensor& tensor, const std::string& name) {
+    TT_FATAL(
+        is_supported_dtype(tensor.dtype()),
+        "GELU_BW operation requires a floating-point {} (BFLOAT16, FLOAT32, BFLOAT8_B or BFLOAT4_B). {} data "
+        "type: {}",
+        name,
+        name,
+        static_cast<int>(tensor.dtype()));
+
+    TT_FATAL(
+        tensor.storage_type() == StorageType::DEVICE,
+        "GELU_BW operation requires {} to be on Device. {} storage type: {}",
+        name,
+        name,
+        static_cast<int>(tensor.storage_type()));
+
+    TT_FATAL(
+        tensor.buffer() != nullptr,
+        "GELU_BW operation requires {} to be allocated in a buffer on the device. Buffer is null.",
+        name);
+
+    TT_FATAL(!tensor.is_sharded(), "GELU_BW operation does not support sharded {} tensor.", name);
+
+    TT_FATAL(
+        tensor.layout() == Layout::TILE,
+        "GELU_BW operation requires {} to be in Tile layout. {} layout: {}",
+        name,
+        name,
+        static_cast<int>(tensor.layout()));
+
+    TT_FATAL(
+        tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "GELU_BW operation requires {} to have Interleaved memory layout. {} memory layout: {}",
+        name,
+        name,
+        static_cast<int>(tensor.memory_config().memory_layout()));
+}
+
 }  // namespace
 
 void GeluBwDeviceOperation::validate_on_program_cache_miss(
@@ -42,11 +80,7 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
         "type: {}",
         static_cast<int>(input_tensor.dtype()));
 
-    TT_FATAL(
-        is_supported_dtype(grad_output.dtype()),
-        "GELU_BW operation requires a floating-point grad_output (BFLOAT16, FLOAT32, BFLOAT8_B or BFLOAT4_B). "
-        "Grad output data type: {}",
-        static_cast<int>(grad_output.dtype()));
+    validate_tensor_contract(grad_output, "grad_output");
 
     TT_FATAL(
         output_datatype == input_tensor.dtype(),
@@ -84,30 +118,11 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.memory_config().memory_layout()));
 
     TT_FATAL(
-        grad_output.storage_type() == StorageType::DEVICE,
-        "GELU_BW operation requires grad_output to be on Device. grad_output storage type: {}",
-        static_cast<int>(grad_output.storage_type()));
-
-    TT_FATAL(
-        grad_output.buffer() != nullptr,
-        "GELU_BW operation requires grad_output to be allocated in a buffer on the device. Buffer is null.");
-
-    TT_FATAL(
         grad_output.dtype() == input_tensor.dtype(),
         "GELU_BW operation requires grad_output and input data types to match. grad_output data type: {}, input data "
         "type: {}",
         static_cast<int>(grad_output.dtype()),
         static_cast<int>(input_tensor.dtype()));
-
-    TT_FATAL(
-        grad_output.layout() == Layout::TILE,
-        "GELU_BW operation requires grad_output to be in Tile layout. grad_output layout: {}",
-        static_cast<int>(grad_output.layout()));
-
-    TT_FATAL(
-        grad_output.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "GELU_BW operation requires grad_output to have Interleaved memory layout. grad_output memory layout: {}",
-        static_cast<int>(grad_output.memory_config().memory_layout()));
 
     TT_FATAL(
         grad_output.logical_shape() == input_tensor.logical_shape(),
@@ -122,28 +137,7 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
 
     if (preallocated_input_grad.has_value()) {
         const auto& preallocated = preallocated_input_grad.value();
-
-        TT_FATAL(
-            preallocated.storage_type() == StorageType::DEVICE,
-            "GELU_BW operation requires preallocated input grad to be on Device. Storage type: {}",
-            static_cast<int>(preallocated.storage_type()));
-
-        TT_FATAL(
-            preallocated.buffer() != nullptr,
-            "GELU_BW operation requires preallocated input grad to be allocated in a buffer on the device. Buffer is "
-            "null.");
-
-        TT_FATAL(!preallocated.is_sharded(), "GELU_BW operation does not support sharded preallocated input grad.");
-
-        TT_FATAL(
-            preallocated.layout() == Layout::TILE,
-            "GELU_BW operation requires preallocated input grad to be in Tile layout. Layout: {}",
-            static_cast<int>(preallocated.layout()));
-
-        TT_FATAL(
-            preallocated.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "GELU_BW operation requires preallocated input grad to use Interleaved memory layout. Memory layout: {}",
-            static_cast<int>(preallocated.memory_config().memory_layout()));
+        validate_tensor_contract(preallocated, "preallocated input grad");
 
         TT_FATAL(
             preallocated.logical_shape() == input_tensor.logical_shape(),
