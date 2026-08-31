@@ -8,6 +8,7 @@
 #include "llk_pack_untilize_api.h"  // legacy CB-id API + unified llk_pack_untilize_*_impl cores
 #include "data_format_derive.h"
 #include "api/compute/experimental/2_0/internal/llk_descriptor.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK PACK UNTILIZE -- LLKOperand (id-free, compile-time NTTP) overloads
@@ -33,6 +34,7 @@ template <
     std::uint32_t row_num_datums = TILE_C_DIM,
     bool dense = false>
 inline void llk_pack_untilize_init() {
+    SAN_HOOK(unsupported());
     constexpr std::uint8_t RegFmt = ckernel::infer_pack_reg_fmt(OUT_DESC.format, is_fp32_dest_acc_en);
     llk_pack_untilize_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
         RegFmt,
@@ -55,6 +57,7 @@ inline void llk_pack_untilize(
     std::uint32_t base_ptr,
     const std::uint32_t block_c_index = 0,
     const std::uint32_t tile_dst_rt_offset = 0) {
+    SAN_HOOK(unsupported());
     constexpr std::uint8_t RegFmt = ckernel::infer_pack_reg_fmt(OUT_DESC.format, is_fp32_dest_acc_en);
     // Per tile-row output stride, folded to a compile-time constant. Replaces the legacy
     // full_ct_dim * fifo_page_size; tile_stride_words is the one-tile L1 size (exp section included for BFP).
@@ -74,6 +77,7 @@ inline void llk_pack_untilize(
 
 template <ckernel::experimental::LLKMemDescriptor OUT_DESC, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_untilize_uninit() {
+    SAN_HOOK(unsupported());
     constexpr std::uint8_t RegFmt = ckernel::infer_pack_reg_fmt(OUT_DESC.format, is_fp32_dest_acc_en);
     llk_pack_untilize_uninit_impl(RegFmt);
 }

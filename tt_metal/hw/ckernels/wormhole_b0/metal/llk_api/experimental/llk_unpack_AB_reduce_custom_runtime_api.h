@@ -17,6 +17,7 @@
 #include "experimental/llk_unpack_AB_reduce_custom.h"
 #include "experimental/llk_unpack_AB_reduce_custom_runtime.h"
 #include "llk_unpack_common.h"
+#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -50,6 +51,7 @@ using namespace ckernel::unpacker;
 template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_AB_reduce_block_max_row_init_runtime(
     std::uint32_t block_ct_dim, bool respect_trigger, const ckernel::TensorShape& tensor_shape) {
+    SAN_HOOK(unsupported());
     _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(block_ct_dim, respect_trigger, tensor_shape);
 }
 
@@ -78,6 +80,7 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     const std::uint32_t row_start_index,
     bool respect_trigger = false,
     bool overlap_first_half = false) {
+    SAN_HOOK(unsupported());
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
     std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
@@ -110,5 +113,6 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
  */
 inline void llk_unpack_AB_reduce_block_max_row_uninit_runtime(
     bool respect_trigger = false, bool overlap_first_half = false) {
+    SAN_HOOK(unsupported());
     _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(respect_trigger, overlap_first_half);
 }

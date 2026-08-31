@@ -7,6 +7,7 @@
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_binary.h"
 #include "experimental/llk_math_mul_reduce_scalar.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK MUL REDUCE SCALAR - Fused multiply and scalar reduction
@@ -15,6 +16,7 @@
 template <MathFidelity math_fidelity>
 inline void llk_math_eltwise_mul_reduce_scalar_init(
     const std::uint32_t operand_A, const std::uint32_t acc_to_dest = 0) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand_A);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
@@ -28,6 +30,7 @@ inline void llk_math_eltwise_mul_reduce_scalar_init(
 template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
 inline void llk_math_eltwise_mul_reduce_scalar(
     std::uint32_t dst_index, const std::uint32_t icb0, const bool clear_fp32_dst_acc = true) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(icb0);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
@@ -42,11 +45,13 @@ inline void llk_math_eltwise_mul_reduce_scalar(
 
 template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool enforce_fp32_accumulation = false>
 inline void llk_math_mul_reduce_scalar_reduce_init() {
+    SAN_HOOK(unsupported());
     _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, math_fidelity, enforce_fp32_accumulation>();
 }
 
 template <MathFidelity math_fidelity>
 inline void llk_math_mul_reduce_column(const std::uint32_t dst_index, const std::uint32_t icb0) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(icb0);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
     _llk_math_mul_reduce_column_<math_fidelity>(dst_index, tensor_shape);
@@ -54,12 +59,17 @@ inline void llk_math_mul_reduce_column(const std::uint32_t dst_index, const std:
 
 template <MathFidelity math_fidelity>
 inline void llk_math_mul_reduce_scalar() {
+    SAN_HOOK(unsupported());
     _llk_math_mul_reduce_scalar_<math_fidelity>();
 }
 
-inline void llk_math_mul_reduce_scalar_clear_dvalid() { _llk_math_mul_reduce_scalar_clear_dvalid_(); }
+inline void llk_math_mul_reduce_scalar_clear_dvalid() {
+    SAN_HOOK(unsupported());
+    _llk_math_mul_reduce_scalar_clear_dvalid_();
+}
 
 template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_mul_reduce_scalar_move_dest_to_src(std::uint32_t idst = 0) {
+    SAN_HOOK(unsupported());
     _llk_math_mul_reduce_scalar_move_dest_to_src_<binary_reuse_dest>(idst);
 }

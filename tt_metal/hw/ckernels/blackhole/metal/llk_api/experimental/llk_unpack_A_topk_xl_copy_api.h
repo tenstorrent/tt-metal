@@ -7,12 +7,14 @@
 #include <cstdint>
 #include "experimental/llk_unpack_A_topk_xl_copy.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK A — TopK-XL copy (single-UNPACR unpack-to-dest MOP for FP16 and FP32 paths)
  *************************************************************************/
 
 inline void llk_unpack_topk_xl_copy_init(const std::uint32_t operand) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t operand_unpack_src_format = unpack_src_format[operand_id];
     const std::uint32_t operand_unpack_dst_format = unpack_dst_format[operand_id];
@@ -26,6 +28,7 @@ inline void llk_unpack_topk_xl_copy_init(const std::uint32_t operand) {
 
 inline void llk_unpack_topk_xl_copy_one_tile_unpack(
     const std::uint32_t operand, const std::uint32_t in_tile_index, const std::uint32_t elements_this_tile) {
+    SAN_HOOK(unsupported());
     // Zero-element tile means "clear-only" (no source data copied).
     const std::uint32_t adc_count = (elements_this_tile == 0) ? (1024 - 1) : (elements_this_tile - 1);
     TT_SETADCXX(p_setadc::UNP_A, adc_count, 0x0);

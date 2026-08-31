@@ -8,6 +8,7 @@
 #include "llk_assert.h"
 #include "llk_math_common_api.h"
 #include "experimental/llk_math_eltwise_binary_custom.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK MATH ELTWISE BINARY CUSTOM - blocked bcast-col paths
@@ -25,6 +26,7 @@
 template <MathFidelity math_fidelity>
 inline void llk_math_eltwise_binary_sub_bcast_cols_init_custom(
     const std::uint32_t operandA, const std::uint32_t operandB) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operandA);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 
@@ -40,6 +42,7 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_init_custom(
  */
 inline void llk_math_eltwise_binary_sub_bcast_cols_custom(
     const std::uint32_t operandA, const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
+    SAN_HOOK(unsupported());
     LLK_ASSERT(
         (dst_index + ct_dim <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "dst range out of bounds");
@@ -62,6 +65,7 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_custom(
  */
 inline void llk_math_eltwise_binary_mul_bcast_cols_init_custom(
     const std::uint32_t operandA, const std::uint32_t operandB) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operandA);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 
@@ -80,6 +84,7 @@ inline void llk_math_eltwise_binary_mul_bcast_cols_init_custom(
  */
 inline void llk_math_eltwise_binary_mul_bcast_cols_custom(
     const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
+    SAN_HOOK(unsupported());
     LLK_ASSERT(
         (dst_index + ct_dim <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "dst range out of bounds");
