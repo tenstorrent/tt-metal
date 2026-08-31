@@ -63,7 +63,8 @@ ALWI void clear_out_tiles(Noc noc, DataflowBuffer dst_cb, DataflowBuffer clear_v
     constexpr uint32_t tile_size = get_tile_size(clear_value_cb_id);
 
     UnicastEndpoint self_ep;
-    const auto src = experimental::local_addr(clear_value_cb.get_read_ptr(), noc.get_noc_id());
+    // Producer face: the pool reader fills its lane's clear copy at its write cursor (no push).
+    const auto src = experimental::local_addr(clear_value_cb.get_write_ptr(), noc.get_noc_id());
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
         noc.async_read(self_ep, dst_cb, tile_size, src, {.offset_bytes = i * tile_size});

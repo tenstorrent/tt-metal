@@ -70,7 +70,7 @@ span_leg() {  # $1 = output tsv name, $2 = expected get_num_threads() (empty = s
         local seen
         seen=$( (sim_env; TT_METAL_DPRINT_CORES='(0,0)' \
             timeout --foreground "$TIMEOUT_SPAN_S" pytest -q -s "$SCRIPT_DIR/test_qpool_debug.py" 2>&1) |
-            grep -m1 -oE "get_num_threads\(\): [0-9]+" | grep -oE "[0-9]+$" || true)
+            grep -m1 -oE "qpool num_threads: [0-9]+" | grep -oE "[0-9]+$" || true)
         if [[ "$seen" != "$2" ]]; then
             echo "run_qpool: FATAL — leg expected num_threads=$2 but kernel reports '${seen:-none}'" >&2
             exit 1
@@ -82,8 +82,8 @@ span_leg() {  # $1 = output tsv name, $2 = expected get_num_threads() (empty = s
 }
 
 set_threads() {  # $1 = from, $2 = to — with loud verification (sed exits 0 on no match!)
-    sed -i "s/is_quasar ? $1 : 1;/is_quasar ? $2 : 1;/" "$PU"
-    grep -q "is_quasar ? $2 : 1;" "$PU" || { echo "run_qpool: FATAL — thread toggle $1->$2 did not match in $PU" >&2; exit 1; }
+    sed -i "s/? $1 : 1;/? $2 : 1;/" "$PU"
+    grep -q "? $2 : 1;" "$PU" || { echo "run_qpool: FATAL — thread toggle $1->$2 did not match in $PU" >&2; exit 1; }
 }
 
 cd "$REPO_ROOT"
@@ -118,7 +118,7 @@ span)
     ;;
 span-ab)
     mkdir -p "$OUT_DIR"
-    restore() { sed -i 's/is_quasar ? 1 : 1;/is_quasar ? 4 : 1;/' "$PU"; }
+    restore() { sed -i 's/? 1 : 1;/? 4 : 1;/' "$PU"; }
     trap restore EXIT
     echo "run_qpool: span-ab leg 1/2 — num_threads=4"
     ./build_metal.sh > "$OUT_DIR/build_T4.log" 2>&1
