@@ -658,15 +658,16 @@
       models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
+    pytest -s --timeout 3600 models/demos/gemma4/tests/e2e/test_teacher_forcing_e2e.py
   model: gemma-4-31b
   model_family: Gemma
   skus:
     wh_llmbox_perf:
-      timeout: 10
+      timeout: 35
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 25
+      timeout: 40
       tier: 1
       release_ready: true
     # bh_galaxy_perf: temporarily disabled — same Blackhole Galaxy fabric / ethernet
@@ -687,9 +688,19 @@
       models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
+    pytest -s --timeout 3600 models/demos/gemma4/tests/e2e/test_teacher_forcing_e2e.py
   model: gemma-4-12b
   model_family: Gemma
   skus:
+    # T3K: same command as Gemma-4-31B e2e on this SKU (demo + lm_head +
+    # packed_verify matches_sequential + full_model; batch_perf deselected).
+    # 12B is smaller; 10m matches the 31B WH leg. models.e2e_tier2
+    # wh_llmbox_perf was 259/266 before this job — budget bumped +10.
+    # CI=true selects 1x8. release_ready false until the WH leg is green.
+    wh_llmbox_perf:
+      timeout: 25
+      tier: 2
+      release_ready: false
     # Single Blackhole P150: short demo + unit PCC. Cap at 6m so models
     # e2e_tier2 bh_p150 stays within the 26m team budget (GPT-OSS 15 + UNet 5
     # + this 6). f562aa60493's timeout:20 made requested=40 and failed
@@ -698,7 +709,7 @@
       timeout: 6
       tier: 2
     bh_quietbox_2:
-      timeout: 22
+      timeout: 37
       tier: 1
       release_ready: false
   owner_id: U088413NP0Q # Ashai Reddy

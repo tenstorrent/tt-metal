@@ -15,7 +15,6 @@ Supports both prefill and decode modes with paged attention.
 Compatible with tt_transformers Generator interface.
 """
 
-
 import os
 
 import torch
@@ -25,8 +24,9 @@ from tracy import signpost
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
+from models.demos.gemma4.tt.attention.operations import prefill_tilize_memcfg
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
-from models.demos.gemma4.tt.rms_norm import RMSNorm
+from models.demos.gemma4.tt.rms_norm import RMSNorm, maybe_interleave
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
 
@@ -38,6 +38,50 @@ from models.demos.gemma4.utils.substate import substate
 # tt_transformers Generator (the model returns logits in sampling layout),
 # so it is profiled there / by op name (SamplingDeviceOperation, TopK).
 LM_HEAD_SIGNPOST = "gemma4_lm_head"
+
+
+# Widest per-device vocab shard on-device sampling is verified at (see
+# test_sampling.py, which parametrizes 1x1/1x2/1x4/1x8 over vocab 262144).
+# Raise only alongside a passing test at the new width.
+_MAX_SAMPLING_SHARD_WIDTH = 256 * 1024
+
+
+def force_argmax_sampling_enabled() -> bool:
+    """``GEMMA4_TT_FORCE_ARGMAX=1`` opts on-device sampling into the argmax path.
+
+    When every user in the batch decodes greedily (top_k=1, top_p=1.0,
+    temperature=0), TTSampling can skip the top-k / top-p / RNG pipeline and use
+    a single all-gather + ``ttnn.argmax`` instead. That path is off by default
+    (unset or ``0`` — today's behaviour): the batch still routes through the
+    top-k pipeline, which is exact for greedy and needs no CCL semaphores.
+    """
+    return os.environ.get("GEMMA4_TT_FORCE_ARGMAX", "0").strip().lower() not in ("0", "false", "no", "off", "")
+
+
+# Gemma4-31B dense checkpoint (``configs/gemma-4-31B-it``). Public because
+# generator_trace's batch-32 auto-warmup has to gate on the same value: the two
+# conditions must agree or the L1 clash this guards comes back silently.
+GEMMA4_31B_HIDDEN_SIZE = 5376
+# Batched prefill + on-device sampling demo ceiling (``text_demo_v2`` batch-32).
+_GEMMA4_BATCH32_SAMPLING_WIDTH = 32
+
+
+def _is_gemma4_31b_hidden_size(hidden_size: int) -> bool:
+    return int(hidden_size) == GEMMA4_31B_HIDDEN_SIZE
+
+
+def _use_31b_batch32_host_batched_extract(hidden_size: int, *, target_batch=None) -> bool:
+    """True when 31B batch-32 batched prefill must avoid device slice→untilize.
+
+    After traced batched prefill at row spans ≥16, ``ttnn.slice`` → untilize clashes
+    with L1 CBs left by the capture and CCL RS buffers on WH T3K (same class of
+    failure as RoPE slices in ``_slice_prefill_rot_mats``). Callers route to the
+    host extract path instead; scoped to 31B + batch-32 so 12B keeps device extract.
+    """
+    if not _is_gemma4_31b_hidden_size(hidden_size):
+        return False
+    tb = int(target_batch) if target_batch is not None else 0
+    return tb == _GEMMA4_BATCH32_SAMPLING_WIDTH
 
 
 def _compute_per_device_vocab(vocab_size, num_tp):
@@ -53,63 +97,14 @@ def _compute_per_device_vocab(vocab_size, num_tp):
 def _get_lm_head_program_config(mesh_device, m: int, k: int, n: int):
     """Build a 1D-mcast matmul program config for the LM head.
 
-    LM head shape is [B, 1, H] x [H, V_per_dev] with B padded to 32 for
-    decode (so M_tiles=1). Primary target is gemma-4-31B-it on T3K (1x8):
-    H=5376 (K_tiles=168), vocab=262144, V_per_dev=32768 (N_tiles=1024).
-    Layout: the activation tile is small,
-    the weight slab is large — mcast in0 across the whole compute grid and
-    split N evenly across cores.
-
-    Picks per_core_N = ceil(N_tiles / num_cores) — the kernel pads the
-    trailing core when num_cores doesn't divide N_tiles (e.g. 80 BH cores
-    against 1024 tiles → 13 per core with a partial tail). in0_block_w is
-    the largest power of 2 dividing K_tiles, capped at 32 so the in0 CB
-    stays small. out_subblock_w stays <=4 to fit the dest register file.
+    Delegates to :func:`dram_sharded.lm_head_decode_config` (``1d_c64_bw1`` sweep
+    winner). Returns ``None`` outside the decode / last-token tile regime so
+    ``ttnn.linear`` keeps its L1-safe auto heuristic.
     """
-    tile_size = 32
-    grid = mesh_device.compute_with_storage_grid_size()
-    num_cores = grid.x * grid.y
+    from models.demos.gemma4.tt.dram_sharded import lm_head_decode_config
 
-    m_tiles = max(1, (m + tile_size - 1) // tile_size)
-    k_tiles = max(1, k // tile_size)
-    n_tiles = max(1, n // tile_size)
-
-    # Scope the explicit 1D-mcast config to the regime it is tuned for:
-    # the sharded-vocab decode / last-token shape [B<=32, 1, H] x [H, V_per_dev]
-    # with M_tiles==1 and a per-device vocab shard bounded at 64K (the same
-    # width at which on-device sampling stays enabled, i.e. TP shards the 262144
-    # vocab down to <=64K). Outside that regime this config overruns L1:
-    #   - tp==1 (e.g. E2B on a single WH N150) keeps the full 262144-wide vocab
-    #     on one chip, so per_core_N explodes and the in1 CB grows to ~8 MB,
-    #     well past the ~1.4 MB L1 (program.cpp circular-buffer validation throw);
-    #   - a non-last-token prefill slice (get_last_token==-1 -> M==seq_len) scales
-    #     the output CB by M_tiles.
-    # In those cases return None so ttnn.linear falls back to its default matmul
-    # heuristic, which blocks N/M to fit L1 (the pre-tuning behaviour).
-    if m_tiles > 1 or n > 64 * 1024:
-        return None
-
-    per_core_n = max(1, (n_tiles + num_cores - 1) // num_cores)
-
-    in0_block_w = 32
-    while in0_block_w > 1 and k_tiles % in0_block_w != 0:
-        in0_block_w //= 2
-
-    out_subblock_w = min(per_core_n, 4)
-    while out_subblock_w > 1 and per_core_n % out_subblock_w != 0:
-        out_subblock_w -= 1
-
-    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
-        in0_block_w=in0_block_w,
-        out_subblock_h=1,
-        out_subblock_w=out_subblock_w,
-        per_core_M=m_tiles,
-        per_core_N=per_core_n,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=True,
-    )
+    program_config, _, _ = lm_head_decode_config(mesh_device, m, k, n)
+    return program_config
 
 
 def create_rope_caches(mesh_device, hf_config, max_seq_len):
@@ -125,7 +120,14 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
     rope = Gemma4TextRotaryEmbedding(hf_config)
-    x_dummy = torch.randn(1, max_seq_len, hf_config.hidden_size)
+    # HF's rotary forward reads only ``x.device`` and ``x.dtype`` (and its
+    # ``dynamic_rope_update`` decorator only ``x.device``); the values are never
+    # touched. A full [1, max_seq_len, hidden] dummy therefore scaled with the
+    # context: at max_seq_len=131072 it allocated 2.62 GiB (31B) / 1.88 GiB (12B)
+    # of host RAM and paid ~3 s of RNG at every model init for nothing. One
+    # element carries the same dtype/device and yields bit-identical cos/sin
+    # (torch.equal on both configs, all layer types, at 131072).
+    x_dummy = torch.zeros(1, dtype=torch.float32)
     pos_ids = torch.arange(max_seq_len).unsqueeze(0)
 
     caches_4d = {}
@@ -245,6 +247,11 @@ class Gemma4Model:
     # (``_tt_vllm_always_refresh_decode_trace_inputs=False``) for async; the
     # eagerly sampled id is still written into the padded feedback buffer.
     _tt_disable_sampling_trace = True
+    # ``Generator.prefill_forward_text`` passes ``allow_sharded_prefill_logits``
+    # only to models that declare this. Gemma4's ``ttnn_prefill_forward`` and its
+    # ``prefill_forward_single_user_text`` override read it; the other models'
+    # strict ``ttnn_prefill_forward`` signatures would raise TypeError on it.
+    supports_sharded_prefill_logits = True
 
     def __init__(
         self,
@@ -359,18 +366,25 @@ class Gemma4Model:
 
             # Embedding: column-parallel (shard hidden dim across TP devices)
             # Each device holds [vocab, hidden/TP]; all-gather after lookup.
+            # Bake sqrt(hidden) into the device table so embed_tokens skips a
+            # BinaryNg mul every prefill/decode step. LM head + host
+            # ``_embed_weight_cpu`` stay unscaled (tied lm_head must not see the
+            # scale; host PLI/parity paths still multiply by embed_scale).
             if tp > 1:
                 embed_mapper = mesh_config.column_parallel(mesh_device)
             else:
                 embed_mapper = replicate
             embed_suffix = f"_{dtype_to_str(embedding_dtype)}"
+            scaled_embed_weight = embed_weight.float() * self.embed_scale
             self.embedding_weight = ttnn.as_tensor(
-                cast_host_for_ttnn(embed_weight.unsqueeze(0).unsqueeze(0), embedding_dtype),
+                cast_host_for_ttnn(scaled_embed_weight.unsqueeze(0).unsqueeze(0), embedding_dtype),
                 device=mesh_device,
                 dtype=embedding_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=embed_mapper,
-                cache_file_name=get_cache_file_name(tensor_cache_path, f"embed_tokens.weight{tp_suffix}{embed_suffix}"),
+                cache_file_name=get_cache_file_name(
+                    tensor_cache_path, f"embed_tokens.weight_scaled{tp_suffix}{embed_suffix}"
+                ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
@@ -407,7 +421,8 @@ class Gemma4Model:
         # Stash for prefill inputs computed in ``prepare_inputs_prefill``.
         # The Generator interface splits prefill into prepare→forward, but
         # forward's signature doesn't carry the host-side input_ids/embeds
-        # the model needs for per-layer inputs, so we cache them here.
+        # PLI needs, so we cache them here. ``_prefill_embeds_torch`` is only
+        # filled when PLI is configured (E2B/E4B); 31B leaves it None.
         # Direct callers (text_demo, unit tests) pass them explicitly to
         # ``ttnn_prefill_forward`` and bypass this stash.
         self._prefill_input_ids_torch = None
@@ -536,43 +551,47 @@ class Gemma4Model:
         self.sampling_dp = mesh_device.shape[0] if is_mesh else 1
 
         # On-device sampling (greedy/top-k/top-p) — avoids reading full vocab logits to CPU
+        #
+        # The shard cap is a measured device limit, not a design one. TTSampling
+        # already handles wide shards: it switches top-k indices to uint32 above
+        # uint16 range (_select_topk_indices_dtype) and uses the single-device
+        # multi_step_reduction path at tp=1. Greedy / top-k / top-p were verified
+        # exact on WH at tp=1 (shard 262144) and tp=2 (shard 131072) — see
+        # test_sampling.py::test_sampling_*[1x1,1x2]. Previously this was gated to
+        # tp>1 and shard<=64K, which silently dropped every 1x1 and 1x2 run onto
+        # the host path: a full 262144-wide logits row read to CPU per decode step.
         self.sampling = None
-        if is_mesh and tp > 1:
+        self._sampling_logits_in_dram = False
+        if is_mesh:
             per_device_padded = _compute_per_device_vocab(hf_config.vocab_size, tp)
-            if per_device_padded <= 64 * 1024:
-                sampling_args = self._make_sampling_args(hf_config, mesh_device, tp)
-                # Match sampling all-gather topology to Gemma4 CCLManager (Ring on
-                # BH≥8, Linear elsewhere / GEMMA4_CCL_TOPOLOGY). Without this,
-                # TTSampling defaults to Linear while model collectives use Ring.
-                #
-                # allow_force_argmax=True (#48037): greedy (temp=0 → k=1,p=0,temp=1)
-                # must take the single-gather argmax path. With it disabled (the
-                # previous Gemma4 default), greedy went through the heavy
-                # top-k/top-p multi-gather pipeline that corrupts at B=32.
-                # Requires a real TT_CCL (semaphores for force-argmax
-                # all_gather_async) — passing tt_ccl=None made force-argmax
-                # unusable, which is why it was previously forced off.
-                from models.tt_transformers.tt.ccl import TT_CCL
+            if per_device_padded <= _MAX_SAMPLING_SHARD_WIDTH:
+                # tt_ccl=None: the TopK path does not need AG semaphores. The
+                # argmax path all-gathers the full logits row and does, so a CCL
+                # is wired only when GEMMA4_TT_FORCE_ARGMAX opts in.
+                force_argmax = force_argmax_sampling_enabled()
+                sampling_tt_ccl = None
+                if force_argmax and mesh_device.get_num_devices() > 1:
+                    from models.common.modules.tt_ccl import get_tt_ccl
 
-                if ccl_manager is not None:
-                    sampling_args.model_config["SAMPLING_AG_CONFIG"] = {
-                        "allow_force_argmax": True,
-                        "num_links": ccl_manager.num_links,
-                        "topology": ccl_manager.topology,
-                    }
-                sampling_tt_ccl = TT_CCL(mesh_device)
+                    sampling_tt_ccl = get_tt_ccl(mesh_device)
+                    logger.info("GEMMA4_TT_FORCE_ARGMAX=1: sampling gets its own CCL for the argmax all-gather")
                 self.sampling = SamplingGenerator(
-                    args=sampling_args,
+                    args=self._make_sampling_args(hf_config, mesh_device, tp, force_argmax=force_argmax),
                     mesh_device=mesh_device,
                     tt_ccl=sampling_tt_ccl,
                 )
-                _apply_gemma4_single_untilize_override(self.sampling.tt_sampling)
-                topo = getattr(self.sampling.tt_sampling, "ag_topology", None)
-                topo_name = "Ring" if topo == ttnn.Topology.Ring else "Linear"
+                # The argmax path all-gathers the full vocab row into the logits'
+                # own memory config and then untilizes it. Decode lm_head writes
+                # L1-interleaved (lm_head_decode_config), so a 262144-wide bf16
+                # gather parks ~16.7 MB in L1 and untilize's CBs then collide with
+                # it ("statically allocated circular buffers ... clash with L1
+                # buffers on core [0-0]"). Land decode logits in DRAM instead when
+                # this path is armed; the top-k path is unaffected because it only
+                # gathers 32-wide top-k results.
+                self._sampling_logits_in_dram = force_argmax
                 logger.info(
                     f"On-device sampling initialized (vocab={hf_config.vocab_size}, "
-                    f"per_device={per_device_padded}, ag_topology={topo_name}, "
-                    f"force_argmax=1, disable_sampling_trace={int(self._tt_disable_sampling_trace)})"
+                    f"per_device={per_device_padded}, force_argmax={force_argmax})"
                 )
         # Generator/vLLM entry points gate on this flag (and sampling != None).
         self._supports_on_device_sampling = self.sampling is not None
@@ -627,8 +646,13 @@ class Gemma4Model:
         ttnn.copy_host_to_device_tensor(host, self.prefill_valid_len_dev)
 
     @staticmethod
-    def _make_sampling_args(hf_config, mesh_device, tp):
-        """Create minimal args object for SamplingGenerator/TTSampling."""
+    def _make_sampling_args(hf_config, mesh_device, tp, force_argmax=False):
+        """Create minimal args object for SamplingGenerator/TTSampling.
+
+        ``force_argmax`` (from ``GEMMA4_TT_FORCE_ARGMAX``) publishes the
+        SAMPLING_AG_CONFIG that TTSampling reads to allow its argmax path; the
+        default leaves model_config empty, so allow_force_argmax stays False.
+        """
 
         class _Args:
             pass
@@ -643,6 +667,17 @@ class Gemma4Model:
         args.num_devices = mesh_device.get_num_devices()
         args.is_galaxy = mesh_device.shape[0] > 1
         args.model_config = {}
+        if force_argmax:
+            from models.demos.gemma4.tt.ccl import ccl_chunks_per_sync, default_ccl_topology, default_num_links
+
+            args.model_config["SAMPLING_AG_CONFIG"] = {
+                "allow_force_argmax": True,
+                "num_links": default_num_links(),
+                "chunks_per_sync": ccl_chunks_per_sync(),
+                "topology": default_ccl_topology(
+                    mesh_device, is_moe=bool(getattr(hf_config, "enable_moe_block", False))
+                ),
+            }
         args.use_topk_logprobs = False
         return args
 
@@ -738,12 +773,18 @@ class Gemma4Model:
         z = self._tt_slice_start_zeros_4
         tt_slice_starts = ttnn.concat([z[0:2], chunk_start_idx, z[3:4]], dim=0)
         ends = self._tt_seq_len_buffer_by_hd[head_dim]
+        # Keep RoPE slices in DRAM. Short-ISL L1 slices were a small win for
+        # rotary_embedding alone, but they stay live through prefill SDPA and
+        # clash with its static CBs on the full worker grid (same class of
+        # failure as an L1 residual held across attention).
+        slice_mc = ttnn.DRAM_MEMORY_CONFIG
         rot_cos_slice = ttnn.slice(
             input_tensor=full_rot_cos,
             starts=tt_slice_starts,
             ends=ends,
             slice_dim=2,
             num_devices=num_parts,
+            memory_config=slice_mc,
         )
         rot_sin_slice = ttnn.slice(
             input_tensor=full_rot_sin,
@@ -751,6 +792,7 @@ class Gemma4Model:
             ends=ends,
             slice_dim=2,
             num_devices=num_parts,
+            memory_config=slice_mc,
         )
         return (rot_cos_slice, rot_sin_slice)
 
@@ -803,7 +845,9 @@ class Gemma4Model:
         chunk_start_idx=None,
         chunk_page_table=None,
         valid_seq_lens=None,
-        keep_sharded_for_sampling=False,
+        allow_sharded_decode_logits=False,
+        allow_sharded_prefill_logits=False,
+        layer_probe=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -814,9 +858,9 @@ class Gemma4Model:
         the multi-token verify forward (``ttnn_verify_forward``) needs the hidden
         states for every verified position to seed the next drafter iteration.
 
-        ``keep_sharded_for_sampling``: when True (decode + on-device sampling),
-        leave lm_head logits TP-sharded. Host sampling / full-vocab reads must
-        leave this False so decode all-gathers the 262k vocab.
+        ``allow_sharded_*_logits`` leaves lm_head logits TP-sharded only for
+        on-device sampling. Host reads keep the defaults so decode/prefill
+        all-gather the full 262k vocabulary.
 
         Args:
             hidden_states: [1, 1, seq_len, hidden_size] on device (post-embedding)
@@ -831,6 +875,18 @@ class Gemma4Model:
             pli_device_tensors: optional list of pre-computed PLI device tensors (trace mode)
             position_idx_cache: optional [batch] int32 tensor for KV cache update (when position_idx is uint32)
             pli_combined: optional [1,1,n_layers,pli_size] device tensor of pre-computed PLI (decode)
+            layer_probe: optional ``fn(layer_idx, hidden_states)`` called with each
+                decoder layer's output, for building a per-layer PCC ladder against
+                HF, layer by layer. Also read from the
+                instance attribute ``self.layer_probe`` when this kwarg is not
+                given, which is how callers going through ``Gemma4Generator`` attach
+                one — the generator does not forward it. The callback gets the live
+                device tensor and must only read it; the graph keeps using it, and any
+                snapshot it takes has to land in DRAM (holding a sharded L1 copy
+                starves later programs' circular buffers). UNTRACED RUNS ONLY: a probe
+                that copies to host inside trace capture would bake a host readback
+                into the captured graph. ``None`` (the default) costs one
+                ``is not None`` test per layer and changes nothing.
             page_tables_per_layer: optional list of per-layer page tables, one
                 entry per decoder layer. When set, each layer's attention
                 receives ``page_tables_per_layer[i]`` instead of ``page_table``.
@@ -908,6 +964,12 @@ class Gemma4Model:
                 cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_2d, layout=ttnn.TILE_LAYOUT))
                 sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
                 decode_rope_presliced[lt] = (cos_pos, sin_pos)
+
+        # Explicit argument wins; otherwise fall back to an instance attribute, so
+        # callers that reach the model through Gemma4Generator (which does not
+        # forward this kwarg) can still attach a probe by setting
+        # ``generator.model[0].layer_probe``.
+        probe = layer_probe if layer_probe is not None else getattr(self, "layer_probe", None)
 
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
@@ -1016,6 +1078,9 @@ class Gemma4Model:
                 chunk_page_table=chunk_page_table,
             )
 
+            if probe is not None:
+                probe(i, hidden_states)
+
             # For KV source layers during prefill, capture the K/V from the attention
             # The K/V are kept alive on device (not deallocated) when keep_kv=True
             if keep_kv and layer.self_attn._last_kv is not None:
@@ -1031,6 +1096,12 @@ class Gemma4Model:
             if kv_pair is not None:
                 kv_pair[0].deallocate(True)
                 kv_pair[1].deallocate(True)
+
+        # Batched prefill returns pre-norm hidden states; Generator selects each
+        # user's last row and applies norm + lm_head via _apply_norm_and_lm_head.
+        if not is_decode and get_last_token == -1 and batch_size > 1:
+            self._flush_deferred_bounded_fills_if_needed()
+            return hidden_states
 
         # Single-user intermediate generator-level chunks (get_last_token=-1 with
         # a chunk_page_table, not in prefill-trace mode) only need the KV fill
@@ -1048,16 +1119,15 @@ class Gemma4Model:
             # Intermediate generator chunk: do not flush (last chunk owns the ring).
             return None
 
-        # Final norm (must run before batched early-return). Generator then
-        # defers lm_head per slot via ``process_logits_after_prefill_trace``,
-        # which expects *post-norm* hidden (same contract as traced prefill).
-        # Returning pre-norm here skipped RMSNorm and corrupted next-token
-        # logits → decode garbage on metal batch-32 / hetero batched prefill.
-        hidden_states = self.norm.forward(hidden_states)
-
-        if not is_decode and get_last_token == -1 and batch_size > 1:
-            self._flush_deferred_bounded_fills_if_needed()
-            return hidden_states
+        # Final norm. In decode the only consumer is the lm_head matmul, which
+        # reads in0 from L1 — land the norm's sharded_to_interleaved there
+        # directly instead of in DRAM, so _apply_lm_head's hoist does not have to
+        # copy it back (one CopyDeviceOperation per step; same bits, same buffer
+        # type, same program config at the matmul).
+        hidden_states = self.norm.forward(
+            hidden_states,
+            interleaved_memory_config=ttnn.L1_MEMORY_CONFIG if is_decode else None,
+        )
 
         # Speculative decoding seed: the it-assistant drafter's recurrent hidden
         # is HF's ``model_outputs.hidden_states[-1]``. For the gemma4_unified text
@@ -1082,8 +1152,16 @@ class Gemma4Model:
         # ``last_hidden_state`` used by the assistant candidate generator.
         # lm_head deallocates its input.
         if is_decode and return_hidden:
-            # Spec-decode reads full-vocab logits on host — never keep sharded.
-            logits = self._apply_lm_head(hidden_states, is_decode=True, keep_sharded_for_sampling=False)
+            # ``allow_sharded=False`` forces the TP all-gather. spec-decode reads
+            # full-vocab logits and never uses the on-device sampling module, but
+            # ``_apply_lm_head`` skips the gather whenever that module merely
+            # EXISTS and ``allow_sharded`` is set -- and it defaults to True. Pass
+            # it explicitly; do not rely on ``is_decode=False`` to do it, which is
+            # what the gather was keyed on before ``allow_sharded`` was introduced.
+            # Without this the verify row is one TP shard wide (32768 of 262144 at
+            # tp=8) and every argmax over it -- host (``_logits_to_host``) or
+            # on-device (``_argmax_last``) -- caps committed tokens at the shard.
+            logits = self._apply_lm_head(hidden_states, is_decode=False, allow_sharded=False)
             return logits, post_norm_hidden
 
         # Slice to the last token tile before lm_head when caller only wants
@@ -1101,11 +1179,11 @@ class Gemma4Model:
                 (1, 1, tile_start + 32, hidden_states.shape[-1]),
             )
 
-        logits = self._apply_lm_head(
-            hidden_states,
-            is_decode=is_decode,
-            keep_sharded_for_sampling=bool(keep_sharded_for_sampling and is_decode),
-        )
+        # Decode may skip vocab AG when on-device sampling consumes TP shards.
+        # Prefill defaults to gather (host logits); opt in only when the caller
+        # will device-sample (see process_logits_after_prefill_trace).
+        allow_sharded = allow_sharded_decode_logits if is_decode else allow_sharded_prefill_logits
+        logits = self._apply_lm_head(hidden_states, is_decode=is_decode, allow_sharded=allow_sharded)
         if not is_decode:
             # After lm_head only — mid-forward / pre-lm_head flush corrupts token-0 on TP.
             self._flush_deferred_bounded_fills_if_needed()
@@ -1116,7 +1194,7 @@ class Gemma4Model:
         if getattr(self, "bounded_sliding_kv_cache", False):
             flush_deferred_bounded_fills(self.layers)
 
-    def _apply_lm_head(self, hidden_states, is_decode=False, keep_sharded_for_sampling=False, deallocate_input=True):
+    def _apply_lm_head(self, hidden_states, is_decode=False, allow_sharded=False, deallocate_input=True):
         """Project post-norm hidden states to vocab logits, softcap, all-gather.
 
         Factored out of ``__call__`` so traced prefill can defer it (the trace
@@ -1135,11 +1213,29 @@ class Gemma4Model:
         - Softcapping (``tanh(logits/cap)*cap``) is element-wise and works on the
           sharded vocab. ttnn.mul/ttnn.tanh are not in-place, so the results are
           captured — dropping them silently no-ops the cap and tanks PCC vs HF.
-        - The sharded vocab is all-gathered back to full width unless
-          ``keep_sharded_for_sampling`` (on-device sampling consumes shards).
-          Host-sample decode must gather — skipping solely because
-          ``self.sampling`` exists truncates argmax to ~vocab/TP and causes
-          thought-loop / garbage generations on TP meshes.
+        - The sharded vocab is all-gathered back to full width, except when
+          on-device sampling will consume TP-sharded logits (decode or prefill
+          first-token). That path also skips the host Untilize that follows
+          full-vocab readback.
+
+        ``allow_sharded`` must be False whenever the HOST reads these logits, even
+        though ``self.sampling`` exists: the module is constructed for every
+        tp>1 / shard<=64K model regardless of whether the caller uses it, so
+        gating the gather on its mere existence sent a single device's 32K-wide
+        shard to ``process_output_decode``. A host argmax over 1/8 of the vocab
+        silently substitutes low-id fragments for any token above the shard
+        ("creature"->"create", "lapped"->"la"), worst on long-context tasks that
+        need rare tokens.
+
+        Both ``__call__`` gates therefore default to False and sharded logits are
+        strictly OPT-IN: only ``ttnn_decode_forward`` (on-device sampler) and the
+        prefill sampling path ask for them. That direction matters -- a new decode
+        caller that forgets the kwarg gets a correct full-vocab gather, not a
+        silently truncated argmax. The spec-decode verify forwards
+        (``ttnn_verify_forward`` / ``ttnn_packed_verify_forward``) rely on this:
+        both their host argmax (``spec_decode._logits_to_host``) and their
+        on-device argmax (``_argmax_last`` + ``_id_to_host``) read device 0 only,
+        so a sharded row would cap every committed token at the shard width.
         """
         # Bracket the lm_head matmul + softcap with a Tracy signpost so the
         # op_perf_results.py --signpost gemma4_lm_head filter sums just this
@@ -1149,18 +1245,28 @@ class Gemma4Model:
         if is_decode:
             signpost(header=LM_HEAD_SIGNPOST)
         if self.lm_head_weight is not None:
-            lm_head_pc = _get_lm_head_program_config(
-                self.mesh_device,
-                m=hidden_states.shape[2],
-                k=self.hidden_size,
-                n=self.lm_head_weight.shape[-1],
+            from models.demos.gemma4.tt.dram_sharded import lm_head_decode_config
+
+            m = hidden_states.shape[2]
+            k = self.hidden_size
+            n = self.lm_head_weight.shape[-1]
+            program_config, out_memcfg, compute_kernel_config = lm_head_decode_config(self.mesh_device, m, k, n)
+            if is_decode and allow_sharded and self._sampling_logits_in_dram and out_memcfg is not None:
+                # GEMMA4_TT_FORCE_ARGMAX: keep the logits out of L1 so the
+                # full-vocab gather + untilize in TTSampling has L1 for its CBs.
+                out_memcfg = ttnn.DRAM_MEMORY_CONFIG
+            from models.demos.gemma4.tt.attention.operations import hoist_prefill_matmul_in0_if_needed
+
+            act, act_l1 = hoist_prefill_matmul_in0_if_needed(hidden_states, program_config)
+            logits = ttnn.linear(
+                act,
+                self.lm_head_weight,
+                program_config=program_config,
+                memory_config=out_memcfg,
+                compute_kernel_config=compute_kernel_config,
             )
-            logits = ttnn.linear(hidden_states, self.lm_head_weight, program_config=lm_head_pc)
-            # ``deallocate_input=False`` is required when the caller owns a
-            # *persistent* buffer that outlives this call — notably the batched
-            # prefill-sampling trace, whose input is written by
-            # copy_host_to_device_tensor on every replay. Freeing it inside the
-            # capture leaves that copy writing into dead memory (segfault).
+            if act_l1 is not None:
+                act_l1.deallocate(True)
             if deallocate_input:
                 hidden_states.deallocate(True)
         else:
@@ -1175,45 +1281,58 @@ class Gemma4Model:
             signpost(header=LM_HEAD_SIGNPOST)
 
         if self.mesh_config is not None and self.mesh_config.tp > 1 and self.lm_head_weight is not None:
-            if keep_sharded_for_sampling:
-                pass  # On-device sampling module consumes TP-sharded logits.
-            else:
+            # Sampling consumes TP-sharded logits; host readback must gather.
+            if self.sampling is None or not allow_sharded:
                 from models.demos.gemma4.tt.ccl import ccl_allgather
 
                 logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
 
         return logits
 
-    def embed_tokens(self, tokens):
-        """Embed input tokens and scale by sqrt(hidden_size).
+    def embed_tokens(self, tokens, layout=None, memory_config=None):
+        """Embed input tokens with sqrt(hidden_size) scale already baked into weights.
 
-        Embedding is column-parallel (hidden dim sharded across TP devices).
-        All-gather reconstructs full hidden dim after lookup.
+        Device ``embedding_weight`` is pre-multiplied by ``embed_scale`` at load
+        so this path is a single embedding op (plus TP all-gather) — no BinaryNg
+        mul. Embedding is column-parallel (hidden dim sharded across TP devices);
+        all-gather reconstructs the full hidden dim after lookup.
+
+        ``layout=ttnn.TILE_LAYOUT`` tilizes inside the embedding kernel instead of
+        emitting ROW_MAJOR for a separate ``to_layout``. Every consumer wants TILE,
+        and dropping the standalone ``TilizeDeviceOperation`` measured faster on the
+        embed+all-gather path with bit-identical output — the same pattern the RoPE
+        cache lookups already use. ``memory_config`` lands the
+        result (and the gather output) where the old ``to_layout`` put it.
         """
         if self.embedding_weight is None:
             raise RuntimeError("Embedding weights not loaded")
-        embeds = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16)
-        embeds = ttnn.mul(embeds, self.embed_scale)
+        embed_kwargs = {}
+        if layout is not None:
+            embed_kwargs["layout"] = layout
+        if memory_config is not None:
+            embed_kwargs["memory_config"] = memory_config
+        embeds = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16, **embed_kwargs)
 
         # All-gather sharded hidden dim back to full hidden
         if self.mesh_config is not None and self.mesh_config.tp > 1:
             embeds = ttnn.unsqueeze_to_4D(embeds)
             from models.demos.gemma4.tt.ccl import ccl_allgather
 
-            embeds = ccl_allgather(embeds, self.mesh_config, self.ccl_manager)
+            embeds = ccl_allgather(embeds, self.mesh_config, self.ccl_manager, memory_config=memory_config)
         return embeds
 
     def raw_embed(self, tokens):
         """Token embedding table lookup without the sqrt(hidden) scale.
 
-        This helper exposes the raw table for diagnostics/compatibility. The
-        it-assistant drafter path intentionally uses ``embed_tokens()``, matching
-        HF ``get_input_embeddings()(ids)`` where Gemma4 applies the embedding
-        scale inside the module.
+        Device ``embedding_weight`` is pre-scaled, so this undoes ``embed_scale``
+        after lookup. Prefer host ``_embed_weight_cpu`` when you need the raw
+        table without a device mul. The it-assistant drafter uses
+        ``embed_tokens()`` (scaled), matching HF ``Gemma4TextScaledWordEmbedding``.
         """
         if self.embedding_weight is None:
             raise RuntimeError("Embedding weights not loaded")
         embeds = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16)
+        embeds = ttnn.mul(embeds, 1.0 / self.embed_scale)
         if self.mesh_config is not None and self.mesh_config.tp > 1:
             embeds = ttnn.unsqueeze_to_4D(embeds)
             from models.demos.gemma4.tt.ccl import ccl_allgather
@@ -1256,10 +1375,9 @@ class Gemma4Model:
             it-assistant drafter's recurrent seed.
         """
         if x.dtype in (ttnn.uint32, ttnn.int32):
-            input_embeds = self.embed_tokens(x)
+            input_embeds = self.embed_tokens(x, layout=ttnn.TILE_LAYOUT)
             if len(input_embeds.shape) == 3:
                 input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
-            input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
         else:
             input_embeds = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
@@ -1325,10 +1443,9 @@ class Gemma4Model:
             (logits [1,1,P,vocab], hidden [1,1,P,hidden]) — same contract as
             ``ttnn_verify_forward``.
         """
-        input_embeds = self.embed_tokens(x)
+        input_embeds = self.embed_tokens(x, layout=ttnn.TILE_LAYOUT)
         if len(input_embeds.shape) == 3:
             input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
-        input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
 
         # Pre-gather RoPE once per layer type (identical for all layers of a
         # type — saves 2 embedding gathers per layer).
@@ -1592,8 +1709,7 @@ class Gemma4Model:
         batched_prefill=False,
         **kwargs,
     ):
-        """Build prefill device inputs and cache the host-side state needed
-        for per-layer inputs.
+        """Build prefill device inputs and cache host-side PLI state.
 
         Returns a 6-tuple matching
         ``models/tt_transformers/tt/model.py:prepare_inputs_prefill``:
@@ -1607,9 +1723,10 @@ class Gemma4Model:
         refresh the absolute start via ``copy_host_to_device``); otherwise
         ``None`` and the generator passes a Python int into
         ``ttnn_prefill_forward``.
-        """
-        import torch.nn.functional as F
 
+        Host ``_prefill_embeds_torch`` is only computed when PLI is configured
+        (E2B/E4B); non-PLI models (31B) skip the vocab-table ``F.embedding``.
+        """
         del start_pos, last_token_idx, global_user_id, user_id, batched_prefill, kwargs
 
         device = None if trace_enabled else self.mesh_device
@@ -1634,8 +1751,15 @@ class Gemma4Model:
             mesh_mapper=mesh_mapper,
         )
 
+        # Already-uploaded tables pass straight through (same contract as
+        # ``chunk_start_idx`` below). Eager multi-chunk prefill uploads the
+        # full-width page table once and reuses it for every chunk instead of
+        # re-``from_torch``-ing an identical table per chunk; nothing in the
+        # forward deallocates it, so one device buffer serves the whole prompt.
         tt_page_table = None
-        if page_table is not None:
+        if isinstance(page_table, ttnn.Tensor):
+            tt_page_table = page_table
+        elif page_table is not None:
             tt_page_table = ttnn.from_torch(
                 page_table,
                 device=device,
@@ -1645,7 +1769,9 @@ class Gemma4Model:
             )
 
         tt_chunk_page_table = None
-        if chunk_page_table is not None:
+        if isinstance(chunk_page_table, ttnn.Tensor):
+            tt_chunk_page_table = chunk_page_table
+        elif chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table,
                 device=device,
@@ -1673,29 +1799,158 @@ class Gemma4Model:
                     mesh_mapper=mesh_mapper,
                 )
 
-        self._prefill_input_ids_torch = tokens_torch
-        self._prefill_batch_size = batch_size
-        self._prefill_seq_len_per_user = per_user_seq_len
-        if self._embed_weight_cpu is not None:
-            self._prefill_embeds_torch = F.embedding(tokens_torch, self._embed_weight_cpu).float() * self.embed_scale
-        else:
-            self._prefill_embeds_torch = None
+        # Host embeds feed PLI only. An unconditional F.embedding over the vocab
+        # table shows up as a start→Embeddings host gap on long ISLs, so skip it
+        # when PLI is off. Same gate as _compute_per_layer_inputs.
+        self._stash_prefill_host_state(tokens_torch, batch_size, per_user_seq_len)
 
         if trace_enabled:
             return tt_tokens, None, None, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
-        tt_embeds = self.embed_tokens(tt_tokens)
+        # TILE straight out of the embedding kernel — no separate Tilize op.
+        tt_embeds = self.embed_tokens(
+            tt_tokens,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=prefill_tilize_memcfg(per_user_seq_len, self.hidden_size),
+        )
         if batch_size > 1:
             if len(tt_embeds.shape) == 3:
                 tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
         else:
             tt_embeds = ttnn.reshape(tt_embeds, (1, 1, per_user_seq_len, self.hidden_size))
-        tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
 
         return tt_embeds, None, None, tt_page_table, tt_chunk_page_table, None
 
     def prepare_prefill_inputs_trace(self, tokens, **kwargs):
         return self.prepare_inputs_prefill(tokens, trace_enabled=True, **kwargs)
+
+    def _torch_to_host_ttnn(self, torch_tensor, dtype):
+        """Host-only ttnn tensor (device=None) for ``copy_host_to_device_tensor``."""
+        return ttnn.from_torch(
+            torch_tensor,
+            device=None,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._replicate_to_mesh_mapper(),
+        )
+
+    def _stash_prefill_host_state(self, tokens_torch, batch_size, per_user_seq_len):
+        """Side effects ``prepare_inputs_prefill`` sets for PLI / forward consumers."""
+        self._prefill_input_ids_torch = tokens_torch
+        self._prefill_batch_size = batch_size
+        self._prefill_seq_len_per_user = per_user_seq_len
+        if self.hidden_size_per_layer_input and self.per_layer_input_weights and self._embed_weight_cpu is not None:
+            import torch.nn.functional as F
+
+            self._prefill_embeds_torch = F.embedding(tokens_torch, self._embed_weight_cpu).float() * self.embed_scale
+        else:
+            self._prefill_embeds_torch = None
+
+    @staticmethod
+    def should_skip_staged_page_table(cache: dict, buf_key, pt_host: torch.Tensor) -> bool:
+        """True when ``pt_host`` was already CH2D'd into the device buffer keyed by ``buf_key``.
+
+        Same-object (multi-chunk reuses one padded table) or equal contents.
+        In-place mutation of a staged table between calls is unsupported — pass a
+        new tensor if block IDs change.
+        """
+        last = cache.get((buf_key, "page_table"))
+        if last is None:
+            return False
+        last_ref, last_clone = last
+        return last_ref is pt_host or (last_clone is not None and torch.equal(last_clone, pt_host))
+
+    def stage_prefill_trace_inputs(
+        self,
+        tokens,
+        *,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=0,
+        batch_size=1,
+        user_id=0,
+        device_tensors,
+        refresh_page_table: bool = True,
+    ):
+        """CH2D into captured prefill device buffers for trace replay.
+
+        Trace capture owns persistent device tensors for
+        ``(tokens, page_table, chunk_page_table, chunk_start_idx)``. Replay only
+        refreshes their contents — no per-call device ``from_torch``.
+
+        When ``refresh_page_table`` is False, the full page_table device buffer is
+        left untouched (caller already staged it this request). When True, H2D is
+        still skipped if the host table matches the last staged contents.
+
+        Returns ``device_tensors`` unchanged (stable addresses for the graph).
+        """
+        del user_id
+        tokens_torch = tokens.to(torch.long)
+        if batch_size > 1:
+            assert tokens_torch.dim() == 2, "batched prefill tokens must be [batch, seq_len]"
+            per_user_seq_len = tokens_torch.shape[-1]
+            tokens_for_embed = tokens_torch.reshape(1, 1, 1, -1)
+        else:
+            per_user_seq_len = tokens_torch.shape[-1]
+            tokens_for_embed = tokens_torch
+
+        self._stash_prefill_host_state(tokens_torch, batch_size, per_user_seq_len)
+
+        if device_tensors is None or len(device_tensors) < 4:
+            raise ValueError("stage_prefill_trace_inputs requires captured device_tensors of length 4")
+
+        dev_tok = device_tensors[0]
+        dev_pt = device_tensors[1]
+        dev_chunk_pt = device_tensors[2]
+        dev_start = device_tensors[3]
+        buf_key = id(dev_tok) if dev_tok is not None else 0
+        cache = getattr(self, "_prefill_trace_stage_cache", None)
+        if cache is None:
+            cache = {}
+            self._prefill_trace_stage_cache = cache
+
+        # Tokens always change per chunk / request.
+        if dev_tok is not None:
+            # int64 source → uint32 (same as decode): skip int32→uint32 host warn #18536.
+            host_tok = self._torch_to_host_ttnn(tokens_for_embed.to(torch.int64), ttnn.uint32)
+            ttnn.copy_host_to_device_tensor(host_tok, dev_tok)
+
+        if page_table is not None and dev_pt is not None:
+            if refresh_page_table:
+                pt_host = page_table if page_table.dim() > 1 else page_table.unsqueeze(0)
+                pt_host = pt_host.to(dtype=torch.int32)
+                cache_key = (buf_key, "page_table")
+                if not self.should_skip_staged_page_table(cache, buf_key, pt_host):
+                    host_pt = self._torch_to_host_ttnn(pt_host, ttnn.int32)
+                    ttnn.copy_host_to_device_tensor(host_pt, dev_pt)
+                    cache[cache_key] = (pt_host, pt_host.detach().clone())
+        elif page_table is None and dev_pt is not None:
+            raise ValueError("Captured page_table device buffer present but host page_table is None")
+        elif page_table is not None and dev_pt is None:
+            raise ValueError("Host page_table provided but captured page_table device buffer is None")
+
+        if chunk_page_table is not None and dev_chunk_pt is not None:
+            cpt = chunk_page_table if chunk_page_table.dim() > 1 else chunk_page_table.unsqueeze(0)
+            host_cpt = self._torch_to_host_ttnn(cpt.to(dtype=torch.int32), ttnn.int32)
+            ttnn.copy_host_to_device_tensor(host_cpt, dev_chunk_pt)
+        elif chunk_page_table is None and dev_chunk_pt is not None:
+            raise ValueError("Captured chunk_page_table device buffer present but host chunk_page_table is None")
+        elif chunk_page_table is not None and dev_chunk_pt is None:
+            raise ValueError("Host chunk_page_table provided but captured chunk_page_table device buffer is None")
+
+        if dev_start is not None:
+            start_i = int(chunk_start_idx) if not isinstance(chunk_start_idx, ttnn.Tensor) else None
+            if start_i is None:
+                raise TypeError("chunk_start_idx must be an int when staging into a device scalar buffer")
+            host_start = self._torch_to_host_ttnn(
+                torch.tensor([start_i], dtype=torch.int32),
+                ttnn.int32,
+            )
+            ttnn.copy_host_to_device_tensor(host_start, dev_start)
+        elif chunk_start_idx is not None and int(chunk_start_idx) != 0 and chunk_page_table is not None:
+            raise RuntimeError("Traced chunk_start_idx device buffer missing for multi-chunk replay")
+
+        return device_tensors
 
     def _reshape_prefill_embeds(self, tt_embeds, seq_len):
         if len(tt_embeds.shape) == 3:
@@ -1722,9 +1977,12 @@ class Gemma4Model:
             tokens = ttnn.reshape(tokens, (1, seq_len))
         else:
             seq_len = tokens.shape[-1]
-        tt_embeds = self.embed_tokens(tokens)
+        tt_embeds = self.embed_tokens(
+            tokens,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=prefill_tilize_memcfg(seq_len, self.hidden_size),
+        )
         tt_embeds = self._reshape_prefill_embeds(tt_embeds, seq_len)
-        tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
         return tt_embeds, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
     def ttnn_prefill_forward(
@@ -1744,6 +2002,8 @@ class Gemma4Model:
         pli_device_tensors=None,
         page_tables_per_layer=None,
         valid_seq_lens=None,
+        allow_sharded_prefill_logits=False,
+        layer_probe=None,
         **kwargs,
     ):
         """Prefill forward — Generator-compatible signature.
@@ -1766,8 +2026,12 @@ class Gemma4Model:
 
         ``get_last_token`` is passed down so the last-token slice happens
         *before* lm_head — slicing after would still allocate full-seq
-        logits first. ``valid_seq_lens`` is the per-slot real token count for
-        batched prefill KV fill (hetero prompts in one pad bucket).
+        logits first.
+
+        Pass ``allow_sharded_prefill_logits=True`` when the caller will
+        on-device-sample TP-sharded logits (skips vocab AllGather). Host
+        full-vocab readback must leave this False (default).
+        ``valid_seq_lens`` bounds per-slot KV fill for heterogeneous batched prefill.
         """
         del rot_mats_global, rot_mats_local, kwargs
         if input_ids_torch is None:
@@ -1793,6 +2057,8 @@ class Gemma4Model:
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
             valid_seq_lens=valid_seq_lens,
+            allow_sharded_prefill_logits=allow_sharded_prefill_logits,
+            layer_probe=layer_probe,
         )
 
     def process_output_prefill(self, tt_out, last_token_idx):
@@ -1800,6 +2066,14 @@ class Gemma4Model:
 
         Under TP, Gemma4 all-gathers logits inside the model so a single
         device tensor already holds the full vocab.
+
+        Do not try to drop the preceding ``ttnn.untilize`` (``tt_transformers/tt/
+        generator.py``): on the [1,1,32,262144] bf16 logits it costs less device
+        time than the host readback it saves, and slicing the needed row first is
+        worse still (a TILE-layout height slice alone costs more than the
+        untilize). The real fix is to not read full-vocab logits at all — with
+        ``sampling_params`` set the generator samples on device and skips both the
+        untilize and the readback.
         """
         if self.mesh_config is not None and self.mesh_config.tp > 1:
             torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
@@ -1807,7 +2081,7 @@ class Gemma4Model:
             torch_output = ttnn.to_torch(tt_out)
         return torch_output[..., last_token_idx, : self.vocab_size]
 
-    def process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
+    def process_logits_after_prefill_trace(self, hidden_states, last_token_idx, allow_sharded=False):
         """Deferred lm_head for traced prefill.
 
         The trace returns post-norm hidden states ``[1,1,seq,hidden]`` when
@@ -1817,6 +2091,10 @@ class Gemma4Model:
 
         If the last dim is already vocab-sized (legacy / batched path that ran
         lm_head inside the trace), only slice and return.
+
+        ``allow_sharded=True`` skips the vocab AllGather when the caller will
+        run on-device sampling on TP-sharded logits (same contract as decode).
+        Host full-vocab readback must keep the default ``False``.
         """
         get_last_token = (last_token_idx // 32) * 32
         sliced = ttnn.slice(
@@ -1825,7 +2103,7 @@ class Gemma4Model:
             (1, 1, get_last_token + 32, hidden_states.shape[-1]),
         )
         if sliced.shape[-1] == self.hidden_size:
-            logits = self._apply_lm_head(sliced, is_decode=False)
+            logits = self._apply_lm_head(sliced, is_decode=False, allow_sharded=allow_sharded)
         else:
             logits = sliced
         # Trace deferred lm_head: commit bounded ring fills after logits.
@@ -1835,60 +2113,130 @@ class Gemma4Model:
     def extract_last_tokens_batched_prefill(
         self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len, target_batch=None
     ):
-        """Extract each user's last-token hidden from batched prefill output.
+        """Last-token hidden rows from batched prefill for on-device sampling.
 
-        Generator reshapes deferred post-norm hidden to
-        ``[padded_batch, 1, prefill_seq_len, H]`` then calls this before
-        on-device prefill sampling (``GEMMA4_HOST_SAMPLE=0``).
+        Generator reshapes pre-norm hidden to ``[B, 1, S, H]`` then calls this +
+        ``_apply_norm_and_lm_head``. Returns ``[1, 1, target_batch, hidden_size]``
+        holding the full hidden on every device -- Gemma4 RMSNorm is not
+        DistributedNorm, so it needs the whole width, not a TP column shard.
 
-        Gemma4 residuals are full-width (replicated) after embed all-gather /
-        layer all-reduces — unlike tt_transformers column-sharded activations —
-        so host gather uses one device shard and re-uploads with
-        ``ReplicateTensorToMesh``. Returns ``[1, 1, target_batch, H]``.
+        Stays on device. This used to read every TP shard of the last-token tile
+        block to host, ``torch.cat`` them into the full hidden, pick one row per
+        user, and upload the result again -- a download, a host concat and an
+        upload per prefill group, to rearrange data that never needed to leave the
+        mesh. One ``ttnn.slice`` per user, one
+        ``ttnn.concat``, and (only when the hidden arrives TP-sharded) one
+        all-gather of the *selected rows* do the same thing with no host hop and
+        no blocking read.
+
+        Selecting before gathering is what keeps it cheap: before the row select
+        the hidden is ``[B, 1, S, hidden/tp]`` with S the whole padded prefill
+        length; after it, ``[1, 1, B, hidden/tp]``.
+
+        Bit-exact: slice, concat and all-gather are pure data movement, no
+        arithmetic. One behavioural note -- the old path read shard 0 and
+        broadcast it to every device, silently forcing cross-device agreement;
+        this path leaves each device with its own bits. For a replicated hidden
+        they are equal by construction (the residual stream is produced by CCLs
+        that land identical bits on every device), which is the same assumption
+        the old code made when it treated shard 0 as representative.
+
+        ``GEMMA4_BATCHED_EXTRACT_DEVICE=0`` restores the host round trip (A/B + bisect).
         """
-        del prefill_seq_len  # layout already [B,1,S,H]; S unused after reshape
-        active_indices = [lt for lt in last_token_idx_list if lt > 0]
-        all_same = len(set(active_indices)) <= 1
-
-        if all_same and active_indices:
-            common_last = active_indices[0]
-            get_last = (common_last // 32) * 32
-            R = common_last % 32
-            block = ttnn.slice(
-                hidden_states,
-                (0, 0, get_last, 0),
-                (padded_batch, 1, get_last + 32, hidden_states.shape[-1]),
+        del prefill_seq_len
+        if os.environ.get("GEMMA4_BATCHED_EXTRACT_DEVICE", "1").lower() in ("0", "false", "no"):
+            return self._extract_last_tokens_batched_prefill_host(
+                hidden_states, last_token_idx_list, padded_batch, target_batch
             )
-        else:
-            block = hidden_states
-            R = None
+        if _use_31b_batch32_host_batched_extract(self.hidden_size, target_batch=target_batch):
+            return self._extract_last_tokens_batched_prefill_host(
+                hidden_states, last_token_idx_list, padded_batch, target_batch
+            )
+        hidden_states = maybe_interleave(hidden_states)
+        per_dev = int(hidden_states.shape[-1])
+        tp = self.mesh_config.tp if self.mesh_config is not None else 1
+        if per_dev != self.hidden_size and per_dev * tp != self.hidden_size:
+            raise ValueError(
+                f"batched prefill hidden last dim {per_dev} x tp {tp} " f"does not match hidden_size {self.hidden_size}"
+            )
 
-        host_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(block)]
-        if host_tensors[0].shape[-1] == self.hidden_size:
+        target_batch = padded_batch if target_batch is None else target_batch
+        if target_batch < padded_batch:
+            raise ValueError(f"target_batch {target_batch} must be >= padded_batch {padded_batch}")
+
+        # One row per user, each at its own last token -- no all-same special case
+        # is needed once the select happens on device. Inactive slots report
+        # last_token_idx <= 0 and their row is never consumed downstream, so
+        # clamping them to row 0 keeps the slice in range.
+        rows = []
+        for slot in range(padded_batch):
+            last = max(int(last_token_idx_list[slot]), 0)
+            rows.append(ttnn.slice(hidden_states, (slot, 0, last, 0), (slot + 1, 1, last + 1, per_dev)))
+        combined = ttnn.concat(rows, dim=2) if len(rows) > 1 else rows[0]
+        for row_tensor in rows:
+            if row_tensor is not combined:
+                row_tensor.deallocate(True)
+
+        if per_dev != self.hidden_size:
+            from models.demos.gemma4.tt.ccl import ccl_allgather
+
+            combined = ccl_allgather(combined, self.mesh_config, self.ccl_manager)
+
+        if target_batch > padded_batch:
+            grown = ttnn.pad(
+                combined,
+                padding=[(0, 0), (0, 0), (0, target_batch - padded_batch), (0, 0)],
+                value=0.0,
+            )
+            combined.deallocate(True)
+            combined = grown
+
+        if combined.dtype != ttnn.bfloat16:
+            # The host path forced bf16 through ``from_torch``; keep that contract
+            # for ``_apply_norm_and_lm_head``.
+            combined = ttnn.typecast(combined, ttnn.bfloat16)
+        return combined
+
+    def _extract_last_tokens_batched_prefill_host(self, hidden_states, last_token_idx_list, padded_batch, target_batch):
+        """The host round trip: read every TP shard, concatenate, pick one row per user.
+
+        Reached three ways: ``GEMMA4_BATCHED_EXTRACT_DEVICE=0`` (A/B and bisecting),
+        and -- since the 31B batch-32 L1 fix -- as the **shipping** path whenever
+        ``_use_31b_batch32_host_batched_extract`` holds. Not dead code: do not
+        remove it as an unused fallback.
+
+        Validates the same invariants as the device path it replaces (hidden-width
+        vs ``hidden_size``, ``target_batch >= padded_batch``), so routing here does
+        not skip a check.
+        """
+        hidden_states = maybe_interleave(hidden_states)
+        host_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(hidden_states)]
+        per_dev = int(host_tensors[0].shape[-1])
+        if per_dev == self.hidden_size:
             host_full = host_tensors[0]
-        else:
+        elif per_dev * len(host_tensors) == self.hidden_size:
             host_full = torch.cat(host_tensors, dim=-1)
-
-        if R is not None:
-            combined = host_full[:, :, R : R + 1, :].reshape(1, 1, padded_batch, -1).contiguous()
         else:
-            rows = []
-            for slot in range(padded_batch):
-                lt_idx = int(last_token_idx_list[slot])
-                rows.append(host_full[slot : slot + 1, :, lt_idx : lt_idx + 1, :])
-            combined = torch.cat(rows, dim=0).reshape(1, 1, padded_batch, -1).contiguous()
+            raise ValueError(
+                f"batched prefill hidden last dim {per_dev} x {len(host_tensors)} devices "
+                f"does not match hidden_size {self.hidden_size}"
+            )
+        rows = [
+            host_full[
+                slot : slot + 1,
+                :,
+                max(int(last_token_idx_list[slot]), 0) : max(int(last_token_idx_list[slot]), 0) + 1,
+                :,
+            ]
+            for slot in range(padded_batch)
+        ]
+        combined = torch.cat(rows, dim=0).reshape(1, 1, padded_batch, -1).contiguous()
 
-        target_batch = padded_batch if target_batch is None else int(target_batch)
+        target_batch = padded_batch if target_batch is None else target_batch
         if target_batch < padded_batch:
             raise ValueError(f"target_batch {target_batch} must be >= padded_batch {padded_batch}")
         if target_batch > padded_batch:
-            padded_combined = torch.zeros(
-                1,
-                1,
-                target_batch,
-                combined.shape[-1],
-                dtype=combined.dtype,
-            )
+            padded_combined = torch.zeros(1, 1, target_batch, combined.shape[-1], dtype=combined.dtype)
             padded_combined[:, :, :padded_batch, :] = combined
             combined = padded_combined
 
@@ -1901,17 +2249,10 @@ class Gemma4Model:
         )
 
     def _apply_norm_and_lm_head(self, x, deallocate_input=True):
-        """Batched-prefill sampling: final norm already applied; run lm_head.
-
-        Called by ``Generator`` after :meth:`extract_last_tokens_batched_prefill`.
-        Keep logits TP-sharded for on-device sampling.
-
-        ``deallocate_input=False`` when ``x`` is a persistent trace-input buffer
-        that must survive the capture (see
-        ``Gemma4Generator._capture_trace_prefill_sampling``).
-        """
+        """Final RMSNorm + lm_head on last-token rows ``[1, 1, B, H]``."""
+        x = self.norm.forward(x)
         return self._apply_lm_head(
-            x, is_decode=False, keep_sharded_for_sampling=True, deallocate_input=deallocate_input
+            x, is_decode=False, allow_sharded=self.sampling is not None, deallocate_input=deallocate_input
         )
 
     def switch_mode(self, mode):
@@ -2045,6 +2386,7 @@ class Gemma4Model:
         on_device_logits=False,
         pli_combined=None,
         page_tables_per_layer=None,
+        layer_probe=None,
     ):
         """Decode forward — matches tt_transformers Generator interface.
 
@@ -2081,10 +2423,9 @@ class Gemma4Model:
             if len(x_embed.shape) == 4:
                 # embed_tokens expects a compact [1, B] (or [B]) id tensor.
                 x_embed = ttnn.reshape(x_embed, (1, int(x_embed.shape[-1])))
-            input_embeds = self.embed_tokens(x_embed)
+            input_embeds = self.embed_tokens(x_embed, layout=ttnn.TILE_LAYOUT)
             if len(input_embeds.shape) == 3:
                 input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
-            input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
         else:
             input_embeds = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
@@ -2115,9 +2456,12 @@ class Gemma4Model:
             position_idx_cache=position_idx_cache,
             pli_combined=ttnn.to_layout(pli_combined, ttnn.TILE_LAYOUT) if pli_combined is not None else None,
             page_tables_per_layer=page_tables_per_layer,
-            # Only skip vocab all-gather when this step feeds on-device sampling.
-            # Host-sample decode must gather full 262k vocab (see _apply_lm_head).
-            keep_sharded_for_sampling=on_device_logits,
+            # Only the on-device sampler can consume TP-sharded logits. When the
+            # host reads them (GEMMA4_HOST_SAMPLE=1, vLLM host logits, logprobs),
+            # force the all-gather so argmax sees the full 262K vocab and not
+            # device 0's 32K shard.
+            allow_sharded_decode_logits=on_device_logits,
+            layer_probe=layer_probe,
         )
 
         if on_device_logits:

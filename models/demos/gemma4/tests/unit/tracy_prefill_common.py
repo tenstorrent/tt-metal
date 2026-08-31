@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.demo.sampling_utils import build_device_sampling_params, model_can_sample_on_device
 from models.demos.gemma4.tt.generator import Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import skip_gemma4_full_prefill_warmup
 from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
@@ -38,7 +39,7 @@ def _flush_device_profiler(mesh_device):
     _sync_mesh(mesh_device)
 
 
-def _traced_prefill(generator, kv_cache, tokens, page_table, prompt_lens):
+def _traced_prefill(generator, kv_cache, tokens, page_table, prompt_lens, *, sampling_params=None):
     out = generator.prefill_forward_text(
         tokens,
         page_table=page_table,
@@ -46,6 +47,7 @@ def _traced_prefill(generator, kv_cache, tokens, page_table, prompt_lens):
         prompt_lens=prompt_lens,
         enable_trace=True,
         warmup_prefill=False,
+        sampling_params=sampling_params,
     )
     _sync_mesh(generator.model[0].mesh_device)
     return out
@@ -62,9 +64,32 @@ def _signpost_start_stop(emit: bool):
             signpost("stop")
 
 
+def _tracy_device_sampling_params(generator):
+    """Optional greedy on-device sample so Tracy can skip vocab AllGather + Untilize.
+
+    Opt in with ``GEMMA4_TRACY_DEVICE_SAMPLE=1``. Default stays host logits so the
+    baseline CSV still includes the fixed lm_head / vocab-AG / Untilize tax.
+    """
+    if os.environ.get("GEMMA4_TRACY_DEVICE_SAMPLE", "0").lower() not in ("1", "true", "yes"):
+        return None
+    can_sample = model_can_sample_on_device(generator.model[0])
+    if not can_sample:
+        logger.warning("GEMMA4_TRACY_DEVICE_SAMPLE set but model cannot sample on device; using host logits")
+        return None
+    logger.info("Tracy prefill: on-device greedy sampling (skips vocab AllGather + Untilize)")
+    return build_device_sampling_params({"temperature": 0}, can_sample=True)
+
+
 def build_prefill_trace_fixtures(batch_size, prefill_len, vocab_size):
-    """Build tokens, page table, and seq-len limits for one (batch, ISL) bucket."""
+    """Build tokens, page table, and seq-len limits for one (batch, ISL) bucket.
+
+    ``_build_tokens`` keeps a short natural-language prompt (parity vs HF). For
+    Tracy that made every ``prefill_N`` capture run the 96-row kernel. Profiling
+    fills ``prompt_lens`` to the padded kernel so matmuls/SDPA/CCL match the
+    requested ISL.
+    """
     tokens, prompt_lens, kernel_len = _build_tokens(batch_size, prefill_len, vocab_size)
+    prompt_lens = prompt_lens.new_full(prompt_lens.shape, kernel_len)
     max_new_tokens = 32
     max_seq_len = max(prefill_len + max_new_tokens, 4096)
     paged_cfg = _page_params(batch_size, prefill_len, max_new_tokens)
@@ -81,13 +106,19 @@ def build_prefill_trace_fixtures(batch_size, prefill_len, vocab_size):
     }
 
 
-def load_prefill_trace_generator(mesh_device, model_path, fixtures):
-    """Load Gemma4Generator for a single trace bucket (inside Tracy session)."""
+def load_prefill_trace_generator(mesh_device, model_path, fixtures, *, num_layers=None):
+    """Load Gemma4Generator for a single trace bucket (inside Tracy session).
+
+    ``num_layers`` truncates the decoder stack to the first N layers (same knob
+    ``create_tt_model`` exposes). Used by the single-layer Tracy profile so the
+    ops CSV holds one decoder block instead of all 30-60.
+    """
     generator, kv_caches, _tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
         model_path=model_path,
         max_batch_size=fixtures["max_batch_size"],
         max_seq_len=fixtures["max_seq_len"],
+        num_layers=num_layers,
         paged_attention_config=fixtures["paged_cfg"],
     )
     model_args = generator.model_args[0]
@@ -103,6 +134,8 @@ def run_prefill_trace_capture(
     generator,
     kv_caches,
     fixtures,
+    *,
+    sampling_params=None,
 ):
     """First traced prefill: compiles kernels and captures the device trace."""
     return _traced_prefill(
@@ -111,6 +144,7 @@ def run_prefill_trace_capture(
         fixtures["tokens"],
         fixtures["page_table"],
         fixtures["prompt_lens"],
+        sampling_params=sampling_params,
     )
 
 
@@ -118,6 +152,8 @@ def run_prefill_trace_replay(
     generator,
     kv_caches,
     fixtures,
+    *,
+    sampling_params=None,
 ):
     """Replay an existing prefill trace (steady-state inference path)."""
     return _traced_prefill(
@@ -126,6 +162,7 @@ def run_prefill_trace_replay(
         fixtures["tokens"],
         fixtures["page_table"],
         fixtures["prompt_lens"],
+        sampling_params=sampling_params,
     )
 
 
@@ -137,17 +174,18 @@ def run_prefill_trace_capture_and_replays(
     *,
     emit_signposts: bool = False,
     include_measured_replay: bool | None = None,
+    sampling_params=None,
 ):
     """Capture trace, warm replay once, then optional signposted measured replay."""
     if include_measured_replay is None:
         include_measured_replay = emit_signposts
 
-    run_prefill_trace_capture(generator, kv_caches, fixtures)
-    run_prefill_trace_replay(generator, kv_caches, fixtures)
+    run_prefill_trace_capture(generator, kv_caches, fixtures, sampling_params=sampling_params)
+    run_prefill_trace_replay(generator, kv_caches, fixtures, sampling_params=sampling_params)
 
     if include_measured_replay:
         with _signpost_start_stop(emit_signposts):
-            run_prefill_trace_replay(generator, kv_caches, fixtures)
+            run_prefill_trace_replay(generator, kv_caches, fixtures, sampling_params=sampling_params)
 
     _flush_device_profiler(mesh_device)
 
@@ -160,25 +198,30 @@ def run_prefill_trace_tracy_session(
     vocab_size,
     *,
     emit_signposts: bool = True,
+    num_layers=None,
 ):
     """Full pplx-style Tracy session: load, capture, warm replay, signposted replay."""
     fixtures = build_prefill_trace_fixtures(batch_size, prefill_len, vocab_size)
     mesh_key = "x".join(str(d) for d in mesh_device.shape)
     logger.info(
-        "Prefill trace session: model={} mesh={} batch={} prompt_len={} kernel_len={} signposts={}",
+        "Prefill trace session: model={} mesh={} batch={} prompt_len={} kernel_len={} num_layers={} signposts={}",
         os.path.basename(model_path.rstrip("/")),
         mesh_key,
         batch_size,
         prefill_len,
         fixtures["kernel_len"],
+        num_layers or "all",
         emit_signposts,
     )
 
-    generator, kv_caches = load_prefill_trace_generator(mesh_device, model_path, fixtures)
+    generator, kv_caches = load_prefill_trace_generator(mesh_device, model_path, fixtures, num_layers=num_layers)
+    sampling_params = _tracy_device_sampling_params(generator)
     run_prefill_trace_capture_and_replays(
         generator,
         kv_caches,
         fixtures,
         mesh_device,
         emit_signposts=emit_signposts,
+        sampling_params=sampling_params,
     )
+    return generator, kv_caches

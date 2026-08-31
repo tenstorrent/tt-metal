@@ -22,7 +22,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig
-from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard
+from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard, decode_1d_matmul_config
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # DRAM-width-sharded QKV / O-proj decode matmuls (same size as the interleaved
@@ -41,6 +41,12 @@ class AttentionWeights:
     k_norm_weight: ttnn.Tensor  # Replicated across devices
     is_global: bool  # Controls K=V tying and partial RoPE
     kv_replicated: bool = False  # True when KV heads are replicated (not split) across TP devices
+    # (program_config, compute_kernel_config) for the decode (M<=32) fused-QKV
+    # matmul, or None to keep ttnn.linear's auto choice. See
+    # dram_sharded.decode_1d_matmul_config: the fused QKV is the one narrow-N
+    # decode matmul where auto collapses to a 1x1 output subblock, leaving DRAM
+    # far short of peak on 31B sliding layers.
+    qkv_decode_config: object = None
 
 
 def load_attention_weights(
@@ -217,6 +223,12 @@ def load_attention_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    # Narrow-N decode config for the fused QKV matmul (no-op when wqkv is a
+    # DramShardedLinear, which brings its own program config).
+    qkv_decode_config = (
+        None if isinstance(wqkv, DramShardedLinear) else decode_1d_matmul_config(mesh_device, hidden_size, qkv_n)
+    )
+
     return AttentionWeights(
         wqkv=wqkv,
         o_proj=o_proj,
@@ -224,4 +236,5 @@ def load_attention_weights(
         k_norm_weight=k_norm_weight,
         is_global=is_global,
         kv_replicated=kv_replicated,
+        qkv_decode_config=qkv_decode_config,
     )

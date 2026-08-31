@@ -116,6 +116,15 @@ class TTSampling(LightweightModule):
             f"cannot cut an untilize row of width {width} into tile-aligned chunks of at most {TOPK_MAX_WIDTH}"
         )
 
+    @staticmethod
+    def _param_snapshot(value):
+        """Hashable snapshot of one sampling parameter, for change detection."""
+        if isinstance(value, torch.Tensor):
+            return tuple(value.reshape(-1).tolist())
+        if isinstance(value, (list, tuple)):
+            return tuple(value)
+        return value
+
     def _is_force_argmax_sampling(self, k, p, temp):
         """Detect whether all users request deterministic greedy decoding.
 
@@ -323,6 +332,10 @@ class TTSampling(LightweightModule):
                 self.mesh_device, dims=self._greedy_col_dims(), mesh_shape=self.cluster_shape
             ),
         )
+
+        # Params last written to k_tensor / p_tensor / temp_tensor / _greedy_col.
+        # None = "unknown", so the first reset_params always writes.
+        self._applied_param_snapshot = None
 
         # Create device offset indices for global indexing
         self._create_indices_tensors()
@@ -601,7 +614,14 @@ class TTSampling(LightweightModule):
     ):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
-        if not self._force_argmax_sampling:
+        param_snapshot = (self._param_snapshot(k), self._param_snapshot(p), self._param_snapshot(temp))
+        if not self._force_argmax_sampling and param_snapshot != self._applied_param_snapshot:
+            # Decode calls this once per token, almost always with the same
+            # params for the whole generation. k_tensor / p_tensor / temp_tensor
+            # and the greedy mask are persistent device buffers that only this
+            # method writes, so re-deriving four host tensors and re-uploading
+            # them every step is pure churn. Write only on an actual change.
+            #
             # When _sampling_dp > 1, create multi-device host tensors so
             # copy_host_to_device_tensor writes per-row shards correctly.
             if self._sampling_dp > 1:
@@ -650,6 +670,7 @@ class TTSampling(LightweightModule):
                 ),
             )
             ttnn.copy_host_to_device_tensor(self._greedy_col_new, self._greedy_col)
+            self._applied_param_snapshot = param_snapshot
 
         self.log_probs_calculator.set_log_probs_mode(
             enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots

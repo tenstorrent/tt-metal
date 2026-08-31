@@ -21,7 +21,21 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.tt.compute_config import gelu_variant
-from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
+from models.demos.gemma4.tt.dram_sharded import (
+    TILE_SIZE,
+    DramShardedLinear,
+    can_dram_shard,
+    decode_in0_l1_enabled,
+    interleaved_down_proj_prefill_config,
+    interleaved_gate_up_prefill_config,
+    linear_l1_safe,
+    matmul_rows,
+    prefill_linear_above_cutoff,
+    prefill_lofi_ckc,
+    prefill_matmul_lofi_enabled,
+    prefill_progcfg_1d_for_width_sharded_in0,
+    should_prefill_long_2d,
+)
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # DRAM-width-sharded decode matmuls for the shared MLP. On by default for
@@ -159,7 +173,11 @@ class SharedMLP:
                 ),
             )
         else:
-            gate_up_proj = ttnn.as_tensor(
+            # Interleaved-weight path (everything off Blackhole). Prefill gets an
+            # explicit 1D program config from interleaved_gate_up_prefill_config —
+            # see SharedMLP.__call__. Keep the weight as a tensor (not a lambda)
+            # so the call site can pass program_config / out memcfg / HiFi4.
+            self.gate_up_proj = ttnn.as_tensor(
                 gate_up_weight,
                 device=mesh_device,
                 dtype=dtype,
@@ -170,9 +188,6 @@ class SharedMLP:
                 ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-
-            self.gate_up_proj = lambda x: ttnn.linear(x, gate_up_proj)
-
         if dram_shard and can_dram_shard(down_k, self.hidden_size, dtype=dtype):
             self.down_proj = DramShardedLinear(
                 down_proj_weight,
@@ -186,7 +201,7 @@ class SharedMLP:
                 ),
             )
         else:
-            down_proj = ttnn.as_tensor(
+            self.down_proj = ttnn.as_tensor(
                 down_proj_weight,
                 device=mesh_device,
                 dtype=dtype,
@@ -198,7 +213,135 @@ class SharedMLP:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            self.down_proj = lambda x: ttnn.linear(x, down_proj)
+    def _prepare_prefill_act(self, hidden_states, program_config):
+        """Move ``hidden_states`` onto the layout the tuned prefill matmul wants.
+
+        Prefer keeping a width-sharded LN output in place (caller matched a 1D
+        progcfg to that shard grid). Only S2I when the auto path has no progcfg.
+        Returns ``(act, owned)``.
+        """
+        if program_config is None:
+            if hidden_states.is_sharded():
+                # Decode (M <= TILE): the tuned prefill config declines, so we land
+                # here with the pre-FF LN's width-sharded L1 island output — and
+                # used to un-shard it into *DRAM*, spilling the activation the
+                # island had just kept on-chip and making gate_up read in0 from
+                # DRAM. The S2I happens either way; only its destination changes,
+                # so retargeting it to L1 is bit-exact and costs no extra op.
+                # The staged activation is [1, 1, 32, hidden_local] regardless of
+                # batch (rows are tile-padded to 32), so the L1 cost does not grow
+                # with batch or context length.
+                dest = ttnn.DRAM_MEMORY_CONFIG
+                if matmul_rows(hidden_states) <= TILE_SIZE and decode_in0_l1_enabled():
+                    dest = ttnn.L1_MEMORY_CONFIG
+                return ttnn.sharded_to_interleaved(hidden_states, dest), True
+            return hidden_states, False
+        if hidden_states.is_sharded():
+            return hidden_states, False
+        if hidden_states.memory_config().buffer_type != ttnn.BufferType.L1:
+            return ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG), True
+        return hidden_states, False
+
+    def _gate_up_linear(self, hidden_states):
+        """Fused gate+up matmul — DramShardedLinear on BH, tuned 1D prefill off BH."""
+        if isinstance(self.gate_up_proj, DramShardedLinear):
+            return self.gate_up_proj(hidden_states)
+
+        # Interleaved-weight prefill: pin 1D progcfg + L1 interleaved out + HiFi4.
+        # Decode (M<=TILE) may consume a width-sharded LN out on that core grid
+        # and skip S2I. Prefill-sized 1D CBs on the same shard clash on Wormhole,
+        # so M>TILE always S2I's to the tuned interleaved config.
+        m = matmul_rows(hidden_states)
+        k = int(hidden_states.shape[-1])
+        n = int(self.gate_up_proj.shape[-1])
+        # 12B long-4k (M=4096, K=N=3840): cutoff-reshape+LoFi beats auto+LoFi.
+        # At M=2048 (31B T3K chunks) auto+LoFi still wins — keep that path.
+        if should_prefill_long_2d(m) and m >= 4096:
+            act, owned = self._prepare_prefill_act(hidden_states, None)
+            gate_up = prefill_linear_above_cutoff(act, self.gate_up_proj)
+            if owned:
+                act.deallocate(True)
+            return gate_up
+        program_config, out_memcfg, compute_kernel_config = interleaved_gate_up_prefill_config(m, k, n)
+        # Above the tuned 1D band, auto DRAM-in0 keeps HiFi2 by default; LoFi is
+        # the isolate winner at M=2048.
+        if program_config is None and compute_kernel_config is None and prefill_matmul_lofi_enabled(m):
+            compute_kernel_config = prefill_lofi_ckc()
+        # Decode (M<=TILE): the tuned prefill config declines, so the output would
+        # follow the op default (DRAM) and the whole GeGLU group — 2x slice + the
+        # gelu*mul — would run against DRAM. The tensor is
+        # [1,1,32,2*inter/tp] bf16 = 344 KB, i.e. 5 KB/core, so keep the group on
+        # L1. (The prefill-sized rejection of an L1 GeGLU intermediate above is a
+        # seq=4096 L1-budget result and does not apply at M=32.)
+        if out_memcfg is None and m <= TILE_SIZE:
+            out_memcfg = ttnn.L1_MEMORY_CONFIG
+        if program_config is not None and hidden_states.is_sharded():
+            # Decode (M<=TILE) keep-sharded island is proven. Prefill-sized 1D
+            # CBs on the LN width-shard clash with the rest of the layer on
+            # Wormhole — S2I to the tuned interleaved config instead.
+            matched = (
+                prefill_progcfg_1d_for_width_sharded_in0(m, k, n, hidden_states.memory_config())
+                if m <= TILE_SIZE
+                else None
+            )
+            if matched is not None:
+                program_config = matched
+            else:
+                act = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
+                gate_up = linear_l1_safe(
+                    act,
+                    self.gate_up_proj,
+                    program_config=program_config,
+                    memory_config=out_memcfg,
+                    compute_kernel_config=compute_kernel_config,
+                )
+                act.deallocate(True)
+                return gate_up
+        act, owned = self._prepare_prefill_act(hidden_states, program_config)
+        gate_up = linear_l1_safe(
+            act,
+            self.gate_up_proj,
+            program_config=program_config,
+            memory_config=out_memcfg,
+            compute_kernel_config=compute_kernel_config,
+        )
+        if owned:
+            act.deallocate(True)
+        return gate_up
+
+    def _down_proj_linear(self, hidden):
+        """Row-parallel down projection — DramShardedLinear on BH, tuned 1D prefill off BH."""
+        if isinstance(self.down_proj, DramShardedLinear):
+            return self.down_proj(hidden)
+
+        # GeGLU leaves interleaved after gate_up L1-out + slice; keep interleaved path.
+        m = matmul_rows(hidden)
+        k = int(hidden.shape[-1])
+        n = int(self.down_proj.shape[-1])
+        # Above the 1D-tuned band, auto streams in0 from DRAM with in0_block_w=1.
+        # Cutoff-reshape 2D is the isolate winner (see prefill_linear_above_cutoff).
+        if should_prefill_long_2d(m):
+            act, owned = self._prepare_prefill_act(hidden, None)
+            output = prefill_linear_above_cutoff(act, self.down_proj)
+            if owned:
+                act.deallocate(True)
+            return output
+        program_config, out_memcfg, compute_kernel_config = interleaved_down_proj_prefill_config(m, k, n)
+        # Decode: L1 writeback, same lever (and same bit-exactness) as o_proj.
+        # Consumer is the all-reduce.
+        if out_memcfg is None and m <= TILE_SIZE:
+            out_memcfg = ttnn.L1_MEMORY_CONFIG
+        act, owned = self._prepare_prefill_act(hidden, program_config)
+        output = linear_l1_safe(
+            act,
+            self.down_proj,
+            program_config=program_config,
+            memory_config=out_memcfg,
+            compute_kernel_config=compute_kernel_config,
+        )
+        if owned:
+            act.deallocate(True)
+        return output
 
     def __call__(self, hidden_states):
         """
@@ -209,21 +352,34 @@ class SharedMLP:
         # Fused gate/up projection: one matmul produces [.., 2*inter_pad/device]
         # laid out as [up_i | gate_i]. Split with the padded half-width so TILE
         # slice bounds stay aligned (264 would round to 288 and break down_proj).
-        gate_up = self.gate_up_proj(hidden_states)
+        gate_up = self._gate_up_linear(hidden_states)
         shard = self._inter_per_device
         s = gate_up.shape[-2]
-        up = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, s, shard])
-        gate = ttnn.slice(gate_up, [0, 0, 0, shard], [1, 1, s, 2 * shard])
+        # Keep the split halves wherever gate_up landed (L1 at decode, DRAM at
+        # prefill) so the group does not bounce.
+        geglu_mc = gate_up.memory_config() if not gate_up.is_sharded() else None
+        up = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, s, shard], memory_config=geglu_mc)
+        gate = ttnn.slice(gate_up, [0, 0, 0, shard], [1, 1, s, 2 * shard], memory_config=geglu_mc)
         gate_up.deallocate(True)
 
-        # Prefer Accurate over FastLut/Tanh for device PCC (see compute_config).
-        gate = ttnn.gelu(gate, variant=gelu_variant())
-        hidden = ttnn.mul(gate, up)
+        # NOTE: in PREFILL this GeGLU intermediate stays in DRAM. Do NOT move it
+        # to L1 to give down_proj an L1 in0: the intermediate is
+        # [seq, intermediate_size/tp], and at tp=1/tp=2 that is 4-8x wider than
+        # tp=8 and OOMs L1 at seq=4096.
+        # DECODE is the opposite case and does use L1 (see _gate_up_linear): seq
+        # is one tile, so the whole group is 344 KB, and what L1 buys there is the
+        # gate_up WRITE — its output never goes through DRAM — not the down_proj
+        # read. ``geglu_mc`` inherits whichever the matmul picked, so neither case
+        # is hard-coded here.
+        # Preserve main's Accurate GeLU policy and the source tip's memory placement.
+        activated = ttnn.gelu(gate, variant=gelu_variant(), memory_config=geglu_mc)
+        hidden = ttnn.mul(activated, up, memory_config=geglu_mc)
+        activated.deallocate(True)
         gate.deallocate(True)
         up.deallocate(True)
 
         # output = hidden @ down_proj
-        output = self.down_proj(hidden)
+        output = self._down_proj_linear(hidden)
         hidden.deallocate(True)
 
         # Allreduce after row-parallel down_proj

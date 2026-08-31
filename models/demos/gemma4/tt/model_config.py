@@ -207,18 +207,48 @@ class Gemma4ModelArgs:
         )
 
     @staticmethod
+    def _resolve_checkpoint_dir(weights_path: str) -> Path:
+        """Resolve a local checkpoint directory from a path or HF hub id.
+
+        ``load_state_dict`` used to glob ``Path(hf_id)`` directly, which misses
+        shards already cached under ``HF_HOME/hub/…`` and fell through to
+        ``AutoModelForCausalLM`` (~3 min for 31B). ``snapshot_download`` maps
+        hub ids to the on-disk snapshot (fast when cached).
+        """
+        path = Path(weights_path)
+        if path.is_dir():
+            return path
+        if path.exists():
+            return path
+        try:
+            from huggingface_hub import snapshot_download
+
+            return Path(
+                snapshot_download(
+                    weights_path,
+                    allow_patterns=["*.safetensors", "*.safetensors.index.json"],
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not resolve HF hub snapshot for {} ({}); " "will try AutoModelForCausalLM fallback.",
+                weights_path,
+                exc,
+            )
+            return path
+
+    @staticmethod
     def load_state_dict(weights_path, dummy_weights=False):
         """Load model state dict from safetensors (fast) or HF checkpoint."""
         if dummy_weights:
             return {}
 
-        from pathlib import Path
-
-        safetensor_files = sorted(Path(weights_path).glob("*.safetensors"))
+        checkpoint_dir = Gemma4ModelArgs._resolve_checkpoint_dir(weights_path)
+        safetensor_files = sorted(checkpoint_dir.glob("*.safetensors"))
         if safetensor_files:
             from safetensors.torch import load_file
 
-            logger.info(f"Loading {len(safetensor_files)} safetensor files from {weights_path}")
+            logger.info(f"Loading {len(safetensor_files)} safetensor files from {checkpoint_dir}")
             state_dict = {}
             for f in tqdm(safetensor_files, desc="Loading safetensors"):
                 shard = load_file(str(f))

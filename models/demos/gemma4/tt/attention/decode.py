@@ -10,7 +10,7 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 import os
 
 import ttnn
-from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+from models.demos.gemma4.tt.compute_config import decode_sdpa_compute_kernel_config
 
 from .operations import (
     apply_allreduce,
@@ -34,6 +34,34 @@ from .weights import AttentionWeights
 # Populated on the first (un-traced compile) call; inside trace capture the
 # probe is skipped entirely.
 _Q_SHARDED_MEM_CACHE: dict = {}
+
+
+def _qkv_norm_island_memcfg(batch, use_embedding_rope):
+    """Memory config for the per-head q/k/v norm + RoPE island at decode.
+
+    ``nlp_create_qkv_heads_decode`` hands back Q/K/V height-sharded in L1, and
+    both consumers of the normed+rotated tensors (``paged_update_cache``,
+    ``sdpa_decode``) want L1 too — yet the norms and RoPE in between were staged
+    through **DRAM interleaved**. Those ops run on one core over a
+    ``[1, 1, heads_local, head_dim]`` tensor (a few tiles), so they are
+    latency-bound and a DRAM round-trip is pure latency.
+
+    Keeping the island in L1 interleaved feeds the *same* kernels the *same*
+    bits — only the buffer type moves — so it is bit-exact by construction.
+    ``GEMMA4_DECODE_QKV_L1=0`` restores the DRAM staging.
+
+    RESTRICTED to ``batch == 1`` on the embedding-RoPE path, because those are
+    the only rotations that accept a ``memory_config``. ``apply_rope_decode_peruser``
+    (batch > 1) and the legacy 4D-cache ``apply_rope`` both return a tensor
+    following their INPUT's buffer type, so an L1 input would hand
+    ``sdpa_decode`` an L1 Q and trip its ``Q_memcfg.buffer_type() == DRAM``
+    assert. Those paths keep the DRAM staging, byte-for-byte as before.
+    """
+    if os.environ.get("GEMMA4_DECODE_QKV_L1", "1").lower() in ("0", "false", "no"):
+        return ttnn.DRAM_MEMORY_CONFIG
+    if batch != 1 or not use_embedding_rope:
+        return ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.L1_MEMORY_CONFIG
 
 
 def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
@@ -94,29 +122,45 @@ def decode_forward(
     """
     tp = mesh_config.tp if mesh_config else 1
 
-    # 1. Fused QKV projection
-    xqkv = apply_qkv_projection(hidden_states, weights)
+    # 1. Fused QKV projection. Land the output straight in L1: the only consumer
+    # is ``nlp_create_qkv_heads_decode``, which needs an L1 input anyway (see
+    # split_qkv_heads_decode). Writing DRAM and copying back cost one extra
+    # CopyDeviceOperation per layer plus a full DRAM round-trip of the fused
+    # QKV. At decode M=32 the tensor is
+    # tiny (2048-3072 cols bf16 = 128-192 KB across the grid).
+    xqkv = apply_qkv_projection(hidden_states, weights, memory_config=ttnn.L1_MEMORY_CONFIG, decode=True)
 
     # 2. Split into Q, K, V heads
     tt_q, tt_k, tt_v = split_qkv_heads_decode(
         xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
     )
 
-    # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
+    # 3. Per-head norms (un-shard for rms_norm, restore sharded for the KV write).
+    # The staging buffer is L1 at batch=1 — see _qkv_norm_island_memcfg. Both
+    # inputs to that decision are known here: the split puts batch in dim 1, and
+    # the RoPE flavour follows from the cos-cache rank (step 4 re-derives it).
     q_sharded_mem = tt_q.memory_config()
-    tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
+    island_mem = _qkv_norm_island_memcfg(
+        batch=int(tt_q.shape[1]),
+        use_embedding_rope=bool(rope_presliced or len(cos_cache.shape) == 2),
+    )
+    island_is_l1 = island_mem.buffer_type == ttnn.BufferType.L1
+    tt_q = ttnn.to_memory_config(tt_q, island_mem)
+    tt_q = apply_per_head_norm(
+        tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=island_mem
+    )
 
     if is_kv_shared:
         # KV-shared layer: discard own K/V, use source layer's KV cache directly
         tt_k.deallocate(True)
         tt_v.deallocate(True)
     else:
-        tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
-        tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
-        # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
-        tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
-        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
+        tt_k = ttnn.to_memory_config(tt_k, island_mem)
+        tt_v = ttnn.to_memory_config(tt_v, island_mem)
+        tt_k = apply_per_head_norm(
+            tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=island_mem
+        )
+        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=island_mem)
 
     # 4. RoPE — use on-device embedding lookup for trace compatibility
     # use_embedding_rope: cos/sin are per-position [1,1,batch_pad,head_dim] tensors.
@@ -143,9 +187,9 @@ def decode_forward(
             cos_b = ttnn.transpose(cos_pos, 1, 2)[:, :batch, :, :]  # [1, batch, 1, head_dim]
             sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch, :, :]
 
-        def _rope(t):
+        def _rope(t, memory_config=None):
             if batch == 1:
-                return apply_rope(t, cos_pos, sin_pos, token_index=0)
+                return apply_rope(t, cos_pos, sin_pos, token_index=0, memory_config=memory_config)
             return apply_rope_decode_peruser(t, cos_b, sin_b)
 
         # Rotate Q (and K, unless this is a KV-shared layer) with the shared
@@ -154,9 +198,16 @@ def decode_forward(
         # trace replay it regressed throughput (~3%): host dispatch is already
         # free under replay, so it only added concat+split device kernels while
         # removing one tiny rope kernel. Keep separate rotations.
-        tt_q = _rope(tt_q)
+        # Q's rotated result goes straight to sdpa_decode, which hard-asserts
+        # "Q tensor buffer type must be DRAM when not sharded"
+        # (sdpa_decode_device_operation.cpp) — so when the island is on L1, Q's
+        # rotation must still write DRAM; only its norm stays on L1. K feeds
+        # paged_update_cache via a reshard to the height-sharded spec, which is
+        # happy in L1. When the island is DRAM these are None, i.e. the exact
+        # pre-optimization calls.
+        tt_q = _rope(tt_q, memory_config=ttnn.DRAM_MEMORY_CONFIG if island_is_l1 else None)
         if not is_kv_shared:
-            tt_k = _rope(tt_k)
+            tt_k = _rope(tt_k, memory_config=island_mem if island_is_l1 else None)
     else:
         # Legacy path: full 4D cache with Python int token_index
         tt_q = apply_rope(tt_q, cos_cache, sin_cache, token_index=token_index)
@@ -299,6 +350,7 @@ def decode_forward(
         k_chunk_size=64,
         exp_approx_mode=False,
     )
+    sdpa_compute_kernel_config = decode_sdpa_compute_kernel_config(mesh_device)
 
     if page_table is not None:
         sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
@@ -312,6 +364,7 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_kernel_config,
             # Tell SDPA the layer's view of the cache when the buffer was allocated
             # for a different layer type under HMA cross-group sharing — same
             # rationale as the num_kv_heads override on paged_update_cache.
@@ -331,6 +384,7 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_kernel_config,
         )
     tt_q.deallocate(True)
 

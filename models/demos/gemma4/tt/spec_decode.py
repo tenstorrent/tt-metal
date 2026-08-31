@@ -1038,13 +1038,53 @@ class SpeculativeDecoder:
         tr["vhidden"] = vh
         self._fused_trace = tr
 
-    def _hidden_row_to_device(self, row):
-        """Read the verify hidden, slice row `row`, and copy it into tr["h"].
+    def _device_seed_enabled(self) -> bool:
+        """Whether the recurrent seed is carried device-side (default) or via host.
 
-        Host round-trip for the recurrent seed: small ([1,1,1,backbone]) and
-        allocation-free on device (copy_host_to_device into the persistent buffer),
-        so it stays trace-safe (no device clone/slice that could alias trace
-        scratch on a re-replay)."""
+        ``GEMMA4_SPEC_DEVICE_SEED=0`` restores the host round trip. Kept as an
+        escape hatch because the host path is allocation-free on device, and the
+        device path allocates a short-lived slice between trace replays -- see
+        :meth:`_hidden_row_to_device`.
+        """
+        return os.environ.get("GEMMA4_SPEC_DEVICE_SEED", "1").lower() not in ("0", "false", "no")
+
+    def _hidden_row_to_device(self, row):
+        """Copy verify-hidden row ``row`` into tr["h"] -- on device.
+
+        The recurrent drafter seed used to make a full host round trip per
+        iteration: read ``vhidden`` back, slice one row in torch, upload it again.
+        The tensor is small ([1,1,1,backbone]) but the read is *blocking* and sits
+        between the trace replay and the next submit, so it serialised every
+        spec-decode iteration -- the one place in this file where a host hop is on
+        the critical path rather than beside it.
+
+        ``ttnn.slice`` + ``ttnn.copy`` into the persistent buffer does the same
+        selection on device. The original comment avoided a device slice because a
+        freshly allocated tensor could alias trace scratch on a re-replay; the
+        slice here is allocated and freed inside one iteration and never overlaps a
+        live trace tensor, and ``ttnn.copy(src, tr["h"])`` is already the idiom
+        used to reset this same buffer in ``_capture_fused_trace``. ``ttnn.slice``
+        cannot write straight into ``tr["h"]`` -- its ``output_tensor`` requires the
+        unpadded shape, and a TILE [1,1,1,backbone] buffer is padded to 32 rows --
+        hence the temporary.
+
+        Dtype is handled the same way the host path handled it: the old upload
+        forced ``dtype=tr["h"].dtype`` through ``from_torch``, and ``ttnn.copy``
+        likewise converts into the destination's dtype (checked on device: bf16
+        source into bf16/fp32 destinations is exact, into bfp8_b it quantises,
+        never raises). So a ``vhidden``/``tr["h"]`` dtype mismatch behaves as
+        before rather than silently reinterpreting bits.
+        """
+        if not self._device_seed_enabled():
+            return self._hidden_row_to_device_host(row)
+        tr = self._fused_trace
+        vh = tr["vhidden"]
+        sel = ttnn.slice(vh, [0, 0, row, 0], [1, 1, row + 1, int(vh.shape[-1])])
+        ttnn.copy(sel, tr["h"])
+        sel.deallocate(True)
+
+    def _hidden_row_to_device_host(self, row):
+        """``GEMMA4_SPEC_DEVICE_SEED=0`` fallback: the original host round trip."""
         tr = self._fused_trace
         vh = tr["vhidden"]
         vh_t = ttnn.to_torch(ttnn.get_device_tensors(vh)[0]) if self._tp > 1 else ttnn.to_torch(vh)
@@ -1372,7 +1412,33 @@ class SpeculativeDecoder:
 
     def _hidden_rows_to_device_batched(self, rows_b):
         """Shift-seed: gather packed-verify hidden row ``b*P+rows_b[b]`` per user
-        into the persistent batched recurrent buffer tr["h"] (host round-trip)."""
+        into the persistent batched recurrent buffer tr["h"] -- on device.
+
+        Batched counterpart of :meth:`_hidden_row_to_device`: one slice per user
+        plus a concat, then a device copy into the persistent buffer, replacing the
+        blocking read + ``torch.cat`` + upload that ran between every replay. The
+        untraced batched path already selects these rows with
+        ``ttnn.clone(ttnn.slice(vhidden, ...))``, so the op mix is not new here.
+        """
+        if not self._device_seed_enabled():
+            return self._hidden_rows_to_device_batched_host(rows_b)
+        tr = self._fused_trace_batched
+        B, P = tr["B"], tr["P"]
+        vh = tr["vhidden"]
+        backbone = int(vh.shape[-1])
+        sel = []
+        for b in range(B):
+            r = b * P + rows_b[b]
+            sel.append(ttnn.slice(vh, [0, 0, r, 0], [1, 1, r + 1, backbone]))
+        combined = ttnn.concat(sel, dim=2) if B > 1 else sel[0]
+        ttnn.copy(combined, tr["h"])
+        for t in sel:
+            t.deallocate(True)
+        if B > 1:
+            combined.deallocate(True)
+
+    def _hidden_rows_to_device_batched_host(self, rows_b):
+        """``GEMMA4_SPEC_DEVICE_SEED=0`` fallback: the original host round trip."""
         tr = self._fused_trace_batched
         B, P = tr["B"], tr["P"]
         vh = tr["vhidden"]

@@ -232,7 +232,8 @@ class Transformer(LightweightModule):
                 f"Showing up to 10: {sample}"
             )
 
-    def process_logits_after_prefill_trace(self, logits, last_token_idx):
+    def process_logits_after_prefill_trace(self, logits, last_token_idx, allow_sharded=False):
+        del allow_sharded  # Gemma4-only opt-in; API parity with Generator callers
         get_last_token = (last_token_idx // 32) * 32
         logits = ttnn.slice(
             logits,

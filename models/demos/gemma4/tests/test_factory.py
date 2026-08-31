@@ -14,6 +14,7 @@ from functools import lru_cache
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -34,6 +35,65 @@ PREFILL_BUCKETS = [128, 1024, 4096]
 
 def _get_model_path():
     return os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", _DEFAULT_MODEL_PATH)
+
+
+# HF reference loading -- one path shared by every test that scores TT against
+# the real checkpoint (test_teacher_forcing_e2e), so dtype/device_map never drift
+# between the demo-agreement and accuracy numbers.
+_HF_DEVICE_MAP_ENV = "GEMMA4_HF_DEVICE_MAP"
+
+
+def from_pretrained_gemma4_causal_lm(model_path, **kwargs):
+    """``from_pretrained`` that also loads the 12B unified multimodal release.
+
+    Local 12B trees often keep an adapted text ``config.json`` (so TT can read
+    ``text_config``) next to unified safetensors, with the original HF config
+    saved as ``config.json.unified``. ``AutoModelForCausalLM`` then instantiates
+    ``Gemma4ForConditionalGeneration`` and dies on the vision-tower shape
+    mismatch. Prefer the sidecar + ``Gemma4UnifiedForConditionalGeneration``
+    when present; otherwise use AutoModel (31B / CI NAS 12B).
+    """
+    from pathlib import Path
+
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    sidecar = Path(model_path) / "config.json.unified"
+    if sidecar.is_file():
+        config = AutoConfig.from_pretrained(sidecar, trust_remote_code=True)
+        try:
+            from transformers import Gemma4UnifiedForConditionalGeneration
+        except ImportError:
+            from transformers.models.gemma4_unified import Gemma4UnifiedForConditionalGeneration
+
+        logger.info("Loading HF reference via {} (unified sidecar)", sidecar.name)
+        return Gemma4UnifiedForConditionalGeneration.from_pretrained(model_path, config=config, **kwargs)
+    return AutoModelForCausalLM.from_pretrained(model_path, **kwargs)
+
+
+def load_hf_reference_model(model_path=None):
+    """Load the full HF checkpoint used as the reference model.
+
+    bf16 weights + ``trust_remote_code``, sharded per ``GEMMA4_HF_DEVICE_MAP``
+    (default ``auto``); set that to ``cpu`` to force host. Caller owns the
+    returned model and should ``del`` it when done -- these checkpoints are large.
+    """
+    model_path = model_path or _get_model_path()
+    device_map = os.environ.get(_HF_DEVICE_MAP_ENV, "auto")
+    load_kwargs = {"torch_dtype": torch.bfloat16, "trust_remote_code": True}
+    if device_map.lower() not in ("cpu", "none", ""):
+        load_kwargs["device_map"] = device_map
+        logger.info("Loading HF reference model with device_map={}", device_map)
+    else:
+        logger.warning("Loading HF reference model on CPU (set {}=auto for GPU)", _HF_DEVICE_MAP_ENV)
+
+    model = from_pretrained_gemma4_causal_lm(model_path, **load_kwargs)
+    model.eval()
+    return model
+
+
+def hf_reference_model_device(model) -> torch.device:
+    """Device of the first parameter -- where inputs for ``model`` must live."""
+    return next(model.parameters()).device
 
 
 def build_hf_prefill_mask(seq_len, sliding_window=None):
@@ -233,6 +293,143 @@ def skip_if_config_only_checkpoint():
     """Skip tests that load HF weights or tokenizers when only config.json is available."""
     if uses_ci_config_only_checkpoint():
         pytest.skip(_CONFIG_ONLY_SKIP_REASON)
+
+
+# ── Real checkpoint weights ────────────────────────────────────────────────
+#
+# ``create_hf_reference_layer`` and friends build HF modules from the *config*
+# and leave the constructor's init in place — N(0, 0.02) for the router/expert
+# tensors, all-ones for every RMSNorm scale, HF's default for the projections.
+# That has none of the dynamic range or the outlier channels a trained
+# checkpoint carries, which is exactly what bf16/bfp8 storage and multi-step
+# accumulation get wrong. The helpers below pull the *real* tensors so a test
+# can gate the device op at the magnitudes the model actually runs at.
+#
+# Only the requested tensors are read: the safetensors headers give a
+# key -> shard map, then one ``get_tensor`` per key. Materializing a 31B
+# state dict to fetch one projection would dominate every test that used it.
+
+
+@lru_cache(maxsize=1)
+def real_checkpoint_dir():
+    """Local directory holding the checkpoint's safetensors shards.
+
+    Cached: for a hub-id ``HF_MODEL`` this goes through ``snapshot_download``,
+    which round-trips to the Hub to revalidate the revision even when every
+    shard is already local. Once per process, not once per parametrized case.
+    """
+    model_path = _get_model_path()
+    if os.path.isdir(model_path):
+        return model_path
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(model_path, allow_patterns=["*.safetensors", "*.safetensors.index.json"])
+
+
+@lru_cache(maxsize=1)
+def real_weight_index():
+    """``{tensor key: shard path}`` from the safetensors headers — no tensor data read."""
+    from pathlib import Path
+
+    from safetensors import safe_open
+
+    index = {}
+    for shard in sorted(Path(real_checkpoint_dir()).glob("*.safetensors")):
+        with safe_open(str(shard), framework="pt") as f:
+            for key in f.keys():
+                index[key] = str(shard)
+    return index
+
+
+@lru_cache(maxsize=1)
+def real_text_prefix():
+    """Checkpoint prefix for the text stack, trailing dot included.
+
+    The plain text releases name these ``model.layers.0.…`` and the unified
+    multimodal ones ``model.language_model.layers.0.…``. Derived from wherever
+    ``embed_tokens.weight`` lives rather than guessed, so a third naming
+    convention resolves too.
+    """
+    for key in sorted(real_weight_index()):
+        if key.endswith("embed_tokens.weight") and "per_layer" not in key:
+            return key[: -len("embed_tokens.weight")]
+    return "model."
+
+
+def skip_unless_real_weights():
+    """Skip unless HF_MODEL resolves to a checkpoint with readable safetensors."""
+    skip_if_config_only_checkpoint()
+    if not real_weight_index():
+        pytest.skip(f"No safetensors shards under {real_checkpoint_dir()}; this test needs real weights")
+
+
+def load_real_substate(relative_prefix):
+    """Real weights under ``<text prefix><relative_prefix>.``, keys made relative.
+
+    ``load_real_substate("layers.0.self_attn")`` returns ``{"q_proj.weight": …,
+    "k_norm.weight": …}`` — the shape an HF submodule's ``load_state_dict``
+    wants. fp32 tensors are cast to bf16 to match what
+    ``Gemma4ModelArgs.load_state_dict`` hands the real model.
+    """
+    from collections import defaultdict
+
+    from safetensors import safe_open
+
+    assert relative_prefix, "relative_prefix must be non-empty — an empty one would load the whole text stack"
+    skip_unless_real_weights()
+    index = real_weight_index()
+    prefix = f"{real_text_prefix()}{relative_prefix}."
+    by_shard = defaultdict(list)
+    for key in index:
+        if key.startswith(prefix):
+            by_shard[index[key]].append(key)
+    if not by_shard:
+        pytest.skip(f"Checkpoint {_get_model_path()} has no weights under '{prefix}'")
+
+    out = {}
+    for shard, keys in by_shard.items():
+        with safe_open(shard, framework="pt") as f:
+            for key in keys:
+                tensor = f.get_tensor(key)
+                out[key[len(prefix) :]] = tensor.to(torch.bfloat16) if tensor.dtype == torch.float32 else tensor
+    return out
+
+
+def load_real_model_substate(num_layers):
+    """Real weights for a *truncated* text stack, keyed for an HF reference model.
+
+    Returns ``embed_tokens.weight``, ``layers.{0..num_layers-1}.…`` and
+    ``norm.weight`` — deliberately not the whole checkpoint, so a 1-layer test
+    reads one layer's tensors rather than all 48.
+    """
+    state = {}
+    for name in ("embed_tokens", "norm"):
+        for key, value in load_real_substate(name).items():
+            state[f"{name}.{key}"] = value
+    for layer_idx in range(num_layers):
+        for key, value in load_real_substate(f"layers.{layer_idx}").items():
+            state[f"layers.{layer_idx}.{key}"] = value
+    return state
+
+
+def load_real_weights_into(module, relative_prefix):
+    """Load the checkpoint's weights for ``relative_prefix`` into an HF module.
+
+    Returns the loaded state dict (keys relative to ``relative_prefix``) so a
+    caller can log or reuse the tensors it just installed.
+
+    ``strict=False``: the TT port drops tensors the reference module still
+    declares (``v_norm``) and vice versa. Asserts that *something* landed, so a
+    prefix typo fails loudly instead of quietly leaving the constructor init —
+    which would make the test look like it passed on real weights.
+    """
+    state = load_real_substate(relative_prefix)
+    _, unexpected = module.load_state_dict(state, strict=False)
+    loaded = len(state) - len(unexpected)
+    assert (
+        loaded > 0
+    ), f"No weight under '{relative_prefix}' matched {type(module).__name__}; unexpected={unexpected[:5]}"
+    return state
 
 
 class TestFactory:
@@ -483,11 +680,26 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
         mesh_shapes = [max(mesh_shapes, key=lambda s: s[0] * s[1])]
 
     extra = dict(device_params_extra or {})
+    # Match demo Fabric packet defaults so Tracy/PCC multi-device paths see the
+    # same AG packing as text_demo_v2 (WH 31B → 6144). Explicit extra wins.
+    # Skip on 1x1 (no fabric).
+    router = None
+    if "fabric_router_config" not in extra:
+        from models.demos.gemma4.tt.ccl import fabric_router_config_from_env
+
+        router = fabric_router_config_from_env()
+
+    def _device_params_for(shape):
+        params = {"fabric_config": None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D, **extra}
+        if shape != (1, 1) and router is not None and "fabric_router_config" not in params:
+            params["fabric_router_config"] = router
+        return params
+
     if not mesh_shapes:
         params = [
             pytest.param(
                 (1, 1),
-                {"fabric_config": None, **extra},
+                _device_params_for((1, 1)),
                 id="1x1",
                 marks=pytest.mark.skip(reason="Not enough devices"),
             )
@@ -496,7 +708,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
         params = [
             pytest.param(
                 s,
-                {"fabric_config": None if s == (1, 1) else ttnn.FabricConfig.FABRIC_1D, **extra},
+                _device_params_for(s),
                 id=f"{s[0]}x{s[1]}",
             )
             for s in mesh_shapes

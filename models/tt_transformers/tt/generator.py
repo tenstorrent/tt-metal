@@ -950,10 +950,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         ), f"start_pos length {len(num_cached_per_user)} != prompt_lens length {len(prompt_lens)}"
         for i, (seq_len, num_cached) in enumerate(zip(prompt_lens, num_cached_per_user)):
             assert 0 <= num_cached < seq_len, f"user {i}: num_cached={num_cached} must be < seq_len={seq_len}"
-        prefill_seq_lens = [
-            get_padded_prefill_len(seq_len - num_cached)
-            for seq_len, num_cached in zip(prompt_lens, num_cached_per_user)
-        ]
+        prefill_seq_lens = kwargs.pop("prefill_seq_lens", None)
+        if prefill_seq_lens is None:
+            prefill_seq_lens = [
+                get_padded_prefill_len(seq_len - num_cached)
+                for seq_len, num_cached in zip(prompt_lens, num_cached_per_user)
+            ]
         # Row-sharded batched prefill: process 1 user per row per iteration.
         # See _will_row_shard_prefill for when this path is taken.
         if self._will_row_shard_prefill(tokens, sampling_params):
@@ -1059,6 +1061,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 and getattr(self.model[model_id], "_supports_on_device_sampling", False)
                 and getattr(self.model[model_id], "sampling", None) is not None
             )
+            # Prefill opt-in: skip vocab AllGather when on-device sampling will
+            # consume TP-sharded logits (Gemma4). Host full-vocab path keeps False.
+            #
+            # Gated on the model declaring it reads this kwarg. The chunked /
+            # prefix-caching branch of ``prefill_forward_single_user_text``
+            # splats ``**kwargs`` straight into ``ttnn_prefill_forward``, and
+            # every implementation except Gemma4's has a strict signature
+            # (tt_transformers Transformer, gpt_oss, qwen3_vl, llama3_70b_galaxy,
+            # llama_vision) -- an unconditional key raises TypeError there for
+            # any prompt longer than ``max_prefill_chunk_size``, which is exactly
+            # when ``can_enable_trace`` is False and that branch is the only path.
+            if getattr(self.model[model_id], "supports_sharded_prefill_logits", False):
+                local_kwargs["allow_sharded_prefill_logits"] = sampling_enabled
 
             if use_batched_prefill:
                 # Galaxy 70B approach: slot-based placement with shape [padded_batch, prefill_seq_len]
@@ -1303,7 +1318,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         for local_idx, slot in enumerate(empty_slots):
                             user_logits = logits[slot : slot + 1, :, :, :]
                             _logits = self.model[model_id].process_logits_after_prefill_trace(
-                                user_logits, last_token_idx[slot]
+                                user_logits, last_token_idx[slot], allow_sharded=False
                             )
                             _logits = ttnn.to_layout(
                                 _logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -1333,7 +1348,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     )
                     continue
                 else:
-                    logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx_for_trace)
+                    logits = self.model[model_id].process_logits_after_prefill_trace(
+                        logits, last_token_idx_for_trace, allow_sharded=sampling_enabled
+                    )
             else:
                 if return_hidden_states:
                     raise NotImplementedError("return_hidden_states=True requires enable_trace=True")

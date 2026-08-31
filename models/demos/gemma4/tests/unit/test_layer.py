@@ -21,6 +21,7 @@ from ...tests.test_factory import (
     build_hf_prefill_mask,
     compare_tensors,
     get_pcc_threshold,
+    load_real_weights_into,
     parametrize_batch_seq,
     parametrize_mesh_with_fabric,
 )
@@ -130,7 +131,7 @@ def _create_gemma4_model_args(hf_text_config):
 
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
-@parametrize_batch_seq(configs=[(1, L) for L in PREFILL_BUCKETS])
+@parametrize_batch_seq(configs=[(1, L) for L in (*PREFILL_BUCKETS, 2048)])
 def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device, reset_seeds, request):
     """
     Full decoder layer PCC test: compares TT layer against HF reference.
@@ -214,25 +215,114 @@ def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device, reset_seeds,
     assert passing, f"Full layer (layer_idx={layer_idx}, tp={tp}) PCC too low: {pcc_msg}"
 
 
-# ── Decode Layer Test (fully on device) ───────────────────────────────────
+# ── Real-weight Full Layer PCC Test ───────────────────────────────────────
 
 
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
-def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds, request):
-    """
-    Full decoder layer decode test (seq_len=1, fully on device).
+@parametrize_batch_seq(configs=[(1, 128)], ids=["prefill_128"])
+def test_layer_forward_real_weights(batch_size, seq_len, layer_idx, mesh_device, reset_seeds, request):
+    """Full decoder layer PCC on the checkpoint's trained weights.
 
-    Uses KV cache pre-filled with random data, then decodes one token.
-    Compares against HF reference with same KV cache state.
+    This is the first point where the norms and the projections meet: the input
+    LayerNorm's real scale (up to ~190 on 12B layer 0) multiplies the hidden
+    state *before* QKV, and the post-attention / feedforward norms sit on the
+    residual adds. The random-init layer test drives all of those at unit scale,
+    so it cannot see an accumulation-order or bf16-rounding regression that only
+    shows up once the norms actually scale.
+
+    128 only, not the wider buckets ``test_layer_forward`` parametrizes: that
+    test already fails at 1024 on a single card (the layer's CBs want 2.60 MB
+    against a 1.50 MB L1), and with the real double-wide MLP — 12B layer 0's
+    ``gate_proj`` is ``[15360, 3840]``, twice the config's intermediate — the
+    ceiling is lower still. 128 fits everywhere the random-init test fits.
+    """
+    hf_text_config = _create_hf_text_config()
+    hf_layer = _create_hf_reference_layer(hf_text_config, layer_idx)
+    load_real_weights_into(hf_layer, f"layers.{layer_idx}")
+    hf_layer.eval()
+
+    tt_state = _hf_state_to_tt_state(hf_layer.state_dict(), layer_idx)
+    model_args = _create_gemma4_model_args(hf_text_config)
+
+    from models.demos.gemma4.config import MeshConfig, ModeConfig
+    from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
+    from models.demos.gemma4.tt.ccl import CCLManager
+
+    attn_cfg = Gemma4AttentionConfig(model_args, layer_idx)
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
+    ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
+
+    tt_layer = Gemma4DecoderLayer(
+        mesh_device=mesh_device,
+        hf_config=model_args,
+        state_dict=tt_state,
+        layer_idx=layer_idx,
+        ccl_manager=ccl_manager,
+        dtype=ttnn.bfloat16,
+        tensor_cache_path=None,
+        mesh_config=mesh_config,
+        max_seq_len=seq_len,
+        max_local_batch_size=batch_size,
+    )
+
+    x_torch = torch.randn(1, seq_len, model_args.hidden_size, dtype=torch.float32)
+
+    hf_rope = _create_hf_rope(hf_text_config, seq_len, layer_idx)
+    sliding = attn_cfg.sliding_window if attn_cfg.is_sliding else None
+    attn_mask = build_hf_prefill_mask(seq_len, sliding_window=sliding)
+    with torch.no_grad():
+        pli = _make_per_layer_input(hf_text_config, seq_len)
+        hf_output = hf_layer(x_torch, per_layer_input=pli, position_embeddings=hf_rope, attention_mask=attn_mask)
+
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    x_tt = ttnn.from_torch(
+        x_torch.unsqueeze(0).to(torch.bfloat16),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
+    )
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max(seq_len, 128), layer_idx)
+    tt_output = tt_layer(
+        x_tt,
+        rope_mats=(cos_tt, sin_tt),
+        position_idx=None,
+        page_table=None,
+        kv_cache=None,
+        is_decode=False,
+    )
+    tt_output_torch = (
+        (ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]) if is_mesh else ttnn.to_torch(tt_output))
+        .squeeze(0)
+        .float()
+    )
+
+    passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=get_pcc_threshold(request))
+    assert passing, f"Full layer real-weights (layer_idx={layer_idx}, tp={tp}) PCC too low: {pcc_msg}"
+
+
+# ── Decode Layer Test (fully on device) ───────────────────────────────────
+
+
+def _run_layer_decode(layer_idx, mesh_device, request, real_weights, label):
+    """Decode-layer PCC body, shared by the random-init and real-weight tests.
+
+    Split out rather than parametrized on a ``weights`` axis: an extra axis
+    would rename the existing ``test_layer_forward_decode`` nodes and strand
+    their pcc_thresholds.json entries on the 0.99 default.
     """
     from transformers.cache_utils import DynamicCache
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
     from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 
-    hf_text_config = _create_hf_text_config(num_experts=4, top_k=2)
+    hf_text_config = _create_hf_text_config() if real_weights else _create_hf_text_config(num_experts=4, top_k=2)
     hf_layer = _create_hf_reference_layer(hf_text_config, layer_idx)
+    if real_weights:
+        load_real_weights_into(hf_layer, f"layers.{layer_idx}")
+        hf_layer.eval()
     hf_state = hf_layer.state_dict()
     tt_state = _hf_state_to_tt_state(hf_state, layer_idx)
     model_args = _create_gemma4_model_args(hf_text_config)
@@ -366,4 +456,33 @@ def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds, request):
 
     # Relaxed threshold for decode: MoE router bf16 topk can pick different experts
     passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=get_pcc_threshold(request))
-    assert passing, f"Full layer decode (layer_idx={layer_idx}, tp={tp}) PCC too low: {pcc_msg}"
+    assert passing, f"Full layer decode {label} (layer_idx={layer_idx}, tp={tp}) PCC too low: {pcc_msg}"
+
+
+@parametrize_mesh_with_fabric()
+@pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
+def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds, request):
+    """
+    Full decoder layer decode test (seq_len=1, fully on device).
+
+    Uses KV cache pre-filled with random data, then decodes one token.
+    Compares against HF reference with same KV cache state.
+    """
+    _run_layer_decode(layer_idx, mesh_device, request, real_weights=False, label="random-init")
+
+
+@parametrize_mesh_with_fabric()
+@pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
+def test_layer_forward_decode_real_weights(layer_idx, mesh_device, reset_seeds, request):
+    """Full decoder layer decode on the checkpoint's trained weights.
+
+    The decode counterpart to ``test_layer_forward_real_weights``: same layer,
+    same real norms and projections, but through the seq_len=1 path with a
+    pre-filled KV cache — so the input LayerNorm's real scale (up to ~190 on 12B
+    layer 0) drives the decode QKV and the residual adds, which the prefill test
+    never reaches.
+
+    Unlike the random-init test this cannot reduce the expert count on a MoE
+    variant, since the real weights carry the real one.
+    """
+    _run_layer_decode(layer_idx, mesh_device, request, real_weights=True, label="real-weights")

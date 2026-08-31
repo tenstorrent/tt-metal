@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.common import create_tt_model, get_gemma4_padded_prefill_len
 from models.demos.gemma4.tt.generator import (
     ChunkedPrefillPageTableGuardMixin,
     align_num_cached_tokens_to_sdpa,
@@ -24,7 +24,6 @@ from models.demos.gemma4.tt.generator_trace import (
     should_auto_enable_bounded_sliding,
     warmup_gemma4_model_prefill,
 )
-from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES, create_submeshes
 from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM, allocate_vllm_kv_cache
 
@@ -52,7 +51,7 @@ def _vllm_force_full_isl_single_chunk() -> bool:
 def _full_isl_prefill_chunk_size(max_seq_len: int) -> int:
     """Largest full-ISL single-chunk size that fits ``max_model_len``.
 
-    Prefill pads to the next power-of-2 bucket (``get_padded_prefill_len``).
+    Prefill pads to the next power-of-2 bucket (``get_gemma4_padded_prefill_len``).
     For non-pow2 pools (e.g. QB2 31B ``max_context=49152``) the largest valid
     single-chunk length is the floor power-of-2 (32768) — not 49152 (pads to
     65536 > pool) and not ceil-pow2 65536.
@@ -458,9 +457,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 kwargs["start_pos"] = num_cached_per_user
                 start_pos = num_cached_per_user
             prefill_seq_lens = [
-                get_padded_prefill_len(seq_len - num_cached)
+                get_gemma4_padded_prefill_len(seq_len - num_cached)
                 for seq_len, num_cached in zip(prompt_lens_list, num_cached_per_user)
             ]
+            kwargs["prefill_seq_lens"] = prefill_seq_lens
             page_table = kwargs.get("page_table")
             # Hetero *actual* lens OK: per-slot valid_seq_lens caps KV fill.
             can_batch_prefill = (
@@ -977,7 +977,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             prompt_lens_list = prompt_lens_list.tolist()
         num_cached_per_user = [int(n) for n in start_pos] if start_pos is not None else [0] * len(prompt_lens_list)
         prefill_seq_lens = [
-            get_padded_prefill_len(seq_len - num_cached)
+            get_gemma4_padded_prefill_len(seq_len - num_cached)
             for seq_len, num_cached in zip(prompt_lens_list, num_cached_per_user)
         ]
         page_table = kwargs.get("page_table")
@@ -1206,9 +1206,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         elif prefill_seq_lens_plan is not None:
             prefill_seq_lens = prefill_seq_lens_plan
         elif seq_len is not None:
-            prefill_seq_lens = [get_padded_prefill_len(seq_len)]
+            prefill_seq_lens = [get_gemma4_padded_prefill_len(seq_len)]
         elif tokens is not None:
-            prefill_seq_lens = [get_padded_prefill_len(int(tokens.shape[1]))]
+            prefill_seq_lens = [get_gemma4_padded_prefill_len(int(tokens.shape[1]))]
         else:
             prefill_seq_lens = [128]
         can_batch = will_batch
@@ -1221,6 +1221,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             can_batch_prefill=can_batch,
         )
         kwargs["enable_trace"] = enable_trace
+        kwargs["prefill_seq_lens"] = prefill_seq_lens
 
         args0 = self.model_args[0]
         prev_disable = getattr(args0, "disable_batched_prefill", False)
