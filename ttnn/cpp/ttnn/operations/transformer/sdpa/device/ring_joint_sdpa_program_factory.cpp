@@ -2462,8 +2462,27 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     //   !args.is_balanced      two independent breaks. Zigzag sets extra_chunks_per_core = 2, so
     //                          cores_doing_extra_work counts PAIRS while this schedule appends ONE
     //                          float per owner -- chunk ids [base*C+F, base*C+2F) are then never
-    //                          scheduled (silent garbage). And balanced_skip_q's parity decision
-    //                          desyncs injector from receivers at the float slot -> hang.
+    //                          scheduled. And balanced_skip_q's parity decision desyncs injector
+    //                          from receivers at the float slot.
+    //                          MEASURED, not reasoned: mla_dense_small_balanced (RING_MLA_K_SWEEP,
+    //                          grid 5x6 -> base 2, floats 2) with this term removed HANGS. The
+    //                          unscheduled ids do NOT show up as silent garbage, which is what this
+    //                          comment used to claim: an unscheduled float leaves a receiver waiting
+    //                          on a donor that never runs its handoff.
+    //                          The term stays !args.is_balanced rather than the narrower
+    //                          !enable_zigzag_balancing (= is_balanced && kernel_is_causal &&
+    //                          num_q_chunks % 2 == 0) even though only the ZIGZAG branch of the flat
+    //                          split has the pair-counting problem. Narrowing it would admit balanced
+    //                          CHUNKED prefill, where kernel_is_causal is false so zigzag never
+    //                          engages and the split is the plain non-zigzag one -- but no chunked
+    //                          model config in the tree is balanced (CHUNKED_PREFILL_MODEL_CONFIGS is
+    //                          kimi50k only, is_balanced=False), so that would be an UNEXERCISED
+    //                          relaxation of a contract whose failure mode is a hang, and the
+    //                          balanced_skip_q break above is independent of zigzag anyway.
+    //                          A zigzag-AWARE rotation is the real fix if this is ever wanted: make
+    //                          the float unit two chunks wide so ROTATED_Q_SPLIT becomes base + 2 and
+    //                          each float migrates as a pair. base is always even under zigzag
+    //                          ((total_pairs/num_cores)*2), so pairs stay aligned.
     //   (!kv_pad_rotation_enabled was here and has been REMOVED -- kv-pad now rotates. See the
     //    rot_active_ordinal note in the predicate for why the device-derived mask stopped mattering.)
     //   (active_ring_iter_mask == full_ring_iter_mask was here and has been REMOVED -- partial masks
