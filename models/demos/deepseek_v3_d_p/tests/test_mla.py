@@ -967,11 +967,9 @@ def test_mla_chunked_prefill(
     # Incidental, not a K3 guarantee; re-enable when K3 has a runtime that actually feeds metadata.
     if variant.name == "kimi_k3" and use_metadata_tensor:
         pytest.skip("kimi_k3 has no runtime, so the metadata (device-scalar) path is unreachable for it")
-    # A variant with no registered golden MLA trace (kimi_k2_7 today: its vllm capture has no mla_io/
-    # streams, so mla_trace_defaults = ()). _run_chunked_prefill asserts on an empty trace list, so skip
-    # instead -- a missing golden is a coverage gap, not a failure of the code under test. Keyed on the
-    # precondition rather than a variant name so this keeps holding as variants are added. No CI selector
-    # reaches it (the yaml's Kimi job is cpu/func), but a bare `-k trace` locally does.
+    # Skip rather than let _run_chunked_prefill assert on an empty trace list. Keyed on the
+    # precondition, not a variant name, so it holds as variants are added.
+    # kimi_k2_7 hits this today: https://github.com/tenstorrent/tt-metal/issues/54973
     if reference == "trace" and not variant.mla_trace_defaults and not MLA_CHUNKED_TRACE_PATH:
         pytest.skip(
             f"{variant.name} has no registered golden MLA trace. MLA_CHUNKED_TRACE_PATH overrides the "

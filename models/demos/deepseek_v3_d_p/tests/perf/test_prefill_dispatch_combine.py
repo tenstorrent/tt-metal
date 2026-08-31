@@ -50,16 +50,7 @@ DISPATCH_BUFFER_CAPACITY_FACTOR = 8
 
 
 # One entry per model whose chunked-prefill capture we replay; add a model by extending this list.
-# "kimi26" is a MODEL KEY, not a display id: init_helpers validates it against a hard allowlist
-# and builds the capture filename expert_routing_kimi26.safetensors from it, so it cannot be
-# renamed to kimi_k2_7 without renaming that file on /mnt/models. Config stays KimiK26Config to
-# match the key; the values are identical to K2.7 either way.
-#
-# FOLLOW-UP: only the K2.6 routing capture exists today. The K2.7 routing stream IS already staged
-# (golden/structured_traces/vllm-kimi-k27-codedebug-56320/routing/), so producing the capture is a
-# host-side repack rather than a tracer re-run -- see tt/moe/init_helpers.py. Once staged, add a
-# ("kimi27", KimiK27Config) entry here, extend the allowlist there, re-cut the baselines in
-# test_dispatch_combine_perf.py, and this K2.6 entry can go.
+# "kimi26" / KimiK26Config: https://github.com/tenstorrent/tt-metal/issues/54972
 _CHUNK_MODELS = [("dsv3", DeepSeekV3Config), ("kimi26", KimiK26Config), ("glm52", GLM52Config)]
 _TORUS_Y_MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id == "fabric2d-torus-y-8x1-2link"]
 assert len(_TORUS_Y_MESH_CONFIGS) == 1, "LoudBox TorusY proxy config missing from ALL_MESH_CONFIGS"

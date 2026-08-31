@@ -20,16 +20,7 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 KVPE_DIM = 576  # kv_lora_rank (512) + qk_rope_head_dim (64)
 
 
-# BLOCKED ON a row-sharded K2.7 golden trace. This module tests the trace LOADER, not a model, and
-# the two Kimi goldens are different shapes on disk: K2.6's prefill_trace_default nests metadata.json
-# in a run-hash subdir and splits each layer's KV into 14 row shards, while K2.7's is flat with one
-# shard per layer. So K2.6 is the only fixture that reaches resolve_trace_dir's subdir-descent branch
-# and the multi-shard torch.cat path in _load_golden_kv_post -- dropping it would delete that coverage,
-# not migrate it. Concretely: resolve_trace_dir returns early when metadata.json is at the top level
-# (runner_utils.py:167), so K2.7 and deepseek_v3_d_p never reach the descent branch below it, and
-# K2.6 is the only staged Kimi golden that does. Every other trace in the cache is single-shard too.
-# To retire this: re-record a K2.7 golden at chunk_rows < seq_len (K2.6's used 4096, giving 14
-# shards), stage it, then repoint test_golden_row_shard_concat_is_contiguous and drop kimi_k2_6.
+# kimi_k2_6 is still needed here: https://github.com/tenstorrent/tt-metal/issues/54971
 def _trace_or_skip(variant_name):
     trace = get_adapter(variant_name).prefill_trace_default
     if not Path(trace).exists():
@@ -71,7 +62,7 @@ def test_golden_row_shard_concat_is_contiguous():
     extends the shorter one row-for-row."""
     import torch
 
-    trace = _trace_or_skip("kimi_k2_6")  # row-sharded (14/layer); K2.7's golden is a single shard
+    trace = _trace_or_skip("kimi_k2_6")  # https://github.com/tenstorrent/tt-metal/issues/54971
     short = _load_golden_kv_post(trace, 0, 4096)
     long = _load_golden_kv_post(trace, 0, 8192)
     assert torch.equal(short, long[:4096])

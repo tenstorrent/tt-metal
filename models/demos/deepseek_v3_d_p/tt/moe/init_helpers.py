@@ -775,14 +775,7 @@ def load_captured_routing(
         # Lazy import: transformer_helpers imports from this module in places.
         from models.demos.deepseek_v3_d_p.utils.transformer_helpers import CODE_DEBUG_5K_CHUNKED
 
-        # "kimi26" is a capture-file key, not a checkpoint id: the filename below is built from it.
-        # BLOCKED ON expert_routing_kimi27.safetensors under $DEEPSEEK_V3_TRACE_DIR/code_debug_5k_chunked/.
-        # Not a tracer re-run: the K2.7 routing stream is already staged at
-        # golden/structured_traces/vllm-kimi-k27-codedebug-56320/routing/expert_ids_layer_{1..60}/ as
-        # [56320, 8] int32, and this loader wants [5120, 8] -- so it is a host-side repack of one of
-        # the 11 chunks (which one the K2.6 capture used is not recorded anywhere, and the perf
-        # baselines in tests/perf/test_dispatch_combine_perf.py would need re-cutting for K2.7 weights).
-        # Callers: tests/perf/test_dispatch_combine_perf.py, tests/perf/test_prefill_dispatch_combine.py.
+        # "kimi26" not "kimi27": https://github.com/tenstorrent/tt-metal/issues/54972
         if model not in {"dsv3", "kimi26", "glm52"}:
             raise ValueError(f"Unknown model {model!r}; expected one of dsv3, kimi26, glm52")
 
