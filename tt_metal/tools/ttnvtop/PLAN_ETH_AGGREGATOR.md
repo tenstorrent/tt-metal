@@ -2127,3 +2127,92 @@ So the ordering is:
    contended by fabric -- and `wait_for_non_mmio_flush` waits for all of them. Pinning
    to the link pair that reaches the target remote chip: 1/6 -> 14/14. The remaining
    work is upstream (see 7.3), not investigation.
+
+## 5u. Coexistence measured: BOTH workloads keep full speed, but SHUTDOWN live-locks the tunnel -- 2026-08-31
+
+The two arms the acquisition fix had never been tested against. Both ran with aggregators
+on all 8 chips of the T3K, monitor in a separate process from the workload.
+
+### Test A -- heavy CCL over tt-fabric + monitor: PASS
+
+    up: 8/8   skipped: 0
+    journal-fed: 8/8   ring-drain lines: 0
+    workload A: {"label": "ccl-mon", "ok": true, "ccl_per_iter": 4, "num_devices": 8,
+                 "elapsed_s": 420.04, "iters": 475800, "per_iter_ms": 0.8828}
+    fatals A: 0        stopped: 8/8
+
+~1.9M fabric collectives in 7 min. 0.8828 ms/iter vs 0.858 unmonitored = 2.9% slower.
+This is the arm that used to HANG. It now also stops clean, 8/8.
+
+### Test B -- Llama-3.3-70B + monitor: workload PASS, monitor SHUTDOWN FAIL
+
+    aggregators up: 8/8   core-skips: 4
+    journal-fed: 8/8   ring-drain lines: 0
+    Average speed: 96.72ms @ 10.34 tok/s/user
+    =========== 1 passed, 45 deselected, 4 warnings in 643.78s (0:10:43) ===========
+
+10.34 tok/s against a 10.35 unmonitored baseline -- 0.1%, inside noise. `core-skips: 4`
+is the three-condition pre-flight refusing four busy cores BEFORE writing a byte, which
+is the behaviour whose absence corrupted fast dispatch in 5q.
+
+So steady-state coexistence holds for both fabric-heavy and inference workloads.
+The failure is entirely in teardown.
+
+### The shutdown live-lock
+
+On `kill -INT` the collector did not exit. Llama's teardown then blocked:
+
+    UMD | Waiting for lock 'NON_MMIO_2_PCIe' which is currently held by thread
+           TID: 107452, PID: 107327 (robust_mutex.cpp)
+    UMD | Waiting for lock 'NON_MMIO_3_PCIe' which is currently held by thread
+           TID: 107446, PID: 107327
+
+PID 107327 is the collector. Per-thread state, 9 min after the SIGINT (utime in ticks):
+
+    tid=107327 utime=625   wchan=futex_wait_queue
+    tid=107446 utime=59367 wchan=0
+    tid=107452 utime=57383 wchan=0
+    tid=107453 utime=975   wchan=futex_wait_queue
+
+`wchan=0` with ~590 s of CPU each: 107446 and 107452 are SPINNING at 100%, not blocked --
+and they are exactly the two TIDs UMD names as holding the two remote-tunnel locks. This
+is a live-lock, not a deadlock, and the collector's own log stopped advancing 527 s
+earlier (123 lines, unchanged over a 6 s recheck), so the spin makes no progress either.
+
+Mechanism: the journal feed issues `read_from_device(..., landing_base + 64, 8192)` per
+chip per tick. On a NON_MMIO chip that 8 KiB becomes many tunnel transactions under the
+interprocess lock, and the path spins without re-checking `g_stop`. Two remote chips ->
+two held locks -> every other process on those tunnels starves. It is the *remote* chips
+again, and the lock is interprocess, so the blast radius is the whole machine.
+
+Recovery, in order, all verified:
+  - `kill -9` on the collector -> UMD's robust mutexes were recovered by the kernel and
+    pytest exited 20 s later (with a teardown backtrace, not a clean exit).
+  - `--stop-aggregator` then could not run: it needs topology discovery, and discovery
+    now times out on a frozen eth heartbeat left by the kernels it was trying to stop.
+    Chicken-and-egg -- the 5-8 min hang from the trap list, reached from a new direction.
+  - `tt-smi -r` cleared it; `--journal-probe` then reports `none found`, discovery clean.
+
+### Consequences
+
+1. SIGINT must exit. A signal that cannot interrupt a UMD tunnel poll is not a stop.
+   The discovery-phase `_exit(130)` guard (5j) needs an equivalent for the sample loop.
+2. Never hold a UMD interprocess lock across a multi-block remote read. The 8 KiB journal
+   read has to be chunked with a `g_stop` check between chunks, or moved off the locked
+   path entirely.
+3. `--stop-aggregator` must not depend on full topology discovery, or a stuck monitor is
+   unrecoverable without a board reset. This is the single highest-value fix: it converts
+   every future wedge from "reset the board" into "run the stop".
+4. Steady state is NOT the risk any more -- shutdown is. Both workloads ran at full speed
+   with the monitor attached; the monitor just cannot let go.
+
+### Unrelated, still open
+
+- `compute_busy_p1000` reads ~0 across all 8 chips during Llama decode (only chip 6, at
+  0.1%), while Test A's CCL arm showed 11.9-16.8% on chips 5-7. Feed counters prove the
+  writes happen: `published=38400 skipped_seq=0 skipped_dwall=0` on 8/8. Batch-1 decode
+  is bandwidth-bound so low is expected, but not uniformly zero. Unresolved.
+- The first Test B attempt died with `Bus error (core dumped)` in BOTH the collector and
+  the pytest simultaneously, on a board carrying 37,091 AER entries and an `a1:00.0`
+  physical-layer RxErr storm. SIGBUS in two unrelated processes at once is a PCIe fault,
+  not our code. It did not recur after the board reset.
