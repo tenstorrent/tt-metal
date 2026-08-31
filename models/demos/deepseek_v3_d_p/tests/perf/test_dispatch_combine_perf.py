@@ -86,6 +86,10 @@ _COMBINE_GLM52_CHUNK_EXPECTED_NS: dict[tuple[int, int], int] = {
 # model -> (picks, dispatch baselines, combine baselines).
 _MODELS = {
     "dsv3": (_DS_CHUNK_PICKS, _DISPATCH_DS_CHUNK_EXPECTED_NS, _COMBINE_DS_CHUNK_EXPECTED_NS),
+    # "kimi26" keys the NFS capture expert_routing_kimi26.safetensors (see tt/moe/init_helpers.py).
+    # BLOCKED ON a K2.7 routing capture -- a host-side repack of the already-staged K2.7 routing
+    # stream, see tt/moe/init_helpers.py. The MoE shape is identical either way, but these baselines
+    # were measured on K2.6 routing, so moving the key means re-cutting them.
     "kimi26": (_KIMI_CHUNK_PICKS, _DISPATCH_KIMI_CHUNK_EXPECTED_NS, _COMBINE_KIMI_CHUNK_EXPECTED_NS),
     "glm52": (_GLM52_CHUNK_PICKS, _DISPATCH_GLM52_CHUNK_EXPECTED_NS, _COMBINE_GLM52_CHUNK_EXPECTED_NS),
 }

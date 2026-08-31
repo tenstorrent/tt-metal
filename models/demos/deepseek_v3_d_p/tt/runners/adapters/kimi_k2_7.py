@@ -37,5 +37,11 @@ class KimiK27Adapter(KimiK26Adapter):
     test_prefill_trace_default = (
         "/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320"
     )
-    # Not inherited from Kimi-K2.6: different checkpoint, and K2.7's trace has no mla_io/ streams.
+    # Not inherited from Kimi-K2.6: different checkpoint, and K2.7's vllm capture has no mla_io/
+    # streams. BLOCKED ON an MLA trace for K2.7: test_mla.py's reference='trace' axis skips while
+    # this is empty (K2.6 has two, under mla_sdpa_traces/). load_trace needs a dir holding
+    # mla_io/mla_{input,output}_layer_<N>.safetensors for exactly one layer plus
+    # kv_cache/layer_<N>.safetensors. Kimi-K3 registers a plain structured_traces/ dir that happens
+    # to include mla_io/, so the existing capture flow can emit this -- K2.7's trace simply was not
+    # captured with those streams enabled. Once staged, list it here and drop the skip in test_mla.py.
     mla_trace_defaults = ()
