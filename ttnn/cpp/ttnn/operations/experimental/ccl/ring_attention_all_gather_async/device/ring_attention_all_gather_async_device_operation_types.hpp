@@ -40,7 +40,7 @@ struct RingAttentionAllGatherAsyncParams {
     ttnn::ccl::snake_ring::Orientation snake_orientation = ttnn::ccl::snake_ring::Orientation::Row;
     uint32_t mesh_rows = 0;
     uint32_t mesh_cols = 0;
-    uint64_t route_plan_hash = 0;
+    std::optional<uint64_t> route_plan_hash;
 
     RingAttentionAllGatherAsyncParams(
         std::vector<IDevice*> devices,
@@ -57,7 +57,7 @@ struct RingAttentionAllGatherAsyncParams {
         ttnn::ccl::snake_ring::Orientation snake_orientation = ttnn::ccl::snake_ring::Orientation::Row,
         uint32_t mesh_rows = 0,
         uint32_t mesh_cols = 0,
-        uint64_t route_plan_hash = 0) :
+        std::optional<uint64_t> route_plan_hash = std::nullopt) :
         devices(std::move(devices)),
         dim(dim),
         num_links(num_links),

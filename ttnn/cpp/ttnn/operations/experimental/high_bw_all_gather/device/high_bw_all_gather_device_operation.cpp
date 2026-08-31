@@ -4,7 +4,7 @@
 
 #include "high_bw_all_gather_device_operation.hpp"
 #include "high_bw_all_gather_device_operation_types.hpp"
-#include "kernels/snake_ring.hpp"
+#include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -100,7 +100,7 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     const auto mesh_shape = input_tensor.device()->shape();
     if (args.linearized_mesh_ring) {
         const uint32_t snake_lane_count =
-            args.snake_ring_orientation == snake_ring::Orientation::Row ? mesh_shape[0] : mesh_shape[1];
+            args.snake_ring_orientation == ttnn::ccl::snake_ring::Orientation::Row ? mesh_shape[0] : mesh_shape[1];
         TT_FATAL(
             mesh_shape[0] > 1 && mesh_shape[1] > 1 && snake_lane_count % 2 == 0,
             "high_bw_all_gather full-mesh ring requires a 2D mesh whose selected snake orientation has an even "
@@ -361,8 +361,9 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const bool one_active_axis = (axis_num_devices[0] > 1) != (axis_num_devices[1] > 1);
     const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(fabric_config);
-    snake_ring::Orientation snake_orientation =
-        linearized_mesh_ring && mesh_shape[0] % 2 != 0 ? snake_ring::Orientation::Column : snake_ring::Orientation::Row;
+    ttnn::ccl::snake_ring::Orientation snake_orientation = linearized_mesh_ring && mesh_shape[0] % 2 != 0
+                                                               ? ttnn::ccl::snake_ring::Orientation::Column
+                                                               : ttnn::ccl::snake_ring::Orientation::Row;
     std::optional<uint64_t> direct_neighbor_route_hash;
     if (fabric_is_2d && (linearized_mesh_ring || one_active_axis)) {
         const auto mesh_ring_plan = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
@@ -417,7 +418,7 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .mesh_cols = linearized_mesh_ring ? mesh_shape[1] : 0,
             .packet_size = packet_size,
             .neighbor_unicast_eligible = neighbor_unicast_eligible,
-            .neighbor_route_plan_hash = direct_neighbor_route_hash.value_or(0),
+            .neighbor_route_plan_hash = direct_neighbor_route_hash,
             .subdevice_id = subdevice_id,
             .sub_core_grid = sub_core_grid,
             .input_batch_index = input_batch_index,

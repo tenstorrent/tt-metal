@@ -11,7 +11,7 @@
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/sub_device_types.hpp>
-#include "kernels/snake_ring.hpp"
+#include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -27,7 +27,7 @@ struct HighBwAllGatherParams {
     // With no public cluster_axis, linearize the complete 2D mesh into a
     // direct-neighbor snake ring. cluster_axis is ignored in this mode.
     bool linearized_mesh_ring = false;
-    snake_ring::Orientation snake_ring_orientation = snake_ring::Orientation::Row;
+    ttnn::ccl::snake_ring::Orientation snake_ring_orientation = ttnn::ccl::snake_ring::Orientation::Row;
 
     // Fabric setup info
     tt::tt_fabric::FabricConfig fabric_config = tt::tt_fabric::FabricConfig::DISABLED;
@@ -47,7 +47,7 @@ struct HighBwAllGatherParams {
     // Hash of the complete directed physical neighbor plan. Fabric routing
     // arguments are baked into cached programs, so eligibility alone is not a
     // sufficient cache discriminator when the physical plan changes.
-    uint64_t neighbor_route_plan_hash = 0;
+    std::optional<uint64_t> neighbor_route_plan_hash;
 
     // Worker-core selection.
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
