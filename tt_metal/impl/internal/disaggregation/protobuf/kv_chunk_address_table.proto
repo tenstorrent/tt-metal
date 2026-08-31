@@ -85,4 +85,10 @@ message KvChunkAddressTable {
     // message cap is emitted runs-only — such a table is unreadable by ANY entries-only
     // reader today, so nothing working is broken.
     repeated KvChunkRun runs = 11;
+    // Format version of this message. Absent (0) = the legacy pre-compression format.
+    // Readers must reject values newer than they know (fail-closed; old readers ignore the
+    // field and read the dual-written entries, which is the intended transition behavior).
+    uint32 format_version = 12;
+    // Provenance: host that wrote the file (diagnostics only).
+    string origin_host = 13;
 }

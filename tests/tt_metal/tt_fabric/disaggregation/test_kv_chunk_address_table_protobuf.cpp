@@ -575,6 +575,51 @@ TEST(KvChunkAddressTableProtobuf, MixedCompressionPerConfigRoundTrip) {
     EXPECT_EQ(pb2.entries_size(), 64);
 }
 
+TEST(KvChunkAddressTableProtobuf, FormatVersionTag) {
+    auto table = make_strided_table();
+
+    // Export stamps the current version + origin host.
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(table)));
+    EXPECT_EQ(pb.format_version(), 1u);
+    EXPECT_FALSE(pb.origin_host().empty());
+
+    // Legacy files (no tag => 0) still read.
+    pb.set_format_version(0);
+    EXPECT_NO_THROW(import_from_protobuf(pb.SerializeAsString()));
+
+    // A newer-than-known tag is rejected loudly (fail-closed versioning).
+    pb.set_format_version(2);
+    EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
+}
+
+TEST(KvChunkAddressTableProtobuf, GoldenV1ArtifactReads) {
+    // Genuine pre-compression artifact: written by the pre-change code (main @ fd3cf5f897c,
+    // 2 layers x 2 slots x 96 chunks, affine rows, stride 0x10000 from per-row bases).
+    // Freezes the v1 wire contract — any drift in how we read old files fails here.
+    namespace fs = std::filesystem;
+    const fs::path path = fs::path(__FILE__).parent_path() / "kv_chunk_table_v1_golden.pb";
+    auto restored = import_from_protobuf_file(path.string());
+
+    ASSERT_EQ(restored.num_configs(), 1u);
+    const auto& cfg = restored.config();
+    EXPECT_EQ(cfg.num_layers, 2u);
+    EXPECT_EQ(cfg.num_slots, 2u);
+    EXPECT_EQ(cfg.max_sequence_length, 96 * 32u);
+    EXPECT_EQ(restored.compression(0), ChunkCompression::kUnrolled);  // legacy = unrolled
+    EXPECT_EQ(restored.get_host(make_fnid(0, 0)), "legacy-host");
+    for (uint32_t slot = 0; slot < 2; slot++) {
+        for (uint32_t layer = 0; layer < 2; layer++) {
+            const uint64_t base = 0x1'0000'0000ULL + (slot * 2 + layer) * 0x1000'0000ULL;
+            for (uint32_t i = 0; i < 96; i++) {
+                const auto loc = restored.lookup(layer, i * 32, slot);
+                ASSERT_EQ(loc.noc_addr, base + i * 0x10000ULL) << "slot=" << slot << " layer=" << layer << " i=" << i;
+                EXPECT_EQ(loc.size_bytes, 512u);
+            }
+        }
+    }
+}
+
 TEST(KvChunkAddressTableProtobuf, DualWriteSurvivesReexport) {
     // A small dual-written table imports as an in-memory StridedRowMap (runs authoritative).
     // Re-exporting THAT must keep the entries mirror for old readers downstream.

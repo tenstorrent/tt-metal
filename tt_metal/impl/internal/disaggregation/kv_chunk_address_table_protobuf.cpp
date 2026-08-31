@@ -12,6 +12,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include <unistd.h>
+
 #include <google/protobuf/text_format.h>
 
 #include "protobuf/kv_chunk_address_table.pb.h"
@@ -71,6 +73,10 @@ uint32_t delta_period(std::span<const KvCacheLocation> row) {
     }
     return 0;
 }
+
+// Newest format_version this reader knows. 0 = legacy (pre-tag) files; 1 = compression tags.
+// Bump when the wire format changes incompatibly; old readers must keep working via dual-write.
+constexpr uint32_t kMaxKnownFormatVersion = 1;
 
 // Wire conversion, with fail-closed validation of the declared tag.
 ChunkCompression from_wire(::tt::disaggregation::proto::ChunkCompression c) {
@@ -296,6 +302,12 @@ void emit_config_payload(
 
 ::tt::disaggregation::proto::KvChunkAddressTable to_proto_message(const KvChunkAddressTable& table) {
     ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    pb.set_format_version(kMaxKnownFormatVersion);
+    char hostname[256];
+    if (::gethostname(hostname, sizeof(hostname)) == 0) {
+        hostname[sizeof(hostname) - 1] = '\0';
+        pb.set_origin_host(hostname);
+    }
 
     // Dual-write decision needs the total unrolled size up front (grid-equivalent count).
     const uint64_t total_chunks = table.total_entries();
@@ -353,6 +365,15 @@ void emit_config_payload(
 }
 
 KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChunkAddressTable& pb) {
+    // Fail closed on newer formats (old readers ignore this field and read the dual-written
+    // entries — the intended transition path; a runs-only file yields an empty-but-valid
+    // legacy table there, which is why rollout upgrades readers first).
+    if (pb.format_version() > kMaxKnownFormatVersion) {
+        throw std::runtime_error(
+            "KvChunkAddressTable format_version=" + std::to_string(pb.format_version()) +
+            " is newer than this reader supports (max " + std::to_string(kMaxKnownFormatVersion) +
+            ") — upgrade the reader");
+    }
     // Reconstruct configs. `configs` (field 9) is authoritative when present;
     // otherwise fall back to the legacy single-config scalar fields. Entries are
     // placed by config NAME (idx_to_name) so they land correctly even if the map
