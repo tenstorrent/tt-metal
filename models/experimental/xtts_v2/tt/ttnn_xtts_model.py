@@ -315,8 +315,7 @@ class XttsV2:
 
         # 3) An eager prefill at every shape (compiles fill_cache/SDPA/etc.), then the step trace.
         t1 = time.time()
-        grid = self.mesh_device.compute_with_storage_grid_size()
-        shapes = prefill_shapes(self.decoder.config.n_head, grid.x * grid.y, MAX_PREFIX)
+        shapes = prefill_shapes(MAX_PREFIX)
         for rows in shapes:
             self.decoder.reset_caches()
             self.decoder.prefill(torch.zeros(1, rows, self.decoder.config.n_embd))

@@ -15,7 +15,8 @@ one-pass latents at the same positions, which holds only if the cache was seeded
     consecutive runs and hands each core only its first cache address, so at some tile counts a run
     crosses a head boundary and those positions are seeded with zeros. The damage is bit-identical
     on every repeat, so only sweeping the length sees it (BUG-7 in the bringup notes).
-  * pad arithmetic   — no device: _prefill_tiles must never return a straddling shape.
+  * pad arithmetic   — no device: on any core grid, prefill's fill_cache calls (single-shot when
+    the padded shape divides safely, chunked otherwise) must never produce a straddling call.
 
 Both device tests run the serving order (prefill after capture), so they also cover the shape the
 request path actually uses. The reference is computed live (see tests/reference_helpers.py).
@@ -35,14 +36,15 @@ from models.common.utility_functions import comp_pcc
 from models.experimental.xtts_v2.reference.xtts_gpt_ref import build_reference, make_golden_input, reference_forward
 from models.experimental.xtts_v2.tests.reference_helpers import gpt_reference
 from models.experimental.xtts_v2.tt.ttnn_xtts_gpt import preprocess_gpt_parameters
-from models.experimental.xtts_v2.tt.ttnn_xtts_gpt_decode import TTNNGPTTracedDecoder, _prefill_tiles
+from models.experimental.xtts_v2.tt.ttnn_xtts_gpt_decode import TTNNGPTTracedDecoder, _fill_step_tiles, _prefill_tiles
 
 TARGET_PCC = 0.999  # one shape against the standard golden
 # The sweep's bar sits lower: bf16 error grows with context and varies by position, and it uses a
 # long synthetic input. Still far above a straddled prefill, which lands in the 0.6-0.97 range.
 TARGET_PCC_LENGTHS = 0.998
 TRACE_REGION = 50_000_000
-N_HEAD, GRID_CORES = 16, 64  # test_prefill_pad_is_safe is pure arithmetic, so it states its shape
+N_HEAD = 16
+GRID_CASES = (64, 110)  # test_prefill_pad_is_safe is pure arithmetic: Wormhole 8x8, Blackhole 11x10
 MAX_TILES = 16  # 512 rows: 32 conditioning + 404 text + START, the model's longest prompt
 DECODE_WINDOW = 4  # positions decoded per length; one latent alone is a noisy PCC
 LENGTHS = tuple(32 * t for t in range(1, MAX_TILES + 1))
@@ -87,7 +89,6 @@ def run_prefill_lengths_pcc(device, verbose=True):
     dec.reset_caches()
     dec.prefill(inputs_embeds[:, : LENGTHS[0], :].contiguous())  # compile before capture
     dec.capture()
-    grid = device.compute_with_storage_grid_size()
 
     scored = []
     for P in LENGTHS:
@@ -97,7 +98,7 @@ def run_prefill_lengths_pcc(device, verbose=True):
         lat = [_step(dec, device, inputs_embeds[:, t : t + 1, :], t) for t in range(P, end)]
         passed, pcc_msg = comp_pcc(golden[:, P:end, :], torch.cat(lat, dim=1), pcc=TARGET_PCC_LENGTHS)
         if verbose:
-            pad = 32 * _prefill_tiles(P, dec.config.n_head, grid.x * grid.y)
+            pad = 32 * _prefill_tiles(P)
             print(f"  P={P:4d} ({P // 32:2d} tiles, padded to {pad:4d})  {pcc_msg}")
         scored.append((P, passed, pcc_msg))
 
@@ -106,12 +107,20 @@ def run_prefill_lengths_pcc(device, verbose=True):
 
 
 def test_prefill_pad_is_safe():
-    """_prefill_tiles must never hand fill_cache a shape where a core's run can straddle a head."""
+    """On any grid, every fill_cache call prefill makes (single-shot when the padded shape
+    divides safely, chunked otherwise) must be a shape where no core's run can straddle a head,
+    and the padded length must cover P without exceeding the model-cap cache."""
     for P in range(1, 32 * MAX_TILES + 1):
-        t = _prefill_tiles(P, N_HEAD, GRID_CORES)
+        t = _prefill_tiles(P)
         assert 32 * t >= P, f"P={P} padded down to {32 * t}"
-        blocks = N_HEAD * t
-        assert blocks <= GRID_CORES or blocks % GRID_CORES == 0, f"P={P} -> {t} tiles straddles"
+        assert t <= MAX_TILES, f"P={P} padded past the model cap: {t} tiles"
+        for n_cores in GRID_CASES:
+            if N_HEAD * t <= n_cores or (N_HEAD * t) % n_cores == 0:
+                continue  # prefill single-shots this shape; safe by construction
+            step = _fill_step_tiles(N_HEAD, n_cores)
+            for s in range(0, t, step):
+                chunk = min(step, t - s)
+                assert N_HEAD * chunk <= n_cores, f"P={P} grid={n_cores}: chunk of {chunk} tiles straddles"
 
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": TRACE_REGION}], indirect=True)

@@ -64,24 +64,32 @@ def _decode_matmul_cfg(device, K, N, fused_activation=None):
     )
 
 
-def prefill_shapes(n_head, n_cores, max_prefix):
+def prefill_shapes(max_prefix):
     """The distinct padded lengths prefill compiles for, so a caller can warm every one."""
-    return sorted({32 * _prefill_tiles(p, n_head, n_cores) for p in range(1, max_prefix + 1)})
+    return sorted({32 * _prefill_tiles(p) for p in range(1, max_prefix + 1)})
 
 
-def _prefill_tiles(P, n_head, n_cores):
-    """Smallest 32-row tile count covering P that ttnn.fill_cache seeds correctly.
+def _prefill_tiles(P):
+    """32-row tile count P is right-padded to. Pure compile-time bucketing: prompts up to 4
+    tiles keep their own tile count, longer ones round up to 4-tile (128-row) buckets, so
+    warmup precompiles a handful of prefill program variants instead of one per length.
+    Cache-write safety does NOT depend on this padding -- prefill() chunks its fill_cache
+    calls to a size that seeds correctly on any core grid (_fill_step_tiles)."""
+    t = (P + 31) // 32
+    return t if t <= 4 else ((t + 3) // 4) * 4
+
+
+def _fill_step_tiles(n_head, n_cores):
+    """Largest per-call tile count at which ttnn.fill_cache seeds every position correctly.
 
     fill_cache splits n_head*tiles blocks over the cores as consecutive runs, but hands each core
     only its FIRST cache address and then walks forward. A run that crosses a head boundary writes
     the remainder into the previous head instead, leaving those positions zero -- and it does so
     identically on every repeat, so nothing downstream flags it. No run can straddle when every
-    core gets at most one block, or when the blocks divide evenly over the cores (equal runs,
-    each starting on a head boundary)."""
-    t = (P + 31) // 32
-    while n_head * t > n_cores and (n_head * t) % n_cores:
-        t += 1
-    return t
+    core gets at most one block (n_head*tiles <= n_cores), or when the blocks divide evenly over
+    the cores (equal runs, each starting on a head boundary). prefill() single-shots the fill
+    when the whole padded length satisfies one of those, else writes chunks of this many tiles."""
+    return max(1, n_cores // n_head)
 
 
 class TTNNGPTTracedDecoder(TTNNGPTCore):
@@ -204,8 +212,9 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         once, not P times. Latents are discarded (only the caches seed decode). Eager (not traced); run
         after reset_caches() and BEFORE capture() (allocating buffers under a live trace corrupts it).
         prefix_emb: torch [batch, P, 1024] (batch=1 for the single-request path). P is right-padded
-        to a tile count fill_cache seeds correctly (_prefill_tiles), which also buckets the prefill
-        program variants; callers keep their TRUE P for decode.
+        to a bucketed tile count (_prefill_tiles) so warmup can precompile every program variant;
+        the cache write is chunked to a size fill_cache seeds correctly on this core grid
+        (_fill_step_tiles). Callers keep their TRUE P for decode.
 
         Data-parallel note: when requests have different prompt lengths, right-pad them to a
         common P with zeros. Padded positions do get K/V written, but each request's decode starts
@@ -215,7 +224,12 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         cfg = self.config
         E, nh = cfg.n_embd, cfg.n_head
         g = self.device.compute_with_storage_grid_size()
-        P = 32 * _prefill_tiles(prefix_emb.shape[1], nh, g.x * g.y)
+        n_cores = g.x * g.y
+        P = 32 * _prefill_tiles(prefix_emb.shape[1])
+        tiles = P // 32
+        # single-shot fill is safe when blocks divide evenly or every core gets at most one
+        fill_single_shot = nh * tiles <= n_cores or (nh * tiles) % n_cores == 0
+        step = _fill_step_tiles(nh, n_cores)
         x = ttnn.from_torch(
             torch.nn.functional.pad(prefix_emb, (0, 0, 0, P - prefix_emb.shape[1])).contiguous(),
             dtype=ttnn.bfloat16,
@@ -235,8 +249,18 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
                 transpose_k_heads=False,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )  # each [1, nh, P, dh]
-            ttnn.fill_cache(self.k_cache[li], k, 0)  # write positions 0..P-1 in one shot
-            ttnn.fill_cache(self.v_cache[li], v, 0)
+            if fill_single_shot:
+                ttnn.fill_cache(self.k_cache[li], k, 0)  # write positions 0..P-1 in one shot
+                ttnn.fill_cache(self.v_cache[li], v, 0)
+            else:
+                # chunked write: each call covers few enough tiles that no core's run can
+                # straddle a head boundary on this grid (see _fill_step_tiles)
+                for s in range(0, tiles, step):
+                    r0, r1 = 32 * s, 32 * min(s + step, tiles)
+                    for cache, src in ((self.k_cache[li], k), (self.v_cache[li], v)):
+                        chunk = ttnn.slice(src, (0, 0, r0, 0), (1, nh, r1, cfg.head_dim))
+                        ttnn.fill_cache(cache, chunk, 0, update_idx=r0)
+                        ttnn.deallocate(chunk)
             attn = ttnn.transformer.scaled_dot_product_attention(
                 q, k, v, is_causal=True, scale=self.scale, compute_kernel_config=self.compute_kernel_config
             )

@@ -112,8 +112,6 @@ def run_teacher_forced_pcc(verbose=True):
         voices = [(secs, tts.compute_voice(_clip(secs, i), 22050)) for i, secs in enumerate(CLIP_SECONDS)]
         gpt, final_norm = build_reference(tts.ckpt_path)
         mel_emb, mel_pos = tts.heads["mel_emb"], tts.heads["mel_pos"]
-        grid = tts.mesh_device.compute_with_storage_grid_size()
-        n_head, n_cores = tts.decoder.config.n_head, grid.x * grid.y
 
         voc_ref = HifiganReference()
         scored, wav_scored, no_codes, buckets, deepest = [], [], [], set(), 0
@@ -134,7 +132,7 @@ def run_teacher_forced_pcc(verbose=True):
             prefix = assemble_prompt(tts.tokenizer.encode(text, lang), voice.gpt_cond_latent, tts.tables)
             langs.add(lang)
             P = prefix.shape[1]
-            buckets.add(32 * _prefill_tiles(P, n_head, n_cores))
+            buckets.add(32 * _prefill_tiles(P))
             if not codes:  # rare and legitimate: the first sampled code was STOP (see generate)
                 no_codes.append(label)
                 continue
