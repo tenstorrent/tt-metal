@@ -1,0 +1,29 @@
+{
+  "arms": [
+    {
+      "candidate": "linear_final",
+      "harness_lines": [
+        "LINEAR_ATTENTION_SYNTHETIC_PCC mode=prefill sequence=128 path=optimized candidate=linear_final 0.9999958010754335",
+        "LINEAR_ATTENTION_SYNTHETIC_LATENCY mode=prefill batch=1 sequence=128 median_ms=273.859528 min_ms=273.859514"
+      ],
+      "perf_exit_status": 0,
+      "phase": "prefill",
+      "profile_exit_status": 0,
+      "raw_report": "models/autoports/qwen_qwen3_6_27b/doc/kda_conv_swap/prefill/linear_final/reports/2026_08_31_14_15_44/ops_perf_results_2026_08_31_14_15_44.csv"
+    },
+    {
+      "candidate": "linear_kda_conv",
+      "harness_lines": [
+        "LINEAR_ATTENTION_SYNTHETIC_PCC mode=prefill sequence=128 path=optimized candidate=linear_kda_conv 0.9999956331466894",
+        "LINEAR_ATTENTION_SYNTHETIC_LATENCY mode=prefill batch=1 sequence=128 median_ms=270.042938 min_ms=270.042931"
+      ],
+      "perf_exit_status": 0,
+      "phase": "prefill",
+      "profile_exit_status": 0,
+      "raw_report": "models/autoports/qwen_qwen3_6_27b/doc/kda_conv_swap/prefill/linear_kda_conv/reports/2026_08_31_14_16_01/ops_perf_results_2026_08_31_14_16_01.csv"
+    }
+  ],
+  "iterations": 1,
+  "phase": "prefill",
+  "sequence": 128
+}

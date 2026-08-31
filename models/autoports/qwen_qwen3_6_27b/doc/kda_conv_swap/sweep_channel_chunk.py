@@ -1,14 +1,22 @@
-"""Sweep channel_chunk_size for the fused KDA conv at Qwen3.6-27B's exact shapes."""
+"""Sweep channel_chunk_size for the fused KDA conv at Qwen3.6-27B's exact shapes.
+
+T=32 is one prefill chunk; T=128 is decode's K*B user-major packed window."""
+
+import argparse
+
 import torch
 
 import ttnn
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
-SEQ, KW, VW = 32, 2048, 6144
+KW, VW = 2048, 6144
 C = 2 * KW + VW  # 10240
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sequence", type=int, default=32)
+    SEQ = parser.parse_args().sequence
     device = ttnn.open_device(device_id=0)
     try:
         g = torch.Generator().manual_seed(7)

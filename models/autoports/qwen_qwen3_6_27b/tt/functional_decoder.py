@@ -608,19 +608,13 @@ class FunctionalDecoder(LightweightModule):
         output = ttnn.reshape(output, (1, self.batch, sequence, value_width))
         return ttnn.linear(output, self.weights["out_proj"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    def _linear_attention_decode(self, hidden_states):
-        key_heads = int(self.hf_config.linear_num_key_heads)
-        value_heads = int(self.hf_config.linear_num_value_heads)
-        key_dim = int(self.hf_config.linear_key_head_dim)
-        value_dim = int(self.hf_config.linear_value_head_dim)
-        key_width = key_heads * key_dim
-        value_width = value_heads * value_dim
+    def _linear_causal_conv_decode(self, mixed, key_width, value_width):
+        """One decode step of the stateful depthwise causal convolution.
 
-        mixed = ttnn.linear(hidden_states, self.weights["in_qkv"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        z = ttnn.linear(hidden_states, self.weights["in_z"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        beta = ttnn.linear(hidden_states, self.weights["in_b"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        decay = ttnn.linear(hidden_states, self.weights["in_a"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
+        Advances the persistent conv state by one token and returns the
+        SiLU-activated ``query``, ``key`` and ``value`` slices.  Split out so
+        an optimized subclass can substitute a fused kernel for the block.
+        """
         mixed = ttnn.permute(mixed, (0, 2, 3, 1))
         next_conv_state = ttnn.concat(
             [self.caches["conv"][..., 1:], mixed],
@@ -635,10 +629,26 @@ class FunctionalDecoder(LightweightModule):
         mixed = ttnn.silu(mixed)
         ttnn.copy(next_conv_state, self.caches["conv"])
         mixed = ttnn.permute(mixed, (0, 3, 1, 2))
+        return (
+            mixed[..., :key_width],
+            mixed[..., key_width : 2 * key_width],
+            mixed[..., 2 * key_width :],
+        )
 
-        query = mixed[..., :key_width]
-        key = mixed[..., key_width : 2 * key_width]
-        value = mixed[..., 2 * key_width :]
+    def _linear_attention_decode(self, hidden_states):
+        key_heads = int(self.hf_config.linear_num_key_heads)
+        value_heads = int(self.hf_config.linear_num_value_heads)
+        key_dim = int(self.hf_config.linear_key_head_dim)
+        value_dim = int(self.hf_config.linear_value_head_dim)
+        key_width = key_heads * key_dim
+        value_width = value_heads * value_dim
+
+        mixed = ttnn.linear(hidden_states, self.weights["in_qkv"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        z = ttnn.linear(hidden_states, self.weights["in_z"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        beta = ttnn.linear(hidden_states, self.weights["in_b"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        decay = ttnn.linear(hidden_states, self.weights["in_a"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        query, key, value = self._linear_causal_conv_decode(mixed, key_width, value_width)
         query = ttnn.reshape(query, (self.batch, 1, key_heads, key_dim))
         key = ttnn.reshape(key, (self.batch, 1, key_heads, key_dim))
         query = ttnn.permute(query, (0, 2, 1, 3))

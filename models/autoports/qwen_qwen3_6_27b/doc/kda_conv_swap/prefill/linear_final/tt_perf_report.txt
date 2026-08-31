@@ -5,9 +5,9 @@ Sorting CSV by 'HOST START TS' column...
 Using operations after 'PERF_PREFILL'.
 Using operations until 'PERF_PREFILL_END'.
 Detected data from 1 devices. Merging device data...
-Writing CSV output to /home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/kda_conv_swap/linear_final/perf.csv
+Writing CSV output to /home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/kda_conv_swap/prefill/linear_final/perf.csv
 Overall DRAM roofline (modeled ops): 6.2% (32 GB/s)
 Warning: Unclassified operation 'RepeatInterleaveCodegenDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
 Warning: Unclassified operation 'RepeatCodegenDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
-Writing CSV stacked report to /home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/kda_conv_swap/linear_final/perf_stacked.csv
-Plotting PNG stacked report to /home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/kda_conv_swap/linear_final/perf_stacked.png
+Writing CSV stacked report to /home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/kda_conv_swap/prefill/linear_final/perf_stacked.csv
+Plotting PNG stacked report to /home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/kda_conv_swap/prefill/linear_final/perf_stacked.png

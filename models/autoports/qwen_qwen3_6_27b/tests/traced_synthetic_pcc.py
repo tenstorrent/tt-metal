@@ -137,9 +137,15 @@ def run(kind, batch, optimized=False, candidate="default", steps=3):
         ttnn.synchronize_device(mesh)
         for name in cache_names:
             # Optimized full attention intentionally uses a compressed KV
-            # cache, so restore using the destination's actual device dtype.
-            cache_dtype = decoder.caches[name].dtype
-            _copy_host(initial_cache[name], decoder.caches[name], dtype=cache_dtype)
+            # cache, and an optimized conv state may be re-laid row-major, so
+            # restore using the destination's actual device dtype and layout
+            # rather than assuming tiled bfloat16.
+            _copy_host(
+                initial_cache[name],
+                decoder.caches[name],
+                layout=decoder.caches[name].layout,
+                dtype=decoder.caches[name].dtype,
+            )
         ttnn.synchronize_device(mesh)
 
         trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)

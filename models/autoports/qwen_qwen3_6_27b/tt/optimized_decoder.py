@@ -68,6 +68,10 @@ class OptimizationPolicy:
     # 29.2 us at 320 against 73.8 us at 1280 and 51.9 us at 64.  See
     # doc/kda_conv_swap/README.md.
     linear_kda_conv_channel_chunk: int = 320
+    # Decode packs K*B tap rows into the sequence dim, so its T differs from
+    # prefill's and it tunes separately.  Swept at T=128, C=10240: 81.6 us at
+    # 512 against 107.8 at 128 and 145.0 at 2048.
+    linear_kda_conv_decode_channel_chunk: int = 512
     decode_storage_cores: int = 8
     # Advisor-challenger placement bundle.  This remains default-off in the
     # shipped decoder; experiment policies are constructed with
@@ -686,6 +690,49 @@ class OptimizedDecoder(FunctionalDecoder):
             self.linear_kda_program_config = ttnn.QkvCausalConv1dSiluProgramConfig(
                 channel_chunk_size=policy.linear_kda_conv_channel_chunk,
             )
+            # Decode is B independent single-token streams, but the op is
+            # single-stream causal over its sequence dim.  Lay the per-user tap
+            # windows out user-major as one [1, K*B, C] sequence: user b holds
+            # rows [K*b, K*b+K), oldest first, so only row K*b+K-1 has a K-tap
+            # window entirely inside its own user's block.  The other rows mix
+            # adjacent users and are dropped by a constant one-hot select.
+            # Needs K*B tile-aligned, which B=1 prefill-shaped runs are not.
+            conv_width = conv_weight.shape[0]
+            self.linear_kda_decode_ready = (kernel * self.batch) % ttnn.TILE_SIZE == 0
+            if self.linear_kda_decode_ready:
+                # Re-lay the persistent conv state as the user-major window
+                # itself rather than keeping a second copy beside it.  One
+                # source of truth means an external writer -- prefill, a vLLM
+                # slot edit, a test restoring the cache -- is seen by the fused
+                # path with no sync step and no per-token write-back.
+                legacy_state = self.caches["conv"]
+                self.caches["conv"] = _to_device(
+                    torch.zeros(self.batch, kernel, conv_width, dtype=torch.bfloat16),
+                    mesh_device=self.mesh_device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                ttnn.deallocate(legacy_state)
+                self.linear_kda_history = _to_device(
+                    torch.zeros(1, kernel - 1, conv_width, dtype=torch.bfloat16),
+                    mesh_device=self.mesh_device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                select = torch.zeros(1, self.batch, kernel * self.batch, dtype=torch.bfloat16)
+                for row in range(self.batch):
+                    select[0, row, kernel * row + kernel - 1] = 1.0
+                self.linear_kda_select = _to_device(select, mesh_device=self.mesh_device)
+                # HiFi4 with FP32 accumulation keeps the one-hot select exactly
+                # value-preserving rather than merely close.
+                self.linear_kda_select_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                    self.mesh_device.arch(),
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=False,
+                )
+                self.linear_kda_decode_program_config = ttnn.QkvCausalConv1dSiluProgramConfig(
+                    channel_chunk_size=policy.linear_kda_conv_decode_channel_chunk,
+                )
             # The fused conv kernel does not accumulate through L1, so it
             # rejects the packer_l1_acc the projection configs carry.  Match
             # the projection's fidelity otherwise.
@@ -1237,12 +1284,18 @@ class OptimizedDecoder(FunctionalDecoder):
         chain and its layout conversions.  It takes a single ``[1, T, C]``
         sequence, so batched prefill keeps the inherited implementation.
         """
-        kernel = self.caches["conv"].shape[-1]
+        kernel = int(self.hf_config.linear_conv_kernel_dim)
         # The op requires a tile-aligned sequence, and the state refill below
         # needs a chunk at least as long as the kernel.  A ragged tail chunk
         # from a non-aligned prompt satisfies neither, so it keeps the
         # inherited implementation; correctness never depends on the knob.
         if not self.policy.linear_kda_conv or self.batch != 1 or sequence % ttnn.TILE_SIZE or sequence < kernel:
+            if getattr(self, "linear_kda_decode_ready", False):
+                window = self._linear_kda_borrow_legacy_conv_state()
+                try:
+                    return FunctionalDecoder._linear_causal_conv_prefill(self, mixed, sequence, key_width, value_width)
+                finally:
+                    self._linear_kda_restore_window_conv_state(window)
             return FunctionalDecoder._linear_causal_conv_prefill(self, mixed, sequence, key_width, value_width)
 
         history_rows = kernel - 1
@@ -1280,6 +1333,79 @@ class OptimizedDecoder(FunctionalDecoder):
             ttnn.reshape(key, (1, 1, sequence, key_width)),
             ttnn.reshape(value, (1, 1, sequence, value_width)),
         )
+
+    def _linear_kda_borrow_legacy_conv_state(self):
+        """Run an inherited composite conv against the re-laid conv state.
+
+        The composite implementations index the state as ``[1, B, C, K]``.
+        While the fused decode path is active it is stored as the ``[B, K, C]``
+        user-major window instead, so convert in, let the caller run, and
+        convert the advanced state back.  Only ragged prefill tails and
+        batch-32 prefill take this route; decode never does.
+        """
+        window = self.caches["conv"]
+        kernel = window.shape[1]
+        legacy = ttnn.permute(ttnn.to_layout(window, ttnn.TILE_LAYOUT), (0, 2, 1))
+        self.caches["conv"] = ttnn.reshape(legacy, (1, self.batch, window.shape[-1], kernel))
+        return window
+
+    def _linear_kda_restore_window_conv_state(self, window):
+        legacy = self.caches["conv"]
+        kernel = window.shape[1]
+        advanced = ttnn.permute(legacy, (0, 1, 3, 2))
+        advanced = ttnn.to_layout(ttnn.reshape(advanced, (self.batch, kernel, -1)), ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.copy(advanced, window)
+        ttnn.deallocate(advanced)
+        ttnn.deallocate(legacy)
+        self.caches["conv"] = window
+
+    def _linear_causal_conv_decode(self, mixed, key_width, value_width):
+        """Fuse the decode causal convolution into the KDA kernel.
+
+        Replaces the shift/multiply/reduce/SiLU/slice chain with one fused op
+        over the user-major packed window, then drops the rows whose tap window
+        straddles a user boundary with a constant one-hot select.
+        """
+        if not self.policy.linear_kda_conv or not getattr(self, "linear_kda_decode_ready", False):
+            return FunctionalDecoder._linear_causal_conv_decode(self, mixed, key_width, value_width)
+
+        window = self.caches["conv"]
+        kernel = window.shape[1]
+        # Shift every user's window down one row and land the new token last.
+        token = ttnn.to_layout(ttnn.reshape(mixed, (self.batch, 1, -1)), ttnn.ROW_MAJOR_LAYOUT)
+        shifted = ttnn.slice(window, (0, 1, 0), (self.batch, kernel, window.shape[-1]))
+        advanced = ttnn.concat([shifted, token], dim=1)
+        ttnn.copy(advanced, window)
+        ttnn.deallocate(advanced)
+        ttnn.deallocate(shifted)
+        ttnn.deallocate(token)
+
+        sequence = ttnn.reshape(window, (1, kernel * self.batch, -1))
+        query, key, value = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+            sequence,
+            self.linear_kda_history,
+            *self.linear_kda_taps,
+            key_width,
+            key_width,
+            value_width,
+            program_config=self.linear_kda_decode_program_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.linear_kda_compute_kernel_config,
+        )
+        if sequence.buffer_address() != window.buffer_address():
+            ttnn.deallocate(sequence)
+
+        def select(packed):
+            picked = ttnn.matmul(
+                self.linear_kda_select,
+                packed,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.linear_kda_select_compute_kernel_config,
+            )
+            ttnn.deallocate(packed)
+            return picked
+
+        return select(query), select(key), select(value)
 
     def _linear_attention_prefill_chunk(self, hidden_states):
         """Preserve the inherited affine scan across a compressed state boundary.
@@ -1361,24 +1487,7 @@ class OptimizedDecoder(FunctionalDecoder):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        mixed = ttnn.permute(mixed, (0, 2, 3, 1))
-        next_conv_state = ttnn.concat(
-            [self.caches["conv"][..., 1:], mixed],
-            dim=-1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        mixed = ttnn.sum(
-            ttnn.multiply(next_conv_state, self.weights["conv"]),
-            dim=-1,
-            keepdim=True,
-        )
-        mixed = ttnn.silu(mixed)
-        ttnn.copy(next_conv_state, self.caches["conv"])
-        mixed = ttnn.permute(mixed, (0, 3, 1, 2))
-
-        query = mixed[..., :key_width]
-        key = mixed[..., key_width : 2 * key_width]
-        value = mixed[..., 2 * key_width :]
+        query, key, value = self._linear_causal_conv_decode(mixed, key_width, value_width)
         query = ttnn.reshape(query, (self.batch, 1, key_heads, key_dim))
         key = ttnn.reshape(key, (self.batch, 1, key_heads, key_dim))
         query = ttnn.permute(query, (0, 2, 1, 3))
