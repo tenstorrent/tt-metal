@@ -285,6 +285,34 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
         )
     )
 
+    # Local-only: the one DENSE (non-chunked) ring-MLA shape small enough to test. mla_100k is the
+    # only other dense MLA config and it is is_balanced=True, which both trips the rotation's
+    # !is_balanced term AND makes its active mask full -- so nothing in the tree exercised dense
+    # causal's PARTIAL mask, the case the rotation's ordinal indexing exists for. is_balanced=False
+    # keeps the causal drop (ring_iter_does_work skips device_index < ring_id), giving a genuinely
+    # partial mask that the HOST knows (unlike kv-pad, where it is device-derived).
+    # Sized for the CPU reference, which is what makes mla_100k time out: 8 heads and 1280 local seq
+    # instead of 29 and 3200.
+    if os.environ.get("RING_MLA_K_SWEEP"):
+        configs.append(
+            ModelConfig(
+                name="mla_dense_small",
+                nhq=8,
+                nhk=1,
+                nhv=8,
+                d_q=576,
+                d_k=576,
+                d_v=128,
+                is_causal=True,
+                is_balanced=False,
+                q_dtype=ttnn.bfloat16,
+                kv_dtype=ttnn.bfloat8_b,
+                q_chunk_sizes=[160],
+                k_chunk_sizes=[320],
+                seq_len=1280,
+            )
+        )
+
     configs.append(
         ModelConfig(
             name="mla_128k",
@@ -4624,24 +4652,32 @@ PERF_TEST_CONFIG_MODELS = list(RING_JOINT_PERF_MODEL_CONFIGS.keys())
 def generate_ring_mla_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, ModelConfig]):
     if mesh_config.sp_size < 2 or "mla_100k" not in model_configs:
         return [], []
-    model = model_configs["mla_100k"]
-    q_chunk_size = 160
-    k_chunk_size = 320
-    config = (
-        BATCH_SIZE,
-        model.seq_len * mesh_config.sp_size,
-        model.nhq * mesh_config.tp_size,
-        model.nhk,
-        model.d_q,
-        model.d_k,
-        model.d_v,
-        q_chunk_size,
-        k_chunk_size,
-        model.is_balanced,
-        model.q_dtype,
-        model.kv_dtype,
-    )
-    return [config], [f"ring_mla-{model.name}-q{q_chunk_size}-k{k_chunk_size}"]
+    configs, ids = [], []
+    # mla_dense_small (RING_MLA_K_SWEEP only) is the non-balanced dense shape; see its ModelConfig.
+    for name in ("mla_100k", "mla_dense_small"):
+        if name not in model_configs:
+            continue
+        model = model_configs[name]
+        q_chunk_size = model.q_chunk_sizes[0]
+        k_chunk_size = model.k_chunk_sizes[-1]
+        configs.append(
+            (
+                BATCH_SIZE,
+                model.seq_len * mesh_config.sp_size,
+                model.nhq * mesh_config.tp_size,
+                model.nhk,
+                model.d_q,
+                model.d_k,
+                model.d_v,
+                q_chunk_size,
+                k_chunk_size,
+                model.is_balanced,
+                model.q_dtype,
+                model.kv_dtype,
+            )
+        )
+        ids.append(f"ring_mla-{model.name}-q{q_chunk_size}-k{k_chunk_size}")
+    return configs, ids
 
 
 RING_MLA_TEST_CONFIGS, RING_MLA_TEST_CONFIG_IDS = generate_ring_mla_test_configs(MESH_CONFIG, MODEL_CONFIGS)
