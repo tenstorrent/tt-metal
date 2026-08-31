@@ -1,6 +1,6 @@
 {
-  "last_run": "2026-08-31T01:06Z",
-  "run_id": "33346392885",
+  "last_run": "2026-08-31T06:54Z",
+  "run_id": "33365632291",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -75,6 +75,12 @@
       "issue": 54853,
       "branch": "repo-assist/fix-issue-54853-ttsim-md-smoke-test-filter",
       "status": "opened this run (docs-only, [skip ci] title); fixes TTSIM.md pytest -k substring-match bug (\"not tilize\" deselects all tests since ids contain tilize:No/Yes); no CI expected due to skip ci, unverified per docs-only guidance"
+    },
+    "54896-softshrink": {
+      "issue": 54896,
+      "branch": "repo-assist/fix-issue-54896-softshrink-negative-lambda",
+      "status": "opened_this_run_ci_pending",
+      "title": "Reject negative/infinite lambda in softshrink"
     }
   },
   "issues_labeled": [
@@ -194,13 +200,16 @@
     "54695": "labeled+commented this run, no fix PR opened (root cause confirmed, fix approach suggested, no HW needed but left for follow-up PR)",
     "54654": "labeled bug, needs HW/device access to root-cause slow-dispatch hang, no fix PR",
     "54779": "has open community fix PR #54780, no duplicate needed",
-    "54868": "has open fix PR #54871 (tzh476) - reflection-identity fix for FP32 gelu_bw saturation"
+    "54868": "has open fix PR #54871 (tzh476) - reflection-identity fix for FP32 gelu_bw saturation",
+    "54878": "linked PR #54776 already open",
+    "54877": "linked PR #54675 already open"
   },
   "dropped_fix_targets": {
     "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
     "53055": "reporter (maintainer ncvetkovicTT) deliberately deferred fix pending directed test -- filed as documentation, not an action item",
     "54235": "ternary Metal2.0 cache-key analysis, too architectural, needs ops-team decision",
-    "54232": "TensorParameterRelaxation, too architectural"
+    "54232": "TensorParameterRelaxation, too architectural",
+    "54897": "hardsigmoid FP32 cancellation near x=-3 - deferred to next run, not yet fixed"
   },
   "watch_prs": {
     "52237": "fixes #52233, watch for merge",
@@ -277,7 +286,8 @@
     "54807": "already labeled bug + assigned sidnadTT, Quasar HW-specific fix, out of repo-assist scope (2026-08-29)",
     "54742": "already covered by open PR #54743, already labeled bug (2026-08-29)",
     "54813": "KDA prepare_chunk_recurrence t_inv precision bug for Kimi-K3; maintainer kgrujcic-tt already root-caused, assigned, fix pushed to feature/kimi-k3-modules & feature/kimi-k3-prefill; no repo-assist action",
-    "54814": "Workarounds tracking/parent issue, assigned kgrujcic-tt, not a standalone confirmed defect; no repo-assist action"
+    "54814": "Workarounds tracking/parent issue, assigned kgrujcic-tt, not a standalone confirmed defect; no repo-assist action",
+    "54899": "copy_dest_values FP16B subnormal flush - complex arch-dependent LLK fix, issue itself flags open questions; too risky for surgical repo-assist fix, left for maintainer"
   },
   "stale_pr_nudges": {
     "34933": {
@@ -768,6 +778,11 @@
         "task8_monthly_summary"
       ],
       "summary": "Re-verified 6 tracked PRs (54666/54690 CI green; 54848/54858 action_required blocked pending maintainer approval). Corrected memory: PR for softplus fix is #54858, not #54857 (issue number). Opened docs-only PR #aw_ttsimmd fixing TTSIM.md pytest -k substring bug (closes #54853). Updated Monthly Activity issue #51865."
+    },
+    {
+      "run_id": "33365632291",
+      "date": "2026-08-31T06:54Z",
+      "summary": "Re-verified 3 tracked PRs (#54792/#54848/#54858) still stuck action_required (no build-artifact run); PR #54690 unchanged blocked. Opened new fix PR for #54896 (softshrink negative/infinite lambda TT_FATAL guard in unary_op_utils.cpp + unary_device_operation.cpp). Confirmed #54878/#54877 already covered by existing linked PRs. Deferred #54897 (hardsigmoid) fix to next run. Assessed #54899 as too complex/risky for surgical fix."
     }
   ],
   "no_action_reviewed": [
