@@ -60,6 +60,29 @@ def _point_latest(runs_root, target) -> None:
         pass
 
 
+def main_runs_root(runs_root):
+    """The MAIN checkout's counterpart of ``runs_root``, or None when there is no separate one.
+
+    A run in a linked worktree files its artifacts there, so the checkout an operator has open sees
+    nothing of it. This names where those artifacts' durable twin belongs -- the same path, under the
+    main working tree -- so the pointer and the report land beside each other exactly as they do in
+    the worktree. Returns None for an ordinary checkout, where the run is already in the only tree.
+    """
+    from pathlib import Path as _P
+
+    from . import gitio
+
+    try:
+        runs_root = _P(runs_root).resolve()
+        here = gitio.repo_root(runs_root)
+        main = gitio.main_worktree_root(runs_root)
+        if main == here:
+            return None
+        return main / runs_root.relative_to(here)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 class Run:
     """A single run directory and its referenced artifacts."""
 

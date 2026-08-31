@@ -15,6 +15,7 @@ Two failures of the same pointer, both observed on one box:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -41,19 +42,47 @@ def _repo(at: Path) -> Path:
     return at
 
 
-def test_a_worktree_run_is_findable_from_the_main_checkout(tmp_path):
+def _worktree_run(tmp_path):
     main = _repo(tmp_path / "main")
     wt = tmp_path / "wt"
     subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", "--detach", str(wt)], check=True)
     (main / _RUNS_REL).mkdir(parents=True)
     run_dir = wt / _RUNS_REL / "2026-01-01T00-00-00-m"
     run_dir.mkdir(parents=True)
+    (wt / _RUNS_REL / "latest").symlink_to(run_dir.name)
+    return main, wt, run_dir
+
+
+def test_a_worktree_run_is_findable_from_the_main_checkout(tmp_path, monkeypatch):
+    """Without a durable home there is nothing local to point at, so name the worktree directly."""
+    monkeypatch.delenv("PERF_MCP_STATE_DIR", raising=False)
+    main, wt, run_dir = _worktree_run(tmp_path)
 
     _publish_latest_to_main_worktree(run_dir, wt / _RUNS_REL)
 
     pointer = main / _RUNS_REL / "latest"
     assert pointer.is_symlink(), "the main checkout still has no pointer to the running run"
     assert pointer.resolve() == run_dir.resolve()
+
+
+def test_persist_gives_the_main_checkout_its_own_run_directory(tmp_path, monkeypatch):
+    """--persist must behave in the main checkout exactly as the worktree behaves in itself:
+    `latest` names a real local directory, and the report is inside it. Pointing across at /tmp
+    made the pointer a trap -- it died with the worktree it named."""
+    state = tmp_path / "state"
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(state))
+    main, wt, run_dir = _worktree_run(tmp_path)
+
+    _publish_latest_to_main_worktree(run_dir, wt / _RUNS_REL)
+
+    pointer = main / _RUNS_REL / "latest"
+    assert Path(os.readlink(pointer)) == Path(run_dir.name), "pointer should name the run, not a path"
+    assert pointer.resolve().is_relative_to(main), "the pointer must stay inside the main checkout"
+
+    monkeypatch.setattr(S, "_runs_root", lambda: wt / _RUNS_REL)
+    S._mirror_report("live text")
+    assert (state / "RUN_REPORT.md").read_text() == "live text"
+    assert (pointer / "RUN_REPORT.md").read_text() == "live text", "following latest found no report"
 
 
 def test_an_in_place_run_is_left_alone(tmp_path):

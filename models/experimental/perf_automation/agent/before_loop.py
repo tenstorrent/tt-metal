@@ -43,32 +43,37 @@ PKG_ROOT = Path(__file__).parent.parent
 
 
 def _publish_latest_to_main_worktree(run_dir, runs_root) -> None:
-    """Point the MAIN checkout's ``runs/latest`` at this run, when the run lives elsewhere.
+    """Give the MAIN checkout the same view of this run that the worktree has.
 
     An existing demo is optimized in a throwaway worktree, so the run directory -- and the `latest`
-    pointer beside it -- are created there. The `runs/latest` in the tree the operator actually has
-    open is never touched, so it goes on naming whichever run last happened to be in-place: on this
-    box it advertised a run from three days earlier while a current one was in flight, and every
-    reader who followed it read a stale report and concluded the live one had not been written.
+    beside it -- are created there. The `latest` in the tree the operator has open was never touched,
+    so it went on naming whichever run last happened to be in-place: on this box it advertised a run
+    from three days earlier while a current one was in flight, and every reader who followed it read
+    a stale report and concluded the live one had not been written.
 
-    The pointer is absolute because it crosses trees, and it is only a pointer: the run's own
-    artifacts stay with the run, and the durable copy --persist keeps is unaffected either way.
-    Best-effort; a repo that is not a worktree resolves to itself and this is a no-op.
+    With a durable directory configured (--persist) the run gets a real counterpart directory in the
+    main checkout and `latest` points at it by name, exactly as it does in the worktree -- so
+    following the pointer lands on a report that outlives the worktree. summary._mirror_report fills
+    that directory as the report is written; it is created here because this is where the run id is
+    known. Without --persist there is nothing durable to point at, so the pointer names the worktree
+    directly: still correct, still current, just as disposable as the run it describes.
+
+    Best-effort throughout: a checkout that is not a worktree has one tree and this is a no-op.
     """
-    from . import gitio
-    from .run import _point_latest
+    import os as _os
+
+    from .run import _point_latest, main_runs_root
 
     try:
         run_dir = Path(run_dir).resolve()
-        runs_root = Path(runs_root).resolve()
-        main_root = gitio.main_worktree_root(run_dir)
-        here = gitio.repo_root(run_dir)
-        if main_root == here:
+        main_runs = main_runs_root(runs_root)
+        if main_runs is None:
             return
-        main_runs = main_root / runs_root.relative_to(here)
-        if main_runs.resolve() == runs_root:
-            return
-        _point_latest(main_runs, run_dir)
+        if str(_os.environ.get("PERF_MCP_STATE_DIR") or "").strip():
+            (main_runs / run_dir.name).mkdir(parents=True, exist_ok=True)
+            _point_latest(main_runs, run_dir.name)
+        else:
+            _point_latest(main_runs, run_dir)
     except Exception:  # noqa: BLE001
         return
 

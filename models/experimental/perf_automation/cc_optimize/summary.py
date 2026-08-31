@@ -172,11 +172,42 @@ def _mirror_report(text: str) -> None:
         # is the system temp dir, which is the very place this exists to escape.
         if not (_os.environ.get("PERF_MCP_STATE_DIR") or "").strip():
             return
-        d = state_dir()
-        d.mkdir(parents=True, exist_ok=True)
-        (d / _REPORT_NAME).write_text(text)
+        for d in _durable_report_dirs(state_dir()):
+            d.mkdir(parents=True, exist_ok=True)
+            (d / _REPORT_NAME).write_text(text)
     except Exception:  # noqa: BLE001
         pass
+
+
+def _durable_report_dirs(state: Path) -> list:
+    """Every place outside the worktree that should hold the live report.
+
+    The state directory is the one that always qualifies. The second is the run's counterpart
+    directory in the main checkout, which before_loop creates and points `latest` at under
+    --persist: without the report in it, following that pointer from the tree the operator has open
+    reaches an empty directory, while the worktree's identical pointer reaches a live report. The
+    two views must agree, or the pointer is a trap rather than a shortcut.
+
+    Derived from the run's own `latest`, so no run id has to be threaded here, and skipped whenever
+    the main checkout IS this checkout -- then the run directory already holds the report.
+    """
+    dirs = [state]
+    try:
+        from agent.run import main_runs_root
+    except Exception:  # noqa: BLE001
+        return dirs
+    try:
+        runs = _runs_root()
+        main_runs = main_runs_root(runs)
+        if main_runs is None:
+            return dirs
+        run_id = os.readlink(runs / "latest")
+        mirror = main_runs / Path(run_id).name
+        if mirror.resolve() != (runs / Path(run_id).name).resolve():
+            dirs.append(mirror)
+    except (OSError, ValueError):
+        pass
+    return dirs
 
 
 def optimize_block(model_root, attempts_len: int, text: str, when_note: str) -> str:
