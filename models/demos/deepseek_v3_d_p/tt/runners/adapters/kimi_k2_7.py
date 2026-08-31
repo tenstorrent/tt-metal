@@ -12,12 +12,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6 import KimiK26Adapter
 
 
 class KimiK27Adapter(KimiK26Adapter):
     # --- identity & runner defaults ---
     name = "kimi_k2_7"
+    # Not inherited: KimiK26Adapter sets model_config = KimiK26Config, so without this every
+    # variant=kimi_k2_7 test would read K2.7 constants in its decorators and K2.6 constants at
+    # runtime through variant.model_config. The values are identical today -- this is about
+    # having one place to change on the day they are not.
+    model_config = KimiK27Config
     ttnn_cache_default = "/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill"
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320"
 
