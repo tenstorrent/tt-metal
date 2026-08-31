@@ -78,53 +78,81 @@ gained a fix for a trace `END` marker with no captured `BEGIN`.
 
 ## B. Caused by the new base — still broken
 
-### B1. The TP4 multichip path does not run at all: three L1 clashes
+### B1. The TP4 multichip path did not run at all: three L1 clashes — FIXED
 
-**This is the significant one, and it is unfixed.** Every entry point into
-`multichip_decoder.py` fails on this base with statically-allocated circular
-buffers colliding with L1 buffers. Three distinct sites:
+Every entry point into `multichip_decoder.py` failed on this base with
+statically-allocated circular buffers colliding with L1 buffers:
 
 | Path | Call site | Cores | CB region ends | L1 buffer at | Overlap |
 |---|---|---|---:|---:|---:|
-| prefill | `functional_decoder._rms_norm` (input layernorm), from `prefill_forward` | `[0-0 - 3-0]` | 1,188,864 | 916,992 | 271,872 B |
-| decode | `_mlp_decode` → `_tp_linear("mlp_down_decode")`, `in0_block_w=17` | `[0-0 - 7-9]` | 811,776 | 777,728 | 34,048 B |
-| decode | `_tp_linear` → `_all_reduce` after the MLP down projection | `[0-0 - 0-0]` | 177,152 | 163,328 | 13,824 B |
+| prefill | `_rms_norm` (input layernorm) | `[0-0 - 3-0]` | 1,188,864 | 916,992 | 271,872 B |
+| decode | `_tp_linear("mlp_down_decode")`, `in0_block_w=17` | `[0-0 - 7-9]` | 811,776 | 777,728 | 34,048 B |
+| decode | `_all_reduce` after the MLP down projection | `[0-0 - 0-0]` | 177,152 | 163,328 | 13,824 B |
 
-Reproduce:
+**This was a real regression, not a wrong invocation.** That distinction was
+worth establishing rather than assuming, and the evidence is:
 
-```bash
-python models/autoports/qwen_qwen3_6_27b/tests/multichip_traced_decode.py --kind linear --batch 32 --steps 4
-python models/autoports/qwen_qwen3_6_27b/tests/multichip_linear_attention_smoke.py --mode prefill --sequence 128
-```
+- `doc/multichip_decoder/artifacts/tracy/linear_b32_dram_sharded/provenance.txt`
+  records the exact command, and its `trace_result.json` records
+  `candidate=default`, `baseline_candidate=default`, `pcc: [1.0, 1.0, 1.0]`,
+  `multichip_trace_median_ms=4.4718`. That is the same command, same candidate,
+  no env vars, no warm-up step. Running it on the rebased tree failed.
+- The harness performs no collective warm-up for `candidate=default`
+  (`_ccl_buffers` is only populated for `multichip_preallocated_ccl`, and holds
+  output tensors, not semaphores), so those green runs took the same
+  first-collective-at-width-5120 path this one does.
+- `ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp` is unchanged between
+  the two bases; only its nanobind docstring moved.
+- Enabling `FABRIC_1D_RING` costs the L1 allocator nothing: `total_bytes_per_bank`
+  is 1,461,248 with fabric both disabled and enabled.
+- The single-chip baseline the same harness prints is unchanged (15.8581 ms
+  recorded, 15.8382 ms now), so the environment is comparable.
 
-Both `--kind full` and `--kind linear`, both `--batch 1` and `--batch 32`, fail.
+**Root cause — one thing, not three.** `ttnn.all_reduce` passes no persistent
+semaphores (it forwards `std::nullopt` and falls through to the non-persistent
+`ttnn::reduce_scatter` / `ttnn::all_gather` wrappers), so every call creates
+fresh global semaphores. They are allocated above the first collective program's
+own footprint, and being persistent they stay there after that program is gone —
+pinning a low-water mark on contiguous L1 for the rest of the process. Measured
+on a (1,4) Blackhole mesh, largest contiguous L1 after the first `all_reduce`:
 
-**Confirmed pre-existing relative to the KDA work on this branch.** Reverting
-`functional_decoder.py`, `optimized_decoder.py` and `traced_synthetic_pcc.py` to
-`e542603b2e3` reproduces the identical failure -- same program id (354), same
-addresses. Nothing in the KDA change touches `multichip_decoder.py`.
+| first call width | 32 | 512 | 5120 (the real residual width) |
+|---|---:|---:|---:|
+| largest contiguous L1 after | 1,461,120 B | 1,329,664 B | **805,376 B** |
 
-Diagnosis so far: the decode sites are reachable in sequence. Setting
-`mlp_down_in0_block_w=1` shrinks the down projection's in0 CB enough to clear
-the second row of the table, and execution then advances to the third. So this
-is a multi-site L1 budget regression, not one bad program config. The most
-likely cause is that the L1 unreserved base moved up on the newer metal,
-leaving less room than the multichip decoder was tuned against; the smallest
-overlap is only 13.5 KB.
+Later calls add more semaphores — 9 per call on the reduce-scatter + all-gather
+path, 60 blocks after eight calls in one sweep — but never lower the mark.
 
-A related trap while triaging: TP4 splits the MLP down projection to K=4352,
-which over 8 cores is **17 K tiles per core**, so `in0_block_w` may only be 1 or
-17. The existing `final_down_w4` / `final_down_w34` / `final_down_w68`
-candidates are all illegal on the multichip path and raise
-`ValueError: in0_block_w=N must divide 17 K tiles/core` before reaching the
-device. `final_down_w1` was added to give the family its only other legal TP4
-value; it is a triage aid, **not a fix** -- it advances the failure, it does not
-clear it.
+805,376 B is not enough for this layer. The decode MLP down projection's static
+CBs alone reach 811,776 B. The prefill norm needs ~1,080,320 B contiguous,
+measured by squeezing L1 with a blocker tensor and bisecting; the same
+`ttnn.rms_norm` with a plain tiled `[1, 1, 1, W]` weight instead of the
+row-major `[1, 1, W/32, 32]` contract needs only ~564,224 B, which is why the
+single-chip path — which runs no collectives and so never loses the L1 — never
+saw any of this.
 
-**Consequence for the KDA work:** the fused conv could not be applied to
-`multichip_decoder.py` with a measurement, because the path it would be measured
-on does not execute. The single-chip results stand on their own; the multichip
-port is blocked behind this L1 re-tune.
+**Fix:** run one minimal collective (width 512) at load time, while L1 is empty,
+so the mark is set at the top. One extra program at setup, no numerics change,
+nothing added to the hot path. Commit `386e8b8ba9c`.
+
+| Kind | Batch | recorded | now |
+|---|---:|---:|---:|
+| linear attention | 32 | 4.4718 ms | 4.3344 ms |
+| linear attention | 1 | 0.9008 ms | 0.7930 ms |
+| full attention | 32 | 0.7223 ms | 0.7241 ms |
+| full attention | 1 | 0.5958 ms | 0.6084 ms |
+
+All at PCC 1.0 against the single-chip baseline, prefill smoke green at S128.
+
+**What I could not establish** is which side of the collective grew. Both
+candidates were rewritten between the two bases: `reduce_scatter_minimal_async`
+(+2,192/−1,800, including its program factory and a new chunk-paged contiguous
+staging intermediate plus a "penult" intermediate — both DRAM, so not directly
+the L1 cost), and `normalization/layernorm` (+2,581/−1,889, including the
+interleaved multi-core path and the CB helpers). Settling that needs a build of
+the old base to compare against, which this branch did not do. The fix does not
+depend on the answer: it removes the fragmentation rather than trying to fit
+underneath it.
 
 ### B2. Eager batch-32 decode fails in the shared synthetic harness
 
@@ -216,14 +244,23 @@ autoport's `.gitignore` -- `profile_log_device.csv` alone is 347 MB per arm.
 
 ## Open work
 
-1. **Re-tune the multichip decoder's L1 budget for the new base** (B1). Blocks
-   all TP4 evidence, and blocks porting the fused KDA conv to
-   `multichip_decoder.py`.
-2. Decide whether B2 is a real regression or an unsupported combination.
-3. If the multichip path comes back, port the fused conv into
-   `multichip_decoder._linear_attention_decode`. The per-device widths are
-   Q/K/V = 512/512/1536 with `conv_width` 2560, all tile-aligned, and `K*B` is
-   128 at batch 32, so the same user-major packing applies. The one extra
-   consideration is `_active_mask`: the composite computes the convolution from
-   the *unmasked* advanced state and only masks what it stores, so a port must
-   read the advanced window before blending, not after.
+1. Decide whether B2 is a real regression or an unsupported combination.
+2. Establish which side of the collective grew its L1 footprint, by building the
+   old base and measuring the same first-collective low-water mark. The fix does
+   not depend on it, but the answer belongs upstream: any model that runs a
+   collective before a large program inherits this on this base.
+3. Consider whether `ttnn.all_reduce` should take persistent semaphores rather
+   than minting fresh ones per call. The accumulation (9 per call) is bounded in
+   practice, but the placement of the first set is load-bearing for every
+   program that follows, which is a sharp edge for callers.
+
+## Note for anyone triaging the MLP down projection
+
+TP4 splits it to K=4352, which over 8 cores is **17 K tiles per core**, so
+`in0_block_w` may only be 1 or 17. The existing `final_down_w4` /
+`final_down_w34` / `final_down_w68` candidates are all illegal on the multichip
+path and raise `ValueError: in0_block_w=N must divide 17 K tiles/core` before
+reaching the device. `final_down_w1` was added during triage as the family's
+only other legal TP4 value. It is not needed for the fix -- shrinking those CBs
+only moved the failure to the next site, because 811,776 B was already above the
+805,376 B floor.
