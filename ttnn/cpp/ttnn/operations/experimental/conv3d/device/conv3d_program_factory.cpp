@@ -393,6 +393,9 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     if (C_in_num_blocks > 1) {
         other_cbs_bytes += partial_tile_size * matmul_M_t * matmul_N_t;  // reduction (same format as partials)
         other_cbs_bytes += tile_size;                                    // worker_ack
+        if (use_fp32_partials && use_fp32_exact) {
+            other_cbs_bytes += partial_tile_size * matmul_M_t * matmul_N_t;  // reduction_acc
+        }
     }
     if (use_bias) {
         other_cbs_bytes += tile_size * matmul_N_t;  // bias
