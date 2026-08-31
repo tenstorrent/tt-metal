@@ -199,7 +199,7 @@ scaleout:
     wh_n300_civ2: 15
     wh_llmbox_civ2: 65
     bh_loudbox: 195
-    bh_loudbox_civ2_viommu: 195
+    bh_loudbox_civ2_viommu: 45
     bh_p300: 195
     bh_quietbox_2: 195
   stress:
