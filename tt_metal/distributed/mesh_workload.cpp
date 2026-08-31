@@ -86,6 +86,40 @@ MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {
 
 MeshWorkloadImpl::~MeshWorkloadImpl() { Inspector::mesh_workload_destroyed(this); }
 
+MeshWorkloadImpl::FinalizedMetadata& MeshWorkloadImpl::get_finalized_metadata() {
+    TT_ASSERT(finalized_metadata_.has_value());
+    return *finalized_metadata_;
+}
+
+void MeshWorkloadImpl::set_finalized(uint32_t max_program_kernels_sizeB) {
+    TT_ASSERT(!is_finalized());
+    FinalizedMetadata metadata{.max_program_kernels_sizeB = max_program_kernels_sizeB};
+    for (auto& [_, program] : programs_) {
+        auto& program_impl = program.impl();
+        metadata.runs_on_noc_multicast_only_cores |= program_impl.runs_on_noc_multicast_only_cores();
+        metadata.runs_on_noc_unicast_only_cores |= program_impl.runs_on_noc_unicast_only_cores();
+
+        const auto& program_config_sizes = program_impl.get_program_config_sizes();
+        if (metadata.program_config_sizes.empty()) {
+            metadata.program_config_sizes = program_config_sizes;
+        } else {
+            TT_FATAL(
+                metadata.program_config_sizes.size() == program_config_sizes.size(),
+                "Expected config sizes to be identical across all programs in a MeshWorkload.");
+            for (size_t i = 0; i < metadata.program_config_sizes.size(); i++) {
+                TT_FATAL(
+                    metadata.program_config_sizes[i] == program_config_sizes[i],
+                    "Expected config sizes to be identical across all programs in a MeshWorkload.");
+            }
+        }
+
+        if (!program_impl.get_per_core_cross_node_dfbs().empty()) {
+            metadata.cross_node_program_ids.push_back(program_impl.get_id());
+        }
+    }
+    finalized_metadata_ = std::move(metadata);
+}
+
 void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Program&& program) {
     TT_FATAL(!is_finalized(), "Cannot add programs to a MeshWorkload after it has been finalized.");
     auto potential_intersection = find_intersection(programs_, device_range);
@@ -229,8 +263,8 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     auto* mesh_device = mesh_cq.device();
     uint32_t prefetcher_cache_sizeB = MetalContext::instance().dispatch_mem_map().ringbuffer_size();
 
-    bool use_prefetcher_cache =
-        this->max_program_kernels_sizeB_ and this->max_program_kernels_sizeB_ <= prefetcher_cache_sizeB;
+    const uint32_t max_program_kernels_sizeB = get_finalized_metadata().max_program_kernels_sizeB;
+    bool use_prefetcher_cache = max_program_kernels_sizeB and max_program_kernels_sizeB <= prefetcher_cache_sizeB;
     for (auto& [device_range, program] : programs_) {
         program.impl().generate_dispatch_commands(mesh_device, use_prefetcher_cache);
     }
@@ -238,21 +272,11 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
 }
 
 bool MeshWorkloadImpl::runs_on_noc_multicast_only_cores() {
-    if (!runs_on_noc_multicast_only_cores_.has_value()) {
-        runs_on_noc_multicast_only_cores_ = std::any_of(programs_.begin(), programs_.end(), [](auto& program_on_grid) {
-            return program_on_grid.second.impl().runs_on_noc_multicast_only_cores();
-        });
-    }
-    return *runs_on_noc_multicast_only_cores_;
+    return get_finalized_metadata().runs_on_noc_multicast_only_cores;
 }
 
 bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
-    if (!runs_on_noc_unicast_only_cores_.has_value()) {
-        runs_on_noc_unicast_only_cores_ = std::any_of(programs_.begin(), programs_.end(), [](auto& program_on_grid) {
-            return program_on_grid.second.impl().runs_on_noc_unicast_only_cores();
-        });
-    }
-    return *runs_on_noc_unicast_only_cores_;
+    return get_finalized_metadata().runs_on_noc_unicast_only_cores;
 }
 
 std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkloadImpl::get_kernels(
@@ -300,38 +324,17 @@ std::vector<Semaphore>& MeshWorkloadImpl::semaphores() {
 }
 
 const std::vector<uint32_t>& MeshWorkloadImpl::get_program_config_sizes() {
-    if (!program_config_sizes_.has_value()) {
-        auto& global_program_config_sizes = program_config_sizes_.emplace();
-        for (auto& program_on_grid : programs_) {
-            if (!global_program_config_sizes.empty()) {
-                for (size_t i = 0; i < global_program_config_sizes.size(); i++) {
-                    TT_FATAL(
-                        global_program_config_sizes[i] == program_on_grid.second.impl().get_program_config_sizes()[i],
-                        "Expected config sizes to be identical across all programs in a MeshWorkload.");
-                }
-            } else {
-                global_program_config_sizes = program_on_grid.second.impl().get_program_config_sizes();
-            }
-        }
-    }
-    return *program_config_sizes_;
+    return get_finalized_metadata().program_config_sizes;
 }
 
 const std::vector<uint64_t>& MeshWorkloadImpl::get_cross_node_program_ids() {
-    if (!cross_node_program_ids_.has_value()) {
-        auto& cross_node_program_ids = cross_node_program_ids_.emplace();
-        for (auto& [device_range, program] : programs_) {
-            if (!program.impl().get_per_core_cross_node_dfbs().empty()) {
-                cross_node_program_ids.push_back(program.impl().get_id());
-            }
-        }
-    }
-    return *cross_node_program_ids_;
+    return get_finalized_metadata().cross_node_program_ids;
 }
 
 const std::unordered_set<SubDeviceId>& MeshWorkloadImpl::determine_sub_device_ids(
     MeshDevice* mesh_device, uint64_t sub_device_manager_id) {
-    auto [entry, inserted] = sub_device_ids_by_mesh_and_manager_[mesh_device->id()].try_emplace(sub_device_manager_id);
+    auto& sub_device_ids_by_manager = get_finalized_metadata().sub_device_ids_by_mesh_and_manager[mesh_device->id()];
+    auto [entry, inserted] = sub_device_ids_by_manager.try_emplace(sub_device_manager_id);
     auto& sub_device_ids = entry->second;
     if (inserted) {
         for (auto& [device_range, program] : programs_) {
@@ -437,7 +440,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     }
     ttsl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
-    this->max_program_kernels_sizeB_ = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
+    const uint32_t max_program_kernels_sizeB = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
         extract_context_id(mesh_device),
         mesh_device,
         kernels_getter,
@@ -445,7 +448,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
         semaphores_getter,
         programs);
 
-    set_finalized();
+    set_finalized(max_program_kernels_sizeB);
 }
 
 // MeshWorkload PIMPL Implementation
