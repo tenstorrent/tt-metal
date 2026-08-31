@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-08-30",
+  "last_scan_date": "2026-09-01",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -34,7 +34,9 @@
     "33158955938",
     "33244209984",
     "33274485285",
-    "33300580035"
+    "33300580035",
+    "33375429322",
+    "33433754247"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -43,7 +45,6 @@
     "sanity-tests.yaml",
     "galaxy-unit-tests.yaml",
     "t3000-unit-tests.yaml",
-    "galaxy-sanity.yaml",
     "single-card-demo-tests.yaml",
     "t3000-demo-tests.yaml",
     "models-t3-unit-tests.yaml",
@@ -62,7 +63,8 @@
     "runtime-sanity-tests.yaml",
     "galaxy-integration-tests.yaml",
     "models-t2-e2e-tests.yaml",
-    "blackhole-e2e-tests.yaml"
+    "blackhole-e2e-tests.yaml",
+    "galaxy-sanity.yaml"
   ],
   "in_flight_prs": [
     {
@@ -261,10 +263,19 @@
       "pr": 0,
       "branch": "silencer/demote-apply-device-delay-info-logs",
       "pattern": "apply_device_delay per-mesh-coordinate log_info spam (Creating/Created delay program, Starting/Ending delay primitive, Initializing delay op structs)",
-      "status": "open-pr",
+      "status": "reported_inconclusive_ready_for_review",
       "dispatched_workflow": "blackhole-e2e-tests.yaml",
-      "note": "PR created and blackhole-e2e-tests dispatched this run on branch silencer/demote-apply-device-delay-info-logs; actual PR number not visible to this session (safe-output write-once). Reconcile next run: find the PR by branch name, check CI run, comment + mark ready-for-review."
+      "note": "PR #54909 validation run 33375429322 (blackhole-e2e-tests) all 51 checks passed. Grepped jobs 99438137023/99438137098 for demoted apply_device_delay patterns: 0 occurrences, but no evidence those jobs exercise apply_device_delay code path at all - inconclusive. Commented /codeowners ping + marked ready for review (this run).",
+      "pr_number": 54909
+    },
+    {
+      "branch": "silencer/pydantic-configdict-ci-data-models",
+      "pr_number": null,
+      "title": "Replace deprecated pydantic class-based Config with ConfigDict in CI data-collection models",
+      "pattern": "PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead (infra/data_collection/pydantic_models.py PerfMetric/OpParam)",
+      "status": "pr_opened_validation_dispatched",
+      "note": "Found in galaxy-sanity-test job 99627428530 (run 33433754247, wh_galaxy), 6x gha-annotation occurrences in last-5000-lines sample. Fixed by switching to model_config = ConfigDict(frozen=True), matching existing pattern in same file (OpTest.model_config). Dispatched galaxy-sanity (arch wormhole_b0) on branch for validation. Next run: find PR by branch name, check CI, grep next run's job log for 'class-based `config` is deprecated' - should be 0 if fixed."
     }
   ],
-  "backlog_cursor": "This run: Phase A marked #54851 ready-for-review (done). Phase B sampled blackhole-e2e-tests run 33300580035 (3 jobs: 99277253800, 99277254362, 99277254474). Confirmed PR #54224 (Fabric config changed same-value log) is still OPEN/unmerged on main - the 25x/4x same-value 'Fabric config changed' occurrences seen in this run's sample are NOT a new target, just evidence #54224 is still needed; do not open a duplicate for this pattern. Also confirmed 'Unknown motherboard' (ledger 7c2e91a4b6f0) and 'Fabric packet size suboptimal' (PR #54679) are already tracked - skip. New target found and PR opened this run: apply_device_delay log_info->log_debug demotion (branch silencer/demote-apply-device-delay-info-logs), dispatched blackhole-e2e-tests for validation. Untriaged candidates for next runs: (a) 'Building missing direction tensix builder for fabric_node...' warning in tt_metal/fabric/fabric_builder.cpp:261 (12x in sample, warning severity, not yet in ledger) - needs root-cause read of compile_kernels_for_missing_directions to see if the warning fires redundantly or legitimately once; (b) UMD topology-discovery/cluster-lifecycle info lines (71x/5x/3x in sample) - check if already covered by known 'UMD | Starting devices in cluster' pattern before treating as new. Next: reconcile the just-opened PR's CI result next run (find by branch name since PR number wasn't returned), then continue rotation with a workflow not recently sampled."
+  "backlog_cursor": "This run: Phase A resolved PR #54909 (apply_device_delay demotion) - validation run 33375429322 all-green but inconclusive (jobs didn't demonstrably exercise the delay code path); commented /codeowners ping and marked ready for review. Phase B sampled galaxy-sanity.yaml run 33433754247 (success), job 99627428530 (Fabric CCL tests [wh_galaxy]). Histogram: warning/UMD=576 (all hwloc_set_area_membind/init_hugepage - lives in tt_metal/third_party/umd submodule, not checked out, cannot root-cause-fix here, skip), info/Metal=290 (256x was D2HSocket hugepage-fallback log - already covered by existing PR #54405, skip as duplicate), info/UMD=135 and info/Distributed=43 (topology discovery/cluster lifecycle - previously untriaged candidate, still not acted on, defer), gha-annotation=6x pydantic 'class-based config is deprecated, use ConfigDict' warning. New target found and PR opened: silencer/pydantic-configdict-ci-data-models (infra/data_collection/pydantic_models.py, PerfMetric+OpParam class Config -> model_config=ConfigDict(frozen=True)), dispatched galaxy-sanity for validation. Remaining untriaged candidates for future runs: (a) 'Building missing direction tensix builder for fabric_node...' warning in tt_metal/fabric/fabric_builder.cpp:261 - 0 occurrences in this run's sample (not exercised by this job), still needs root-cause read when a job that hits FabricTensixConfig::UDM is sampled; (b) UMD topology-discovery/cluster-lifecycle info lines (Starting/Closing devices in cluster, Cluster constructor/destructor, topology discovery) - 9x each in this sample, likely legitimate once-per-process lifecycle logging at appropriate info severity, probably NOT noise - deprioritize unless a job shows it repeated excessively. Next run: reconcile silencer/pydantic-configdict-ci-data-models PR (find by branch name), check galaxy-sanity dispatch result, grep a fresh galaxy-sanity job log for the pydantic deprecation string (should be 0 occurrences if fixed); then continue workflow rotation avoiding galaxy-sanity.yaml, blackhole-e2e-tests, models-t3-unit-tests, perf-device-models, t3000-integration-tests, models-t2-e2e-tests (all recently sampled)."
 }
