@@ -1048,32 +1048,16 @@ def test_eltwise_unary_sfpu_saturation(
 # Mixed-magnitude block-float blocks
 #
 # Bfp8_b, Bfp4_b and Bfp2_b share one exponent per 16-element block, so the stimulus that
-# exercises the format is a block holding one large element and fifteen small ones, where the
-# small values quantize hard or to zero. Every other stimulus here is a narrow-range uniform or
-# gaussian, so the shared exponent never bites; the edge sweeps cannot reach it either, their
-# format axis being Float16_b / Float32 with block-float excluded from cat B because the unpack
-# quantization destroys a NaN.
-#
-# A face callable rather than a new DistributionKind: this is one op's stimulus, not a
-# distribution the generator needs to know about.
-#
-# THE GOLDEN WAS CHECKED FIRST (plan step 3). Abs at all three formats over spreads of 2**-4
-# through 2**-24 on a Blackhole p150: zero mismatching lanes, so the host quantizer models a
-# mixed block the way the unpacker does and any failure here is the op. The spread does bite --
-# in Bfp8_b, 512 of 4096 elements flush to zero at 2**-8 and 2816 at 2**-24; Bfp2_b collapses
-# fifteen of every sixteen at every spread, its one magnitude bit doing what its docstring says.
-#
-# TWO VARIANTS for two questions whose product is not needed: the op sweep asks whether each op
-# survives a block with its small elements quantized away, the format sweep whether each format
-# quantizes as modelled -- op-independent, so one pass-through op is the instrument.
-#
-# WHERE THE VERDICT COMES FROM, corrected. An earlier version said the Bfp8_b lattice path in
-# `_bfp_block_aware_compare` was "never reached": true of *this variant*, where torch.isclose
-# accepted all 4096 elements over Exp, Gelu, Silu and Sqrt, and false as a general claim --
-# across the block-float half of this file it takes 370 calls, 112 of them Bfp8_b. The spread
-# reaches it on the narrower formats by construction, since a Bfp4_b or Bfp2_b output has no
-# tolerance pre-check at all and the lattice is the only verdict (255 and 3 calls). Bfp8_b
-# staying inside atol says the stimulus is well modelled, not that the comparator is dead.
+# exercises the format is a block of one large element and fifteen small ones -- everything else
+# here is a narrow-range uniform or gaussian, and the shared exponent never bites. It does here:
+# in Bfp8_b, 512 of 4096 elements flush to zero at 2**-8 and 2816 at 2**-24, and Bfp2_b collapses
+# fifteen of every sixteen at every spread. Measured against Abs on a Blackhole p150 first, at
+# all three formats and every spread, with zero mismatching lanes: the host quantizer models a
+# mixed block the way the unpacker does, so a failure here is the op. Two variants, because the
+# questions are independent -- whether an op survives a block with its small elements quantized
+# away, and whether each format quantizes as modelled (op-independent, so one pass-through op is
+# the instrument). On a Bfp4_b or Bfp2_b output this is also the only path that reaches
+# `_bfp_block_aware_compare`'s lattice, passed_test having no tolerance pre-check there.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BLOCK_ELEMENTS = 16

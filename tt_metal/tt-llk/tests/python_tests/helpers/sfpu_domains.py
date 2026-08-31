@@ -1971,8 +1971,8 @@ _COMPARISON_EDGE_OPS = (
 # lcm have identities there, and 0 annihilates the multiply and is neutral for max/min. 1 comes
 # with it as the multiplicative identity gcd and lcm are next most likely to disagree on.
 #
-# Registered here rather than in the test that drives them (convention 1), which also makes the
-# ledger tell the truth: from a test-file list, cat D read "no knee registered" for ops that
+# Registered here rather than in the test that drives them -- an op joins a sweep by gaining a
+# table entry -- which also makes the ledger tell the truth: from a test-file list, cat D read "no knee registered" for ops that
 # were being driven at one.
 #
 # The divisor ops are absent: a zero divisor is undefined for them (_INT_ZERO_UNDEFINED_DIVISOR
@@ -2133,10 +2133,9 @@ _SPECIALS_CARRYING_INPUTS: FrozenSet[DataFormat] = frozenset(
 # Empty, and that is a measurement rather than caution. Injecting specials on every triple
 # specials_safe() allows gives **272 failures out of 564 variants** -- 48% -- and the
 # failures are not the (format, dest_acc) matrix, which is gated correctly, but goldens
-# that return inf where IEEE says nan and so on. The expansion plan's rule of thumb was
-# "default to injecting the edge; xfail the handful the golden cannot yet express"; the
-# measurement says the handful is half the op list, which makes cat B golden work rather
-# than a stimulus change.
+# that return inf where IEEE says nan and so on. "Inject the edge and xfail the handful the
+# golden cannot express" was the intent; the measurement says the handful is half the op list,
+# which makes cat B golden work rather than a stimulus change.
 #
 # Per op rather than one global bool, because the global only had two states: no specials
 # anywhere, or ~270 xfails -- and 270 xfails is not coverage, it is a monument. An op joins
@@ -2878,7 +2877,7 @@ assert not (
 # op's *golden* defines an answer at a non-finite operand, specials_safe() says the *pipeline*
 # delivers one intact, and neither implies the other.
 #
-# Measured in convention 3's two passes. Host-side first, over all 5x5x5 special triples: every
+# Measured before enrolling, in two passes. Host-side first, over all 5x5x5 special triples: every
 # TernarySFPUGolden op and WhereGolden answers, none raises -- and not by luck, since they are
 # plain torch arithmetic with no math.* call to raise the way the unary tranche's
 # math.acos/asin/tan did. Then on a Blackhole p150 through test_sfpu_ternary_operand_edges'
@@ -3318,9 +3317,8 @@ def edge_values(
         synonym for it: the delivery rules differ and so do the failure classes, so folding
         the two would give one xfail covering an unpack question and a saturation one.
 
-    Clipped against the *narrowest* format in the pipeline, not the input format. This is
-    the part the plan's original one-format signature got wrong: a caller that passes a
-    spec to a driver bypasses the driver's own for_op_pipeline() resolution entirely
+    Clipped against the *narrowest* format in the pipeline, not the input format, which is why
+    the signature takes both: a caller that passes a spec to a driver bypasses the driver's own for_op_pipeline() resolution entirely
     (eltwise_unary_sfpu only resolves when spec_A is None), so a probe near a format
     ceiling would otherwise reach a Float16 or MxFp4 output unclipped and overflow.
 

@@ -1471,9 +1471,8 @@ def test_format_extremes_straddle_the_ftz_cliff(fmt):
 def test_format_extremes_are_exactly_representable(fmt):
     """Every cat-F probe must survive a round trip through the format it is a probe for.
 
-    The trap this closes is the one the plan names for the saturation probes and which applies
-    just as hard here: a value written near a threshold gets pinned to a value other than the
-    one it names. _FORMAT_MAX_MAGNITUDE's bfloat16 fallback is a decimal literal that sits a
+    Same trap the saturation probes are written to avoid, and it applies just as hard here: a
+    value written near a threshold gets pinned to a value other than the one it names. _FORMAT_MAX_MAGNITUDE's bfloat16 fallback is a decimal literal that sits a
     hair *above* the true bfloat16 maximum, so an unrounded ceiling probe would quantize on the
     way in and stop being the ceiling.
     """

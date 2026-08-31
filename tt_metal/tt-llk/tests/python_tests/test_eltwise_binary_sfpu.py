@@ -1534,7 +1534,7 @@ def test_eltwise_binary_sfpu_int_signed_division(formats, dest_acc, mathop):
 # plain SFPMAD arithmetic, IEEE-exact over the whole format range, and their registered
 # uniform(-1, 1) is a stimulus choice rather than an accuracy claim.
 #
-# SfpuElwpow is absent though the plan listed it: base [0, 8] and exponent [0, 4] tops out at
+# SfpuElwpow is absent: base [0, 8] and exponent [0, 4] tops out at
 # 4096, so it cannot overflow inside what the kernel claims accuracy on. Measured anyway, to be
 # sure the exclusion is the domain and not a defect -- above the threshold it saturates correctly
 # (2**200, 2**400, 3**300 all +inf), and below it the finite controls are 45% off at 2**100 and
@@ -1944,8 +1944,8 @@ assert _BINARY_EDGE_OPS, (
 # an op had belonged to one class and one set of cells; the signed-zero *pole* probe broke that.
 # fmod's lost zero sign is a bfloat16-path story and its `fmod(0, -0.0)` is an unpack-to-dest
 # one, so a single per-op cell list would have to be the union and would then xfail each class
-# on cells where it passes -- reporting XPASS forever, which is exactly the drift convention 4's
-# per-cell enumeration exists to catch.
+# on cells where it passes -- reporting XPASS forever, which is exactly the drift the per-cell
+# enumeration exists to catch.
 _ZERO_SIGN_CELLS = (
     (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
     (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),

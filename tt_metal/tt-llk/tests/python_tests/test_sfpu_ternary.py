@@ -291,8 +291,8 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
 # twenty-five, and would spend the rest of every face on the (0, 0, 0) that
 # StimuliSpec.custom zero-fills with.
 #
-# *edge_class* partitions the probe by failure class before it is driven, which is convention 5
-# and the same split _EDGE_CLASSES makes in test_eltwise_binary_sfpu:
+# *edge_class* partitions the probe by failure class before it is driven -- one class per
+# variant, the same split _EDGE_CLASSES makes in test_eltwise_binary_sfpu:
 #
 #   pole         the finite edges -- the registered singularity straddled by a ULP step (cat A),
 #                the op's knees (cat D), and the signed zeros.
