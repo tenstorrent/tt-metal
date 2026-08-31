@@ -31,18 +31,17 @@ from typing import TYPE_CHECKING
 import torch
 from loguru import logger
 
-from ..layers.lora import LoRAMixin
-from .direct import apply_direct_delta
 from .keys import parse_adapter
 from .route import route
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Iterator, Mapping, Sequence
     from pathlib import Path
 
     from ..layers.module import Module
     from .direct import DirectDelta
     from .keys import AdapterEntry
+    from .route import RoutedTensor
 
 
 @dataclass(frozen=True)
@@ -126,6 +125,8 @@ def apply_entries(
     silence.
 
     """
+    from .direct import apply_direct_delta
+
     report = AdapterReport(name=name, strength=strength)
     device_entries = []
     for entry in entries:
@@ -145,18 +146,7 @@ def apply_entries(
         raise NotImplementedError(msg)
 
     fused, singles = _partition(device_entries, groups)
-    state, provenance = _build_routing_state(fused, singles)
-    routed, unresolved = route(model, state)
-    if unresolved:
-        msg = (
-            f"adapter {report.name}: {len(unresolved)} target(s) resolved to no parameter: "
-            f"{', '.join(sorted(unresolved)[:5])}. Either the target map is incomplete or this "
-            "adapter was published against a different architecture."
-        )
-        raise KeyError(msg)
-
-    for item in routed:
-        sources = provenance[item.path]
+    for sources, item in _route_each(model, fused, singles, adapter_name=report.name):
         if sources[0].kind == "lora":
             report.bound[item.path] = _bind(item.module, item.value, sources, strength=strength, name=report.name)
         else:
@@ -208,56 +198,79 @@ def _partition(
     return fused, singles
 
 
-def _build_routing_state(
-    fused: Mapping[str, list[AdapterEntry]], singles: Sequence[AdapterEntry]
-) -> tuple[dict[str, torch.Tensor], _Provenance]:
-    """Assemble the state dict handed to the router, and remember what produced each key.
+def _route_each(
+    model: Module,
+    fused: Mapping[str, list[AdapterEntry]],
+    singles: Sequence[AdapterEntry],
+    *,
+    adapter_name: str,
+) -> Iterator[tuple[list[AdapterEntry], RoutedTensor]]:
+    """Route one source at a time, so what produced each destination is known rather than inferred.
 
-    Fused members are widened to the group's total rank before routing, each occupying its own
-    slice of the rank axis. That block-diagonal form is what makes the fused product reproduce the
-    per-source deltas and cross-couple nothing.
+    Inferring it from the destination path does not work: renames mean a source and its destination
+    need not share a prefix (``attn.to_out.0`` lands on ``attn.to_out``), and a mis-attribution
+    there is silent -- every shape still agrees, and the wrong ``A`` binds to the wrong ``B``.
 
-    Provenance is keyed by the *unprefixed* destination name because the router reports paths from
-    the model root, and for a fused group the destination is a parameter no source is named after.
+    Routing is cheap enough to do per source because the walk descends only where it has something
+    to deliver: a single source touches its own path and nothing else.
+
+    Fused members are widened to the group's total rank first, each holding its own slice of the
+    rank axis. That block-diagonal form is what makes the fused product reproduce the per-source
+    deltas and cross-couple nothing.
     """
-    state: dict[str, torch.Tensor] = {}
-    by_source: dict[str, list[AdapterEntry]] = {}
+    widened = {
+        owner: {
+            f"{entry.path}.weight": _widen(entry, offset, sum(member.rank for member in members))
+            for entry, offset in zip(members, _offsets(members), strict=True)
+        }
+        for owner, members in fused.items()
+    }
+    group_destinations: dict[str, set[str]] = {}
 
     for owner, members in fused.items():
-        total_rank = sum(entry.rank for entry in members)
-        offset = 0
-        for entry in members:
-            widened = torch.zeros(entry.B.shape[0], total_rank, dtype=entry.B.dtype)
-            widened[:, offset : offset + entry.rank] = entry.B
-            offset += entry.rank
-            state[f"{entry.path}.weight"] = widened
-        by_source[owner] = members
+        routed = _route_one(model, widened[owner], adapter_name=adapter_name)
+        group_destinations[owner] = {item.path for item in routed}
+        for item in routed:
+            yield members, item
 
     for entry in singles:
         suffix = "bias" if entry.kind == "diff_b" else "weight"
-        state[f"{entry.path}.{suffix}"] = entry.B if entry.kind == "lora" else entry.delta
-        by_source[entry.path] = [entry]
+        state = {f"{entry.path}.{suffix}": entry.B if entry.kind == "lora" else entry.delta}
+        # A fusing hook on the way down reads all of its sources, so give it the group's real
+        # factors rather than leaving it to fail on a sibling this source has no business supplying.
+        standins = [owner for owner in widened if entry.path.startswith(f"{owner}.")]
+        for owner in standins:
+            state.update(widened[owner])
+        for item in _route_one(model, state, adapter_name=adapter_name):
+            if any(item.path in group_destinations[owner] for owner in standins):
+                continue
+            yield [entry], item
 
-    return state, _Provenance(by_source)
+
+def _route_one(model: Module, state: Mapping[str, torch.Tensor], *, adapter_name: str) -> list[RoutedTensor]:
+    routed, unresolved = route(model, state)
+    if unresolved:
+        msg = (
+            f"adapter {adapter_name}: {len(unresolved)} target(s) resolved to no parameter: "
+            f"{', '.join(sorted(unresolved))}. Either the target map is incomplete or this adapter "
+            "was published against a different architecture."
+        )
+        raise KeyError(msg)
+    return routed
 
 
-class _Provenance:
-    """Map a routed destination path back to the adapter entries that produced it.
+def _offsets(members: Sequence[AdapterEntry]) -> list[int]:
+    offsets, total = [], 0
+    for entry in members:
+        offsets.append(total)
+        total += entry.rank
+    return offsets
 
-    The router reports where a tensor landed, not where it came from. For a 1:1 target the two
-    share a prefix; for a fused group the destination sits under the owner. Longest-prefix match
-    covers both without the router having to carry provenance itself.
-    """
 
-    def __init__(self, by_source: Mapping[str, list[AdapterEntry]]) -> None:
-        self._by_source = dict(by_source)
-
-    def __getitem__(self, dest: str) -> list[AdapterEntry]:
-        candidates = [src for src in self._by_source if dest == src or dest.startswith(f"{src}.")]
-        if not candidates:
-            msg = f"routed tensor {dest} has no adapter entry behind it"
-            raise KeyError(msg)
-        return self._by_source[max(candidates, key=len)]
+def _widen(entry: AdapterEntry, offset: int, total_rank: int) -> torch.Tensor:
+    widened = torch.zeros(entry.B.shape[0], total_rank, dtype=entry.B.dtype)
+    widened[:, offset : offset + entry.rank] = entry.B
+    return widened
 
 
 def _bind(module: Module, b_routed: torch.Tensor, sources: Sequence[AdapterEntry], *, strength: float, name: str):
@@ -267,6 +280,8 @@ def _bind(module: Module, b_routed: torch.Tensor, sources: Sequence[AdapterEntry
     preparation pipeline produces for a weight. The bank stores factors in PyTorch LoRA layout, so
     it goes back to ``[out, rank]`` here rather than teaching the mixin a second convention.
     """
+    from ..layers.lora import LoRAMixin
+
     if not isinstance(module, LoRAMixin):
         msg = (
             f"{name}: {type(module).__name__} is not LoRA-aware; call promote_to_lora(model) before "
