@@ -17,12 +17,10 @@ Test coverage notes:
 """
 
 import inspect
-import inspect
 import os
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from types import SimpleNamespace
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -43,7 +41,6 @@ except ImportError:
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.attention import attention_1d as attention_1d_module
-from models.common.modules.attention import attention_1d as attention_1d_module
 from models.common.modules.attention.attention_1d import Attention1D, Attention1DConfig, _resolve_attention1d_config
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1DConfig
@@ -54,14 +51,7 @@ from models.common.tensor_utils import (
     zeros_like_kv_cache,
     zeros_like_paged_cache,
 )
-from models.common.tensor_utils import (
-    get_rot_transformation_mat,
-    nearest_32,
-    zeros_like_kv_cache,
-    zeros_like_paged_cache,
-)
 from models.common.tests.utils import stable_model_seed
-from models.common.utility_functions import comp_allclose, comp_pcc
 from models.common.utility_functions import comp_allclose, comp_pcc
 
 # 1D module suites target the T3K; skip when the host system is a Galaxy.
@@ -320,7 +310,6 @@ class HfAttentionWrapper:
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
         self._uses_past_key_values = "past_key_values" in inspect.signature(attention.forward).parameters
-        self._uses_past_key_values = "past_key_values" in inspect.signature(attention.forward).parameters
 
     def forward(self, x: torch.Tensor, start_pos: int, mask=None):
         """Run attention forward pass using rotary_emb directly."""
@@ -338,22 +327,7 @@ class HfAttentionWrapper:
                 else {"past_key_value": self.past_key_value, "use_cache": True}
             )
             output, *_ = self.attention(x, position_embeddings=position_embeddings, attention_mask=mask, **cache_kwargs)
-            cache_kwargs = (
-                {"past_key_values": self.past_key_value}
-                if self._uses_past_key_values
-                else {"past_key_value": self.past_key_value, "use_cache": True}
-            )
-            output, *_ = self.attention(x, position_embeddings=position_embeddings, attention_mask=mask, **cache_kwargs)
         else:
-            cache_kwargs = (
-                {"past_key_values": self.past_key_value}
-                if self._uses_past_key_values
-                else {"past_key_value": self.past_key_value, "use_cache": True}
-            )
-            outputs = self.attention(x, position_ids=position_ids, attention_mask=mask, **cache_kwargs)
-            output = outputs[0]
-            if not self._uses_past_key_values and len(outputs) > 2:
-                self.past_key_value = outputs[2]
             cache_kwargs = (
                 {"past_key_values": self.past_key_value}
                 if self._uses_past_key_values
@@ -889,14 +863,11 @@ def test_attention_prefill_selects_scalar_or_tensor_chunk_start_api(monkeypatch,
         typecast=MagicMock(side_effect=lambda tensor, **_kwargs: tensor),
     )
     prefill_sdpa_prg_config = MagicMock(return_value="sdpa-program")
-    arch_cfg = SimpleNamespace(
-        li_o_prefill_compute_kernel_cfg=object(),
-        li_qkv_prefill_compute_kernel_cfg=object(),
-        sdpa_prefill_compute_kernel_cfg=object(),
-    )
     cfg = SimpleNamespace(
         activation_dtype=None,
         head_dim=128,
+        li_o_prefill_compute_kernel_cfg=object(),
+        li_qkv_prefill_compute_kernel_cfg=object(),
         mesh_device=SimpleNamespace(get_num_devices=MagicMock(return_value=1)),
         min_kv_prefill_shard_seqlen=256,
         n_heads=32,
@@ -906,6 +877,7 @@ def test_attention_prefill_selects_scalar_or_tensor_chunk_start_api(monkeypatch,
         prefill_wo_prg_config=MagicMock(return_value="wo-program"),
         prefill_xqkv_prg_config=MagicMock(return_value="qkv-program"),
         scale=0.125,
+        sdpa_prefill_compute_kernel_cfg=object(),
         sliding_window=None,
         transformation_mat_prefill=object(),
         use_minimal_qkv_matmul=MagicMock(return_value=False),
@@ -917,7 +889,6 @@ def test_attention_prefill_selects_scalar_or_tensor_chunk_start_api(monkeypatch,
         _all_gather_before_wo_prefill=MagicMock(side_effect=lambda tensor: tensor),
         _kv_fill_prefill=MagicMock(),
         _reduce_after_wo_prefill=MagicMock(side_effect=lambda tensor: tensor),
-        arch_config=arch_cfg,
         config=cfg,
         k_norm=None,
         kv_cache=(
