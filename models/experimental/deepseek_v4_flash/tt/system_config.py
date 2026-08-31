@@ -172,6 +172,9 @@ class AttentionSettings:
     keep_qa_kv_weights_in_l1: bool = True
     # ``None`` = fuse wherever the prefetcher is off (see :meth:`resolve_fuse_qa_kv`).
     fuse_qa_kv_proj: Optional[bool] = False
+    # How q_a and kv are partitioned when ``tp_size > 1``. Ignored at TP1 (the
+    # projections are replicated). See ``DeepSeekV4Attention.qkv_tp_strategy``.
+    qkv_tp_strategy: str = "fused_replicated_full"
 
     def resolve_fuse_qa_kv(self, use_prefetcher: bool) -> bool:
         """Whether to run q_a and kv as one matmul over their concatenated weight.
@@ -281,6 +284,7 @@ class SystemConfig:
             f"/{self.prefetcher.num_prefetch_pages}p "
             f"experts_block={self.moe.experts_block_size} "
             f"fuse_qa_kv={'auto' if self.attention.fuse_qa_kv_proj is None else self.attention.fuse_qa_kv_proj} "
+            f"qkv_tp={self.attention.qkv_tp_strategy} "
             f"dtype={self.decode.weight_dtype} batch={self.decode.batch} "
             f"users={self.decode.num_users} ctx={self.decode.max_context}"
         )
@@ -501,6 +505,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, Callable[[str], Any]], ...] = (
     ("attention", "sdpa_max_cores_per_head_batch", "DEEPSEEK_V4_SDPA_MAX_CORES_PER_HEAD", int),
     ("attention", "keep_qa_kv_weights_in_l1", "DEEPSEEK_V4_KEEP_WEIGHTS_IN_L1", _env_bool),
     ("attention", "fuse_qa_kv_proj", "DEEPSEEK_V4_FUSE_QA_KV", _env_tristate),
+    ("attention", "qkv_tp_strategy", "DEEPSEEK_V4_QKV_TP_STRATEGY", str),
     ("decode", "packed_l1_weights", "DEEPSEEK_V4_PACKED_L1_WEIGHTS", _env_bool),
     ("decode", "weight_dtype", "DEEPSEEK_V4_WEIGHT_DTYPE", str),
     ("decode", "block_size", "DEEPSEEK_V4_BLOCK_SIZE", int),

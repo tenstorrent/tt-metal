@@ -27,8 +27,9 @@ namespace {
 // replaces the two-hub in0 gather with a pipelined closed-ring all-gather over S ∪ C_B.
 // Compute (compute_partial_width_sharded.cpp) is unchanged -- the ring reader lands each
 // shard directly at cb_full_in0[sender_id * shard_size], matching the sender-major layout
-// compute already assumes. Only the non-GCB path uses this; ENABLE_GLOBAL_CB stays on the
-// hub gather because the reader<->prefetcher handshake lives in the hub reader.
+// compute already assumes. Used only when `ring_gather` is requested on the L1-resident
+// path; ENABLE_GLOBAL_CB stays on the hub gather because the reader<->prefetcher
+// handshake lives in the hub reader.
 ProgramDescriptor create_descriptor_ring_gather_partial(
     const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes,
     const MatmulDecodeDeviceOperation::tensor_args_t& tensor_args,
@@ -49,10 +50,10 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
              *mesh_dispatch_coordinate) == operation_attributes.mesh_coords->end())) {
         return {};
     }
-    // Non-GCB path uses the ring gather (closed ring; handles arbitrary S/C overlap the same
-    // way as the full-width factory). GCB (prefetcher) path stays on the two-hub gather
-    // because the reader<->prefetcher handshake is baked into reader_partial_width_sharded.cpp.
-    if (!operation_attributes.global_cb.has_value()) {
+    // Ring gather is opt-in (`ring_gather`) on the L1-resident weight path, matching the
+    // full-width factory. The two-hub gather remains the default; GCB (prefetcher) stays on
+    // it because the reader<->prefetcher handshake is baked into reader_partial_width_sharded.cpp.
+    if (operation_attributes.ring_gather && !operation_attributes.global_cb.has_value()) {
         const auto& a_grid = tensor_args.input_tensor_a.memory_config().shard_spec().value().grid;
         const auto& b_grid = operation_attributes.packed_weight.has_value()
                                  ? operation_attributes.packed_weight->cores
@@ -65,6 +66,10 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             b_grid.num_cores());
         return create_descriptor_ring_gather_partial(operation_attributes, tensor_args, tensor_return_value);
     }
+    log_info(
+        tt::LogOp,
+        "matmul_decode PartialWidthSharded: in0 gather = hub{}",
+        operation_attributes.global_cb.has_value() ? " (global_cb / prefetcher path)" : "");
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     auto& output_tensor = tensor_return_value;

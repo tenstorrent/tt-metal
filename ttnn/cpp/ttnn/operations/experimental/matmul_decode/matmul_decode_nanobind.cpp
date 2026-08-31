@@ -53,7 +53,7 @@ void bind_matmul_decode_operation(nb::module_& mod) {
 
     ttnn::bind_function<"matmul_decode", "ttnn.experimental.">(
         mod,
-        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None, all_gather: bool = False, mesh_coords: Optional[list[ttnn.MeshCoordinate]] = None) -> ttnn.Tensor
+        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None, all_gather: bool = False, mesh_coords: Optional[list[ttnn.MeshCoordinate]] = None, ring_gather: bool = False) -> ttnn.Tensor
 
         Returns the matrix product of two tensors.
 
@@ -126,6 +126,10 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 Intended for an explicit point-to-point broadcast of the selected rank's
                 result. Not supported with `global_cb`, `all_gather`, or the batched factory.
                 Defaults to None (all coordinates).
+            ring_gather (bool, optional): gather in0 over a pipelined closed ring on the
+                union of the source and compute grids instead of the two-hub gather.
+                Full- and partial-width L1-resident paths only (plain or packed_weight).
+                Not supported with `global_cb` or the batched factory. Defaults to False.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -141,7 +145,8 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("global_cb_k_blocks") = 1,
         nb::arg("packed_weight") = nb::none(),
         nb::arg("all_gather") = false,
-        nb::arg("mesh_coords") = nb::none());
+        nb::arg("mesh_coords") = nb::none(),
+        nb::arg("ring_gather") = false);
 }
 
 // Descriptor-level bindings for models/experimental/ops/descriptors/matmul_decode.py, mirroring
@@ -164,7 +169,8 @@ void bind_matmul_decode_descriptor(nb::module_& mod) {
         .def_rw("global_cb_k_blocks", &ttnn::prim::MatmulDecodeParams::global_cb_k_blocks)
         .def_rw("packed_weight", &ttnn::prim::MatmulDecodeParams::packed_weight)
         .def_rw("all_gather", &ttnn::prim::MatmulDecodeParams::all_gather)
-        .def_rw("ring_size", &ttnn::prim::MatmulDecodeParams::ring_size);
+        .def_rw("ring_size", &ttnn::prim::MatmulDecodeParams::ring_size)
+        .def_rw("ring_gather", &ttnn::prim::MatmulDecodeParams::ring_gather);
 
     nb::class_<ttnn::prim::MatmulDecodeInputs>(mod, "MatmulDecodeInputs")
         .def(

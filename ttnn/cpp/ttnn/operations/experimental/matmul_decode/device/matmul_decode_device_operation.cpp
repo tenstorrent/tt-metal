@@ -77,6 +77,14 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
             "the partial-width all-gather implementation is not available");
     }
 
+    if (operation_attributes.ring_gather) {
+        TT_FATAL(
+            !operation_attributes.global_cb.has_value(),
+            "matmul_decode ring_gather is not supported with global_cb (tensor prefetcher); the "
+            "reader<->prefetcher handshake lives on the two-hub gather path");
+        TT_FATAL(!batched, "matmul_decode ring_gather is not supported with the batched width-sharded factory");
+    }
+
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Input tensor A must be in tile layout");
     TT_FATAL(input_tensor_b.layout() == Layout::TILE, "Input tensor B must be in tile layout");
     TT_FATAL(
@@ -544,7 +552,6 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
     if (input_tensor_a.logical_shape().rank() == 4) {
         const auto memory_config = operation_attributes.output_mem_config.value_or(
             MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM));
-
         return tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
@@ -621,12 +628,14 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     uint32_t global_cb_k_blocks,
     const std::optional<ttnn::operations::experimental::matmul_decode::PackedWeightSpec>& packed_weight,
     bool all_gather,
-    const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords) {
+    const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords,
+    bool ring_gather) {
     using OperationType = ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation;
     using ttnn::operations::experimental::matmul_decode::gcb_num_receivers;
 
     auto with_all_gather = [&](OperationType::operation_attributes_t attrs) {
         attrs.all_gather = all_gather;
+        attrs.ring_gather = ring_gather;
         attrs.mesh_coords = mesh_coords;
         if (all_gather) {
             attrs.ring_size = ::ttnn::ccl::get_topological_dimension(input_tensor_a, std::nullopt);

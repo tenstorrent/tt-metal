@@ -33,7 +33,7 @@ namespace {
 // Ring-gather implementation of FullWidthSharded. Replaces the two-hub gather-then-broadcast
 // with a pipelined ring all-gather on in0. Kept separate from the hub-gather path so we can
 // keep the ENABLE_GLOBAL_CB weight streaming logic on the old path unchanged; the ring-gather
-// path is used only when the weights are L1-resident (plain or packed-weight cases).
+// path is used only when `ring_gather` is requested on L1-resident weights (plain or packed).
 ProgramDescriptor create_descriptor_ring_gather_full(
     const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes,
     const MatmulDecodeDeviceOperation::tensor_args_t& tensor_args,
@@ -57,20 +57,11 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
              *mesh_dispatch_coordinate) == operation_attributes.mesh_coords->end())) {
         return {};
     }
-    // Ring gather covers the L1-resident weight paths (plain and packed_weight) whenever the
-    // source grid and the compute grid are disjoint. Two cases still route to the two-hub
-    // gather:
-    //   1. ENABLE_GLOBAL_CB: the reader<->prefetcher handshake is baked into
-    //      reader_full_width_sharded.cpp; ring gather doesn't yet cover it.
-    //   2. Overlapping S ∩ C: the ring's pipeline schedule assumes every non-source core has
-    //      a source (or a source-fed forwarder) as its predecessor, which is trivially true
-    //      when S and C are disjoint contiguous runs. Handling arbitrary overlaps requires a
-    //      per-step "who is sending" mask that the current reader doesn't carry; the two-hub
-    //      gather already handles overlap correctly, so we prefer it in that case.
-    // Non-GCB path always uses the ring gather (closed ring; handles arbitrary S/C overlap).
-    // GCB (prefetcher) path still uses the two-hub gather because the reader<->prefetcher
-    // handshake is baked into reader_full_width_sharded.cpp.
-    if (!operation_attributes.global_cb.has_value()) {
+    // Ring gather is opt-in (`ring_gather`) on the L1-resident weight paths (plain and
+    // packed_weight). The two-hub gather remains the default, and the GCB (prefetcher) path
+    // always uses it because the reader<->prefetcher handshake is baked into
+    // reader_full_width_sharded.cpp.
+    if (operation_attributes.ring_gather && !operation_attributes.global_cb.has_value()) {
         const auto& a_grid = tensor_args.input_tensor_a.memory_config().shard_spec().value().grid;
         const auto& b_grid = operation_attributes.packed_weight.has_value()
                                  ? operation_attributes.packed_weight->cores
@@ -84,6 +75,10 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         return create_descriptor_ring_gather_full(
             operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
     }
+    log_info(
+        tt::LogOp,
+        "matmul_decode FullWidthSharded: in0 gather = hub{}",
+        operation_attributes.global_cb.has_value() ? " (global_cb / prefetcher path)" : "");
     (void)mesh_dispatch_coordinate;
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
