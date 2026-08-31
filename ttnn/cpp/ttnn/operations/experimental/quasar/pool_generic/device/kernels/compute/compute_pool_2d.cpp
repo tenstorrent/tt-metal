@@ -164,20 +164,19 @@ void kernel_main() {
     // if max out sticks is non-zero then this will be used as the number of out sticks for every core
     // otherwise the runtime args are referenced for core-specific number of out sticks, for Pool2D
     // runtime args are used while for grid sample the max out sticks is set
-    uint32_t num_out_sticks_this_core =
-        max_out_sticks_per_core ? max_out_sticks_per_core : get_arg(args::out_nhw_this_core);
+    uint32_t num_out_sticks_per_thread =
+        max_out_sticks_per_core ? max_out_sticks_per_core : get_arg(args::out_nhw_per_thread);
+    // Whole-cluster stick count, needed by the tiled-output tile-boundary math below.
+    const uint32_t num_out_sticks_this_cluster = num_out_sticks_per_thread * get_num_threads();
     uint32_t last_tile_height =
-        num_out_sticks_this_core % TILE_HEIGHT == 0 ? TILE_HEIGHT : num_out_sticks_this_core % TILE_HEIGHT;
+        num_out_sticks_this_cluster % TILE_HEIGHT == 0 ? TILE_HEIGHT : num_out_sticks_this_cluster % TILE_HEIGHT;
 
-    // Sticks are dealt whole to (reader thread, NEO) lanes; the per-core count must divide evenly.
-    // Runtime ASSERT: out_nhw_this_core is a per-core runtime arg, so this cannot be a static_assert.
-    ASSERT(num_out_sticks_this_core % get_num_threads() == 0);
     // Live thread-count probe for the perf harness A/B guard (inert unless TT_METAL_DPRINT_CORES set).
     DPRINT("qpool num_threads: {}\n", get_num_threads());
 
     uint32_t tilize_stick_counter = 0;
     uint32_t tilize_stick_total = 0;
-    for (uint32_t n = 0; n < num_out_sticks_this_core / get_num_threads(); ++n) {
+    for (uint32_t n = 0; n < num_out_sticks_per_thread; ++n) {
         const bool reader0 = !(use_split_reader && (n & 0x1));
         const bool use_reader1_scalar = !reader0 && !one_scalar_per_core;
         // The reader1 (split) DFB tokens only exist under SPLIT_READER; gate the selection at
@@ -257,7 +256,7 @@ void kernel_main() {
                 }
                 tile_regs_release();
 
-                bool last_tile = num_out_sticks_this_core - tilize_stick_total < last_tile_height;
+                bool last_tile = num_out_sticks_this_cluster - tilize_stick_total < last_tile_height;
                 if (tilize_stick_counter == TILE_HEIGHT || (last_tile && tilize_stick_counter == last_tile_height)) {
                     if (last_tile && last_tile_height != TILE_HEIGHT) {
                         pre_tilize_cb.wait_front(last_tile_height * in_ntiles_c);
