@@ -169,6 +169,7 @@ int main(int argc, char** argv) {
     // with the thing it is testing.
     uint32_t resident_rounds = 0;
     const char* dump_gaps = nullptr;  // raw per-round CSV: analysis thresholds belong offline, not in a constant
+    uint32_t hold_ms = 0;             // soak vehicle for the IN-ROUTER sync: keep the mesh open, do nothing
     uint32_t resident_hz = 20;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--samples") == 0 && i + 1 < argc) {
@@ -227,6 +228,8 @@ int main(int argc, char** argv) {
             resident_hz = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
         } else if (std::strcmp(argv[i], "--dump-gaps") == 0 && i + 1 < argc) {
             dump_gaps = argv[++i];
+        } else if (std::strcmp(argv[i], "--hold-ms") == 0 && i + 1 < argc) {
+            hold_ms = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
         }
     }
 
@@ -364,6 +367,15 @@ int main(int argc, char** argv) {
             if (!all_links) { break; }
         }
         if (!all_links && !edges.empty()) { break; }
+    }
+    if (hold_ms != 0) {
+        // Soak vehicle for the IN-ROUTER device-to-device sync (fabric_router_sync_hook.hpp): the
+        // routers and the perf_debug profiler are already up from the mesh open above; everything
+        // interesting happens in the profiler's own threads and teardown logs. Just stay alive.
+        printf("[ethsync] --hold-ms %u: holding the mesh open (in-router sync soak), then closing\n", hold_ms);
+        std::this_thread::sleep_for(std::chrono::milliseconds(hold_ms));
+        mesh_device->close();
+        return 0;
     }
     printf("[ethsync] %zu link(s) to measure, %u samples %u us apart\n", edges.size(), cfg.n_samples, cfg.gap_us);
     if (free_only && edges.empty()) {
