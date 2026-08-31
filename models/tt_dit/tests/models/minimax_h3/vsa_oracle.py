@@ -55,13 +55,14 @@ def compute_topk(sparsity: float, num_candidates: int) -> int:
 
 
 def select_index_rows(
-    scores: torch.Tensor, geometry: MiniMaxH3VSAGeometry, sparsity: float
-) -> tuple[torch.Tensor, list[list[set[int]]]]:
+    scores: torch.Tensor, geometry: MiniMaxH3VSAGeometry, sparsity: float, with_sets: bool = True
+) -> tuple[torch.Tensor, list[list[set[int]]] | None]:
     """Index tensor per the R4 contract, plus per-row python sets for set-wise checks.
 
     ``scores``: [B, H, n_tiles, n_tiles] (query tile x key tile). Returns the
     uint32 index tensor [B, H, n_tiles, n_tiles] (sentinel-tailed, unsorted
-    top-k order after the exempt prefix) and ``sets[h][row]`` for B = 1.
+    top-k order after the exempt prefix) and, when ``with_sets``, ``sets[h][row]``
+    for B = 1 (skip at production scale -- the sets loop is per-row).
     """
     batch, heads, n_tiles, _ = scores.shape
     assert n_tiles == geometry.n_tiles
@@ -70,23 +71,32 @@ def select_index_rows(
     real_ids = torch.nonzero(geometry.valid_counts > 0, as_tuple=False).reshape(-1)
     k = compute_topk(sparsity, int(candidate_ids.numel()))
 
-    indices = torch.full((batch, heads, n_tiles, n_tiles), VSA_INDEX_SENTINEL, dtype=torch.int64)
-    sets: list[list[set[int]]] = []
-    for b in range(batch):
-        head_sets: list[list[set[int]]] = []
-        for h in range(heads):
-            row_sets: list[set[int]] = []
-            for row in range(n_tiles):
-                if bool(geometry.is_exempt[row]):
-                    listed = real_ids
-                else:
-                    top = scores[b, h, row, candidate_ids].topk(k).indices
-                    listed = torch.cat([exempt_ids, candidate_ids[top]])
-                indices[b, h, row, : listed.numel()] = listed
-                row_sets.append(set(listed.tolist()))
-            head_sets.append(row_sets)
-        if b == 0:
-            sets = head_sets
+    # candidate rows, vectorized: [exempt ids | top-k candidate ids | sentinel tail]
+    top = scores[..., candidate_ids].topk(k, dim=-1).indices  # [B, H, rows, k]
+    listed = torch.cat(
+        [
+            exempt_ids.reshape(1, 1, 1, -1).expand(batch, heads, n_tiles, -1),
+            candidate_ids[top],
+            torch.full(
+                (batch, heads, n_tiles, n_tiles - exempt_ids.numel() - k), VSA_INDEX_SENTINEL, dtype=torch.int64
+            ),
+        ],
+        dim=-1,
+    )
+    # exempt-query rows take the dense list of all real tiles
+    dense_row = torch.full((n_tiles,), VSA_INDEX_SENTINEL, dtype=torch.int64)
+    dense_row[: real_ids.numel()] = real_ids
+    indices = torch.where(geometry.is_exempt.reshape(1, 1, -1, 1), dense_row.reshape(1, 1, 1, -1), listed)
+
+    sets = None
+    if with_sets:
+        sets = [
+            [
+                set(row[row != VSA_INDEX_SENTINEL].tolist())
+                for row in (indices[0, h, r] for r in range(n_tiles))
+            ]
+            for h in range(heads)
+        ]
     return indices.to(torch.uint32), sets
 
 
@@ -138,6 +148,59 @@ def fine_attention(
     return out
 
 
+def fine_attention_batched(
+    q_tiled: torch.Tensor,
+    k_tiled: torch.Tensor,
+    v_tiled: torch.Tensor,
+    indices: torch.Tensor,
+    block_counts: torch.Tensor,
+    scale: float | None = None,
+    row_chunk: int = 64,
+) -> torch.Tensor:
+    """`fine_attention`, vectorized over row chunks for production-scale shapes.
+
+    Same contract and results (up to fp32 reduction order); gathers each row chunk's listed blocks
+    into a padded [rows, L*64] key window and masks pad columns, so memory stays bounded by
+    ``row_chunk * W_max * 64``.
+    """
+    batch, heads, seq_len, dim = q_tiled.shape
+    n_kv_blocks = k_tiled.shape[2] // VSA_TILE_TOKENS
+    scale = dim**-0.5 if scale is None else scale
+    counts = block_counts.to(torch.long)[:n_kv_blocks]
+    n_q_tiles = seq_len // VSA_TILE_TOKENS
+
+    idx = indices.to(torch.int64)
+    valid_rowmask = idx != VSA_INDEX_SENTINEL  # [B, H, rows, W]
+    out = torch.zeros_like(q_tiled)
+    arange64 = torch.arange(VSA_TILE_TOKENS)
+    for b in range(batch):
+        for h in range(heads):
+            for r0 in range(0, n_q_tiles, row_chunk):
+                rows = slice(r0, min(r0 + row_chunk, n_q_tiles))
+                row_idx = idx[b, h, rows]  # [R, W]
+                row_valid = valid_rowmask[b, h, rows]
+                width = int(row_valid.sum(dim=-1).max())
+                blocks = row_idx[:, :width].clamp(min=0, max=n_kv_blocks - 1)  # [R, L]
+                listed = row_valid[:, :width]  # [R, L]
+                cols = (blocks[:, :, None] * VSA_TILE_TOKENS + arange64[None, None, :]).reshape(
+                    blocks.shape[0], -1
+                )  # [R, L*64]
+                col_ok = listed[:, :, None] & (arange64[None, None, :] < counts[blocks][:, :, None])
+                col_ok = col_ok.reshape(cols.shape)  # [R, L*64]
+                keys = k_tiled[b, h][cols].float()  # [R, L*64, D]
+                vals = v_tiled[b, h][cols].float()
+                queries = q_tiled[b, h, rows.start * VSA_TILE_TOKENS : rows.stop * VSA_TILE_TOKENS]
+                queries = queries.reshape(-1, VSA_TILE_TOKENS, dim).float()  # [R, 64, D]
+                attn = torch.einsum("rqd,rkd->rqk", queries, keys) * scale
+                attn = attn.masked_fill(~col_ok[:, None, :], float("-inf"))
+                probs = torch.softmax(attn, dim=-1)
+                res = torch.einsum("rqk,rkd->rqd", probs, vals)
+                out[b, h, rows.start * VSA_TILE_TOKENS : rows.stop * VSA_TILE_TOKENS] = res.reshape(
+                    -1, dim
+                ).to(out.dtype)
+    return out
+
+
 def vsa_attention(
     q_tiled: torch.Tensor,
     k_tiled: torch.Tensor,
@@ -145,16 +208,19 @@ def vsa_attention(
     geometry: MiniMaxH3VSAGeometry,
     sparsity: float,
     gate_tiled: torch.Tensor | None = None,
+    batched: bool = False,
 ) -> torch.Tensor:
     """Full VSA oracle in tiled order: fine attention + gated coarse branch.
 
     All tensors [B, H, S_pad, D] in placement order, zeros at pad slots.
-    Output rows of pad slots are don't-cares.
+    Output rows of pad slots are don't-cares. ``batched=True`` uses the
+    row-chunk-vectorized fine attention (same results; production scale).
     """
     scores = coarse_scores(q_tiled, k_tiled, geometry)
-    indices, _ = select_index_rows(scores, geometry, sparsity)
+    indices, _ = select_index_rows(scores, geometry, sparsity, with_sets=False)
     block_counts = geometry.valid_counts.to(torch.uint32)
-    out = fine_attention(q_tiled, k_tiled, v_tiled, indices, block_counts)
+    fine = fine_attention_batched if batched else fine_attention
+    out = fine(q_tiled, k_tiled, v_tiled, indices, block_counts)
     if gate_tiled is not None:
         out = out + gate_tiled * coarse_output(scores, v_tiled, geometry, out.dtype)
     return out

@@ -59,7 +59,7 @@ def _make_layout(num_text: int, num_audio_latents: int, grid: tuple[int, int, in
     return layout, prefix_segments
 
 
-def _torch_vsa_reference(torch_model, x, rope_cos, rope_sin, geometry, sparsity, gate_weight):
+def _torch_vsa_reference(torch_model, x, rope_cos, rope_sin, geometry, sparsity, gate_weight, batched=False):
     """The diffusers processor with dense SDPA swapped for the tiled VSA oracle."""
     with torch.no_grad():
         q = torch_model.to_q(x).unflatten(-1, (NUM_HEADS, HEAD_DIM))
@@ -75,7 +75,7 @@ def _torch_vsa_reference(torch_model, x, rope_cos, rope_sin, geometry, sparsity,
         gate = None
         if gate_weight is not None:
             gate = tile((x @ gate_weight.T).unflatten(-1, (NUM_HEADS, HEAD_DIM))[0].unsqueeze(0))
-        out_tiled = vsa_attention(tile(q), tile(k), tile(v), geometry, sparsity, gate_tiled=gate)
+        out_tiled = vsa_attention(tile(q), tile(k), tile(v), geometry, sparsity, gate_tiled=gate, batched=batched)
         out = geometry.unpack_rows(out_tiled.squeeze(0).permute(1, 0, 2))  # [S, H, D]
         return torch_model.to_out[0](out.reshape(1, -1, NUM_HEADS * HEAD_DIM))
 
@@ -223,4 +223,63 @@ def test_vsa_attention_vs_torch_oracle(
     # unpack to the original packed order and compare on real rows only
     tt_rows = geometry.unpack_rows(tt_out.reshape(geometry.padded_len, HIDDEN_SIZE), dim=0)
     logger.info(f"comparing {tt_rows.shape} rows (placement={placement}, gate={gate})")
+    assert_quality(ref[0], tt_rows, pcc=MIN_PCC)
+
+
+# R6b/c at production shapes: sparsity 0.9, PCC vs the torch VSA oracle.
+# 15s/768p: 362 frames -> 107 latent frames, (24, 42) grid -> ragged video tiles (107 % 4 != 0,
+#   42 % 4 != 0); text 512, audio 604 rows.
+# 1280x768 / 39 frames: 12 latent frames, (24, 40) grid -> NO ragged video tiles; audio 130 rows.
+_PROD_SHAPES = {
+    "15s_768p": dict(num_text=512, num_audio_latents=302, grid=(107, 24, 42), ragged_video=True),
+    "39f_1280x768": dict(num_text=512, num_audio_latents=65, grid=(12, 24, 40), ragged_video=False),
+}
+
+
+@GALAXY_RING
+@pytest.mark.parametrize("gate", ["zero", "random"])
+@pytest.mark.parametrize("shape", list(_PROD_SHAPES), ids=list(_PROD_SHAPES))
+@pytest.mark.timeout(7200)
+def test_vsa_attention_production_shape(
+    mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topology, shape, gate, reset_seeds
+) -> None:
+    """R6b/c: sparsity 0.9 vs the torch VSA oracle at production shapes (batched CPU oracle)."""
+    MIN_PCC = 0.985  # near-tie top-k selection across the bf16/fp32 boundary dominates the residual
+    SPARSITY = 0.9
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    if sp_factor != 8:
+        pytest.skip("VSA v0 targets 4x8")
+    if shape == "15s_768p" and gate == "random":
+        pytest.skip("the random-gate branch is pinned at the cheaper 39-frame shape")
+
+    spec = _PROD_SHAPES[shape]
+    layout, prefix_segments = _make_layout(spec["num_text"], spec["num_audio_latents"], spec["grid"])
+    geometry = build_vsa_geometry(prefix_segments, spec["grid"], sp_factor=sp_factor)
+    video_counts = geometry.valid_counts[geometry.is_3d]
+    assert bool((video_counts < 64).any()) == spec["ragged_video"]
+    logger.info(f"{shape}: seq_len={geometry.seq_len}, tiles={geometry.n_tiles} ({geometry.n_pad_tiles} pad)")
+
+    torch_model = _torch_attention_model()
+    state = dict(torch_model.state_dict())
+    gate_weight = None
+    if gate == "random":
+        torch.manual_seed(3)
+        gate_weight = 0.02 * torch.randn(NUM_HEADS * HEAD_DIM, HIDDEN_SIZE)
+        state["to_gate_compress.weight"] = gate_weight
+
+    rope = MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
+    rope_cos, rope_sin = rope(layout.position_ids)
+    x = torch.randn(1, geometry.seq_len, HIDDEN_SIZE)
+
+    vsa_model, _ = _setup_tt_model(
+        mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, geometry,
+        MiniMaxH3VSAConfig(sparsity=SPARSITY, k_chunk_blocks=2), state,
+    )  # fmt: skip
+    tt_out = _run_tt(vsa_model, mesh_device, sp_axis, tp_axis, geometry, x, rope_cos, rope_sin)
+    tt_rows = geometry.unpack_rows(tt_out.reshape(geometry.padded_len, HIDDEN_SIZE), dim=0)
+
+    logger.info("computing the torch VSA oracle (batched)")
+    ref = _torch_vsa_reference(torch_model, x, rope_cos, rope_sin, geometry, SPARSITY, gate_weight, batched=True)
     assert_quality(ref[0], tt_rows, pcc=MIN_PCC)

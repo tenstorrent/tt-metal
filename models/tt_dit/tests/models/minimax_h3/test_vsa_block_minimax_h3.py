@@ -14,6 +14,7 @@ import math
 import pytest
 import torch
 from diffusers.models.transformers.transformer_minimax_h3 import (
+    MINIMAX_H3_MODALITY_NUM,
     MiniMaxH3RotaryPosEmbed,
     MiniMaxH3TransformerBlock as TorchMiniMaxH3Block,
 )
@@ -30,7 +31,6 @@ from ....pipelines.minimax_h3.vsa_geometry import build_vsa_geometry
 from ....utils.tensor import bf16_tensor_2dshard, from_torch
 from ....utils.test import ring_params_8k_req_exact_devices, skip_if_unsupported_num_links
 from .common import (
-    MINIMAX_H3_MODALITY_NUM,
     REAL_BLOCK_CONFIG,
     ROPE_FREQ_DIM,
     ROPE_THETA,
@@ -61,6 +61,7 @@ GALAXY_4X8_TRACE = pytest.mark.parametrize(
 
 @GALAXY_4X8_TRACE
 @pytest.mark.parametrize("traced", [False, True], ids=["untraced", "traced"])
+@pytest.mark.timeout(2700)
 def test_vsa_block_15s_768p(
     mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topology, traced, reset_seeds
 ) -> None:
