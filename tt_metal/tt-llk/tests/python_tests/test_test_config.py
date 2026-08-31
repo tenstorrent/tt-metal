@@ -90,14 +90,25 @@ def clear_search_dirs(in_tree: bool = False) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_registered_search_dirs_change_the_variant_id(isolated_search_dirs):
+@pytest.mark.parametrize(
+    "in_tree",
+    [
+        pytest.param(True, id="after-setup-build"),
+        pytest.param(False, id="before-setup-build"),
+    ],
+)
+def test_registered_search_dirs_change_the_variant_id(isolated_search_dirs, in_tree):
     """Search dirs live in class state, so ``self.__dict__`` cannot see them.
 
     ``prepare`` does not rebuild in CONSUME mode — it trusts the variant id to
     locate the ELF the producer pass built. Two configurations that compile
     against different headers must not share an id.
+
+    Run in both regimes: ``add_helpers_tree`` here is what a real consumer's
+    conftest calls, and after ``setup_build`` its header half lands in the
+    merged ``INCLUDES`` rather than in the extras.
     """
-    clear_search_dirs()
+    clear_search_dirs(in_tree)
     ids = [variant_id()]
 
     for register in (
@@ -112,14 +123,21 @@ def test_registered_search_dirs_change_the_variant_id(isolated_search_dirs):
     assert len(set(ids)) == len(ids), f"variant ids collided: {ids}"
 
 
-def test_search_dir_precedence_changes_the_variant_id(isolated_search_dirs):
+@pytest.mark.parametrize(
+    "in_tree",
+    [
+        pytest.param(True, id="after-setup-build"),
+        pytest.param(False, id="before-setup-build"),
+    ],
+)
+def test_search_dir_precedence_changes_the_variant_id(isolated_search_dirs, in_tree):
     """Registration order is a compilation input: it decides which copy wins."""
-    clear_search_dirs()
+    clear_search_dirs(in_tree)
     TestConfig.add_include_dirs("/probe/low")
     TestConfig.add_include_dirs("/probe/high")
     high_wins = variant_id()
 
-    clear_search_dirs()
+    clear_search_dirs(in_tree)
     TestConfig.add_include_dirs("/probe/high")
     TestConfig.add_include_dirs("/probe/low")
     low_wins = variant_id()

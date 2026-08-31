@@ -125,6 +125,11 @@ def _run_fixture(child_temp: str, report: Path) -> subprocess.CompletedProcess:
     env["RUNNER_TEMP"] = child_temp
     env["TMPDIR"] = child_temp
 
+    # A list argv, so this runs with shell=False: every element reaches the
+    # child as one argument via execve, with no shell to parse it. The only
+    # non-literal element is the report path, which this function just created
+    # under tempfile.TemporaryDirectory(). Passing the flag and its value as
+    # separate elements rather than interpolating keeps that obvious.
     argv = [
         sys.executable,
         "-m",
@@ -132,7 +137,8 @@ def _run_fixture(child_temp: str, report: Path) -> subprocess.CompletedProcess:
         "--compile-producer",
         "-q",
         "--override-ini=addopts=",
-        f"--junitxml={report}",
+        "--junitxml",
+        str(report),
         ".",
     ]
 
@@ -178,11 +184,17 @@ def _assert_the_child_ran_the_fixture(
         f"reached collection.\n\n{result.stdout}"
     )
 
+    # "skipped" counts as not-run, deliberately. A test that quietly starts
+    # skipping — an arch marker, a guard clause, a mode that returns early — is
+    # the same silent loss of coverage this check exists to catch, and it would
+    # otherwise still emit a <testcase> element.
     root = ET.parse(report).getroot()
     ran = {
         case.get("name", "").split("[")[0]
         for case in root.iter("testcase")
-        if not any(case.iter("failure")) and not any(case.iter("error"))
+        if all(
+            case.find(outcome) is None for outcome in ("failure", "error", "skipped")
+        )
     }
 
     missing = sorted(EXPECTED_FIXTURE_NODE_IDS - ran)

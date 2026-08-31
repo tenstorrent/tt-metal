@@ -499,14 +499,13 @@ def test_out_of_tree_driver_compiles():
         dest_acc=DestAccumulation.No,
     )
 
-    # The compile is the assertion. ``run()`` raises ``Skipped`` in PRODUCE
-    # mode before touching a device, and the wrapper always launches this suite
-    # with ``--compile-producer``, so anything written after this line would be
-    # unreachable in CI. That is deliberate, not a shortcoming: this fixture
-    # exists to prove the out-of-tree *contract* — configuration, search-dir
-    # precedence, and that the flags reach the compiler — not to re-check LLK
-    # numerics, which the in-tree suites already do on silicon.
-    configuration.run()
+    # The compile is the assertion, so this calls ``prepare()`` rather than
+    # ``run()``: it builds and stops, with no device step and no producer-mode
+    # ``pytest.skip`` to reason around. This fixture exists to prove the
+    # out-of-tree *contract* — configuration, search-dir precedence, and that
+    # the flags reach the compiler — not to re-check LLK numerics, which the
+    # in-tree suites already do on silicon.
+    configuration.prepare()
 
 
 # --------------------------------------------------------------------------- #
@@ -553,7 +552,14 @@ def test_per_variant_include_dirs_override_suite_wide_ones():
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
         RuntimeError
     ) as excinfo:
-        configuration.run()
+        # ``prepare()``, not ``run()``: in PRODUCE mode ``run()`` ends in
+        # ``pytest.skip``, and ``Skipped`` derives from BaseException, so it
+        # would sail straight through this ``raises`` and the plugin would
+        # rewrite the skip to *passed*. This test would then be green having
+        # asserted nothing — in exactly the case it exists to catch, a probe
+        # that stopped firing. ``prepare()`` compiles without that skip, so an
+        # unexpectedly successful build surfaces as DID NOT RAISE.
+        configuration.prepare()
 
     message = str(excinfo.value)
     assert "OOT_PROBE_SHADOWED" in message, (
