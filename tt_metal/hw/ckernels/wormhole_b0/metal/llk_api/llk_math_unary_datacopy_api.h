@@ -19,10 +19,17 @@ template <
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy(std::uint32_t dst_index, std::uint32_t operand) {
-    SAN_HOOK(unsupported());
     LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
     const std::uint32_t operand_id = get_operand_id(operand);
+    // Wormhole's datacopy is never handed the face count at execute, so NumFaces is left as init
+    // seated it; see OperationFpuEltwiseUnaryDatacopy in sanitizer/operation.h.
+    SAN_HOOK(execute<OperationFpuEltwiseUnaryDatacopy>(
+        StateVal<OperationFpuEltwiseUnaryDatacopy::DataCopyType>(to_underlying(type)),
+        StateVal<OperationFpuEltwiseUnaryDatacopy::BroadcastType>(to_underlying(src_b_bcast_type)),
+        StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[operand_id]),
+        StateDiscard<std::uint32_t>(dst_index)));
+
     _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
         dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
 }
@@ -34,8 +41,16 @@ template <
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_block(
     std::uint32_t start_dst_index, std::uint32_t ntiles, std::uint32_t operand) {
-    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
+
+    // One execute per tile in the block; the operation state is identical for every iteration, so it
+    // is restated once here rather than inside the loop.
+    SAN_HOOK(execute<OperationFpuEltwiseUnaryDatacopy>(
+        StateVal<OperationFpuEltwiseUnaryDatacopy::DataCopyType>(to_underlying(type)),
+        StateVal<OperationFpuEltwiseUnaryDatacopy::BroadcastType>(to_underlying(src_b_bcast_type)),
+        StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[operand_id]),
+        StateDiscard<std::uint32_t>(start_dst_index),
+        StateDiscard<std::uint32_t>(ntiles)));
 
     for (uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
         LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
@@ -52,7 +67,6 @@ template <
     bool is_int_fpu_en = false,
     PackMode pack_mode = PackMode::Default>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
-    SAN_HOOK(unsupported());
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize || pack_mode == PackMode::Tilize,
         "Wormhole B0 math datacopy init: use PackMode::Default, PackMode::Untilize, or PackMode::Tilize (tilize is "
@@ -61,6 +75,12 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t dst_format = get_operand_dst_format(operand_id);
+    SAN_HOOK(init<OperationFpuEltwiseUnaryDatacopy>(
+        StateVal<OperationFpuEltwiseUnaryDatacopy::DataCopyType>(to_underlying(type)),
+        StateVal<OperationFpuEltwiseUnaryDatacopy::BroadcastType>(to_underlying(src_b_bcast_type)),
+        StateVal<OperationFpuEltwiseUnaryDatacopy::NumFaces>(num_faces),
+        StateVal<Operand<Exu::Fpu>::Format>(dst_format)));
+
     _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(
         num_faces, dst_format);
 }
