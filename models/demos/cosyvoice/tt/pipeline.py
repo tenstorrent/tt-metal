@@ -442,15 +442,25 @@ class CosyVoiceTTNN:
     ) -> "StreamResult":
         """The full chain, **interleaved**: waveform chunks start before the LLM stops.
 
-        **This once returned corrupt audio, and the reason shapes the design.** The
-        flow decoder and the vocoder run from inside the decode loop, so the state
-        `StreamState` carries across a chunk boundary used to sit in device buffers
-        while `generate()`'s trace was live -- and a trace execution clobbers those.
-        The symptom was a first chunk matching a no-trace reference at PCC 0.99999994
-        and a second chunk with a *bit-identical* mel but waveform PCC 0.011.
-        `StreamState` now parks those four tensors on the host between chunks; its
-        docstring carries the measurement. Nothing here needs to know about it, but a
-        caller adding state that survives a seam does.
+        **Known defect, precisely diagnosed, fix not landed.** The audio this returns
+        is corrupt: peaks around 72 against a batch path peaking at 0.001 on the same
+        prompt, with identical tokens and a correct chunk schedule. The cause is
+        established — the state `StreamState` carries across a chunk boundary sits in
+        device buffers while `generate()`'s trace is live, and a later `execute_trace`
+        clobbers it. Chunk 0 matches a no-trace reference at waveform PCC 0.99999994;
+        chunk 1 has a *bit-identical* mel at PCC 1.0 and waveform PCC 0.011.
+        `generate(use_trace=False)` makes the audio correct, which is what isolates it.
+
+        A fix was written and verified — park those four tensors on the host between
+        chunks — and is **not** in the tree, because it hangs
+        `tests/perf/test_streaming_perf.py` on Blackhole, where that test otherwise
+        passes in 12.7 s. Neither draining the queue before the readback nor hoisting
+        the synthesizer out of the traced region changed that. So the defect stands and
+        `docs/VALIDATION.md` records both it and the candidate remedy.
+
+        Use `synthesize` for audio. This method is the pipelining *mechanism*, and the
+        schedule it demonstrates is gated by
+        `tests/e2e/test_pipeline_api.py::test_device_streaming_generates_the_same_tokens_as_batch`.
 
         `synthesize` above runs the three stages strictly in order -- every token,
         then all the mel, then all the audio -- so the first sample of output exists
