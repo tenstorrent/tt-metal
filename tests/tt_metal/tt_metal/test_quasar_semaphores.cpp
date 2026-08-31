@@ -88,7 +88,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::KernelSpec dm_transform_spec{
@@ -109,7 +109,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::KernelSpec dm_writer_spec{
@@ -124,7 +124,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -251,7 +251,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::KernelSpec dm_writer_0_spec{
@@ -271,7 +271,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 .runtime_arg_names =
                     {"dram_addr", "l1_addr", "num_elements", "dram_bank_id", "remote_noc_x", "remote_noc_y"},
             },
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::KernelSpec dm_reader_1_spec{
@@ -290,7 +290,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::KernelSpec dm_transform_1_spec{
@@ -311,7 +311,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::KernelSpec dm_writer_1_spec{
@@ -326,7 +326,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::WorkUnitSpec wu_core_0{
@@ -484,7 +484,7 @@ static void run_snake_chain(
             .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"}},
-            .hw_config = experimental::DataMovementGen2Config{}};
+            .hw_config = experimental::DataMovementHardwareConfig{}};
         if (is_src) {
             reader.semaphore_bindings = {{.semaphore_spec_name = L0, .accessor_name = "sem"}};
         } else {
@@ -505,14 +505,14 @@ static void run_snake_chain(
                 {{.semaphore_spec_name = L0, .accessor_name = "sem_in"},
                  {.semaphore_spec_name = L1, .accessor_name = "sem_out"}},
             .compile_time_args = {{"num_elements", num_elements}, {"buf_a", buf_a}, {"buf_b", buf_b}},
-            .hw_config = experimental::DataMovementGen2Config{}});
+            .hw_config = experimental::DataMovementHardwareConfig{}});
 
         // Writer: sink writes final; others also increment the next node's cross sem.
         KernelSpec writer{
             .unique_id = WRITER,
             .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
             .num_threads = 1,
-            .hw_config = experimental::DataMovementGen2Config{}};
+            .hw_config = experimental::DataMovementHardwareConfig{}};
         const bool writer_relays = (!is_sink) || ring;  // ring: last node relays back to node[0]
         if (!writer_relays) {
             writer.runtime_arg_schema = {.runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"}};
@@ -545,7 +545,7 @@ static void run_snake_chain(
                     {{.semaphore_spec_name = WRAP_L0, .accessor_name = "sem"},
                      {.semaphore_spec_name = WRAP, .accessor_name = "remote_sem"}},
                 .runtime_arg_schema = {.runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"}},
-                .hw_config = experimental::DataMovementGen2Config{}});
+                .hw_config = experimental::DataMovementHardwareConfig{}});
             wu_kernels.push_back(WRAP_READER);
             params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
                 .kernel = WRAP_READER,
@@ -723,7 +723,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanOutBroadcast) {
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = SEM, .accessor_name = "sem"}},
         .runtime_arg_schema = {.runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"}},
-        .hw_config = experimental::DataMovementGen2Config{}});
+        .hw_config = experimental::DataMovementHardwareConfig{}});
     spec.work_units.push_back(experimental::WorkUnitSpec{.name = "wu", .kernels = {READER}, .target_nodes = all_nodes});
     experimental::ProgramRunArgs params;
     experimental::ProgramRunArgs::KernelRunArgs kra{.kernel = READER};
@@ -800,14 +800,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanInGather) {
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = SEM, .accessor_name = "sem"}},
         .runtime_arg_schema = {.runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"}},
-        .hw_config = experimental::DataMovementGen2Config{}});
+        .hw_config = experimental::DataMovementHardwareConfig{}});
     spec.kernels.push_back(experimental::KernelSpec{
         .unique_id = WRITER,
         .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = SEM, .accessor_name = "sem"}},
         .runtime_arg_schema = {.runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"}},
-        .hw_config = experimental::DataMovementGen2Config{}});
+        .hw_config = experimental::DataMovementHardwareConfig{}});
     spec.work_units.push_back(
         experimental::WorkUnitSpec{.name = "wu", .kernels = {READER, WRITER}, .target_nodes = all_nodes});
 
@@ -950,7 +950,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
         .semaphore_bindings = {{.semaphore_spec_name = BARRIER, .accessor_name = "barrier_sem"}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"remote_noc_x", "remote_noc_y", "is_target", "num_elements", "result_addr"}},
-        .hw_config = experimental::DataMovementGen2Config{}};
+        .hw_config = experimental::DataMovementHardwareConfig{}};
     spec.kernels.push_back(bk);
     spec.work_units.push_back(experimental::WorkUnitSpec{.name = "wu", .kernels = {BK}, .target_nodes = all_nodes});
 

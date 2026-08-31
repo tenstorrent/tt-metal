@@ -108,28 +108,28 @@ static void RunTest(
                         uint32_t target_thread_id = static_cast<uint32_t>(processor.processor_type) - kFirstUserDm;
                         assert_kernel_spec.num_threads = 6;
                         assert_kernel_spec.compile_time_args = {{"target_thread_id", target_thread_id}};
-                        assert_kernel_spec.hw_config = experimental::DataMovementGen2Config{};
+                        assert_kernel_spec.hw_config = experimental::DataMovementHardwareConfig{};
                     } else {
                         assert_kernel_spec.num_threads = 1;
-                        assert_kernel_spec.hw_config = experimental::DataMovementGen1Config{
-                            .processor = gen1_processor,
-                            .noc = gen1_noc,
-                        };
+                        assert_kernel_spec.hw_config = experimental::DataMovementHardwareConfig{
+                            .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                .processor = gen1_processor,
+                                .noc = gen1_noc,
+                            }};
                     }
                     break;
                 }
                 case HalProcessorClassType::COMPUTE: {
                     uint32_t trisc_id = static_cast<uint32_t>(processor.processor_type);
                     assert_kernel_spec.num_threads = 1;
-                    assert_kernel_spec.compiler_options = {
-                        .defines = {{fmt::format("TRISC{}", trisc_id), "1"}}};
+                    assert_kernel_spec.compiler_options = {.defines = {{fmt::format("TRISC{}", trisc_id), "1"}}};
                     // Bind trisc_id so the kernel can early-return on TRISCs that aren't the target
                     // of a Quasar compute HW-fault test.
                     assert_kernel_spec.compile_time_args = {{"trisc_id", trisc_id}};
                     if (is_quasar) {
-                        assert_kernel_spec.hw_config = experimental::ComputeGen2Config{};
+                        assert_kernel_spec.hw_config = experimental::ComputeHardwareConfig{};
                     } else {
-                        assert_kernel_spec.hw_config = experimental::ComputeGen1Config{};
+                        assert_kernel_spec.hw_config = experimental::ComputeHardwareConfig{};
                     }
                     break;
                 }
@@ -205,9 +205,7 @@ static void RunTest(
                 kernel,
                 logical_core,
                 dm_processor,
-                experimental::quasar::QuasarDataMovementConfig{
-                    .num_threads_per_cluster = 1,
-                    .is_legacy_kernel = true});
+                experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .is_legacy_kernel = true});
             break;
         }
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported programmable core type");
@@ -293,9 +291,7 @@ static void RunTest(
         switch (hw_assert_cause) {
             // ERROR_TRISC<n>, illegal access.
             case 5:
-            case 7:
-                hw_assert_cause = (trisc << 8) | static_cast<uint32_t>(TriscRiscErrors::L1_ILLEGAL_ACCESS);
-                break;
+            case 7: hw_assert_cause = (trisc << 8) | static_cast<uint32_t>(TriscRiscErrors::L1_ILLEGAL_ACCESS); break;
             // ILLEGAL_INSTRUCTION_TRISC<n>, backwards numbered, plus the opcode the kernel hits.
             case 8:
                 hw_assert_cause =
@@ -377,7 +373,7 @@ static void RunTest(
         EXPECT_EQ(expected, exception);
     }
 }
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 
 // Test parameters structure
 struct WatcherTestParams {
@@ -573,8 +569,7 @@ INSTANTIATE_TEST_SUITE_P(
         // These report the PC up front, same as the DM faults.
         HwFaultMessageParams{
             "Trisc0TtiBufferHang", 0x0016, 0x1234, {"at PC 0x00001234", "Neo 0 TRISC0", "TTI_BUFFER_HANG"}, {}},
-        HwFaultMessageParams{
-            "Trisc1MemReadNoResponse", 0x0119, 0x1234, {"Neo 0 TRISC1", "MEM_READ_NO_RESPONSE"}, {}},
+        HwFaultMessageParams{"Trisc1MemReadNoResponse", 0x0119, 0x1234, {"Neo 0 TRISC1", "MEM_READ_NO_RESPONSE"}, {}},
         HwFaultMessageParams{"Trisc2StackOverflow", 0x021f, 0x1234, {"Neo 0 TRISC2", "STACK_OVERFLOW"}, {}},
         HwFaultMessageParams{"Trisc3L1IllegalAccess", 0x0328, 0x1234, {"Neo 0 TRISC3", "L1_ILLEGAL_ACCESS"}, {}},
         HwFaultMessageParams{"Neo3Trisc1", 0xc128, 0x1234, {"Neo 3 TRISC1", "L1_ILLEGAL_ACCESS"}, {}},
@@ -611,8 +606,7 @@ INSTANTIATE_TEST_SUITE_P(
         // Sticky bitmask, so both bits can be set at once.
         HwFaultMessageParams{"SfpuCcStackOverflow", 0x0e01, 0, {"SFPU", "CC_STACK_OVERFLOW"}, {"CC_STACK_UNDERFLOW"}},
         HwFaultMessageParams{"SfpuCcStackUnderflow", 0x0e02, 0, {"SFPU", "CC_STACK_UNDERFLOW"}, {}},
-        HwFaultMessageParams{
-            "SfpuCcStackBothBits", 0x0e03, 0, {"SFPU", "CC_STACK_OVERFLOW + CC_STACK_UNDERFLOW"}, {}},
+        HwFaultMessageParams{"SfpuCcStackBothBits", 0x0e03, 0, {"SFPU", "CC_STACK_OVERFLOW + CC_STACK_UNDERFLOW"}, {}},
 
         // No error index on these, so nothing in parens.
         HwFaultMessageParams{"EdcFatal", 0x0a00, 0, {"EDC_FATAL_ERROR"}, {"(", "TRISC"}},
@@ -650,8 +644,7 @@ TEST(WatcherHwFaultMessage, ReportsEveryNeoAndTrisc) {
 // Block 32 is the one an exclusive bound misses.
 TEST(WatcherHwFaultMessage, IllegalInstructionThreadOrderIsReversed) {
     for (uint32_t block = 32; block <= 35; block++) {
-        const std::string msg =
-            get_debug_assert_message(dev_msgs::DebugAssertHwFault, 0, (block << 8) | 0x41);
+        const std::string msg = get_debug_assert_message(dev_msgs::DebugAssertHwFault, 0, (block << 8) | 0x41);
         EXPECT_NE(msg.find(fmt::format("Neo 0 TRISC{}", 35 - block)), std::string::npos) << msg;
     }
 }

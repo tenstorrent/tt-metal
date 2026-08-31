@@ -107,13 +107,14 @@ void RunTest(
                         // Launch on all 6 user DM threads (DM0/DM1 are reserved for the runtime) and filter in-kernel.
                         kernel_spec.num_threads = 6;
                         kernel_spec.compile_time_args["dm_id"] = processor.processor_type;
-                        kernel_spec.hw_config = experimental::DataMovementGen2Config{};
+                        kernel_spec.hw_config = experimental::DataMovementHardwareConfig{};
                     } else {
-                        kernel_spec.hw_config = experimental::DataMovementGen1Config{
-                            .processor = static_cast<tt_metal::DataMovementProcessor>(processor.processor_type),
-                            .noc = (processor.processor_type == 0) ? tt_metal::NOC::RISCV_0_default
-                                                                   : tt_metal::NOC::RISCV_1_default,
-                        };
+                        kernel_spec.hw_config = experimental::DataMovementHardwareConfig{
+                            .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                .processor = static_cast<tt_metal::DataMovementProcessor>(processor.processor_type),
+                                .noc = (processor.processor_type == 0) ? tt_metal::NOC::RISCV_0_default
+                                                                       : tt_metal::NOC::RISCV_1_default,
+                            }};
                     }
                     break;
                 }
@@ -123,9 +124,9 @@ void RunTest(
                         {fmt::format("WATCHER_RINGBUF_TRISC{}", processor.processor_type), "1"}};
                     if (is_quasar) {
                         kernel_spec.num_threads = 1;
-                        kernel_spec.hw_config = experimental::ComputeGen2Config{};
+                        kernel_spec.hw_config = experimental::ComputeHardwareConfig{};
                     } else {
-                        kernel_spec.hw_config = experimental::ComputeGen1Config{};
+                        kernel_spec.hw_config = experimental::ComputeHardwareConfig{};
                     }
                     break;
                 }
@@ -233,12 +234,12 @@ void RunMultiWriterTest(MeshWatcherFixture* fixture, const std::shared_ptr<distr
             "dm",
             {.num_threads = 6,
              .compiler_options = {.defines = {{"MULTI_DM_TEST", "1"}}},
-             .hw_config = experimental::DataMovementGen2Config{}});
+             .hw_config = experimental::DataMovementHardwareConfig{}});
         add_spec(
             "compute",
             {.num_threads = 4,
              .compiler_options = {.defines = {{"MULTI_DM_TEST", "1"}}},
-             .hw_config = experimental::ComputeGen2Config{}});
+             .hw_config = experimental::ComputeHardwareConfig{}});
         // DM0/DM1 are reserved, so the 6 launched threads land on DM2...DM7. COMPUTE follows the 8
         // DM entries in the HAL index.
         append_expected_writers(expected, [](uint32_t dm) { return fmt::format("DM{}", dm); }, 6, 2);
@@ -246,13 +247,15 @@ void RunMultiWriterTest(MeshWatcherFixture* fixture, const std::shared_ptr<distr
     } else {
         add_spec(
             "brisc",
-            {.hw_config = experimental::DataMovementGen1Config{
-                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}});
+            {.hw_config = experimental::DataMovementHardwareConfig{
+                 .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}}});
         add_spec(
             "ncrisc",
-            {.hw_config = experimental::DataMovementGen1Config{
-                 .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}});
-        // One ComputeGen1Config kernel builds all 3 TRISC binaries; each needs its own define.
+            {.hw_config = experimental::DataMovementHardwareConfig{
+                 .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                     .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}}});
+        // One ComputeHardwareConfig kernel builds all 3 TRISC binaries; each needs its own define.
         add_spec(
             "trisc",
             {.compiler_options =
@@ -260,7 +263,7 @@ void RunMultiWriterTest(MeshWatcherFixture* fixture, const std::shared_ptr<distr
                       {{"WATCHER_RINGBUF_TRISC0", "1"},
                        {"WATCHER_RINGBUF_TRISC1", "1"},
                        {"WATCHER_RINGBUF_TRISC2", "1"}}},
-             .hw_config = experimental::ComputeGen1Config{}});
+             .hw_config = experimental::ComputeHardwareConfig{}});
         append_expected_writers(expected, tensix_name, 5);
     }
 

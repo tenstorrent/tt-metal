@@ -251,7 +251,7 @@ void RunNoOpProgram(distributed::MeshDevice& target, const std::string& label) {
 
 // Minimal Gen1 Metal 2.0 ProgramSpec: one no-op DM kernel on node (0, 0).
 experimental::ProgramSpec MakeMinimalNoOpProgramSpec() {
-    using experimental::DataMovementGen1Config;
+    using experimental::DataMovementHardwareConfig;
     using experimental::KernelSpec;
     using experimental::KernelSpecName;
     using experimental::NodeCoord;
@@ -264,10 +264,12 @@ experimental::ProgramSpec MakeMinimalNoOpProgramSpec() {
         .source = KernelSpec::SourceCode{"void kernel_main() {}"},
         .num_threads = 1,
         .hw_config =
-            DataMovementGen1Config{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::NOC_0,
-            },
+            DataMovementHardwareConfig{
+                .gen1_specific =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = NOC::NOC_0,
+                    }},
     };
 
     return ProgramSpec{

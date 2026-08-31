@@ -72,9 +72,11 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
                                 : tt::tt_metal::NOC::RISCV_0_default;
             experimental::DataMovementHardwareConfig dm_cfg;
             if (is_quasar) {
-                dm_cfg = experimental::DataMovementGen2Config{};
+                dm_cfg = experimental::DataMovementHardwareConfig{};
             } else {
-                dm_cfg = experimental::DataMovementGen1Config{.processor = gen1_proc, .noc = gen1_noc};
+                dm_cfg = experimental::DataMovementHardwareConfig{
+                    .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = gen1_proc, .noc = gen1_noc}};
             }
             kernel_specs.push_back(experimental::KernelSpec{
                 .unique_id = experimental::KernelSpecName{name},
@@ -105,7 +107,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             .source = path_metal2,
             .num_threads = 1,
             .runtime_arg_schema = {.common_runtime_arg_names = {"wait_cycles"}},
-            .hw_config = experimental::ComputeGen1Config{},
+            .hw_config = experimental::ComputeHardwareConfig{},
         });
         kernel_names.emplace_back(compute_kernel_name);
         params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{

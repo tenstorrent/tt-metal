@@ -300,7 +300,7 @@ void run_benchmark_case_base(DfbInitTimingBenchContext& ctx) {
     const experimental::KernelSpecName CONSUMER{"consumer"};
     const experimental::TensorParamName IN_TENSOR{"in_tensor"};
 
-    const experimental::DataMovementHardwareConfig dm_producer_cfg = experimental::DataMovementGen2Config{};
+    const experimental::DataMovementHardwareConfig dm_producer_cfg = experimental::DataMovementHardwareConfig{};
 
     auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(ENTRY_SIZE, NUM_ENTRIES));
 
@@ -331,7 +331,7 @@ void run_benchmark_case_base(DfbInitTimingBenchContext& ctx) {
         .num_threads = NUM_CONSUMERS,
         .dfb_bindings = {experimental::StridedConsumerOf(DFB, "in")},
         .compile_time_args = {{"num_entries_per_consumer", NUM_ENTRIES_PER_CONSUMER}},
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     experimental::WorkUnitSpec wu{
@@ -380,7 +380,7 @@ void run_benchmark_case_two(DfbInitTimingBenchContext& ctx) {
     const experimental::KernelSpecName COMPUTE{"compute"};
     const experimental::KernelSpecName WRITER{"writer_dm"};
 
-    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementGen2Config{};
+    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementHardwareConfig{};
 
     experimental::DataflowBufferSpec dfb_ss_spec = MakeBenchDfbSpec(DFB_SS, ENTRY_SIZE, NUM_ENTRIES);
     experimental::DataflowBufferSpec dfb_sa_spec = MakeBenchDfbSpec(DFB_SA, ENTRY_SIZE, NUM_ENTRIES);
@@ -404,12 +404,13 @@ void run_benchmark_case_two(DfbInitTimingBenchContext& ctx) {
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_avg_compute.cpp",
         .num_threads = NUM_IN_THREADS,
-        .dfb_bindings = {
-            experimental::StridedConsumerOf(DFB_SS, "ss_in"),
-            experimental::AllConsumerOf(DFB_SA, "sa_in"),
-            experimental::ProducerOf(DFB_T6, "t6_out"),
-        },
-        .hw_config = experimental::ComputeGen2Config{},
+        .dfb_bindings =
+            {
+                experimental::StridedConsumerOf(DFB_SS, "ss_in"),
+                experimental::AllConsumerOf(DFB_SA, "sa_in"),
+                experimental::ProducerOf(DFB_T6, "t6_out"),
+            },
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     // Writer DM: STRIDED consumer on DFB_T6
@@ -480,7 +481,7 @@ void run_benchmark_case_four(DfbInitTimingBenchContext& ctx) {
     const experimental::KernelSpecName READER{"reader_dm"};
     const experimental::KernelSpecName COMPUTE{"compute"};
 
-    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementGen2Config{};
+    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementHardwareConfig{};
 
     // Reader DM: 4 STRIDED producers on all three DFBs
     experimental::KernelSpec reader_spec{
@@ -500,12 +501,13 @@ void run_benchmark_case_four(DfbInitTimingBenchContext& ctx) {
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst_compute.cpp",
         .num_threads = NUM_CONSUMERS,
-        .dfb_bindings = {
-            experimental::AllConsumerOf(DFB0, "in0"),
-            experimental::AllConsumerOf(DFB1, "in1"),
-            experimental::AllConsumerOf(DFB2, "in2"),
-        },
-        .hw_config = experimental::ComputeGen2Config{},
+        .dfb_bindings =
+            {
+                experimental::AllConsumerOf(DFB0, "in0"),
+                experimental::AllConsumerOf(DFB1, "in1"),
+                experimental::AllConsumerOf(DFB2, "in2"),
+            },
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     experimental::WorkUnitSpec wu{
@@ -566,7 +568,7 @@ void run_benchmark_case_three(DfbInitTimingBenchContext& ctx) {
     const experimental::KernelSpecName READER{"reader_dm"};
     const experimental::KernelSpecName COMPUTE{"compute"};
 
-    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementGen2Config{};
+    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementHardwareConfig{};
 
     // Reader DM: 4 STRIDED producers on all three DFBs.
     experimental::KernelSpec reader_spec{
@@ -586,12 +588,13 @@ void run_benchmark_case_three(DfbInitTimingBenchContext& ctx) {
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_avg2_compute.cpp",
         .num_threads = NUM_CONSUMERS,
-        .dfb_bindings = {
-            experimental::StridedConsumerOf(DFB0, "in0"),
-            experimental::StridedConsumerOf(DFB1, "in1"),
-            experimental::StridedConsumerOf(DFB2, "in2"),
-        },
-        .hw_config = experimental::ComputeGen2Config{},
+        .dfb_bindings =
+            {
+                experimental::StridedConsumerOf(DFB0, "in0"),
+                experimental::StridedConsumerOf(DFB1, "in1"),
+                experimental::StridedConsumerOf(DFB2, "in2"),
+            },
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     experimental::WorkUnitSpec wu{
@@ -660,7 +663,7 @@ void run_benchmark_case_five(DfbInitTimingBenchContext& ctx) {
         return experimental::DFBSpecName{std::string("dfb_") + group + std::to_string(i)};
     };
 
-    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementGen2Config{};
+    const experimental::DataMovementHardwareConfig gen2_dm_hw = experimental::DataMovementHardwareConfig{};
 
     // Each reader: single DM, 1Sx4A, 16 reads per DFB (full ring).
     const char* READER_SRC =
@@ -705,7 +708,7 @@ void run_benchmark_case_five(DfbInitTimingBenchContext& ctx) {
         .source = COMPUTE_SRC,
         .num_threads = 4,
         .dfb_bindings = compute_bindings,
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     });
 
     // 12 DFB specs: 3 per group × 4 groups.
@@ -1273,7 +1276,7 @@ void run_benchmark_case_six_debug_implicit_sync_program_spec(DfbInitTimingBenchC
     const experimental::KernelSpecName CONSUMER{"consumer"};
     const experimental::TensorParamName IN_TENSOR{"in_tensor"};
 
-    const experimental::DataMovementHardwareConfig dm_producer_cfg = experimental::DataMovementGen2Config{};
+    const experimental::DataMovementHardwareConfig dm_producer_cfg = experimental::DataMovementHardwareConfig{};
 
     auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(ENTRY_SIZE, NUM_ENTRIES));
 
@@ -1304,7 +1307,7 @@ void run_benchmark_case_six_debug_implicit_sync_program_spec(DfbInitTimingBenchC
         .num_threads = NUM_CONSUMERS,
         .dfb_bindings = {experimental::AllConsumerOf(DFB, "in")},
         .compile_time_args = {{"num_entries_per_consumer", NUM_ENTRIES}},
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     experimental::WorkUnitSpec wu{

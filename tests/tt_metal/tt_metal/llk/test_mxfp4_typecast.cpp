@@ -99,7 +99,7 @@ static vector<uint32_t> run_mxfp4_typecast(
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::KernelSpec writer_spec{
@@ -110,7 +110,7 @@ static vector<uint32_t> run_mxfp4_typecast(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::KernelSpec compute_spec{
@@ -134,7 +134,7 @@ static vector<uint32_t> run_mxfp4_typecast(
              }},
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
         .hw_config =
-            experimental::ComputeGen2Config{
+            experimental::ComputeHardwareConfig{
                 .enable_32_bit_dest = fp32_dest_acc_en,
             },
     };
@@ -195,23 +195,23 @@ static vector<uint32_t> run_mxfp4_typecast(
 // Data generators follow the fp8_typecast tests' convention: generate
 // row-major floats in U(0, rand_max_float) + offset, then pack into tiles.
 static vector<uint32_t> create_random_vector_of_mxfp4(
-	uint32_t num_bytes, int rand_max_float, int seed, float offset = 0.0f) {
-	uint32_t single_tile_size = tt::tile_size(tt::DataFormat::MxFp4);
-	TT_FATAL(
-		num_bytes % single_tile_size == 0,
-		"num_bytes {} must be divisible by MXFP4 tile_size {}",
-		num_bytes,
-		single_tile_size);
-	uint32_t num_tiles = num_bytes / single_tile_size;
+    uint32_t num_bytes, int rand_max_float, int seed, float offset = 0.0f) {
+    uint32_t single_tile_size = tt::tile_size(tt::DataFormat::MxFp4);
+    TT_FATAL(
+        num_bytes % single_tile_size == 0,
+        "num_bytes {} must be divisible by MXFP4 tile_size {}",
+        num_bytes,
+        single_tile_size);
+    uint32_t num_tiles = num_bytes / single_tile_size;
 
-	std::mt19937 rng(seed);
-	std::uniform_real_distribution<float> dist(0.0f, static_cast<float>(rand_max_float));
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> dist(0.0f, static_cast<float>(rand_max_float));
 
-	constexpr uint32_t kNumFloatsPerTile = 1024;
-	vector<float> fp32_vec(num_tiles * kNumFloatsPerTile);
-	for (float& v : fp32_vec) {
-		v = dist(rng) + offset;
-	}
+    constexpr uint32_t kNumFloatsPerTile = 1024;
+    vector<float> fp32_vec(num_tiles * kNumFloatsPerTile);
+    for (float& v : fp32_vec) {
+        v = dist(rng) + offset;
+    }
 
     vector<uint32_t> packed =
         pack_as_mx_tiles(tt::DataFormat::MxFp4, ttsl::make_const_span(fp32_vec), /*row_major_input=*/true);

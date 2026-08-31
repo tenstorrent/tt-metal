@@ -40,8 +40,8 @@ const experimental::KernelSpecName COMPUTE{"compute"};
 
 struct BmmParams {
     uint32_t Mt, Kt, Nt;
-    uint32_t B_total;       // total batch count (buffer sizing + validation)
-    uint32_t B_per_core;    // batch count per core (kernel runtime args)
+    uint32_t B_total;     // total batch count (buffer sizing + validation)
+    uint32_t B_per_core;  // batch count per core (kernel runtime args)
     uint32_t num_threads = 2;
     uint32_t num_input_tiles = 4;
     uint32_t num_output_tiles = 4;
@@ -90,15 +90,21 @@ experimental::ProgramSpec build_bmm_program_spec(
     experimental::DataMovementHardwareConfig writer_config;
     experimental::ComputeHardwareConfig compute_config;
     if (is_quasar) {
-        reader_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync};
-        writer_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync};
-        compute_config = experimental::ComputeGen2Config{};
+        reader_config = experimental::DataMovementHardwareConfig{
+            .gen2_specific = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = !use_implicit_sync}};
+        writer_config = experimental::DataMovementHardwareConfig{
+            .gen2_specific = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = !use_implicit_sync}};
+        compute_config = experimental::ComputeHardwareConfig{};
     } else {
-        reader_config = experimental::DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default};
-        writer_config = experimental::DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
-        compute_config = experimental::ComputeGen1Config{};
+        reader_config = experimental::DataMovementHardwareConfig{
+            .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default}};
+        writer_config = experimental::DataMovementHardwareConfig{
+            .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}};
+        compute_config = experimental::ComputeHardwareConfig{};
     }
 
     experimental::DataflowBufferSpec src0_dfb_spec{
@@ -205,13 +211,20 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
 
     BmmParams p;
     if (mesh_device.arch() != ARCH::QUASAR) {
-        p.Mt = 4; p.Kt = 2; p.Nt = 3;
-        p.B_total = 2; p.B_per_core = 2;
-        p.num_input_tiles = 2; p.num_output_tiles = 2;
+        p.Mt = 4;
+        p.Kt = 2;
+        p.Nt = 3;
+        p.B_total = 2;
+        p.B_per_core = 2;
+        p.num_input_tiles = 2;
+        p.num_output_tiles = 2;
         p.num_threads = 1;
     } else {
-        p.Mt = 2; p.Kt = 2; p.Nt = 2;
-        p.B_total = 1; p.B_per_core = 1;
+        p.Mt = 2;
+        p.Kt = 2;
+        p.Nt = 2;
+        p.B_total = 1;
+        p.B_per_core = 1;
         p.num_threads = 2;
     }
 
@@ -280,9 +293,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     }
 
     BmmParams p;
-    p.Mt = 2; p.Kt = 2; p.Nt = 2;
-    p.B_total = 2;      // total batches across both cores
-    p.B_per_core = 1;   // each core computes exactly one batch
+    p.Mt = 2;
+    p.Kt = 2;
+    p.Nt = 2;
+    p.B_total = 2;     // total batches across both cores
+    p.B_per_core = 1;  // each core computes exactly one batch
     p.num_threads = 2;
 
     auto tensors = create_bmm_tensors(mesh_device, p);

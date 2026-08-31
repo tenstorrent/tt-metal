@@ -241,13 +241,15 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
     experimental::DataMovementHardwareConfig reader_dm_cfg;
     experimental::DataMovementHardwareConfig writer_dm_cfg;
     if (is_quasar) {
-        reader_dm_cfg = experimental::DataMovementGen2Config{};
-        writer_dm_cfg = experimental::DataMovementGen2Config{};
+        reader_dm_cfg = experimental::DataMovementHardwareConfig{};
+        writer_dm_cfg = experimental::DataMovementHardwareConfig{};
     } else {
-        reader_dm_cfg = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
-        writer_dm_cfg = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        reader_dm_cfg = experimental::DataMovementHardwareConfig{
+            .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
+        writer_dm_cfg = experimental::DataMovementHardwareConfig{
+            .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
     }
 
     experimental::KernelSpec reader_spec{
@@ -419,13 +421,15 @@ bool reader_datacopy_writer(
     experimental::DataMovementHardwareConfig reader_dm_cfg;
     experimental::DataMovementHardwareConfig writer_dm_cfg;
     if (is_quasar) {
-        reader_dm_cfg = experimental::DataMovementGen2Config{};
-        writer_dm_cfg = experimental::DataMovementGen2Config{};
+        reader_dm_cfg = experimental::DataMovementHardwareConfig{};
+        writer_dm_cfg = experimental::DataMovementHardwareConfig{};
     } else {
-        reader_dm_cfg = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
-        writer_dm_cfg = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        reader_dm_cfg = experimental::DataMovementHardwareConfig{
+            .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
+        writer_dm_cfg = experimental::DataMovementHardwareConfig{
+            .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
     }
 
     experimental::KernelSpec reader_spec{
@@ -461,13 +465,13 @@ bool reader_datacopy_writer(
         unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
     if (is_quasar) {
-        compute_hw_config = experimental::ComputeGen2Config{
+        compute_hw_config = experimental::ComputeHardwareConfig{
             .enable_32_bit_dest = fp32_dest_acc_en,
             .double_buffer_dest = !test_config.dst_full_sync_en,
             .unpack_modes = unpack_modes,
         };
     } else {
-        compute_hw_config = experimental::ComputeGen1Config{
+        compute_hw_config = experimental::ComputeHardwareConfig{
             .enable_32_bit_dest = fp32_dest_acc_en,
             .double_buffer_dest = !test_config.dst_full_sync_en,
             .unpack_modes = unpack_modes,

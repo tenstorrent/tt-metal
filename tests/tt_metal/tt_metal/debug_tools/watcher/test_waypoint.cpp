@@ -86,9 +86,11 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
                                 : tt::tt_metal::NOC::RISCV_0_default;
             experimental::DataMovementHardwareConfig dm_cfg;
             if (is_quasar) {
-                dm_cfg = experimental::DataMovementGen2Config{};
+                dm_cfg = experimental::DataMovementHardwareConfig{};
             } else {
-                dm_cfg = experimental::DataMovementGen1Config{.processor = gen1_proc, .noc = gen1_noc};
+                dm_cfg = experimental::DataMovementHardwareConfig{
+                    .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = gen1_proc, .noc = gen1_noc}};
             }
             kernel_specs.push_back(experimental::KernelSpec{
                 .unique_id = experimental::KernelSpecName{name},
@@ -109,11 +111,11 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     if (is_quasar) {
         constexpr uint32_t kQuasarUserDmCores = 6;
         add_dm_kernel("wp_dm", kQuasarUserDmCores, std::nullopt);
-        compute_config = experimental::ComputeGen2Config{};
+        compute_config = experimental::ComputeHardwareConfig{};
     } else {
         add_dm_kernel("wp_brisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_0);
         add_dm_kernel("wp_ncrisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_1);
-        compute_config = experimental::ComputeGen1Config{};
+        compute_config = experimental::ComputeHardwareConfig{};
     }
     kernel_specs.push_back(experimental::KernelSpec{
         .unique_id = compute_kernel_name,

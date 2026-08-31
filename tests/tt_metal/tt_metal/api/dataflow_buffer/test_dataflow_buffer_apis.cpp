@@ -72,13 +72,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     // Per thread: {tile0[0], tile0[1], tile1[0], tile1[1], get_tile_address(1)[0],
     //             read_tile_value<uint16_t>(1)[0], read_tile_value<uint16_t>(1)[1]}
     const std::vector<DataT> expected_per_thread = {
-        tile0_val0,
-        tile0_val1,
-        tile1_val0,
-        tile1_val1,
-        tile1_val0,
-        tile1_val0_lo,
-        tile1_val0_hi};
+        tile0_val0, tile0_val1, tile1_val0, tile1_val1, tile1_val0, tile1_val0_lo, tile1_val0_hi};
     // UNPACK, MATH, and PACK each write expected_per_thread to a distinct L1 slot.
     std::vector<DataT> expected_scalar_reads;
     expected_scalar_reads.reserve(num_results_per_thread * num_trisc_threads);
@@ -122,7 +116,10 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
                 {"num_producers", num_producers},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
-        .hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0},
+        .hw_config =
+            m2::DataMovementHardwareConfig{
+                .gen1_specific =
+                    m2::DataMovementHardwareConfig::DataMovement1XXConfig{.processor = DataMovementProcessor::RISCV_0}},
     };
 
     m2::KernelSpec consumer{
@@ -136,7 +133,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
               .access_pattern = m2::DFBAccessPattern::STRIDED}},
         .compile_time_args = {{"num_entries_per_consumer", num_entries}},
         .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
-        .hw_config = m2::ComputeGen1Config{},
+        .hw_config = m2::ComputeHardwareConfig{},
     };
 
     m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
@@ -190,9 +187,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     ASSERT_EQ(scalar_results.size(), expected_scalar_reads.size());
     for (uint32_t thread = 0; thread < num_trisc_threads; ++thread) {
         const auto begin = scalar_results.begin() + thread * num_results_per_thread;
-        EXPECT_EQ(
-            std::vector<DataT>(begin, begin + num_results_per_thread),
-            expected_per_thread)
+        EXPECT_EQ(std::vector<DataT>(begin, begin + num_results_per_thread), expected_per_thread)
             << "TRISC thread slot " << thread;
     }
 }
@@ -249,16 +244,12 @@ inline uint32_t expected_strided_ring_span_bytes(
 }
 
 inline ExtentRecord expected_strided_extent(
-    uint32_t entry_size,
-    uint32_t num_entries,
-    uint32_t num_producers,
-    uint32_t num_consumers,
-    bool is_producer) {
+    uint32_t entry_size, uint32_t num_entries, uint32_t num_producers, uint32_t num_consumers, bool is_producer) {
     const auto layout = compute_strided_layout(num_entries, entry_size, num_producers, num_consumers, is_producer);
     const uint32_t total_bytes = num_entries * entry_size;
     const uint32_t num_endpoint_threads = is_producer ? num_producers : num_consumers;
-    const uint32_t ring_span_bytes = expected_strided_ring_span_bytes(
-        entry_size, layout.ring_bytes, layout.num_tcs_on_risc, num_endpoint_threads);
+    const uint32_t ring_span_bytes =
+        expected_strided_ring_span_bytes(entry_size, layout.ring_bytes, layout.num_tcs_on_risc, num_endpoint_threads);
     return ExtentRecord{
         entry_size,
         entry_size * layout.stride_in_entries,
@@ -273,11 +264,7 @@ inline ExtentRecord expected_strided_extent(
 
 // ALL consumer (cap=ALL): capacity/stride follow num_producers; TC counts match DMTensix ALL.
 inline ExtentRecord expected_all_extent(
-    uint32_t entry_size,
-    uint32_t num_entries,
-    uint32_t num_producers,
-    uint32_t num_consumers,
-    bool is_producer) {
+    uint32_t entry_size, uint32_t num_entries, uint32_t num_producers, uint32_t num_consumers, bool is_producer) {
     (void)num_consumers;
     const uint32_t capacity = num_entries / num_producers;
     const uint32_t stride_in_entries = 1;
@@ -394,11 +381,15 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
     m2::DataMovementHardwareConfig producer_hw;
     m2::ComputeHardwareConfig consumer_hw;
     if (is_quasar) {
-        producer_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for = {DFB}};
-        consumer_hw = m2::ComputeGen2Config{};
+        producer_hw = m2::DataMovementHardwareConfig{
+            .gen2_specific =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for = {DFB}}};
+        consumer_hw = m2::ComputeHardwareConfig{};
     } else {
-        producer_hw = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
-        consumer_hw = m2::ComputeGen1Config{};
+        producer_hw = m2::DataMovementHardwareConfig{
+            .gen1_specific =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{.processor = DataMovementProcessor::RISCV_0}};
+        consumer_hw = m2::ComputeHardwareConfig{};
     }
 
     m2::KernelSpec producer{
@@ -452,8 +443,7 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
 
     Program program = m2::MakeProgramFromSpec(mesh_device, spec);
 
-    const uint32_t producer_records =
-        params.num_producers * params.producer.num_tc_snapshots;
+    const uint32_t producer_records = params.num_producers * params.producer.num_tc_snapshots;
     const uint32_t consumer_records = params.consumer.num_tc_snapshots;
     const uint32_t producer_result_l1 =
         allocate_l1_result_region(mesh_device, (producer_records + consumer_records) * extent_record_bytes);

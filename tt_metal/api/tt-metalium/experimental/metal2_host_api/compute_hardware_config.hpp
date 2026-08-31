@@ -4,8 +4,8 @@
 
 #pragma once
 
+#include <optional>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
@@ -31,12 +31,6 @@ namespace tt::tt_metal::experimental {
 //
 // The ComputeHardwareConfig configures this pipeline.
 //
-// Different generations of Tenstorrent accelerators have slightly different
-// Tensix compute hardware. The compute configuration is therefore generation-
-// specific (though many fields are common). ComputeHardwareConfig is a variant
-// object that holds one generation's config; you must specify the correct
-// config for the hardware your compute kernel will run on.
-//
 // NOTE: The Unpack, Math, and Pack stages are hardware pipeline stages internal
 //       to a single kernel thread. Not to be confused with KernelSpec::num_threads!
 //       In a multi-threaded compute kernel, each thread runs its own independent
@@ -44,13 +38,11 @@ namespace tt::tt_metal::experimental {
 //
 // ============================================================================
 
-// Type used for unpack_modes; see configuration structs below for details
 using ComputeUnpackModes = Table<DFBSpecName, tt::tt_metal::UnpackMode>;
 
-// Compute configuration for Gen1 architectures:
-//  - Wormhole  (TT-1.1.0)
-//  - Blackhole (TT-1.2.0)
-struct ComputeGen1Config {
+struct ComputeHardwareConfig {
+    // ---- Generation-agnostic ("common") fields ----
+
     ////////////////////////////////////////////////
     // General accuracy / performance tradeoffs
     ////////////////////////////////////////////////
@@ -63,12 +55,6 @@ struct ComputeGen1Config {
     // Accuracy / performance tradeoff for the SFPU transcendentals.
     // Select either fast-and-approximate mode or slow-and-precise mode.
     Precision sfpu_precision_mode = Precision::Precise;
-
-    // Pack stage precision tweak for block-float formats.
-    // Affects how exponents are reconciled when converting Dest contents to BFP in
-    // the Pack stage. Select either precise (slower) or approximate (faster).
-    // NOTE: This setting has no effect on non-BFP formats.
-    Precision bfp_pack_precision_mode = Precision::Approximate;
 
     /////////////////////////////////////
     // Dest register file configuration
@@ -116,127 +102,35 @@ struct ComputeGen1Config {
     //  - You want to preserve the full precision
     //  - The data will be consumed by the SFPU (not the FPU)
     //
+    // On Gen2 architectures, there is NO performance penalty for unpacking directly to
+    // Dest, so UnpackMode=UnpackToDest is the preferred mode for any SFPU-consumed data.
+    //
     // If no mode is specified for a (consumed-from) DFB, UnpackToSrc is assumed.
     // However, if enable_32_bit_dest is true and the DFB carries a 32-bit format, you must
     // EXPLICITLY specify an UnpackMode for that DFB. (Enforced by validation checks.)
     //
     ComputeUnpackModes unpack_modes;
+
+    // ---- Generation-specific configs ----
+    // Optional and unset by default. Each config applies only to the architecture named in
+    // its header, and is ignored on any other.
+    // NOTE: The target architecture is selected at program construction time.
+    //       See MakeProgramFromSpec for more details.
+
+    // ---- TT-1.x.x specific (Wormhole, Blackhole) ----
+    struct Compute1XXConfig {
+        // Pack-stage precision tweak for block-float formats.
+        // Affects how exponents are reconciled when converting Dest contents to BFP in
+        // the Pack stage. Select either precise (slower) or approximate (faster).
+        // NOTE: This setting has no effect on non-BFP formats.
+        Precision bfp_pack_precision_mode = Precision::Approximate;
+    };
+    std::optional<Compute1XXConfig> gen1_specific = std::nullopt;
+
+    // ---- TT-2.x.x specific (Quasar and derivatives) ----
+    // Empty today.
+    struct Compute2XXConfig {};
+    std::optional<Compute2XXConfig> gen2_specific = std::nullopt;
 };
-
-// Compute configuration for Gen2 architectures:
-//  - Quasar (TT-2.0.0)
-//  - Quasar derivatives (TT-2.0.x)
-struct ComputeGen2Config {
-    ////////////////////////////////////////////////
-    // General accuracy / performance tradeoffs
-    ////////////////////////////////////////////////
-
-    // See ComputeGen1Config for details on fpu_math_fidelity
-    MathFidelity fpu_math_fidelity = MathFidelity::HiFi4;
-
-    // See ComputeGen1Config for details on sfpu_precision_mode
-    Precision sfpu_precision_mode = Precision::Precise;
-
-    // Note: Gen2 architectures replace BFP data formats with MXFP formats;
-    //       the bfp_pack_precision_mode setting is not relevant for Gen2.
-
-    /////////////////////////////////////
-    // Dest register file configuration
-    /////////////////////////////////////
-
-    // See ComputeGen1Config for details on enable_32_bit_dest
-    bool enable_32_bit_dest = false;
-
-    // See ComputeGen1Config for details on double_buffer_dest
-    bool double_buffer_dest = true;
-
-    // See ComputeGen1Config for details on unpack_modes
-    //
-    // NOTE: On Gen2 architectures, there is NO performance penalty for unpacking directly to
-    //       Dest, so UnpackMode=UnpackToDest is the preferred mode for any SFPU-consumed data.
-    ComputeUnpackModes unpack_modes;
-
-    ///////////////////////////////////////////
-    // Temporary configs (these will change!)
-    ///////////////////////////////////////////
-
-    ///////////////////////////////////////////////////////////////////////////////////////////////
-};
-
-// A compute kernel's hardware config holds exactly one generation's config.
-using ComputeHardwareConfig = std::variant<ComputeGen1Config, ComputeGen2Config>;
-
-// ----------------------------------------------------------------------------
-//  Common-field accessors
-// ----------------------------------------------------------------------------
-//
-// Many compute settings are common to Gen1 and Gen2 architectures.
-//
-// Reaching a common field through the variant is syntactically awkward; you should not need
-// to know which alternative is held. For convenience, each common field is given an accessor
-// helper function here. (Generation-specific fields are not given accessors.)
-//
-// Each field has a mutable and a const accessor.
-//
-// The mutable accessor returns a reference, so you can assign through it:
-//
-//     enable_32_bit_dest(compute_hw) = true;
-//
-// or bind it and use it multiple times:
-//
-//     auto& dfb_unpack_modes = unpack_modes(compute_hw);
-//     dfb_unpack_modes.emplace(dfb1, UnpackMode::UnpackToDest);
-//     dfb_unpack_modes.emplace(dfb2, UnpackMode::UnpackToSrc);
-//
-// The const accessor returns the scalar fields by value, and unpack_modes (a container) by
-// const reference.
-//
-// For common fields, prefer this syntax over e.g. std::get<ComputeGen1Config>(config).field,
-// which throws if the wrong architecture is targeted.
-
-inline MathFidelity& fpu_math_fidelity(ComputeHardwareConfig& config) {
-    return std::visit([](auto& cfg) -> MathFidelity& { return cfg.fpu_math_fidelity; }, config);
-}
-
-inline MathFidelity fpu_math_fidelity(const ComputeHardwareConfig& config) {
-    return std::visit([](const auto& cfg) -> MathFidelity { return cfg.fpu_math_fidelity; }, config);
-}
-
-inline Precision& sfpu_precision_mode(ComputeHardwareConfig& config) {
-    return std::visit([](auto& cfg) -> Precision& { return cfg.sfpu_precision_mode; }, config);
-}
-
-inline Precision sfpu_precision_mode(const ComputeHardwareConfig& config) {
-    return std::visit([](const auto& cfg) -> Precision { return cfg.sfpu_precision_mode; }, config);
-}
-
-inline bool& enable_32_bit_dest(ComputeHardwareConfig& config) {
-    return std::visit([](auto& cfg) -> bool& { return cfg.enable_32_bit_dest; }, config);
-}
-
-inline bool enable_32_bit_dest(const ComputeHardwareConfig& config) {
-    return std::visit([](const auto& cfg) -> bool { return cfg.enable_32_bit_dest; }, config);
-}
-
-inline bool& double_buffer_dest(ComputeHardwareConfig& config) {
-    return std::visit([](auto& cfg) -> bool& { return cfg.double_buffer_dest; }, config);
-}
-
-inline bool double_buffer_dest(const ComputeHardwareConfig& config) {
-    return std::visit([](const auto& cfg) -> bool { return cfg.double_buffer_dest; }, config);
-}
-
-inline ComputeUnpackModes& unpack_modes(ComputeHardwareConfig& config) {
-    return std::visit([](auto& cfg) -> ComputeUnpackModes& { return cfg.unpack_modes; }, config);
-}
-
-inline const ComputeUnpackModes& unpack_modes(const ComputeHardwareConfig& config) {
-    return std::visit([](const auto& cfg) -> const ComputeUnpackModes& { return cfg.unpack_modes; }, config);
-}
-
-// Delete the rvalue overload of unpack_modes to prevent dangling references
-// (The mutable accessors can't bind a temporary, and the const scalars return by value,
-// so only this one needs it.)
-inline const ComputeUnpackModes& unpack_modes(const ComputeHardwareConfig&&) = delete;
 
 }  // namespace tt::tt_metal::experimental
