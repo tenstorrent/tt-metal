@@ -420,6 +420,10 @@ ProgramArtifacts create_no_bcast_artifacts(
         is_scalar);
     const std::optional<Tensor>& b_opt = tensor_args.input_tensor_b;
 
+    // Thread counts and ring depth. Same cached instance matches_quasar_native_slice gated on, so the
+    // divisibility it checked holds for exactly these values.
+    const NativeTuning& t = native_tuning();
+
     const bool is_sfpu = op.is_sfpu;
     const DataType input_dtype = op.input_dtype;
     const auto op_type = op.binary_op_type;
@@ -642,14 +646,41 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     // --- DataflowBuffers (mirrors the descriptor factory's CB block). A BORROWED operand backs the DFB
     // with its resident L1 shard (num_entries == full shard, borrowed_from set); any NoC-read operand
-    // (interleaved, or sharded on a non-matching grid) is a 2-entry ring filled over the NoC.
+    // (interleaved, or sharded on a non-matching grid) is a derived-depth ring filled over the NoC.
     // post_lhs/post_rhs exist only when that operand has activations; their format is the op_has_exp
     // Float16_b intermediate on the FPU path, else the operand's own format. ---
-    const uint32_t a_entries = a_borrowed ? full_shard_tiles(a, *a.shard_spec()) : 2u;
-    // Scalar in1 is a single writer-filled tile (never borrowed); otherwise the borrowed shard or a
-    // 2-entry NoC ring.
-    const uint32_t b_entries = is_scalar ? 1u : (b_borrowed ? full_shard_tiles(*b_opt, *b_opt->shard_spec()) : 2u);
-    const uint32_t c_entries = c_borrowed ? full_shard_tiles(c, *c.shard_spec()) : 2u;
+    // capacity = num_entries / max(producers, consumers) is what reaches the credit register, so the
+    // knob is PER-THREAD and num_entries is derived. A global depth is meaningless: depth 2 is illegal
+    // at R=4 (must divide by max(R,C)) and depth 4 at R=C=4 gives capacity 1, i.e. no double buffering.
+    // in0/in1 endpoints are (R, C); out endpoints are (C, W).
+    const uint32_t in_producers_consumers = std::max(t.reader_threads, t.compute_threads);
+    const uint32_t out_producers_consumers = std::max(t.compute_threads, t.writer_threads);
+    const uint32_t in_entries = t.entries_per_thread * in_producers_consumers;
+    const uint32_t out_entries = t.entries_per_thread * out_producers_consumers;
+    // threshold and num_entries_per_txn_id are uint8_t with NO guard, and the only TT_FATAL there checks
+    // divisibility, which 0 % anything == 0 passes. num_txn_ids falls back to 1 when no n in [2,4]
+    // divides, so the cliff is at 255 entries -- not 510 as a "num_txn_ids >= 2" assumption would suggest.
+    TT_FATAL(
+        in_entries <= 255 && out_entries <= 255,
+        "binary_ng Quasar-native: num_entries must be <= 255 (unguarded uint8_t threshold), got in={} out={}",
+        in_entries,
+        out_entries);
+    // num_tiles_per_cycle > 1 batches n tiles per reserve/push, which a strided multi-thread ring cannot
+    // express. Reachable only if the gate ever admits a borrowed shard.
+    TT_FATAL(
+        num_tiles_per_cycle == 1 || (in_producers_consumers == 1 && out_producers_consumers == 1),
+        "binary_ng Quasar-native: num_tiles_per_cycle {} > 1 requires stride 1 on EVERY DFB "
+        "(in: max(R,C)={}, out: max(C,W)={})",
+        num_tiles_per_cycle,
+        in_producers_consumers,
+        out_producers_consumers);
+
+    const uint32_t a_entries = a_borrowed ? full_shard_tiles(a, *a.shard_spec()) : in_entries;
+    // Scalar in1 is a single writer-filled tile (never borrowed); otherwise the borrowed shard or the
+    // derived NoC ring.
+    const uint32_t b_entries =
+        is_scalar ? 1u : (b_borrowed ? full_shard_tiles(*b_opt, *b_opt->shard_spec()) : in_entries);
+    const uint32_t c_entries = c_borrowed ? full_shard_tiles(c, *c.shard_spec()) : out_entries;
 
     std::vector<m2::DataflowBufferSpec> dfbs;
     constexpr uint32_t num_mandatory_dfbs = 3;  // in0, in1, out
@@ -821,7 +852,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     m2::KernelSpec reader_spec{
         .unique_id = READER,
         .source = std::filesystem::path(kernel_sources.reader),
-        .num_threads = 1,
+        .num_threads = t.reader_threads,
         .compiler_options = {.defines = reader_defines_tbl},
         .dfb_bindings = reader_dfb_bindings,
         .tensor_bindings = reader_tensor_bindings,
@@ -869,7 +900,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     m2::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = std::filesystem::path(kernel_sources.writer),
-        .num_threads = 1,
+        .num_threads = t.writer_threads,
         .compiler_options = {.defines = writer_defines_tbl},
         .dfb_bindings = writer_dfb_bindings,
         .tensor_bindings = writer_tensor_bindings,
@@ -934,7 +965,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     m2::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = std::filesystem::path(kernel_sources.compute),
-        .num_threads = 1,
+        .num_threads = t.compute_threads,
         .compiler_options =
             {.include_paths = {std::filesystem::path(kComputeIncludeCommon), std::filesystem::path(kComputeIncludeDfb)},
              .defines = compute_defines_tbl},
@@ -970,6 +1001,36 @@ ProgramArtifacts create_no_bcast_artifacts(
     const uint32_t d_stride_b = bHt * bWt * bC * bN * (bD > 1);
     const uint32_t n_stride_b = bHt * bWt * bC * (bN > 1);
     const uint32_t c_stride_b = bHt * bWt * (bC > 1);
+
+    // These strides are the INPUT's while the loop bounds are the OUTPUT's, so a zeroed stride makes an
+    // operand re-read one tile across that dim -- outer-dim broadcast ("no_bcast" means no SUBTILE
+    // broadcast). kernels_qsr/ collapses the cascade to page = start_tile_id + k and ignores them, which
+    // is the identity only while every input dim equals the output's.
+    const bool a_dims_are_output_dims = aND == cND && aD == cD && aN == cN && aC == cC && aHt == cHt && aWt == cWt;
+    const bool b_dims_are_output_dims = bND == cND && bD == cD && bN == cN && bC == cC && bHt == cHt && bWt == cWt;
+    TT_FATAL(
+        a_dims_are_output_dims && b_dims_are_output_dims,
+        "Quasar-native binary_ng requires both inputs to have the output's dims; the collapsed kernel "
+        "traversal cannot express outer-dim broadcast. a=({},{},{},{},{},{}) b=({},{},{},{},{},{}) "
+        "out=({},{},{},{},{},{}).",
+        aND,
+        aD,
+        aN,
+        aC,
+        aHt,
+        aWt,
+        bND,
+        bD,
+        bN,
+        bC,
+        bHt,
+        bWt,
+        cND,
+        cD,
+        cN,
+        cC,
+        cHt,
+        cWt);
 
     std::vector<CoreCoord> cores;
     CoreRangeSet core_group_1, core_group_2;

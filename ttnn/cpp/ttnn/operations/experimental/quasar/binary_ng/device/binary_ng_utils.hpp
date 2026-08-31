@@ -144,15 +144,16 @@ ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::S
 
 MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const ttnn::Shape& shape_b);
 
-// Env-driven tuning for ProgramFactoryQuasarNative, read once per process. R/C/W constrain ADMISSION
-// only until the multi-thread host wiring lands -- raising them narrows which shapes route native and
-// cannot make the program use more engines; native_tuning() log_info's that so an A/B log is honest.
+// Env-driven tuning for ProgramFactoryQuasarNative, read once per process. R/C/W set KernelSpec
+// num_threads AND gate admission: matches_quasar_native_slice rejects shapes whose per-core tile count
+// does not divide by lcm(R,C,W), because the kernels' strided share assumes an exact split.
 struct NativeTuning {
-    bool implicit_sync = false;       // parsed; NOT yet consumed
-    uint32_t entries_per_thread = 2;  // parsed; NOT yet consumed. Per-thread ring depth once it is
-    uint32_t reader_threads = 1;      // R -- admission gate only, for now
-    uint32_t compute_threads = 1;     // C -- admission gate only, for now; must be 1, 2 or 4
-    uint32_t writer_threads = 1;      // W -- admission gate only, for now
+    bool implicit_sync = false;       // parsed and logged; NOT consumed -- the factory hardcodes
+                                      // explicit sync, so setting the env var changes nothing
+    uint32_t entries_per_thread = 2;  // per-thread ring depth; num_entries = this x max(producers, consumers)
+    uint32_t reader_threads = 1;      // R
+    uint32_t compute_threads = 1;     // C -- must be 1, 2 or 4
+    uint32_t writer_threads = 1;      // W
     bool enabled = false;             // TTNN_QSR_NATIVE; 0 and unset both mean OFF
 };
 

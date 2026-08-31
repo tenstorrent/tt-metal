@@ -2,9 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 / DataflowBuffer (DFB) FPU compute kernel for binary_ng's no-broadcast binary op.
+// Metal 2.0 / DataflowBuffer (DFB) FPU compute kernel for binary_ng's no-broadcast binary op,
+// Quasar-native.
 //
-// 1:1 mirror of the CircularBuffer kernels/compute/eltwise_binary_no_bcast.cpp, with the CB->DFB
+// Diverges from kernels_dfb/compute/eltwise_binary_no_bcast_dfb.cpp only in the trip count: thread c
+// of C processes num_tiles / C tiles. Which tiles it gets is the DFB's assignment, not the kernel's.
+//
+// Otherwise mirrors the CircularBuffer kernels/compute/eltwise_binary_no_bcast.cpp, with the CB->DFB
 // swap. Uses the same define machinery the descriptor factory builds: BINARY_OP / BINARY_OP_TYPE
 // (the binary op), HAS_ACTIVATIONS / PREPROCESS / PROCESS_POST_ACTIVATIONS (lhs/rhs/post activation
 // chains), PACK_RELU (fused RELU fast path). Layout-agnostic: the reader/writer absorb all
@@ -19,6 +23,7 @@
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_dfb.hpp"
@@ -91,15 +96,15 @@ void kernel_main() {
         dfb_post_rhs.pop_front(n);
     };
 
-    // Process full chunks
-    uint32_t num_full_chunks = num_tiles / num_tiles_per_cycle;
+    // Thread c of C consumes its own share. WHICH tiles is the DFB's business, so unlike the
+    // dataflow kernels only the trip count changes here. The gate's even divisibility makes the
+    // division exact.
+    const uint32_t my_tiles = num_tiles / get_num_threads();
+
+    // No remainder branch: the gate rejects sharding, which pins num_tiles_per_cycle to 1, so
+    // my_tiles % num_tiles_per_cycle is always 0.
+    const uint32_t num_full_chunks = my_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
         process_tiles(num_tiles_per_cycle);
-    }
-
-    // Process remainder
-    uint32_t remainder = num_tiles % num_tiles_per_cycle;
-    if (remainder > 0) {
-        process_tiles(remainder);
     }
 }

@@ -954,12 +954,13 @@ const NativeTuning& native_tuning() {
             "cores), got {} + {}",
             t.reader_threads,
             t.writer_threads);
-        // Once, so an A/B log is self-describing: COMPUTE_THREADS=4 still emits a 1-thread program.
+        // Once, so an A/B log is self-describing. num_entries is DERIVED (entries_per_thread x the
+        // endpoint's max(producers, consumers)), so the depth reaching the credit register is not this
+        // number.
         log_info(
             tt::LogOp,
-            "binary_ng Quasar-native ENABLED: R={} C={} W={} entries_per_thread={} implicit_sync={}. "
-            "R/C/W currently constrain ADMISSION ONLY; the generated program is 1 reader / 1 compute / "
-            "1 writer until the multi-thread host wiring lands.",
+            "binary_ng Quasar-native ENABLED: R={} C={} W={} entries_per_thread={}. Sync is EXPLICIT; "
+            "TTNN_QSR_IMPLICIT_SYNC={} is parsed but NOT wired to the program.",
             t.reader_threads,
             t.compute_threads,
             t.writer_threads,
