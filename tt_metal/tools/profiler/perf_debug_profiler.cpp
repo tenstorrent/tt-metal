@@ -31,6 +31,8 @@
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -626,6 +628,40 @@ bool tracy_push_enabled() {
 // tensix core), which is exactly the baggage perf_debug exists to avoid. Instead read the Tensix WALL CLOCK
 // (the very counter kernel markers timestamp with) straight over NoC, bracketed by host clock reads --
 // Cristian's algorithm: the midpoint of the bracket cancels the round-trip to first order.
+namespace {
+// Fabric routers own their eth cores outright: on Blackhole an eth core has exactly ONE Metal-programmable
+// RISC and the router kernel occupies it, and get_active_ethernet_cores(true) does NOT filter router cores
+// on this arch (the FABRIC_ROUTER skip exists only in the non-BH branch). Routers are also already RUNNING
+// by the time this profiler starts -- MeshDevice::create calls initialize_fabric_and_dispatch_fw() before
+// init_perf_debug_profiler() -- so every eth-sync launch (init tree, closure, resident tracker, close-check)
+// must keep off the claimed set or it writes a launch message into a live router. The claim set queried
+// here is the post-trim ACTIVE ROUTER set: exactly the channels fabric_init programs routers on, which is
+// ALL trained channels under the default configs the fabric unit tests and CCL/models use (planes=nullopt
+// -> STRICT claims everything; free channels exist only when num_routing_planes is configured lower).
+// Fabric DISABLED skips the query entirely, so the common profiling case pays nothing.
+bool eth_core_is_fabric_claimed(uint32_t chip_id, const CoreCoord& logical_eth) {
+    if (MetalContext::instance().get_fabric_config() == tt::tt_fabric::FabricConfig::DISABLED) {
+        return false;
+    }
+    try {
+        const auto& cp = MetalContext::instance().get_control_plane();
+        const auto node = cp.get_fabric_node_id_from_physical_chip_id(chip_id);
+        const auto& soc = MetalContext::instance().get_cluster().get_soc_desc(chip_id);
+        for (const auto& [chan, dir] : cp.get_active_fabric_eth_channels(node)) {
+            const auto core = soc.get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
+            if (CoreCoord(core.x, core.y) == logical_eth) {
+                return true;
+            }
+        }
+        return false;
+    } catch (const std::exception&) {
+        // Fabric is configured but its claims are unreadable. Treat the core as claimed: launching on a
+        // live router can wedge the mesh, declining only costs eth sync (host anchors still stand).
+        return true;
+    }
+}
+}  // namespace
+
 struct PerfDebugSync {
     double frequency = 0.0;  // device cycles per nanosecond (GHz)
     uint64_t device_at_anchor = 0;
@@ -1109,6 +1145,10 @@ void PerfDebugProfiler::cross_path_tracking_test() {
         if (!e.valid || e.snd_dev == nullptr || e.rcv_dev == nullptr) {
             continue;
         }
+        if (eth_core_is_fabric_claimed(e.sender_chip, e.snd_eth) ||
+            eth_core_is_fabric_claimed(e.receiver_chip, e.rcv_eth)) {
+            continue;  // the link's channel is fabric-owned by now; see the close-check skip
+        }
         // DRISC core on each end. Deliberately a DRAM core: it is where our drainers live, its coords are
         // virtual (so read_reg resolves them, unlike the LOGICAL eth coords that aborted an earlier attempt),
         // and it is the domain our drainer zones are timestamped in.
@@ -1339,6 +1379,10 @@ void PerfDebugProfiler::start_eth_tracker(const std::shared_ptr<distributed::Mes
                 auto [pid, pcore] = e.snd_dev->get_connected_ethernet_core(c);
                 if (static_cast<uint32_t>(pid) != e.receiver_chip) {
                     continue;
+                }
+                if (eth_core_is_fabric_claimed(e.sender_chip, c) ||
+                    eth_core_is_fabric_claimed(e.receiver_chip, pcore)) {
+                    continue;  // a fabric router owns this channel; keep looking for a free one
                 }
                 snd2 = c;
                 rcv2 = pcore;
@@ -1663,6 +1707,18 @@ void PerfDebugProfiler::check_sync_drift_at_close() {
     double worst_elapsed_s = 0.0;
     for (const auto& e : link_syncs_) {
         if (!e.valid || e.snd_dev == nullptr || e.rcv_dev == nullptr) {
+            continue;
+        }
+        if (eth_core_is_fabric_claimed(e.sender_chip, e.snd_eth) ||
+            eth_core_is_fabric_claimed(e.receiver_chip, e.rcv_eth)) {
+            // Cannot happen when the init selection ran under the same fabric config (it avoids claimed
+            // channels), but a config brought up between init and close would land here.
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] eth sync CLOSE-CHECK {} -> {} SKIPPED: a fabric router now owns the "
+                "link's eth channel; the session's accumulated drift is UNKNOWN for this link",
+                e.sender_chip,
+                e.receiver_chip);
             continue;
         }
         const auto r = eth_sync::measure_link(e.snd_dev, e.snd_eth, e.rcv_dev, e.rcv_eth, cfg);
@@ -2299,6 +2355,10 @@ void PerfDebugProfiler::sync_devices_over_eth(const std::shared_ptr<distributed:
             if (visited.count(peer_id) != 0) {
                 continue;
             }
+            if (eth_core_is_fabric_claimed(static_cast<uint32_t>(snd->id()), ec) ||
+                eth_core_is_fabric_claimed(static_cast<uint32_t>(peer_id), std::get<1>(peer))) {
+                continue;  // a fabric router owns one end; a later channel to this peer may still be free
+            }
             IDevice* rcv = nullptr;
             for (IDevice* d : devices) {
                 if (d->id() == peer_id) {
@@ -2415,6 +2475,10 @@ void PerfDebugProfiler::sync_devices_over_eth(const std::shared_ptr<distributed:
             const auto snd_id = static_cast<uint32_t>(snd->id());
             if (measured_pairs.count(pair_key(snd_id, peer_id)) != 0) {
                 continue;  // a tree edge, or a pair already closed
+            }
+            if (eth_core_is_fabric_claimed(snd_id, ec) ||
+                eth_core_is_fabric_claimed(peer_id, std::get<1>(peer))) {
+                continue;
             }
             IDevice* rcv = nullptr;
             for (IDevice* d : devices) {
