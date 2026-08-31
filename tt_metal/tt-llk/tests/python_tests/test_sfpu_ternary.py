@@ -106,23 +106,19 @@ def _run_sfpu_ternary(
 ):
     """Drive one ternary variant; returns (src_A, golden_tensor, res_tensor) for extra checks.
 
-    *scalar_bits* is the addc multiplier as a raw fp32 bit pattern. It reaches the kernel as a
-    `constexpr std::uint32_t SFPU_TERNARY_SCALAR`, so it is a *compile-time* axis -- one
-    argument rather than a module constant read twice, so the templates list and the golden
-    call cannot come to disagree about which value was driven.
+    *scalar_bits* is the addc multiplier as a raw fp32 bit pattern, reaching the kernel as a
+    `constexpr std::uint32_t SFPU_TERNARY_SCALAR` -- a compile-time axis, passed as an argument
+    so the templates list and the golden call cannot disagree about which value was driven.
 
-    *unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
-
-    For the one case where the sign genuinely is not specified: a NaN the kernel emitted,
-    packed as a signed infinity through a pipeline too narrow to hold it, on Wormhole, where
-    `SFPMAD.md` says that NaN's sign "might or might not be set". Better than withdrawing the
-    variant -- the magnitude, the finiteness and every finite lane stay checked, so a kernel
-    returning a finite value, a zero or a NaN where an infinity is due still fails.
+    *unspecified_nonfinite_sign* compares a non-finite result by magnitude only, for the one case
+    where the sign genuinely is not specified: a NaN the kernel emitted, packed as a signed
+    infinity through a pipeline too narrow to hold it, on Wormhole, where `SFPMAD.md` says that
+    sign "might or might not be set". Better than withdrawing the variant, since magnitude,
+    finiteness and every finite lane stay checked.
 
     Scoped per lane, from the mask the golden records while the NaN is still a NaN, because one
-    tensor holds both kinds of non-finite at once: the specials_in class drives `inf + (-inf)`,
-    whose sign the ISA leaves open, alongside `lerp(a, b, 0) = a` at `a = -inf`, whose `-inf`
-    IEEE fully specifies. Same per-lane scoping test_eltwise_binary_sfpu uses.
+    tensor holds both kinds of non-finite: `inf + (-inf)`, whose sign the ISA leaves open, and
+    `lerp(-inf, b, 0) = -inf`, which IEEE fully specifies.
     """
     # The specs below carry no seed, so seed here: an unseeded redraw makes a variant
     # sitting near its tolerance pass or fail by luck. Same as the binary driver.
@@ -267,47 +263,26 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
 # ─────────────────────────────────────────────────────────────────────────────
 # Deliberate edge values, per operand and per failure class
 #
-# The random sweep holds c in uniform(1, 2) for addcdiv and snake_beta because both divide by
-# it, so the pole is unreachable by construction; this drives it -- and, now, drives the two
-# operands the previous version of this sweep never touched.
+# The random sweep holds c in uniform(1, 2) for addcdiv and snake_beta because both divide by it,
+# so the pole is unreachable by construction. This drives it, and drives the two operands the
+# sweep never touched. `edge_values(op, ..., operand=X)` resolves it through the usual metadata
+# -- addcdiv and snake_beta from _OP_SINGULARITIES, lerp from _OP_OPERAND_EDGE_POINTS, addcmul
+# from nothing, a multiply having no pole and no knee -- so an op joins by gaining a table entry.
 #
-# `edge_values(op, ..., operand=X)` resolves the whole thing through the usual metadata:
+# Two runtime axes, and each is separate for its own reason.
 #
-#   addcdiv    a + value * b / c    -> _OP_SINGULARITIES C = (0.0, BOTH)
-#   snake_beta a + sin(b*a)^2 / c   -> _OP_SINGULARITIES C = (0.0, BOTH)
-#   lerp       a + c * (b - a)      -> _OP_OPERAND_EDGE_POINTS C = (-1, 0, 1, 2)
-#   addcmul    a + value * b * c    -> nothing finite; a multiply has no pole and no knee
+# *operand* says which of a, b, c carries the probe; the other two keep their random domains, so
+# every probe meets a fresh random pair in each of the sixteen faces StimuliSpec.custom fills.
+# Pinning two operands would pair their lists *index-wise* rather than crossing them --
+# generate_stimuli fills each independently and tilize pairs by position -- so five probes
+# against five would test five combinations, not twenty-five, and would spend the rest of every
+# face on the (0, 0, 0) the zero-fill leaves behind.
 #
-# so an op joins by gaining a table entry, never by being listed here.
-#
-# TWO AXES, AND WHY EACH IS SEPARATE.
-#
-# *operand* says which of a, b, c carries the probe. The other two keep their random domains,
-# so each probe value meets a fresh random pair in every face it is repeated into -- sixteen of
-# them at [64, 64], since StimuliSpec.custom fills per face. Pinning two operands instead would
-# pair their value lists *index-wise*: generate_stimuli fills each operand independently and
-# tilize pairs by position, so this is not the cartesian product edge_pair_values() gives the
-# binary suite. Five probes against five probes would test five combinations rather than
-# twenty-five, and would spend the rest of every face on the (0, 0, 0) that
-# StimuliSpec.custom zero-fills with.
-#
-# *edge_class* partitions the probe by failure class before it is driven -- one class per
-# variant, the same split _EDGE_CLASSES makes in test_eltwise_binary_sfpu:
-#
-#   pole         the finite edges -- the registered singularity straddled by a ULP step (cat A),
-#                the op's knees (cat D), and the signed zeros.
-#   specials_in  the non-finite ones (cat B), gated on TERNARY_SPECIALS_READY_OPS and
-#                specials_safe().
-#
-# Classified by `math.isfinite` on the probe, exactly as _classify_edge_pair() tests its
-# operands before anything else: a non-finite *operand* is a different question from a pole,
-# and one tensor holding both means one xfail covering two causes. Without the split,
-# addcdiv's c = 0 pole and c = inf would share a variant and a regression in either would be
-# invisible while the other stayed broken.
-#
-# `test_sfpu_ternary_operand_edges[..., operand:C-edge_class:pole]` is the sweep that used to be
-# spelled test_sfpu_ternary_edges; it is the same stimulus, reached through the same
-# edge_values() metadata, so nothing that was covered has been dropped.
+# *edge_class* splits the finite edges (cat A's singularity straddled by a ULP step, cat D's
+# knees, the signed zeros) from the non-finite ones (cat B, gated on TERNARY_SPECIALS_READY_OPS
+# and specials_safe()), classified by `math.isfinite` on the probe. One class per variant: a
+# non-finite operand is a different question from a pole, and without the split addcdiv's c = 0
+# and c = inf would share one xfail and a regression in either would hide behind the other.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _TERNARY_EDGE_OPS = [
@@ -388,24 +363,20 @@ def _ternary_edge_class_values(
 def _producer_probe_values(mathop, formats, dest_acc, specials):
     """Any non-empty probe list for this compile key, or [] if the op has no edge at all here.
 
-    For the compile-producer pass only. Both `operand` and `edge_class` are runtime() axes, so
-    conftest._collapse_runtime_only_variants keeps one item per compile key -- the first, which
-    is operand A -- and *that* item builds the ELF the other five share. A skip there leaves
-    them running against a binary that was never built, which presents as TENSIX TIMED OUT
-    rather than as a skip.
+    For the compile-producer pass only. `operand` and `edge_class` are both runtime() axes, so
+    _collapse_runtime_only_variants keeps one item per compile key -- operand A, class pole --
+    and that item builds the ELF the other five share; a skip there leaves them running against
+    a binary that was never built, which presents as TENSIX TIMED OUT.
 
-    So the fallback has to drop *both* runtime axes, not just the class. Dropping the class
-    alone is not enough, and the Float16_b / dest_acc=Yes cell is why: cat B is off there, and
-    with it operands A and B have no edge of either class, while operand C still has its pole --
-    3 values for addcdiv and snake_beta, 4 for lerp -- which the consumer will execute. Asking
-    only about operand A returns nothing and the producer skips anyway.
+    So the fallback drops *both* axes. Dropping the class alone is not enough, and Float16_b /
+    dest_acc=Yes is why: cat B is off there, leaving operands A and B with no edge of either
+    class while operand C still has its pole -- 3 values for addcdiv and snake_beta, 4 for lerp
+    -- which the consumer will execute.
 
-    Any non-empty list compiles the right kernel: the ELF depends on the compile-time axes
-    (op, formats, dest_acc) and never on which values go in which tensor, and the producer
-    builds and then skips before the stimulus reaches a device (TestConfig.run()), so the values
-    are never asserted against a golden. The consumer still partitions by operand and class and
-    still skips. An op with nothing on any operand -- addcmul on that same cell -- returns []
-    and skips correctly, because there the consumer skips all six too.
+    Any non-empty list compiles the right kernel, since the ELF depends on (op, formats,
+    dest_acc) and never on which values go in which tensor, and the producer builds then skips
+    before the stimulus reaches a device. The consumer still partitions and still skips. An op
+    with nothing on any operand -- addcmul on that cell -- returns [] and skips correctly.
     """
     for candidate in _TERNARY_OPERANDS:
         vals = edge_values(
@@ -439,33 +410,25 @@ def _cat_b_cells(applies=lambda _in_fmt, _out_fmt, _dest_acc: True):
     )
 
 
-# What driving the ternary specials found on a Blackhole p150, once both goldens modelled the
-# Dest write and the pack (see sfpu_domains' cat-B ternary section for the 10 cells that
-# accounted for). Keyed by (op, operand) and scoped to the specials_in class: every entry below
-# is a non-finite *operand*, and the pole class agreed everywhere.
-#
-# Non-strict per Phase 0's approximate-exp precedent, so each case still executes and reports
-# XPASS if the behaviour changes, and derived from the delivery gates rather than listed so a
-# cell drifting in or out shows up as a behaviour change rather than as a stale table.
+# What driving the ternary specials found on a Blackhole p150, once both goldens modelled the Dest
+# write and the pack (which accounted for 10 cells on its own). Keyed by (op, operand), scoped to
+# the specials_in class -- every entry is a non-finite *operand*, and the pole class agreed
+# everywhere. Non-strict, so each case still executes and reports XPASS if behaviour changes, and
+# derived from the delivery gates rather than listed so a cell drifting in or out shows up.
 #
 # TWO CAUSES, NOT FOUR:
 #
-#   c = NaN through the reciprocal (addcdiv and snake_beta, operand C). Both divide by c, both
-#   build the divide on SFPARECIP, and the kernel returns +0 for 1/NaN rather than propagating
-#   -- so the result is `a` where the golden says NaN. Identical to the divergence already
-#   recorded against unary Reciprocal ("1/NaN returns +0"), reached through the same primitive,
-#   and it is section 5.6 Q1's composition question rather than a new one. Applies on every
-#   specials-carrying cell, because it is arithmetic and not a delivery fact. Measured: c =
-#   +/-inf agrees on both cells (value*b/+/-inf = +/-0, so the result is a), which is what makes
-#   this the NaN probe alone.
+#   c = NaN through the reciprocal (addcdiv and snake_beta, operand C). Both build the divide on
+#   SFPARECIP, which returns +0 for 1/NaN instead of propagating, so the result is `a` where the
+#   golden says NaN -- the divergence unary Reciprocal already carries, through the same
+#   primitive. On every specials-carrying cell, being arithmetic rather than a delivery fact.
+#   Measured: c = +/-inf agrees on both cells, which is what makes this the NaN probe alone.
 #
-#   A non-finite reaching the sin (snake_beta, operands A and B). sin(b*a) with either operand
-#   non-finite gives the kernel something whose square is +inf, against a golden NaN; SFPLUTFP32
-#   documents no NaN/inf handling, so what the polynomial does there is an LLK decision rather
-#   than an ISA one -- section 5.6 Q1 again. Scoped to the cells where a NaN *survives to L1*:
-#   where it does not, the golden's NaN is packed to the same +inf the kernel produced and the
-#   two agree by substitution. That scoping is the interesting half of the measurement, and it
-#   is derived from nan_survives_to_l1() rather than transcribed so it cannot go stale.
+#   A non-finite reaching the sin (snake_beta, operands A and B). sin(b*a) then has a square of
+#   +inf against a golden NaN, and SFPLUTFP32 documents no NaN/inf handling, so what the
+#   polynomial does there is an LLK decision with no ISA ruling. Scoped to the cells where a NaN
+#   *survives to L1*, from nan_survives_to_l1() rather than transcribed: where it does not, the
+#   golden's NaN packs to the same +inf and the two agree by substitution.
 _TERNARY_EDGE_KNOWN_DIVERGENCES = {
     (MathOperation.SfpuAddcdiv, Operand.C): _cat_b_cells(),
     (MathOperation.SfpuSnakeBeta, Operand.C): _cat_b_cells(),
@@ -604,28 +567,21 @@ def test_sfpu_ternary_operand_edges(
 # ─────────────────────────────────────────────────────────────────────────────
 # The addc multiplier
 #
-# `value` reaches the kernel as a `constexpr std::uint32_t SFPU_TERNARY_SCALAR`, so varying it
-# is a compile-time axis -- and until now it was not an axis at all: 2.0 in the main sweep, the
-# edge sweep and the perf test alike. Three probes are worth the six ELFs:
+# `value` reaches the kernel as a `constexpr std::uint32_t SFPU_TERNARY_SCALAR`, so varying it is
+# a compile-time axis -- and it was not an axis at all before: 2.0 everywhere. Three probes are
+# worth the six ELFs. At 0.0 both ops collapse to the identity in `a`, which is a cheap and very
+# strong check that neither kernel reads the wrong Dst tile -- one returning `b` or `c` would pass
+# every other variant here, all three operands carrying plausible random values. 1.0 removes the
+# multiply; -2.0 flips a sign the golden and the kernel have to agree on.
 #
-#   0.0    both ops collapse to the identity in `a`. A very cheap, very strong check that
-#          neither kernel is reading the wrong Dst tile -- a kernel that returned `b` or `c`
-#          instead would pass every other variant in this file, since all three operands carry
-#          plausible random values there.
-#   1.0    removes the multiply, so the addc path is `a + b*c` / `a + b/c` with no scaling.
-#   -2.0   flips a sign the golden and the kernel have to agree on.
+# One format column and one dest_acc value, deliberately: the scalar is orthogonal to both, and
+# crossing it with the full profile would multiply ELFs for no new question.
 #
-# Format axis reduced to one column and dest_acc to one value on purpose: the scalar is
-# orthogonal to both, and crossing it with the full profile would multiply the ELF count for no
-# new question. The main sweep stays at 2.0 for the same reason.
-#
-# Scoped to the ops' *ordinary* domains, so the identity at value = 0 is a clean assertion. The
-# interesting interaction is with addcdiv's pole, and it is measured rather than guessed: at
-# value = 0 and c = 0 the kernel returns NaN on Blackhole, matching the golden's IEEE reading
-# (0 * inf is NaN, and the kernel does not short-circuit the multiply). addcmul returns `a`
-# exactly on all 4096 lanes there. Driving that here would put the pole and the scalar in one
-# variant, which is what the edge_class split exists to prevent, so it is recorded and not
-# driven.
+# Scoped to the ops' *ordinary* domains, so the identity at value = 0 is a clean assertion. Its
+# interaction with addcdiv's pole is measured rather than guessed -- at value = 0 and c = 0 the
+# kernel returns NaN on Blackhole, matching the golden's IEEE reading, and addcmul returns `a` on
+# all 4096 lanes -- but recorded here rather than driven, since one variant holding both the pole
+# and the scalar is what the edge_class split exists to prevent.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _SCALAR_PROBES = (0.0, 1.0, -2.0)
@@ -671,32 +627,24 @@ def test_sfpu_ternary_scalar(formats, dest_acc, mathop, scalar):
 # ─────────────────────────────────────────────────────────────────────────────
 # addcmul's cancellation edge
 #
-# addcmul is the one ternary op with nothing in _OP_SINGULARITIES or
-# _OP_OPERAND_EDGE_POINTS -- `a + value * b * c` is smooth in all three operands -- so the
-# sweep above gives it only its cat-B class, and before cat B existed it had no deliberate
-# edge at all.
-#
-# What it does have is exact cancellation: choose a = -value * b * c and the result must be
-# zero. That is worth driving on its own because the *sign* of that zero is a real question on
-# this hardware rather than a matter of taste -- SFPMAD "flushed to positive zero" on Wormhole
-# against "flushed to sign-preserved zero" on Blackhole, the same split that arch-gates
+# addcmul is the one ternary op with nothing in _OP_SINGULARITIES or _OP_OPERAND_EDGE_POINTS --
+# `a + value * b * c` is smooth in all three operands -- so the sweep above gives it only cat B.
+# What it does have is exact cancellation: at a = -value * b * c the result must be zero, and the
+# *sign* of that zero is a real hardware question, SFPMAD flushing to positive zero on Wormhole
+# against sign-preserved zero on Blackhole -- the same split that arch-gates
 # _EDGE_CLASS_NEGATIVE_ZERO in the binary suite.
 #
-# Built as an explicit triple rather than a StimuliSpec because the relation is between the
-# three operands: no per-operand domain can express "a is the exact negation of value*b*c".
-# Every b and c below is a power of two and value is 2.0, so value*b*c is exact in every format
-# this runs on and the cancellation is not an artifact of rounding.
+# An explicit triple rather than a StimuliSpec, because the relation is *between* the operands
+# and no per-operand domain can express it. Every b and c is a power of two and value is 2.0, so
+# the product is exact in every format here and the cancellation is not a rounding artifact.
 #
-# What the comparator can and cannot see: passed_test() judges by torch.isclose, a both-NaN
-# clause and PCC, under all of which -0.0 == +0.0. So this variant asserts that the result is
-# *zero*, which is the part that can fail; the zero's sign would need a bitwise comparator, and
-# that is a suite-wide change (the same limitation recorded against Neg(+0) in
-# sfpu_domains.SPECIALS_READY_OPS).
+# The variant asserts the result is *zero*, which is the part that can fail: passed_test() judges
+# by torch.isclose, a both-NaN clause and PCC, and -0.0 == +0.0 under all three. The sign would
+# need a bitwise comparator, which is a suite-wide change.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# (b, c) pairs; a is derived as -_SCALAR_VALUE * b * c. Powers of two on both operands, spanning
-# both signs and three decades of magnitude, so the product is exact and the cancellation is
-# tested across the exponent range rather than at one point.
+# (b, c) pairs; a is derived as -_SCALAR_VALUE * b * c. Powers of two, both signs, three decades
+# of magnitude, so the product is exact and the cancellation is tested across the exponent range.
 _ADDCMUL_CANCELLATION_BC = (
     (1.0, 1.0),
     (1.0, -1.0),
@@ -754,14 +702,12 @@ def test_sfpu_addcmul_cancellation(formats, dest_acc, mathop):
 # ─────────────────────────────────────────────────────────────────────────────
 # Mixed-magnitude block-float blocks, ternary side
 #
-# The unary half is test_eltwise_unary_sfpu_block_spread, and the reasoning is there. addcmul
-# is the only ternary op the suite drives on Bfp8_b, and it is a good subject for this: it has
-# no pole and no knee, so a mixed block is the only thing the variant is asking about, and its
-# three operands each carry their own shared exponent.
-#
-# The spread is driven on all three, not one. A block-float operand's quantization is per
-# operand, so pinning two of them to a narrow range would leave two thirds of the question
-# untested -- and unlike the pole sweeps there is no second failure class here to keep separate.
+# Reasoning is in the unary half, test_eltwise_unary_sfpu_block_spread. addcmul is the only
+# ternary op the suite drives on Bfp8_b and a good subject: no pole and no knee, so a mixed block
+# is the only thing the variant asks about, and its three operands each carry their own shared
+# exponent -- which is why the spread is driven on all three. Quantization is per operand, so
+# pinning two to a narrow range would leave two thirds of the question untested, and there is no
+# second failure class here to keep separate.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BLOCK_ELEMENTS = 16
@@ -903,22 +849,17 @@ def _run_ttnn_where(formats, dest_acc, mathop, cond, true_value, false_value):
 
 # The condition for the `mixed` variant, mixed *by construction* on every format.
 #
-# `uniform(0.0, 1.0)` is what this used to be, and on a float format it produced no exact
-# zeros at all -- 0 in 4096 on Float32, 20 on Float16_b and only because bf16 rounds small
-# draws down. So `mixed` was bit-for-bit `all_ones` on Float32: the false branch was never
-# taken by the one variant whose entire purpose is to take it. Int32 was the accident that
-# hid it, its integer narrowing giving a genuine ~50/50.
+# It used to be `uniform(0.0, 1.0)`, which produced 0 exact zeros in 4096 on Float32 and 20 on
+# Float16_b (and those only because bf16 rounds small draws down) -- so `mixed` was bit-for-bit
+# `all_ones` there, and the false branch was never taken by the one variant meant to take it.
+# Int32's integer narrowing gave a genuine ~50/50 and hid it. `uniform(intervals=[(0.0, 0.0),
+# (0.5, 1.0)])` looks like the fix and is not: an interval is chosen by *length*, so a
+# zero-length one is never chosen. Hence a callable.
 #
-# `uniform(intervals=[(0.0, 0.0), (0.5, 1.0)])` looks like the fix and is not: an interval is
-# selected with probability proportional to its *length*, so a zero-length one is never
-# selected and the float formats come out with no zeros again. A callable is the honest way
-# to say "exactly half of these must be zero".
-#
-# The non-zero half is a spread of small magnitudes rather than a constant 1.0, and both signs:
-# `where` selects on `cond != 0`, so a negative condition and a condition of 2 must both take
-# the true branch, and a constant would assert neither. They are small integers because the
-# same tensor is driven on Int32, where anything in (0, 1) would quantize to zero and turn the
-# spread back into the bug this replaces.
+# The non-zero half is a spread of small magnitudes and both signs, not a constant 1.0: `where`
+# selects on `cond != 0`, so -1 and 2 must both take the true branch and a constant asserts
+# neither. Small integers because the same tensor runs on Int32, where anything in (0, 1) would
+# quantize to zero and turn the spread back into the bug it replaces.
 _WHERE_MIXED_NONZERO = (1.0, 2.0, -1.0, -2.0)
 
 
@@ -991,12 +932,11 @@ def test_ttnn_where(
     elif test_case == "all_zeros":
         src_A = torch.zeros_like(src_A)
     else:
-        # The failure this variant was in is silent -- a condition that is all-true still
-        # passes, against a golden that is also all-true -- so assert the stimulus itself
-        # rather than trusting the spec to have produced it. _where_mixed_condition splits
-        # every face exactly in half and none of the three formats perturb the values it
-        # emits, so the bound can be the exact one: anything else means the spec stopped
-        # reaching the tensor, which is the regression worth catching.
+        # The failure this variant was in is silent -- an all-true condition passes against an
+        # all-true golden -- so assert the stimulus rather than trusting the spec to have
+        # produced it. _where_mixed_condition splits every face exactly in half and none of the
+        # three formats perturb its values, so the bound is the exact one: anything else means
+        # the spec stopped reaching the tensor.
         frac_true = float((src_A.flatten().to(torch.float32) != 0.0).float().mean())
         assert frac_true == 0.5, (
             f"the 'mixed' condition is {frac_true:.1%} true, not the half it is built to be "
@@ -1045,29 +985,24 @@ def test_ttnn_where_mcw(
 # ─────────────────────────────────────────────────────────────────────────────
 # IEEE specials through where, one operand at a time
 #
-# where selects rather than computes, so the three operands ask three different questions and
-# only one of them is about the SFPU's arithmetic at all:
+# where selects rather than computes, so its three operands ask two different questions. On the
+# *condition*: is `cond != 0` still right at +/-inf, NaN or -0.0? The predicate is built on
+# SFPSETCC, whose contract holds only "provided that VC is neither negative zero nor any kind of
+# NaN" -- both outside what the primitive promises, which is why driving them is the point. On
+# *true/false*: does a special survive being selected and packed? A raw LO16 move should carry
+# anything, and the interesting case is a NaN through a pipeline that substitutes an infinity.
 #
-#   condition   is `cond != 0` still right when cond is +/-inf, NaN or -0.0? The kernel builds
-#               the predicate on SFPSETCC, whose contract is stated "provided that VC is neither
-#               negative zero nor any kind of NaN" -- so both of those are outside what the
-#               primitive promises, and driving them is the point.
-#   true/false  does a special survive being selected and packed? A raw LO16 move should carry
-#               anything, and the interesting case is the one where it cannot: a NaN through a
-#               pipeline that substitutes an infinity for it.
+# The non-probed operands are constants and the condition is pinned to the branch under test, so
+# every probe value is definitely the one selected -- an alternating condition would leave half
+# the list unobserved and still pass.
 #
-# The non-probed operands are held at constants rather than at random values, and the condition
-# is pinned to the branch under test (all-ones while probing `true`, all-zeros while probing
-# `false`), so every probe value is definitely the one selected. An alternating condition would
-# leave half the probe list unobserved and the variant would still pass.
-#
-# Values come from edge_values() like every other cat-B sweep, so where enrols by its entry in
-# TERNARY_SPECIALS_READY_OPS rather than by a list here, and the -0.0 probe is dropped on the
-# pipelines that flatten it by the same negative_zero_delivered() gate.
+# Values come from edge_values() like every other cat-B sweep, so where enrols through
+# TERNARY_SPECIALS_READY_OPS and the -0.0 probe is dropped by negative_zero_delivered() on the
+# pipelines that flatten it.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Constants for the two operands not under test. Exact in every format this sweep runs on, and
-# distinct from each other so the result says which branch was taken.
+# Constants for the two operands not under test: exact in every format here, and distinct from
+# each other so the result says which branch was taken.
 _WHERE_TRUE_CONST = 2.0
 _WHERE_FALSE_CONST = 11.0
 
@@ -1122,12 +1057,11 @@ def test_ttnn_where_specials(request, formats, dest_acc, mathop, operand):
     ]
 
     if not vals and TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-        # `operand` is runtime() here too, so the same starvation is available: the producer
-        # keeps operand A alone and the consumer runs all three. Today every operand of `where`
-        # empties on exactly the same cells -- cat B is its only source of probes and cat B is
-        # a per-pipeline fact -- so the skip is uniform and this guard never fires. It is here
-        # so that the day a per-operand entry lands in the registry (a knee on the condition,
-        # say), the sweep gains coverage rather than a timeout.
+        # `operand` is runtime() here too, so the same starvation is available. It does not
+        # happen today: cat B is where's only source of probes and is a per-pipeline fact, so
+        # every operand empties on the same cells and the skip is uniform. The guard is here so
+        # that a per-operand registry entry later -- a knee on the condition, say -- gains
+        # coverage rather than a timeout.
         vals = _producer_probe_values(mathop, formats, dest_acc, specials)
 
     if not vals:
