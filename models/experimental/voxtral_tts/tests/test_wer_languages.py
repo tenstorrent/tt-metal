@@ -51,7 +51,7 @@ OUTPUT_SR = 24000
 # Averaging three seeds there makes the statistic survive a reshuffle, which any numerics change
 # causes. Listed per cell rather than per band because the other eight long cells measure
 # 0.0000-0.0119 with every run perfect, so extra draws buy nothing there and cost ~48 min a run.
-SEEDS = {("hi", "long"): (0, 1, 2)}
+SEEDS = {("ar", "long"): (0, 1, 2), ("hi", "long"): (0, 1, 2)}
 DEFAULT_SEEDS = (0,)
 FULL_SWEEP_LANG = "en"
 
@@ -60,8 +60,17 @@ FULL_SWEEP_LANG = "en"
 # run across 100 was 0.135, so this keeps real headroom on the noisiest cell.
 COLLAPSE = 0.30
 
-# Ceiling per (language, band), MEASURED on this branch -- seed 0, whisper-large-v3. The table and
-# the run that produced it are in VOXTRAL_TTS_STATUS.md.
+# Ceiling per (language, band), from each cell's THREE-SEED mean -- 460 runs, whisper-large-v3. The
+# table and the run that produced it are in VOXTRAL_TTS_STATUS.md.
+#
+# Derived from three seeds even though most cells GATE on one, because a single draw is a biased
+# estimate of the cell it is judging: seed 0 flattered nl/medium (0.0091 against a true 0.0146, which
+# left only 1.3x headroom at seed 1) and maligned ar/medium (0.0274 against 0.0173). Re-deriving from
+# the 3-seed mean tightened two cells, loosened three and left twenty-two alone.
+#
+# Seed count per cell is set by MEASURED spread, not by band -- see SEEDS. 18 of 27 cells move by
+# less than a fifth of their ceiling across seeds; those keep one seed and their tight ceilings.
+# Seven move 20-50% and are listed below as watch. Two exceed 50% and carry three seeds.
 #
 # BANDED RATHER THAN POOLED because the bands are not comparable. A five-word sentence quantises to
 # multiples of 0.20, so its rate is coarse however good the audio is, and pooling it with a 115-word
@@ -85,9 +94,13 @@ CEILINGS = {
     #   medium        0.03
     #   long          0.02
     #   voice_sweep   0.03
+    #
+    # WATCH LIST -- these move 20-50% of their ceiling across seeds, so a failure here is worth
+    # re-running across seeds before it is believed: ar/medium, de/medium, fr/long, hi/short,
+    # it/medium, nl/medium, nl/long. nl/medium is the closest to its ceiling of the seven.
     ("ar", "short"): 0.25,          # measured 0.0000
-    ("ar", "medium"): 0.08,         # measured 0.0274
-    ("ar", "long"): 0.04,           # measured 0.0119
+    ("ar", "medium"): 0.05,        # 3-seed 0.0173 (seed0 read 0.0274)
+    ("ar", "long"): 0.07,          # 3-seed 0.0238 (seed0 read 0.0119) -- 3 seeds, see SEEDS
     ("de", "short"): 0.25,          # measured 0.0000
     ("de", "medium"): 0.03,         # measured 0.0000
     ("de", "long"): 0.02,           # measured 0.0000
@@ -101,7 +114,7 @@ CEILINGS = {
     ("fr", "medium"): 0.03,         # measured 0.0000
     ("fr", "long"): 0.02,           # measured 0.0049
     ("hi", "short"): 0.25,          # measured 0.0000
-    ("hi", "medium"): 0.18,         # measured 0.0615
+    ("hi", "medium"): 0.16,        # 3-seed 0.0533 (seed0 read 0.0615)
     # THE WEAKEST CELL, and the only one whose ceiling is the cap rather than 3x its mean. Measured
     # 0.1966: the mean of hi_female 0.0513 and hi_male 0.3419 on ONE seed each.
     #
@@ -127,8 +140,8 @@ CEILINGS = {
     ("it", "medium"): 0.03,         # measured 0.0105
     ("it", "long"): 0.02,           # measured 0.0000
     ("nl", "short"): 0.25,          # measured 0.0000
-    ("nl", "medium"): 0.03,         # measured 0.0091
-    ("nl", "long"): 0.03,           # measured 0.0095
+    ("nl", "medium"): 0.04,        # 3-seed 0.0146 (seed0 read 0.0091) -- closest to its ceiling
+    ("nl", "long"): 0.04,          # 3-seed 0.0127 (seed0 read 0.0095)
     ("pt", "short"): 0.25,          # measured 0.0000
     ("pt", "medium"): 0.03,         # measured 0.0077
     ("pt", "long"): 0.02,           # measured 0.0000
@@ -284,7 +297,7 @@ def voices_for(lang, all_voices):
 
 
 def run_language(lang, asr, pipe, band="medium", voices=None, max_sentences=None,
-                 collapse=COLLAPSE, verbose=True):
+                 collapse=COLLAPSE, seeds_override=None, verbose=True):
     """One (language, band) voice x sentence x seed matrix -> stats dict.
 
     No assertions, so the measurement probe and the gate share one code path.
@@ -293,7 +306,7 @@ def run_language(lang, asr, pipe, band="medium", voices=None, max_sentences=None
 
     voices = voices if voices is not None else voices_for(lang, all_voices())
     texts = wer_band(lang, band)[:max_sentences]   # a wide voice sweep pays breadth, not depth
-    seeds = SEEDS.get((lang, band), DEFAULT_SEEDS)
+    seeds = seeds_override or SEEDS.get((lang, band), DEFAULT_SEEDS)
     scores, non_terminating = {}, []
     for voice in voices:
         for si, text in enumerate(texts):
