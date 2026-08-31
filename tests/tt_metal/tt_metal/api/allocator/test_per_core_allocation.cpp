@@ -338,6 +338,26 @@ TEST_F(PerCoreAllocationTest, RangeLockstepScopesDependenciesOnDirectBufferCreat
     EXPECT_TRUE(scoped->is_allocated());
 }
 
+// Both setters have to reject the other flag, or the pair is only mutually exclusive in one call
+// order. Setting per-core last is the dangerous direction: allocate_buffer tests per_core_allocation
+// first and returns from that branch, so range lockstep would be dropped without a word.
+TEST_F(PerCoreAllocationTest, RangeLockstepAndPerCoreExcludeEachOtherInBothOrders) {
+    auto args_for = [](const CoreCoord& core) {
+        return BufferShardingArgs(
+            ShardSpecBuffer(CoreRangeSet(core), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1}),
+            TensorMemoryLayout::HEIGHT_SHARDED);
+    };
+    const CoreCoord core(0, 0);
+
+    auto per_core_first = args_for(core);
+    per_core::set_per_core_allocation(per_core_first, true);
+    EXPECT_ANY_THROW(range_lockstep::set_range_lockstep_allocation(per_core_first, true));
+
+    auto range_lockstep_first = args_for(core);
+    range_lockstep::set_range_lockstep_allocation(range_lockstep_first, true);
+    EXPECT_ANY_THROW(per_core::set_per_core_allocation(range_lockstep_first, true));
+}
+
 TEST_F(PerCoreAllocationTest, RangeLockstepSurvivesNdShardSpecConversion) {
     // TensorSpec rebuilds the MemoryConfig from named fields when it converts an nd shard spec to
     // a legacy one, and a rebuild drops the experimental flags unless they are explicitly restored.
