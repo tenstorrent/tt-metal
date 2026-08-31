@@ -37,18 +37,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
+    const ckernel::TensorShape operand_a_shape =
+        ckernel::make_tensor_shape(params.in0_face_r_dim, params.in0_face_c_dim, params.num_faces_r_dim_A, params.num_faces_c_dim_A);
+    const ckernel::TensorShape operand_b_shape =
+        ckernel::make_tensor_shape(params.in1_face_r_dim, params.in1_face_c_dim, params.num_faces_r_dim_B, params.num_faces_c_dim_B);
+#else
+    constexpr ckernel::TensorShape operand_a_shape = ckernel::make_tensor_shape(in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
+    constexpr ckernel::TensorShape operand_b_shape = ckernel::make_tensor_shape(in1_face_r_dim, in1_face_c_dim, num_faces_r_dim_B, num_faces_c_dim_B);
 #endif
 
     {
         ZONE_SCOPED("INIT")
         set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
-        // Full 32x32 tiles: 2x2 faces of 16x16 (tiny tiles not supported for quasar).
         // Matmul flips the unpacker roles: _llk_unpack_matmul_init_ arg0 drives UNPACR1/SrcB, arg1 drives
         // UNPACR0/SrcA -- so operand A is recorded under Unp1 and operand B under Unp0 (matches product).
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
-            ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces_A), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-            ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces_B), L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(operand_a_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(operand_b_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(static_cast<DataFormat>(formats.unpack_A_dst));
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(static_cast<DataFormat>(formats.unpack_B_dst));
 
@@ -57,7 +61,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
             CT_DIM,
             RT_DIM,
-            KT_DIM); // transpose in src_A not supported for quasar
+            KT_DIM,
+            operand_a_shape,
+            operand_b_shape); // transpose in src_A not supported for quasar
         PROFILER_SYNC();
     }
     {
@@ -75,7 +81,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t j = 0; j < KT_DIM; j++)
                 {
-                    _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
+                    _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM, operand_a_shape, operand_b_shape);
                 }
             }
         }
@@ -101,6 +107,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t RT_DIM      = params.RT_DIM;
     const std::uint32_t KT_DIM      = params.KT_DIM;
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const ckernel::TensorShape operand_a_shape =
+        ckernel::make_tensor_shape(params.in0_face_r_dim, params.in0_face_c_dim, params.num_faces_r_dim_A, params.num_faces_c_dim_A);
+    const ckernel::TensorShape operand_b_shape =
+        ckernel::make_tensor_shape(params.in1_face_r_dim, params.in1_face_c_dim, params.num_faces_r_dim_B, params.num_faces_c_dim_B);
+#else
+    constexpr ckernel::TensorShape operand_a_shape = ckernel::make_tensor_shape(in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
+    constexpr ckernel::TensorShape operand_b_shape = ckernel::make_tensor_shape(in1_face_r_dim, in1_face_c_dim, num_faces_r_dim_B, num_faces_c_dim_B);
 #endif
     {
         ZONE_SCOPED("INIT")
@@ -132,7 +145,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // configured as MxFp4_2x_A or MxFp4_2x_B.
         // ENABLE_DIRECT_INDEXING selects the DI variant (MVMULDI with explicit indices) vs
         // the auto-increment-addr_mod MVMUL variant.
-        _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
+        _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(
+            CT_DIM, RT_DIM, operand_a_shape, operand_b_shape);
         PROFILER_SYNC();
     }
     {
@@ -188,6 +202,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t RT_DIM      = params.RT_DIM;
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const Operand& buffer_Res       = params.buffer_Res;
+    const ckernel::TensorShape output_shape =
+        ckernel::make_tensor_shape(params.in0_face_r_dim, params.in1_face_c_dim, params.num_faces_r_dim_A, params.num_faces_c_dim_B);
+#else
+    constexpr ckernel::TensorShape output_shape = ckernel::make_tensor_shape(in0_face_r_dim, in1_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_B);
 #endif
     {
         ZONE_SCOPED("INIT")
@@ -202,15 +220,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
-        // Full 32x32 tiles: 2x2 faces of 16x16 (tiny tiles not supported for quasar).
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-            ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(output_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_matmul_init_(
-            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(),
-            RT_DIM,
-            CT_DIM,
-            1 /*num_subblocks_c_dim*/); // Use destination buffer descriptor for packing output
+        _llk_pack_matmul_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), RT_DIM, CT_DIM, 1 /* num_subblocks_c_dim */, output_shape);
         PROFILER_SYNC();
     }
     {
@@ -223,14 +235,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/);
+                _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, output_shape);
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/);
+                _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, output_shape);
                 _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }
