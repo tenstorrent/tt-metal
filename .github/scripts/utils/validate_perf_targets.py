@@ -591,6 +591,7 @@ def validate(
 
         measured = _measurement_lookup(run)
         is_accuracy_run = _is_accuracy_run(measured)
+        is_single_pass_run = _is_single_pass_run(measured)
         config_params = run.get("config_params", {})
         optimization_profile = None
         if isinstance(config_params, dict):
