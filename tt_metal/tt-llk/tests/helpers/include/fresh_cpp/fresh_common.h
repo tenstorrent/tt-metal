@@ -121,6 +121,56 @@ sfpi_inline sfpi::vFloat fresh_mod_positive(const sfpi::vFloat aa, const sfpi::v
     return r;
 }
 
+// exp(x) - 1 stated by the Cody-Waite reduction the production elu/celu/selu
+// family shares (tt_llk ckernel_sfpu_expm1_cw.h expm1_cw_clamped, bf16 arm):
+//   x = k*ln2 + r with |r| <= ln2/2; expm1(r) = r * h(r) with h the published
+//   Sollya remez degree-4 fit (max abs error 1.60e-7); reconstruction
+//   expm1(x) = (2^k - 1) + 2^k * expm1(r).
+// k comes from the 1.5*2^23 rounding-bias trick: the biased-integer reading of
+// t = x/ln2 + BIAS carries k in its low bits, and 2^k is rebuilt with setexp.
+// The range reduction is also the tt-polynomial-fitter deployment canon
+// (deployment/.../piecewise_generic.cpp exp_reduce: identical INV_LN2 /
+// NEG_LN2_HI / NEG_LN2_LO split and rounding-bias lowering); the h(r)
+// coefficients are the production kernel's own Sollya fit (not in the fitter's
+// data).  Expression shapes mirror the production body statement-for-statement
+// so both legs lower to the same value stream (lane JU bit-exact repair: the
+// prior exp-recombination arm gave elu(0) = +1.72e-3, lane JN certificate).
+// The clamp at -87 keeps k >= -126 so the setexp reconstruction cannot wrap.
+sfpi_inline sfpi::vFloat fresh_expm1_cw(sfpi::vFloat x)
+{
+    constexpr float CW_INV_LN2    = 1.4426950408889634f;
+    constexpr float CW_NEG_LN2_HI = -0.6931152343750000f;
+    constexpr float CW_NEG_LN2_LO = -3.19461832987e-05f;
+    constexpr float ROUNDING_BIAS = 12582912.0f; // 1.5 * 2^23
+    // h(r) = expm1(r)/r on [-ln2/2, ln2/2], ascending powers (production fit).
+    constexpr float H1 = 4.9999371171e-01f;
+    constexpr float H2 = 1.6666433215e-01f;
+    constexpr float H3 = 4.1875664145e-02f;
+    constexpr float H4 = 8.3751315251e-03f;
+
+    x = sfpi::max(x, -87.0f);
+
+    // Cody-Waite range reduction: x = k*ln2 + r (keep the multiply fused into
+    // the bias add, exactly as the production body spells it).
+    const sfpi::vFloat bias = ROUNDING_BIAS;
+    const sfpi::vFloat t    = x * CW_INV_LN2 + bias;
+    const sfpi::vFloat k    = t - bias;
+    sfpi::vFloat r          = k * CW_NEG_LN2_HI + x;
+    r                       = r + k * CW_NEG_LN2_LO;
+
+    // expm1(r) = r * h(r), Horner.
+    sfpi::vFloat h = H4 * r + H3;
+    h              = h * r + H2;
+    h              = h * r + H1;
+    h              = h * r + 1.0f;
+    h              = r * h;
+
+    // 2^k from the biased-integer reading of t; expm1(x) = (2^k - 1) + 2^k*h.
+    const sfpi::vInt k_int   = sfpi::as<sfpi::vInt>(t) - sfpi::as<sfpi::vInt>(bias);
+    const sfpi::vFloat two_k = sfpi::setexp(sfpi::vFloat(1.0f), k_int + 127);
+    return (two_k - 1.0f) + two_k * h;
+}
+
 // exp(x) stated by exponent/mantissa recombination (the exp_21f algorithm of
 // Moroz, Samotyy, Walczyk & Cieslinski 2022): exp(x) = 2**(x/ln2) = 2**xi *
 // 2**xf; xlog2 = x/ln2 + 127 is the result's biased exponent, its fixed-point

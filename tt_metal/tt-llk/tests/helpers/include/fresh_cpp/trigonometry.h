@@ -140,8 +140,21 @@ __attribute__((noinline)) void calculate_acosh_fresh_cpp()
         }
         v_endif;
 
-        // The clean fused form: no DST round-trip between the sqrt expression
-        // and the log1p polynomial.
+        if constexpr (!IS_FP32_DEST_ACC)
+        {
+            // Production materialises arg to DST before log1p; on this row's
+            // 16-bit DEST that store TRUNCATES arg to bf16 — a value-changing
+            // quantization, not just a scheduling round-trip (lane JN
+            // certificate: 437 outputs <= 2 ULP apart once the fresh body
+            // dropped it).  The quantization is adopted back, stated as the
+            // bit operation it is (arg is an SFPU MAD result, so it is never
+            // denormal and the store's flush-to-zero leg is vacuous); the
+            // register-pressure scheduling half of production's round-trip
+            // stays with the compiler.  Lane JU coefficient repair,
+            // 2026-08-31 (hand-adopted numerics).
+            arg = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(arg) & 0xffff0000);
+        }
+
         sfpi::vFloat res = fresh_log1p<IS_FP32_DEST_ACC>(arg);
         v_if (x >= LOG1P_LARGE)
         {

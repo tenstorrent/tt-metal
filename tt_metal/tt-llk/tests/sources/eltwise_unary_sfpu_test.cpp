@@ -441,11 +441,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     DST_SYNC,
                     is_fp32_dest_acc_en,
                     calculate_celu_fresh_cpp,
-                    (is_fp32_dest_acc_en, iterations),
+                    (is_fp32_dest_acc_en, iterations, FRESH_CELU_ALPHA_BITS, FRESH_CELU_ALPHA_RECIP_BITS),
                     block_tile,
-                    VectorMode::None,
-                    FRESH_CELU_ALPHA_BITS,
-                    FRESH_CELU_ALPHA_RECIP_BITS);
+                    VectorMode::None);
             }
             else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::clamp)
             {

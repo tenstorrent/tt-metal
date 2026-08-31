@@ -10,9 +10,21 @@
 //                  = x                          for x >= 0
 //                  = alpha * (exp(x/alpha) - 1) for x <  0
 //
-// alpha and 1/alpha arrive as raw fp32 bits exactly as the production
-// dispatch sends them (both 1.0f; the golden uses alpha = 1.0).  exp is the
-// shared exponent/mantissa-recombination statement (fresh_common.h).
+// alpha and 1/alpha are the dispatch scalars exactly as the production
+// dispatch sends them (both 1.0f; the golden uses alpha = 1.0).  Production
+// receives them as literals into an inline kernel, so they constant-fold and
+// the x/alpha and alpha* multiplies vanish at compile time; this body takes
+// them as template constants so the same folding happens here (a runtime
+// 1.0f multiply is NOT value-neutral on this pipeline: SFPMAD canonicalizes
+// negative-NaN payloads, which the lane JN certificate distinguishes).
+//
+// Lane JU coefficient repair (2026-08-31): the negative arm is expm1 stated
+// by the shared Cody-Waite statement (fresh_common.h fresh_expm1_cw — the
+// production elu/celu/selu family's expm1_cw_clamped numerics).  The previous
+// exp_21f(x) - 1 arm carried a +1.72e-3 bias at 0: sem celu(±0) = +1.72e-3
+// and POSITIVE outputs for tiny negative inputs (lane JN certificate,
+// 16,032/65,536 diverging inputs).  expm1 stated directly is exact at the
+// origin and sign-correct.
 #include <cstdint>
 
 #include "fresh_cpp/fresh_common.h"
@@ -26,18 +38,18 @@ namespace ckernel::sfpu
 constexpr std::uint32_t FRESH_CELU_ALPHA_BITS       = 0x3f800000u; // 1.0f
 constexpr std::uint32_t FRESH_CELU_ALPHA_RECIP_BITS = 0x3f800000u; // 1.0f
 
-template <bool DST_ACCUM_MODE, int ITERATIONS>
-__attribute__((noinline)) void calculate_celu_fresh_cpp(const std::uint32_t alpha_bits, const std::uint32_t alpha_recip_bits)
+template <bool DST_ACCUM_MODE, int ITERATIONS, std::uint32_t ALPHA_BITS = FRESH_CELU_ALPHA_BITS, std::uint32_t ALPHA_RECIP_BITS = FRESH_CELU_ALPHA_RECIP_BITS>
+__attribute__((noinline)) void calculate_celu_fresh_cpp()
 {
-    const sfpi::vFloat alpha       = Converter::as_float(alpha_bits);
-    const sfpi::vFloat alpha_recip = Converter::as_float(alpha_recip_bits);
+    constexpr float alpha       = __builtin_bit_cast(float, ALPHA_BITS);
+    constexpr float alpha_recip = __builtin_bit_cast(float, ALPHA_RECIP_BITS);
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vFloat v = sfpi::dst_reg[0];
         // Negative branch computed on all lanes (vector select below): the
-        // positive lanes' exp value is never observed.
-        const sfpi::vFloat e = fresh_exp(v * alpha_recip);
-        sfpi::vFloat r       = alpha * (e - 1.0f);
+        // positive lanes' expm1 value is never observed.
+        const sfpi::vFloat e = fresh_expm1_cw(v * alpha_recip);
+        sfpi::vFloat r       = alpha * e;
         v_if (v >= 0.0f)
         {
             r = v;

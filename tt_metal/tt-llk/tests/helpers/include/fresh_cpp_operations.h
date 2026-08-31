@@ -47,7 +47,16 @@ inline void calculate_exp_fresh_cpp() {
     //    forces the flush (the mantissa of a flushed subnormal is never
     //    observable).
     constexpr float ONE_LN2 = 1.4426950216293334961f;
-    constexpr float C0 = 1.0017248f;
+    // C0: the exp_21f paper value is 1.0017248, but the production BH kernel
+    // (the TTI exp_21f body this row races) loads c0 as the fp16 immediate
+    // 0x3C02 — one SFPLOADI instead of two — whose expanded value is
+    // 1.001953125.  The half-bf16-ULP gap moved 193/65,536 outputs by 1 ULP
+    // (lane JN certificate); the quantized constant is adopted for
+    // bit-exactness with the shipped kernel (lane JU coefficient repair,
+    // 2026-08-31 — hand-adopted numerics, and measurably no worse: on the 193
+    // disagreeing patterns the quantized constant was CLOSER to true exp on
+    // 128).
+    constexpr float C0 = 1.001953125f;
     constexpr float C1 = 7.839635491371155e-08f;
     constexpr float C2 = 4.791750143340323e-15f;
     for (int row = 0; row < ITERATIONS; ++row) {
@@ -106,20 +115,33 @@ template <int ITERATIONS>
 // setsgn restores the odd symmetry outside the tree (SGN_RETAIN folding is a
 // later compiler increment).  Same golden and tolerance contract as the
 // cubic (exact torch.sigmoid, atol 0.13 / rtol 0.05).
+//
+// Lane JU coefficient repair (2026-08-31): the leaf constants are now the
+// production SFPLUT table's own entries, decoded from the fp8 (1s-3e-4m,
+// negative-bias) coefficient pairs sigmoid_appx_init loads (l0=0x3DFF,
+// l1=0x21D8, l2=0xFF10; the fp8 code 0xFF decodes to +0 by ISA special case):
+//   |x| < 1 : 0.2265625 * |x| + 0
+//   |x| < 2 : 0.265625  * |x| - 0.046875
+//   else    : 0         * |x| + 0.5
+// All six values are exact in fp32 (and in the fp16 LUT-entry encoding), and
+// SFPLUT's evaluation IS the same single a*|x|+c MAD with sign-retain, so the
+// tree is a bit-exact restatement of the production kernel over the full
+// 2^16 space (hand-adopted numerics; the previous leaves were an own 3-piece
+// fit, 33,964/65,536 diverging inputs on the cubic row's certificate).
 __attribute__((noinline)) void calculate_sigmoid_appx_tree_cpp()
 {
     for (int row = 0; row < ITERATIONS; ++row)
     {
         const sfpi::vFloat input = sfpi::dst_reg[0];
         const sfpi::vFloat mag   = sfpi::abs(input);
-        sfpi::vFloat g           = mag * 0.0375f + 0.3058f;
+        sfpi::vFloat g           = mag * 0.0f + 0.5f;
         v_if (mag < 1.0f)
         {
-            g = mag * 0.2452f + -0.0005f;
+            g = mag * 0.2265625f + 0.0f;
         }
         v_elseif (mag < 2.0f)
         {
-            g = mag * 0.1497f + 0.0814f;
+            g = mag * 0.265625f + -0.046875f;
         }
         v_endif;
         sfpi::dst_reg[0] = sfpi::setsgn(g, input) + 0.5f;
