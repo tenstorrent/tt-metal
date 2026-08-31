@@ -1212,3 +1212,79 @@ def test_conv3d_fp32_exact_tail(device):
         f"error depends on C_in blocking (full-C {errors[C]:.3e} vs 32 {errors[32]:.3e}, spread {spread:.1%}): "
         "the reduction path is re-rounding partials"
     )
+
+
+def test_conv3d_fp32_exact_tail_streaming(device):
+    """Same gate for the streaming-output variant of the fp32-exact tail.
+
+    The config forces enable_streaming_output on (single C_in block; C_out_block=32 so fp32
+    writes are 128B <= TILE_WIDTH*4; W_out_block=64 so num_patches=64 -> matmul_M_t=2), which
+    runs the per-row SFPU bias + untilize branch instead of the whole-block one. Measured with
+    the exact tail: 1.150e-3 (matches the whole-block path's 1.155e-3); without it: 1.500e-3.
+    """
+    torch.manual_seed(42)
+    C, C_out, W = 128, 32, 64
+    input_shape = (1, C, 4, 6, W)
+    kernel_size, padding = (3, 3, 3), (0, 1, 1)
+    N = 1
+
+    input_tensor = torch.randn(input_shape, dtype=torch.float32)
+    conv3d_module = nn.Conv3d(C, C_out, kernel_size=kernel_size, padding=padding, bias=True)
+    with torch.no_grad():
+        golden = (
+            torch.nn.functional.conv3d(
+                input_tensor.double(),
+                conv3d_module.weight.data.double(),
+                conv3d_module.bias.data.double(),
+                padding=padding,
+            )
+        ).float()
+    D_out = _out_size(input_shape[2], padding[0], 1, kernel_size[0], 1)
+    H_out = _out_size(input_shape[3], padding[1], 1, kernel_size[1], 1)
+    W_out = _out_size(input_shape[4], padding[2], 1, kernel_size[2], 1)
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    tt_input = prepare_input_tensor(input_tensor, C, device, dtype=ttnn.DataType.FLOAT32)
+    config = create_conv3d_config(
+        C_in_block=C,
+        C_out_block=32,
+        W_out_block=64,
+        weights_dtype=ttnn.DataType.FLOAT32,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+    tt_weight = ttnn.from_torch(conv3d_module.weight.data, dtype=ttnn.DataType.FLOAT32, pad_value=0)
+    tt_weight = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=tt_weight, groups=1, C_in_block=config.C_in_block, alignment=ALIGNMENT, device=device
+    )
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1),
+        device=device,
+        dtype=ttnn.DataType.FLOAT32,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
+    )
+    tt_output = ttnn.experimental.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        device=device,
+        bias_tensor=tt_bias,
+        dtype=ttnn.DataType.FLOAT32,
+        output_channels=C_out,
+        kernel_size=kernel_size,
+        stride=(1, 1, 1),
+        groups=1,
+        padding=padding,
+        padding_mode="zeros",
+        config=config,
+        compute_kernel_config=kernel_config,
+    )
+    out = reshape_output(tt_output, N, D_out, H_out, W_out, C_out, device)
+    rel = ((out.double() - golden.double()).pow(2).mean().sqrt() / golden.double().std()).item()
+    logger.info(f"conv3d fp32-exact tail (streaming): rel RMSE vs float64 = {rel:.3e}")
+    assert rel <= 1.35e-3, f"streaming-output path: rel RMSE {rel:.3e} > 1.35e-3 vs float64 golden"
