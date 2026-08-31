@@ -373,9 +373,8 @@ risky: `COSYVOICE_FF2_GRID`, and `COSYVOICE_KV_INPLACE` on Blackhole.
 ## 10. Known limitations
 
 Four, all reproducible, none smoothed over. `docs/VALIDATION.md` carries the same list
-against the requirements they touch. A fifth — corrupt audio from the interleaved
-schedule — was diagnosed and fixed rather than listed; item 3 keeps the account,
-because the fix is a constraint on anyone extending that path.
+against the requirements they touch, and item 3 additionally carries a defect whose
+cause is now established and whose remedy is known but does not yet land cleanly.
 
 1. **`RTF < 0.2` is not reachable on this decomposition** — §3.4. Bounded below by the
    Euler count and by the decode step's weight traffic, not by tuning.
@@ -388,13 +387,15 @@ because the fix is a constraint on anyone extending that path.
    board.** TTNN warns about it — *"Allocating device buffers is unsafe due to the
    existence of an active trace"* — and this port has now been bitten by both halves.
 
-   **The corruption is fixed.** Interleaved synthesis returned audio peaking at 72
+   **The corruption is diagnosed and its remedy is known, but not landed.**
+   Interleaved synthesis returns audio peaking at 72
    against a batch path peaking at 0.001; per-chunk comparison against a no-trace
    reference showed chunk 0 clean (waveform PCC `0.99999994`) and chunk 1 with a
    *bit-identical mel* (PCC `1.0`) but waveform PCC `0.011` — which localises it to
-   the state carried across the seam rather than to either stage. `StreamState` now
-   parks those four tensors on the host between chunks. `docs/VALIDATION.md` has the
-   full account; the same fix also stopped `synthesize_streaming` hanging n300.
+   the state carried across the seam rather than to either stage. Parking those four
+   tensors on the host fixes the audio and also stops `synthesize_streaming` hanging
+   n300 — but it hangs `test_streaming_perf` on Blackhole, so it is not in the tree.
+   `docs/VALIDATION.md` has the full account and what else was tried.
 
    **The hang is not fully fixed.** `test_device_streaming_first_audio_latency` still
    wedges n300 and is skipped there (§5). Ruled out: trace region size,
