@@ -23,12 +23,35 @@
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
-}
+class MeshWorkload;
+}  // namespace tt::tt_metal::distributed
 
 namespace ttnn::graph {
 
 // Node identifiers in the graph
 using node_id = int;
+
+// Where one program of a MeshWorkload actually ran. `device_id` is the MeshDevice id so it joins
+// the report's `devices` table; `physical_device_id` is the chip the program landed on.
+struct ProgramExecutionPlacement {
+    uint32_t device_id = 0;
+    uint32_t physical_device_id = 0;
+    uint64_t sub_device_manager_id = 0;
+    uint8_t sub_device_id = 0;
+    tt::tt_metal::CoreRangeSet worker_core_ranges;
+    uint64_t runtime_id = 0;
+    uint32_t global_call_count = 0;
+    uint64_t program_id = 0;
+    uint8_t command_queue_id = 0;
+};
+
+// Records where `workload` just ran into every capture active on the calling thread. No-op when no
+// capture is active. GraphTracker's processor stack is per-thread, so a workload enqueued on a
+// thread that is not capturing is intentionally not observed.
+void track_mesh_workload_execution(
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    uint64_t runtime_id);
 
 class ProcessorHooks : public tt::tt_metal::IGraphHooks {
 private:
@@ -89,27 +112,7 @@ public:
 
     void track_program(tt::tt_metal::Program* program, const tt::tt_metal::IDevice* device) override;
 
-    void track_program_execution(
-        uint32_t device_id,
-        uint64_t sub_device_manager_id,
-        uint8_t sub_device_id,
-        const tt::tt_metal::CoreRangeSet& worker_core_ranges,
-        uint64_t runtime_id,
-        uint32_t global_call_count,
-        uint64_t program_id,
-        uint8_t command_queue_id);
-
-    static void track_cross_thread_program_execution(
-        uint32_t device_id,
-        uint64_t sub_device_manager_id,
-        uint8_t sub_device_id,
-        const tt::tt_metal::CoreRangeSet& worker_core_ranges,
-        uint64_t runtime_id,
-        uint32_t global_call_count,
-        uint64_t program_id,
-        uint8_t command_queue_id);
-
-    static bool is_program_execution_tracking_enabled();
+    void track_program_execution(const ProgramExecutionPlacement& placement);
 
     void track_function_start(
         std::string_view function_name, std::span<tt::tt_metal::TrackedArgument> input_parameters) override;
@@ -138,8 +141,6 @@ private:
     std::shared_ptr<ProcessorHooks> hook;
 
     std::mutex mutex;
-    static std::mutex active_processors_mutex;
-    static std::vector<GraphProcessor*> active_processors;
     RunMode run_mode = RunMode::NORMAL;
     std::stack<node_id> current_op_id;
     std::unordered_map<std::int64_t, node_id> buffer_id_to_counter;

@@ -136,7 +136,9 @@ class TestSubDeviceExecutionImport:
                 "counter": 2,
                 "node_type": "program_execution",
                 "params": {
-                    "device_id": 17,
+                    # device_id is the MeshDevice id, physical_device_id the chip it landed on.
+                    # Distinct values here so the importer's device-id remap is actually exercised.
+                    "device_id": 5,
                     "physical_device_id": 17,
                     "sub_device_manager_id": 7,
                     "sub_device_id": 1,
@@ -146,7 +148,7 @@ class TestSubDeviceExecutionImport:
                     "program_id": 42,
                     "command_queue_id": 0,
                 },
-                "connections": [1],
+                "connections": [],
             },
             {
                 "counter": 3,
@@ -157,7 +159,7 @@ class TestSubDeviceExecutionImport:
             },
             {"counter": 4, "node_type": "capture_end", "params": {}, "connections": []},
         ]
-        return _make_report(graph, devices=[{"device_id": 17}]), worker_core_ranges
+        return _make_report(graph, devices=[{"device_id": 5}]), worker_core_ranges
 
     def test_imports_authoritative_program_execution_and_topology(self, tmp_path):
         report, expected_ranges = self._report_with_program_execution()
@@ -187,6 +189,119 @@ class TestSubDeviceExecutionImport:
             assert cursor.execute("SELECT value FROM operation_arguments WHERE operation_id = 1").fetchone() == (
                 "SubDeviceId(0)",
             )
+
+            # device_id is a remapped MeshDevice id, so it must resolve in the devices table.
+            # Emitting the physical chip id here instead would leave these rows dangling on any
+            # mesh whose chip ids differ from its mesh id.
+            assert (
+                cursor.execute(
+                    "SELECT COUNT(*) FROM operation_executions e "
+                    "LEFT JOIN devices d ON d.device_id = e.device_id AND d.rank = e.rank "
+                    "WHERE d.device_id IS NULL"
+                ).fetchone()[0]
+                == 0
+            )
+
+            # program_execution is a leaf: the op links to it, it links back to nothing. A back-edge
+            # would surface as an op <-> execution cycle in the edges table.
+            assert (
+                cursor.execute(
+                    "SELECT COUNT(*) FROM edges a JOIN edges b "
+                    "ON a.source_unique_id = b.sink_unique_id AND a.sink_unique_id = b.source_unique_id"
+                ).fetchone()[0]
+                == 0
+            )
+        finally:
+            conn.close()
+
+    def test_execution_ids_stay_unique_across_merged_files(self, tmp_path):
+        """Two same-rank files whose executions sit a full stride apart in graph node counters.
+
+        Deriving execution_id from the graph node counter collides here (node counters routinely
+        exceed the per-file operation id stride), and INSERT OR REPLACE would silently drop a row.
+        """
+        stride = graph_report._OPERATION_ID_STRIDE_PER_RANK_FILE
+
+        def graph_with_execution_at(counter_target, physical_device_id):
+            graph = [{"counter": 0, "node_type": "capture_start", "params": {}, "connections": []}]
+            counter = 1
+            while counter < counter_target - 1:
+                graph.append(
+                    {
+                        "counter": counter,
+                        "node_type": "circular_buffer_allocate",
+                        "params": {
+                            "size": "1",
+                            "address": "0",
+                            "core_range_set": "",
+                            "globally_allocated": "0",
+                            "device_id": "5",
+                        },
+                        "connections": [],
+                    }
+                )
+                counter += 1
+            graph.append(
+                {
+                    "counter": counter,
+                    "node_type": "function_start",
+                    "params": {"name": "ttnn.add"},
+                    "connections": [counter + 1],
+                    "input_tensors": [],
+                    "arguments": [],
+                }
+            )
+            graph.append(
+                {
+                    "counter": counter + 1,
+                    "node_type": "program_execution",
+                    "params": {
+                        "device_id": 5,
+                        "physical_device_id": physical_device_id,
+                        "sub_device_manager_id": 7,
+                        "sub_device_id": 1,
+                        "worker_core_ranges": "[]",
+                        "runtime_id": 3,
+                        "global_call_count": (3 << 10) | physical_device_id,
+                        "program_id": 42,
+                        "command_queue_id": 0,
+                    },
+                    "connections": [],
+                }
+            )
+            assert counter + 1 == counter_target
+            graph.append(
+                {
+                    "counter": counter + 2,
+                    "node_type": "function_end",
+                    "params": {"name": "ttnn.add"},
+                    "connections": [],
+                    "duration_ns": 1000,
+                }
+            )
+            graph.append({"counter": counter + 3, "node_type": "capture_end", "params": {}, "connections": []})
+            return graph
+
+        report_dir = tmp_path / "reports_in"
+        report_dir.mkdir()
+        for filename, counter_target, physical_device_id in (
+            ("a.json", stride + 2, 17),
+            ("b.json", 2, 18),
+        ):
+            report = _make_report(
+                graph_with_execution_at(counter_target, physical_device_id), devices=[{"device_id": 5}]
+            )
+            with open(report_dir / filename, "w") as f:
+                json.dump(report, f)
+
+        conn = sqlite3.connect(graph_report.import_report(report_dir, tmp_path / "output"))
+        try:
+            rows = conn.execute(
+                "SELECT execution_id, physical_device_id FROM operation_executions ORDER BY execution_id"
+            ).fetchall()
+            assert len(rows) == 2, f"an execution was dropped by an execution_id collision: {rows}"
+            assert len({execution_id for execution_id, _ in rows}) == 2, rows
+            assert {physical_device_id for _, physical_device_id in rows} == {17, 18}, rows
         finally:
             conn.close()
 
@@ -2373,6 +2488,10 @@ class TestGraphCaptureToFile:
         assert params["sub_device_id"] == 0
         assert json.loads(params["worker_core_ranges"])
         assert params["global_call_count"] == (params["runtime_id"] << 10) | params["physical_device_id"]
+        # device_id identifies the MeshDevice (joins the devices table); physical_device_id the chip.
+        assert params["device_id"] == device.id()
+        # Leaf node: no back-edge to the owning operation.
+        assert execution_nodes[0]["connections"] == []
 
         db_path = graph_report.import_report(report_path, db_dir)
         with sqlite3.connect(db_path) as conn:
@@ -2432,6 +2551,8 @@ class TestGraphCaptureToFile:
         assert json.loads(params["worker_core_ranges"]) == [{"start": {"x": 4, "y": 0}, "end": {"x": 4, "y": 4}}]
         assert params["global_call_count"] == (params["runtime_id"] << 10) | params["physical_device_id"]
         assert params["command_queue_id"] == 0
+        assert params["device_id"] == device.id()
+        assert execution_nodes[0]["connections"] == []
 
         db_path = graph_report.import_report(report_path, db_dir)
         with sqlite3.connect(db_path) as conn:

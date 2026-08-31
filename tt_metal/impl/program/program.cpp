@@ -2783,8 +2783,6 @@ ProgramId detail::ProgramImpl::get_runtime_id() const { return this->runtime_id;
 
 ProgramId Program::get_runtime_id() const { return internal_->get_runtime_id(); }
 
-ProgramId Program::get_id() const { return internal_->get_id(); }
-
 size_t detail::ProgramImpl::num_kernels() const {
     size_t count = 0;
     for (const auto& kernels : kernels_) {

@@ -242,6 +242,11 @@ COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
 # so they do not collide (each capture must have fewer than this many ops).
 _OPERATION_ID_STRIDE_PER_RANK_FILE = 10000
 
+# operation_executions.execution_id is operation_id * this stride + a per-operation index, so ids
+# stay unique wherever operation_id is. Bounds an operation to this many program executions, i.e.
+# this many devices in one rank's local mesh.
+_EXECUTION_ID_STRIDE_PER_OPERATION = 1024
+
 
 def _schema_version_tuple(ver: str) -> tuple[int, ...]:
     """Parse ``schema_version`` metadata for ordering (e.g. ``2.1``, ``3`` → comparable tuples)."""
@@ -1298,11 +1303,22 @@ def import_graph(
             operation_id = base_operation_id + operation_counter
             operations_batch.append((operation_id, name, duration_s, rank))
 
+            execution_index = 0
             for execution_node in current_op_nodes:
                 if execution_node.get("node_type") != "program_execution":
                     continue
                 execution_params = execution_node.get("params") or {}
-                execution_id = base_operation_id + int(execution_node.get("counter", 0))
+                # Derive the id from operation_id, which is already unique across ranks and merged
+                # files. Deriving it from the graph node counter instead would collide across files,
+                # because node counters routinely exceed _OPERATION_ID_STRIDE_PER_RANK_FILE.
+                if execution_index >= _EXECUTION_ID_STRIDE_PER_OPERATION:
+                    logger.warning(
+                        f"operation_id={operation_id} has more than {_EXECUTION_ID_STRIDE_PER_OPERATION} "
+                        f"program executions; dropping the remainder to keep execution_id unique"
+                    )
+                    break
+                execution_id = operation_id * _EXECUTION_ID_STRIDE_PER_OPERATION + execution_index
+                execution_index += 1
                 device_id = int(execution_params["device_id"])
                 physical_device_id = int(execution_params.get("physical_device_id", device_id))
                 manager_id = int(execution_params["sub_device_manager_id"])
