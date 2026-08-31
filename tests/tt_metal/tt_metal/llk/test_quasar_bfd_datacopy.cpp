@@ -52,16 +52,19 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
 
     const std::uint32_t single_tile_size = 2 * 1024;  // Float16_b 32x32 tile
 
+    // The direct reader/writer kernels address a single DRAM bank (bank_id
+    // 0). Use page_size = whole buffer so the allocator places each buffer in
+    // one bank, and advance the DRAM pointer by the native tile size.
     distributed::ReplicatedBufferConfig src_global_config{.size = single_tile_size * TILES_STREAMED_PER_INPUT};
     distributed::DeviceLocalBufferConfig src_local_config{
-        .page_size = single_tile_size, .buffer_type = BufferType::DRAM};
+        .page_size = single_tile_size * TILES_STREAMED_PER_INPUT, .buffer_type = BufferType::DRAM};
     auto src0_dram_buffer = distributed::MeshBuffer::create(src_global_config, src_local_config, mesh_device.get());
     auto src1_dram_buffer = distributed::MeshBuffer::create(src_global_config, src_local_config, mesh_device.get());
     auto src2_dram_buffer = distributed::MeshBuffer::create(src_global_config, src_local_config, mesh_device.get());
 
     auto dst_dram_buffer = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = single_tile_size * TOTAL_TILES},
-        {.page_size = single_tile_size, .buffer_type = BufferType::DRAM},
+        {.page_size = single_tile_size * TOTAL_TILES, .buffer_type = BufferType::DRAM},
         mesh_device.get());
 
     const experimental::DFBSpecName IN0_DFB{"in0_dfb"};
@@ -192,10 +195,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
     distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, /*blocking=*/true);
     distributed::EnqueueWriteMeshBuffer(cq, src2_dram_buffer, src2_vec, /*blocking=*/true);
 
-    const std::uint32_t src_aligned_page_size =
-        static_cast<std::uint32_t>(src0_dram_buffer->get_reference_buffer()->aligned_page_size());
-    const std::uint32_t dst_aligned_page_size =
-        static_cast<std::uint32_t>(dst_dram_buffer->get_reference_buffer()->aligned_page_size());
+    const std::uint32_t src_aligned_page_size = single_tile_size;
+    const std::uint32_t dst_aligned_page_size = single_tile_size;
 
     auto reader_run_args = [&](const std::shared_ptr<distributed::MeshBuffer>& buf) {
         return experimental::MakeRuntimeArgsForSingleNode(
