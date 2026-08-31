@@ -25,6 +25,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
+#include <internal/graph_tracking.hpp>
 #include <type_traits>
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/operation_concepts.hpp"
@@ -497,7 +498,7 @@ typename device_operation_t::tensor_return_value_t launch(
     // L1 clash of #28836, program dispatch. The guard closes the tracked scope on those paths too,
     // marking it aborted, so the capture does not lose the failing op and misnest everything after
     // it.
-    tt::tt_metal::ScopedTrackedFunction tracked_function(operation_name, operation_attributes, input_tensors);
+    tt::tt_metal::internal::ScopedTrackedFunction tracked_function(operation_name, operation_attributes, input_tensors);
 
     for (const auto& input_tensor_ref : input_tensors) {
         const auto& input_tensor = input_tensor_ref.get();

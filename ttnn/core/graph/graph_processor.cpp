@@ -27,6 +27,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
+#include <internal/graph_tracking.hpp>
 #include <unordered_map>
 
 using namespace tt::tt_metal;
@@ -629,7 +630,7 @@ void GraphProcessor::abort_open_function_impl(std::string_view reason) {
 }
 
 void GraphProcessor::track_function_end(const std::any& output_tensors) {
-    if (const auto* abort = std::any_cast<GraphFunctionAbort>(&output_tensors)) {
+    if (const auto* abort = std::any_cast<internal::GraphFunctionAbort>(&output_tensors)) {
         const std::lock_guard<std::mutex> lock(mutex);
         if (abort->unwind_all) {
             // Innermost first, so the scopes are closed in the order they would have been on the
