@@ -39,7 +39,11 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
-from models.demos.common.prefill.runners.migration import migration_file_export_enabled, serialize_device_map
+from models.demos.common.prefill.runners.migration import (
+    migration_file_export_enabled,
+    remove_stale_device_map_sidecars,
+    serialize_device_map,
+)
 from models.demos.common.prefill.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
@@ -142,6 +146,7 @@ DFLASH_ENABLED = (
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
+TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 # Some models (e.g. Kimi: single expert group, device gate) route the MoE routing all-gather's global
 # semaphores to L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static
 # CBs, which needs the mesh opened with an L1_SMALL region. The adapter owns both knobs.
@@ -410,6 +415,21 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
         d2d_in.release_fabric_links()
 
 
+def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: float) -> None:
+    """Append one chunk's timing to this rank's CSV via a single O_APPEND write (per-rank file => lone
+    writer, atomic even on NFS). Telemetry must never take down the run, so any write error is swallowed."""
+    if not TIMING_DIR:
+        return
+    try:
+        fd = os.open(os.path.join(TIMING_DIR, f"rank{rank}.csv"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(fd, f"{rank},{c},{compute_start:.6f},{compute_ms:.3f}\n".encode())
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
 def _compute_and_send(
     runtime, kv_caches, rank: int, c: int, inp, meta: dict, d2d_out, d2h_service=None, record_dev=None
 ) -> float:
@@ -418,7 +438,10 @@ def _compute_and_send(
     (NTP-comparable). CHUNK_START is logged BEFORE the forward, with this chunk's metadata, so the
     slot/KV-range is visible per rank even if prefill_chunk hangs. The trailing metadata is kept after
     compute_start so the c=/compute_start= fields stay parseable (plot_pipeline_trace.py)."""
+    if SYNC_PER_CHUNK:
+        ttnn.synchronize_device(runtime.mesh_device)
     t_start = time.time()
+    t_perf = time.perf_counter()
     logger.info(
         f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} "
         f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
@@ -437,7 +460,9 @@ def _compute_and_send(
         # Block on device completion so the delta is this rank's forward alone, not the downstream-start
         # proxy. Serializes dispatch (no overlap) — measurement runs only.
         ttnn.synchronize_device(runtime.mesh_device)
-        logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={(time.time() - t_start) * 1000.0:.3f}")
+        compute_ms = (time.perf_counter() - t_perf) * 1000.0
+        logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={compute_ms:.3f}")
+        _record_chunk_timing(rank, c, t_start, compute_ms)
     if not runtime.config.is_last_rank:
         # Traced: `out` is the runtime's persistent _trace_output (the next replay overwrites it in place),
         # so the send copies it into the socket backing but must not free it. Eager: `out` is fresh — free it.
@@ -799,7 +824,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         _mock_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
         runtime.build_kv_chunk_table(kv_caches, path=_mock_table_path)
         # fabric_node -> ASIC unique_id, so the producer can resolve chips for read_dram_umd without
-        # touching the ControlPlane.
+        # touching the ControlPlane. Stale rank-scoped siblings from a prior multi-rank run would
+        # merge into the reader's map, so drop them first.
+        remove_stale_device_map_sidecars(_mock_map_path)
         serialize_device_map(mesh_device, _mock_map_path)
         logger.info(
             f"[mock-migration] KV chunk table -> {_mock_table_path}, device map -> {_mock_map_path} "
@@ -823,6 +850,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             export_device_map_file_and_gather_stage_layouts,
             migration_device_map_file_path,
             publish_serialized_table_and_wait_ready,
+            rank_scoped_device_map_path,
         )
 
         # This rank's pipeline stage owns layers [first_layer_idx, first_layer_idx + num_my_layers).
@@ -854,6 +882,14 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         if is_first_rank and os.path.exists(table_path):
             logger.warning(f"[migration] removing stale KV chunk table {table_path} from a prior run")
             os.remove(table_path)
+
+        # Same rationale for the JSON device-map sidecars: a leftover rank-scoped file from a run with
+        # a different rank count would silently merge into this run's map. Must stay BEFORE the
+        # all-gather barrier below — every rank writes its fresh map only after it.
+        if not _file_export:
+            remove_stale_device_map_sidecars(
+                os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+            )
 
         # ALL RANKS join the stage-layout all-gather (collective barrier; rank 0 needs the merged
         # layout to build the table). Real migration also delivers this rank's local FNID->UMD map to
@@ -900,11 +936,16 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             #
             # EVERY rank serializes its OWN local fabric_node -> ASIC unique_id device map so each
             # co-located producer can resolve only its host's chips for read_dram_umd (the multi-rank
-            # merged table carries every host's fnids; a producer with just its local map naturally
-            # filters to its own layers). The device-map path is host-local (each rank overwrites the
-            # same name on its own host); the table path MUST be on shared storage (only rank 0 writes
-            # it, but every host's reader resolves the same path) — enforced above for num_ranks > 1.
-            device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+            # merged table carries every host's fnids; a producer merges the local maps and skips
+            # layers owned by another host). Rank-scoped filename for num_ranks > 1 — co-located ranks
+            # would otherwise overwrite each other at the shared host-local path; the table path MUST
+            # be on shared storage (only rank 0 writes it, but every host's reader resolves the same
+            # path) — enforced above for num_ranks > 1.
+            device_map_path = rank_scoped_device_map_path(
+                os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json"),
+                rank,
+                num_ranks,
+            )
             serialize_device_map(mesh_device, device_map_path)
             if is_first_rank:
                 # RANK 0 builds the merged table spanning every gathered stage — identical to the real
@@ -936,9 +977,13 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             # device-less reader downstream: migration_driver's destination verification
             # (--verify-migration, both dst-bytes and dst-golden) and prefill_producer's source-KV
             # PCC each resolve chips through this file, log "device map ... not found", and FAIL —
-            # so a real migration run could never verify what it copied. Host-local by design (one
-            # file per host, each rank overwriting its own).
-            device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+            # so a real migration run could never verify what it copied. Host-local by design;
+            # rank-scoped filename for num_ranks > 1 so co-located ranks don't overwrite each other.
+            device_map_path = rank_scoped_device_map_path(
+                os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json"),
+                rank,
+                num_ranks,
+            )
             serialize_device_map(mesh_device, device_map_path)
             logger.info(f"[migration] rank {rank}: local device map -> {device_map_path}")
 
@@ -1040,6 +1085,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             master_rank=master_rank,
             ring_shm_name=ring_shm_name,
             scheduler_channel_shm_name=ack_shm_name if rank == master_rank else "",
+            teardown_timeout_ms=30000,
         )
         if use_d2h:
             # Device-record source. The reader thread reconstructs (chunk, global-layer) from a per-rank

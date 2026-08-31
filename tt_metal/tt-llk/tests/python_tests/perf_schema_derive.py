@@ -11,7 +11,9 @@ with ``ast`` and touches no device libraries.
 
 Two arch families, derived separately:
 
-  WH/BH  perf_*.py at the python_tests root, derived from themselves.
+  WH/BH  perf_*.py at the python_tests root, derived from themselves
+         unless they are thin wrappers and the sibling test_*.py holds
+         create_test_or_perf_config (Quasar-style shared harness).
          ->  PERF_TEST_SCHEMAS
 
   Quasar quasar/perf_*_quasar.py wrappers, derived from the sibling
@@ -130,6 +132,13 @@ def _has_perfconfig(tree) -> bool:
     )
 
 
+def _is_fuser_perf_test(tree) -> bool:
+    return any(
+        isinstance(n, ast.Attribute) and n.attr == "run_perf_test"
+        for n in ast.walk(tree)
+    )
+
+
 def _param_fields_in_tree(tree, specs) -> set:
     """Emitted param fields from every templates=/runtimes= list in a file.
 
@@ -178,7 +187,8 @@ def _param_fields_in_tree(tree, specs) -> set:
 def _perf_test_sources(quasar: bool):
     """Yield (catalog_key, source_path) for each perf test.
 
-    WH/BH: perf_*.py outside quasar/, derived from itself.
+    WH/BH: perf_*.py at the python_tests root, derived from itself unless the
+    sibling test_*.py holds create_test_or_perf_config and the wrapper does not.
     Quasar: quasar/perf_*_quasar.py wrappers, derived from the sibling
     test_*_quasar.py (perf_ -> test_) that actually calls PerfConfig and holds the
     templates/runtimes lists. Keyed by the wrapper name a developer runs.
@@ -186,12 +196,28 @@ def _perf_test_sources(quasar: bool):
     if quasar:
         for wrapper in sorted(ROOT.glob(f"{QUASAR_DIR}/perf_*_quasar.py")):
             sibling = wrapper.parent / wrapper.name.replace("perf_", "test_", 1)
-            if sibling.exists():
+            if _is_fuser_perf_test(ast.parse(wrapper.read_text())):
+                yield wrapper.stem, wrapper
+            elif sibling.exists():
                 yield wrapper.stem, sibling
     else:
-        for path in sorted(ROOT.rglob("perf_*.py")):
-            if QUASAR_DIR not in path.parts:
-                yield path.stem, path
+        for path in sorted(ROOT.glob("perf_*.py")):
+            sibling = path.parent / path.name.replace("perf_", "test_", 1)
+            source = path
+            if sibling.exists():
+                try:
+                    sibling_tree = ast.parse(sibling.read_text())
+                    perf_tree = ast.parse(path.read_text())
+                except SyntaxError:
+                    sibling_tree = None
+                    perf_tree = None
+                if (
+                    sibling_tree
+                    and _has_perfconfig(sibling_tree)
+                    and (not perf_tree or not _has_perfconfig(perf_tree))
+                ):
+                    source = sibling
+            yield path.stem, source
 
 
 def derive_perf_test_schemas(quasar: bool = False) -> dict:
@@ -216,6 +242,9 @@ def derive_perf_test_schemas(quasar: bool = False) -> dict:
         try:
             tree = ast.parse(path.read_text())
         except SyntaxError:
+            continue
+        if _is_fuser_perf_test(tree):
+            schemas[key] = sorted({MARKER_COLUMN, ps.LOOP_FACTOR_COLUMN})
             continue
         if not _has_perfconfig(tree):
             continue

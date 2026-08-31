@@ -53,7 +53,6 @@ struct SumReduceScalarConfig {
 };
 
 bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumReduceScalarConfig& config) {
-    IDevice* device = mesh_device.get_devices()[0];
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord core = {0, 0};
 
@@ -68,16 +67,15 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
     // reader_unary_push_n walks a bank linearly, which would otherwise stride across
     // interleaved banks and hand the compute kernel the wrong tiles.
     const uint32_t input_byte_size = config.num_tiles * tile_byte_size;
-    tt_metal::InterleavedBufferConfig dram_config = {
-        .device = device,
-        .size = input_byte_size,
-        .page_size = input_byte_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
-    auto src_dram_buffer = CreateBuffer(dram_config);
+    auto src_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = input_byte_size},
+        {.page_size = input_byte_size, .buffer_type = tt_metal::BufferType::DRAM},
+        &mesh_device);
 
-    dram_config.size = out_tile_byte_size;
-    dram_config.page_size = out_tile_byte_size;
-    auto dst_dram_buffer = CreateBuffer(dram_config);
+    auto dst_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = out_tile_byte_size},
+        {.page_size = out_tile_byte_size, .buffer_type = tt_metal::BufferType::DRAM},
+        &mesh_device);
 
     uint32_t cb_tiles = std::max(8u, config.num_tiles);
     tt_metal::CircularBufferConfig cb_src_config =
@@ -137,7 +135,8 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
     auto packed_input = test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         0, 1.0f, byte_size / sizeof(bfloat16), config.seed);
 
-    tt_metal::detail::WriteToBuffer(*src_dram_buffer, packed_input);
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, packed_input, /*blocking=*/true);
 
     // Wrap the program into a MeshWorkload and dispatch via the mesh command queue.
     // This path works under both fast dispatch and slow dispatch, unlike detail::LaunchProgram.
@@ -145,12 +144,11 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     workload.add_program(device_range, std::move(program));
-    auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
     std::vector<uint32_t> result_vec;
-    tt_metal::detail::ReadFromBuffer(*dst_dram_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
 
     auto u16_src_vec = u16_from_u32_vector(packed_input);
 

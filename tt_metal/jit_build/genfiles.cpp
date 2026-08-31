@@ -172,6 +172,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             scratch_entries.push_back({name, size_bytes, addr_crta_word});
         });
 
+    // Tensor binding sequences: user order (matches Kernel::compute_hash); no sort.
+    struct TensorBindingSequenceEntry {
+        string name;
+        vector<string> members;
+    };
+    vector<TensorBindingSequenceEntry> tensor_binding_sequence_entries;
+    settings.process_tensor_binding_sequences(
+        [&tensor_binding_sequence_entries](const string& name, const vector<string>& members) {
+            tensor_binding_sequence_entries.push_back({name, members});
+        });
+
     // Emit the header content:
     //  - DFB binding tokens are emitted into the dfb namespace
     //  - Semaphore ids are emitted into the sem namespace (semaphores have no binding-token type;
@@ -193,7 +204,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
-    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty()) {
+    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty() &&
+        tensor_binding_sequence_entries.empty()) {
         content << "// No bindings for this kernel.\n";
     } else {
         if (!dfb_entries.empty()) {
@@ -206,6 +218,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // This header defines TensorBindingToken, a type which can be used
             // to construct a TensorAccessor or LocalTensorAccessor.
             content << "#include \"api/tensor/tensor_binding_token.h\"\n";
+        }
+        if (!tensor_binding_sequence_entries.empty()) {
+            content << "#include <tuple>\n";
         }
         if (!scratch_entries.empty()) {
             // The full Scratchpad type (NOC-free, so it compiles on both data-movement and
@@ -230,7 +245,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "}  // namespace sem\n";
         }
 
-        if (!ta_entries.empty()) {
+        if (!ta_entries.empty() || !tensor_binding_sequence_entries.empty()) {
             // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
             // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
             // its implicit base-address CRTA.
@@ -238,11 +253,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             //
             // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
             // template with extra metadata in the future without touching kernel source.
+            //
+            // Tensor binding sequences are constexpr std::tuple of those member tokens (members order).
             content << "namespace tensor {\n";
             for (const auto& entry : ta_entries) {
                 content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset
                         << "u, " << entry.addr_crta_offset << "u>;\n";
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+            }
+            for (const auto& sequence : tensor_binding_sequence_entries) {
+                content << fmt::format(
+                    "constexpr auto {} = std::make_tuple({});\n", sequence.name, fmt::join(sequence.members, ", "));
             }
             content << "}  // namespace tensor\n";
         }
@@ -677,7 +698,6 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
-    bool enable_2x_src_format,
     uint32_t max_cbs) {
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
 
@@ -686,8 +706,7 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
         unpack_conditional_dst_format,
         fp32_dest_acc_en,
         std::move(unpack_to_dest_mode),
-        /*int_fpu_en=*/false,
-        enable_2x_src_format);
+        /*int_fpu_en=*/false);
 
     TT_ASSERT(src_formats.size() == max_cbs);
     TT_ASSERT(dst_formats.size() == max_cbs);
@@ -821,7 +840,6 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
         unpack_conditional_dst_format,
         options.fp32_dest_acc_en,
         options.unpack_to_dest_mode,
-        options.enable_2x_src_format,
         max_cbs);
 
     auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(

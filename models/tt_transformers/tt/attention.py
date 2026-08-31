@@ -714,16 +714,28 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        xqkv_fused_sharded = ttnn.linear(
-            x,
-            self.wqkv,
-            memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
-            program_config=self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher),
-            compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
-            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
-        )
+        if self.TG and self.prefetcher is None:
+            x_interleaved = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            xqkv_fused_sharded = ttnn.linear(
+                x_interleaved,
+                self.wqkv,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=None,
+                compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
+                dtype=self.ccl_dtype,
+            )
+            ttnn.deallocate(x_interleaved)
+        else:
+            xqkv_fused_sharded = ttnn.linear(
+                x,
+                self.wqkv,
+                memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
+                program_config=self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher),
+                compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
+                dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+                global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
+                sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
+            )
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
             # select the bias tensor based on the number of tiles in the rows
@@ -743,7 +755,7 @@ class Attention(LightweightModule):
             memory_config=qkv_all_reduce_mem_cfg
             if qkv_all_reduce_mem_cfg is not None
             else xqkv_fused_sharded.memory_config(),
-            sharded=True,
+            sharded=not (self.TG and self.prefetcher is None),
             dtype=self.ccl_dtype,
             topology=self.ccl_topology,
             subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,

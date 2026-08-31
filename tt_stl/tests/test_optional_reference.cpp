@@ -9,19 +9,19 @@
 namespace ttsl {
 namespace {
 
-TEST(OptionalReferenceTest, DefaultConstruction) {
+TEST(OptionalReferenceTest, CPU_DefaultConstruction) {
     optional_reference<int> ref;
     EXPECT_FALSE(ref.has_value());
     EXPECT_FALSE(ref);
 }
 
-TEST(OptionalReferenceTest, NulloptConstruction) {
+TEST(OptionalReferenceTest, CPU_NulloptConstruction) {
     optional_reference<int> ref(std::nullopt);
     EXPECT_FALSE(ref.has_value());
     EXPECT_FALSE(ref);
 }
 
-TEST(OptionalReferenceTest, LvalueConstruction) {
+TEST(OptionalReferenceTest, CPU_LvalueConstruction) {
     int value = 42;
     optional_reference<int> ref(value);
     EXPECT_TRUE(ref.has_value());
@@ -30,14 +30,14 @@ TEST(OptionalReferenceTest, LvalueConstruction) {
     EXPECT_EQ(*ref, 42);
 }
 
-TEST(OptionalReferenceTest, ConstLvalueConstruction) {
+TEST(OptionalReferenceTest, CPU_ConstLvalueConstruction) {
     const int value = 42;
     optional_reference<const int> ref(value);
     EXPECT_TRUE(ref.has_value());
     EXPECT_EQ(*ref, 42);
 }
 
-TEST(OptionalReferenceTest, ImplicitConversionToConst) {
+TEST(OptionalReferenceTest, CPU_ImplicitConversionToConst) {
     int value = 42;
     optional_reference<const int> ref(value);
     EXPECT_TRUE(ref.has_value());
@@ -48,7 +48,7 @@ TEST(OptionalReferenceTest, ImplicitConversionToConst) {
     EXPECT_EQ(*ref, 100);  // Reference should see the change
 }
 
-TEST(OptionalReferenceTest, OptionalConstruction) {
+TEST(OptionalReferenceTest, CPU_OptionalConstruction) {
     std::optional<int> opt = 42;
     optional_reference<int> ref(opt);
     EXPECT_TRUE(ref.has_value());
@@ -59,20 +59,20 @@ TEST(OptionalReferenceTest, OptionalConstruction) {
     EXPECT_EQ(*ref, 100);
 }
 
-TEST(OptionalReferenceTest, ConstOptionalConstruction) {
+TEST(OptionalReferenceTest, CPU_ConstOptionalConstruction) {
     const std::optional<int> opt = 42;
     optional_reference<const int> ref(opt);
     EXPECT_TRUE(ref.has_value());
     EXPECT_EQ(*ref, 42);
 }
 
-TEST(OptionalReferenceTest, EmptyOptionalConstruction) {
+TEST(OptionalReferenceTest, CPU_EmptyOptionalConstruction) {
     std::optional<int> opt;
     optional_reference<int> ref(opt);
     EXPECT_FALSE(ref.has_value());
 }
 
-TEST(OptionalReferenceTest, CopyConstruction) {
+TEST(OptionalReferenceTest, CPU_CopyConstruction) {
     int value = 42;
     optional_reference<int> ref1(value);
     optional_reference<int> ref2(ref1);
@@ -82,7 +82,7 @@ TEST(OptionalReferenceTest, CopyConstruction) {
     EXPECT_EQ(*ref2, 42);
 }
 
-TEST(OptionalReferenceTest, MoveConstruction) {
+TEST(OptionalReferenceTest, CPU_MoveConstruction) {
     int value = 42;
     optional_reference<int> ref1(value);
     optional_reference<int> ref2(std::move(ref1)); // NOLINT(performance-move-const-arg)
@@ -94,7 +94,7 @@ TEST(OptionalReferenceTest, MoveConstruction) {
     EXPECT_TRUE(ref1.has_value());
 }
 
-TEST(OptionalReferenceTest, CopyAssignment) {
+TEST(OptionalReferenceTest, CPU_CopyAssignment) {
     int value1 = 42;
     int value2 = 100;
     optional_reference<int> ref1(value1);
@@ -105,7 +105,7 @@ TEST(OptionalReferenceTest, CopyAssignment) {
     EXPECT_EQ(*ref2, 42);
 }
 
-TEST(OptionalReferenceTest, Reset) {
+TEST(OptionalReferenceTest, CPU_Reset) {
     int value = 42;
     optional_reference<int> ref(value);
     EXPECT_TRUE(ref.has_value());
@@ -114,7 +114,7 @@ TEST(OptionalReferenceTest, Reset) {
     EXPECT_FALSE(ref.has_value());
 }
 
-TEST(OptionalReferenceTest, ArrowOperator) {
+TEST(OptionalReferenceTest, CPU_ArrowOperator) {
     struct TestStruct {
         int value = 42;
         int get() const { return value; }
@@ -126,7 +126,7 @@ TEST(OptionalReferenceTest, ArrowOperator) {
     EXPECT_EQ(ref->get(), 42);
 }
 
-TEST(OptionalReferenceTest, ValueMethod) {
+TEST(OptionalReferenceTest, CPU_ValueMethod) {
     int val = 42;
     optional_reference<int> ref(val);
     EXPECT_EQ(ref.value(), 42);
@@ -136,7 +136,7 @@ TEST(OptionalReferenceTest, ValueMethod) {
     EXPECT_EQ(val, 100);
 }
 
-TEST(OptionalReferenceTest, EqualityOperators) {
+TEST(OptionalReferenceTest, CPU_EqualityOperators) {
     int value1 = 42;
     int value2 = 42;
 
@@ -159,7 +159,7 @@ TEST(OptionalReferenceTest, EqualityOperators) {
     EXPECT_NE(ref1, empty1);
 }
 
-TEST(OptionalReferenceTest, ModifyThroughReference) {
+TEST(OptionalReferenceTest, CPU_ModifyThroughReference) {
     int value = 42;
     optional_reference<int> ref(value);
 
@@ -170,7 +170,7 @@ TEST(OptionalReferenceTest, ModifyThroughReference) {
     EXPECT_EQ(value, 200);
 }
 
-TEST(OptionalReferenceTest, ConstCorrectness) {
+TEST(OptionalReferenceTest, CPU_ConstCorrectness) {
     int value = 42;
     const optional_reference<int> ref(value);
 
@@ -179,7 +179,7 @@ TEST(OptionalReferenceTest, ConstCorrectness) {
     EXPECT_EQ(value, 100);
 }
 
-TEST(OptionalReferenceTest, UseCaseExample) {
+TEST(OptionalReferenceTest, CPU_UseCaseExample) {
     auto test_function = [](optional_reference<const int> val) {
         if (val) {
             EXPECT_GE(*val, 0);
@@ -194,7 +194,7 @@ TEST(OptionalReferenceTest, UseCaseExample) {
     test_function(std::nullopt);
 }
 
-TEST(OptionalReferenceTest, TemporaryBindingToConst) {
+TEST(OptionalReferenceTest, CPU_TemporaryBindingToConst) {
     auto test_function = [](optional_reference<const int> val) { EXPECT_EQ(*val, 42); };
     test_function(42);
     test_function(std::make_optional(42));

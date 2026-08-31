@@ -312,8 +312,7 @@ void RunSemaphoreIncMulticastTest(
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    uint32_t num_dest_cores =
-        (mcast_end_virtual.x - mcast_start_virtual.x + 1) * (mcast_end_virtual.y - mcast_start_virtual.y + 1);
+    uint32_t num_dest_cores = CoreRange(mcast_start, mcast_end).size();
 
     constexpr uint32_t buffer_page_size = 64;
     distributed::DeviceLocalBufferConfig l1_config{
@@ -1138,8 +1137,7 @@ void RunMcastTest(
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    uint32_t num_dest_cores =
-        (mcast_end_virtual.x - mcast_start_virtual.x + 1) * (mcast_end_virtual.y - mcast_start_virtual.y + 1);
+    uint32_t num_dest_cores = CoreRange(mcast_start, mcast_end).size();
 
     constexpr uint32_t buffer_page_size = 64;
     constexpr uint32_t buffer_size = buffer_page_size;

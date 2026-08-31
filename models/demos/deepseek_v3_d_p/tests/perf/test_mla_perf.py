@@ -12,18 +12,28 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
     run_mla_perf_loudbox,
     run_model_device_perf_test_with_merge,
 )
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla"
 
-_CMD_2X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq100k and scaled_sl and random and fabric2d-2x4'"
-_CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq100k and scaled_sl and random and torus-xy-8x4'"
+# 640 tokens/chip on both: 8x4 takes seq5k literally, 2x4 scales it to 1280 global.
+_CMD_2X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq5k and scaled_sl and random and fabric2d-2x4' --wrapper-invocation"
+_CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq5k and max_sl and random and torus-xy-8x4' --wrapper-invocation"
 
-# Kimi K2.6 chunked prefill: 50k KV-cache prefix + one fresh 5k chunk (chunk_size_global=5120). On
-# the 8x4 Galaxy (sp=8) this lands chunk_local=640 per chip, exercising the num_heads=64 chunked-only
-# 640 matmul/SDPA configs. Functional reference (no PCC) keeps the measured region to the single
-# forward (the 50k prefix is preloaded host->device before the MLA_START signpost, so it is not timed).
+# Kimi K2.6 chunked prefill: 50k cache + one 5k chunk. The 50k prefix is preloaded before the
+# MLA_START signpost, so only the single forward is timed.
 _CHUNKED_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill"
-_CMD_CHUNKED_8X4 = f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and kimi and func and torus-xy-8x4'"
+_CMD_CHUNKED_8X4 = (
+    f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and k2_6 and func and torus-xy-8x4' --wrapper-invocation"
+)
+
+
+_IGNORE_POWER = os.environ.get("DS_PERF_IGNORE_POWER") == "1"
+_REQUIRE_HIGH_POWER = pytest.mark.skipif(
+    not (is_high_power() or _IGNORE_POWER),
+    reason="galaxy perf baselines are cut on a >=130W TDP host; an 8kW galaxy measures differently. "
+    "DS_PERF_IGNORE_POWER=1 runs it anyway, for bring-up only",
+)
 
 
 def _require_certified_torus_xy():
@@ -32,7 +42,7 @@ def _require_certified_torus_xy():
 
 
 # Kimi K3 (NoPE + output gate, 96 heads): same scenario/mesh as the K2.6 command above. 'k3' not
-# 'kimi' in the -k -- the ids are disjoint so the two selectors cannot cross-match.
+# 'k2_6' in the -k -- the ids are disjoint so the two selectors cannot cross-match.
 #
 # 'scalar' is load-bearing, not cosmetic: run_device_perf profiles the whole -k selection into one
 # CSV and the signpost filter keeps every MLA_START/MLA_END region, so a selector matching both the
@@ -43,23 +53,38 @@ def _require_certified_torus_xy():
 # this reason (13_947_233 vs a 7_118_649 baseline that matches one forward within 2%). The metadata
 # axis came in with 3d3c65f985b (#51624), predating both K3 commits. Fix is to pin 'and scalar'
 # there too and keep 7_118_649; left alone here so this change doesn't touch another CI baseline.
-_CMD_K3_CHUNKED_8X4 = f"pytest {_CHUNKED_TEST_PATH} " "-k 'deep-50k+5k and k3 and func and torus-xy-8x4 and scalar'"
+_CMD_K3_CHUNKED_8X4 = (
+    f"pytest {_CHUNKED_TEST_PATH} " "-k 'deep-50k+5k and k3 and func and torus-xy-8x4 and scalar' --wrapper-invocation"
+)
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+
+    if not on_ci:
+        return False
+    # Measures the non-chunked balanced MLA path; production runs chunked+non_balanced,
+    # covered by the chunked galaxy perf tests below.
+    return True
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.timeout(0)
 def test_deepseek_v3_mla_perf_loudbox():
     """Retain the existing 2x4 LoudBox proxy on unwrapped Fabric2D."""
     run_mla_perf_loudbox(
         command_2x4=_CMD_2X4,
-        # Measured 2026-08-15 on the BH LoudBox Fabric2D CI runner (run 31895358174).
-        expected_ns_2x4=8_857_393,
+        # Re-measured 2026-08-22 at 640 tokens/chip, BH LoudBox bh-lb-15, DDR 16000, 150W.
+        # Mean of 14 runs, 2.658-2.664 ms, 0.25% peak to peak.
+        expected_ns_2x4=2_660_615,
         model_name_2x4="deepseek_v3_mla_lb_2x4_fabric2d",
         subdir="deepseek_v3_mla",
         margin=0.03,
-        comments_2x4="seq100k_scaled_lb_2x4_fabric2d_proxy",
+        comments_2x4="isl5k_lb_2x4_fabric2d_proxy",
     )
 
 
+@_REQUIRE_HIGH_POWER
 @pytest.mark.timeout(0)
 def test_deepseek_v3_mla_perf_galaxy():
     if not _is_galaxy_env():
@@ -70,18 +95,19 @@ def test_deepseek_v3_mla_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4,
-        # Migration starting threshold: measured 2026-06-10 on bh-glx-110-c08u02 with FABRIC_1D.
-        # The first certified TorusXY result must be used to recalibrate it.
-        expected_device_perf_ns_per_iteration=14_252_829,
+        # Measured 2026-08-22, 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified, DDR 16000.
+        # Two runs 3.894 / 3.886 ms, spread 0.21%.
+        expected_device_perf_ns_per_iteration=3_890_333,
         subdir="deepseek_v3_mla",
         model_name="deepseek_v3_mla_glx_8x4",
         num_iterations=1,
         batch_size=1,
         margin=margin,
-        comments="seq100k_scaled_glx_8x4_ground_truth",
+        comments="isl5k_glx_8x4_ground_truth",
     )
 
 
+@_REQUIRE_HIGH_POWER
 @pytest.mark.timeout(0)
 def test_kimi_mla_chunked_perf_galaxy():
     """Kimi K2.6 chunked-prefill MLA perf on the 8x4 Galaxy: 50k KV-cache prefix + one fresh 5k chunk
@@ -109,6 +135,7 @@ def test_kimi_mla_chunked_perf_galaxy():
     )
 
 
+@_REQUIRE_HIGH_POWER
 @pytest.mark.timeout(0)
 def test_kimi_k3_mla_chunked_perf_galaxy():
     """Kimi-K3 chunked-prefill MLA perf on the 8x4 Galaxy: 50k KV-cache prefix + one fresh 5k chunk

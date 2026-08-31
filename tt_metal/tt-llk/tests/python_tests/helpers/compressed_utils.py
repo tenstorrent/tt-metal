@@ -24,7 +24,7 @@ from helpers.test_variant_parameters import CRK_TILE_DIMM, IN_FACE_DIMS, NUM_FAC
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
 from helpers.tilize_untilize import tilize, untilize
 from helpers.unpack import unpack_bfp2_b, unpack_bfp4_b, unpack_bfp8_b
-from helpers.utils import passed_test
+from helpers.utils import matmul_acc_atol, passed_test
 from ttexalens.tt_exalens_lib import write_to_device
 
 # -----------------------------------------------------------------------------
@@ -35,6 +35,14 @@ FMT_CODE = {"bfp8": 3, "bfp4": 2, "bfp2": 1, "bfp0": 0}
 # bfp0 is the zero/skip tile, and its code being 0 is relied on throughout: a unit is
 # tested for "is a zero tile" simply as ``code == 0`` (non-zero as ``code != 0``).
 assert FMT_CODE["bfp0"] == 0, "bfp0 code must be 0 (used as the zero-tile sentinel)"
+
+# The same codes keyed by the harness DataFormat, for tests that sweep a DataFormat axis and
+# need the kernel code for it. bfp0 has no DataFormat: it is the absence of a tile.
+FMT_CODE_BY_DATAFORMAT = {
+    DataFormat.Bfp8_b: FMT_CODE["bfp8"],
+    DataFormat.Bfp4_b: FMT_CODE["bfp4"],
+    DataFormat.Bfp2_b: FMT_CODE["bfp2"],
+}
 
 
 def assign_random(K, N, formats, granularity):
@@ -287,6 +295,31 @@ class CompressedStimuliConfig(StimuliConfig):
         write_to_device(location, self.buf_c_addr, self.packed_meta)
 
 
+def encode_tile_meta(assignment, ct):
+    """Pack a row-major (kt x ct) grid of per-tile FMT_CODEs into the tile kernels' meta buffer.
+
+    10 tiles per u32: tile j of a word contributes its format at bits [3j+3 : 3j+4] and its
+    use_b flag at bit 3j+2, and bits [1:0] of each word carry the *previous* tile's format so
+    the unpacker's 5-bit sliding window always sees (prev, use_b, curr). use_b is set on the
+    first tile of every kt row, i.e. whenever in0 (SrcB) has to be re-fetched.
+
+    Read by both the unpacker and the math thread of the tile-granular compressed matmuls.
+    """
+    total = len(assignment)
+    meta = [0] * ((total + 9) // 10)
+    prev_fmt = 0
+    for i in range(total):
+        u, j = divmod(i, 10)
+        if j == 0:
+            meta[u] |= prev_fmt & 0b11
+        fmt = assignment[i] & 0b11
+        use_b = 1 if (i % ct) == 0 else 0
+        meta[u] |= use_b << (3 * j + 2)
+        meta[u] |= fmt << (3 * j + 3)
+        prev_fmt = fmt
+    return np.array(meta, dtype=np.uint32).tobytes()
+
+
 def pack_bfp_tile(tile, code, tile_dim, face_dim=FACE_C_DIM):
     num_faces = (tile_dim // face_dim) ** 2
     faces = tilize(
@@ -458,18 +491,9 @@ def run_compressed(
         .reshape(M, N)
     )
 
-    # K-aware absolute floor: the single LoFi MVMUL accumulates the K-deep sum in a
-    # bf16 dest, so noise grows ~linearly per K-tile — a floor on small outputs that
-    # Float16_b's default atol (0.05) is too tight for at large kt. Scale it by
-    # kt * mean|nonzero golden| (never below default; rtol unchanged; PCC is the real
-    # gate). 0.005 is calibrated across formats (worst ~0.0034 at kt=16, bfp2/bfp0);
-    # mean excludes bfp0's structural zeros, which would otherwise deflate it.
-    FLOAT16B_DEFAULT_ATOL = 0.05
-    ACC_ATOL_PER_KT = 0.005
-    active_golden = golden.abs()
-    active_golden = active_golden[active_golden > 0]
-    mean_active = active_golden.mean().item() if active_golden.numel() else 0.0
-    acc_atol = max(FLOAT16B_DEFAULT_ATOL, ACC_ATOL_PER_KT * kt * mean_active)
+    # K-aware absolute floor, see helpers.utils.matmul_acc_atol: the single LoFi MVMUL
+    # accumulates the K-deep sum in a bf16 dest, so noise grows ~linearly per K-tile.
+    acc_atol = matmul_acc_atol(golden, kt, DataFormat.Float16_b)
 
     assert passed_test(
         golden,
