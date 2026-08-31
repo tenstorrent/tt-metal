@@ -654,6 +654,21 @@ class TestConfig:
                 resolved.append(Path(root).expanduser().resolve())
         return resolved
 
+    @staticmethod
+    def _extra_header_include_flag_lists(already: list) -> tuple[list, list]:
+        """Registered header extras that ``already`` does not contain.
+
+        The header-side counterpart of ``_extra_src_include_flag_lists``, kept
+        in one place so the two filters cannot drift. Only
+        ``generate_variant_hash`` needs it: after ``setup_build`` these extras
+        are folded into ``INCLUDES``, but a variant hashed before that would
+        otherwise not see them at all.
+        """
+        return (
+            [flag for flag in TestConfig.EXTRA_INCLUDE_PREPEND if flag not in already],
+            [flag for flag in TestConfig.EXTRA_INCLUDE_APPEND if flag not in already],
+        )
+
     def _extra_src_include_flag_lists(self) -> tuple[list, list]:
         """Instance + process extras split for before/after in-tree ``helpers/src``."""
         instance = TestConfig._as_include_flags(self.src_include_dirs)
@@ -886,8 +901,8 @@ class TestConfig:
         self,
         test_name: str,
         formats: InputOutputFormat = None,
-        templates: list[TemplateParameter] = [],
-        runtimes: list[RuntimeParameter] = [],
+        templates: list[TemplateParameter] = None,
+        runtimes: list[RuntimeParameter] = None,
         variant_stimuli: StimuliConfig = None,
         boot_mode: BootMode = BootMode.DEFAULT,
         profiler_build: ProfilerBuild = ProfilerBuild.No,
@@ -916,8 +931,18 @@ class TestConfig:
 
         self._prepared = False
 
+        # This instance owns its parameter lists: copy on the way in, and never
+        # mutate a caller's list or a default in place. The speed-of-light
+        # branch below rebinds rather than appending, for the same reason.
+        # (These used to default to a shared ``[]`` that the fold mutated, so a
+        # variant constructed without explicit ``templates`` inherited the
+        # previous variant's runtimes -- invisible until it changed what got
+        # compiled. Regression coverage: test_test_config.py.)
+        templates = list(templates or [])
+        runtimes = list(runtimes or [])
+
         if TestConfig.SPEED_OF_LIGHT:
-            templates += runtimes
+            templates = templates + runtimes
             runtimes = []
             compile_time_formats = True
 
@@ -1221,7 +1246,59 @@ class TestConfig:
             if field_name not in NON_COMPILATION_ARGUMENTS
         ]
 
-        self.variant_id = sha256(str(" | ".join(temp_str)).encode()).hexdigest()
+        # Header and source search dirs decide which copy of a given relative
+        # include a driver compiles against, so they are compilation inputs.
+        # Most of them live in class state (``add_include_dirs`` /
+        # ``add_src_include_dirs`` / ``add_helpers_tree``, and the in-tree
+        # ``INCLUDES`` built by ``setup_compilation_options``), which
+        # ``self.__dict__`` cannot see — so hashing instance fields alone gave
+        # two variants the same id while they compiled against different
+        # headers. That matters because ``prepare`` does not rebuild in CONSUME
+        # mode: it trusts this id to locate the ELF the producer pass built.
+        # Order is part of the value: these lists are precedence-ordered, and
+        # reordering them changes which header wins.
+        # ``INCLUDES`` is the merged view, and only exists once ``setup_build``
+        # has run; before that the registered extras live solely in
+        # ``EXTRA_INCLUDE_*``. Hash both, so a variant built before the merge
+        # and one built after cannot collide.
+        #
+        # Each group is fenced by a label rather than concatenated, because the
+        # *role* of a dir is as much a compilation input as the dir itself. A
+        # flat list loses that: the same dir registered with ``prepend=True``
+        # and ``prepend=False`` yields the same token sequence while deciding
+        # opposite precedence against the in-tree ``helpers/src``. Labels cannot
+        # be confused with flags, which all start with ``-I``.
+        #
+        # The two sides are not symmetric, and it is worth being precise about
+        # which mechanism carries which. Header extras are folded into
+        # ``INCLUDES`` by ``_apply_extra_includes`` as ``prepend + rest +
+        # append``, so once ``setup_build`` has run header role is carried by
+        # the *order* of ``INCLUDES`` — and the two header fences below are
+        # empty. They are non-empty only before that fold, which is the window
+        # where the extras are the sole record of what was registered. Src
+        # extras are never folded into a merged list, so for those the fences
+        # are the only thing that distinguishes prepend from append.
+        header_tokens = self._header_include_tokens()
+        header_prepend, header_append = TestConfig._extra_header_include_flag_lists(
+            header_tokens
+        )
+        src_include_prepend, src_include_append = self._extra_src_include_flag_lists()
+        search_dirs = [
+            "<<headers>>",
+            *header_tokens,
+            "<<headers-prepend>>",
+            *header_prepend,
+            "<<headers-append>>",
+            *header_append,
+            "<<src-prepend>>",
+            *src_include_prepend,
+            "<<src-append>>",
+            *src_include_append,
+        ]
+
+        self.variant_id = sha256(
+            str(" | ".join(temp_str + ["<<search-dirs>>"] + search_dirs)).encode()
+        ).hexdigest()
 
     def resolve_shared_compile_options(self) -> tuple[str, str, str]:
         """Flags for brisc/coverage. Process-wide ``INCLUDES`` only.
@@ -1231,11 +1308,23 @@ class TestConfig:
         """
         return self._compose_compile_options(list(TestConfig.INCLUDES))
 
-    def resolve_compile_options(self) -> tuple[str, str, str]:
-        include_tokens = TestConfig._as_include_flags(self.include_dirs) + list(
+    def _header_include_tokens(self) -> List[str]:
+        """Header ``-I`` tokens this variant compiles with, in search order.
+
+        Per-variant dirs first, then the process-wide ``INCLUDES``.
+
+        ``generate_variant_hash`` reads the same helper on purpose. The variant
+        id has to describe what actually reaches the compiler, so if these two
+        ever disagree the cache key stops matching the binary — which is silent,
+        because ``prepare`` does not rebuild in CONSUME mode. Keep them sharing
+        one definition rather than two copies of the expression.
+        """
+        return TestConfig._as_include_flags(self.include_dirs) + list(
             TestConfig.INCLUDES
         )
-        return self._compose_compile_options(include_tokens)
+
+    def resolve_compile_options(self) -> tuple[str, str, str]:
+        return self._compose_compile_options(self._header_include_tokens())
 
     def _compose_compile_options(self, include_tokens: list) -> tuple[str, str, str]:
         if (
