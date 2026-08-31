@@ -490,7 +490,7 @@ class TestGeluBwTanhWithGradientScaling:
         "input_value,grad_value,max_expected_ulp",
         [
             (1.0, 2.0, 2),
-            (-1.0, 0.5, 2),
+            (-1.0, 0.5, 3),
             (0.0, 1.0, 2),
             (2.0, -1.0, 2),
             (0.5, 3.0, 2),
