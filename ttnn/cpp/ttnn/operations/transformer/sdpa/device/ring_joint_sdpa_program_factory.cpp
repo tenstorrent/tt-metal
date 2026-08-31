@@ -2479,10 +2479,21 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     //                          kimi50k only, is_balanced=False), so that would be an UNEXERCISED
     //                          relaxation of a contract whose failure mode is a hang, and the
     //                          balanced_skip_q break above is independent of zigzag anyway.
-    //                          A zigzag-AWARE rotation is the real fix if this is ever wanted: make
-    //                          the float unit two chunks wide so ROTATED_Q_SPLIT becomes base + 2 and
-    //                          each float migrates as a pair. base is always even under zigzag
-    //                          ((total_pairs/num_cores)*2), so pairs stay aligned.
+    //                          A zigzag-AWARE rotation was ATTEMPTED and is NOT sufficient. Making
+    //                          the float unit two chunks wide (rot_float_unit = 2 under zigzag, so
+    //                          ROTATED_Q_SPLIT = base + 2 and each float migrates as a pair; base is
+    //                          always even there, (total_pairs/num_cores)*2, so pairs stay aligned)
+    //                          does fix the pair-counting break -- the rotation then engages on
+    //                          mla_dense_small_balanced at grid 5x6 (base 2, floats 2, ideal slots 17
+    //                          vs flat 32) instead of leaving ids unscheduled. But it STILL dies:
+    //                          TT_THROW in system_memory_manager.cpp:779. So the two breaks listed
+    //                          above really are independent, and balanced_skip_q is the harder one:
+    //                          its parity decision desyncs the injector from its receivers at the
+    //                          float slot regardless of how wide the float is. Reverted.
+    //                          Anyone retrying this must fix balanced_skip_q's injector/receiver
+    //                          parity FIRST -- widening the float unit alone is a dead end, and the
+    //                          non-balanced dense config (mla_dense_small) keeps passing throughout,
+    //                          so only the balanced id catches it.
     //   (!kv_pad_rotation_enabled was here and has been REMOVED -- kv-pad now rotates. See the
     //    rot_active_ordinal note in the predicate for why the device-derived mask stopped mattering.)
     //   (active_ring_iter_mask == full_ring_iter_mask was here and has been REMOVED -- partial masks
