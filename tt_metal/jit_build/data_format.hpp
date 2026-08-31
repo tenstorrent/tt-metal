@@ -6,17 +6,11 @@
 #include <cstdint>
 #include <vector>
 #include <span>
-#include <tt-metalium/tt_backend_api_types.hpp>     // for DataFormat
-#include <umd/device/types/arch.hpp>                // for ARCH
+#include <tt-metalium/tt_backend_api_types.hpp>  // for DataFormat
+#include <umd/device/types/arch.hpp>             // for ARCH
 
 namespace tt::tt_metal {
 enum class UnpackToDestMode : std::uint8_t;
-
-// A local FP32 epoch is effective only on Blackhole and only when a Float32 buffer has a
-// non-default unpack-to-dest mode at the same index. Mismatched vector lengths are allowed;
-// only indices present in both vectors are considered.
-bool has_effective_local_fp32_epoch(
-    std::span<const tt::DataFormat> data_formats, std::span<const UnpackToDestMode> unpack_to_dest_mode, tt::ARCH arch);
 }  // namespace tt::tt_metal
 
 namespace tt {

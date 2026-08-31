@@ -22,6 +22,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "llk_device_fixture.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/float8_utils.hpp"
@@ -128,6 +129,34 @@ struct LocalFp32EpochResult {
     vector<uint32_t> bf16;
 };
 
+constexpr char kAllowFp8WithLocalFp32Dest[] = "ALLOW_FP8_WITH_LOCAL_FP32_DEST";
+
+static Program make_fp8_validation_program(bool allow_local_fp32_dest) {
+    Program program = CreateProgram();
+    CoreCoord core = {0, 0};
+    constexpr auto fp8_cb = tt::CBIndex::c_0;
+    constexpr auto output_cb = tt::CBIndex::c_16;
+    const uint32_t fp8_tile_size = tt::tile_size(tt::DataFormat::Fp8_e4m3);
+    const uint32_t bf16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+
+    CreateCircularBuffer(
+        program,
+        core,
+        CircularBufferConfig(fp8_tile_size, {{fp8_cb, tt::DataFormat::Fp8_e4m3}}).set_page_size(fp8_cb, fp8_tile_size));
+    CreateCircularBuffer(
+        program,
+        core,
+        CircularBufferConfig(bf16_tile_size, {{output_cb, tt::DataFormat::Float16_b}})
+            .set_page_size(output_cb, bf16_tile_size));
+
+    ComputeConfig compute_config{.fp32_dest_acc_en = false, .compile_args = {1}};
+    if (allow_local_fp32_dest) {
+        compute_config.defines.emplace(kAllowFp8WithLocalFp32Dest, "1");
+    }
+    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_fp8.cpp", core, compute_config);
+    return program;
+}
+
 static LocalFp32EpochResult run_local_fp32_epoch(
     distributed::MeshDevice& mesh_device,
     const vector<uint32_t>& fp8_input,
@@ -204,7 +233,10 @@ static LocalFp32EpochResult run_local_fp32_epoch(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/fp8_local_fp32_epoch.cpp",
         core,
-        ComputeConfig{.fp32_dest_acc_en = false, .unpack_to_dest_mode = unpack_to_dest_mode});
+        ComputeConfig{
+            .fp32_dest_acc_en = false,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .defines = {{kAllowFp8WithLocalFp32Dest, "1"}}});
 
     SetRuntimeArgs(
         program,
@@ -276,6 +308,19 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToFloat16b) {
     EXPECT_TRUE(is_close_vectors<float>(
         src_floats, dst_floats, [](float a, float b) { return is_close(a, b, /*rtol=*/0.0f, /*atol=*/0.0f); }));
     EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixFp8RequiresGlobalOrExplicitLocalFp32Dest) {
+    auto without_opt_in = make_fp8_validation_program(/*allow_local_fp32_dest=*/false);
+    EXPECT_THROW(without_opt_in.impl().compile(devices_[0].get()), std::exception);
+
+    auto with_opt_in = make_fp8_validation_program(/*allow_local_fp32_dest=*/true);
+    EXPECT_NO_THROW(with_opt_in.impl().compile(devices_[0].get()));
+}
+
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFp8LocalFp32DestOptInDoesNotBypassGlobalRequirement) {
+    auto with_opt_in = make_fp8_validation_program(/*allow_local_fp32_dest=*/true);
+    EXPECT_THROW(with_opt_in.impl().compile(devices_[0].get()), std::exception);
 }
 
 TEST_F(LLKBlackholeSingleCardFixture, TensixFp8LocalFp32EpochRestoresBf16Dest) {

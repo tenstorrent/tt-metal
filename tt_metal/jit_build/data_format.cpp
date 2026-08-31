@@ -140,9 +140,7 @@ std::vector<DataFormat> get_unpack_src_formats(std::span<const DataFormat> data_
 }
 
 DataFormat get_single_unpack_dst_format(
-    const DataFormat src_format,
-    const DataFormat /*pack_format*/,
-    const DataFormat unpack_conditional_dst_format) {
+    const DataFormat src_format, const DataFormat /*pack_format*/, const DataFormat unpack_conditional_dst_format) {
     // NOTE: DataFormat::UInt8 is intentionally not remapped to Int8 here. The unpacker's 4-bit
     // OutDataFormat register field has no UInt8 encoding; the LLK applies masked_data_format()
     // at the register-write site so UInt8 (=30) lands as INT8 (=14) in the bitfield. We preserve
@@ -214,11 +212,11 @@ std::vector<DataFormat> get_unpack_dst_formats(
         } else {
             if (src_format == DataFormat::Float32 && !unpack_to_dest_mode.empty() &&
                 unpack_to_dest_mode[i] != tt::tt_metal::UnpackToDestMode::Default) {
-                unpack_dst_format.push_back(get_single_unpack_dst_format(
-                    src_format, DataFormat::Invalid, DataFormat::Float32));
+                unpack_dst_format.push_back(
+                    get_single_unpack_dst_format(src_format, DataFormat::Invalid, DataFormat::Float32));
             } else {
-                unpack_dst_format.push_back(get_single_unpack_dst_format(
-                    src_format, DataFormat::Invalid, unpack_conditional_dst_format));
+                unpack_dst_format.push_back(
+                    get_single_unpack_dst_format(src_format, DataFormat::Invalid, unpack_conditional_dst_format));
             }
         }
     }
@@ -234,23 +232,6 @@ bool any_unpack_to_dest(const std::vector<tt::tt_metal::UnpackToDestMode>& unpac
     return false;
 }
 
-bool tt_metal::has_effective_local_fp32_epoch(
-    std::span<const tt::DataFormat> data_formats,
-    std::span<const tt_metal::UnpackToDestMode> unpack_to_dest_mode,
-    tt::ARCH arch) {
-    if (arch != tt::ARCH::BLACKHOLE) {
-        return false;
-    }
-
-    for (std::size_t index = 0; index < data_formats.size() && index < unpack_to_dest_mode.size(); ++index) {
-        if (data_formats[index] == tt::DataFormat::Float32 &&
-            unpack_to_dest_mode[index] != tt_metal::UnpackToDestMode::Default) {
-            return true;
-        }
-    }
-    return false;
-}
-
 DataFormat get_single_pack_src_format(
     DataFormat data_format,
     DataFormat unpack_conditional_dst_format,
@@ -260,9 +241,7 @@ DataFormat get_single_pack_src_format(
     tt::ARCH arch) {
     if (data_format == DataFormat::Fp8_e4m3) {
         TT_FATAL(
-            tt::is_data_format_supported(DataFormat::Fp8_e4m3, arch),
-            "Fp8 E4M3 mode not supported on arch {}",
-            arch);
+            tt::is_data_format_supported(DataFormat::Fp8_e4m3, arch), "Fp8 E4M3 mode not supported on arch {}", arch);
     }
 
     DataFormat pack_src_format;
