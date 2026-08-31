@@ -830,6 +830,7 @@
 
 
 - name: "high_bw_all_gather 32-rank snake-ring CCL perf + accuracy"
+  fabric_profile: torus_xy
   # Companion to the 8-rank axis gate above, on the same full 8x4 Blackhole-Galaxy
   # Fabric2D XY-torus. cluster_axis=None linearizes all 32 devices into one
   # direct-neighbour snake ring (row snake, 8 even lanes, closing through the Y
