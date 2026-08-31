@@ -1235,7 +1235,7 @@ def test_noc_event_profiler():
 
         assert "arch_name" in soc_desc_data, "SoC descriptor missing 'arch_name' field"
         arch_name = soc_desc_data["arch_name"].upper()
-        expected_arch = ENV_VAR_ARCH_NAME.upper().replace("_", "")
+        expected_arch = ENV_VAR_ARCH_NAME.upper()
         assert (
             expected_arch in arch_name or arch_name in expected_arch
         ), f"SoC descriptor arch_name '{soc_desc_data['arch_name']}' does not match expected arch '{ENV_VAR_ARCH_NAME}'"
