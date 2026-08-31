@@ -35,7 +35,7 @@ lora:
   lora_rank: 32
   lora_alpha: 32
   lora_target_set: attn
-  lora_a_init: kaiming
+  lora_a_init: gaussian
   lora_path: "cache/wan22_14b_lego/wan22_14b_lego_lora.safetensors"
 
 optimizer:

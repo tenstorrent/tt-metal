@@ -274,13 +274,19 @@ def train(cfg: Config) -> None:
         m.train()
 
     trainable = {}
+    expert_params = {role: {} for role in experts}
     for role, model in experts.items():
         for name, param in model.parameters().items():
             if "lora" in name:
                 trainable[f"{role}/{name}"] = param
+                expert_params[role][f"{role}/{name}"] = param
     adamw_config = ttml.optimizers.AdamWConfig.make(cfg.LR, 0.9, 0.999, 1e-8, cfg.WEIGHT_DECAY)
-    optimizer = ttml.optimizers.AdamW(trainable, adamw_config)
-    print(f"[train] constant lr={cfg.LR}, {len(trainable)} trainable tensors")
+    # AdamW's bias-correction clock (beta powers) is global per optimizer instance, and step()
+    # skips params without grads. Routing can leave an expert out of a whole accumulation
+    # window, so a shared optimizer would advance that expert's clock past its frozen moments.
+    # torch keeps a per-param step counter; one optimizer per expert gives the same semantics.
+    optimizers = {role: ttml.optimizers.AdamW(params, adamw_config) for role, params in expert_params.items()}
+    print(f"[train] constant lr={cfg.LR}, {len(trainable)} trainable tensors, {len(optimizers)} optimizers")
 
     patch_size = model_config_for(cfg).patch_size
     shape = latent_shape(cfg)
@@ -303,7 +309,8 @@ def train(cfg: Config) -> None:
     step_times: list[float] = []
     loop_start = step_start = time.time()
     data_iter = iter(train_loader)
-    optimizer.zero_grad()
+    for opt in optimizers.values():
+        opt.zero_grad()
     print(
         f"[train] loop: step {global_step} -> max_steps={cfg.MAX_STEPS} "
         f"accum={cfg.GRAD_ACCUM} t-range=[{lo:.3f},{hi:.3f})"
@@ -344,8 +351,11 @@ def train(cfg: Config) -> None:
                 ttml.sync_gradients(trainable, axis_names=("dp",))
             if cfg.GRAD_CLIP > 0.0:
                 ttml.core.clip_grad_norm(trainable, cfg.GRAD_CLIP, 2.0, False)
-            optimizer.step()
-            optimizer.zero_grad()
+            for role, opt in optimizers.items():
+                # Only step experts that were routed (got grads) in this window.
+                if any(p.is_grad_initialized() for p in expert_params[role].values()):
+                    opt.step()
+                opt.zero_grad()
             global_step += 1
 
             avg = accum_loss / accum_n
