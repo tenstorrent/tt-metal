@@ -9,9 +9,11 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal::internal::disaggregation {
@@ -46,6 +48,16 @@ struct KvChunkAddressTableConfig {
     uint32_t chunk_size_bytes = 19584;  // physical size of one chunk in bytes (18 x 1088 bfp8 tiles)
 };
 
+// How a config's chunk map is represented in memory (and on the wire; values must match
+// ChunkCompression in kv_chunk_address_table.proto). Import instantiates the corresponding
+// map type; an unrecognized wire value is rejected loudly (fail-closed versioning).
+enum class ChunkCompression : uint32_t {
+    kUnrolled = 0,     // UnrolledGrid
+    kStridedRows = 1,  // StridedRowMap
+};
+
+class StridedRowRangeView;  // fwd — defined after KvChunkAddressTable
+
 // Lookup table mapping (layer, position, slot, config) -> KvCacheLocation.
 //
 // Describes how a KV cache is allocated/laid out across a multi-host,
@@ -65,14 +77,46 @@ struct KvChunkAddressTableConfig {
 // deduplicated: identical sorted sets of FabricNodeIds share the same index.
 // The side table is typically tiny (handful of entries) and stays in L1 cache.
 //
-// Per-config storage is ordered [slot][layer][position_chunk] so that the
-// typical access pattern (fixed slot, iterate layers, iterate positions)
-// gets contiguous position-chunk reads — the innermost loop.
-//
 // Position indices are in units of tokens and are converted internally
 // to chunk indices via (position / chunk_n_tokens).
 class KvChunkAddressTable {
 public:
+    // --- Per-config map representations ---
+    // Both store their config's dims and address chunks by CHUNK index
+    // (position/chunk_n_tokens conversion and bounds validation stay in the table).
+
+    struct UnrolledGrid {
+        std::vector<KvCacheLocation> entries;  // [slot][layer][chunk]
+        uint32_t num_layers = 0;
+        uint32_t num_position_chunks = 0;
+
+        size_t flat_index(uint32_t layer, uint32_t chunk, uint32_t slot) const;
+        const KvCacheLocation& lookup(uint32_t layer, uint32_t chunk, uint32_t slot) const;
+        std::span<const KvCacheLocation> lookup_range(
+            uint32_t layer, uint32_t start_chunk, uint32_t end_chunk, uint32_t slot) const;
+    };
+
+    struct StridedRowMap {
+        // One (slot, layer) row: chunk c at bases[c % step] + (c / step) * strides[c % step].
+        // step == 0 marks a never-populated row (lookup returns a zeroed location, matching
+        // an unset unrolled cell). A populated row is dense: residues 0..step-1 each present.
+        struct Row {
+            uint32_t step = 0;
+            uint32_t size_bytes = 0;
+            DeviceGroupIndex device_group_index{0};
+            std::vector<uint64_t> bases;    // [step]
+            std::vector<int64_t> strides;   // [step]
+        };
+
+        std::vector<Row> rows;  // [slot][layer]
+        uint32_t num_layers = 0;
+        uint32_t num_position_chunks = 0;
+        uint32_t num_slots = 0;
+
+        KvCacheLocation lookup(uint32_t layer, uint32_t chunk, uint32_t slot) const;
+        StridedRowRangeView lookup_range(uint32_t layer, uint32_t start_chunk, uint32_t end_chunk, uint32_t slot) const;
+    };
+
     // Single config — the whole table uses one configuration (config id 0, name "0").
     explicit KvChunkAddressTable(const KvChunkAddressTableConfig& config);
 
@@ -103,27 +147,58 @@ public:
     // Set the location for a specific (layer, position, slot, config).
     // `position` is in tokens and must be chunk-aligned (multiple of the config's chunk_n_tokens).
     // `config` is addressed by id (default 0) or by name.
+    // Only valid on UNROLLED configs — compressed maps are built at import; to produce one
+    // from an unrolled table use install_strided_map() (the serializer does this).
     void set(uint32_t layer, uint32_t position, uint32_t slot, KvCacheLocation location, uint32_t config_id = 0);
     void set(uint32_t layer, uint32_t position, uint32_t slot, KvCacheLocation location, const std::string& config);
+
+    // Replace a config's map with a compressed representation (import path).
+    void install_strided_map(uint32_t config_id, StridedRowMap map);
 
     // Register a mapping from FabricNodeId to its host name.
     void set_fabric_node_host(const tt::tt_fabric::FabricNodeId& node_id, const std::string& host_name);
 
     // --- Accessors ---
 
-    // Lookup a single entry. `position` is in tokens (chunk-aligned). `config` by id (default 0) or name.
-    const KvCacheLocation& lookup(uint32_t layer, uint32_t position, uint32_t slot, uint32_t config_id = 0) const;
-    const KvCacheLocation& lookup(uint32_t layer, uint32_t position, uint32_t slot, const std::string& config) const;
+    // Lookup a single entry, by value (uniform across representations).
+    // `position` is in tokens (chunk-aligned). `config` by id (default 0) or name.
+    // Hot paths: prefer visit_map()/visit_range() (dispatch once, then iterate the
+    // representation-native range) over per-entry calls.
+    KvCacheLocation lookup(uint32_t layer, uint32_t position, uint32_t slot, uint32_t config_id = 0) const;
+    KvCacheLocation lookup(uint32_t layer, uint32_t position, uint32_t slot, const std::string& config) const;
 
-    // Lookup a contiguous range of position chunks for a given (layer, slot, config).
-    // Returns a span over the internal storage — zero-copy.
-    // `start_pos` must be chunk-aligned. `end_pos` need not be aligned —
-    // it is rounded up to include the enclosing chunk.
-    // Returns entries for chunks covering positions [start_pos, end_pos).
-    std::span<const KvCacheLocation> lookup_range(
-        uint32_t layer, uint32_t start_pos, uint32_t end_pos, uint32_t slot, uint32_t config_id = 0) const;
-    std::span<const KvCacheLocation> lookup_range(
-        uint32_t layer, uint32_t start_pos, uint32_t end_pos, uint32_t slot, const std::string& config) const;
+    // Top-level dispatch on a config's map representation. fn is instantiated per
+    // alternative (UnrolledGrid / StridedRowMap) and must return the same type
+    // (e.g. void) for each — range objects do not escape the dispatch.
+    template <typename F>
+    decltype(auto) visit_map(uint32_t config_id, F&& fn) const {
+        validate_config_id(config_id);
+        if (const auto* grid = std::get_if<UnrolledGrid>(&maps_[config_id])) {
+            return fn(*grid);
+        }
+        return fn(std::get<StridedRowMap>(maps_[config_id]));
+    }
+
+    // visit_map + position bookkeeping: fn receives the representation-native range
+    // over chunks covering positions [start_pos, end_pos) — a std::span (unrolled) or
+    // StridedRowRangeView (strided). Same single-return-type constraint.
+    template <typename F>
+    decltype(auto) visit_range(
+        uint32_t layer, uint32_t start_pos, uint32_t end_pos, uint32_t slot, uint32_t config_id, F&& fn) const {
+        validate_args(config_id, layer, start_pos, slot);
+        const auto& cfg = configs_[config_id];
+        TT_FATAL(
+            end_pos <= cfg.max_sequence_length,
+            "end_pos {} > max_sequence_length {} (config {})",
+            end_pos,
+            cfg.max_sequence_length,
+            config_id);
+        const uint32_t start_chunk = to_chunk_index(config_id, start_pos);
+        const uint32_t end_chunk = to_chunk_index(config_id, end_pos + cfg.chunk_n_tokens - 1);
+        return visit_map(config_id, [&](const auto& map) -> decltype(auto) {
+            return fn(map.lookup_range(layer, start_chunk, end_chunk, slot));
+        });
+    }
 
     // Resolve a FabricNodeId to its host name.
     const std::string& get_host(const tt::tt_fabric::FabricNodeId& node_id) const;
@@ -153,14 +228,15 @@ public:
     uint32_t config_id_of(const std::string& name) const;
     // Number of position chunks for a config.
     uint32_t num_position_chunks(uint32_t config_id = 0) const;
-    // Total entries summed across all configs.
+    // The representation of a config's chunk map.
+    ChunkCompression compression(uint32_t config_id = 0) const;
+    // Total entries summed across all configs (grid-equivalent chunk count).
     size_t total_entries() const;
 
 private:
     void init_configs(std::span<const KvChunkAddressTableConfig> configs, std::vector<std::string> names);
     uint32_t resolve_config(const std::string& name) const;
     void validate_config_id(uint32_t config_id) const;
-    size_t flat_index(uint32_t config_id, uint32_t layer, uint32_t position_chunk, uint32_t slot) const;
     uint32_t to_chunk_index(uint32_t config_id, uint32_t position) const;
     void validate_args(uint32_t config_id, uint32_t layer, uint32_t position, uint32_t slot) const;
 
@@ -168,10 +244,61 @@ private:
     std::vector<std::string> config_names_;                        // config_id -> name
     std::unordered_map<std::string, uint32_t> name_to_config_id_;  // name -> config_id
     std::vector<uint32_t> num_position_chunks_;                    // per config
-    std::vector<uint32_t> num_layers_x_chunks_;                    // per config: num_layers * num_position_chunks
-    std::vector<std::vector<KvCacheLocation>> entries_;            // per-config grid [slot][layer][position_chunk]
+    std::vector<std::variant<UnrolledGrid, StridedRowMap>> maps_;  // per config
     std::vector<DeviceGroup> device_groups_;                       // shared across configs
     std::unordered_map<tt::tt_fabric::FabricNodeId, std::string> fabric_node_to_host_;  // shared across configs
+};
+
+// Random-access range over chunks [start_chunk, end_chunk) of one (slot, layer) row of a
+// StridedRowMap, computing each location on dereference (compressed storage has nothing to
+// reference, so iteration yields values). Namespace-scoped (not nested) so consumers can
+// name and reuse the type without the map. Default-constructible; a default view is empty.
+class StridedRowRangeView {
+public:
+    class Iterator {
+    public:
+        using iterator_category = std::random_access_iterator_tag;
+        using value_type = KvCacheLocation;
+        using difference_type = std::ptrdiff_t;
+
+        Iterator() = default;
+        KvCacheLocation operator*() const;
+        Iterator& operator++();
+        Iterator operator++(int);
+        Iterator& operator--();
+        Iterator& operator-=(difference_type n);
+        Iterator& operator+=(difference_type n);
+        Iterator operator+(difference_type n) const;
+        Iterator operator-(difference_type n) const;
+        difference_type operator-(const Iterator& o) const;
+        bool operator==(const Iterator& o) const;
+        bool operator!=(const Iterator& o) const;
+        bool operator<(const Iterator& o) const;
+
+    private:
+        friend class StridedRowRangeView;
+        Iterator(const KvChunkAddressTable::StridedRowMap* map, uint32_t layer, uint32_t slot, uint32_t first, uint32_t i);
+        const KvChunkAddressTable::StridedRowMap* map_ = nullptr;
+        uint32_t layer_ = 0;
+        uint32_t slot_ = 0;
+        uint32_t first_ = 0;
+        uint32_t i_ = 0;
+    };
+
+    StridedRowRangeView() = default;
+    Iterator begin() const;
+    Iterator end() const;
+    size_t size() const;
+
+private:
+    friend struct KvChunkAddressTable::StridedRowMap;
+    StridedRowRangeView(
+        const KvChunkAddressTable::StridedRowMap* map, uint32_t layer, uint32_t slot, uint32_t first, uint32_t last);
+    const KvChunkAddressTable::StridedRowMap* map_ = nullptr;
+    uint32_t layer_ = 0;
+    uint32_t slot_ = 0;
+    uint32_t first_ = 0;
+    uint32_t last_ = 0;
 };
 
 }  // namespace tt::tt_metal::internal::disaggregation

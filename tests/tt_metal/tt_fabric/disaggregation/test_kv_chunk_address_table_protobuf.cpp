@@ -6,8 +6,10 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -415,6 +417,234 @@ TEST(KvChunkAddressTableProtobuf, LegacySingleConfigWireStillReads) {
     ASSERT_EQ(restored.num_configs(), 1u);
     EXPECT_EQ(restored.config_name(0), "0");
     EXPECT_EQ(restored.lookup(1, 32, 0).noc_addr, 0xABCDu);
+}
+
+// --- Strided-run compression (field 11 `runs`) ---
+
+// Scoped override for KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES (read at each export call).
+class DualWriteEnvGuard {
+public:
+    explicit DualWriteEnvGuard(const char* value) {
+        if (const char* old = std::getenv("KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES")) {
+            old_ = old;
+        }
+        if (value != nullptr) {
+            ::setenv("KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES", value, 1);
+        } else {
+            ::unsetenv("KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES");
+        }
+    }
+    ~DualWriteEnvGuard() {
+        if (old_) {
+            ::setenv("KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES", old_->c_str(), 1);
+        } else {
+            ::unsetenv("KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES");
+        }
+    }
+
+private:
+    std::optional<std::string> old_;
+};
+
+// 2 layers x 2 slots x 96 chunks of 32 tokens; each row is affine (chunk i at base + i*stride).
+KvChunkAddressTable make_strided_table() {
+    KvChunkAddressTableConfig cfg{.num_layers = 2, .max_sequence_length = 96 * 32, .num_slots = 2, .chunk_n_tokens = 32};
+    KvChunkAddressTable table(cfg);
+    auto grp = table.add_device_group({make_fnid(0, 0)});
+    for (uint32_t slot = 0; slot < 2; slot++) {
+        for (uint32_t layer = 0; layer < 2; layer++) {
+            const uint64_t base = 0x1'0000'0000ULL + (slot * 2 + layer) * 0x1000'0000ULL;
+            for (uint32_t i = 0; i < 96; i++) {
+                table.set(
+                    layer,
+                    i * 32,
+                    slot,
+                    KvCacheLocation{
+                        .noc_addr = base + i * 0x10000ULL, .size_bytes = 512, .device_group_index = grp});
+            }
+        }
+    }
+    return table;
+}
+
+TEST(KvChunkAddressTableProtobuf, StridedRunsRoundTrip) {
+    DualWriteEnvGuard guard("0");  // force runs-only: prove runs alone rebuild the table
+    auto original = make_strided_table();
+
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(original)));
+    EXPECT_EQ(pb.entries_size(), 0);
+    EXPECT_EQ(pb.runs_size(), 4);  // one run per (slot, layer) row
+
+    auto restored = import_from_protobuf(pb.SerializeAsString());
+    expect_tables_equal(original, restored);
+}
+
+TEST(KvChunkAddressTableProtobuf, BlockCyclicRunsRoundTrip) {
+    // 12-bank round-robin: chunk c at row_base + (c%12)*bank_block + (c/12)*period — the delta
+    // sequence alternates, so step-1 detection fails but one affine stream per bank (step 12) fits.
+    // period (0x30000) deliberately != kBanks*bank_block (0x18000): equal values would make the
+    // pattern purely affine (degenerate) and it would compress at step 1 instead.
+    DualWriteEnvGuard guard("0");
+    constexpr uint32_t kBanks = 12;
+    constexpr uint32_t kChunks = 96;  // 8 full periods
+    KvChunkAddressTableConfig cfg{
+        .num_layers = 2, .max_sequence_length = kChunks * 32, .num_slots = 2, .chunk_n_tokens = 32};
+    KvChunkAddressTable original(cfg);
+    auto grp = original.add_device_group({make_fnid(0, 0)});
+    for (uint32_t slot = 0; slot < 2; slot++) {
+        for (uint32_t layer = 0; layer < 2; layer++) {
+            const uint64_t row_base = 0x1'0000'0000ULL + (slot * 2 + layer) * 0x1000'0000ULL;
+            for (uint32_t i = 0; i < kChunks; i++) {
+                original.set(
+                    layer,
+                    i * 32,
+                    slot,
+                    KvCacheLocation{
+                        .noc_addr = row_base + (i % kBanks) * 0x2000ULL + (i / kBanks) * 0x30000ULL,
+                        .size_bytes = 512,
+                        .device_group_index = grp});
+            }
+        }
+    }
+
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(original)));
+    EXPECT_EQ(pb.entries_size(), 0);
+    EXPECT_EQ(pb.runs_size(), 4 * kBanks);  // 4 rows, one run per bank
+    for (const auto& run : pb.runs()) {
+        EXPECT_EQ(run.chunk_step(), kBanks);
+        EXPECT_EQ(run.count(), kChunks / kBanks);
+        EXPECT_EQ(run.addr_stride(), 0x30000);
+    }
+
+    auto restored = import_from_protobuf(pb.SerializeAsString());
+    expect_tables_equal(original, restored);
+}
+
+TEST(KvChunkAddressTableProtobuf, MixedCompressionPerConfigRoundTrip) {
+    // Compression is per-config: the affine config exports STRIDED_ROWS, the pseudo-random
+    // config stays UNROLLED. The importer must honor both tags in one table.
+    DualWriteEnvGuard guard("0");  // runs-only for the strided config
+    std::map<std::string, KvChunkAddressTableConfig> configs = {
+        {"aff", {.num_layers = 1, .max_sequence_length = 64 * 32, .num_slots = 1, .chunk_n_tokens = 32}},
+        {"rnd", {.num_layers = 1, .max_sequence_length = 64 * 32, .num_slots = 1, .chunk_n_tokens = 32}},
+    };
+    KvChunkAddressTable original(configs);
+    auto grp = original.add_device_group({make_fnid(0, 0)});
+    for (uint32_t i = 0; i < 64; i++) {
+        original.set(
+            0,
+            i * 32,
+            0,
+            KvCacheLocation{.noc_addr = 0x1'0000'0000ULL + i * 0x8000ULL, .size_bytes = 512, .device_group_index = grp},
+            "aff");
+        const uint64_t h = pseudo_rand(1, 0, i * 32);
+        original.set(
+            0,
+            i * 32,
+            0,
+            KvCacheLocation{
+                .noc_addr = 0x1'0000'0000ULL + (h & 0xFFFF'FFFFULL), .size_bytes = 512, .device_group_index = grp},
+            "rnd");
+    }
+
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(original)));
+    ASSERT_EQ(pb.configs_size(), 2);
+    for (const auto& c : pb.configs()) {
+        if (c.name() == "aff") {
+            EXPECT_EQ(c.compression(), ::tt::disaggregation::proto::STRIDED_ROWS);
+        } else {
+            EXPECT_EQ(c.compression(), ::tt::disaggregation::proto::UNROLLED);
+        }
+    }
+    EXPECT_EQ(pb.runs_size(), 1);      // the affine config's single row
+    EXPECT_EQ(pb.entries_size(), 64);  // the random config's entries
+
+    auto restored = import_from_protobuf(pb.SerializeAsString());
+    EXPECT_EQ(restored.compression(restored.config_id_of("aff")), ChunkCompression::kStridedRows);
+    EXPECT_EQ(restored.compression(restored.config_id_of("rnd")), ChunkCompression::kUnrolled);
+    expect_tables_equal(original, restored);
+
+    // A re-export of the mixed table must preserve the per-config forms: the strided config
+    // serializes from its map (no detection), the unrolled one re-detects nothing.
+    ::tt::disaggregation::proto::KvChunkAddressTable pb2;
+    ASSERT_TRUE(pb2.ParseFromString(export_to_protobuf(restored)));
+    EXPECT_EQ(pb2.runs_size(), 1);
+    EXPECT_EQ(pb2.entries_size(), 64);
+}
+
+TEST(KvChunkAddressTableProtobuf, DualWriteSurvivesReexport) {
+    // A small dual-written table imports as an in-memory StridedRowMap (runs authoritative).
+    // Re-exporting THAT must keep the entries mirror for old readers downstream.
+    DualWriteEnvGuard guard(nullptr);  // default threshold: dual-write
+    auto original = make_strided_table();
+
+    auto first = import_from_protobuf(export_to_protobuf(original));
+    ASSERT_EQ(first.compression(0), ChunkCompression::kStridedRows);
+
+    ::tt::disaggregation::proto::KvChunkAddressTable pb2;
+    ASSERT_TRUE(pb2.ParseFromString(export_to_protobuf(first)));
+    EXPECT_EQ(pb2.runs_size(), 4);
+    EXPECT_EQ(pb2.entries_size(), 4 * 96);  // mirror survived the re-export
+
+    auto second = import_from_protobuf(pb2.SerializeAsString());
+    expect_tables_equal(original, second);
+}
+
+TEST(KvChunkAddressTableProtobuf, DualWriteMirrorsEntriesBelowThreshold) {
+    DualWriteEnvGuard guard(nullptr);  // default threshold: a small table dual-writes
+    auto original = make_strided_table();
+
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(original)));
+    EXPECT_EQ(pb.runs_size(), 4);
+    EXPECT_EQ(pb.entries_size(), 4 * 96);  // every chunk mirrored
+
+    auto restored = import_from_protobuf(pb.SerializeAsString());
+    expect_tables_equal(original, restored);
+}
+
+TEST(KvChunkAddressTableProtobuf, RunValidationThrows) {
+    auto make_pb = [] {
+        ::tt::disaggregation::proto::KvChunkAddressTable pb;
+        auto* c = pb.add_configs();
+        c->set_name("0");
+        c->set_num_layers(1);
+        c->set_max_sequence_length(64);
+        c->set_num_slots(1);
+        c->set_chunk_n_tokens(32);
+        auto* g = pb.add_device_groups();
+        g->add_fabric_node_ids()->set_mesh_id(0);
+        return pb;
+    };
+
+    {  // chunk_step 0
+        auto pb = make_pb();
+        auto* r = pb.add_runs();
+        r->set_config_idx(0);
+        r->set_chunk_step(0);
+        r->set_count(1);
+        EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
+    }
+    {  // extends past the config's position chunks (2 exist: 64/32)
+        auto pb = make_pb();
+        auto* r = pb.add_runs();
+        r->set_config_idx(0);
+        r->set_start_chunk(1);
+        r->set_chunk_step(1);
+        r->set_count(2);
+        EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
+    }
+    {  // config_idx out of range
+        auto pb = make_pb();
+        auto* r = pb.add_runs();
+        r->set_config_idx(7);
+        r->set_chunk_step(1);
+        r->set_count(1);
+        EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
+    }
 }
 
 TEST(KvChunkAddressTableProtobuf, DuplicateConfigNameThrows) {

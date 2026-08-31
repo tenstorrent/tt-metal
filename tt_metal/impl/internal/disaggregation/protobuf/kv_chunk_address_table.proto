@@ -17,6 +17,14 @@ message FabricNodeHost {
     string host_name = 3;
 }
 
+// How a config's chunk addresses are represented in this message (and, on import,
+// in memory). Declared per config — mixed-representation tables are supported.
+// Unknown values must be rejected loudly by readers (fail-closed versioning).
+enum ChunkCompression {
+    UNROLLED = 0;      // fully materialized per-chunk `entries` (the legacy form)
+    STRIDED_ROWS = 1;  // base+stride runs (field 11) covering each (slot, layer) row
+}
+
 // One config ("group") — a distinct attention implementation / tensor
 // representation a layer may use. A table holds one or more.
 message KvChunkConfig {
@@ -26,6 +34,7 @@ message KvChunkConfig {
     uint32 num_slots = 4;
     uint32 chunk_n_tokens = 5;
     uint32 chunk_size_bytes = 6;
+    ChunkCompression compression = 7;  // payload form for this config's chunks (default UNROLLED)
 }
 
 message KvCacheEntry {
@@ -36,6 +45,24 @@ message KvCacheEntry {
     uint32 size_bytes = 5;
     uint32 device_group_index = 6;
     uint32 config_idx = 7;  // which config ("group") this entry belongs to (default 0)
+}
+
+// A strided run of chunks within one (config, slot, layer) row: covers chunk indices
+//   start_chunk + k*chunk_step,  k in [0, count)
+// at noc_addr = base_noc_addr + k*addr_stride, all sharing size_bytes/device_group_index.
+// Chunk indices are in units of the config's chunk_n_tokens. chunk_step > 1 captures
+// block-cyclic layouts (chunks round-robin across DRAM banks = one affine stream per bank).
+message KvChunkRun {
+    uint32 config_idx = 1;
+    uint32 slot = 2;
+    uint32 layer = 3;
+    uint32 start_chunk = 4;
+    uint32 chunk_step = 5;  // >= 1
+    uint32 count = 6;
+    uint64 base_noc_addr = 7;
+    sint64 addr_stride = 8;  // per-step address delta (constant across the run)
+    uint32 size_bytes = 9;
+    uint32 device_group_index = 10;
 }
 
 message KvChunkAddressTable {
@@ -51,4 +78,11 @@ message KvChunkAddressTable {
     repeated FabricNodeHost fabric_node_hosts = 7;
     repeated KvCacheEntry entries = 8;
     repeated KvChunkConfig configs = 9;  // all configs ("groups"); index == config_idx
+    // Compressed chunk addressing (strided runs) — the payload for configs tagged
+    // STRIDED_ROWS in KvChunkConfig.compression. Runs are authoritative for those configs
+    // (transition-era writers also dual-write `entries` for old readers, which ignore both
+    // this field and the tag). A table whose unrolled entries would exceed protobuf's ~2GB
+    // message cap is emitted runs-only — such a table is unreadable by ANY entries-only
+    // reader today, so nothing working is broken.
+    repeated KvChunkRun runs = 11;
 }
