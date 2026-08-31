@@ -273,6 +273,41 @@ def test_prefill_and_host_decode_release_prior_trace_before_page_table_conversio
     assert decode.index("self._release_decode_state()") < decode.index("self._page_tables_to_tt(")
 
 
+def test_prefill_keeps_live_traces_for_warm_shapes():
+    source = inspect.getsource(Gemma4ForCausalLM)
+    prefill = source[source.index("    def prefill_forward(") : source.index("    def decode_forward(")]
+    # A first-of-its-shape prefill releases the decode traces (its program
+    # and shape-cache allocations persist while a trace owns allocator
+    # addresses); a warm-shape prefill keeps them live so the next decode
+    # refreshes and replays instead of re-capturing.
+    assert prefill.index(
+        "if not self._keep_decode_traces or prefill_shape not in self._warm_prefill_shapes:"
+    ) < prefill.index("self._release_decode_state()")
+    assert "self._warm_prefill_shapes.add(prefill_shape)" in prefill
+    assert "release_decode_traces=False" in prefill
+    generator_prefill = inspect.getsource(Gemma4Generator.prefill_forward)
+    assert "release_decode_traces" in generator_prefill
+    assert inspect.signature(Gemma4Generator.prefill_forward).parameters["release_decode_traces"].default is True
+
+
+def test_decode_reset_batch_reuses_matching_live_traces():
+    source = inspect.getsource(Gemma4ForCausalLM.decode_forward)
+    # reset_batch alone (same batch shape, sampling key, and KV cache) must
+    # not release the live traces: prepare_token_out_decode refreshes the
+    # trace-bound inputs in place and replays without a capture.
+    reuse = source[source.index("steady_trace_reuse = (") : source.index("if must_prepare and not steady_trace_reuse:")]
+    assert "not cache_changed" in reuse
+    assert "self._decode_sampling_key == sampling_key" in reuse
+    assert "self.model.trace_state.trace_id is not None" in reuse
+    assert "self.generator._sampling_trace_id is not None" in reuse
+
+
+def test_page_table_conversion_releases_traces_before_reallocation():
+    source = inspect.getsource(Gemma4ForCausalLM._page_tables_to_tt)
+    assert "_page_table_state_would_reallocate" in source
+    assert source.index("self._release_decode_state()") < source.index("_update_page_table_state(")
+
+
 def test_dynamic_prepare_releases_trace_before_batch_shaped_page_table_conversion():
     source = inspect.getsource(Gemma4ForCausalLM.decode_forward)
     start = source.index("        must_prepare = (")

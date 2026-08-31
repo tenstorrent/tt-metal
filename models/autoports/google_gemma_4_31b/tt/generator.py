@@ -592,8 +592,18 @@ class Gemma4Generator(Generator):
         temperature: float = 1.0,
         force_argmax: bool = False,
         seed: int | Sequence[int] | torch.Tensor | None = None,
+        allow_live_traces: bool = False,
     ):
-        if self.model.trace_state.trace_id is not None or self._sampling_trace_id is not None:
+        # Eager sampling touches only pre-existing persistent sampler objects
+        # and transient parameter tensors, both safe alongside live decode
+        # traces; the RNG stream it advances is re-seeded at the next request
+        # boundary by prepare/reuse. A caller may opt in with
+        # allow_live_traces only when this batch size and sampling mode have
+        # already run eagerly once (programs compiled, buffers allocated);
+        # _get_eager_sampler still hard-fails on any first-time allocation.
+        if not allow_live_traces and (
+            self.model.trace_state.trace_id is not None or self._sampling_trace_id is not None
+        ):
             raise RuntimeError("eager sampling is not allowed while decode traces are live")
         batch_size = int(tt_out_tok.shape[-1])
         output_prefix = tuple(int(tt_out_tok.shape[index]) for index in range(3))
@@ -800,9 +810,16 @@ class Gemma4Generator(Generator):
         prompt_lens: list[int],
         return_all_logits: bool = False,
         return_device_logits: bool = False,
+        release_decode_traces: bool = True,
         **kwargs: Any,
     ) -> torch.Tensor | ttnn.Tensor:
-        if self.model.trace_state.trace_id is not None or self._sampling_trace_id is not None:
+        # The vLLM adapter passes release_decode_traces=False for prefills
+        # whose programs and shape caches are already warm: those allocate
+        # transients only, which are freed before the next trace execution,
+        # so the live decode traces stay valid. Every other caller releases.
+        if release_decode_traces and (
+            self.model.trace_state.trace_id is not None or self._sampling_trace_id is not None
+        ):
             self._release_all_decode_traces()
         # The source-current readiness prefill runner passes one disposable TT
         # tensor with kv_cache=None as an explicit placeholder. It is not a
