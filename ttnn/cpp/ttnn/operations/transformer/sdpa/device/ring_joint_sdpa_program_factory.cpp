@@ -2564,6 +2564,22 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // per-iteration chunks this schedule does not count; unreachable today, since joint tensors
         // are a video-gen shape and latent-V an MLA one, but validation does not forbid the pair.
         !args.is_balanced && !kv_pad_rotation_enabled &&
+        // Partial masks: the ordinal fix is known, and there is nothing to test it on. Building the
+        // rotation cycle over the ORDINAL sequence of active iterations (rather than absolute t) makes
+        // a skipped iteration harmless, since the handoff is then always between consecutive ACTIVE
+        // iterations; the writer can derive the same ordinal by popcount of active_ring_iter_mask, so
+        // it costs no runtime arg. I implemented that and verified it is a no-op for chunked prefill
+        // (full mask => ordinal == t: accuracy 10 passed, determinism 4, perf unchanged), then
+        // REVERTED it, because no configuration in the tree can exercise it:
+        //   - kv-pad partial masks are device-derived, so the host cycle cannot match them (measured
+        //     hang, see the kv-pad note below);
+        //   - the only other source of a partial mask is DENSE causal (ring_iter_does_work drops
+        //     device_index < ring_id when !is_balanced), and the sole dense ring-MLA config,
+        //     mla_100k, is is_balanced=True -- which both trips !args.is_balanced above AND makes the
+        //     mask full, since balanced disables that causal drop.
+        // So relaxing this today would ship an unexercised relaxation of a hang-prone contract. If a
+        // non-balanced dense ring-MLA config ever lands, the ordinal cycle is the fix.
+        //
         // Ring shape: the rotation cycle needs every iteration active. No ring_size bounds needed.
         // The old ring_size <= 8 cap was the semaphore budget, gone now that the handoff is O(1) in
         // ring_size; ring_size <= 32 (the width of the per-iteration masks) is already enforced by
