@@ -89,7 +89,7 @@
 - name: runtime_perf_pcie_mem_bench
   cmd: |
     mkdir -p generated/test_reports
-    ./build/tools/mem_bench --benchmark_filter="Device (Reading|Writing) Host"
+    ./build/tools/mem_bench --benchmark_filter='Device (Reading|Writing) Host'
   skus:
     bh_p150b_civ2_viommu:
       timeout: 10
