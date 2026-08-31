@@ -100,16 +100,8 @@ FMT_SPACE = {2: 1 << 16, 4: 1 << 32}
 UNARY_HOOKED_FILES = {"test_sfpu_unary.py"}
 FILE_CLASS = {
     "test_sfpu_unary.py": ("unary", None),
-    "test_eltwise_unary_typecast.py": (
-        "unary-unhooked",
-        "unary typecast row, separate harness (test_eltwise_unary_typecast.py) "
-        "not instrumented with the LANEJN hooks this run",
-    ),
-    "test_sfpu_binop_scalar.py": (
-        "unary-unhooked",
-        "tensor x registered-scalar row; separate harness not instrumented "
-        "with the LANEJN hooks this run",
-    ),
+    "test_eltwise_unary_typecast.py": ("unary", None),
+    "test_sfpu_binop_scalar.py": ("unary", None),  # tensor x registered scalar
     "test_sfpu_coverage.py": (
         "unary-unhooked",
         "coverage-census row; separate harness not instrumented with the "

@@ -305,7 +305,46 @@ def test_eltwise_unary_typecast(
         for fmt_config in configuration.formats_config:
             fmt_config.pack_src = pack_src
 
+    # laneJN bit-exact sweep hook (corpus/tools/bitexact_sweep.py) — same
+    # env-gated contract as test_sfpu_unary.py's eltwise_unary_sfpu.
+    import os as _os
+
+    _lanejn_raw_a = _os.environ.get("LANEJN_RAW_A")
+    if _lanejn_raw_a:
+        from pathlib import Path as _Path
+
+        configuration.variant_stimuli.lanejn_raw_a = _Path(_lanejn_raw_a).read_bytes()
+
     res_from_L1 = configuration.run().result
+
+    _lanejn_dump = _os.environ.get("LANEJN_DUMP")
+    if _lanejn_dump:
+        import numpy as _np
+
+        _stim = configuration.variant_stimuli
+        _np.savez(
+            _lanejn_dump,
+            src_raw=_np.frombuffer(
+                getattr(_stim, "lanejn_src_a_raw", b""), dtype=_np.uint8
+            ),
+            res_raw=_np.frombuffer(
+                getattr(_stim, "lanejn_raw_reads", {}).get("Res", b""),
+                dtype=_np.uint8,
+            ),
+            meta=_np.array(
+                [
+                    "MathOperation.Typecast",
+                    str(typecast_impl),
+                    str(formats.input_format.name),
+                    str(formats.output_format.name),
+                    str(input_dimensions),
+                    str(_stim.tile_count_A),
+                    str(_stim.tile_count_res),
+                    str(dest_acc),
+                    str(approx_mode),
+                ]
+            ),
+        )
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -313,6 +352,9 @@ def test_eltwise_unary_typecast(
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+
+    if _os.environ.get("LANEJN_SKIP_ASSERT") == "1":
+        return
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format

@@ -120,12 +120,55 @@ def _run_sfpu_binop_scalar(
         compile_time_formats=True,
     )
 
+    # laneJN bit-exact sweep hook (corpus/tools/bitexact_sweep.py) — same
+    # env-gated contract as test_sfpu_unary.py's eltwise_unary_sfpu.
+    import os as _os
+
+    _lanejn_raw_a = _os.environ.get("LANEJN_RAW_A")
+    if _lanejn_raw_a:
+        from pathlib import Path as _Path
+
+        configuration.variant_stimuli.lanejn_raw_a = _Path(_lanejn_raw_a).read_bytes()
+
     res_from_L1 = configuration.run().result
+
+    _lanejn_dump = _os.environ.get("LANEJN_DUMP")
+    if _lanejn_dump:
+        import numpy as _np
+
+        _stim = configuration.variant_stimuli
+        _np.savez(
+            _lanejn_dump,
+            src_raw=_np.frombuffer(
+                getattr(_stim, "lanejn_src_a_raw", b""), dtype=_np.uint8
+            ),
+            res_raw=_np.frombuffer(
+                getattr(_stim, "lanejn_raw_reads", {}).get("Res", b""),
+                dtype=_np.uint8,
+            ),
+            meta=_np.array(
+                [
+                    f"{mathop}(scalar_bits=0x{scalar_bits:08x})",
+                    str(fresh_cpp_impl),
+                    str(formats.input_format.name),
+                    str(formats.output_format.name),
+                    str(input_dimensions),
+                    str(_stim.tile_count_A),
+                    str(_stim.tile_count_res),
+                    str(dest_acc),
+                    "-",
+                ]
+            ),
+        )
+
     res_from_L1 = res_from_L1[:1024]
 
     assert len(res_from_L1) == len(
         golden
     ), "Result tensor and golden tensor are not of the same length"
+
+    if _os.environ.get("LANEJN_SKIP_ASSERT") == "1":
+        return
 
     torch_format = format_dict[formats.output_format]
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
