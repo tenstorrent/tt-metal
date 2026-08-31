@@ -3199,7 +3199,9 @@ EXTREMES_READY_OPS.update(
 
 # (1) Trig at a magnitude no range reduction reaches. sin/cos/tan return +/-inf or NaN at
 # 3.39e38 where the golden gives a bounded value -- there is no argument reduction that far, and
-# whether there should be is the open kernel-contract question W9 exists to settle.
+# whether there should be is an open kernel-contract question: what range do the trig kernels
+# claim, and is |x| > pi inside the promise or outside it? Until that is ruled on, enrolling
+# these three would be asserting an answer nobody has given.
 _EXTREMES_NOT_READY_TRIG: Tuple[MathOperation, ...] = (
     MathOperation.Sin,
     MathOperation.Cos,
@@ -3913,7 +3915,7 @@ def suite_coverage_from_tests() -> SuiteCoverage:
         # _UINT32_BINARY_OPS: the uint32 high-range sweep drives 0, 1 and 2**32 - 1, which is
         # exactly integer_specials(UInt32). It reaches the extremes by a different route than
         # _INT_EXTREME_OPS and the ledger has to count both or it under-reports the class --
-        # the same omission W13 fixed for the shift ops.
+        # the same omission that once hid the shift ops' cat C.
         integer_extremes=frozenset(binary._INT_EXTREME_OPS)
         | frozenset(binary._SHIFT_EDGE_OPS)
         | frozenset(binary._UINT32_BINARY_OPS)

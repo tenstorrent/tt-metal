@@ -1020,7 +1020,7 @@ def test_integer_only_cells_are_integer_only_ops():
 def test_shift_ops_really_do_drive_the_integer_extremes():
     """The shift sweeps are counted for cat C, so their value list has to contain an extreme.
 
-    This is the cell the ledger got wrong before W13 -- it read 'unrecorded' for three ops that
+    This is the cell the ledger used to get wrong -- it read 'unrecorded' for three ops that
     were being driven at INT32_MAX all along, because SuiteCoverage was built from
     _INT_EXTREME_OPS and the shift sweeps are not in it. Counting them is only honest while the
     values are still there, so the claim is checked against the list rather than against the
