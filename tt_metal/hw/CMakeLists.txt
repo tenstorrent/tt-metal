@@ -382,6 +382,7 @@ foreach(ARCH IN LISTS ARCHS)
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_ALIAS}/metal/llk_io
         -I${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_ALIAS}/common/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_ALIAS}/llk_lib
+        -I${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tt_llk_${ARCH_ALIAS}/llk_lib/hal
     )
 
     foreach(HW_PAIR IN LISTS HW_OBJ_SRC_PAIRS)
