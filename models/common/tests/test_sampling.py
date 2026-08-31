@@ -324,34 +324,6 @@ def test_format_sampling_params_uses_device_argmax_sentinel_for_greedy_rows():
     assert params.top_p[0] == 0.0
 
 
-def test_scatter_sampling_params_to_slots_moves_params_to_their_slot_row():
-    """A batched prefill samples slot row s with the params of the request there."""
-    params = SamplingParams(temperature=[0.1, 0.2, 0.3], top_k=[1, 2, 3], top_p=[0.5, 0.6, 0.7], seed=[7, 8, 9])
-
-    scattered = scatter_sampling_params_to_slots(params, [2, 0, 5], slot_len=8)
-
-    assert scattered.temperature[2] == 0.1 and scattered.temperature[0] == 0.2
-    assert scattered.temperature[5] == 0.3
-    assert scattered.top_k[2] == 1 and scattered.top_k[0] == 2 and scattered.top_k[5] == 3
-    assert scattered.top_p[2] == 0.5 and scattered.top_p[0] == 0.6 and scattered.top_p[5] == 0.7
-    # Unoccupied rows carry the last request's values, so they stay valid instead of
-    # sampling from a formatter default.
-    assert scattered.temperature[1] == 0.3
-    # SeedManager.reset_seed is given the slot list separately and maps seeds itself.
-    assert scattered.seed == [7, 8, 9]
-    # The input is never mutated.
-    assert params.temperature == [0.1, 0.2, 0.3]
-
-
-def test_scatter_sampling_params_to_slots_is_identity_for_dense_slots():
-    params = format_sampling_params(SamplingParams(temperature=[0.5, 0.5], top_k=[4, 4], top_p=[0.9, 0.9]), 32)
-
-    scattered = scatter_sampling_params_to_slots(params, list(range(2)), slot_len=32)
-
-    assert scattered.temperature[:2] == params.temperature[:2]
-    assert scattered.top_k[:2] == params.top_k[:2]
-
-
 # ---------------------------------------------------------------------------
 # Seeded decode reproducibility under async scheduling (#51981).
 # Host-only: the generator is built with __new__ and driven with stub modules.
@@ -366,8 +338,8 @@ class _RecordingSeedManager(SeedManager):
         super().__init__(SimpleNamespace(_sampling_dp=1), max_batch_size=max_batch_size)
         self.pushed = []
 
-    def write_device_seed_values(self, new_seeds):
-        self.pushed.append(list(new_seeds))
+    def write_device_seed_values(self, seed_values):
+        self.pushed.append(list(seed_values))
 
 
 class _StubSamplingModule:
@@ -375,10 +347,10 @@ class _StubSamplingModule:
         self.seed_manager = _RecordingSeedManager(max_batch_size)
         self.tt_sampling = SimpleNamespace(max_batch_size=max_batch_size)
 
-    def apply_decode_state(self, sampling_params_chunks, *, reset_batch=False, prompt_tokens=None, output_tokens=None):
+    def apply_decode_state(self, sampling_params_chunks, **kwargs):
         pass
 
-    def sample(self, logits=None, tt_out_tok=None, enable_trace=False):
+    def sample(self, logits=None, **kwargs):
         return logits
 
 
@@ -480,6 +452,34 @@ def test_reset_seed_from_slots_if_needed_reports_the_slots_it_reset():
 
     assert seed_manager.reset_seed_from_slots_if_needed([42, 43, None, None], [0, 1, 2, 3]) == []
     assert seed_manager.reset_seed_from_slots_if_needed([42, 99, None, None], [0, 1, 2, 3]) == [1]
+
+
+def test_scatter_sampling_params_to_slots_moves_params_to_their_slot_row():
+    """A batched prefill samples slot row s with the params of the request there."""
+    params = SamplingParams(temperature=[0.1, 0.2, 0.3], top_k=[1, 2, 3], top_p=[0.5, 0.6, 0.7], seed=[7, 8, 9])
+
+    scattered = scatter_sampling_params_to_slots(params, [2, 0, 5], slot_len=8)
+
+    assert scattered.temperature[2] == 0.1 and scattered.temperature[0] == 0.2
+    assert scattered.temperature[5] == 0.3
+    assert scattered.top_k[2] == 1 and scattered.top_k[0] == 2 and scattered.top_k[5] == 3
+    assert scattered.top_p[2] == 0.5 and scattered.top_p[0] == 0.6 and scattered.top_p[5] == 0.7
+    # Unoccupied rows carry the last request's values, so they stay valid instead of
+    # sampling from a formatter default.
+    assert scattered.temperature[1] == 0.3
+    # SeedManager.reset_seed is given the slot list separately and maps seeds itself.
+    assert scattered.seed == [7, 8, 9]
+    # The input is never mutated.
+    assert params.temperature == [0.1, 0.2, 0.3]
+
+
+def test_scatter_sampling_params_to_slots_is_identity_for_dense_slots():
+    params = format_sampling_params(SamplingParams(temperature=[0.5, 0.5], top_k=[4, 4], top_p=[0.9, 0.9]), 32)
+
+    scattered = scatter_sampling_params_to_slots(params, list(range(2)), slot_len=32)
+
+    assert scattered.temperature[:2] == params.temperature[:2]
+    assert scattered.top_k[:2] == params.top_k[:2]
 
 
 def _skip_if_not_galaxy(mesh_device):
