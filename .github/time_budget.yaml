@@ -322,7 +322,7 @@ models:
   merge_gate:
     wh_galaxy_merge_gate: 5
   sanity:
-    wh_galaxy_perf: 10
+    wh_galaxy_perf: 8
     wh_n300_civ2: 5
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
@@ -360,7 +360,7 @@ models:
   unit_tier1:
     wh_llmbox: 150
     wh_n150: 110
-    wh_galaxy: 240
+    wh_galaxy: 260
     wh_galaxy_perf: 60
     bh_p150: 20
     bh_quietbox_2: 390

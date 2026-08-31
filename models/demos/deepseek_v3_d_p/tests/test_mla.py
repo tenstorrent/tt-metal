@@ -760,10 +760,10 @@ def _run_chunked_prefill(
                     )
                     for val in (u, kv_actual, valid_end)
                 )
-            # Metadata path: pass ONLY the metadata tensor (the runner hands tt_metadata straight from
-            # inbound_socket_service_sync) -- actual_start/actual_end are read on-device, so leave them
-            # None to prove forward needs no host per-chunk scalars. cache_user_id is unused on this path
-            # (slot comes from metadata[0]).
+            # Metadata path: pass ONLY the per-element metadata operands (the runtime's _trace_metadata
+            # equivalent) -- actual_start/actual_end are read on-device, so leave them None to prove
+            # forward needs no host per-chunk scalars. cache_user_id is unused on this path (slot comes
+            # from metadata[0]).
             # Determinism re-issues the SAME forward on the same device inputs. forward takes
             # actual_start/cache_user_id from the caller, so a repeat rewrites the same cache slots
             # with the same data -- idempotent, like the repeated block() in test_prefill_block.

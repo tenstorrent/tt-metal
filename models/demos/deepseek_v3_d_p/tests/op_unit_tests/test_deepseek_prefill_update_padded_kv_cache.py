@@ -25,7 +25,12 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_x_device_params,
     torus_xy_device_params,
 )
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    MlaKvCacheFormat,
+    init_kvpe_cache,
+    init_mla_kv_cache,
+)
 
 # MLA KVPE head dim (kv_lora_rank=512 + qk_rope_head_dim=64). The op is a pure page copy, so a
 # gathered cache slot must byte-match the input we sent (read back through the same dtype
@@ -831,3 +836,127 @@ def test_update_padded_kv_cache_metadata_matches_scalar(mesh_device, dtype, layo
         f"{mesh_device.num_program_cache_entries()}"
     )
     logger.info(f"program cache stable at {entries_after_first} entries across {len(cases)} metadata-path chunks")
+
+
+def _alloc_multihead_cache(mesh_device, *, batch, heads, seq_local, head_dim, dtype, layout):
+    """Cache with a per-chip HEAD dim > 1, ND-sharded exactly like the model caches (32-token bank
+    chunks, round-robin over the DRAM grid). ``init_kvpe_cache`` is fixed at one head, so this is its
+    multi-head sibling -- the layout ``allocate_dflash_kv_cache`` produces when
+    ``num_key_value_heads > tp``."""
+    from models.demos.common.prefill.runners.migration import get_num_dram_banks
+
+    grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0))
+            for bank_id in range(get_num_dram_banks(mesh_device))
+        ]
+    )
+    mem_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim],
+            grid=grid,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+    return ttnn.from_torch(
+        torch.zeros(batch, heads, seq_local, head_dim, dtype=torch.bfloat16),
+        device=mesh_device,
+        dtype=dtype,
+        layout=layout,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param((1, 1), id="1x1"),
+        pytest.param(
+            (2, 2), marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"), id="2x2"
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_multihead_head_stride(mesh_device):
+    """A per-chip head dim > 1 must not smear rows across heads.
+
+    The cache's head stride (cache_HtWt) is larger than the input's (input_Ht * Wt) whenever the cache is
+    deeper than one chunk, so a core holding blocks either side of a head boundary must address each
+    block from its own (head, row) -- 64 heads x 7 page-rows over ~110 cores puts several cores across a
+    boundary."""
+    sp_axis, tp_axis = 0, 1
+    sp = mesh_device.shape[sp_axis]
+    tile = ttnn.TILE_SIZE
+
+    heads, head_dim = 64, 64
+    chunk_local = 7 * tile  # 7 page-rows/head: blocks (64*7=448) >> cores, boundaries every 7 blocks
+    chunk_global = chunk_local * sp
+    seq_local = 2 * chunk_local  # deeper than one chunk -> cache head stride != input head stride
+    num_layers = 2
+    layer_idx, slot_id = 0, 0
+    write_end = chunk_global
+
+    input_shard_dims = [None, None]
+    input_shard_dims[sp_axis] = 2
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 1
+
+    mesh_device.enable_program_cache()
+    cache = _alloc_multihead_cache(
+        mesh_device,
+        batch=num_layers,
+        heads=heads,
+        seq_local=seq_local,
+        head_dim=head_dim,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    torch.manual_seed(3)
+    src = torch.randn(1, heads, chunk_global, head_dim, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        src,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims),
+    )
+    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+        cache,
+        tt_input,
+        slot_idx=slot_id,
+        layer_idx=layer_idx,
+        num_layers=num_layers,
+        kv_actual_global=0,
+        cluster_axis=sp_axis,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    # Chunk 0 at offset 0: chip c holds global positions [c*chunk_local, (c+1)*chunk_local) in its first
+    # chunk_local rows, so concatenating the chips' slabs on the seq dim gives natural order directly.
+    host = ttnn.to_torch(
+        cache,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(concat_dims), mesh_shape=mesh_device.shape),
+    ).to(torch.float32)[:num_layers, :, :, :head_dim]
+    written = torch.cat([host[layer_idx, :, c * seq_local : c * seq_local + chunk_local, :] for c in range(sp)], dim=1)
+
+    # Spill first, placement second: a misaddressed block shows up as a write past the real rows, and
+    # that is the more specific signal. This must read `host`, not `written` -- `written` is assembled
+    # from exactly chunk_local rows per chip, so slicing it past write_end yields nothing at all. Each
+    # chip's slab is seq_local deep with only its first chunk_local written, so the spill lands in the
+    # unwritten half.
+    for c in range(sp):
+        tail = host[layer_idx, :, c * seq_local + chunk_local : (c + 1) * seq_local, :]
+        assert torch.count_nonzero(tail) == 0, f"chip {c}: wrote past its {chunk_local} real rows"
+    assert torch.count_nonzero(host[1 - layer_idx]) == 0, "wrote into the neighbouring layer slot"
+    for h in range(heads):
+        assert torch.equal(
+            written[h, :write_end], src[0, h, :write_end].to(torch.float32)
+        ), f"head {h}: rows [0, {write_end}) do not match what was sent -- a block landed in another head"
+    logger.success(f"{heads} heads x {chunk_local} rows placed exactly (write_end={write_end})")

@@ -345,7 +345,7 @@ struct FusedRingGate {
     uint32_t shard_dir[max_ring_size];  // shard -> direction semaphore index
     uint32_t shard_val[max_ring_size];  // shard -> wait threshold
 
-    // recv has already consumed the 6-arg fused block (waiting for the op signal) and advanced argidx; take the
+    // recv has already consumed the fused block (waiting for the op signal) and advanced argidx; take the
     // k_local addr from the next slot and leave argidx at the band-perm base.
     FusedRingGate(const RingSDPAOpReceiver& recv, uint32_t& argidx) :
         ring_index(recv.seq.ring_index),
@@ -558,8 +558,9 @@ void kernel_main() {
     };
 
     if constexpr (fused_ring_enabled) {
-        // The receiver consumes the six fused args at slot 27 and waits for the producer signal. The gate then
-        // consumes k_local and records the following band-permutation base.
+        // The receiver consumes the fused-arg block at slot 27 (ring/dir/sems plus the split-forwarding
+        // triple — this op runs with split forwarding disabled) and waits for the producer signal. The
+        // gate then consumes k_local and records the following band-permutation base.
         uint32_t fused_argidx = 27;
         RingSDPAOpReceiver fused_recv(/*wait_for_op_signal=*/true, fused_argidx);
         const FusedRingGate gate(fused_recv, fused_argidx);
