@@ -58,7 +58,8 @@ MATH_FIDELITIES = [
     MathFidelity.HiFi4,
 ]
 
-# Dest-fill RT x CT from dest capacity; KT 1 and 4 (long-K lives on perf_matmul).
+# Dest-fill RT x CT from dest capacity, plus 2×4 / 4×2 when they fit.
+# KT 1 and 4 (long-K lives on perf_matmul).
 PERF_KT_DIMS = (1, 4)
 THROTTLE_LEVELS = (0, 5)
 DEST_HANDOFF_NUM_BLOCKS = 4
@@ -70,15 +71,20 @@ def _dest_capacity(dest_sync, dest_acc) -> int:
     )
 
 
+# 2-D dest blocks that are neither a vector (1×N / N×1) nor a square.
+RECT_DEST_BLOCKS = ((2, 4), (4, 2))
+
+
 def _dest_fill_rt_ct_pairs(max_tiles):
-    """Power-of-two (rt, ct) pairs that exactly fill dest."""
+    """Power-of-two dest-fill (rt, ct) pairs, plus 2×4 / 4×2 when they fit dest."""
     pairs = []
     rt_dim = 1
     while rt_dim <= max_tiles:
         if max_tiles % rt_dim == 0:
             pairs.append((rt_dim, max_tiles // rt_dim))
         rt_dim *= 2
-    return pairs
+    pairs.extend((rt, ct) for rt, ct in RECT_DEST_BLOCKS if rt * ct <= max_tiles)
+    return list(dict.fromkeys(pairs))
 
 
 def _fits_tiny_perf_tile_shape(cfg) -> bool:
@@ -92,7 +98,7 @@ def _fits_tiny_perf_tile_shape(cfg) -> bool:
 
 
 def generate_perf_matmul_combinations():
-    """Regular matmul: dest-filling RT x CT grids with KT in {1, 4}."""
+    """Regular matmul: dest-filling RT x CT grids, plus 2×4 / 4×2 when they fit dest, with KT in {1, 4}."""
     combinations = []
     bfloat16_formats = {DataFormat.Float16_b, DataFormat.Float32}
 
@@ -197,9 +203,10 @@ def test_perf_math_matmul(
     """
     Performance test for matmul operations.
 
-    Regular matmul uses dest-filling RT x CT grids sized to dest capacity, with
-    KT in {1, 4} and throttle 0 or 5. Tiny tiles cover ct=1 and dest-fill ct.
-    A dest-handoff slice repeats dest-fill blocks (NUM_BLOCKS=4, KT=1, throttle=0).
+    Regular matmul uses dest-filling RT x CT grids sized to dest capacity, plus
+    2×4 / 4×2 when they fit, with KT in {1, 4} and throttle 0 or 5. Tiny tiles
+    cover ct=1 and dest-fill ct. A dest-handoff slice repeats those grids
+    (NUM_BLOCKS=4, KT=1, throttle=0).
     """
     formats = matmul_config.formats
     in0_dimensions = matmul_config.tile_dimensions.in0_dimensions

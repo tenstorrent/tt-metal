@@ -37,10 +37,15 @@ KT_DIMS = [1, 4, 32]
 DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
 
 
+# 2-D dest blocks that are neither a vector (1×N / N×1) nor a square.
+RECT_DEST_BLOCKS = ((2, 4), (4, 2))
+
+
 def dest_corner_mn(max_tiles: int) -> List[tuple]:
-    """1×1, 1×max, max×1, and the largest square that fits in dest."""
+    """1×1, 1×max, max×1, largest square, and 2×4 / 4×2 when they fit dest."""
     square = int(max_tiles**0.5)
     corners = [(1, 1), (1, max_tiles), (max_tiles, 1), (square, square)]
+    corners.extend((rt, ct) for rt, ct in RECT_DEST_BLOCKS if rt * ct <= max_tiles)
     return list(dict.fromkeys(corners))
 
 
