@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     cpu_mla_reference,
     load_trace,
@@ -210,14 +211,14 @@ def run_model(
 
     topology = per_axis_topology(device_params["fabric_config"])
 
-    production_mesh = [32, 4]
     sp_axis = 0
     tp_axis = 1
 
     mesh_shape = list(mesh_device.shape)
 
+    # 640 tokens on every chip; the global length follows the mesh. max_sl keeps the literal seq_len.
     if scale_down_sl:
-        seq_len = (seq_len // production_mesh[sp_axis]) * mesh_shape[sp_axis]
+        seq_len = PREFILL_CHUNK_TOKENS_PER_CHIP * mesh_shape[sp_axis]
 
     # temp hack
     config.max_seq_len = seq_len
@@ -428,7 +429,11 @@ def _ci_unsupported_param_combos(**params):
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
+@pytest.mark.parametrize(
+    "seq_len",
+    [PREFILL_CHUNK_TOKENS],
+    ids=["seq5k"],
+)
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])

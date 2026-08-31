@@ -724,6 +724,9 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
     The MODEL's own caches only. Under DFlash the drafter's context caches ride in the same table under
     further `dflash_*` configs, checked as a sibling gate from _verify_resident_slots (see
     dflash_kv_table_pcc_check in the deepseek dflash_prefill module)."""
+    golden_cap = int(os.environ.get("PREFILL_PCC_GOLDEN_LEN", "0"))
+    if golden_cap:
+        real_len = min(real_len, golden_cap)
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":
@@ -940,6 +943,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     ``"index": min`` when the index cache was validated — omitted, not defaulted to 1.0, when the model is
     dense or the trace carries no indexer-key golden (warned, not fatal — see below). Raises on an
     index-cache READ failure."""
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
         _load_golden_index_k,
         _load_golden_kv_post,
@@ -1000,7 +1004,8 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     # config 1: index cache (sparse/DSA only). Validated the SAME way as config 0 — read block-by-block
     # via the table, decode, and PCC vs the golden indexer key. Config 1 holds all layers on GLM-5.1 and
     # only the full-indexer layers on GLM-5.2, so iterate its OWN layer count, not NUM_LAYERS. The index
-    # cache is bf8 TILE, and the golden is already in the device rope frame (no re-interleave, unlike pe).
+    # cache is bf8 TILE. Its Hadamard transform is undone before comparing against the natural-basis
+    # golden, which is already in the device rope frame (no re-interleave, unlike pe).
     #
     # A trace can carry the KVPE golden but no indexer-key golden (some vllm dumps store only
     # dsa/dsa_topk_indices_layer_*). There is then nothing to PCC config 1 against, so warn and return the
@@ -1017,6 +1022,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             return mins
 
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
+        index_hadamard = normalized_hadamard_matrix(index_head_dim).float()
         n_index_layers = table.config(1).num_layers
         # Config 1 is published on the GLOBAL LAYER axis, same numbering as the golden: rows == full-indexer layer ids.
         full_layers = _full_indexer_layer_indices(NUM_LAYERS)
@@ -1049,6 +1055,10 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             dev_ik = torch.cat(decoded_rows, dim=0)[:real_len]
 
             golden_ik = _load_golden_index_k(trace_dir, layer, real_len)
+            # Sparse prefill stores index keys in the decode indexer's orthonormal Hadamard basis.
+            # The trace golden is captured before that transform, so apply the symmetric,
+            # self-inverse H matrix once more to compare both tensors in the natural basis.
+            dev_ik = (dev_ik.float() @ index_hadamard).to(torch.bfloat16)
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
             min_index = min(min_index, pcc_index)
             checked_index += 1
@@ -1460,6 +1470,16 @@ def main() -> None:
         push_start = time.perf_counter()
         service.forward_to_tensor_bytes(chunk_bytes, metadata=_pack_metadata(slot_id, actual_start, actual_end))
         return (time.perf_counter() - push_start) * 1000.0
+
+    warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))
+    if warmup_chunks > 0:
+        logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
+        for cidx in range(warmup_chunks):
+            push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE)
+        service.barrier()
+        if ack_channel is not None:
+            _drain_layer_acks(ack_channel, NUM_LAYERS * warmup_chunks)
+        logger.info("[producer] warmup complete; starting the measured request")
 
     stats = run_schedule(cfg, push_fn=push_chunk)
     service.barrier()
