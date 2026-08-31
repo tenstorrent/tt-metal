@@ -85,6 +85,10 @@ SRCS_SLICE_32B_ELEMENT_COUNT = SRCS_SLICE_32B_ROW_DIM * SRCS_SLICE_COL_DIM  # 64
 
 # All supported tile dimensions as (rows, cols) tuples
 SUPPORTED_TILE_SIZES = [
+    (1, 16),
+    (2, 16),
+    (4, 16),
+    (8, 16),
     (16, 16),
     (1, 32),
     (2, 32),
@@ -125,6 +129,10 @@ def get_tile_params(tile_dimensions):
     Calculate TensorShape parameters from tile dimensions.
 
     Supported tile dimensions:
+    - [1, 16]  -> face_r_dim=1,  num_faces=1, num_faces_r_dim=1, num_faces_c_dim=1
+    - [2, 16]  -> face_r_dim=2,  num_faces=1, num_faces_r_dim=1, num_faces_c_dim=1
+    - [4, 16]  -> face_r_dim=4,  num_faces=1, num_faces_r_dim=1, num_faces_c_dim=1
+    - [8, 16]  -> face_r_dim=8,  num_faces=1, num_faces_r_dim=1, num_faces_c_dim=1
     - [16, 16] -> face_r_dim=16, num_faces=1, num_faces_r_dim=1, num_faces_c_dim=1
     - [1, 32]  -> face_r_dim=1,  num_faces=2, num_faces_r_dim=1, num_faces_c_dim=2
     - [2, 32]  -> face_r_dim=2,  num_faces=2, num_faces_r_dim=1, num_faces_c_dim=2

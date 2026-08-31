@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <array>
 #include <cstdint>
 
 #include "llk_assert.h"
@@ -111,6 +110,27 @@ constexpr TensorShape tensor_shape_from_num_faces(const std::uint32_t face_r_dim
     const std::uint8_t num_faces_r_dim = (num_faces == 4) ? 2 : 1;
     const std::uint8_t num_faces_c_dim = (num_faces == 4) ? 2 : static_cast<std::uint8_t>(num_faces);
     return TensorShape {static_cast<std::uint8_t>(face_r_dim), MAX_FACE_C_DIM, num_faces_r_dim, num_faces_c_dim};
+}
+
+/**
+ * @brief Whether Input 0 (SrcB) and Input 1 (SrcA) form a supported matmul TensorShape pair.
+ */
+constexpr bool validate_matmul_tensor_shapes_(const TensorShape& src_b_shape, const TensorShape& src_a_shape)
+{
+    const bool supported_width =
+        src_a_shape.face_c_dim == MAX_FACE_C_DIM && (src_a_shape.num_faces_c_dim == 1 || src_a_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM);
+    const bool wide_src_b = src_b_shape.face_c_dim == MAX_FACE_C_DIM && src_b_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM &&
+                            ((src_b_shape.num_faces_r_dim == 1 && (src_b_shape.face_r_dim == 1 || src_b_shape.face_r_dim == 2 || src_b_shape.face_r_dim == 4 ||
+                                                                   src_b_shape.face_r_dim == 8 || src_b_shape.face_r_dim == MAX_FACE_R_DIM)) ||
+                             (src_b_shape.face_r_dim == MAX_FACE_R_DIM && src_b_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM));
+    const bool full_k_src_a = src_a_shape.face_r_dim == MAX_FACE_R_DIM && src_a_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM;
+    const bool narrow_src_b = src_b_shape.face_r_dim == MAX_FACE_R_DIM && src_b_shape.face_c_dim == MAX_FACE_C_DIM &&
+                              src_b_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && src_b_shape.num_faces_c_dim == 1;
+    const bool half_k_src_a      = src_a_shape.face_r_dim == MAX_FACE_R_DIM && src_a_shape.num_faces_r_dim == 1;
+    const bool single_face_src_b = src_b_shape.face_r_dim == MAX_FACE_R_DIM && src_b_shape.face_c_dim == MAX_FACE_C_DIM && src_b_shape.num_faces_r_dim == 1 &&
+                                   src_b_shape.num_faces_c_dim == 1;
+    const bool single_face_src_a = half_k_src_a && src_a_shape.num_faces_c_dim == 1;
+    return supported_width && ((wide_src_b && full_k_src_a) || (narrow_src_b && half_k_src_a) || (single_face_src_b && single_face_src_a));
 }
 
 /**
