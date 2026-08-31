@@ -16,8 +16,8 @@ making every Linear in the model a LoRA target, not just the attn/ffn subset.
 """
 from __future__ import annotations
 
-from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
-from ...layers.lora import LoRAMixin
+from ..layers.linear import ColParallelLinear, Linear, RowParallelLinear
+from ..layers.lora import LoRAMixin
 
 # Base types eligible for in-place promotion. Exact-type match (not isinstance)
 # so an unknown Linear subclass isn't silently mis-promoted.

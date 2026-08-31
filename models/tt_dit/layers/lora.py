@@ -109,7 +109,7 @@ class LoRAMixin:
 
     # Layout-neutral (adds no __dict__/__weakref__ of its own) so a plain
     # Linear instance can be promoted in place via ``__class__`` assignment
-    # (see experimental/lora/promote.py); state still lives in Module's __dict__.
+    # (see lora/promote.py); state still lives in Module's __dict__.
     __slots__ = ()
 
     LORA_MODES = ("fuse", "runtime")
