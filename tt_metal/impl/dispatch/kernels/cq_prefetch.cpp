@@ -177,6 +177,10 @@ constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X
 constexpr uint32_t dispatch_s_noc_xy =
     uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
 #if !defined(IS_CQ_DRAM_BACKED) || IS_CQ_DRAM_BACKED == 0
+#if defined(NOC_ATT_ENABLED)
+#error \
+    "No ATT map binds a system-memory window: Quasar fast dispatch under ATT requires DRAM-backed command queues (TT_METAL_DRAM_BACKED_CQ)"
+#endif
 constexpr uint64_t pcie_noc_xy =
     uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));
 #endif

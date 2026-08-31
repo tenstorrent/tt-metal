@@ -692,3 +692,484 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
         }
     }
 }
+
+// ============================================================================
+// CQ flag-based stateful family: the dispatch kernels' transport.
+//
+// V2 splits a destination across two hardware registers - DEST_ADDR holds the
+// local offset, DEST_COORD the packed coordinate - and the CQ_NOC_* flags say
+// which register a call re-programs; the unflagged register keeps its latched
+// value. Under ATT the destination is ONE opaque 64-bit operand and DEST_COORD
+// carries multicast extents, so the latch moves to software: per command
+// buffer, a base (V2's coordinate register) and a local offset (V2's
+// DEST_ADDR register), folded and written whole whenever either changes. Same
+// signatures and template parameters as V2; same per-issue register count on
+// the unicast paths.
+//
+// Multicast: the latched "coordinate" is the packed software rectangle
+// descriptor (local address in bits [35:0], the four 6-bit corners above), so
+// it OR-composes with local offsets exactly like a unicast operand. Every
+// issue that touches N or D re-resolves descriptor | local through the active
+// map into the start operand (DEST_ADDR) and extents (DEST_COORD), like the
+// stateless V3 multicast arm; MCAST_DESTS carries the caller's ndests.
+//
+// The read family mirrors this on the source side (V2: SRC_ADDR offset +
+// SRC_COORD coordinate).
+// ============================================================================
+
+constexpr uint32_t CQ_NOC_FLAG_SRC = 0x01;
+constexpr uint32_t CQ_NOC_FLAG_NOC = 0x02;
+constexpr uint32_t CQ_NOC_FLAG_DST = 0x04;
+constexpr uint32_t CQ_NOC_FLAG_LEN = 0x08;
+
+constexpr uint32_t CQ_NOC_INLINE_FLAG_VAL = 0x10;
+constexpr uint32_t CQ_NOC_INLINE_FLAG_BE = 0x20;
+
+constexpr uint32_t CQ_NOC_CMD_FLAG_MCAST = 0x01;
+constexpr uint32_t CQ_NOC_CMD_FLAG_LINKED = 0x02;
+constexpr uint32_t CQ_NOC_CMD_FLAG_POSTED = 0x04;
+
+enum CQNocFlags {
+    CQ_NOC_sndl = 0,
+    CQ_NOC_sndL = CQ_NOC_FLAG_LEN,
+    CQ_NOC_snDl = CQ_NOC_FLAG_DST,
+    CQ_NOC_snDL = CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+    CQ_NOC_sNdl = CQ_NOC_FLAG_NOC,
+    CQ_NOC_sNdL = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_LEN,
+    CQ_NOC_sNDl = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
+    CQ_NOC_sNDL = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+    CQ_NOC_Sndl = CQ_NOC_FLAG_SRC,
+    CQ_NOC_SndL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_LEN,
+    CQ_NOC_SnDl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_DST,
+    CQ_NOC_SnDL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+    CQ_NOC_SNdl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC,
+    CQ_NOC_SNdL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_LEN,
+    CQ_NOC_SNDl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
+    CQ_NOC_SNDL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+};
+
+enum CQNocCmdFlags {
+    CQ_NOC_mkp = 0,
+    CQ_NOC_mkP = CQ_NOC_CMD_FLAG_POSTED,
+    CQ_NOC_mKp = CQ_NOC_CMD_FLAG_LINKED,
+    CQ_NOC_mKP = CQ_NOC_CMD_FLAG_LINKED | CQ_NOC_CMD_FLAG_POSTED,
+    CQ_NOC_Mkp = CQ_NOC_CMD_FLAG_MCAST,
+    CQ_NOC_MkP = CQ_NOC_CMD_FLAG_MCAST | CQ_NOC_CMD_FLAG_POSTED,
+    CQ_NOC_MKp = CQ_NOC_CMD_FLAG_MCAST | CQ_NOC_CMD_FLAG_LINKED,
+    CQ_NOC_MKP = CQ_NOC_CMD_FLAG_MCAST | CQ_NOC_CMD_FLAG_LINKED | CQ_NOC_CMD_FLAG_POSTED,
+};
+
+enum CQNocInlineFlags {
+    CQ_NOC_INLINE_ndvb = 0,
+    CQ_NOC_INLINE_ndvB = CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_ndVb = CQ_NOC_INLINE_FLAG_VAL,
+    CQ_NOC_INLINE_ndVB = CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_nDvb = CQ_NOC_FLAG_DST,
+    CQ_NOC_INLINE_nDvB = CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_nDVb = CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL,
+    CQ_NOC_INLINE_nDVB = CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_Ndvb = CQ_NOC_FLAG_NOC,
+    CQ_NOC_INLINE_NdvB = CQ_NOC_FLAG_NOC | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_NdVb = CQ_NOC_FLAG_NOC | CQ_NOC_INLINE_FLAG_VAL,
+    CQ_NOC_INLINE_NdVB = CQ_NOC_FLAG_NOC | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_NDvb = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
+    CQ_NOC_INLINE_NDvB = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_NDVb = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL,
+    CQ_NOC_INLINE_NDVB = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
+};
+
+enum CQNocWait {
+    CQ_NOC_wait = 0,
+    CQ_NOC_WAIT = 1,
+};
+enum CQNocSend {
+    CQ_NOC_send = 0,
+    CQ_NOC_SEND = 1,
+};
+
+// Software mirror of V2's per-command-buffer destination and source register
+// pairs. base = the latched coordinate half (offset-field-zero operand, or an
+// offset-free multicast descriptor); local = the latched offset half.
+inline uint64_t noc_v3_cq_dest_base[NOC_V3_STATE_CMD_BUFS] = {};
+inline uint64_t noc_v3_cq_dest_local[NOC_V3_STATE_CMD_BUFS] = {};
+inline uint64_t noc_v3_cq_src_base[NOC_V3_STATE_CMD_BUFS] = {};
+inline uint64_t noc_v3_cq_src_local[NOC_V3_STATE_CMD_BUFS] = {};
+// Latched at init from the cmd_flags MCAST bit: selects the descriptor
+// interpretation of the dest state (and the resolve at issue time).
+inline bool noc_v3_cq_dest_mcast[NOC_V3_STATE_CMD_BUFS] = {};
+
+// Multicast descriptors keep their local address in the low bits, corners
+// above - the same OR-composability as an operand, split by a constant mask.
+inline constexpr uint64_t NOC_V3_CQ_MCAST_LOCAL_MASK = noc_att::DESCRIPTOR_LOCAL_LIMIT - 1;
+
+// V2's D-flag write masked the value to the local field, silently dropping
+// any coordinate half. The ATT analog: a value that matches a window
+// contributes that window's local field; anything else IS a bare local
+// offset already (completion-queue pointers, packed-write offsets).
+inline __attribute__((always_inline)) uint64_t noc_v3_cq_local_of(uint64_t noc_addr) {
+    constexpr noc_att::WindowClass candidates[] = {
+        noc_att::WindowClass::Worker,
+        noc_att::WindowClass::Dram,
+        noc_att::WindowClass::FullTile,
+        noc_att::WindowClass::LoopbackScratch};
+    for (noc_att::WindowClass window_class : candidates) {
+        const noc_att::Window& window = noc_att::map_window(ACTIVE_ATT_MAP, window_class);
+        if (window.matches(noc_addr)) {
+            return window.local_address(noc_addr);
+        }
+    }
+    return noc_addr;
+}
+
+// Resolve a host-packed unicast coordinate word ((y << NOC_ADDR_NODE_ID_BITS)
+// | x) to its offset-free operand base: worker table first, then the
+// full-tile table (DRAM/perimeter tiles), like the backend's
+// packed_worker_address.
+inline __attribute__((always_inline)) uint64_t noc_v3_cq_packed_base(uint32_t packed_xy) {
+    constexpr uint32_t node_mask = (1u << NOC_ADDR_NODE_ID_BITS) - 1;
+    const noc_att::ResolvedTile tile = noc_att::resolve_current(
+        ACTIVE_ATT_MAP, packed_xy & node_mask, (packed_xy >> NOC_ADDR_NODE_ID_BITS) & node_mask);
+    ASSERT(tile.valid);
+    return noc_att::map_window(ACTIVE_ATT_MAP, tile.window).make_address(tile.selector, 0);
+}
+
+// Unpack a host NOC_MULTICAST_ENCODING word (x_start << 2n | y_start << 3n |
+// x_end | y_end << n, n = NOC_ADDR_NODE_ID_BITS) into an offset-free
+// multicast descriptor.
+inline __attribute__((always_inline)) uint64_t noc_v3_cq_packed_mcast_base(uint32_t packed_rect) {
+    constexpr uint32_t node_mask = (1u << NOC_ADDR_NODE_ID_BITS) - 1;
+    const uint32_t x_end = packed_rect & node_mask;
+    const uint32_t y_end = (packed_rect >> NOC_ADDR_NODE_ID_BITS) & node_mask;
+    const uint32_t x_start = (packed_rect >> (2 * NOC_ADDR_NODE_ID_BITS)) & node_mask;
+    const uint32_t y_start = (packed_rect >> (3 * NOC_ADDR_NODE_ID_BITS)) & node_mask;
+    return noc_att::make_multicast_descriptor(x_start, y_start, x_end, y_end, 0);
+}
+
+// Program the destination register(s) from the latched state. Unicast: one
+// full-operand DEST_ADDR write - the same per-issue register count as V2.
+// Multicast: resolve the folded descriptor through the map (trap on an
+// invalid rectangle, exactly like the stateless V3 arm); extents land in the
+// repurposed DEST_COORD.
+template <uint32_t cmd_buf>
+inline __attribute__((always_inline)) void noc_v3_cq_program_dest(uint32_t size, uint32_t ndests) {
+    if (noc_v3_cq_dest_mcast[cmd_buf]) {
+        const uint64_t descriptor = noc_v3_cq_dest_base[cmd_buf] | noc_v3_cq_dest_local[cmd_buf];
+        const noc_att::NocMulticastAddress target =
+            noc_att::resolve_worker_multicast<ACTIVE_ATT_MAP>(descriptor, size != 0 ? size : 1);
+        if (target.rectangle_count == 0) {
+            // Unresolvable rectangle: out-of-map corner or transfer overflow.
+            // ASSERT is a no-op outside checked builds, so trap.
+            __builtin_trap();
+        }
+        ASSERT(ndests == target.rectangle_count);
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, target.start_address);
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, target.extent_xy);
+    } else {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf,
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8,
+            noc_v3_cq_dest_base[cmd_buf] | noc_v3_cq_dest_local[cmd_buf]);
+    }
+}
+
+// --------------------------------------------------------------------------
+// Read family. The NOC flag targets the SOURCE coordinate on reads.
+// --------------------------------------------------------------------------
+
+template <uint32_t cmd_buf>
+inline __attribute__((always_inline)) void noc_read_init_state(uint32_t noc) {
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, CMD_BUF_MISC_READ);
+}
+
+// Packed-source overload: src_addr carries both halves (a full ATT operand or,
+// on D-only sends, a bare offset against the latched source base).
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT>
+inline __attribute__((always_inline)) void noc_read_with_state(
+    uint32_t noc, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+
+    if constexpr (flags & CQ_NOC_FLAG_SRC) {
+        noc_v3_cq_src_local[cmd_buf] = noc_v3_cq_local_of(src_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        noc_v3_cq_src_base[cmd_buf] = noc_v3_state_base_of(src_addr);
+    }
+    if constexpr (flags & (CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC)) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf,
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8,
+            noc_v3_cq_src_base[cmd_buf] | noc_v3_cq_src_local[cmd_buf]);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_DST) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, noc_v3_local_operand(dst_addr));
+    }
+    if constexpr (flags & CQ_NOC_FLAG_LEN) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, size);
+    }
+    if constexpr (send) {
+        __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+        // One response per issued call (see the V2 comment: the barrier waits
+        // on the hardware outstanding count, so the exact packet accounting
+        // does not matter, only that state-only calls do not count).
+        noc_reads_num_issued[noc] += 1;
+    }
+}
+
+// Split-source overload: the coordinate arrives as a host-packed word and the
+// offset separately, so no window walk is needed on the offset.
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT>
+inline __attribute__((always_inline)) void noc_read_with_state(
+    uint32_t noc, uint32_t src_noc_addr, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+
+    if constexpr (flags & CQ_NOC_FLAG_SRC) {
+        noc_v3_cq_src_local[cmd_buf] = src_addr;
+    }
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        noc_v3_cq_src_base[cmd_buf] = noc_v3_cq_packed_base(src_noc_addr);
+    }
+    if constexpr (flags & (CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC)) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf,
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8,
+            noc_v3_cq_src_base[cmd_buf] | noc_v3_cq_src_local[cmd_buf]);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_DST) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, noc_v3_local_operand(dst_addr));
+    }
+    if constexpr (flags & CQ_NOC_FLAG_LEN) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, size);
+    }
+    if constexpr (send) {
+        __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+        noc_reads_num_issued[noc] += 1;
+    }
+}
+
+// --------------------------------------------------------------------------
+// Write family.
+// --------------------------------------------------------------------------
+
+template <uint32_t cmd_buf, enum CQNocCmdFlags cmd_flags = CQ_NOC_mkp>
+inline __attribute__((always_inline)) void noc_write_init_state(uint32_t noc, uint32_t vc) {
+    uint64_t misc = CMD_BUF_MISC_WRITE_TRANS | CMD_BUF_MISC_SRC_INCLUDE |
+                    ((cmd_flags & CQ_NOC_CMD_FLAG_LINKED) ? CMD_BUF_MISC_LINKED : 0) |
+                    ((cmd_flags & CQ_NOC_CMD_FLAG_MCAST) ? CMD_BUF_MISC_MULTICAST : 0) |
+                    ((cmd_flags & CQ_NOC_CMD_FLAG_POSTED) ? CMD_BUF_MISC_POSTED : 0);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf,
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8,
+        (cmd_flags & CQ_NOC_CMD_FLAG_MCAST) ? NOC_OVERLAY_MCAST_RESP_VC : NOC_OVERLAY_WR_RESP_VC);
+    // Select the descriptor interpretation of the latched dest state.
+    noc_v3_cq_dest_mcast[cmd_buf] = (cmd_flags & CQ_NOC_CMD_FLAG_MCAST) != 0;
+}
+
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT,
+    bool update_counter = true,
+    bool posted = false>
+inline __attribute__((always_inline)) void noc_write_with_state(
+    uint32_t noc, uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+
+    if constexpr (flags & CQ_NOC_FLAG_SRC) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, noc_v3_local_operand(src_addr));
+    }
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        noc_v3_cq_dest_base[cmd_buf] =
+            noc_v3_cq_dest_mcast[cmd_buf] ? (dst_addr & ~NOC_V3_CQ_MCAST_LOCAL_MASK) : noc_v3_state_base_of(dst_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_DST) {
+        noc_v3_cq_dest_local[cmd_buf] =
+            noc_v3_cq_dest_mcast[cmd_buf] ? (dst_addr & NOC_V3_CQ_MCAST_LOCAL_MASK) : noc_v3_cq_local_of(dst_addr);
+    }
+    if constexpr (flags & (CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST)) {
+        noc_v3_cq_program_dest<cmd_buf>(size, ndests);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_LEN) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, size);
+    }
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_DESTS_REG_OFFSET / 8, ndests);
+    if constexpr (send) {
+        __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+    }
+
+    if constexpr (update_counter) {
+        if constexpr (posted) {
+            noc_posted_writes_num_issued[noc] += 1;
+        } else {
+            noc_nonposted_writes_num_issued[noc] += 1;
+            noc_nonposted_writes_acked[noc] += ndests;
+        }
+    }
+}
+
+// Split-destination overload: dst_noc_addr carries the packed coordinate (or
+// packed multicast rectangle) and dst_addr the full local address.
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT,
+    bool update_counter = true,
+    bool posted = false>
+inline __attribute__((always_inline)) void noc_wwrite_with_state(
+    uint32_t noc, uint32_t src_addr, uint32_t dst_noc_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+
+    if constexpr (flags & CQ_NOC_FLAG_SRC) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, noc_v3_local_operand(src_addr));
+    }
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        noc_v3_cq_dest_base[cmd_buf] = noc_v3_cq_dest_mcast[cmd_buf] ? noc_v3_cq_packed_mcast_base(dst_noc_addr)
+                                                                     : noc_v3_cq_packed_base(dst_noc_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_DST) {
+        if (noc_v3_cq_dest_mcast[cmd_buf]) {
+            ASSERT(dst_addr < noc_att::DESCRIPTOR_LOCAL_LIMIT);
+            noc_v3_cq_dest_local[cmd_buf] = dst_addr & NOC_V3_CQ_MCAST_LOCAL_MASK;
+        } else {
+            noc_v3_cq_dest_local[cmd_buf] = dst_addr;
+        }
+    }
+    if constexpr (flags & (CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST)) {
+        noc_v3_cq_program_dest<cmd_buf>(size, ndests);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_LEN) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, size);
+    }
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_DESTS_REG_OFFSET / 8, ndests);
+    if constexpr (send) {
+        __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+    }
+
+    if constexpr (update_counter) {
+        if constexpr (posted) {
+            noc_posted_writes_num_issued[noc] += 1;
+        } else {
+            noc_nonposted_writes_num_issued[noc] += 1;
+            noc_nonposted_writes_acked[noc] += ndests;
+        }
+    }
+}
+
+// --------------------------------------------------------------------------
+// Inline-write family. Same MISC/VC/routing as V2 (cmd_buf 2 = simple buffer
+// builtins, 0/1 = complex buffer); only the address model changes. Shares the
+// per-cmd_buf dest state with the bulk write family because the hardware
+// DEST_ADDR register is shared too. Inline multicast is an unimplemented
+// capability under ATT (the stateless V3 arm traps as well).
+// --------------------------------------------------------------------------
+
+template <uint32_t cmd_buf, enum CQNocCmdFlags cmd_flags = CQ_NOC_mkp>
+inline __attribute__((always_inline)) void noc_inline_dw_write_init_state(uint32_t noc, uint32_t vc) {
+    static_assert(cmd_buf <= 2, "Qsr has 2 complex cmd buffers (0,1) and one simple (2) command buffer");
+    (void)noc;
+    static_assert(
+        (cmd_flags & CQ_NOC_CMD_FLAG_MCAST) == 0, "inline-write multicast is not implemented under ATT (V3 traps)");
+    uint64_t misc = CMD_BUF_MISC_INLINE_WRITE | CMD_BUF_MISC_BYTE_ENABLE | CMD_BUF_MISC_SRC_INCLUDE |
+                    ((cmd_flags & CQ_NOC_CMD_FLAG_POSTED) ? CMD_BUF_MISC_POSTED : 0);
+
+    if constexpr (cmd_buf == 2) {
+        __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
+        __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
+        __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_OVERLAY_WR_RESP_VC);
+    } else {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_OVERLAY_WR_RESP_VC);
+    }
+    noc_v3_cq_dest_mcast[cmd_buf] = false;
+}
+
+template <
+    uint32_t cmd_buf,
+    enum CQNocInlineFlags flags,
+    enum CQNocWait wait = CQ_NOC_WAIT,
+    enum CQNocSend send = CQ_NOC_SEND>
+inline __attribute__((always_inline)) void noc_inline_dw_write_with_state(
+    uint32_t noc, uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF) {
+    static_assert(cmd_buf <= 2, "noc_inline_dw_write_* only supports cmd_buf 0, 1, or 2");
+    (void)noc;
+
+    if constexpr (flags & CQ_NOC_INLINE_FLAG_VAL) {
+        if constexpr (cmd_buf == 2) {
+            __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, val);
+        } else {
+            __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+                cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, val);
+        }
+    }
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        noc_v3_cq_dest_base[cmd_buf] = noc_v3_state_base_of(dst_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_DST) {
+        noc_v3_cq_dest_local[cmd_buf] = noc_v3_cq_local_of(dst_addr);
+    }
+    if constexpr (flags & (CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST)) {
+        const uint64_t operand = noc_v3_cq_dest_base[cmd_buf] | noc_v3_cq_dest_local[cmd_buf];
+        if constexpr (cmd_buf == 2) {
+            __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+                TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, operand);
+        } else {
+            __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+                cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, operand);
+        }
+    }
+    if constexpr (flags & CQ_NOC_INLINE_FLAG_BE) {
+        // The byte-enable lane comes from the offset within the NOC word; the
+        // caller's dst_addr carries the offset whenever BE is re-programmed
+        // (window bases are NOC-word aligned, so this matches the folded
+        // operand's lane).
+        uint32_t be32 = be << (dst_addr & (NOC_WORD_BYTES - 1));
+        if constexpr (cmd_buf == 2) {
+            __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
+        } else {
+            __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+                cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
+        }
+    }
+    if constexpr (send) {
+        if constexpr (cmd_buf == 2) {
+            if constexpr (flags & CQ_NOC_INLINE_FLAG_VAL) {
+                __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(val);
+            } else {
+                __builtin_riscv_ttrocc_scmdbuf_issue_trans();
+            }
+        } else {
+            __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+        }
+    }
+}
