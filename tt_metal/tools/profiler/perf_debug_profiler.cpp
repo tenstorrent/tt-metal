@@ -1026,6 +1026,15 @@ void PerfDebugProfiler::start_drift_corrector(const std::shared_ptr<distributed:
     if (s == nullptr || *s == '\0' || *s == '0' || devices_.empty()) {
         return;
     }
+    if (eth_track_ != nullptr) {
+        // Two writers with different bases (host fit vs eth link) racing one ratcheted value would mix
+        // reference frames; the eth tracker is the more direct measurement, so it wins.
+        log_warning(
+            tt::LogMetal,
+            "[perf-debug profiler] DRIFT CORRECTOR disabled: the ETH TRACKER already owns the per-device "
+            "corrections");
+        return;
+    }
     const double hz = std::strtod(s, nullptr);
     if (!(hz > 0.0)) {
         return;
@@ -1243,6 +1252,214 @@ void PerfDebugProfiler::check_anchor_staleness_at_close() {
     }
 }
 
+namespace {
+uint32_t eth_track_hz() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_ETH_TRACK_HZ");
+        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 0u;
+    }();
+    return v;
+}
+}  // namespace
+
+// One resident pair per spanning-tree link, plus the tracking thread. Fit parameters are COPIES of the
+// init link_syncs_ entries, not references: the container may be rebuilt by a late re-anchor, and the
+// tracker's deviation basis must be the exact fits the close-check will later predict from.
+struct PerfDebugProfiler::EthTrackState {
+    struct Edge {
+        int64_t off0 = 0;
+        uint64_t ref0 = 0;
+        double rate0 = 1.0;
+        uint32_t snd_chip = 0;
+        uint32_t rcv_chip = 0;
+        eth_sync::ResidentLink rl;
+        int64_t corr_edge = 0;  // (init-fit linear) - (measured), cycles: what the child LOST vs the model
+        bool have = false;
+        uint32_t fails = 0;
+    };
+    std::vector<Edge> edges;
+    std::unordered_map<uint32_t, size_t> parent_edge;  // chip -> index into edges
+    uint32_t root = 0;
+    std::thread th;
+    std::atomic<bool> stop{false};
+    int64_t baseline = 0;  // common additive term keeping ratcheted values non-decreasing; cancels in diffs
+};
+
+void PerfDebugProfiler::start_eth_tracker(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    const uint32_t hz = eth_track_hz();
+    if (hz == 0 || eth_track_ != nullptr || link_syncs_.empty() || eth_sync_parent_edge_.empty()) {
+        return;
+    }
+    if (eth_sync_late()) {
+        // The late re-anchor DISCARDS and re-measures the tree the tracker would deviate against; running
+        // both would score corrections built on fits the close-check no longer uses. Unsupported combo.
+        log_warning(
+            tt::LogMetal,
+            "[perf-debug profiler] ETH TRACKER disabled: TT_METAL_PERF_DEBUG_ETH_SYNC_LATE rebuilds the "
+            "fits the tracker deviates against");
+        return;
+    }
+    const auto context_id = mesh_device->impl().get_context_id();
+    auto& cluster = MetalContext::instance(context_id).get_cluster();
+    auto* st = new EthTrackState();
+    st->root = eth_sync_root_chip_;
+    for (const auto& [chip, idx] : eth_sync_parent_edge_) {
+        const auto& e = link_syncs_[idx];
+        if (!e.valid || e.snd_dev == nullptr || e.rcv_dev == nullptr) {
+            continue;
+        }
+        // A SECOND channel on the same pair: the init sync used e.snd_eth and the close-check will use it
+        // again, so the resident pair takes any other trained channel toward the same peer.
+        CoreCoord snd2{};
+        CoreCoord rcv2{};
+        bool found = false;
+        for (const auto& [peer, cores] : cluster.get_ethernet_cores_grouped_by_connected_chips(e.snd_dev->id())) {
+            if (static_cast<uint32_t>(peer) != e.receiver_chip) {
+                continue;
+            }
+            for (const auto& c : cores) {
+                if (c == e.snd_eth) {
+                    continue;
+                }
+                auto [pid, pcore] = e.snd_dev->get_connected_ethernet_core(c);
+                if (static_cast<uint32_t>(pid) != e.receiver_chip) {
+                    continue;
+                }
+                snd2 = c;
+                rcv2 = pcore;
+                found = true;
+                break;
+            }
+            break;
+        }
+        if (!found) {
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] ETH TRACKER: no second eth channel on {} -> {}; this link is not "
+                "tracked and its subtree keeps correction 0",
+                e.sender_chip,
+                e.receiver_chip);
+            continue;
+        }
+        eth_sync::LinkSyncConfig rcfg;
+        rcfg.n_samples = 16;  // measured: ~7 ns offset noise back-to-back; rate comes from ROUND deltas
+        rcfg.gap_us = 0;
+        rcfg.host_timeout_ms = 1000;
+        EthTrackState::Edge ed;
+        ed.off0 = e.offset;
+        ed.ref0 = e.ref_mid;
+        ed.rate0 = e.rate;
+        ed.snd_chip = e.sender_chip;
+        ed.rcv_chip = e.receiver_chip;
+        ed.rl = eth_sync::start_resident_link(e.snd_dev, snd2, e.rcv_dev, rcv2, rcfg);
+        st->edges.push_back(std::move(ed));
+        st->parent_edge[chip] = st->edges.size() - 1;
+    }
+    if (st->edges.empty()) {
+        delete st;
+        return;
+    }
+    eth_track_ = st;
+    const auto period = std::chrono::microseconds(static_cast<int64_t>(1e6 / hz));
+    st->th = std::thread([st, period]() {
+        while (!st->stop.load(std::memory_order_relaxed)) {
+            for (auto& ed : st->edges) {
+                if (st->stop.load(std::memory_order_relaxed)) {
+                    break;
+                }
+                auto r = eth_sync::resident_round(ed.rl);
+                if (!r.solution.valid) {
+                    if (++ed.fails == 1 || (ed.fails % 200) == 0) {
+                        log_warning(
+                            tt::LogMetal,
+                            "[perf-debug profiler] ETH TRACKER round INVALID on {} -> {} (x{}): status {}/{}, "
+                            "samples {}/{}",
+                            ed.snd_chip,
+                            ed.rcv_chip,
+                            ed.fails,
+                            eth_sync::status_name(r.sender_status),
+                            eth_sync::status_name(r.receiver_status),
+                            r.sender_samples,
+                            r.receiver_samples);
+                    }
+                    continue;
+                }
+                const double dt = static_cast<double>(static_cast<int64_t>(r.solution.mid_ref - ed.ref0));
+                const double linear = static_cast<double>(ed.off0) + dt * (ed.rate0 - 1.0);
+                ed.corr_edge = static_cast<int64_t>(std::llround(linear - static_cast<double>(r.solution.offset)));
+                ed.have = true;
+            }
+            // Compose per-device RELATIVE corrections down the tree (root = 0). Unlike the host corrector''s
+            // device-vs-host values, RELATIVE deviations wander in BOTH directions, and the setter''s ratchet
+            // (grow-only, required for Tracy''s per-lane ordering) would freeze them at their maximum. So a
+            // COMMON baseline B is added to every device including the root: chosen each tick so every
+            // published value is non-decreasing, it rides through the ratchet unharmed and cancels out of
+            // every difference -- and differences are all that cross-device alignment and the close-check
+            // prediction ever read.
+            bool all_have = true;
+            std::unordered_map<uint32_t, int64_t> rel;
+            rel[st->root] = 0;
+            for (const auto& [chip, _] : st->parent_edge) {
+                int64_t corr = 0;
+                uint32_t cur = chip;
+                bool ok = true;
+                int hops = 0;
+                while (cur != st->root && hops++ < 8) {
+                    auto it = st->parent_edge.find(cur);
+                    if (it == st->parent_edge.end() || !st->edges[it->second].have) {
+                        ok = false;
+                        break;
+                    }
+                    corr += st->edges[it->second].corr_edge;
+                    cur = st->edges[it->second].snd_chip;
+                }
+                if (ok) {
+                    rel[chip] = corr;
+                } else {
+                    all_have = false;
+                }
+            }
+            if (all_have) {
+                for (const auto& [chip, r] : rel) {
+                    const int64_t prev = perf_debug::get_zone_ts_correction(chip);
+                    const int64_t need = prev - r;
+                    if (need > st->baseline) {
+                        st->baseline = need;
+                    }
+                }
+                for (const auto& [chip, r] : rel) {
+                    perf_debug::set_zone_ts_correction(chip, r + st->baseline);
+                }
+            }
+            std::this_thread::sleep_for(period);
+        }
+    });
+    log_info(
+        tt::LogMetal,
+        "[perf-debug profiler] ETH TRACKER: {} resident link(s) at {} Hz on second channels -- per-device "
+        "corrections now come from the links themselves, so the close-check scores the tracked offset "
+        "instead of a one-shot extrapolation",
+        st->edges.size(),
+        hz);
+}
+
+void PerfDebugProfiler::stop_eth_tracker() {
+    if (eth_track_ == nullptr) {
+        return;
+    }
+    eth_track_->stop.store(true);
+    if (eth_track_->th.joinable()) {
+        eth_track_->th.join();
+    }
+    for (auto& ed : eth_track_->edges) {
+        eth_sync::stop_resident_link(ed.rl);
+    }
+    delete eth_track_;
+    eth_track_ = nullptr;
+    // Corrections stay FROZEN at the last round -- the close-check reads them a few lines later, so the
+    // staleness it scores is one round period, not a session.
+}
+
 void PerfDebugProfiler::check_sync_drift_at_close() {
     if (!eth_sync_close_check() || link_syncs_.empty()) {
         return;
@@ -1321,8 +1538,9 @@ void PerfDebugProfiler::check_sync_drift_at_close() {
             log_info(
                 tt::LogMetal,
                 "[perf-debug profiler] eth sync CLOSE-CHECK {} -> {}: host-assisted prediction is {:+.3f} us "
-                "off vs {:+.3f} us for the fixed-rate extrapolation (corrections {:+} / {:+} cycles) -- the "
-                "host path supplies the rate change the eth fit could not know about",
+                "off vs {:+.3f} us for the fixed-rate extrapolation (corrections {:+} / {:+} cycles) -- the live "
+                "corrections (eth tracker or host drift corrector) supply what the one-shot fit could not "
+                "know about",
                 e.sender_chip,
                 e.receiver_chip,
                 static_cast<double>(err_hosted) / freq / 1000.0,
@@ -2152,6 +2370,10 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     // Device-to-device clock sync FIRST, while the eth cores are still free and no drainer is resident.
     // Both conditions stop holding the moment the loop below starts booting devices.
     sync_devices_over_eth(mesh_device);
+    // And the RESIDENT tracker immediately after, in the same free window: its pairs launch once here and
+    // then only ever answer mailbox commands, so nothing is launched mid-capture and bring-up drift is
+    // already inside the corrections by the time the first zone is stamped.
+    start_eth_tracker(mesh_device);
 
     // ---- PASS 2: bring up each device's drainers -------------------------------------------------------
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
@@ -4581,6 +4803,7 @@ void PerfDebugProfiler::stop() {
     }
     // Last, with the drainers quiesced so the links are quiet and nothing else is competing for the NoC.
     stop_drift_corrector();
+    stop_eth_tracker();
     cross_path_tracking_test();
     check_sync_drift_at_close();
     check_anchor_staleness_at_close();

@@ -280,6 +280,18 @@ private:
     std::thread drift_thread_;
     std::atomic<bool> drift_stop_{false};
 
+    // RESIDENT ETH TRACKER (TT_METAL_PERF_DEBUG_ETH_TRACK_HZ, 0 = off). Keeps a bounded sync pair RESIDENT
+    // on a SECOND channel of every spanning-tree link -- one launch at start(), rounds commanded through an
+    // L1 mailbox -- and converts each link's live deviation from its init fit into the SAME per-device zone
+    // corrections the drift corrector feeds. Zones and the close-check prediction both read those
+    // corrections, so the close-check stops scoring a one-shot extrapolation and starts scoring the
+    // tracked truth. The init one-shot and the close-check keep the pair's FIRST channel; residents live on
+    // a second one, so the two never collide.
+    struct EthTrackState;
+    EthTrackState* eth_track_ = nullptr;
+    void start_eth_tracker(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
+    void stop_eth_tracker();
+
     // Chips whose AI clock this profiler pinned, so stop() can release exactly those.
     std::vector<int> forced_aiclk_chips_;
 
