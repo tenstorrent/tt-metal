@@ -38,6 +38,18 @@ VSA_INDEX_SENTINEL = 0xFFFFFFFF
 _TOPK_K_MULTIPLE = 16  # ttnn.experimental.topk_large_indices wants k % 16 == 0, k in [16, 2048]
 
 
+from dataclasses import dataclass  # noqa: E402
+
+
+@dataclass(frozen=True)
+class MiniMaxH3VSAConfig:
+    """Host-side VSA knobs (R5): the attention path is selected by passing this to the model."""
+
+    sparsity: float
+    placement: str = "identity"  # tile placement across SP shards: "identity" | "striped"
+    k_chunk_blocks: int = 1  # vsa_sdpa's m: listed blocks gathered per L1 chunk
+
+
 def compute_topk(sparsity: float, num_candidates: int) -> int:
     """Candidate tiles to keep; FastVideo's compute_topk, clamped to [1, n]."""
     return max(1, min(math.ceil((1 - sparsity) * num_candidates), num_candidates))
@@ -140,10 +152,12 @@ class MiniMaxH3VSACoarseStage:
         )
         self.exempt_prefix = upload(prefix, ttnn.uint32, ttnn.Layout.ROW_MAJOR)
 
-        # [sp, H, rows, tail] sentinel tail
+        # [sp, H, rows, tail] sentinel tail (absent when exempt + top-k fill the row exactly)
         tail = w - self.n_exempt - self.k
-        sentinel = torch.full((geometry.sp_factor, num_heads, rows, tail), -1, dtype=torch.int32)
-        self.sentinel_tail = upload(sentinel, ttnn.uint32, ttnn.Layout.ROW_MAJOR)
+        self.sentinel_tail = None
+        if tail > 0:
+            sentinel = torch.full((geometry.sp_factor, num_heads, rows, tail), -1, dtype=torch.int32)
+            self.sentinel_tail = upload(sentinel, ttnn.uint32, ttnn.Layout.ROW_MAJOR)
 
         # dense-list blend, int32 TILE domain: final = sparse * keep + dense_masked
         row_exempt = self._host_row_exempt.to(torch.int32)  # [sp, rows]
@@ -171,28 +185,34 @@ class MiniMaxH3VSACoarseStage:
         return pooled
 
     def __call__(
-        self, q_bhnd: ttnn.Tensor, k_bhnd: ttnn.Tensor, v_bhnd: ttnn.Tensor
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Run the coarse stage. Returns (o_c [1,H,S_local,d] bf16, indices [1,H,rows,W] uint32 ROW_MAJOR)."""
+        self, q_bhnd: ttnn.Tensor, k_bhnd: ttnn.Tensor, v_bhnd: ttnn.Tensor, *, compute_o_c: bool = True
+    ) -> tuple[ttnn.Tensor | None, ttnn.Tensor]:
+        """Run the coarse stage. Returns (o_c [1,H,S_local,d] bf16 or None, indices [1,H,rows,W] uint32 ROW_MAJOR).
+
+        ``compute_o_c=False`` skips the coarse-output branch (an all-zero gate weight contributes
+        nothing, so skipping it gives identical output); selection always runs.
+        """
         num_heads = q_bhnd.shape[1]
         self._upload_row_constants(num_heads)
 
         q_c = self.pool(q_bhnd, scaled=True)  # scores scale baked into the Q averaging matrix
         k_c_t = ttnn.transpose(self.pool(k_bhnd, scaled=False), 2, 3)  # [1, H, d, tiles_local]
-        v_c = self.pool(v_bhnd, scaled=False)
 
         k_c_t_g = self._all_gather(k_c_t, dim=3)  # [1, H, d, n_tiles]
-        v_c_g = self._all_gather(v_c, dim=2)  # [1, H, n_tiles, d]
 
         scores = ttnn.matmul(q_c, k_c_t_g)  # [1, H, tiles_local, n_tiles]
         ttnn.deallocate(q_c)
 
         # (c) coarse output, broadcast tile -> 64 tokens
-        probs = ttnn.softmax(scores, dim=-1)
-        o_c_tiles = ttnn.matmul(probs, v_c_g)  # [1, H, tiles_local, d]
-        ttnn.deallocate(probs)
-        o_c = ttnn.repeat_interleave(o_c_tiles, VSA_TILE_TOKENS, dim=2)  # [1, H, S_local, d]
-        ttnn.deallocate(o_c_tiles)
+        o_c = None
+        if compute_o_c:
+            v_c = self.pool(v_bhnd, scaled=False)
+            v_c_g = self._all_gather(v_c, dim=2)  # [1, H, n_tiles, d]
+            probs = ttnn.softmax(scores, dim=-1)
+            o_c_tiles = ttnn.matmul(probs, v_c_g)  # [1, H, tiles_local, d]
+            ttnn.deallocate(probs)
+            o_c = ttnn.repeat_interleave(o_c_tiles, VSA_TILE_TOKENS, dim=2)  # [1, H, S_local, d]
+            ttnn.deallocate(o_c_tiles)
 
         # (e) selection: top-k over candidate columns only
         masked = ttnn.add(scores, self.cand_mask)  # -inf on non-candidate columns
@@ -206,7 +226,8 @@ class MiniMaxH3VSACoarseStage:
                 topk_ids, [0, 0, 0, 0], [1, num_heads, self.geometry.tiles_per_shard, self.k]
             )
 
-        sparse_rows = ttnn.concat([self.exempt_prefix, topk_ids, self.sentinel_tail], dim=-1)  # [1,H,rows,W]
+        parts = [self.exempt_prefix, topk_ids] + ([self.sentinel_tail] if self.sentinel_tail is not None else [])
+        sparse_rows = ttnn.concat(parts, dim=-1)  # [1, H, rows, W]
         ttnn.deallocate(topk_ids)
 
         # exempt-query rows take the dense list: final = sparse * keep + dense_masked (int32 select;
@@ -221,13 +242,15 @@ class MiniMaxH3VSACoarseStage:
         return o_c, indices
 
     def block_counts_tensor(self) -> ttnn.Tensor:
-        """[1,1,1,W] uint32 valid tokens per block, replicated (vsa_sdpa's block_counts input)."""
-        counts = torch.zeros(self.index_width, dtype=torch.int32)
-        counts[: self.geometry.n_tiles] = self.geometry.valid_counts.to(torch.int32)
-        return from_torch(
-            counts.reshape(1, 1, 1, -1),
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.Layout.ROW_MAJOR,
-            mesh_axes=None,
-        )
+        """[1,1,1,W] uint32 valid tokens per block, replicated (vsa_sdpa's block_counts input). Cached."""
+        if not hasattr(self, "_block_counts"):
+            counts = torch.zeros(self.index_width, dtype=torch.int32)
+            counts[: self.geometry.n_tiles] = self.geometry.valid_counts.to(torch.int32)
+            self._block_counts = from_torch(
+                counts.reshape(1, 1, 1, -1),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.Layout.ROW_MAJOR,
+                mesh_axes=None,
+            )
+        return self._block_counts

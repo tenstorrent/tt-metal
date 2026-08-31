@@ -50,6 +50,9 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int], tuple[int, int, int]] = {
     (5376, 5376): (8, 7, 12),
     (7168, 1344): (8, 8, 6),
     (5376, 7168): (8, 3, 14),
+    # attention to_gate_compress (VSA): K_tiles_per_device = 42 -> K_block 7; N = 56 tiles -> N_block 8.
+    # Valid-by-construction, not sweep-measured (the gate matmul is off the dense path).
+    (5376, 1792): (8, 7, 8),
 }
 
 

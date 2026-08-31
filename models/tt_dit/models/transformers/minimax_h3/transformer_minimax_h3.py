@@ -265,9 +265,14 @@ class MiniMaxH3Transformer3DModel(Module):
         # traced path needs it -- `ttnn.zeros` writes to device and a capture rejects writes -- so it
         # is off by default and the untraced path keeps its per-call allocation.
         cache_padding: bool = False,
+        # VSA (video sparse attention): the fourth attention path (see VSA_SCOPE.md). None (default)
+        # leaves the dense paths untouched. When set, the caller must also bind a geometry-specific
+        # coarse stage via `set_vsa_stage` before running, and feed the sequence in VSA tile order.
+        vsa_config=None,
     ) -> None:
         super().__init__()
 
+        self.vsa_config = vsa_config
         self.precomputed_adaln = precomputed_adaln
         self.cache_padding = cache_padding
         self.hidden_size = hidden_size
@@ -364,6 +369,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     parallel_config=parallel_config,
                     is_fsdp=is_fsdp,
                     precomputed_adaln=precomputed_adaln,
+                    vsa_config=vsa_config,
                 )
                 for _ in range(num_layers)
             ]
@@ -383,6 +389,12 @@ class MiniMaxH3Transformer3DModel(Module):
         )
         self.proj_out = Linear(hidden_size, video_patch_dim, bias=True, mesh_device=mesh_device)
         self.audio_proj_out = Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device)
+
+    def set_vsa_stage(self, stage) -> None:
+        """Bind one geometry-specific VSA coarse stage to every block's attention (shared statics)."""
+        assert self.vsa_config is not None, "set_vsa_stage requires the model to be built with vsa_config"
+        for block in self.transformer_blocks:
+            block.attn.set_vsa_stage(stage)
 
     def forward(
         self,
