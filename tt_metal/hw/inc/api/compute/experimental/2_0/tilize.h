@@ -64,27 +64,38 @@ ALWI void tilize_init(
  * and out.l1_address (the block's first output tile).
  *
  * PER-TILE OUTPUT ADDRESSING vs the legacy BH tilize (fifo_page_size == one tile_size):
- *   Tile t is packed to out.l1_address + t * <output tile stride>. The stride folds to a compile-time
- *   constant from the output descriptor via tile_stride_words(OutFormat, OutShape) (16B words):
+ *   Tile t is packed to out.l1_address + (output_tile_index + t) * <output tile stride>. The stride folds to a
+ *   compile-time constant from the output descriptor via tile_stride_words(OutFormat, OutShape) (16B words):
  *     - linear formats (Float32/Float16/int): geometry-exact datum-count size (SCALE_DATUM_SIZE >> 4);
  *     - block floats (Bfp8/Bfp4/Bfp2): mantissa + shared-exponent section, both scaled by the tile geometry
  *       (matches tt_metal Tile::get_tile_size / the shipping CB page; see internal/llk_descriptor.h::tile_stride_words).
  *   The shipping tilize factories set the output CB page to exactly one tile (output_single_tile_size), so
  *   this matches fifo_page_size for every format the factories use. Remaining edge (no shipping op hits it):
- *   padded / multi-tile CB pages.
+ *   padded / multi-tile CB pages. A caller writing a block into a multi-tile output window may either fold the
+ *   destination into out.l1_address (the id-free default) OR pass output_tile_index to shift the first slot;
+ *   symmetrically input_tile_index shifts the unpack source (matches legacy tilize_block). Both default to 0,
+ *   in which case tile t lands in slot t and the source base is in.l1_address (byte-identical to before).
  *
- * | Function | in    | Input operand (unpack base; LLK offsets by tile_index) | LLKOperand |     | True |
- * | Function | block | Number of column tiles in the block                    | uint32_t   | > 0 | True |
- * | Function | out   | Output operand (first tile's L1 address)               | LLKOperand |     | True |
+ * | Function | in                | Input operand (unpack base; LLK offsets by input_tile_index + t) | LLKOperand |      | True  |
+ * | Function | block             | Number of column tiles in the block                             | uint32_t   | > 0  | True  |
+ * | Function | out               | Output operand (block's first-tile L1 address)                  | LLKOperand |      | True  |
+ * | Function | input_tile_index  | Starting tile index added to the unpack source index            | uint32_t   | >= 0 | False |
+ * | Function | output_tile_index | Starting tile index added to the pack destination slot          | uint32_t   | >= 0 | False |
  */
 // clang-format on
 template <DataFormat InFormat, TensorShape InShape, DataFormat OutFormat, TensorShape OutShape>
-ALWI void tilize_block(LLKOperand<InFormat, InShape> in, std::uint32_t block, LLKOperand<OutFormat, OutShape> out) {
+ALWI void tilize_block(
+    LLKOperand<InFormat, InShape> in,
+    std::uint32_t block,
+    LLKOperand<OutFormat, OutShape> out,
+    std::uint32_t input_tile_index = 0,
+    std::uint32_t output_tile_index = 0) {
     static_assert(is_legal_tile_shape(InShape), "tilize_block: illegal input tile shape.");
     static_assert(is_legal_tile_shape(OutShape), "tilize_block: illegal output tile shape.");
     // Unpack the whole block into srcA first (mirrors llk_unpack_tilize_block), then drain via math+pack.
     for (std::uint32_t t = 0; t < block; t++) {
-        UNPACK((llk_unpack_tilize<LLKOperand<InFormat, InShape>::descriptor, DST_ACCUM_MODE>(in.l1_address, t)));
+        UNPACK((llk_unpack_tilize<LLKOperand<InFormat, InShape>::descriptor, DST_ACCUM_MODE>(
+            in.l1_address, input_tile_index + t)));
     }
 
     for (std::uint32_t t = 0; t < block; t++) {
@@ -97,13 +108,13 @@ ALWI void tilize_block(LLKOperand<InFormat, InShape> in, std::uint32_t block, LL
               DST_ACCUM_MODE,
               BroadcastType::NONE,
               UnpackToDestEn>(0 /*dst index*/)));
-        // Per-tile output slot: out.l1_address + t * one-tile L1 size (via the shared tile_address helper;
-        // the stride folds to a compile-time constant).
+        // Per-tile output slot: out.l1_address + (output_tile_index + t) * one-tile L1 size (via the shared
+        // tile_address helper; the stride folds to a compile-time constant).
         PACK((llk_pack<
               LLKOperand<OutFormat, OutShape>::descriptor,
               DST_ACCUM_MODE,
               true /*out_of_order*/,
-              PackMode::Default>(0 /*tile index*/, detail::tile_address(out, t))));
+              PackMode::Default>(0 /*tile index*/, detail::tile_address(out, output_tile_index + t))));
 
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));

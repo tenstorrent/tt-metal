@@ -1737,4 +1737,15 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeBlock4IdFreeGolden) {
     EXPECT_EQ(golden, result);
 }
 
+// NOTE: no distinguishing test for tilize_block's restored input_tile_index / output_tile_index params.
+// The restored parameters default to 0, in which case tile_index folds to `t` and the generated code is
+// byte-identical to before (covered by TensixTilizeIdFreeGolden above). Observing a NONZERO index cleanly
+// would require a block-configured, wide row-major tilize harness: column-tile b of an N-wide row-major
+// input sits at a b*TILE_WIDTH offset with an N*TILE_WIDTH per-row stride, which only tilizes correctly when
+// the unpack MOP is configured for block=N (as legacy's single llk_unpack_tilize_block(base, block, index)
+// call is). The id-free tilize_block uses a per-tile llk_unpack_tilize loop with block=1 init, so an
+// input_tile_index-addressed nonzero column tile reads the input as contiguous standalone tiles instead of a
+// wide block and cannot match gold_standard_tilize. The restored params are correct-for-parity but not
+// cleanly device-observable via this path (same resolution as the D0/D1/Copilot#2 unobservable fixes).
+
 }  // namespace tt::tt_metal

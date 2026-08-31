@@ -123,6 +123,44 @@ ALWI void reduce_block(
 
 // clang-format off
 /**
+ * Math-only reduction into DST[idst]. This is the MATH half of reduce_tile with NO unpack/pack: the source
+ * tiles must ALREADY be in the source registers (typically staged by a preceding fused op, e.g. tilize). It
+ * consumes NO operand -- pure DST math -- so it takes no LLKOperand; geometry is given by num_faces, which maps
+ * to the naive row-major face layout (faces laid out row-wise first). Pair with reduce_init. DST must be
+ * acquired. For a non-default face layout, use the TensorShape overload below. Reuses the same id-free MATH
+ * core as reduce_tile (llk_math_reduce(idst, shape)).
+ *
+ * | Template | reduce_type | SUM / AVG / MAX                          | PoolType  | | True |
+ * | Template | reduce_dim  | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR | ReduceDim | | True |
+ * | Function | idst        | DST register index for the result       | uint32_t  | | True |
+ * | Function | num_faces   | Number of faces to reduce (default 4)   | uint32_t  | 1 / 2 / 4 | False |
+ */
+// clang-format on
+template <PoolType reduce_type, ReduceDim reduce_dim>
+ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = MAX_NUM_FACES) {
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(
+        idst, tensor_shape_from_num_faces(MAX_FACE_R_DIM, num_faces))));
+}
+
+// clang-format off
+/**
+ * Math-only reduction into DST[idst] with an explicit tile geometry. As above, the source tiles must ALREADY
+ * be in the source registers and NO operand is consumed (pure DST math, no LLKOperand). Pair with reduce_init.
+ * DST must be acquired. Reuses the same id-free MATH core as reduce_tile (llk_math_reduce(idst, shape)).
+ *
+ * | Template | reduce_type  | SUM / AVG / MAX                          | PoolType             | | True |
+ * | Template | reduce_dim   | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR | ReduceDim            | | True |
+ * | Function | idst         | DST register index for the result       | uint32_t             | | True |
+ * | Function | tensor_shape | Tile geometry to reduce                  | ckernel::TensorShape | | True |
+ */
+// clang-format on
+template <PoolType reduce_type, ReduceDim reduce_dim>
+ALWI void reduce_tile_math(std::uint32_t idst, const ckernel::TensorShape& tensor_shape) {
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, tensor_shape)));
+}
+
+// clang-format off
+/**
  * Reduce uninit: reset the MATH reduce state and clear the packer edge mask back to default.
  */
 // clang-format on
