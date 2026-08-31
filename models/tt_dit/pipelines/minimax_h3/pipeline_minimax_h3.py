@@ -77,7 +77,7 @@ from ...utils import cache
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch
 from ...utils.tracing import StateTensor
-from ..events import DenoiseStep, PipelineEventCallback, SectionEnd, SectionStart, null_callback
+from ..events import DenoiseStep, PipelineEventCallback, event_section, null_callback
 from .adaln_precompute import precompute_adaln_table, request_step_timesteps
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
 from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
@@ -1650,9 +1650,8 @@ class MiniMaxH3Pipeline:
         )
 
         # 2. Text (plus the vision block, for fl2va).
-        on_event(SectionStart("encoder"))
-        prompt_embeds, text_token_tags = self.encode_prompt(prompt, keyframes=keyframes)
-        on_event(SectionEnd("encoder"))
+        with event_section(on_event, "encoder"):
+            prompt_embeds, text_token_tags = self.encode_prompt(prompt, keyframes=keyframes)
 
         # Both schedules. Built here rather than after the layout because the keyframe step below needs
         # `scale_noise`, which takes its `t` at face value and works before `set_timesteps` -- but they
@@ -1692,13 +1691,12 @@ class MiniMaxH3Pipeline:
             # `(1, 256, 256)` encoder serves all 28 tiles, which is one wave on a 32-device mesh.
             vae = self._prepare_vae()
             vae = self._prepare_vae(encode_shape=(1, vae.tile_size, vae.tile_size))
-            on_event(SectionStart("vae_encode"))
-            condition_rows = self._encode_keyframes(vae, keyframes)
-            # `scheduler.scale_noise`, never a local copy: a reimplementation computing `1 - t` in
-            # Python double instead of the sample dtype drifts 2.4e-7 (see `conditioning.py`), and a
-            # test asserts no second implementation exists.
-            condition_rows = scheduler.scale_noise(condition_rows, MINIMAX_H3_KEYFRAME_NOISE_AUG, condition_noise)
-            on_event(SectionEnd("vae_encode"))
+            with event_section(on_event, "vae_encode"):
+                condition_rows = self._encode_keyframes(vae, keyframes)
+                # `scheduler.scale_noise`, never a local copy: a reimplementation computing `1 - t` in
+                # Python double instead of the sample dtype drifts 2.4e-7 (see `conditioning.py`), and a
+                # test asserts no second implementation exists.
+                condition_rows = scheduler.scale_noise(condition_rows, MINIMAX_H3_KEYFRAME_NOISE_AUG, condition_noise)
 
         # 4. Layout. One conditioning block of `rows_per_frame` rows per anchor, between text and audio.
         layout = build_packed_sequence(
@@ -1781,9 +1779,8 @@ class MiniMaxH3Pipeline:
         )
 
         # 2. Text, plus one vision block per image reference and one per merged frame pair of a video.
-        on_event(SectionStart("encoder"))
-        prompt_embeds, text_token_tags = self.encode_prompt(prompt, references=prepared)
-        on_event(SectionEnd("encoder"))
+        with event_section(on_event, "encoder"):
+            prompt_embeds, text_token_tags = self.encode_prompt(prompt, references=prepared)
 
         scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
         audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
@@ -1805,21 +1802,20 @@ class MiniMaxH3Pipeline:
             )
         audio_encoder = self._prepare_audio_encoder() if has_audio else None
 
-        on_event(SectionStart("vae_encode"))
-        condition_rows, audio_condition_rows = encode_references(
-            prepared,
-            encode_clip=(lambda pixels: vae.encode_clip(pixels)) if has_visual else None,
-            encode_video=(lambda pixels: vae.encode(pixels)) if has_video else None,
-            # The device encoder returns `(mean, logs)`; ref2va consumes the mean alone.
-            encode_audio=(lambda waveform: audio_encoder(waveform)[0]) if has_audio else None,
-            latents_mean=self.vae_config.latents_mean,
-            latents_std=self.vae_config.latents_std,
-            audio_latents_mean=self.audio_config["latents_mean"],
-            audio_latents_std=self.audio_config["latents_std"],
-            patch_size=self.patch_size,
-            audio_latent_channels=self.audio_config["latent_channels"],
-        )
-        on_event(SectionEnd("vae_encode"))
+        with event_section(on_event, "vae_encode"):
+            condition_rows, audio_condition_rows = encode_references(
+                prepared,
+                encode_clip=(lambda pixels: vae.encode_clip(pixels)) if has_visual else None,
+                encode_video=(lambda pixels: vae.encode(pixels)) if has_video else None,
+                # The device encoder returns `(mean, logs)`; ref2va consumes the mean alone.
+                encode_audio=(lambda waveform: audio_encoder(waveform)[0]) if has_audio else None,
+                latents_mean=self.vae_config.latents_mean,
+                latents_std=self.vae_config.latents_std,
+                audio_latents_mean=self.audio_config["latents_mean"],
+                audio_latents_std=self.audio_config["latents_std"],
+                patch_size=self.patch_size,
+                audio_latent_channels=self.audio_config["latent_channels"],
+            )
 
         # 4. All the noise for the request, off one generator, in the reference's draw order:
         # conditioning first (one draw per VISUAL reference, at its own resolved shape), then video,
@@ -1916,34 +1912,31 @@ class MiniMaxH3Pipeline:
         transformer = self._prepare_transformer()
         # None on the resident-AdaLN path: the blocks project `temb` themselves, so there is no table.
         adaln_cache = self._prepare_adaln_cache(num_inference_steps) if self.precomputed_adaln else None
-        on_event(SectionStart("denoising"))
-        video_rows, audio_rows = self._denoise(
-            transformer,
-            layout,
-            prompt_embeds,
-            video_rows,
-            audio_rows,
-            scheduler,
-            audio_scheduler,
-            adaln_cache,
-            condition_spec=condition_spec,
-            on_event=on_event,
-        )
-        on_event(SectionEnd("denoising"))
+        with event_section(on_event, "denoising"):
+            video_rows, audio_rows = self._denoise(
+                transformer,
+                layout,
+                prompt_embeds,
+                video_rows,
+                audio_rows,
+                scheduler,
+                audio_scheduler,
+                adaln_cache,
+                condition_spec=condition_spec,
+                on_event=on_event,
+            )
 
         # Same rule: `_prepare_*` before the section, never inside it -- and for the VAE that includes
         # the per-shape decoder, whose weight upload would otherwise be timed.
         vae = self._prepare_vae(decode_shape=self.decode_unit_shape())
-        on_event(SectionStart("vae"))
-        video = self._decode_video(
-            vae, video_rows, num_latent_frames, latent_height, latent_width, layout.num_condition_video_rows
-        )
-        on_event(SectionEnd("vae"))
+        with event_section(on_event, "vae"):
+            video = self._decode_video(
+                vae, video_rows, num_latent_frames, latent_height, latent_width, layout.num_condition_video_rows
+            )
 
         audio_decoder = self._prepare_audio_decoder()
-        on_event(SectionStart("audio"))
-        audio = self._decode_audio(audio_decoder, audio_rows, num_audio_latents, layout.num_condition_audio_rows)
-        on_event(SectionEnd("audio"))
+        with event_section(on_event, "audio"):
+            audio = self._decode_audio(audio_decoder, audio_rows, num_audio_latents, layout.num_condition_audio_rows)
 
         return MiniMaxH3Output(
             video=video,
