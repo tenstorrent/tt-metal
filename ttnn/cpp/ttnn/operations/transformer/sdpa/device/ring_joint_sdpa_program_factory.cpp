@@ -2540,7 +2540,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
           !use_attention_sink && num_q_chunks != 0 && (rot_base_chunks * num_cores) % num_q_chunks == 0)) &&
         // Schedules this rotation cannot model. Balanced/zigzag SKIPS whole Q chunks per device, so
         // the equal-cost-per-chunk counting the rotation is built on stops holding -- a causal mask
-        // wants enable_zigzag_balancing instead, which is the right tool for that job. A joint K (L != 0) would
+        // wants enable_zigzag_balancing instead, which is the right tool for that job.
+        // MEASURED, not reasoned: mla_dense_small_balanced (RING_MLA_K_SWEEP, grid 5x6 -> base 2,
+        // floats 2) with this term removed HANGS. It was previously documented as producing silent
+        // garbage from the unscheduled float ids; the real failure is a hang, because an unscheduled
+        // float means a receiver waits on a donor that never runs its handoff. A joint K (L != 0) would
         // likewise add per-iteration chunks this schedule does not count; unreachable today, since joint tensors
         // are a video-gen shape and latent-V an MLA one, but validation does not forbid the pair.
         !args.is_balanced &&

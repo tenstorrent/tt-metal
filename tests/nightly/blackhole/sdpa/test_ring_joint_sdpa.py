@@ -313,6 +313,29 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
             )
         )
 
+    # Local-only companion to mla_dense_small: same shape, zigzag balancing ON. Exists to TEST the
+    # rotation's !is_balanced term rather than take it on reasoning -- mla_100k is balanced too but
+    # times out, so the term had no counterexample.
+    if os.environ.get("RING_MLA_K_SWEEP"):
+        configs.append(
+            ModelConfig(
+                name="mla_dense_small_balanced",
+                nhq=8,
+                nhk=1,
+                nhv=8,
+                d_q=576,
+                d_k=576,
+                d_v=128,
+                is_causal=True,
+                is_balanced=True,
+                q_dtype=ttnn.bfloat16,
+                kv_dtype=ttnn.bfloat8_b,
+                q_chunk_sizes=[160],
+                k_chunk_sizes=[320],
+                seq_len=1280,
+            )
+        )
+
     configs.append(
         ModelConfig(
             name="mla_128k",
@@ -4654,7 +4677,7 @@ def generate_ring_mla_test_configs(mesh_config: MeshConfig, model_configs: Dict[
         return [], []
     configs, ids = [], []
     # mla_dense_small (RING_MLA_K_SWEEP only) is the non-balanced dense shape; see its ModelConfig.
-    for name in ("mla_100k", "mla_dense_small"):
+    for name in ("mla_100k", "mla_dense_small", "mla_dense_small_balanced"):
         if name not in model_configs:
             continue
         model = model_configs[name]
