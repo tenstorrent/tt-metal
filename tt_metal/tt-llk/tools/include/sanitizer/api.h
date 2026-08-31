@@ -89,6 +89,22 @@ static inline void uninit(Vs&&... values)
     detail::uninit<Op, T>(*state, std::forward<Vs>(values)...);
 }
 
+// -----------
+// Unsupported
+// -----------
+
+namespace detail
+{
+
+[[gnu::error("llk::san | fault   | this LLK operation is not modelled by the sanitizer")]] void unsupported_operation();
+
+} // namespace detail
+
+static inline void unsupported()
+{
+    detail::unsupported_operation();
+}
+
 // ------------
 // FunctionZone
 // ------------
@@ -173,6 +189,10 @@ static inline void execute([[maybe_unused]] Vs&&... values)
 
 template <typename Op, Thread T = Thread::TRISC0, typename... Vs>
 static inline void uninit([[maybe_unused]] Vs&&... values)
+{
+}
+
+static inline void unsupported()
 {
 }
 
