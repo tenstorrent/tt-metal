@@ -212,8 +212,8 @@ void enqueue_mesh_workload(
 
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
-    const auto active_manager_id = mesh_device->get_active_sub_device_manager_id();
-    if (active_manager_id != mesh_device->get_default_sub_device_manager_id()) {
+    if (ttnn::graph::GraphProcessor::is_program_execution_tracking_enabled()) {
+        const auto active_manager_id = mesh_device->get_active_sub_device_manager_id();
         const auto sub_device_ids = workload.determine_sub_device_ids(mesh_device);
         TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
         const auto sub_device_id = *sub_device_ids.begin();

@@ -109,6 +109,8 @@ public:
         uint64_t program_id,
         uint8_t command_queue_id);
 
+    static bool is_program_execution_tracking_enabled();
+
     void track_function_start(
         std::string_view function_name, std::span<tt::tt_metal::TrackedArgument> input_parameters) override;
 

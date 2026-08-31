@@ -2352,6 +2352,49 @@ class TestGraphCaptureToFile:
         assert report["graph"] == captured_graph
 
     @skip_for_slow_dispatch()
+    def test_default_manager_execution_metadata_round_trip(self, device, tmp_report_dir):
+        report_path = tmp_report_dir / "default_manager_report.json"
+        db_dir = tmp_report_dir / "db"
+        torch_input = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+        lhs = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+        rhs = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config("enable_logging", True):
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                _ = ttnn.add(lhs, rhs)
+                ttnn.synchronize_device(device)
+            finally:
+                captured_graph = ttnn.graph.end_graph_capture_to_file(report_path)
+
+        execution_nodes = [node for node in captured_graph if node.get("node_type") == "program_execution"]
+        assert len(execution_nodes) == 1
+        params = execution_nodes[0]["params"]
+        assert params["sub_device_id"] == 0
+        assert json.loads(params["worker_core_ranges"])
+        assert params["global_call_count"] == (params["runtime_id"] << 10) | params["physical_device_id"]
+
+        db_path = graph_report.import_report(report_path, db_dir)
+        with sqlite3.connect(db_path) as conn:
+            execution = conn.execute(
+                "SELECT e.physical_device_id, e.runtime_id, e.global_call_count, "
+                "x.sub_device_manager_id, x.sub_device_id, s.worker_core_ranges "
+                "FROM operation_executions e "
+                "JOIN execution_sub_devices x ON x.execution_id = e.execution_id AND x.rank = e.rank "
+                "JOIN sub_devices s ON s.device_id = x.device_id "
+                "AND s.sub_device_manager_id = x.sub_device_manager_id "
+                "AND s.sub_device_id = x.sub_device_id AND s.rank = x.rank"
+            ).fetchone()
+        assert execution[:5] == (
+            params["physical_device_id"],
+            params["runtime_id"],
+            params["global_call_count"],
+            params["sub_device_manager_id"],
+            0,
+        )
+        assert json.loads(execution[5]) == json.loads(params["worker_core_ranges"])
+
+    @skip_for_slow_dispatch()
     @pytest.mark.skipif(not is_wormhole_b0(), reason="Sub-device graph-report coverage targets Wormhole")
     def test_sub_device_execution_metadata_round_trip(self, device, tmp_report_dir):
         report_path = tmp_report_dir / "sub_device_report.json"

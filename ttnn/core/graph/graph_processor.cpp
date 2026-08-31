@@ -534,6 +534,11 @@ void GraphProcessor::track_cross_thread_program_execution(
     }
 }
 
+bool GraphProcessor::is_program_execution_tracking_enabled() {
+    const std::lock_guard<std::mutex> lock(active_processors_mutex);
+    return !active_processors.empty();
+}
+
 template <typename T>
 using ProcessFunc = void (GraphProcessor::*)(const T&);
 
