@@ -318,6 +318,17 @@ def test_ttnn_where(
         src_A = torch.zeros_like(src_A)
     # For "mixed" case, use the generated stimuli as-is
 
+    # laneJO formal-equivalence witness-check hook (see test_sfpu_binary.py):
+    # LANEJO_SRC_OVERRIDE holds {"src_A","src_B","src_C"} replayed verbatim.
+    import os as _lanejo_os
+
+    _lanejo_src = _lanejo_os.environ.get("LANEJO_SRC_OVERRIDE")
+    if _lanejo_src:
+        _lanejo_t = torch.load(_lanejo_src)
+        src_A = _lanejo_t["src_A"].to(src_A.dtype).reshape(src_A.shape)
+        src_B = _lanejo_t["src_B"].to(src_B.dtype).reshape(src_B.shape)
+        src_C = _lanejo_t["src_C"].to(src_C.dtype).reshape(src_C.shape)
+
     golden_generator = get_golden_generator(WhereGolden)
     golden = golden_generator(src_A, src_B, src_C)
 
@@ -374,6 +385,16 @@ def test_ttnn_where(
             else torch.bfloat16
         ),
     )
+
+    # laneJO witness-check hook (paired with LANEJO_SRC_OVERRIDE above).
+    _lanejo_dump = _lanejo_os.environ.get("LANEJO_DUMP")
+    if _lanejo_dump:
+        torch.save(
+            {"src_A": src_A, "src_B": src_B, "src_C": src_C, "result": res_tensor},
+            _lanejo_dump,
+        )
+    if _lanejo_os.environ.get("LANEJO_SKIP_ASSERT") == "1":
+        return
 
     assert torch_equal_nan(golden_tensor, res_tensor), "Assert against golden failed"
 

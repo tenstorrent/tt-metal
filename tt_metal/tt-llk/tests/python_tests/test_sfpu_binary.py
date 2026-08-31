@@ -426,6 +426,15 @@ def sfpu_binary(
     # depending on the draw -- an unreproducible failure. eltwise_unary_sfpu seeds too.
     torch.manual_seed(0)
 
+    # laneJO witness-check hook (see the LANEJO_* block at the end of this
+    # function): replay a solver witness input through the existing
+    # src_A_override plumbing.
+    import os as _lanejo_os
+
+    _lanejo_src = _lanejo_os.environ.get("LANEJO_SRC_OVERRIDE")
+    if _lanejo_src and src_A_override is None:
+        src_A_override = torch.load(_lanejo_src)
+
     # FP32 destination tiles occupy twice the register space. Keep four full destination
     # blocks for those formats and four blocks of eight tiles for the remaining formats.
     if input_dimensions is None:
@@ -566,6 +575,23 @@ def sfpu_binary(
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
+
+    # laneJO formal-equivalence witness-check hook (corpus/tools/formal_equiv.py),
+    # env-gated and inert otherwise:
+    #   LANEJO_SRC_OVERRIDE=<file.pt>  torch tensor used as src_A_override
+    #                                  (whole tile pairs: even tile = in0,
+    #                                  odd tile = in1) so a solver witness
+    #                                  input can be replayed on the sim/device;
+    #   LANEJO_DUMP=<file.pt>          dump {"src_A","result"} tensors;
+    #   LANEJO_SKIP_ASSERT=1           skip the golden assert (witness inputs
+    #                                  deliberately leave the stimuli domain).
+    import os as _lanejo_os
+
+    _lanejo_dump = _lanejo_os.environ.get("LANEJO_DUMP")
+    if _lanejo_dump:
+        torch.save({"src_A": src_A, "result": res_tensor}, _lanejo_dump)
+    if _lanejo_os.environ.get("LANEJO_SKIP_ASSERT") == "1":
+        return
 
     assert len(res_tensor) == len(
         golden_tensor
