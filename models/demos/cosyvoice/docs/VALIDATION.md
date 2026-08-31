@@ -205,44 +205,38 @@ building a real multi-utterance serving path needs that defect closed first, and
 should batch the decode while keeping a device per utterance for the other two stages
 until then.
 
-### The interleaved schedule's corrupt audio — found, diagnosed, fixed
+### The interleaved schedule's corrupt audio — diagnosed, remedy known, not landed
 
-Worth keeping the account, because the fix is a constraint on anyone extending the
-streaming path rather than a one-off.
+`CosyVoiceTTNN.synthesize_streaming` returns audio peaking around 72 against a batch
+path peaking at 0.001 on the same prompt — identical tokens, correct chunk schedule,
+destroyed waveform. **The cause is established**, which is the part that changed:
 
-`CosyVoiceTTNN.synthesize_streaming` returned audio peaking around 72 against a batch
-path peaking at 0.001 on the same prompt — correct tokens, correct chunk schedule,
-destroyed waveform. Two experiments localised it:
-
-* **`generate(use_trace=False)` made it correct.** Same conditioning, same schedule,
-  same tokens; the only variable was whether a decode trace existed. So it was never
-  the per-chunk conditioning.
-* **Per chunk against a no-trace reference:** chunk 0 (vocoded mid-generation, trace
-  live) matched at mel PCC `0.99999988` and waveform PCC `0.99999994`. Chunk 1 (the
-  finalize, after `generate` released the trace) had a **bit-identical mel**, PCC
-  `1.000000000`, and waveform PCC `0.011`.
+* **`generate(use_trace=False)` makes it correct.** Same conditioning, same schedule,
+  same tokens; the only variable is whether a decode trace exists. So it is not the
+  per-chunk conditioning, which an earlier revision of this document wrongly blamed.
+* **Per chunk against a no-trace reference:** chunk 0, vocoded mid-generation with the
+  trace live, matches at mel PCC `0.99999988` and waveform PCC `0.99999994`. Chunk 1,
+  the finalize, has a **bit-identical mel** at PCC `1.000000000` and waveform PCC
+  `0.011`.
 
 Identical mel with destroyed audio rules out the flow decoder and the vocoder's
-arithmetic. What was left is what `StreamState` carries across a seam —
-`mel_overlap`, `hift_mel`, `hift_source`, `hift_speech` — allocated during chunk 0
-while the trace was live, then clobbered by a later `execute_trace` before chunk 1
-consumed them. TTNN warns about exactly this: *"Allocating device buffers is unsafe
-due to the existence of an active trace. These buffers may be corrupted once a trace
-is executed."*
+arithmetic and leaves what `StreamState` carries across a seam — `mel_overlap`,
+`hift_mel`, `hift_source`, `hift_speech` — allocated during chunk 0 while the trace was
+live and clobbered by a later `execute_trace`. TTNN warns about exactly this: *"These
+buffers may be corrupted once a trace is executed."*
 
-**The fix is to park those four on the host between chunks** — `ttnn.to_torch` and
-deallocate on the way out, `from_torch` on the way back in — so no device buffer
-survives a boundary. About 50 KB per seam against a chunk of hundreds of
-milliseconds, and lossless at equal dtype, so the non-interleaved path is unchanged:
-`test_device_streamed_matches_non_streamed` passes on all three boards.
+**The remedy is known and is not in the tree.** Parking those four on the host between
+chunks (`to_torch` out, `from_torch` back) fixes the audio — verified on `p150a` and
+n300, and it also stopped `synthesize_streaming` hanging Wormhole. It is not landed
+because it **hangs `tests/perf/test_streaming_perf.py` on Blackhole**, where that test
+otherwise passes in 12.7 s; the A/B is one commit apart on one board. Also tried and
+rejected: draining the queue before the readback, and hoisting the synthesizer out of
+the traced region.
 
-`test_device_streaming_generates_the_same_tokens_as_batch` now asserts the invariant
-rather than pinning the symptom: the streamed peak must not clip, and — when the batch
-reference is not itself near-silent — must stay in proportion to it.
-
-**A side effect worth recording:** the same fix stopped `synthesize_streaming` hanging
-Wormhole n300. That path now runs there, and `tests/e2e/` gives 8 passed on n300 where
-those tests previously had to be skipped.
+So the defect stands, with `synthesize` as the gated path for audio, and the schedule
+itself gated by `test_device_streaming_generates_the_same_tokens_as_batch` — which
+asserts identical tokens and that chunks are emitted *during* generation, both of which
+hold. What is not yet deliverable is correct audio out of the interleaved path.
 
 ### `test_streaming_perf` still hangs on Wormhole — open
 
