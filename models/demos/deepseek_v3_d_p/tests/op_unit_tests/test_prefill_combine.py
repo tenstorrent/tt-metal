@@ -567,27 +567,39 @@ def test_ttnn_combine(
 
 
 def _cmb_fabric2d_dimensions():
-    """The single (mesh, device_params, ...) tuple the fabric2d case runs on."""
+    """The (mesh, device_params, ...) tuples the fabric2d case runs on.
+
+    Same two scenarios the direct op carries: a small pcc run that checks the op computes the
+    right thing, and the seq-640 perf run this op's development has been measured against.
+    """
     mesh = SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh
     fabric_cfg = SINGLE_GLX_AND_PROXY_MESHES.target_meshes[mesh]
-    model_config = _model_scaledown_for_combine(
-        DeepSeekV3Config(), SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh, mesh, pcc_only=False
-    )
-    return [
-        pytest.param(
-            mesh,
-            fabric_to_device_params(fabric_cfg),
-            _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg),
-            640,  # seq_len_per_chip
-            model_config.EMB_SIZE,
-            model_config.NUM_ROUTED_EXPERTS,
-            model_config.NUM_EXPERTS_PER_TOKEN,
-            8,  # dispatch_buffer_capacity_factor
-            False,  # run_pcc_check
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=_topo_marker(mesh, fabric_cfg)),
-            id=f"dsv3-fabric2d-{_mesh_id(mesh, fabric_cfg)}-row_major-2link-perf_no_pcc",
+    marks = pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=_topo_marker(mesh, fabric_cfg))
+
+    params = []
+    for scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in (
+        ("pcc", 128, 4, True),
+        ("perf_no_pcc", 640, 8, False),
+    ):
+        model_config = _model_scaledown_for_combine(
+            DeepSeekV3Config(), SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh, mesh, pcc_only=run_pcc
         )
-    ]
+        params.append(
+            pytest.param(
+                mesh,
+                fabric_to_device_params(fabric_cfg),
+                per_axis_topology(fabric_cfg)[0],  # sp axis; the op rings along cluster_axis=sp_axis
+                seq_len_per_chip,
+                model_config.EMB_SIZE,
+                model_config.NUM_ROUTED_EXPERTS,
+                model_config.NUM_EXPERTS_PER_TOKEN,
+                dispatch_buffer_capacity_factor,
+                run_pcc,
+                marks=marks,
+                id=f"dsv3-fabric2d-{_mesh_id(mesh, fabric_cfg)}-row_major-2link-{scenario_id}",
+            )
+        )
+    return params
 
 
 @pytest.mark.parametrize(
