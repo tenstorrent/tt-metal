@@ -18,6 +18,7 @@
 namespace tt::tt_metal {
 class Buffer;
 class MeshTensor;
+class Program;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
@@ -66,22 +67,24 @@ inline bool use_sfpu_reduce_path(
            (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN);
 }
 
-// True when a non-unity scalar must be a post-reduce multiply instead of via the scaler CB: MAX/MIN,
-// the Int32 SFPU path, and the accurate fp32 SFPU path all ignore the scaler CB.
-inline bool requires_post_mul(
-    tt::tt_metal::ReduceOpMath math_op, tt::tt_metal::DataType dtype, float scaler, bool use_sfpu_reduce = false) {
+// Where a reduce applies its scalar. Decided by operation semantics alone, never by the value.
+// None marks an intermediate stage that applies no scalar.
+enum class ScalerMode : uint8_t { None, ScalerTile, PostMul };
+
+// PostMul whenever the reduce path ignores the scaler CB: GMPOOL keeps only the scaler's exponent
+// for MAX/MIN, and the Int32 / accurate-fp32 SFPU folds bypass the CB entirely.
+inline ScalerMode derive_scaler_mode(
+    tt::tt_metal::ReduceOpMath math_op, tt::tt_metal::DataType dtype, bool use_sfpu_reduce = false) {
     using tt::tt_metal::ReduceOpMath;
-    if (scaler == 1.0f) {
-        return false;
-    }
     if (math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN) {
-        return true;
+        return ScalerMode::PostMul;
     }
     if (math_op == ReduceOpMath::SUM && dtype == tt::tt_metal::DataType::INT32) {
-        return true;
+        return ScalerMode::PostMul;
     }
-    return use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 &&
-           (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::AVG);
+    const bool sfpu_fp32_scalar = use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 &&
+                                  (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::AVG);
+    return sfpu_fp32_scalar ? ScalerMode::PostMul : ScalerMode::ScalerTile;
 }
 
 // All RM-path locals derived from the input shape, tile geometry, and math op.
@@ -126,12 +129,12 @@ void validate_rm_preconditions(
     std::string_view dim_label);
 
 // Build the reader compile-time args vector for the RM path (slots match
-// reader_unary_reduce_rm.cpp). Returns scalar slots followed by TensorAccessorArgs(src).
+// reader_unary_reduce_rm.cpp). Returns geometry slots followed by TensorAccessorArgs(src).
+// The scaler is common runtime arg 0.
 // `num_h_slices` / `slice_Ht` are H-axis-split geometry (H path only; 1 / full Ht_rm = normal
 // reduce).
 std::vector<uint32_t> build_rm_reader_ct_args(
     const RmPlan& plan,
-    uint32_t scaler_bits,
     const tt::tt_metal::MeshTensor& src,
     tt::tt_metal::ReduceOpDim dim,
     uint32_t num_h_slices = 1,
@@ -150,10 +153,23 @@ std::vector<uint32_t> build_rm_writer_ct_args(
 
 // Build the compute compile-time args vector for the RM path (slots match reduce_rm.cpp).
 // `Ht_arg` is the per-core ht count (W path) or the global Ht_rm (H path); the helper
-// keeps NC pinned at 1. `fp32_sfpu_reduce` (slot 6) routes Float32 through the SFPU for
-// full-fp32 accumulation instead of the tf32 FPU path.
-std::vector<uint32_t> build_rm_compute_ct_args(
-    const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits, bool fp32_sfpu_reduce);
+// keeps NC pinned at 1. `fp32_sfpu_reduce` (slot 5) routes Float32 through the SFPU for
+// full-fp32 accumulation instead of the tf32 FPU path. The post-mul scalar is common runtime arg 0.
+std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_arg, bool fp32_sfpu_reduce);
+
+// --- cache-hit patch helpers ---
+// A cache hit must re-apply what the program hash does not pin: the two scalars and the buffer
+// addresses. Both helpers patch in place, so a hit stays O(cores).
+
+// Overwrite arg slot `arg_idx` on every core the cached program gave runtime args to. The core set
+// comes from the cached grid, so the override never re-derives the work split. Cores with no work
+// hold an empty vector and are skipped.
+void patch_cached_arg_on_all_cores(
+    tt::tt_metal::Program& program, uint32_t kernel_idx, uint32_t arg_idx, uint32_t value);
+
+// Re-point the tensor-backed circular buffer carrying `cb_index` at `tensor`'s current address.
+// Matched by CB index: the position in desc.cbs varies between branches.
+void patch_cached_cb_address(tt::tt_metal::Program& program, uint32_t cb_index, const tt::tt_metal::MeshTensor& tensor);
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     const ttnn::Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);

@@ -24,7 +24,8 @@ void kernel_main() {
 
 #ifdef REDUCE_SCALER
     constexpr uint32_t dfb_id_in2 = get_compile_time_arg_val(2);
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
+    // Common runtime arg 0, so distinct scalar values share one program (#54180).
+    uint32_t scaler_bits = get_common_arg_val<uint32_t>(0);
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<dfb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
 #endif
@@ -33,8 +34,8 @@ void kernel_main() {
     // unified reduce compute kernel (row_chunk = DEST_AUTO_LIMIT). For shard_Wt=1 this
     // degenerates to one column per chunk; for shard_Wt>1 it interleaves columns.
     // Int32 SFPU max reserves one DST for the binary-fold work tile (DEST_AUTO_LIMIT - 1).
-    // Accurate fp32: host sets CT arg 4 to 1 so SFPU chunk sizing here matches the compute kernel.
-    constexpr auto fp32_mode = get_compile_time_arg_val(4) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+    // Accurate fp32: host sets CT arg 3 to 1 so SFPU chunk sizing here matches the compute kernel.
+    constexpr auto fp32_mode = get_compile_time_arg_val(3) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
     constexpr DataFormat reduce_format = get_dataformat(dfb_id_in0);
     constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format, fp32_mode>();
     constexpr uint32_t row_chunk =

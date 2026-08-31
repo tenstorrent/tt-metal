@@ -16,8 +16,13 @@ void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
     uint32_t NC = get_compile_time_arg_val(2);
-    // Accurate fp32: host sets CT arg 4 to route Float32 through the SFPU (full fp32) vs the FPU (tf32).
-    constexpr auto fp32_mode = get_compile_time_arg_val(4) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+    // Accurate fp32: host sets CT arg 3 to route Float32 through the SFPU (full fp32) vs the FPU (tf32).
+    constexpr auto fp32_mode = get_compile_time_arg_val(3) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+
+#ifdef REDUCE_POST_MUL
+    // Common runtime arg 0, so one program serves every scalar value (#54180).
+    const uint32_t post_mul_scaler_bits = get_common_arg_val<uint32_t>(0);
+#endif
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
 
@@ -37,8 +42,10 @@ void kernel_main() {
         // GMPOOL only respects the scaler's exponent for MAX/MIN and SFPU reduce ignores the
         // scaler CB entirely, so both paths apply the user scalar here per output tile.
         // reduce_post_mul_tile handles Int32 (typecast-bracketed) and float formats uniformly.
-        [](uint32_t dst_idx) {
-            constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
+        [post_mul_scaler_bits](uint32_t dst_idx) {
+            if (post_mul_scaler_bits == k_identity_scaler_bits) {
+                return;
+            }
             constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[tt::CBIndex::c_0]);
             compute_kernel_lib::detail::reduce_post_mul_tile<reduce_format>(dst_idx, post_mul_scaler_bits);
         }

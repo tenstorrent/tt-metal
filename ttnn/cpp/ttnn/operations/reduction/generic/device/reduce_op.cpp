@@ -201,13 +201,14 @@ Tensor reduce(
             input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
     }
 
-    // A non-unity scalar is applied after the reduction (see requires_post_mul() in common.hpp):
+    // A non-unity scalar is applied after the reduction (see derive_scaler_mode() in common.hpp):
     // GMPOOL keeps only the scaler's exponent for MAX/MIN, and the Int32 SFPU path ignores the
     // scaler CB. Int32 post-mul rounds through fp32, so it is lossy for |result| > 2^24.
     // The accurate fp32 SFPU path also post-muls (the SFPU ignores the scaler CB): mean applies its
     // 1/N here, the rest their user scalar.
-    const bool use_post_mul =
-        ttnn::prim::requires_post_mul(reduce_math, prepared_input.dtype(), scaler, use_sfpu_fp32_reduce);
+    // The mode depends only on op semantics, so it is hashed while the two scalar floats are not.
+    const auto scaler_mode = ttnn::prim::derive_scaler_mode(reduce_math, prepared_input.dtype(), use_sfpu_fp32_reduce);
+    const bool use_post_mul = scaler_mode == ttnn::prim::ScalerMode::PostMul;
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
     const float post_mul = use_post_mul ? scaler : 1.0f;
 
@@ -232,7 +233,8 @@ Tensor reduce(
                 config,
                 sub_core_grids,
                 /*negate=*/false,
-                /*post_mul_scaler=*/h_post_mul);
+                /*post_mul_scaler=*/h_post_mul,
+                scaler_mode);
             return ttnn::neg(h_out, output_mem_config, std::nullopt, sub_core_grids);
         };
 
@@ -283,6 +285,7 @@ Tensor reduce(
             sub_core_grids,
             negate,
             /*post_mul_scaler=*/1.0f,
+            /*scaler_mode=*/ttnn::prim::ScalerMode::None,
             /*row_major_w_dense_path=*/false,
             /*row_major_h_dense_path=*/false,
             /*use_sfpu_reduce=*/use_sfpu_fp32_reduce);
@@ -302,6 +305,7 @@ Tensor reduce(
             sub_core_grids,
             negate,
             /*post_mul_scaler=*/post_mul,
+            scaler_mode,
             /*row_major_w_dense_path=*/false,
             /*row_major_h_dense_path=*/false,
             /*use_sfpu_reduce=*/use_sfpu_fp32_reduce);
@@ -352,6 +356,7 @@ Tensor reduce(
                 sub_core_grids,
                 /*negate=*/false,
                 /*post_mul_scaler=*/1.0f,
+                /*scaler_mode=*/ttnn::prim::ScalerMode::None,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/true,
                 /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
@@ -369,6 +374,7 @@ Tensor reduce(
                 sub_core_grids,
                 /*negate=*/false,
                 /*post_mul_scaler=*/post_mul,
+                scaler_mode,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/true,
                 /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
@@ -388,6 +394,7 @@ Tensor reduce(
         sub_core_grids,
         negate,
         /*post_mul_scaler=*/post_mul,
+        scaler_mode,
         /*row_major_w_dense_path=*/use_rm_dense_w,
         /*row_major_h_dense_path=*/use_rm_dense_h,
         /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,

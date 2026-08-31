@@ -47,8 +47,8 @@ constexpr auto rm_reconfig_mode =
     compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
 #endif
 
-// Accurate fp32: CT arg 6 routes Float32 through the SFPU (full fp32) instead of the FPU (tf32).
-constexpr auto fp32_mode = get_compile_time_arg_val(6) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+// Accurate fp32: CT arg 5 routes Float32 through the SFPU (full fp32) instead of the FPU (tf32).
+constexpr auto fp32_mode = get_compile_time_arg_val(5) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
 // One reduce() call over the (ht_in_chunk × wt_in_chunk × NC) block currently staged in cb_tile_in.
 // is_last_chunk == true packs the final result into cb_out (with optional post-mul); otherwise the
@@ -70,7 +70,11 @@ FORCE_INLINE void reduce_block(
             compute_kernel_lib::Accumulate::at(cb_acc, chunk_idx),
 #ifdef REDUCE_POST_MUL
             [](uint32_t dst_idx) {
-                constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
+                // Common runtime arg 0, so one program serves every scalar value (#54180).
+                const uint32_t post_mul_scaler_bits = get_common_arg_val<uint32_t>(0);
+                if (post_mul_scaler_bits == k_identity_scaler_bits) {
+                    return;
+                }
                 binop_with_scalar_tile_init();
                 mul_unary_tile(dst_idx, post_mul_scaler_bits);
             }
@@ -103,10 +107,10 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
-    constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(4);
-    constexpr uint32_t ht_tiles_per_chunk = get_compile_time_arg_val(5);
-    // arg(3) = post_mul_scaler_bits — captured inside reduce_block() under REDUCE_POST_MUL.
-    // arg(6) = accurate-fp32 flag — consumed by fp32_mode above.
+    constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(3);
+    constexpr uint32_t ht_tiles_per_chunk = get_compile_time_arg_val(4);
+    // arg(5) = accurate-fp32 flag — consumed by fp32_mode above.
+    // post_mul_scaler_bits is common runtime arg 0 — read inside reduce_block() under REDUCE_POST_MUL.
 
     compute_kernel_hw_startup(cb_rm, cb_tile_in);
 

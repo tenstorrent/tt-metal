@@ -35,6 +35,35 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         "Operands to reduce need to be on device! Got storage type: {}",
         tensor_args.storage_type());
     TT_FATAL(tensor_args.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
+    // The scalars are excluded from the program hash, so they are what a cache hit cannot vouch for.
+    // With no validate_on_program_cache_hit defined, the framework routes hits here too.
+    TT_FATAL(
+        operation_attributes.scaler_mode != ScalerMode::None ||
+            (operation_attributes.scaler == 1.0f && operation_attributes.post_mul_scaler == 1.0f),
+        "ScalerMode::None marks a stage that applies no scalar, got scaler={} post_mul_scaler={}",
+        operation_attributes.scaler,
+        operation_attributes.post_mul_scaler);
+    TT_FATAL(
+        operation_attributes.scaler_mode != ScalerMode::ScalerTile || operation_attributes.post_mul_scaler == 1.0f,
+        "ScalerMode::ScalerTile carries the scalar in the scaler CB, got post_mul_scaler={}",
+        operation_attributes.post_mul_scaler);
+    TT_FATAL(
+        operation_attributes.scaler_mode != ScalerMode::PostMul || operation_attributes.scaler == 1.0f,
+        "ScalerMode::PostMul reduces with scaler=1.0 and multiplies after, got scaler={}",
+        operation_attributes.scaler);
+    // GMPOOL keeps only the scaler's exponent for MAX/MIN, and the Int32 / accurate-fp32 SFPU folds
+    // ignore the scaler CB outright, so a non-unity scalar must never ride the tile on those paths.
+    const bool reduce_path_ignores_scaler_cb =
+        derive_scaler_mode(operation_attributes.math_op, tensor_args.dtype(), operation_attributes.use_sfpu_reduce) ==
+        ScalerMode::PostMul;
+    const bool scaler_tile_would_be_dropped = operation_attributes.scaler_mode == ScalerMode::ScalerTile &&
+                                              operation_attributes.scaler != 1.0f && reduce_path_ignores_scaler_cb;
+    TT_FATAL(
+        !scaler_tile_would_be_dropped,
+        "Non-unity scaler {} routed through the scaler CB on a path that ignores it (math_op {}, dtype {})",
+        operation_attributes.scaler,
+        operation_attributes.math_op,
+        tensor_args.dtype());
     // Dense RM path is only selected on the host for ttnn.mean-style dispatch (AVG over W/H on 4D BF16/FLOAT32,
     // interleaved I/O). It is lowered to PoolType::SUM + scaler before launch; see reduce_op.cpp.
     TT_FATAL(
@@ -195,6 +224,32 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
+ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Tripwire: a new ReduceParams field must be classified — hashed below, or excluded like the
+    // two scalars because the kernels read it as a runtime arg.
+    static_assert(
+        reflect::size<operation_attributes_t>() == 15,
+        "ReduceParams gained or lost a field: add it to compute_program_hash or document why it is "
+        "excluded, then update this count.");
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<ReduceDeviceOperation>,
+        operation_attributes.math_op,
+        operation_attributes.dim,
+        operation_attributes.output_mem_config,
+        operation_attributes.output_dtype,
+        operation_attributes.compute_kernel_config,
+        operation_attributes.sub_core_grids,
+        operation_attributes.negate,
+        operation_attributes.scaler_mode,
+        operation_attributes.row_major_w_dense_path,
+        operation_attributes.row_major_h_dense_path,
+        operation_attributes.use_sfpu_reduce,
+        operation_attributes.num_h_slices,
+        operation_attributes.output_layout,
+        tensor_args);
+}
+
 ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_shape = tensor_args.logical_shape();
@@ -233,6 +288,7 @@ ttnn::Tensor reduce(
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool negate,
     float post_mul_scaler,
+    ScalerMode scaler_mode,
     bool row_major_w_dense_path,
     bool row_major_h_dense_path,
     bool use_sfpu_reduce,
@@ -249,6 +305,7 @@ ttnn::Tensor reduce(
             sub_core_grids,
             negate,
             post_mul_scaler,
+            scaler_mode,
             row_major_w_dense_path,
             row_major_h_dense_path,
             use_sfpu_reduce,

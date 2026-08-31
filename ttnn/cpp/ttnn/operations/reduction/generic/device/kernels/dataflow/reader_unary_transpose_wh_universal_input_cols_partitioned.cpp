@@ -17,14 +17,15 @@ void kernel_main() {
         get_arg_val<uint32_t>(1);  // Start id in column major order. This should be the start of a column
     uint32_t curr_col_in_batch = get_arg_val<uint32_t>(2);
     uint32_t num_cols = get_arg_val<uint32_t>(3);  // number of cols to read
+    // Common runtime arg 0, so distinct scalar values share one program (#54180).
+    uint32_t scaler_bits = get_common_arg_val<uint32_t>(0);
 
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t HtWt = get_compile_time_arg_val(2);
 
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
-    constexpr bool use_welford = get_compile_time_arg_val(4) != 0;
-    constexpr auto fp32_mode = get_compile_time_arg_val(5) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+    constexpr bool use_welford = get_compile_time_arg_val(3) != 0;
+    constexpr auto fp32_mode = get_compile_time_arg_val(4) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
     constexpr uint32_t dfb_id_in0 = tt::CBIndex::c_0;
 
@@ -44,7 +45,7 @@ void kernel_main() {
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<dfb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
-    constexpr auto tensor_args = TensorAccessorArgs<6>();
+    constexpr auto tensor_args = TensorAccessorArgs<5>();
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
 
     Noc noc;

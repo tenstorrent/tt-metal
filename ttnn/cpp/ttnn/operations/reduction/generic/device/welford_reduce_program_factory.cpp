@@ -309,6 +309,9 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     }
 
     // --- Reader kernel ---
+    // The readers are shared with the generic reduce factories, which take the scaler as common
+    // runtime arg 0 (#54180). Welford hashes its own scalar, so a cache hit implies the same
+    // value and this arg needs no cache-hit patching.
     uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scalar);
     KernelDescriptor reader_desc;
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -324,7 +327,11 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         // enable_fp32_sfpu=0: Welford never uses the fp32-SFPU reduce path (use_welford=1 forces
         // row_chunk=1). The slot keeps this reader's CT-arg layout in lockstep with the reduce factories.
         std::vector<uint32_t> reader_compile_time_args = {
-            Ht, Wt, HtWt, scaler_bits, /*use_welford=*/1, /*enable_fp32_sfpu=*/0u};
+            Ht,
+            Wt,
+            HtWt,
+            /*use_welford=*/1,
+            /*enable_fp32_sfpu=*/0u};
         TensorAccessorArgs(input).append_to(reader_compile_time_args);
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -332,7 +339,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         reader_desc.compile_time_args = reader_compile_time_args;
     } else {
         // W-reduce: sequential reader reads tiles row by row.
-        std::vector<uint32_t> reader_compile_time_args = {scaler_bits};
+        std::vector<uint32_t> reader_compile_time_args;
         TensorAccessorArgs(input).append_to(reader_compile_time_args);
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -585,6 +592,8 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             num_cols_read += num_cols_per_core;
         }
     }
+
+    reader_desc.emplace_common_runtime_args({scaler_bits});
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));

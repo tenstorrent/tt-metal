@@ -39,19 +39,20 @@ void reduce_rm_reader() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t rt_count = get_arg_val<uint32_t>(1);
     const uint32_t rt_start = get_arg_val<uint32_t>(2);
+    // Common runtime arg 0, so distinct scalar values share one program (#54180).
+    const uint32_t scaler_bits = get_common_arg_val<uint32_t>(0);
 
-    // Compile-time args. Slots 0-7 shared between paths. H reduce uses slot 8 for H_logical;
-    // TensorAccessor args follow at slot 8 (W) or slot 9 (H).
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(0);
-    constexpr uint32_t W_logical = get_compile_time_arg_val(1);
-    constexpr uint32_t elem_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t padding_identity_bits = get_compile_time_arg_val(3);
-    constexpr uint32_t Wt = get_compile_time_arg_val(4);
-    constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(5);
-    constexpr uint32_t rm_rows_per_tile = get_compile_time_arg_val(6);
-    constexpr uint32_t ht_tiles_per_chunk = get_compile_time_arg_val(7);
-    // H path carries H_logical (8) and the H-axis-split geometry (9-10); the W path omits all three.
-    constexpr auto tensor_args = TensorAccessorArgs<(DIM == ckernel::ReduceDim::REDUCE_ROW) ? 8 : 11>();
+    // Compile-time args. Slots 0-6 shared between paths. H reduce uses slot 7 for H_logical;
+    // TensorAccessor args follow at slot 7 (W) or slot 10 (H).
+    constexpr uint32_t W_logical = get_compile_time_arg_val(0);
+    constexpr uint32_t elem_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t padding_identity_bits = get_compile_time_arg_val(2);
+    constexpr uint32_t Wt = get_compile_time_arg_val(3);
+    constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(4);
+    constexpr uint32_t rm_rows_per_tile = get_compile_time_arg_val(5);
+    constexpr uint32_t ht_tiles_per_chunk = get_compile_time_arg_val(6);
+    // H path carries H_logical (7) and the H-axis-split geometry (8-9); the W path omits all three.
+    constexpr auto tensor_args = TensorAccessorArgs<(DIM == ckernel::ReduceDim::REDUCE_ROW) ? 7 : 10>();
 
     constexpr uint32_t cb_id_scaler = tt::CBIndex::c_2;
     constexpr uint32_t cb_id_rm = tt::CBIndex::c_24;
@@ -131,10 +132,10 @@ void reduce_rm_reader() {
         // === H reduce ===
         // H_logical / split geometry are only meaningful on the H path. The indices embed DIM so the
         // W-branch (where slots 8-10 don't exist) doesn't eagerly instantiate them.
-        constexpr uint32_t H_logical = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 8 : 0);
-        constexpr uint32_t num_h_slices = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 9 : 0);
+        constexpr uint32_t H_logical = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 7 : 0);
+        constexpr uint32_t num_h_slices = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 8 : 0);
         // Tiles per work unit == the compute kernel's Ht loop bound; == Ht_rm when num_h_slices == 1.
-        constexpr uint32_t slice_Ht = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 10 : 0);
+        constexpr uint32_t slice_Ht = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 9 : 0);
 
         // Each owned output tile is one work unit (wt_tiles_per_chunk == 1). Decompose its global id
         // into (nc, slice, wt_in_nc) and read only this slice's contiguous H slice. Tiles that run

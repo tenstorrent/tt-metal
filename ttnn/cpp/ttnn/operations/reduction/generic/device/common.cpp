@@ -9,6 +9,7 @@
 #include <tuple>
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
@@ -93,18 +94,17 @@ void validate_rm_preconditions(
 
 std::vector<uint32_t> build_rm_reader_ct_args(
     const RmPlan& plan,
-    uint32_t scaler_bits,
     const tt::tt_metal::MeshTensor& src,
     tt::tt_metal::ReduceOpDim dim,
     uint32_t num_h_slices,
     uint32_t slice_Ht) {
-    // Slots 0-7 are shared by both paths. The reader's REDUCE_COL (H) branch additionally consumes
-    // H_logical at slot 8 and the H-axis-split geometry (num_h_slices, slice_Ht) at slots 9-10; the
-    // W path omits all three, so the source TensorAccessor args follow at slot 8 (W) or slot 11 (H).
+    // Slots 0-6 are shared by both paths. The reader's REDUCE_COL (H) branch additionally consumes
+    // H_logical at slot 7 and the H-axis-split geometry (num_h_slices, slice_Ht) at slots 8-9; the
+    // W path omits all three, so the source TensorAccessor args follow at slot 7 (W) or slot 10 (H).
     // The kernel is templated on REDUCE_DIM so the unused slots are genuinely dropped.
+    // The scaler is common runtime arg 0, not a CT arg, so its value never forks the program.
     // Only supports ReduceOpDim::W or ReduceOpDim::H
     std::vector<uint32_t> args = {
-        scaler_bits,
         plan.W_logical,
         plan.src_datum_size,
         plan.padding_identity_bits,
@@ -149,17 +149,39 @@ std::vector<uint32_t> build_rm_writer_ct_args(
     return args;
 }
 
-std::vector<uint32_t> build_rm_compute_ct_args(
-    const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits, bool fp32_sfpu_reduce) {
+std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_arg, bool fp32_sfpu_reduce) {
+    // post_mul_scaler_bits is common runtime arg 0, not a CT arg, so its value never forks the program.
     return {
         Ht_arg,
         plan.Wt,
         1u,  // NC (kept literal-1 per the existing RM compute contract; not hoisted into the plan)
-        post_mul_scaler_bits,
         plan.wt_tiles_per_chunk,
         plan.ht_tiles_per_chunk,
         fp32_sfpu_reduce ? 1u : 0u,  // enable_fp32_sfpu: route Float32 through the SFPU
     };
+}
+
+void patch_cached_arg_on_all_cores(
+    tt::tt_metal::Program& program, uint32_t kernel_idx, uint32_t arg_idx, uint32_t value) {
+    for (auto& column : tt::tt_metal::GetRuntimeArgs(program, kernel_idx)) {
+        for (auto& core_args : column) {
+            if (core_args.size() > arg_idx) {
+                core_args[arg_idx] = value;
+            }
+        }
+    }
+}
+
+void patch_cached_cb_address(
+    tt::tt_metal::Program& program, uint32_t cb_index, const tt::tt_metal::MeshTensor& tensor) {
+    const auto index = static_cast<uint8_t>(cb_index);
+    for (const auto& cb : program.circular_buffers()) {
+        if (cb->buffer_indices().contains(index)) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), tensor);
+            return;
+        }
+    }
+    TT_THROW("Cached reduce program has no circular buffer with index {}", cb_index);
 }
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
