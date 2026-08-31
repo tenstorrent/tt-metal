@@ -89,24 +89,41 @@ statically-allocated circular buffers colliding with L1 buffers:
 | decode | `_tp_linear("mlp_down_decode")`, `in0_block_w=17` | `[0-0 - 7-9]` | 811,776 | 777,728 | 34,048 B |
 | decode | `_all_reduce` after the MLP down projection | `[0-0 - 0-0]` | 177,152 | 163,328 | 13,824 B |
 
-**This was a real regression, not a wrong invocation.** That distinction was
-worth establishing rather than assuming, and the evidence is:
+**Was it the rebase? Not confirmed.** The circumstantial case is strong, but I
+never found a change in tt-metal that causes it, so this is recorded as
+unattributed.
+
+What supports "regression":
 
 - `doc/multichip_decoder/artifacts/tracy/linear_b32_dram_sharded/provenance.txt`
   records the exact command, and its `trace_result.json` records
   `candidate=default`, `baseline_candidate=default`, `pcc: [1.0, 1.0, 1.0]`,
-  `multichip_trace_median_ms=4.4718`. That is the same command, same candidate,
-  no env vars, no warm-up step. Running it on the rebased tree failed.
+  `multichip_trace_median_ms=4.4718`. Same command, same candidate, no env vars,
+  no setup step. Running it on the rebased tree failed.
 - The harness performs no collective warm-up for `candidate=default`
   (`_ccl_buffers` is only populated for `multichip_preallocated_ccl`, and holds
-  output tensors, not semaphores), so those green runs took the same
-  first-collective-at-width-5120 path this one does.
-- `ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp` is unchanged between
-  the two bases; only its nanobind docstring moved.
-- Enabling `FABRIC_1D_RING` costs the L1 allocator nothing: `total_bytes_per_bank`
-  is 1,461,248 with fabric both disabled and enabled.
+  output tensors, not semaphores), so those green runs took the same path.
 - The single-chip baseline the same harness prints is unchanged (15.8581 ms
   recorded, 15.8382 ms now), so the environment is comparable.
+
+Candidate causes checked and **ruled out**:
+
+| Candidate | Verdict |
+|---|---|
+| `ccl/all_reduce/all_reduce.cpp` changed | No. Only its nanobind docstring moved. |
+| Fabric reserves more L1 | No. `total_bytes_per_bank` is 1,461,248 with `FABRIC_1D_RING` both disabled and enabled. |
+| The composite-vs-RS+AG path flipped for this shape | No. `composite_common` changed only by a namespace refactor and a rank-1 edge case. |
+| Reduce-scatter CBs grew via the `packet_size_bytes` switch in `e4afdb1a8e6` | No. `tile_granularity = min(4 * min(4, pages_per_packet), max_dst_size)` saturates at 8 either way. |
+| `use_l1_small_for_semaphores` is new | No. Present on both bases, defaulting to `false` on both. |
+
+**Not** ruled out: the `reduce_scatter_minimal_async` rewrite (+2,192/−1,800
+across the two bases) could have changed the size or ordering of the transient
+that displaces the semaphores. Settling that needs a build of the old base to
+measure the same low-water mark, which this branch did not do.
+
+So the honest position is: the failure is real, reproducible, and fully
+characterized on the current base; whether the current base *changed* it is
+unproven.
 
 **Root cause — one thing, not three.** `ttnn.all_reduce` passes no persistent
 semaphores (it forwards `std::nullopt` and falls through to the non-persistent
@@ -164,6 +181,26 @@ interleaved multi-core path and the CB helpers). Settling that needs a build of
 the old base to compare against, which this branch did not do. The fix does not
 depend on the answer: it removes the fragmentation rather than trying to fit
 underneath it.
+
+### B1a. `ttnn.all_reduce` cannot reach the knob that avoids this
+
+`ttnn.reduce_scatter` and `ttnn.all_gather` both take
+`use_l1_small_for_semaphores`, which puts the semaphores in the L1-small region
+and leaves the main heap completely alone — measured, largest contiguous L1 is
+1,428,480 B both before and after a width-5120 reduce-scatter plus all-gather.
+That is the intended mechanism for exactly this problem.
+
+`ttnn.all_reduce` does not expose it, and `all_reduce_async` calls
+`ttnn::reduce_scatter` with thirteen arguments, omitting the fourteenth, so it
+always takes the `false` default. Any caller using `ttnn.all_reduce` therefore
+has no way to keep the semaphores out of the main heap. This gap exists on both
+bases.
+
+It is also not a drop-in fix for the model, because it needs the *caller* to
+open the mesh with an `l1_small_size`; at the default of 0 it fails with
+`Not enough space to allocate 1760 B L1_SMALL buffer ... bank size is 0 B`.
+The decoder does not open the mesh — the harness, the demo and vLLM do — so the
+load-time warm-up stays the model-side fix, and the knob is the upstream ask.
 
 ### B2. Eager batch-32 decode fails in the shared synthetic harness
 
