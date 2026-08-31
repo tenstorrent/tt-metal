@@ -22,7 +22,7 @@
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/graph/graph_consts.hpp"
 #include <tt-metalium/graph_tracking.hpp>
-#include <internal/graph_tracking.hpp>
+#include <internal/graph_function_abort.hpp>
 
 namespace ttnn::graph {
 
