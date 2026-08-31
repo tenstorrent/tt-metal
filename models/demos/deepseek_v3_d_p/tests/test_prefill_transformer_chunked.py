@@ -437,6 +437,18 @@ def _preload_kvpe_prefix_from_trace(
     )
     ttnn.copy_host_to_device_tensor(cache_host_tt, tt_kvpe_cache.storage)
     ttnn.synchronize_device(mesh_device)
+    if tp_shard_kv:
+        # copy_host_to_device_tensor propagates the HOST mapper's declaration, and the folded
+        # [layers, tp, seq/tp, D] layout above declares TP as a dim-1 split -- so the copy overwrites the
+        # sp*tp sequence distribution init_kvpe_cache stamped at creation with [Shard(2), Shard(1)].
+        # The bytes are already in linear chip order (L = s*tp + t, i.e. mesh row-major), so restore the
+        # declaration the cache actually has: dim 2 sharded across BOTH axes. Ops that validate the
+        # distribution (high_bw_all_gather's full-mesh path) otherwise see a 1/8 shard factor, not 1/32.
+        _dist = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
+        _coords = [ttnn.MeshCoordinate([c[i] for i in range(c.dims())]) for c in ttnn.MeshCoordinateRange(_dist)]
+        tt_kvpe_cache.storage.update_tensor_topology(
+            ttnn.TensorTopology(_dist, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], _coords)
+        )
 
 
 def _preload_indexer_k_prefix_from_trace(
