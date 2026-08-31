@@ -16,8 +16,9 @@
  * (llk_math_matmul<fidelity, throttle>(idst, ct, rt)) takes no operand id, so the id-free path reuses the
  * legacy execute directly -- no overload here.
  *
- * partial_face is derived as (in0 total_row_dim() < FACE_R_DIM), exactly as the legacy CB-id
- * llk_math_matmul_init derives it from unpack_tile_r_dim.
+ * partial_face is derived INLINE as (in0 total_row_dim() < FACE_R_DIM), exactly as the legacy CB-id
+ * llk_math_matmul_init derives it from unpack_tile_r_dim. NOTE this is a DIFFERENT threshold than the UNPACK
+ * path (llk_unpack_AB_matmul.h, < TILE_R_DIM); the divergence is inherited from legacy (see llk_descriptor.h).
  *************************************************************************/
 
 template <
@@ -31,8 +32,9 @@ inline void llk_math_matmul_init(
     constexpr std::uint32_t in0_tile_c_dim = IN0_DESC.shape.total_col_dim();
     constexpr std::uint32_t in1_tile_r_dim = IN1_DESC.shape.total_row_dim();
     constexpr std::uint32_t in1_tile_c_dim = IN1_DESC.shape.total_col_dim();
-    // Shared derivation (internal/llk_descriptor.h) so MATH and UNPACK agree; == legacy (in0 tile_r < FACE_R_DIM).
-    constexpr bool partial_face = ckernel::experimental::matmul_partial_face(IN0_DESC);
+    // MATH-side rule == legacy (in0 tile_r < FACE_R_DIM). The UNPACK path uses the looser < TILE_R_DIM (see
+    // llk_unpack_AB_matmul.h / llk_descriptor.h) -- the legacy MATH/UNPACK divergence, preserved.
+    constexpr bool partial_face = in0_tile_r_dim < ckernel::FACE_R_DIM;
 
     llk_math_matmul_init_impl<math_fidelity, THROTTLE_LEVEL>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);

@@ -59,12 +59,14 @@ constexpr std::uint32_t tile_stride_words(DataFormat format, TensorShape shape) 
                               : (SCALE_DATUM_SIZE(fmt, shape.total_tensor_size()) >> 4);
 }
 
-/**
- * (internal) partial_face for a matmul operand: the rule (tile_r_dim < FACE_R_DIM) that both the id-free matmul
- * UNPACK (llk_unpack_AB_matmul) and MATH (llk_math_matmul) derive, shared here so they stay identical (and match
- * the legacy CB-id llk_math_matmul_init). `desc`: the operand's descriptor.
- */
-constexpr bool matmul_partial_face(const LLKMemDescriptor& desc) { return desc.shape.total_row_dim() < FACE_R_DIM; }
+// NOTE (matmul partial_face): the id-free matmul derives partial_face inline at its two call sites, NOT via a
+// shared helper, because the UNPACK and MATH engines use DIFFERENT thresholds (inherited from the legacy CB-id
+// path, do not "unify"):
+//   * MATH  (llk_math_matmul.h):        partial_face = (shape.total_row_dim() < FACE_R_DIM)  -- == legacy math init.
+//   * UNPACK (llk_unpack_AB_matmul.h):  partial_face = (shape.total_row_dim() < TILE_R_DIM)  -- == the legacy
+//     host-side Tile::partial_face (tile height < TILE_HEIGHT) fed via get_operand_partial_face().
+// A one-face-high operand (total_row_dim() == 16) is thus partial-face to the unpacker (16 < 32) but full-face to
+// the math (16 == FACE_R_DIM, not < ).
 
 /**
  * (internal) Per-tile L1 size in 16B words (fifo_page_size units) for a matmul operand descriptor: geometry-exact

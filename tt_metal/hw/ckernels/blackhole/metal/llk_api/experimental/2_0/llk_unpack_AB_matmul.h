@@ -21,14 +21,17 @@
  *     partial_face_b from IN0 (mirrors the legacy execute's operand wiring exactly, incl. its known quirk).
  *
  * ASSUMPTIONS (documented at the compute layer, 2_0/matmul.h):
- *   - partial_face is derived as (total_row_dim() < FACE_R_DIM) -- the same rule MATH already uses in
- *     llk_math_matmul_init; equals the host unpack_partial_face[] for the tested full tiles.
+ *   - partial_face is derived inline as (total_row_dim() < TILE_R_DIM), matching the legacy CB-id path, which
+ *     feeds the unpacker the host-side Tile::partial_face (tile height < TILE_HEIGHT) via
+ *     get_operand_partial_face(). This is INTENTIONALLY a looser threshold than the MATH engine's rule
+ *     (llk_math_matmul.h uses < FACE_R_DIM): a one-face-high tile (total_row_dim() == 16) is partial-face to the
+ *     unpacker but full-face to the math. The divergence is inherited from legacy; do not unify the two.
  *   - per-tile size derived from the descriptor (fifo_page_size == a single tile's size; exact for linear
  *     formats, single-tile test path never applies the multiplier).
  *************************************************************************/
 
-// matmul_partial_face / matmul_tile_size are shared helpers in internal/llk_descriptor.h (used by both the
-// matmul unpack here and the matmul math), so they are derived identically in one place.
+// matmul_tile_size is a shared helper in internal/llk_descriptor.h. partial_face is derived INLINE below
+// (< TILE_R_DIM) rather than via a helper -- the UNPACK/MATH threshold divergence is documented there.
 
 template <ckernel::experimental::LLKMemDescriptor IN0_DESC, ckernel::experimental::LLKMemDescriptor IN1_DESC>
 inline void llk_unpack_AB_matmul_init(
@@ -46,8 +49,8 @@ inline void llk_unpack_AB_matmul_init(
         IN0_DESC.shape.face_r_dim,
         IN1_DESC.shape.total_num_faces(),
         IN0_DESC.shape.total_num_faces(),
-        ckernel::experimental::matmul_partial_face(IN1_DESC),
-        ckernel::experimental::matmul_partial_face(IN0_DESC));
+        IN1_DESC.shape.total_row_dim() < ckernel::TILE_R_DIM,   // partial_face_a (SrcA <- IN1)
+        IN0_DESC.shape.total_row_dim() < ckernel::TILE_R_DIM);  // partial_face_b (SrcB <- IN0)
 }
 
 template <ckernel::experimental::LLKMemDescriptor IN0_DESC, ckernel::experimental::LLKMemDescriptor IN1_DESC>
@@ -68,8 +71,8 @@ inline void llk_unpack_AB_matmul(
         tile_index_in1,
         ckernel::experimental::matmul_tile_size(IN0_DESC),
         ckernel::experimental::matmul_tile_size(IN1_DESC),
-        ckernel::experimental::matmul_partial_face(IN1_DESC),
-        ckernel::experimental::matmul_partial_face(IN0_DESC),
+        IN1_DESC.shape.total_row_dim() < ckernel::TILE_R_DIM,  // partial_face_a (SrcA <- IN1)
+        IN0_DESC.shape.total_row_dim() < ckernel::TILE_R_DIM,  // partial_face_b (SrcB <- IN0)
         ct_dim,
         rt_dim,
         kt_dim);
