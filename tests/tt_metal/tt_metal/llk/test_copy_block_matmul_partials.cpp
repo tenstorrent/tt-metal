@@ -13,10 +13,14 @@
 #include <variant>
 #include <vector>
 
+#include <random>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/tile.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include "tt_metal/test_utils/comparison.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
@@ -412,6 +416,49 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixPackBlockIdFreeIdentity) {
         "tests/tt_metal/tt_metal/test_kernels/compute/pack_block_2_0.cpp",
         /*cb_depth_tiles=*/num_tiles);
     EXPECT_EQ(src_vec, result);
+}
+
+// Id-free (2.0) copy_block over a MULTI-TILE window of block-float (Bfp8_b) tiles. This guards the block-float
+// branch of tile_stride_words (internal/llk_descriptor.h): copy_block reads the 4-tile input window at
+// in.l1_address + c * tile_stride_words(Bfp8_b, 32x32) and packs each DST slot back out. A Bfp8_b tile carries a
+// shared-exponent section that a plain datum-count size omits, so if the per-tile stride is wrong, tiles c=1..3
+// are read from the wrong L1 offset and the decoded output diverges from the input. Bfp8_b in AND out => identity
+// copy (golden = the input, is_close within Bfp8 requant). NOTE: only FULL 32x32 block-float tiles are exercised
+// here -- the BH compute datapath does not support partial (sub-32-row) block-float tiles, so the partial-BFP
+// stride (correct in tile_stride_words, matching tt_metal Tile::get_tile_size) cannot be validated on device.
+TEST_F(LLKBlackholeSingleCardFixture, TensixCopyBlockBfp8IdFree) {
+    constexpr std::uint32_t num_tiles = 4;  // exactly one copy_block window
+    const tt::tt_metal::Tile tile({tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
+    const std::uint32_t datums_per_tile = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
+
+    std::vector<float> src_floats(num_tiles * datums_per_tile);
+    std::mt19937 gen(42);
+    std::uniform_real_distribution<float> dist(-10.0f, 10.0f);
+    for (float& v : src_floats) {
+        v = dist(gen);
+    }
+    auto src_bfp8 =
+        pack_as_bfp8_tiles(ttsl::make_const_span(src_floats), /*row_major_input=*/true, /*is_exp_a=*/false, tile);
+
+    auto result = unit_tests::llk::single_core::run_unary_tiled(
+        *this->devices_.at(0),
+        tt::DataFormat::Bfp8_b,
+        tt::DataFormat::Bfp8_b,
+        tile,
+        src_bfp8,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/copy_block_2_0.cpp",
+        /*cb_depth_tiles=*/num_tiles);
+
+    auto result_floats = unpack_bfp8_tiles_into_float_vec(
+        ttsl::make_const_span(result), /*row_major_output=*/true, /*is_exp_a=*/false, tile);
+
+    ASSERT_EQ(result_floats.size(), src_floats.size());
+    EXPECT_TRUE(tt::test_utils::is_close_vectors<float>(src_floats, result_floats, [](float a, float b) {
+        return tt::test_utils::is_close(a, b, /*rtol=*/0.3f, /*atol=*/0.3f);
+    }));
+    EXPECT_TRUE(tt::test_utils::check_pcc(src_floats, result_floats, /*min_pcc=*/0.9999));
 }
 
 }  // namespace tt::tt_metal

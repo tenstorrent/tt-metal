@@ -17,6 +17,7 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/tile.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -66,6 +67,89 @@ inline vector<std::uint32_t> run_unary(
     CircularBufferConfig cb_dst_config =
         CircularBufferConfig(cb_depth_tiles * output_tile_size, {{tt::CBIndex::c_16, output_fmt}})
             .set_page_size(tt::CBIndex::c_16, output_tile_size);
+    CreateCircularBuffer(program, core, cb_dst_config);
+
+    auto reader = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+    auto writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    CreateKernel(
+        program,
+        compute_kernel,
+        core,
+        ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {num_tiles}});
+
+    detail::WriteToBuffer(src_buffer, src_vec);
+    SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0, num_tiles});
+    SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, num_tiles});
+
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+
+    vector<std::uint32_t> result_vec;
+    detail::ReadFromBuffer(dst_buffer, result_vec);
+    return result_vec;
+}
+
+// Like run_unary, but advertises an explicit (possibly partial / tiny) tile geometry on both CBs via
+// set_tile_dims, and sizes every buffer/page by tile.get_tile_size(fmt) instead of the full-tile tt::tile_size.
+// This is what exercises the per-tile L1 stride for sub-32x32 tiles: reader_unary/writer_unary stream at
+// get_tile_size(cb), and the compute kernel derives geometry (incl. block floats' shared-exponent section) from
+// the CB tile dims. Needed to test block-float partial tiles, whose stride the full-tile size would overcount.
+inline vector<std::uint32_t> run_unary_tiled(
+    distributed::MeshDevice& mesh_device,
+    tt::DataFormat input_fmt,
+    tt::DataFormat output_fmt,
+    const tt::tt_metal::Tile& tile,
+    const vector<std::uint32_t>& src_vec,
+    std::uint32_t num_tiles,
+    bool fp32_dest_acc_en,
+    const std::string& compute_kernel,
+    std::uint32_t cb_depth_tiles) {
+    IDevice* dev = mesh_device.get_devices()[0];
+    Program program = CreateProgram();
+    CoreCoord core = {0, 0};
+
+    const std::uint32_t input_tile_size = tile.get_tile_size(input_fmt);
+    const std::uint32_t output_tile_size = tile.get_tile_size(output_fmt);
+
+    InterleavedBufferConfig src_config{
+        .device = dev,
+        .size = num_tiles * input_tile_size,
+        .page_size = num_tiles * input_tile_size,
+        .buffer_type = BufferType::DRAM};
+    auto src_buffer = CreateBuffer(src_config);
+
+    InterleavedBufferConfig dst_config{
+        .device = dev,
+        .size = num_tiles * output_tile_size,
+        .page_size = num_tiles * output_tile_size,
+        .buffer_type = BufferType::DRAM};
+    auto dst_buffer = CreateBuffer(dst_config);
+
+    CircularBufferConfig cb_src_config =
+        CircularBufferConfig(cb_depth_tiles * input_tile_size, {{tt::CBIndex::c_0, input_fmt}})
+            .set_page_size(tt::CBIndex::c_0, input_tile_size);
+    cb_src_config.set_tile_dims(tt::CBIndex::c_0, tile);
+    CreateCircularBuffer(program, core, cb_src_config);
+
+    CircularBufferConfig cb_dst_config =
+        CircularBufferConfig(cb_depth_tiles * output_tile_size, {{tt::CBIndex::c_16, output_fmt}})
+            .set_page_size(tt::CBIndex::c_16, output_tile_size);
+    cb_dst_config.set_tile_dims(tt::CBIndex::c_16, tile);
     CreateCircularBuffer(program, core, cb_dst_config);
 
     auto reader = CreateKernel(

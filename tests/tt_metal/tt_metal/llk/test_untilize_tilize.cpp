@@ -1711,4 +1711,30 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeDestIdFreeGolden) {
     EXPECT_EQ(golden, result);
 }
 
+// Id-free (2.0) pack_untilize with block_ct_dim = 4 (> 1). This executes pack_untilize_block4_2_0.cpp -- the
+// only 2.0 kernel exercising the block>1 window: it reads 4 tiled input tiles in ONE pack_untilize_block<4,4>
+// call at in.l1_address + c * tile_stride_words(...) and writes one row-major row 4 tiles wide at the
+// full_ct_dim * tile_stride_words(...) output stride. Validated against gold_standard_untilize for a 1x4 tile
+// block (exact). (The partial block-float per-tile stride is covered separately by the copy_block Bfp8 partial-
+// tile test in test_copy_block_matmul_partials.cpp.)
+TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeBlock4IdFreeGolden) {
+    constexpr std::uint32_t num_tiles = 4;  // one 1x4 pack_untilize_block<4,4> window
+    auto src = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result = unit_tests::llk::single_core::run_unary(
+        *this->devices_.at(0),
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_block4_2_0.cpp",
+        /*cb_depth_tiles=*/num_tiles);
+
+    ::unit_tests::compute::GoldenConfig config{
+        .num_tiles_r_dim = 1, .num_tiles_c_dim = 4, .face_r_dim = 16, .face_c_dim = 16, .num_faces = 4};
+    auto golden = ::unit_tests::compute::gold_standard_untilize(src, config);
+    EXPECT_EQ(golden, result);
+}
+
 }  // namespace tt::tt_metal

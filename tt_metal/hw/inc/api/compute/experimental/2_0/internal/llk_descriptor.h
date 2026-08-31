@@ -35,16 +35,20 @@ struct LLKMemDescriptor {
     TensorShape shape;  // tile geometry; derive num_faces / tile dims via TensorShape helpers
 };
 
+// Round up to the 16-byte L1 word granularity (matches tt_metal's L1_ALIGNMENT on Blackhole).
+constexpr std::uint32_t round_up_l1_words(std::uint32_t bytes) { return (bytes + 15u) >> 4; }
+
 // clang-format off
 /**
  * (internal) Per-tile L1 stride in 16-byte words, for absolute (out-of-order) tile addressing (base +
  * t*stride). The id-free stand-in for the CB's fifo_page_size, which the shipping factories set to one tile's
- * size.
- *   * Block floats (Bfp8/Bfp4/Bfp2): a tile carries a shared-exponent section that SCALE_DATUM_SIZE omits (and
- *     it miscounts the sub-byte mantissa), so use GET_L1_HEADERLESS_TILE_SIZE -- exp section included, matching
- *     tile_size(fmt) / llk_pack_fast_tilize. Assumes a full 32x32 tile (partial BFP tiles are out of scope).
- *   * Linear formats (Float32/Float16/int): keep the geometry-exact datum-count size so tiny tiles
- *     (face_r_dim / num_faces below full) stride correctly.
+ * size. Geometry-exact for BOTH branches, so partial / tiny tiles stride correctly:
+ *   * Block floats (Bfp8/Bfp4/Bfp2): a tile is [packed mantissas | shared-exponent section]. This mirrors
+ *     tt_metal Tile::get_tile_size (impl/data_format/tile.cpp) scaled by the real geometry: mantissa =
+ *     total_tensor_size() at the format's storage width (Bfp8 1 B/datum, Bfp4 1/2, Bfp2 1/4), exp section =
+ *     round_up(face_r_dim * total_num_faces, 16). GET_L1_HEADERLESS_TILE_SIZE hard-codes the full-32x32 value
+ *     and is WRONG for a partial BFP tile (fewer face rows / faces), so we compute the size here instead.
+ *   * Linear formats (Float32/Float16/int): the geometry-exact datum-count size (SCALE_DATUM_SIZE >> 4).
  *
  * | Param Type | Name   | Description                       | Type        | Valid Range | Required |
  * |------------|--------|-----------------------------------|-------------|-------------|----------|
@@ -55,8 +59,24 @@ struct LLKMemDescriptor {
 constexpr std::uint32_t tile_stride_words(DataFormat format, TensorShape shape) {
     // The size macros are the legacy numeric-format path; convert the typed format once here.
     const std::uint32_t fmt = static_cast<std::uint32_t>(format);
-    return IS_BFP_FORMAT(fmt) ? GET_L1_HEADERLESS_TILE_SIZE(fmt)
-                              : (SCALE_DATUM_SIZE(fmt, shape.total_tensor_size()) >> 4);
+    if (!IS_BFP_FORMAT(fmt)) {
+        return SCALE_DATUM_SIZE(fmt, shape.total_tensor_size()) >> 4;
+    }
+    // Block-float tile size, generalized from Tile::get_tile_size to the tile geometry (partial BFP support).
+    const std::uint32_t datums = shape.total_tensor_size();
+    // Shared-exponent section: one exponent byte per face row across all faces, padded to the L1 word.
+    // (== tt_metal round_up(face_shape[0] * num_faces, L1_ALIGNMENT).)
+    const std::uint32_t exp_bytes =
+        (static_cast<std::uint32_t>(shape.face_r_dim) * shape.total_num_faces() + 15u) & ~15u;
+    std::uint32_t mantissa_bytes = datums;  // Bfp8/Bfp8_b: 1 byte per datum
+    switch (masked_data_format(fmt)) {
+        case to_underlying(DataFormat::Bfp4):
+        case to_underlying(DataFormat::Bfp4_b): mantissa_bytes = datums >> 1; break;  // 4-bit mantissas
+        case to_underlying(DataFormat::Bfp2):
+        case to_underlying(DataFormat::Bfp2_b): mantissa_bytes = datums >> 2; break;  // 2-bit mantissas
+        default: break;                                                               // Bfp8 / Bfp8_b
+    }
+    return round_up_l1_words(mantissa_bytes + exp_bytes);
 }
 
 // NOTE (matmul partial_face): the id-free matmul derives partial_face inline at its two call sites, NOT via a

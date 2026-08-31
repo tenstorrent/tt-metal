@@ -67,11 +67,11 @@ ALWI void tilize_init(
  *   Tile t is packed to out.l1_address + t * <output tile stride>. The stride folds to a compile-time
  *   constant from the output descriptor via tile_stride_words(OutFormat, OutShape) (16B words):
  *     - linear formats (Float32/Float16/int): geometry-exact datum-count size (SCALE_DATUM_SIZE >> 4);
- *     - block floats (Bfp8/Bfp4/Bfp2): GET_L1_HEADERLESS_TILE_SIZE -- the shared-exponent section included,
- *       matching tile_size(fmt) / the shipping CB page (see internal/llk_descriptor.h::tile_stride_words).
+ *     - block floats (Bfp8/Bfp4/Bfp2): mantissa + shared-exponent section, both scaled by the tile geometry
+ *       (matches tt_metal Tile::get_tile_size / the shipping CB page; see internal/llk_descriptor.h::tile_stride_words).
  *   The shipping tilize factories set the output CB page to exactly one tile (output_single_tile_size), so
  *   this matches fifo_page_size for every format the factories use. Remaining edge (no shipping op hits it):
- *   padded / multi-tile CB pages, and partial/tiny BFP tiles (tile_stride_words uses full-tile BFP size).
+ *   padded / multi-tile CB pages.
  *
  * | Function | in    | Input operand (unpack base; LLK offsets by tile_index) | LLKOperand |     | True |
  * | Function | block | Number of column tiles in the block                    | uint32_t   | > 0 | True |
