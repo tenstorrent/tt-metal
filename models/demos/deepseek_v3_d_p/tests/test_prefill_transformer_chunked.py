@@ -1109,8 +1109,12 @@ def test_mistral4_prefill_transformer_chunked_padded(
     mode,
 ):
     """Padded/rotated chunked prefill for Mistral, traced vs untraced, asserted per-layer against the
-    golden KV cache. Above 8192 this is also the first end-to-end exercise of the llama4 query
-    temperature in a full model -- the MLA-level checks cover the term itself."""
+    golden KV cache.
+
+    The llama4 query temperature is NOT exercised at L1: the transformer is built kv_only_last_layer,
+    so at one layer the only layer is the kv-only one -- it runs attn_norm and the KV branch, never
+    _q_stem, and the temperature scales Q alone. L36 does reach it (layers 0..34 are full), above
+    8192. test_mla.py and tests/torch/test_mistral_small_4_mla_reference.py cover the term itself."""
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_transformer_padded_trace(
         variant,
@@ -1627,10 +1631,6 @@ def run_chunked_transformer_updated(
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
             )
-            for c in range(n_chunks)
-        ]
-        host_meta = [
-            (_meta1(0, False), _meta1(preload_isl + c * CHUNK, False), _meta1(preload_isl + (c + 1) * CHUNK, False))
             for c in range(n_chunks)
         ]
 
@@ -2483,7 +2483,6 @@ def run_chunked_transformer_padded_trace(
         ttnn.from_torch(t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=sp_mapper)
         for t in chunk_tok_host
     ]
-    meta_host_tt = [(_meta1_host(0), _meta1_host(ks), _meta1_host(e)) for (ks, e) in starts]
 
     def _fwd_meta():
         transformer.forward(

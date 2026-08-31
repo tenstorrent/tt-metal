@@ -73,8 +73,6 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
     # outer (multimodal) config, so the unwrap to text_config drops it and the loader would refuse
     # the fp8 tensors. mistral4_hf_config also fixes the softmax-scale convention (see that module).
     config_builder_overrides_checkpoint = True
-    # packed_expert_checkpoint deliberately unset: the fixture splits the stacked experts now
-    # (extract_routed_experts), and setting it would silently load attention only.
     mla_pcc_threshold = 0.995
     # 0.971 was sized for the sigmoid gate, which measured 0.972458 -- a revert would have passed.
     # The softmax gate measures 0.994563; 0.982 (DeepSeek's value) catches a regression with room.
@@ -83,9 +81,9 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
 
     # --- CPU reference ---------------------------------------------------------------------------
     # Model class only -- create_hf_model needs it for every random-weight row, and rope is computed
-    # at model level so the standalone-attention problem does not arise. attention / moe stay
-    # unwired: run_reference_mla does not pass position_embeddings, and run_reference_moe expects a
-    # different state dict. Those two comparisons skip rather than error.
+    # at model level so the standalone-attention problem does not arise. Attention stays unwired --
+    # run_reference_mla does not pass position_embeddings -- so that comparison skips rather than
+    # errors. MoE is wired below.
     @property
     def reference_moe_cls(self):
         """Upstream MoE, used by run_reference_moe. Imported lazily: conftest imports every adapter
