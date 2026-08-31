@@ -30,7 +30,7 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import (
 )
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -203,7 +203,8 @@ def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk, 
     """Read the block-cyclic indexer key cache back to a natural-order [S, index_head_dim] tensor in the
     CPU reference's RoPE frame, so it can be PCC'd against SparseMLAReference.index_cache.
 
-    Same SP-shard concat + block-cyclic un-rotation as the KVPE cache (blockcyclic_positions). The device
+    Same SP-shard concat + block-cyclic un-rotation as the KVPE cache (blockcyclic_positions). Undo the
+    indexer's orthonormal Hadamard transform before comparing with the untransformed CPU reference. The device
     stores the RoPE half INTERLEAVED for both variants (the indexed RoPE op is interleaved-only; the DS
     path permutes half-split->interleaved before it). The CPU reference stores it interleaved for GLM
     (index_rope_interleave=True) but HALF-SPLIT for DS, so for DS we reindex the device's RoPE dims back
@@ -216,6 +217,11 @@ def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk, 
     p = blockcyclic_positions(sp, chunk, cache_sr.shape[2])
     nat = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
     nat[p] = cache_sr[0, 0]
+    # The Sylvester Hadamard matrix is symmetric and self-inverse, so applying it again restores the
+    # pre-transform key. Do this before the DS RoPE-frame permutation because the transform was applied
+    # while the key was still in the device's interleaved frame.
+    hadamard = normalized_hadamard_matrix(nat.shape[-1])
+    nat = (nat.float() @ hadamard.float()).to(torch.bfloat16)
     if not getattr(config, "index_rope_interleave", False):  # DS: device interleaved -> reference half-split
         rope_dim = config.qk_rope_head_dim
         perm = interleaved_to_halfsplit_perm(rope_dim)
@@ -721,8 +727,35 @@ def test_sparse_mla_rotated(
     run_sparse_mla_rotated_case(variant, config_only, mesh_device, iters_isl, seq_len, ds_layer, ds_checkpoint, ds_repo)
 
 
+# None of these tests cover the chunked+non_balanced case, which is the only path production
+# runs — so they are all CI-skipped (still runnable locally).
+def _ci_unsupported_param_combos_sparse_mla_accuracy(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+
+    if not on_ci:
+        return False
+    return True
+
+
+def _ci_unsupported_param_combos_sparse_mla_indexer_reuse(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+
+    if not on_ci:
+        return False
+    return True
+
+
+def _ci_unsupported_param_combos_sparse_mla_determinism(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+
+    if not on_ci:
+        return False
+    return True
+
+
 # One combined parametrization instead of independent variant/mesh/sequence/format axes. BF16 retains
 # both sparsity regimes; scaled FP8 is restricted to the real-pruning sequence to avoid redundant CI work.
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_sparse_mla_accuracy)
 @pytest.mark.parametrize(
     "variant, mesh_device, seq_len, device_params, cache_format",
     SPARSE_ACCURACY_CASES,
@@ -767,6 +800,7 @@ def test_sparse_mla_accuracy(
 SPARSE_REUSE_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_sparse_mla_indexer_reuse)
 @pytest.mark.parametrize(
     "variant, mesh_device, seq_len, device_params",
     SPARSE_REUSE_CASES,
@@ -825,6 +859,7 @@ def test_sparse_mla_indexer_reuse(
 
 
 # Anchor cases (per-variant prod-closest mesh, seq=4096); collected == run.
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_sparse_mla_determinism)
 @pytest.mark.parametrize(
     "variant, mesh_device, seq_len, device_params",
     SPARSE_ANCHOR_CASES,

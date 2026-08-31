@@ -195,7 +195,21 @@ void JitBuildEnv::init(
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
         "-Wno-error=unused-but-set-variable "
         // And don't detect these issues
-        "-Wno-unused-variable -Wno-unused-function ";
+        "-Wno-unused-variable -Wno-unused-function "
+        // Firmware and kernels access mailboxes and MMIO through pointers
+        // formed from small literal addresses (e.g. MEM_MAILBOX_BASE is 16
+        // on Wormhole). On these bare-metal cores the bottom of the address
+        // space is ordinary L1 memory, but GCC assumes no object can live in
+        // the first page and -Warray-bounds diagnoses such accesses as
+        // "source object is likely at address zero", which -Werror makes
+        // fatal. (With -flto the literal address is not visible during
+        // per-TU compilation, so today this only fires if LTO is disabled;
+        // see issue #54692.) min-pagesize=0 tells GCC that constant
+        // addresses from zero up are valid objects, disabling exactly that
+        // heuristic while keeping -Warray-bounds active for genuine
+        // out-of-bounds accesses. It is a diagnostics-only parameter with no
+        // effect on generated code.
+        "--param=min-pagesize=0 ";
 
     // Defines
     this->defines_ = "";

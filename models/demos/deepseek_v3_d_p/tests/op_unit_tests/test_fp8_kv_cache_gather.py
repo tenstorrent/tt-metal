@@ -23,7 +23,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import (
     build_and_serialize_kv_chunk_table,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import PREFILL_CHUNK_OUTPUT_TOKENS, MlaKvCacheFormat
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import PREFILL_CHUNK_TOKENS, MlaKvCacheFormat
 
 
 @pytest.mark.parametrize(
@@ -39,7 +39,7 @@ def test_fp8_row_major_kv_cache_all_gather(mesh_device, tmp_path):
 
     sp_axis = 0
     mesh_shape = tuple(mesh_device.shape)
-    seq_len = PREFILL_CHUNK_OUTPUT_TOKENS
+    seq_len = PREFILL_CHUNK_TOKENS
     config = glm_hf_config(max_seq=seq_len)
     head_dim = config.kv_lora_rank + config.qk_rope_head_dim
     params = PrefillRunParams(
@@ -84,7 +84,7 @@ def test_fp8_row_major_kv_cache_all_gather(mesh_device, tmp_path):
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_users=1,
-        chunk_size_global=PREFILL_CHUNK_OUTPUT_TOKENS,
+        chunk_size_global=PREFILL_CHUNK_TOKENS,
         path=str(table_path),
     )
     table = ttnn.experimental.disaggregation.import_from_protobuf_file(str(table_path))
