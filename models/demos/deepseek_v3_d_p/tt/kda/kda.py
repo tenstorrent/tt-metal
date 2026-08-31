@@ -190,16 +190,16 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        self.grouped_scan_compute_config = ttnn.init_device_compute_kernel_config(
+        self.scan_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=self.recurrence_config.grouped_scan_math_fidelity,
+            math_fidelity=self.recurrence_config.scan_math_fidelity,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
         self.recurrence_compute_config = ops._RecurrenceComputeConfig(
             preparation=self.kda_compute_config,
             affine_prefix=self.affine_prefix_compute_config,
-            grouped_scan=self.grouped_scan_compute_config,
+            scan=self.scan_compute_config,
         )
         # Real-K3 component A/B: output-projection HiFi2 retained PCC >=0.999987 for every LoudBox
         # layout and improved median component latency by 3.580%-5.165%.

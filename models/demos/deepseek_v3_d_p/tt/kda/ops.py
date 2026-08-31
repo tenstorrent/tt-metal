@@ -192,7 +192,7 @@ class _ScanResult:
 class _RecurrenceComputeConfig:
     preparation: ttnn.DeviceComputeKernelConfig | None
     affine_prefix: ttnn.DeviceComputeKernelConfig | None
-    grouped_scan: ttnn.DeviceComputeKernelConfig | None
+    scan: ttnn.DeviceComputeKernelConfig | None
 
 
 def _validate_recurrence_geometry(
@@ -378,7 +378,7 @@ class _DirectScan(_RecurrenceScan):
             *prepared.as_kernel_args(),
             initial_state,
             memory_config=KDA_OUTPUT_MEMORY_CONFIG,
-            compute_kernel_config=self._compute_config.grouped_scan,
+            compute_kernel_config=self._compute_config.scan,
         )
         assert output.dtype == KDA_SCAN_OUTPUT_DTYPE
         assert final_state.dtype == KDA_RECURRENT_STATE_DTYPE
@@ -428,7 +428,7 @@ class _GroupedScan(_RecurrenceScan):
             *grouped.as_kernel_args(),
             group_initial_states,
             memory_config=KDA_OUTPUT_MEMORY_CONFIG,
-            compute_kernel_config=self._compute_config.grouped_scan,
+            compute_kernel_config=self._compute_config.scan,
         )
         assert grouped_output.dtype == KDA_SCAN_OUTPUT_DTYPE
         output = ttnn.reshape(

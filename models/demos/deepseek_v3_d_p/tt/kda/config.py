@@ -30,9 +30,12 @@ class KDARecurrenceProgramConfig:
     """Tunable recurrence strategy and compute fidelity."""
 
     local_scan_strategy: Literal["direct", "grouped"] = "direct"
+    # Used by grouped scan, which runs when local_scan_strategy="grouped" or sequence
+    # parallelism is enabled. This is a ceiling: the effective size is the largest
+    # local-chunk divisor no greater than this value.
     summary_group_chunks: int = 20
     affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
-    grouped_scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
+    scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
 
     def __post_init__(self) -> None:
         if self.local_scan_strategy not in ("direct", "grouped"):
