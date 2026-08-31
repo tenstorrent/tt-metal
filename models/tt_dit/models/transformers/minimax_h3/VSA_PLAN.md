@@ -15,7 +15,7 @@
 | R6b/c production | ✅ | 15s/768p PCC 99.41%, 1280x768/39f 99.31% (zero gate), 99.35% (random gate) |
 | R5 model+pipeline plumbing | ✅ code, model tests pending | pack/unpack gathers in model forward; `_prepare_vsa` + tiled metadata in pipeline |
 | R6a/R6d model level | ✅ | sparsity0 vs dense PCC 99.9998% (video+audio); striped≡identity 99.9998% |
-| Full pipeline run w/ VSA | ⬜ untested | plumbing in place (`MiniMaxH3Pipeline(vsa_config=...)`); needs a real-checkpoint generation run |
+| Full pipeline run w/ VSA | ✅ | real-checkpoint t2va at 15s/768p, sparsity 0.9: PASSED; warm denoise 35.9s / 3 forwards (untraced), sane output |
 | R6a "config off bit-identical" | ✅ | every change branches on `vsa_config`; dense block test re-passes at 99.9995% |
 
 Residual PCC vs the fp32 torch oracle (~99.3-99.5% on random data) is dominated by near-tie
