@@ -317,8 +317,15 @@ def _ensure_protoc_in_venv(venv_path):
 
     protoc_bin = os.path.join(venv_path, "bin", "protoc")
     if os.path.exists(protoc_bin):
-        print("✓ protoc already present in venv")
-        return
+        try:
+            version = subprocess.run(
+                [protoc_bin, "--version"], check=True, capture_output=True, text=True
+            ).stdout.strip()
+            if version == f"libprotoc {_PROTOC_VERSION}":
+                print(f"✓ protoc {_PROTOC_VERSION} already present in venv")
+                return
+        except (OSError, subprocess.CalledProcessError):
+            pass
 
     print(f"\nDownloading protoc {_PROTOC_VERSION} from GitHub...")
     request = urllib.request.Request(_PROTOC_URL, headers={"User-Agent": _USER_AGENT})
