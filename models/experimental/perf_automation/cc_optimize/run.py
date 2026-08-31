@@ -154,6 +154,21 @@ def cc_env(repo_root: Path, devices: str) -> dict:
     pybin = repo_root / "python_env" / "bin"
     if pybin.is_dir():
         env["PATH"] = str(pybin) + os.pathsep + env.get("PATH", "")
+    # THE CLIENT MUST NOT ABANDON HEALTHY WORK. `claude -p` drops any single MCP tool call at its own
+    # built-in ceiling and reports nothing: the server keeps running, its result is discarded, and the
+    # round watchdog stays quiet because the round itself is fine. profile_model persists the roofline
+    # snapshot on its LAST statement, so on an unoptimized model -- where one profile runs several times
+    # longer than on an already-fast one -- that statement never ran and the report silently rendered
+    # its floor-only form with no fidelity ladder. The round's forward-progress watchdog is the
+    # authority on a wedge; this only stops the client giving up before it.
+    try:
+        from scripts.tt_hw_planner.cc_harness import _mcp_tool_timeout_ms
+
+        _tool_ms = _mcp_tool_timeout_ms(None)
+    except Exception:  # noqa: BLE001
+        _tool_ms = None
+    if _tool_ms and not str(env.get("MCP_TOOL_TIMEOUT") or "").strip():
+        env["MCP_TOOL_TIMEOUT"] = str(_tool_ms)
     # THE SCOPE IS INHERITED, NOT RE-DECIDED. This used to pop both variables unconditionally --
     # on the reasoning that pinning a chip subset
     # crashes fabric init. It does, but only WITHOUT a mesh-graph descriptor, and the pair is now
@@ -3290,9 +3305,7 @@ def _siblings():
         return _SIBLINGS[0]
     import importlib.util as _ilu
 
-    _spec = _ilu.spec_from_file_location(
-        "cc_optimize_siblings", str(Path(__file__).resolve().parent / "siblings.py")
-    )
+    _spec = _ilu.spec_from_file_location("cc_optimize_siblings", str(Path(__file__).resolve().parent / "siblings.py"))
     _mod = _ilu.module_from_spec(_spec)
     _spec.loader.exec_module(_mod)
     _SIBLINGS.append(_mod)
@@ -3354,8 +3367,7 @@ def _warn_gate_broken(exc: BaseException) -> None:
     _THERMAL_GATE_BROKEN[0] = True
     print(
         "  [thermal-gate] WARNING: THE THERMAL GATE CANNOT RUN (%s: %s). Device work will proceed "
-        "with NO temperature protection for the rest of this run."
-        % (type(exc).__name__, str(exc)[:120]),
+        "with NO temperature protection for the rest of this run." % (type(exc).__name__, str(exc)[:120]),
         file=sys.stderr,
         flush=True,
     )

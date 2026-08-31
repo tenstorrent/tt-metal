@@ -54,7 +54,7 @@ def _run_probe(demo_dir: Path) -> dict:
             [sys.executable, str(probe), str(demo_dir)],
             capture_output=True,
             text=True,
-            timeout=1800,
+            timeout=_TIMEOUT,
             cwd=str(_REPO),
         )
     except Exception as e:  # noqa: BLE001

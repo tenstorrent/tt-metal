@@ -181,6 +181,39 @@ def _resolve_agent_timeout_s(agent_timeout_s: int | None) -> int | None:
     return agent_timeout_s if agent_timeout_s and agent_timeout_s > 0 else None
 
 
+def _mcp_tool_timeout_ms(agent_timeout_s: int | None) -> int | None:
+    """Per-tool-call ceiling handed to `claude -p`'s MCP client, in milliseconds.
+
+    The client abandons any single tool call at its own built-in default and reports nothing: the
+    server keeps working, its result is discarded, and no watchdog here fires because the round is
+    still healthy. On an already-fast model every device call finished well inside that default, so
+    the ceiling was never reached; on an unoptimized one a single profile exceeds it, and the step
+    that persists the roofline snapshot -- the last statement of that call -- never ran. The report
+    then fell back to its floor-only form with no fidelity ladder and said nothing was wrong.
+
+    The watchdogs that own a round -- this module's wall-clock one, and the optimize engine's
+    forward-progress one -- remain the authority on a wedged agent, so this ceiling is deliberately
+    slack: it exists only to stop the client abandoning healthy work, never to bound it. It tracks
+    the round budget where there is one so the two cannot contradict each other, and otherwise falls
+    back to the same "only a wedged agent gets here" constant those budgets use.
+
+    TT_HW_PLANNER_CC_MCP_TOOL_TIMEOUT_MS overrides it per run; <=0 there hands control back to the
+    client's own default, which is the only way to reinstate the old behaviour. An unparseable
+    override falls through to the derived value rather than silently restoring that default.
+    """
+    raw = str(os.environ.get("TT_HW_PLANNER_CC_MCP_TOOL_TIMEOUT_MS") or "").strip()
+    if raw:
+        try:
+            explicit = int(raw)
+        except ValueError:
+            explicit = None
+        if explicit is not None:
+            return explicit if explicit > 0 else None
+    if agent_timeout_s and agent_timeout_s > 0:
+        return agent_timeout_s * 1000
+    return _DEFAULT_AGENT_TIMEOUT_S * 1000
+
+
 def _kill_agent_tree(proc: subprocess.Popen) -> None:
     """Kill a wedged `claude -p` and everything it spawned (its MCP server + any pytest) via the
     process group, SIGTERM then SIGKILL — mirrors _run_focused_pytest's tree-kill."""
@@ -237,6 +270,10 @@ def run_cc_loop(
 
     rounds, can_stop, halted = 0, False, False
     timeout_s = _resolve_agent_timeout_s(agent_timeout_s)
+    env = dict(env)
+    _tool_timeout_ms = _mcp_tool_timeout_ms(timeout_s)
+    if _tool_timeout_ms and not str(env.get("MCP_TOOL_TIMEOUT") or "").strip():
+        env["MCP_TOOL_TIMEOUT"] = str(_tool_timeout_ms)
     consecutive_timeouts = 0
     verbose = _verbose()
     while rounds < max_rounds:
