@@ -90,7 +90,7 @@ fi
 # check what ran before it, with asserts on, from a reset device.
 SUITES=(
     unary binary bcast reduction add_exp mixed_format
-    matmul matmul_bias matmul_mcast matmul_transpose matmul_blocked
+    matmul matmul_bias matmul_mcast matmul_transpose matmul_blocked dst32
     custom_compute mcast_share rmsnorm rope attention attention_proj flash
     layer negative
 )

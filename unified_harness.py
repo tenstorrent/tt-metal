@@ -334,6 +334,7 @@ def unified_program_spec(
     defines=None,
     math_fidelity=ttnn.MathFidelity.HiFi4,
     math_approx_mode=False,
+    dst_32bit=False,
     dynamic_noc=False,
     name="unified",
 ):
@@ -450,6 +451,13 @@ def unified_program_spec(
     ]
     if bbox is not None and nodes.num_cores() == grid_h * grid_w:
         all_defines.append(("TT_UNIFIED_CORE_GRID_EXACT", "1"))
+    # The DST budget halves with a 32-bit Dest, and math.hpp's kMaxDstTiles has to know.
+    # It goes to ALL THREE kernels, not just compute, because the budget picks between two
+    # code paths that emit different buffer protocol -- so a value only compute could see
+    # would be a hang rather than a wrong number. Metal's own DST_ACCUM_MODE is exactly
+    # that: generated behind a UCK_CHLKC_* guard, invisible to data movement. Compute
+    # static_asserts the two against each other, which is what keeps this honest.
+    all_defines.append(("TT_UNIFIED_DST_32BIT", "1" if dst_32bit else "0"))
 
     def make_kernel(unique_id, hw_config, is_compute):
         k = ps.KernelSpec()
@@ -517,6 +525,7 @@ def unified_program_spec(
     compute_cfg = ps.ComputeGen1Config()
     compute_cfg.fpu_math_fidelity = math_fidelity
     compute_cfg.sfpu_precision_mode = ps.Precision.Approximate if math_approx_mode else ps.Precision.Precise
+    compute_cfg.enable_32_bit_dest = dst_32bit
 
     kernels = {
         "dm0": make_kernel("dm0", dm_cfgs[0], is_compute=False),

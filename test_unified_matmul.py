@@ -27,7 +27,7 @@ KERNEL = "unified_kernels/matmul.cpp"
 TILE = 32
 
 
-def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0, fidelity=None):
+def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0, fidelity=None, dst_32bit=False):
     """mode: "dst" or "l1" accumulate through a buffer; "single" stores straight out."""
     """relu: None, "epilogue" (finish only), or "per_step"."""
     torch.manual_seed(seed)
@@ -74,6 +74,7 @@ def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0, fidelity=
             + ([("MM_RELU_PER_STEP", "1")] if relu == "per_step" else [])
             + ([("MM_RELU_BOTH", "1")] if relu == "both" else [])
         ),
+        dst_32bit=dst_32bit,
         **(fidelity or {}),
     )
 
