@@ -7,6 +7,7 @@ from collections import defaultdict
 
 import torch
 from loguru import logger
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.llama_models import (
@@ -97,17 +98,15 @@ def gather_batched_prefill_samples(
 DECODE_PAGE_TABLE_INPUT_IDX = 3
 
 
-def _mark_trace_buffers_corruptible(owner, value):
+def _maybe_acknowledge_trace_buffers_corruptible(owner, value):
     """Acknowledge opt-in trace I/O that another live trace may overwrite."""
     if not getattr(owner, "_tt_allow_decode_trace_buffer_reuse", False) or value is None:
         return
     if isinstance(value, (list, tuple)):
         for item in value:
-            _mark_trace_buffers_corruptible(owner, item)
+            _maybe_acknowledge_trace_buffers_corruptible(owner, item)
         return
-    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
-    if mark_corruptible is not None:
-        mark_corruptible(value)
+    trace_allocation_tracker.acknowledge_corruptible(value)
 
 
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
@@ -1824,11 +1823,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             host_inputs = self.model[i].prepare_decode_inputs_host(
                 tokens[i], current_pos[i], page_table=user_page_table
             )
-
-            device_inputs.append(copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device))
-            # Preserve main's opt-in annotation for models that deliberately overlap decode trace I/O
-            # (only qwen36 sets _tt_allow_decode_trace_buffer_reuse today).
-            _mark_trace_buffers_corruptible(self, device_inputs[i])
+            device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
+            _maybe_acknowledge_trace_buffers_corruptible(self, device_inputs_i)
+            device_inputs.append(device_inputs_i)
 
         # SamplingGenerator normally pre-compiles just before capturing, which would allocate with the
         # decode trace already live. Pre-compile here instead, against the compile pass' logits (same spec
@@ -1888,7 +1885,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 )
             )
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
-            _mark_trace_buffers_corruptible(self, tt_out_trace[-1])
+            _maybe_acknowledge_trace_buffers_corruptible(self, tt_out_trace[-1])
 
             if sampling_trace_enabled:
                 # NOTE: sampling trace can be keyed depending on sampling params,

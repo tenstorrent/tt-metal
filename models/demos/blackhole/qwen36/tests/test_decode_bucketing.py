@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 from loguru import logger
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.utility_functions import comp_pcc
@@ -83,12 +84,12 @@ def test_unsupported_device_sampling_fails_at_startup(expect_error):
 
 
 def test_trace_buffer_reuse_is_opt_in(monkeypatch):
-    from models.tt_transformers.tt.generator import _mark_trace_buffers_corruptible
+    from models.tt_transformers.tt.generator import _maybe_acknowledge_trace_buffers_corruptible
 
     marked = []
-    monkeypatch.setattr(ttnn, "mark_corruptible", marked.append, raising=False)
-    _mark_trace_buffers_corruptible(SimpleNamespace(), ["default"])
-    _mark_trace_buffers_corruptible(
+    monkeypatch.setattr(trace_allocation_tracker, "acknowledge_corruptible", marked.append)
+    _maybe_acknowledge_trace_buffers_corruptible(SimpleNamespace(), ["default"])
+    _maybe_acknowledge_trace_buffers_corruptible(
         SimpleNamespace(_tt_allow_decode_trace_buffer_reuse=True),
         ["input", None, ("output",)],
     )
@@ -332,15 +333,14 @@ def _parametrize_traced(max_tp=8, trace_bytes=1073741824):
     return decorator
 
 
-def _mark_trace_buffers_corruptible(value):
-    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
-    if mark_corruptible is None or value is None:
+def _acknowledge_trace_buffers_corruptible(value):
+    if value is None:
         return
     if isinstance(value, (list, tuple)):
         for item in value:
-            _mark_trace_buffers_corruptible(item)
+            _acknowledge_trace_buffers_corruptible(item)
         return
-    mark_corruptible(value)
+    trace_allocation_tracker.acknowledge_corruptible(value)
 
 
 @torch.no_grad()
@@ -781,12 +781,12 @@ def test_bucketed_on_device_sampling_traces(mesh_device, reset_seeds, ensure_gc)
         tokens, positions, pt = case_of[width]
         host = model.prepare_decode_inputs_host(tokens, positions, page_table=pt)
         dev = copy_host_to_device(host, mesh_device=mesh_device)
-        _mark_trace_buffers_corruptible(dev)
+        _acknowledge_trace_buffers_corruptible(dev)
         tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         lg = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=True)
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
         ttnn.synchronize_device(mesh_device)
-        _mark_trace_buffers_corruptible(lg)
+        _acknowledge_trace_buffers_corruptible(lg)
         logits_of[width], dtrace_of[width] = lg, tid
         host_of[width], dev_of[width] = host, dev
 
@@ -865,12 +865,12 @@ def test_all_buckets_fit_trace_region(mesh_device, reset_seeds, ensure_gc):
         tokens, positions, pt = case_of[width]
         host = model.prepare_decode_inputs_host(tokens, positions, page_table=pt)
         dev = copy_host_to_device(host, mesh_device=mesh_device)
-        _mark_trace_buffers_corruptible(dev)
+        _acknowledge_trace_buffers_corruptible(dev)
         tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         lg = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=on_dev)
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
         ttnn.synchronize_device(mesh_device)
-        _mark_trace_buffers_corruptible(lg)
+        _acknowledge_trace_buffers_corruptible(lg)
         tids[width], host_of[width], dev_of[width], logits_of[width] = tid, host, dev, lg
         if on_dev:
             model.sampling.set_trace_bucket(width)

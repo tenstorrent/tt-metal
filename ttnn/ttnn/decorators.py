@@ -18,7 +18,7 @@ from loguru import logger
 
 import ttnn
 import ttnn.operation_tracer
-from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TRACKING
+from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TRACKING
 
 
 def compare_tensors_using_pcc(
@@ -532,31 +532,30 @@ if TRACE_ALLOC_DIAGNOSTICS:
 
     def _drain_traceback_ids(source="op_end", op_name=None):
         """Drain allocation IDs and capture their Python call stacks."""
-        from ttnn._ttnn.operations.trace import drain_pending_traceback_ids, drain_retired_traceback_ids
-        from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+        from ttnn._ttnn.operations.trace import drain_pending_traceback_ids
+        from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker
 
         pending = drain_pending_traceback_ids()
-        retired = set(drain_retired_traceback_ids())
-        for buf_id in retired:
-            UnsafeAllocationTracker._tracebacks.pop(buf_id, None)
-        pending = [buf_id for buf_id in pending if buf_id not in retired]
-        if not pending:
-            return
-        import traceback as _tb
+        if pending:
+            import traceback as _tb
 
-        # Drop the tracker wrapper frames so the traceback ends at the model call site.
-        stack = "".join(_tb.format_stack()[:-2])
-        if source == "op_start":
-            marker = (
-                "[trace alloc tracker] pending traceback IDs were flushed at op entry; "
-                "allocation likely happened outside a wrapped op"
-            )
-            if op_name:
-                marker += f" before '{op_name}'"
-            marker += ".\n"
-            stack = marker + stack
-        for buf_id in pending:
-            UnsafeAllocationTracker._tracebacks[buf_id] = stack
+            # Drop the tracker wrapper frames so the traceback ends at the model call site.
+            stack = "".join(_tb.format_stack()[:-2])
+            if source == "op_start":
+                marker = (
+                    "[trace alloc tracker] pending traceback IDs were flushed at op entry; "
+                    "allocation likely happened outside a wrapped op"
+                )
+                if op_name:
+                    marker += f" before '{op_name}'"
+                marker += ".\n"
+                stack = marker + stack
+            for buf_id in pending:
+                TraceAllocationTracker._tracebacks[buf_id] = stack
+
+        # C++ deallocation accounting is authoritative. Reconcile after adding
+        # pending tracebacks so IDs retired before or during this drain are pruned.
+        TraceAllocationTracker.reconcile_tracebacks()
 
 
 # Keyword argument names through which an operation writes into a caller-supplied tensor in
@@ -777,11 +776,12 @@ if TRACE_ALLOC_TRACKING:
             _drain_traceback_ids(source="op_start", op_name=self.python_fully_qualified_name)
             push_allocation_context(self.python_fully_qualified_name)
             try:
-                result = _untracked_fast_operation_call(self, *function_args, **function_kwargs)
-                _drain_traceback_ids(source="op_end", op_name=self.python_fully_qualified_name)
-                return result
+                return _untracked_fast_operation_call(self, *function_args, **function_kwargs)
             finally:
-                pop_allocation_context()
+                try:
+                    _drain_traceback_ids(source="op_end", op_name=self.python_fully_qualified_name)
+                finally:
+                    pop_allocation_context()
 
     else:
 
@@ -1120,11 +1120,12 @@ if TRACE_ALLOC_TRACKING:
             _drain_traceback_ids(source="op_start", op_name=self.python_fully_qualified_name)
             push_allocation_context(self.python_fully_qualified_name)
             try:
-                result = _untracked_operation_call(self, *function_args, **function_kwargs)
-                _drain_traceback_ids(source="op_end", op_name=self.python_fully_qualified_name)
-                return result
+                return _untracked_operation_call(self, *function_args, **function_kwargs)
             finally:
-                pop_allocation_context()
+                try:
+                    _drain_traceback_ids(source="op_end", op_name=self.python_fully_qualified_name)
+                finally:
+                    pop_allocation_context()
 
     else:
 

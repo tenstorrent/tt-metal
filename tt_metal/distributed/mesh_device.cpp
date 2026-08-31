@@ -49,7 +49,7 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
-#include "distributed/trace_allocation_tracker.hpp"
+#include <tt-metalium/experimental/trace_allocation_tracker.hpp>
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
@@ -262,61 +262,70 @@ IDevice* MeshDeviceImpl::reference_device() const { return this->get_devices().a
 
 std::vector<AllocatorImpl*> MeshDeviceImpl::trace_allocators() const {
     this->validate_sub_device_manager_tracker();
-    std::vector<AllocatorImpl*> result;
-    std::unordered_set<AllocatorImpl*> seen;
-    const auto append_manager = [&result, &seen](const SubDeviceManager* manager) {
-        if (manager == nullptr) {
-            return;
-        }
-        for (const auto& allocator : manager->allocators()) {
-            if (allocator != nullptr && seen.insert(allocator.get()).second) {
-                result.push_back(allocator.get());
-            }
-        }
-    };
+    return this->trace_allocators(sub_device_manager_tracker_->get_active_sub_device_manager_id());
+}
 
-    append_manager(sub_device_manager_tracker_->get_default_sub_device_manager());
-    append_manager(sub_device_manager_tracker_->get_active_sub_device_manager());
+std::vector<AllocatorImpl*> MeshDeviceImpl::trace_allocators(SubDeviceManagerId manager_id) const {
+    this->validate_sub_device_manager_tracker();
+    const auto* default_manager = sub_device_manager_tracker_->get_default_sub_device_manager();
+    std::vector<AllocatorImpl*> result = {default_manager->allocator(SubDeviceId{0}).get()};
+    const auto* manager = sub_device_manager_tracker_->find_sub_device_manager(manager_id);
+    if (manager == nullptr || manager == default_manager) {
+        return result;
+    }
+
+    result.reserve(result.size() + manager->allocators().size());
+    for (const auto& allocator : manager->allocators()) {
+        if (allocator != nullptr) {
+            result.push_back(allocator.get());
+        }
+    }
     return result;
 }
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::register_active_trace(const MeshTraceId& trace_id) {
-    for (auto* allocator : this->trace_allocators()) {
-        allocator->register_active_trace(*trace_id);
+    validate_sub_device_manager_tracker();
+    const auto manager_id = sub_device_manager_tracker_->get_active_sub_device_manager_id();
+    for (auto* allocator : this->trace_allocators(manager_id)) {
+        allocator->register_active_trace(manager_id, trace_id);
     }
 }
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::unregister_active_trace(const MeshTraceId& trace_id) {
-    for (auto* allocator : this->trace_allocators()) {
-        allocator->unregister_active_trace(*trace_id);
+    validate_sub_device_manager_tracker();
+    const auto manager_id = sub_device_manager_tracker_->get_active_sub_device_manager_id();
+    for (auto* allocator : this->trace_allocators(manager_id)) {
+        allocator->unregister_active_trace(manager_id, trace_id);
     }
 }
 
 std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ids(const MeshTraceId& trace_id) const {
+    validate_sub_device_manager_tracker();
+    return this->get_unsafe_tracked_ids(sub_device_manager_tracker_->get_active_sub_device_manager_id(), trace_id);
+}
+std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ids(
+    SubDeviceManagerId manager_id, const MeshTraceId& trace_id) const {
     std::unordered_map<size_t, std::string> result;
-    for (auto* allocator : this->trace_allocators()) {
-        result.merge(allocator->get_unsafe_tracked_ids(*trace_id));
+    for (auto* allocator : this->trace_allocators(manager_id)) {
+        result.merge(allocator->get_unsafe_tracked_ids(manager_id, trace_id));
     }
     return result;
 }
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
+    // Manager-local allocations prevent switching managers while they are live,
+    // so the owning local allocator must belong to the active manager. Global
+    // allocations are covered by the default allocator included here.
     for (auto* allocator : this->trace_allocators()) {
         allocator->remove_unsafe_tracked_id(buffer_unique_id);
     }
 }
-std::vector<size_t> MeshDeviceImpl::drain_pending_traceback_ids() {
-    return AllocatorImpl::drain_pending_traceback_ids();
-}
-std::vector<size_t> MeshDeviceImpl::drain_retired_traceback_ids() {
-    return AllocatorImpl::drain_retired_traceback_ids();
-}
 void MeshDeviceImpl::push_corruptible_allocation_scope() {
-    AllocatorImpl::push_corruptible_allocation_scope(this->trace_allocators());
+    tt::tt_metal::push_corruptible_allocation_scope(this->trace_allocators());
 }
-void MeshDeviceImpl::pop_corruptible_allocation_scope() { AllocatorImpl::pop_corruptible_allocation_scope(); }
+void MeshDeviceImpl::pop_corruptible_allocation_scope() { tt::tt_metal::pop_corruptible_allocation_scope(); }
 
 namespace trace_allocation_tracker {
 
@@ -332,8 +341,8 @@ std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshDevice*
 void remove_unsafe_tracked_id(MeshDevice* device, size_t buffer_unique_id) {
     device->impl().remove_unsafe_tracked_id(buffer_unique_id);
 }
-std::vector<size_t> drain_pending_traceback_ids() { return MeshDeviceImpl::drain_pending_traceback_ids(); }
-std::vector<size_t> drain_retired_traceback_ids() { return MeshDeviceImpl::drain_retired_traceback_ids(); }
+std::vector<size_t> drain_pending_traceback_ids() { return tt::tt_metal::drain_pending_traceback_ids(); }
+std::unordered_set<size_t> get_all_unsafe_tracked_ids() { return tt::tt_metal::get_all_unsafe_tracked_ids(); }
 void push_corruptible_allocation_scope(MeshDevice* device) { device->impl().push_corruptible_allocation_scope(); }
 void pop_corruptible_allocation_scope(MeshDevice* device) { device->impl().pop_corruptible_allocation_scope(); }
 
@@ -1176,6 +1185,7 @@ void MeshDeviceImpl::remove_sub_device_manager(SubDeviceManagerId sub_device_man
     auto lock = lock_api();
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->remove_sub_device_manager(sub_device_manager_id);
+    this->allocator_impl()->unregister_active_traces(sub_device_manager_id);
 }
 void MeshDeviceImpl::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
     auto lock = lock_api();

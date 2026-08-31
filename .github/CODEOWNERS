@@ -653,7 +653,7 @@ tt-train/tests/**/CMakeLists.txt @mdragulaTT @vmelnykovTT @dyurshevichTT @zbacze
 # Tech reports
 models/experimental/yunet @tvardhineniTT @dvartaniansTT @tenstorrent/cse-developer-ttnn
 tech_reports/LLMs/vLLM_integration.md @viktorpusTT @tchedaTT
-tech_reports/AdvancedPerformanceOptimizationsForModels/TraceCorrestness.md @tchedaTT @uaydonat
+tech_reports/AdvancedPerformanceOptimizationsForModels/TraceCorrectness.md @tchedaTT @uaydonat
 tech_reports/real_time_profiler/ @mo-tenstorrent @yusufbashiTT
 
 # ── LLK perf infrastructure: restricted ownership ──

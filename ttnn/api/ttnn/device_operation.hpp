@@ -376,7 +376,8 @@ template <DeviceOperationConcept mesh_device_operation_t>
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     const ProgramCacheKey& program_key) {
     auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
-    std::string alloc_ctx = "program_cache: " + std::string(op_name);
+    std::string alloc_ctx =
+        std::string(tt::tt_metal::kProgramCacheAllocationContextPrefix) + " " + std::string(op_name);
     for (const auto& [name, value] : ttsl::reflection::get_attributes(operation_attributes)) {
         alloc_ctx += " " + std::string(name) + "=" + value.to_string();
     }

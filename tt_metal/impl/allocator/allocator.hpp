@@ -4,16 +4,22 @@
 
 #pragma once
 
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 
 #include "impl/allocator/allocator_types.hpp"
 #include "impl/allocator/bank_manager.hpp"
 
 namespace tt::tt_metal {
+
+namespace distributed {
+class MeshDeviceImpl;
+}
 
 // THREAD SAFETY: Allocator is thread safe.
 class AllocatorImpl {
@@ -85,18 +91,6 @@ public:
     void shrink_allocator_size(const BufferType& buffer_type, DeviceAddr shrink_size, bool bottom_up = true);
     void reset_allocator_size(const BufferType& buffer_type);
 
-    void register_active_trace(std::uint32_t trace_id);
-    void unregister_active_trace(std::uint32_t trace_id);
-
-    // Unsafe allocation tracking is per trace. Allocation context remains per buffer because a
-    // buffer has the same allocation site regardless of how many older traces can corrupt it.
-    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(std::uint32_t trace_id);
-    void remove_unsafe_tracked_id(size_t buffer_unique_id);
-    static std::vector<size_t> drain_pending_traceback_ids();
-    static std::vector<size_t> drain_retired_traceback_ids();
-    static void push_corruptible_allocation_scope(const std::vector<AllocatorImpl*>& allocators);
-    static void pop_corruptible_allocation_scope();
-
     // See <tt-metalium/experimental/allocation_context.hpp> for the thread-local context stack API.
 
     // High water mark tracking for DRAM allocations during trace capture
@@ -140,15 +134,24 @@ protected:
     void validate_bank_assignments() const;
 
 private:
+    friend class distributed::MeshDeviceImpl;
+    friend std::unordered_set<size_t> get_all_unsafe_tracked_ids();
+
+    void register_active_trace(SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id);
+    void unregister_active_trace(SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id);
+    void unregister_active_traces(SubDeviceManagerId manager_id);
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(
+        SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id);
+    void remove_unsafe_tracked_id(size_t buffer_unique_id);
     void verify_safe_allocation() const;
     void record_allocation_if_unsafe(Buffer* buffer);
+    void record_deallocation(size_t buffer_unique_id);
+    void record_all_deallocations();
+    void retire_buffer_if_unreferenced(size_t buffer_unique_id);
+    void clear_trace_allocation_state();
     bool in_corruptible_allocation_scope() const;
 
     mutable std::mutex mutex_;
-
-    // Set to true if allocating a buffer is unsafe. This happens when a live trace on device can corrupt
-    // memory allocated by the user (memory used by trace is not tracked in the allocator once the trace is captured).
-    bool allocations_unsafe_ = false;
 
     std::unique_ptr<BankManager> dram_manager_;
     std::unique_ptr<BankManager> l1_manager_;
@@ -174,14 +177,24 @@ private:
     // TODO(river): Revisit during API refactor.
     std::unique_ptr<Allocator> view_;
 
-    // Keep all tracker-only state after the allocator's original fields so the
+    // Keep tracker-only state after the allocator's original fields so the
     // compiled-in feature does not perturb their cache layout when tracking is disabled.
-    bool tracking_enabled_ = false;
-    bool traceback_capture_enabled_ = false;
-    bool skip_program_cache_ = false;
-    std::uint32_t active_trace_count_ = 0;
-    std::unordered_map<std::uint32_t, std::unordered_set<size_t>> unsafe_tracked_ids_by_trace_;
+    bool allocations_unsafe_ = false;
+    const bool tracking_enabled_;
+    const bool traceback_capture_enabled_;
+    const bool skip_program_cache_;
+    std::unordered_map<SubDeviceManagerId, std::unordered_set<distributed::MeshTraceId>> active_traces_by_manager_;
+    std::unordered_map<SubDeviceManagerId, std::unordered_map<distributed::MeshTraceId, std::unordered_set<size_t>>>
+        unsafe_tracked_ids_by_manager_and_trace_;
     std::unordered_map<size_t, std::string> unsafe_allocation_contexts_;
 };
+
+// Process-wide and thread-local implementation state used by the trace allocation diagnostics layer.
+void push_corruptible_allocation_scope(const std::vector<AllocatorImpl*>& allocators);
+void pop_corruptible_allocation_scope();
+std::vector<size_t> drain_pending_traceback_ids();
+std::unordered_set<size_t> get_all_unsafe_tracked_ids();
+void register_traceback_allocator(AllocatorImpl* allocator);
+void unregister_traceback_allocator(AllocatorImpl* allocator);
 
 }  // namespace tt::tt_metal

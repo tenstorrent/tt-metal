@@ -31,8 +31,12 @@ AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
     config_(std::make_unique<AllocatorConfig>(alloc_config)),
     view_(std::make_unique<Allocator>(this)),
     tracking_enabled_(trace_allocation_tracking_enabled()),
-    traceback_capture_enabled_(trace_allocation_diagnostics_enabled()),
-    skip_program_cache_(trace_allocation_skip_program_cache_enabled()) {}
+    traceback_capture_enabled_(tracking_enabled_ && trace_allocation_diagnostics_enabled()),
+    skip_program_cache_(trace_allocation_skip_program_cache_enabled()) {
+    if (traceback_capture_enabled_) {
+        register_traceback_allocator(this);
+    }
+}
 
 void AllocatorImpl::validate_bank_assignments() const {
     TT_ASSERT(not bank_id_to_dram_channel_.empty() and not dram_channel_to_bank_ids_.empty());
@@ -116,7 +120,7 @@ void AllocatorImpl::init_one_bank_per_l1() {
 }
 
 void AllocatorImpl::verify_safe_allocation() const {
-    if (!allocations_unsafe_) {
+    if (!allocations_unsafe_ || allocation_context_contains("trace_storage")) {
         return;
     }
 
@@ -167,7 +171,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
         buffer->set_per_core_addresses(std::move(addrs));
         allocated_buffers_.insert(buffer);
-        if (tracking_enabled_) [[unlikely]] {
+        if (tracking_enabled_ && !unsafe_tracked_ids_by_manager_and_trace_.empty()) [[unlikely]] {
             this->record_allocation_if_unsafe(buffer);
         }
         return buffer->per_core_addresses_.at(cores[0]);
@@ -214,7 +218,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.insert(buffer);
-    if (tracking_enabled_) [[unlikely]] {
+    if (tracking_enabled_ && !unsafe_tracked_ids_by_manager_and_trace_.empty()) [[unlikely]] {
         this->record_allocation_if_unsafe(buffer);
     }
     return address;
@@ -234,6 +238,9 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
             l1_manager_->deallocate_buffer(addr, AllocatorID{bank_id + 1});
         }
         allocated_buffers_.erase(buffer);
+        if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
+            this->record_deallocation(buffer->unique_id());
+        }
         return;
     }
 
@@ -247,6 +254,9 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.erase(buffer);
+    if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
+        this->record_deallocation(buffer->unique_id());
+    }
 }
 
 void AllocatorImpl::deallocate_buffers() {
@@ -255,6 +265,9 @@ void AllocatorImpl::deallocate_buffers() {
     l1_manager_->deallocate_all();
     l1_small_manager_->deallocate_all();
     trace_buffer_manager_->deallocate_all();
+    if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
+        this->record_all_deallocations();
+    }
 }
 
 void AllocatorImpl::set_hybrid_device_allocators(const std::vector<AllocatorImpl*>& device_allocators) {
@@ -514,6 +527,9 @@ void AllocatorImpl::clear() {
     l1_manager_->clear();
     l1_small_manager_->clear();
     trace_buffer_manager_->clear();
+    if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
+        this->record_all_deallocations();
+    }
 }
 
 void AllocatorConfig::reset() {
@@ -525,6 +541,11 @@ void AllocatorConfig::reset() {
 }
 
 AllocatorImpl::~AllocatorImpl() {
+    if (traceback_capture_enabled_) {
+        unregister_traceback_allocator(this);
+    }
+    this->clear_trace_allocation_state();
+
     bank_id_to_dram_channel_.clear();
     dram_channel_to_bank_ids_.clear();
     bank_id_to_logical_core_.clear();
@@ -583,6 +604,9 @@ void AllocatorImpl::override_state(const AllocatorState& state) {
     l1_manager_->deallocate_all();
     l1_small_manager_->deallocate_all();
     trace_buffer_manager_->deallocate_all();
+    if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
+        this->record_all_deallocations();
+    }
     allocated_buffers_.clear();
 
     // Apply state for each buffer type
