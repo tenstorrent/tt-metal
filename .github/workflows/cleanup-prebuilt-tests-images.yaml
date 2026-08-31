@@ -1,0 +1,76 @@
+name: "Cleanup prebuilt tests images"
+# Prebuilt tests images are throwaways: one per (commit x build config x base),
+# pushed on every PR update, so without this they accumulate indefinitely.
+#
+# Keeps the newest N and deletes the rest, oldest first.
+#
+# min-versions-to-keep is what protects an in-flight run: it excludes the newest
+# N from deletion, and the action removes oldest-first. The 100-per-run limit
+# only bounds how much backlog one sweep clears, so do not treat it as the
+# safety mechanism. Note that N counts untagged versions too, so tagged
+# retention is lower than the number says.
+#
+# The action deletes at most 100 versions per run, which is why the schedule is
+# every 30 minutes rather than daily. PR Gate builds two images per run and
+# Merge Gate four, at roughly 600 runs/day each, so ~3,600 versions/day or
+# ~150/hour against 48 x 100 deletions.
+#
+# min-versions-to-keep is sized from that RATE, not picked round: retention in
+# hours is roughly N divided by the hourly push rate. An image must outlive the
+# gap between its build and the last consumer pulling it, and a hardware leg can
+# sit queued for hours, so N = 3600 buys about a day at ~150/hour. Too small a
+# value deletes an image out from under a queued leg, which fails at container
+# startup with no fallback, because container.image is resolved before any step
+# runs.
+#
+# Recompute N if the push rate changes: wiring more consumers raises it, and
+# building one image per run instead of two would halve it.
+#
+# This deletes irreversibly. It is scoped to the one package the
+# build-prebuilt-tests-image producer creates, and never touches a base image.
+
+permissions:
+  packages: write
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      min-versions-to-keep:
+        description: "Newest versions to keep. Set very high for a safe no-op run."
+        required: false
+        type: string
+        default: "3600"
+
+jobs:
+  cleanup:
+    name: "Delete aged-out prebuilt tests images"
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
+        with:
+          # Literal, not a context expression: this is what stops the job ever
+          # resolving to a package it should not touch.
+          owner: tenstorrent
+          package-name: tt-metal/prebuilt-tests-image
+          package-type: container
+          min-versions-to-keep: ${{ inputs.min-versions-to-keep || '3600' }}
+
+      # A GC that silently falls behind looks exactly like one that is working.
+      - name: Report what is left
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEP: ${{ inputs.min-versions-to-keep || '3600' }}
+        run: |
+          set -euo pipefail
+          COUNT=$(gh api "/orgs/tenstorrent/packages/container/tt-metal%2Fprebuilt-tests-image" --jq '.version_count')
+          echo "versions remaining: ${COUNT}" | tee -a "$GITHUB_STEP_SUMMARY"
+          # Steady state sits near the retention value, so warn relative to it
+          # rather than at a fixed number. A deliberate high-retention no-op run
+          # would otherwise report falling behind.
+          THRESHOLD=$(( KEEP * 2 ))
+          if [ "${COUNT}" -gt "${THRESHOLD}" ]; then
+            echo "::warning::${COUNT} versions left, over ${THRESHOLD}; cleanup is not keeping up with the push rate"
+          fi

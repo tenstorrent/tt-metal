@@ -290,21 +290,42 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+      # archive:false makes the artifact URL a direct link to the PNG rather than a zip. Must precede the
+      # publish step below, which needs the URL.
+      - name: ⬆️ Upload prefill plots
+        id: upload-prefill-plots
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: prefill-plots-${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          path: ${{ env.PREFILL_SUMMARIES }}/plots/*.png
+          if-no-files-found: ignore
+          retention-days: 30
+          archive: false
+
       - name: 📊 Publish prefill summaries
         if: always() && !cancelled()
         continue-on-error: true
+        env:
+          PLOTS_URL: ${{ steps.upload-prefill-plots.outputs.artifact-url }}
         run: |
           shopt -s nullglob
           files=("$PREFILL_SUMMARIES"/perf/*.md "$PREFILL_SUMMARIES"/pcc/*.md)
           if [ ${#files[@]} -eq 0 ]; then
             echo "No prefill summary files under $PREFILL_SUMMARIES"
-            exit 0
           fi
           for f in "${files[@]}"; do
             # tee so the table shows in this step's log too, not only on the job-summary page.
             cat "$f" | tee -a "$GITHUB_STEP_SUMMARY"
             printf '\n' >> "$GITHUB_STEP_SUMMARY"
           done
+          # The job-summary sanitizer strips inlined images, so the gantt can only be offered as a link.
+          # Gate on the PNG existing: a failed matplotlib install leaves the artifact empty but still URL'd.
+          plots=("$PREFILL_SUMMARIES"/plots/*.png)
+          if [ -n "$PLOTS_URL" ] && [ ${#plots[@]} -gt 0 ]; then
+            printf '[Pipeline gantt (PNG)](%s)\n\n' "$PLOTS_URL" >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo "Published ${#files[@]} prefill summary file(s) to the job summary"
 
       # Keep the raw .md files for cross-run perf-trend analysis. Uploaded before cleanup; unique name per

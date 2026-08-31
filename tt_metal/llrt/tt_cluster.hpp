@@ -71,8 +71,6 @@ public:
     Cluster(llrt::RunTimeOptions& rtoptions);
     ~Cluster();
 
-    // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
-    // for user facing host apis
     std::unordered_map<ChipId, EthCoord> get_user_chip_ethernet_coordinates() const;
     size_t number_of_user_devices() const;
     std::set<ChipId> user_exposed_chip_ids() const;
@@ -301,12 +299,10 @@ public:
 
     // Internal routing for SD and FD enables launching user ethernet kernels and FD tunneling for all devices in the
     // cluster. When using multiple devices in a cluster, this should be the flow:
-    //       CreateDevice(0)
-    //       CreateDevice(1)
+    //       auto unit_meshes = MeshDevice::create_unit_meshes({0, 1});
     //       set_internal_routing_info_for_ethernet_cores(true);
     //       set_internal_routing_info_for_ethernet_cores(false);
-    //       CloseDevice(0)
-    //       CloseDevice(1)
+    //       unit_meshes.clear();  // or let RAII close them / MeshDevice::close
     void set_internal_routing_info_for_ethernet_cores(
         const tt::tt_fabric::ControlPlane& control_plane,
         bool enable_internal_routing,
