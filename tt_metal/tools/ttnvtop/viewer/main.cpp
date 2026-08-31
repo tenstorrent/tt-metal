@@ -12,6 +12,8 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <termios.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -72,6 +74,181 @@ const char* pct_color(uint32_t pct) {
         return kPctYellow;
     }
     return kPctRed;
+}
+
+// Terminal width, for laying meters out in as many columns as fit.
+int term_cols() {
+    struct winsize ws{};
+    if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+        return ws.ws_col;
+    }
+    return 120;
+}
+
+// Raw-ish stdin so single keypresses (f/s/d/g/q) switch views without Enter.
+// Restored by the destructor so a Ctrl-C or normal exit leaves the terminal sane.
+class RawMode {
+public:
+    RawMode() {
+        if (!::isatty(STDIN_FILENO)) {
+            return;
+        }
+        if (::tcgetattr(STDIN_FILENO, &saved_) != 0) {
+            return;
+        }
+        active_ = true;
+        struct termios raw = saved_;
+        raw.c_lflag &= ~(static_cast<tcflag_t>(ICANON) | static_cast<tcflag_t>(ECHO));
+        raw.c_cc[VMIN] = 0;
+        raw.c_cc[VTIME] = 0;
+        ::tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+    }
+    ~RawMode() { restore(); }
+    void restore() {
+        if (active_) {
+            ::tcsetattr(STDIN_FILENO, TCSANOW, &saved_);
+            active_ = false;
+        }
+    }
+    RawMode(const RawMode&) = delete;
+    RawMode& operator=(const RawMode&) = delete;
+
+private:
+    struct termios saved_{};
+    bool active_ = false;
+};
+
+// Drain pending keypresses; returns the last one seen (0 if none).
+char poll_key() {
+    char last = 0;
+    char c = 0;
+    while (::read(STDIN_FILENO, &c, 1) == 1) {
+        last = c;
+    }
+    return last;
+}
+
+// Which per-core metric the htop-style meters display. F is the default
+// because FPU compute% is the closest analogue of htop's CPU%.
+enum class Metric { Fpu, Sfpu, Dispatch, All };
+
+const char* metric_name(Metric m) {
+    switch (m) {
+        case Metric::Fpu: return "FPU";
+        case Metric::Sfpu: return "SFPU";
+        case Metric::Dispatch: return "DISPATCH";
+        case Metric::All: return "ALL (F/S/D)";
+    }
+    return "?";
+}
+
+// Pull the selected metric out of a PerCoreView, in per-mille.
+uint16_t metric_p1000(const ttnvtop::PerCoreView& v, Metric m) {
+    switch (m) {
+        case Metric::Fpu: return v.compute_busy_p1000;
+        case Metric::Sfpu: return v.sfpu_busy_p1000;
+        case Metric::Dispatch: return v.dispatch_busy_p1000;
+        case Metric::All: return v.compute_busy_p1000;  // unused in All mode
+    }
+    return 0;
+}
+
+// htop-style bar meter:  NNN[|||||  xx.x%]
+// The inner field is kMeterInnerW wide. The percentage text is right-aligned
+// within it and the bar fills from the left; where they overlap the text wins,
+// which is exactly what htop does (Meter.c BarMeterMode_draw).
+constexpr int kMeterInnerW = 9;
+constexpr int kMeterOuterW = 15;  // "NNN[" + inner + "]" + gap
+
+std::string render_meter(uint32_t idx, uint16_t p1000) {
+    const double pct = static_cast<double>(p1000) / 10.0;
+    char pctbuf[16];
+    std::snprintf(pctbuf, sizeof(pctbuf), "%.1f%%", pct);
+    std::string text(pctbuf);
+    if (static_cast<int>(text.size()) > kMeterInnerW) {
+        text = text.substr(0, kMeterInnerW);
+    }
+    // Bar length proportional to the full inner width, min 1 pipe for any
+    // non-zero reading so low-but-live cores stay visible (htop does this too).
+    int bars = static_cast<int>((pct / 100.0) * kMeterInnerW + 0.5);
+    if (p1000 > 0 && bars < 1) {
+        bars = 1;
+    }
+    if (bars > kMeterInnerW) {
+        bars = kMeterInnerW;
+    }
+    std::string inner(kMeterInnerW, ' ');
+    for (int i = 0; i < bars; ++i) {
+        inner[i] = '|';
+    }
+    // Overlay the right-aligned percentage.
+    const int off = kMeterInnerW - static_cast<int>(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        inner[off + i] = text[i];
+    }
+    const uint32_t pct_i = static_cast<uint32_t>(pct + 0.5);
+    std::ostringstream o;
+    o << kAnsiDim << std::setw(3) << idx << kAnsiReset << "[" << pct_color(pct_i) << inner << kAnsiReset << "]";
+    return o.str();
+}
+
+// Per-metric hues for the combined view. Deliberately NOT the saturation ramp
+// (green/yellow/red) -- here colour identifies WHICH unit, and bar length
+// carries the magnitude.
+constexpr const char* kMetricFpuCol = "\x1b[38;5;82m";    // green   F
+constexpr const char* kMetricSfpuCol = "\x1b[38;5;51m";   // cyan    S
+constexpr const char* kMetricDispCol = "\x1b[38;5;213m";  // magenta D
+constexpr const char* kMetricDramCol = "\x1b[38;5;214m";  // orange  DRAM
+
+// DRAM bandwidth for a chip header row. Measured at the DRAM NOC endpoints,
+// validated against exact byte counts to 0.07% (BH) / 0.80% (WH).
+//
+// Rendered only when the collector reports non-zero traffic: a chip genuinely
+// idle and a chip whose DRAM registers were mis-addressed both publish 0, and
+// showing "0.0 GB/s" would present the second as if it were the first.
+std::string render_dram(const ttnvtop::UtilShmHeader* h) {
+    if (h == nullptr || (h->dram_rd_mbps == 0 && h->dram_wr_mbps == 0)) {
+        return "";
+    }
+    const double rd = static_cast<double>(h->dram_rd_mbps) / 1000.0;
+    const double wr = static_cast<double>(h->dram_wr_mbps) / 1000.0;
+    std::ostringstream o;
+    o << std::fixed << std::setprecision(1) << "  " << kMetricDramCol << "DRAM " << (rd + wr) << " GB/s"
+      << " (R " << rd << " W " << wr << ")";
+    if (h->dram_peak_mbps > 0) {
+        const double pct = 100.0 * (rd + wr) * 1000.0 / static_cast<double>(h->dram_peak_mbps);
+        o << " " << std::setprecision(0) << pct << "% of " << (h->dram_peak_mbps / 1000) << "G";
+    }
+    o << kAnsiReset;
+    return o.str();
+}
+
+// Combined meter: NNN[FFFSSSDDD] -- three 3-wide segments, one per unit.
+// Same outer width as render_meter() so the column layout is unchanged; the
+// numeric readout is traded for seeing all three units at once. F/S/D are
+// independent occupancies (each 0-100% of wall time, and they overlap), so
+// they are shown side by side rather than stacked -- stacking would imply they
+// sum to 100%, which they do not: a mixed workload measured F 7.8 / S 27.4 /
+// D 69.0 on the same core.
+constexpr int kSegW = 3;
+
+std::string render_meter_all(uint32_t idx, uint16_t f_p1000, uint16_t s_p1000, uint16_t d_p1000) {
+    const auto seg = [](uint16_t p1000, const char* col) {
+        int bars = static_cast<int>((static_cast<double>(p1000) / 1000.0) * kSegW + 0.5);
+        if (p1000 > 0 && bars < 1) {
+            bars = 1;
+        }
+        if (bars > kSegW) {
+            bars = kSegW;
+        }
+        std::string b(static_cast<size_t>(bars), '|');
+        b.append(static_cast<size_t>(kSegW - bars), ' ');
+        return std::string(col) + b + kAnsiReset;
+    };
+    std::ostringstream o;
+    o << kAnsiDim << std::setw(3) << idx << kAnsiReset << "[" << seg(f_p1000, kMetricFpuCol)
+      << seg(s_p1000, kMetricSfpuCol) << seg(d_p1000, kMetricDispCol) << "]";
+    return o.str();
 }
 
 // Stable per-program color. Intentionally disjoint from the saturation ramp
@@ -440,8 +617,20 @@ int main(int argc, char* argv[]) {
     std::vector<std::deque<std::set<uint32_t>>> chip_timeline;
 
     const auto render_period = std::chrono::milliseconds(1000 / kRenderHz);
+    RawMode raw_mode;             // restores the terminal on scope exit
+    Metric metric = Metric::Fpu;  // f/s/d switch; FPU is the htop-CPU% analogue
+    bool meter_view = true;       // 'g' toggles back to the spatial NoC grid
     while (!g_stop.load(std::memory_order_relaxed)) {
         std::this_thread::sleep_for(render_period);
+        switch (poll_key()) {
+            case 'f': metric = Metric::Fpu; break;
+            case 's': metric = Metric::Sfpu; break;
+            case 'd': metric = Metric::Dispatch; break;
+            case 'a': metric = Metric::All; break;
+            case 'g': meter_view = !meter_view; break;
+            case 'q': g_stop.store(true, std::memory_order_relaxed); continue;
+            default: break;
+        }
         refresh_maps();
         refresh_registry();
 
@@ -510,13 +699,73 @@ int main(int argc, char* argv[]) {
             total_cores += m.header->num_cores;
         }
         out << kAnsiBold << "ttnvtop" << kAnsiReset << "   " << maps.size() << " chip" << (maps.size() == 1 ? "" : "s")
-            << "   " << total_cores << " cores   " << kRenderHz << " Hz\n"
-            << kAnsiDim << "  per-core box: F (FPU matrix) / S (SFPU vector) / D (dispatch)     "
-            << "saturation: " << kAnsiReset << kPctGray << "idle" << kAnsiReset << " " << kPctGreen << "low"
-            << kAnsiReset << " " << kPctYellow << "mid" << kAnsiReset << " " << kPctRed << "hot" << kAnsiReset << "\n";
+            << "   " << total_cores << " cores   " << kRenderHz << " Hz"
+            << "   showing " << kAnsiBold << metric_name(metric) << "%" << kAnsiReset << "\n"
+            << kAnsiDim << "  [f] FPU  [s] SFPU  [d] dispatch  [a] all   [g] " << (meter_view ? "NoC grid" : "meters")
+            << "   [q] quit     saturation: " << kAnsiReset << kPctGray << "idle" << kAnsiReset << " " << kPctGreen
+            << "low" << kAnsiReset << " " << kPctYellow << "mid" << kAnsiReset << " " << kPctRed << "hot" << kAnsiReset
+            << "\n";
+
+        // ---- htop-style meter view -------------------------------------
+        // One meter per core, laid out in as many columns as the terminal
+        // fits, numbered linearly per chip. Denser than the spatial NoC grid,
+        // which matters at 512 cores (8 chips x 64).
+        if (meter_view) {
+            const int cols = std::max(1, (term_cols() - 2) / kMeterOuterW);
+            for (size_t ci = 0; ci < maps.size(); ++ci) {
+                const auto& m = maps[ci];
+                const auto* h = m.header;
+                const auto* cores = m.cores;
+                const uint32_t n = h->num_cores;
+
+                // Chip-level averages for ALL three units are always shown, even when
+                // the per-core cells display only one -- the per-chip picture is
+                // cheap and is nearly always wanted as context.
+                uint64_t sf = 0, ss = 0, sd = 0;
+                for (uint32_t i = 0; i < n; ++i) {
+                    sf += cores[i].compute_busy_p1000;
+                    ss += cores[i].sfpu_busy_p1000;
+                    sd += cores[i].dispatch_busy_p1000;
+                }
+                const uint32_t af = n ? static_cast<uint32_t>(sf / n / 10) : 0;
+                const uint32_t as = n ? static_cast<uint32_t>(ss / n / 10) : 0;
+                const uint32_t ad = n ? static_cast<uint32_t>(sd / n / 10) : 0;
+                out << "\n"
+                    << kAnsiBold << "chip " << ci << kAnsiReset << "  " << n << " cores  @ " << h->aiclk_mhz
+                    << " MHz   " << kMetricFpuCol << "F " << af << "%" << kAnsiReset << "  " << kMetricSfpuCol << "S "
+                    << as << "%" << kAnsiReset << "  " << kMetricDispCol << "D " << ad << "%" << kAnsiReset
+                    << render_dram(h) << "\n";
+
+                const int rows = (static_cast<int>(n) + cols - 1) / cols;
+                for (int r = 0; r < rows; ++r) {
+                    out << " ";
+                    for (int c = 0; c < cols; ++c) {
+                        // Column-major so consecutive indices read down a
+                        // column, matching htop's layout.
+                        const int idx = c * rows + r;
+                        if (idx >= static_cast<int>(n)) {
+                            continue;
+                        }
+                        if (metric == Metric::All) {
+                            out << render_meter_all(
+                                       static_cast<uint32_t>(idx),
+                                       cores[idx].compute_busy_p1000,
+                                       cores[idx].sfpu_busy_p1000,
+                                       cores[idx].dispatch_busy_p1000)
+                                << " ";
+                        } else {
+                            out << render_meter(static_cast<uint32_t>(idx), metric_p1000(cores[idx], metric)) << " ";
+                        }
+                    }
+                    out << "\n";
+                }
+            }
+            out.flush();
+            std::cout << out.str() << std::flush;
+            continue;
+        }
 
         // Global accumulator for the bottom program table and per-chip aggregates.
-        constexpr uint32_t kLoFiMuladdsPerFpuReq = 4096;
         struct KernelBucket {
             uint32_t cores = 0;
             uint64_t sum_f_p1000 = 0;
@@ -609,15 +858,23 @@ int main(int argc, char* argv[]) {
                 out << "  (STALE)";
             }
             out << "   F=" << std::setw(2) << f_avg << "%  S=" << std::setw(2) << s_avg << "%  D=" << std::setw(2)
-                << d_avg << "%";
+                << d_avg << "%" << render_dram(h);
             if (h->aiclk_mhz > 0 && n > 0) {
                 const double peak_greq = static_cast<double>(n) * static_cast<double>(h->aiclk_mhz) / 1000.0;
                 const double f_frac = static_cast<double>(sum_f) / (static_cast<double>(n) * 1000.0);
                 const double achieved_greq = peak_greq * f_frac;
-                const double peak_tflops = peak_greq * kLoFiMuladdsPerFpuReq / 1000.0;
-                const double achieved_tflops = peak_tflops * f_frac;
+                // TFLOPs deliberately NOT shown. The only derivable figure is
+                // LoFi-equivalent (cores x AICLK x 4096 x busy%), which
+                // over-reports by exactly the math fidelity: measured 2026-08-27
+                // on WH T3K as 1.04x / 2.00x / 3.94x for pinned LoFi / HiFi2 /
+                // HiFi4. Correcting it needs a per-core fidelity divisor, and
+                // the WH TDMA_UNPACK fidelity counters do not report it (see
+                // collector/main.cpp). A single --fidelity override would still
+                // be wrong for a mixed-fidelity workload, which is the normal
+                // case for a real model. Greq/s below is cores x AICLK x busy%,
+                // i.e. FPU-busy-cycles per second -- fidelity-independent.
                 out << "   FPU " << std::fixed << std::setprecision(1) << achieved_greq << "/" << peak_greq
-                    << " Greq/s   ~" << std::setprecision(0) << achieved_tflops << "/" << peak_tflops << " TF";
+                    << " Greq/s";
             }
             // Dominant-program label removed: variable-length text on the
             // chip title row caused the right-side PROGRAMS panel to shift

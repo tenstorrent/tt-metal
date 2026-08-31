@@ -22,7 +22,11 @@ namespace ttnvtop {
 
 // Bump on any binary-incompatible change to the structs below.
 //   v2 (2026-04-24): repurposed PerCoreView::reserved_0 as sfpu_busy_p1000.
-constexpr uint16_t kShmVersion = 2;
+//   v3 (2026-08-28): took 3 of UtilShmHeader::reserved for the DRAM bandwidth
+//       axis (chip-level, so it lives in the header, not PerCoreView). Ported
+//       from the tt_coremon lineage; the struct stays 72 bytes, so a v2 reader
+//       sees the same layout it always did for every field it knows about.
+constexpr uint16_t kShmVersion = 3;
 
 constexpr char kShmMagic[4] = {'T', 'T', 'U', 'T'};
 
@@ -50,7 +54,15 @@ struct UtilShmHeader {
     // publish tick via TTDevice::get_clock(). 0 means unknown — viewer
     // should then omit throughput rendering.
     uint32_t aiclk_mhz;
-    uint32_t reserved[4];
+    // GDDR bandwidth measured at the DRAM NOC endpoints (NIU slave counters).
+    // MB/s rather than GB/s so the fields stay integral at u32 precision.
+    // 0 = not sampled, which is what a reader must check before rendering a
+    // %-of-peak: peak comes from the board's dram_speed where available, and a
+    // hardcoded constant understates utilization on 12 Gbps parts by 33%.
+    uint32_t dram_rd_mbps;
+    uint32_t dram_wr_mbps;
+    uint32_t dram_peak_mbps;  // 0 = unknown, so readers can hide %-of-peak
+    uint32_t reserved[1];
 };
 static_assert(sizeof(UtilShmHeader) == 72, "UtilShmHeader must be 72 bytes");
 

@@ -39,6 +39,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -47,6 +48,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "umd/device/firmware/firmware_info_provider.hpp"  // get_dram_speed(), for the DRAM peak
 #include "umd/device/soc_arch_descriptor.hpp"
 #include "umd/device/soc_descriptor.hpp"
 #include "umd/device/topology/topology_discovery.hpp"
@@ -198,6 +200,37 @@ struct CliOptions {
     bool pin_tunnel = false;          // Narrow each remote chip's tunnel to its real link channels
     std::string peek;                 // "chip,x,y,addr[,len]" -- read raw L1 twice and print it
     int watchdog_s = 0;               // Guard against a dead aggregator hard-blocking the next device open
+
+    // ---- BEGIN ported from tt_coremon (CliOptions::remote_budget, source line 262)
+    // Tunnelled NOC transactions per second per REMOTE chip that the per-core ring
+    // drain is allowed to spend. 0 = uncapped.
+    //
+    // This is a FALLBACK knob, not the primary strategy. In the tt_coremon lineage the
+    // per-core sweep over the ETH tunnel was the only path to a remote chip, so it had
+    // to be rate-limited to stay polite. Here it is not: a chip with `journal_active`
+    // publishes from its on-chip aggregator and its per-core drain is switched off
+    // entirely (see ChipState::journal_active and the early return in `ring_drain`),
+    // which removes the tunnel traffic rather than metering it.
+    //
+    // What is left to budget is the UN-AGGREGATED remote chip -- no aggregator was
+    // launched, or its launch failed. There the unthrottled per-core drain measured
+    // 0.1-0.2 Hz with 99.4-99.9% sample loss on a busy remote chip: it was not
+    // producing usable data, and it was taking UMD's NON_MMIO mutex thousands of times
+    // a second to fail at it. So this bounds THAT drain, so an un-aggregated remote
+    // chip degrades gracefully instead of hammering the tunnel.
+    //
+    // The currency is transaction COUNT, not bytes or time: UMD takes the NON_MMIO
+    // mutex per read_from_non_mmio_device() call and documents the acquisition as
+    // non-trivial, so what a workload's request loses the race against is the
+    // back-to-back acquire/release cycles, not the payload size.
+    //
+    // Cores are visited round-robin within the budget rather than freezing the whole
+    // chip, so coverage stays continuous. That costs no accuracy in kind: the ring
+    // already reports what it lost (ChipState::drain_lost_samples), and a
+    // less-frequently-visited core simply loses more of it -- on a path that was
+    // already losing 99%+. Pass 0 to uncap (an idle box being debugged by one user).
+    double remote_budget = 1500.0;
+    // ---- END ported from tt_coremon
 };
 
 void print_help(const char* argv0) {
@@ -224,6 +257,11 @@ void print_help(const char* argv0) {
                  "                         aggregator journal, print what was found, exit\n"
                  "  --journal-probe         Scan every chip's ethernet cores for a Phase 2.2\n"
                  "                          aggregator journal, print what was found, and exit.\n"
+                 "  --remote-budget N       Tunnelled transactions/s the per-core ring drain may\n"
+                 "                          spend on a remote chip that has NO on-chip aggregator\n"
+                 "                          feeding it (default 1500, 0 = uncapped). A chip with an\n"
+                 "                          aggregator does not drain per-core at all, so this\n"
+                 "                          never applies to it.\n"
                  "  --log-file PATH         Redirect collector stderr (incl. UMD logs) to PATH.\n"
                  "\n"
                  "Examples:\n"
@@ -325,6 +363,18 @@ bool parse_cli(int argc, char* argv[], CliOptions& out) {
                 return false;
             }
             out.launch_go = v;
+        } else if (a == "--remote-budget") {
+            // ---- BEGIN ported from tt_coremon (parse, source lines 387-396)
+            const char* v = need_arg("--remote-budget");
+            if (v == nullptr) {
+                return false;
+            }
+            out.remote_budget = std::strtod(v, nullptr);
+            if (!(out.remote_budget >= 0.0)) {  // also rejects NaN
+                std::cerr << "ttnvtop-collector: --remote-budget must be >= 0.\n";
+                return false;
+            }
+            // ---- END ported from tt_coremon
         } else if (a == "--log-file") {
             const char* v = need_arg("--log-file");
             if (v == nullptr) {
@@ -535,6 +585,28 @@ struct ChipState {
     bool is_remote = false;
     std::vector<CoreState> cores;
     ttnvtop::ShmPublisher publisher;
+
+    // ---- BEGIN ported from tt_coremon (ChipState, source lines 546-566)
+    // DRAM bandwidth axis. Endpoints in TRANSLATED coords; noc0 Y is kept
+    // alongside because WH selects one of three NIU bases from it.
+    std::vector<tt_xy_pair> dram_at;
+    std::vector<uint32_t> dram_noc0_y;
+    std::vector<uint32_t> dram_prev_rd, dram_prev_wr;
+    bool dram_primed = false;
+    uint32_t dram_rd_mbps = 0;
+    uint32_t dram_wr_mbps = 0;
+    uint32_t dram_peak_mbps = 0;
+
+    // Remote per-core-drain budget (see CliOptions::remote_budget). Cores are visited
+    // round-robin from `drain_rr_cursor`, spending from a token bucket, so a constrained
+    // budget stretches the revisit interval instead of freezing whole chips. Touched
+    // only by this chip's own drain thread (the drain is one thread per chip), so these
+    // need no synchronization of their own.
+    size_t drain_rr_cursor = 0;
+    double drain_tokens = 0.0;
+    std::chrono::steady_clock::time_point drain_last_refill{};
+    uint64_t drain_cores_sampled = 0;  // since the last drain debug line
+    // ---- END ported from tt_coremon
 
     // Phase 2.1.c: per-kernel cycle attribution. Updated by the drain
     // thread; protected by `ring_mx`. Wrapped in unique_ptr to keep
@@ -750,6 +822,134 @@ bool arm_fpu_counter(TTDevice* device, const tt_xy_pair& core) {
     return true;
 }
 
+// ---- BEGIN ported from tt_coremon (source lines 793-870, 905-947)
+// ---------------------------------------------------------------------------
+// DRAM bandwidth axis: NIU counters at the DRAM NOC endpoints.
+//
+// These are FREE-RUNNING -- no arming, so unlike the Tensix perf counters they
+// carry no two-owner hazard and cannot be reset out from under us.
+//
+// Read at the DRAM endpoints, not summed from the workers: a Tensix master-side
+// NIU counts words regardless of target, so it cannot separate DRAM traffic from
+// L1<->L1 mcast. Every Tensix->DRAM transfer traverses exactly one DRAM endpoint,
+// so summing the slave side counts each transfer exactly once.
+//
+// Validated (see alex-notes/claude-memory/tt-core-utilization-metrics.md):
+//   512 MiB host->DRAM, exact byte count : +0.17%  (BH)
+//   4096^3 matmul, BH                    : +2.7%, R:W exactly 2.000:1
+//   4096^3 matmul, WH                    : +1.5%, R:W 1.998:1
+// Accuracy ceiling: these count NOC words, not GDDR bursts, so they miss
+// read-modify-write amplification and refresh overhead.
+constexpr uint64_t kNocRegsBase = 0xFFB20000ull;
+constexpr uint64_t kNocInstanceOff = 0x10000ull;
+constexpr uint64_t kNocStatusOff = 0x200ull;
+constexpr uint32_t kNumNocs = 2;
+// Slave-side: what the endpoint SERVED, i.e. the GDDR bytes.
+constexpr uint32_t kNiuSlvRdDataWordSent = 0x33;
+constexpr uint32_t kNiuSlvNonpostedWrDataWordRecv = 0x38;
+constexpr uint32_t kNiuSlvPostedWrDataWordRecv = 0x39;
+
+// WH DRAM endpoints do NOT share the Tensix NIU addressing. Blackhole does reuse
+// it (0xFFB20000, stride 0x10000), but on WH each DRAM block carries THREE NIU
+// instances at separate bases, selected by the noc0 Y coordinate mod 3.
+//
+// Getting this wrong does not fault -- it reads a dead region and returns a
+// confident 0.00 GB/s, indistinguishable from an idle chip. Mapping mirrors
+// ttexalens/hardware/wormhole/dram_block.py.
+constexpr uint64_t kWhDramNiuBase[3][2] = {
+    {0x100080000ull, 0x100088000ull},  // y%3 == 1
+    {0x100090000ull, 0x100098000ull},  // y%3 == 2
+    {0x1000A0000ull, 0x1000A8000ull},  // y%3 == 0
+};
+constexpr uint64_t wh_dram_niu_base(uint32_t noc0_y, uint32_t noc) {
+    const uint32_t m = noc0_y % 3;
+    const uint32_t loc = (m == 1) ? 0u : (m == 2) ? 1u : 2u;
+    return kWhDramNiuBase[loc][noc];
+}
+constexpr uint64_t dram_noc_status(bool blackhole, uint32_t noc0_y, uint32_t noc, uint32_t idx) {
+    return blackhole ? (kNocRegsBase + noc * kNocInstanceOff + kNocStatusOff + idx * 4)
+                     : (wh_dram_niu_base(noc0_y, noc) + kNocStatusOff + idx * 4);
+}
+// NOC payload width, words -> bytes. Arch-specific (unlike the perf-counter
+// block): NOC_PAYLOAD_WIDTH is 256 bits on WH, 512 on BH.
+constexpr uint32_t noc_word_bytes(bool blackhole) { return blackhole ? 64u : 32u; }
+// Peak GDDR bandwidth in MB/s, as channels x 32 bit x rate / 8:
+//   WH n300  6 ch x 12 Gbps = 288 GB/s
+//   BH p150a 8 ch x 16 Gbps = 512 GB/s
+// Fallback only -- prefer the board's reported dram_speed. tt-metal hardcodes
+// WH=384 (test_dram_read.cpp), which is a 16 Gbps part; 12G boards peak at 288,
+// so 384 understates utilization by 33%.
+constexpr uint32_t dram_peak_mbps_default(bool blackhole) { return blackhole ? 512000u : 288000u; }
+// The NIU counters are 32-bit and WRAP -- at full bandwidth roughly every 8 s per
+// endpoint, so the sample interval must stay well under that.
+constexpr uint32_t wrap_delta(uint32_t a, uint32_t b) { return b - a; }
+constexpr auto kDramSampleInterval = std::chrono::milliseconds(200);  // 5 Hz, vs ~8 s wrap
+
+// Approximate tunnelled transactions the RING DRAIN spends per core per pass on a
+// remote chip -- this constant only prices the remote budget, since local chips are
+// never budgeted. The drain's per-core cost is one 1 KiB read of the L1 sampler ring;
+// the period reassert (1 Hz) and the read-back probe (0.2 Hz) amortize to nothing
+// against a 200 Hz pass. It is 1.0 rather than tt_coremon's kOpsPerCore = 6.0 (source
+// line 955) because that priced a different access pattern: the perf-counter sweep's
+// six small register reads per core, not one bulk ring read.
+//
+// Sanity on the 1500 tx/s default: 64 cores / 1500 = a 43 ms rotation, against a
+// 62-slot ring that fills in ~155 ms at the 5 ms firmware period x 2 producers. So
+// the default budget still revisits every core before its ring can wrap. tt_coremon's
+// kMaxRotationSeconds hard-fail (source line 969) is deliberately NOT ported: it
+// guarded the 32-bit FPU counter's ~4.3 s wrap, where a wrapped delta is silently
+// DISCARDED and the chip reports nothing at all. The ring has no such failure mode --
+// it counts what it dropped in ChipState::drain_lost_samples -- so a too-small budget
+// here degrades visibly rather than lying, which is the whole point of the fallback.
+constexpr double kDrainOpsPerCore = 1.0;
+
+// Roll one chip's DRAM rates forward over `dt` seconds. The first call only
+// primes the anchor. Read failures leave the previous rate standing rather than
+// publishing a false 0.
+void dram_update(ChipState& chip, double dt) {
+    if (chip.dram_at.empty() || chip.cores.empty()) {
+        return;
+    }
+    const bool bh = chip.arch == tt::ARCH::BLACKHOLE;
+    TTDevice* dev = chip.cores.front().device;
+    std::vector<uint32_t> rd, wr;
+    rd.reserve(chip.dram_at.size() * kNumNocs);
+    wr.reserve(chip.dram_at.size() * kNumNocs);
+    const auto r32 = [&](const tt_xy_pair& c, uint64_t addr) -> uint32_t {
+        uint32_t v = 0;
+        dev->read_from_device(&v, c, addr, sizeof(v));
+        return v;
+    };
+    try {
+        for (size_t i = 0; i < chip.dram_at.size(); ++i) {
+            const auto& d = chip.dram_at[i];
+            const uint32_t y = chip.dram_noc0_y[i];
+            for (uint32_t n = 0; n < kNumNocs; ++n) {
+                rd.push_back(r32(d, dram_noc_status(bh, y, n, kNiuSlvRdDataWordSent)));
+                wr.push_back(static_cast<uint32_t>(
+                    r32(d, dram_noc_status(bh, y, n, kNiuSlvNonpostedWrDataWordRecv)) +
+                    r32(d, dram_noc_status(bh, y, n, kNiuSlvPostedWrDataWordRecv))));
+            }
+        }
+    } catch (const std::exception&) {
+        return;  // keep the last good rate
+    }
+    if (chip.dram_primed && dt > 0.0 && rd.size() == chip.dram_prev_rd.size()) {
+        const double wb = static_cast<double>(noc_word_bytes(bh));
+        uint64_t r = 0, w = 0;
+        for (size_t i = 0; i < rd.size(); ++i) {
+            r += wrap_delta(chip.dram_prev_rd[i], rd[i]);
+            w += wrap_delta(chip.dram_prev_wr[i], wr[i]);
+        }
+        chip.dram_rd_mbps = static_cast<uint32_t>(static_cast<double>(r) * wb / dt / 1e6);
+        chip.dram_wr_mbps = static_cast<uint32_t>(static_cast<double>(w) * wb / dt / 1e6);
+    }
+    chip.dram_prev_rd = std::move(rd);
+    chip.dram_prev_wr = std::move(wr);
+    chip.dram_primed = true;
+}
+// ---- END ported from tt_coremon
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -938,6 +1138,52 @@ int main(int argc, char* argv[]) {
             chips.push_back(std::move(chip));
             continue;
         }
+
+        // ---- BEGIN ported from tt_coremon (source lines 1333-1367)
+        // DRAM endpoints. WH exposes 6 channels x 3 endpoints = 18, BH 8 x 3 = 24
+        // (BH really is 8 channels, even though NUM_DRAM_INSTANCE reads 6 in both
+        // syseng bringup trees).
+        //
+        // Deliberately placed AFTER the read-only-probe early-continue above, not
+        // before it as in the source: get_dram_speed() below is a firmware/telemetry
+        // read, and --journal-probe advertises itself as touching nothing. Probe-mode
+        // chips therefore leave dram_peak_mbps at 0, which the schema already defines
+        // as "unknown, so hide %-of-peak".
+        for (const auto& cc : soc.get_cores(CoreType::DRAM, CoordSystem::NOC0)) {
+            const auto t = soc.translate_coord_to(cc, CoordSystem::TRANSLATED);
+            chip.dram_at.push_back(tt_xy_pair(t.x, t.y));
+            chip.dram_noc0_y.push_back(static_cast<uint32_t>(cc.y));
+        }
+        // Peak = channels x 32 bit x rate / 8, with the rate read from the board
+        // rather than assumed. This matters: tt-metal hardcodes WH=384 GB/s,
+        // which is a 16 Gbps part -- on a 12 Gbps n300 (peak 288) that overstates
+        // the denominator and understates utilization by 33%.
+        chip.dram_peak_mbps = 0;
+        {
+            const bool bh = arch == tt::ARCH::BLACKHOLE;
+            std::optional<uint16_t> gbps;  // per-pin rate, Mbps
+            try {
+                if (auto* fw = dev->get_firmware_info_provider(); fw != nullptr) {
+                    gbps = fw->get_dram_speed();
+                }
+            } catch (const std::exception&) {
+            }
+            if (gbps.has_value() && *gbps > 0) {
+                // UMD reports the per-pin rate in Mbps (16000 for a "16G" part),
+                // not Gbps. Accept either so a units change upstream cannot
+                // silently inflate the denominator by 1000x.
+                const uint32_t rate_mbps =
+                    (*gbps >= 1000u) ? static_cast<uint32_t>(*gbps) : static_cast<uint32_t>(*gbps) * 1000u;
+                // channels x 32-bit bus x rate / 8 bits-per-byte  ->  MB/s
+                const uint32_t channels = bh ? 8u : 6u;
+                chip.dram_peak_mbps = channels * 4u * rate_mbps;
+            } else {
+                chip.dram_peak_mbps = dram_peak_mbps_default(bh);
+                std::cerr << "ttnvtop-collector: chip " << chip_id << " dram_speed unavailable; assuming "
+                          << chip.dram_peak_mbps / 1000 << " GB/s peak.\n";
+            }
+        }
+        // ---- END ported from tt_coremon
 
         int armed = 0;
         for (size_t i = 0; i < chip.cores.size(); ++i) {
@@ -2224,6 +2470,15 @@ int main(int argc, char* argv[]) {
         std::vector<uint8_t> buf(kReadSize);
         const auto period = std::chrono::microseconds(1'000'000 / cli.sample_hz);
         auto next = std::chrono::steady_clock::now();
+        // ---- BEGIN ported from tt_coremon (source lines 1535-1541)
+        // DRAM NIU counters are free-running -- no arming, no owner conflict --
+        // so they ride along on this thread at a fixed 5 Hz. That is far below
+        // the sweep rate (the counters are 32-bit and wrap in ~8 s at full
+        // bandwidth, so 5 Hz leaves ample margin) and keeps the extra NOC reads
+        // off the hot per-core path.
+        auto next_dram = std::chrono::steady_clock::now();
+        auto last_dram_t = std::chrono::steady_clock::now();
+        // ---- END ported from tt_coremon
         while (!g_stop.load(std::memory_order_relaxed)) {
             for (auto& chip : chips) {
                 // 5k transport emulation: the host-pull design does NO per-core remote
@@ -2412,6 +2667,19 @@ int main(int argc, char* argv[]) {
                     }
                 }
             }
+            // ---- BEGIN ported from tt_coremon (source lines 1872-1878)
+            {
+                const auto loop_t = std::chrono::steady_clock::now();
+                if (loop_t >= next_dram) {
+                    const double dram_dt = std::chrono::duration<double>(loop_t - last_dram_t).count();
+                    for (auto& chip : chips) {
+                        dram_update(chip, dram_dt);
+                    }
+                    last_dram_t = loop_t;
+                    next_dram = loop_t + kDramSampleInterval;
+                }
+            }
+            // ---- END ported from tt_coremon
             next += period;
             const auto now_t = std::chrono::steady_clock::now();
             if (next < now_t) {
@@ -2553,7 +2821,44 @@ int main(int argc, char* argv[]) {
                 }
 
                 int probe_good = 0, probe_bad = 0;
-                for (auto& c : chip.cores) {
+                // ---- BEGIN ported from tt_coremon (source lines 1556-1583)
+                // REMOTE BUDGET. Reached only on a remote chip with NO aggregator --
+                // an aggregated chip returned from this lambda before the loop ever
+                // started. So this is the fallback path's back-pressure, not the
+                // primary strategy: see CliOptions::remote_budget for why the drain
+                // being throttled here was measuring 0.1-0.2 Hz at 99.4-99.9% sample
+                // loss anyway, and why bounding it costs nothing real.
+                //
+                // Local chips are never budgeted -- they take no NON_MMIO lock, so
+                // there is nothing to be polite about.
+                size_t budget_cores = chip.cores.size();
+                if (chip.is_remote && cli.remote_budget > 0.0 && !chip.cores.empty()) {
+                    if (chip.drain_last_refill.time_since_epoch().count() == 0) {
+                        chip.drain_last_refill = loop_t0;
+                    }
+                    const double refill_dt = std::chrono::duration<double>(loop_t0 - chip.drain_last_refill).count();
+                    chip.drain_last_refill = loop_t0;
+                    chip.drain_tokens += cli.remote_budget * refill_dt;
+                    // Cap the bucket at one full rotation: an idle stretch must
+                    // not bank credit and then spend it as one long burst,
+                    // which is the starvation we are trying to avoid.
+                    const double cap = kDrainOpsPerCore * static_cast<double>(chip.cores.size());
+                    if (chip.drain_tokens > cap) {
+                        chip.drain_tokens = cap;
+                    }
+                    budget_cores = static_cast<size_t>(chip.drain_tokens / kDrainOpsPerCore);
+                    if (budget_cores > chip.cores.size()) {
+                        budget_cores = chip.cores.size();
+                    }
+                    chip.drain_tokens -= static_cast<double>(budget_cores) * kDrainOpsPerCore;
+                }
+                for (size_t bk = 0; bk < budget_cores; ++bk) {
+                    // Resume from drain_rr_cursor so a constrained budget rotates
+                    // coverage rather than re-reading the same first N cores forever.
+                    auto& c = chip.cores[chip.drain_rr_cursor];
+                    chip.drain_rr_cursor = (chip.drain_rr_cursor + 1) % chip.cores.size();
+                    ++chip.drain_cores_sampled;
+                    // ---- END ported from tt_coremon
                     if (reassert_period) {
                         try {
                             c.device->write_to_device(
@@ -2798,6 +3103,25 @@ int main(int argc, char* argv[]) {
                         probe_good,
                         probe_good + probe_bad);
                     std::fflush(stderr);
+                    // ---- BEGIN ported from tt_coremon (report_health, source lines 1055-1061)
+                    // "Quiet" and "budgeted down to nothing" must not look the same from
+                    // the outside; without this line a throttled remote chip is
+                    // indistinguishable from an idle one -- the same ambiguity that let a
+                    // frozen counter masquerade as an idle workload.
+                    if (chip.is_remote && cli.remote_budget > 0.0 && !chip.cores.empty()) {
+                        const double per_core_hz = static_cast<double>(chip.drain_cores_sampled) /
+                                                   static_cast<double>(chip.cores.size()) * 1'000'000.0 /
+                                                   static_cast<double>(dt_us);
+                        std::fprintf(
+                            stderr,
+                            "[remote-budget] chip=%u no aggregator: per-core drain %.2f Hz at %.0f tx/s budget\n",
+                            static_cast<unsigned>(chip.chip_id),
+                            per_core_hz,
+                            cli.remote_budget);
+                        std::fflush(stderr);
+                    }
+                    chip.drain_cores_sampled = 0;
+                    // ---- END ported from tt_coremon
                 }
             }
 
@@ -2818,30 +3142,72 @@ int main(int argc, char* argv[]) {
     // costs staleness, never data, which is the property the whole design rests on. So
     // this loop cannot lose samples no matter how contended the tunnel gets; that is why
     // it is the answer for remote chips.
-    auto journal_feed = [&]() {
+    // ONE FEED THREAD PER CHIP.
+    //
+    // This was a single thread iterating all chips, and it reproduced exactly the defect the
+    // ring drain had: a remote-chip read crosses the NON_MMIO tunnel and contends with the
+    // workload's own traffic, so one slow read starves every chip behind it. Measured before
+    // this fix: 8 trace lines in 25 s where ~250 ticks were due, and chips 4-7 never reached
+    // the loop body at all. Per chip, a stalled remote read costs only that chip's
+    // freshness -- which the monotonic accumulators already tolerate by design.
+    auto journal_feed = [&](size_t chip_idx) {
+        auto& chip = chips[chip_idx];
+        if (!chip.journal_active) {
+            return;
+        }
         std::vector<uint8_t> buf;
+        std::map<uint32_t, uint64_t> jf_ticks, jf_pub, jf_skip_seq, jf_skip_dwall;
         while (!g_stop.load(std::memory_order_relaxed)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            for (auto& chip : chips) {
-                if (!chip.journal_active) {
-                    continue;
-                }
+            {
                 const uint32_t nc = chip.journal_num_cores;
                 const uint32_t bytes = util_agg_bytes_for(nc);
                 buf.assign(bytes, 0);
                 auto* dev = chip.cores.front().device;
+                // Unconditional trace on the first ticks, BEFORE any bail-out. Without it a
+                // silent `continue` here is indistinguishable from the thread never running,
+                // which is exactly the ambiguity that cost the last three runs.
+                const bool trace = jf_ticks[chip.chip_id] < 3;
+                ++jf_ticks[chip.chip_id];
                 try {
                     dev->read_from_device(buf.data(), chip.journal_core, ttnvtop_agg::landing_base(chip.arch), bytes);
-                } catch (const std::exception&) {
+                } catch (const std::exception& e) {
+                    if (trace) {
+                        std::fprintf(
+                            stderr,
+                            "[journal-feed] chip=%u READ THREW at 0x%llx len %u: %s\n",
+                            static_cast<unsigned>(chip.chip_id),
+                            static_cast<unsigned long long>(ttnvtop_agg::landing_base(chip.arch)),
+                            bytes,
+                            e.what());
+                        std::fflush(stderr);
+                    }
                     continue;
                 }
                 util_agg_hdr_view_t hdr{};
                 std::memcpy(&hdr, buf.data(), sizeof(hdr));
+                if (trace) {
+                    std::fprintf(
+                        stderr,
+                        "[journal-feed] chip=%u read ok: magic=0x%08x (want 0x%08x) head=%u head_xor=0x%08x "
+                        "hdr_ok=%d sweeps=%u nc=%u bytes=%u\n",
+                        static_cast<unsigned>(chip.chip_id),
+                        hdr.magic,
+                        UTIL_AGG_MAGIC,
+                        hdr.head,
+                        hdr.head_xor,
+                        util_agg_hdr_ok(hdr) ? 1 : 0,
+                        hdr.sweep_count,
+                        nc,
+                        bytes);
+                    std::fflush(stderr);
+                }
                 // A remote read arrives in 16 B chunks from different moments, so the
                 // header's self-check is not optional.
                 if (hdr.magic != UTIL_AGG_MAGIC || !util_agg_hdr_ok(hdr)) {
                     continue;
                 }
+                uint32_t dbg_samples = 0, dbg_busy = 0, dbg_wall = 0;
                 for (uint32_t i = 0; i < nc; ++i) {
                     const int ci = chip.journal_to_core[i];
                     if (ci < 0) {
@@ -2850,7 +3216,13 @@ int main(int argc, char* argv[]) {
                     util_agg_core_state_t st{};
                     std::memcpy(
                         &st, buf.data() + sizeof(util_agg_msg_t) + i * sizeof(util_agg_core_state_t), sizeof(st));
+                    if (i == 0) {
+                        dbg_samples = st.samples;
+                        dbg_busy = st.busy_cycles;
+                        dbg_wall = st.wall_cycles;
+                    }
                     if (st.seq == chip.prev_seq[i]) {
+                        ++jf_skip_seq[chip.chip_id];
                         continue;  // this core's block has not been rewritten since last read
                     }
                     // Unsigned subtraction is wrap-correct; both counters are u32 and
@@ -2862,8 +3234,10 @@ int main(int argc, char* argv[]) {
                     chip.prev_wall[i] = st.wall_cycles;
                     chip.prev_seq[i] = st.seq;
                     if (dwall == 0) {
+                        ++jf_skip_dwall[chip.chip_id];
                         continue;
                     }
+                    ++jf_pub[chip.chip_id];
                     double util = static_cast<double>(dbusy) / static_cast<double>(dwall);
                     util = std::clamp(util, 0.0, 1.0);
                     auto& v = chip.publisher.cores()[static_cast<size_t>(ci)];
@@ -2880,15 +3254,34 @@ int main(int argc, char* argv[]) {
                     }
                 }
                 chip.publisher.mark_updated();
+                // Periodic diagnostic: without it, "the viewer shows zeros" is
+                // indistinguishable from "the feed never ran", "seq never advanced" and
+                // "the deltas are genuinely zero".
+                if (jf_ticks[chip.chip_id] % 100 == 0) {
+                    std::fprintf(
+                        stderr,
+                        "[journal-feed] chip=%u ticks=%lu published=%lu skipped_seq=%lu skipped_dwall=%lu "
+                        "hdr_head=%u last_samples=%u last_busy=%u last_wall=%u\n",
+                        static_cast<unsigned>(chip.chip_id),
+                        static_cast<unsigned long>(jf_ticks[chip.chip_id]),
+                        static_cast<unsigned long>(jf_pub[chip.chip_id]),
+                        static_cast<unsigned long>(jf_skip_seq[chip.chip_id]),
+                        static_cast<unsigned long>(jf_skip_dwall[chip.chip_id]),
+                        hdr.head,
+                        dbg_samples,
+                        dbg_busy,
+                        dbg_wall);
+                    std::fflush(stderr);
+                }
             }
         }
     };
-    std::thread journal_feed_thread;
+    std::vector<std::thread> journal_feed_threads;
     {
-        const bool any_journal =
-            std::any_of(chips.begin(), chips.end(), [](const ChipState& c) { return c.journal_active; });
-        if (any_journal) {
-            journal_feed_thread = std::thread(journal_feed);
+        for (size_t i = 0; i < chips.size(); ++i) {
+            if (chips[i].journal_active) {
+                journal_feed_threads.emplace_back(journal_feed, i);
+            }
         }
     }
 
@@ -2918,6 +3311,11 @@ int main(int argc, char* argv[]) {
                     }
                 }
                 header->aiclk_mhz = aiclk_mhz;
+                // ---- BEGIN ported from tt_coremon (source lines 2343-2345)
+                header->dram_rd_mbps = chip.dram_rd_mbps;
+                header->dram_wr_mbps = chip.dram_wr_mbps;
+                header->dram_peak_mbps = chip.dram_peak_mbps;
+                // ---- END ported from tt_coremon
             }
             std::lock_guard<std::mutex> lk(state_mx);
             for (size_t i = 0; i < chip.cores.size(); ++i) {
@@ -2956,8 +3354,8 @@ int main(int argc, char* argv[]) {
     for (auto& t : ring_drain_threads) {
         t.join();
     }
-    if (journal_feed_thread.joinable()) {
-        journal_feed_thread.join();
+    for (auto& t : journal_feed_threads) {
+        t.join();
     }
     std::cout << "\nttnvtop-collector: exiting.\n";
     return 0;
