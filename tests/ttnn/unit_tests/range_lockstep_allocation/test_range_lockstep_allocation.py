@@ -100,7 +100,16 @@ def hog(hybrid_mesh_device):
 
     def place(core):
         num_bytes = _hog_size(mesh)
-        holder.append(_allocate(mesh, core, num_bytes, per_core=True))
+        try:
+            holder.append(_allocate(mesh, core, num_bytes, per_core=True))
+        except RuntimeError as exc:
+            # HYBRID is latched at the first MetalContext construction, so the env var the fixture
+            # sets is too late if an earlier test in the same pytest process already opened a
+            # device. Skip rather than fail: under LOCKSTEP no per-core ranges are gathered at all,
+            # and these tests would prove nothing. Per-core allocation is what reports it.
+            if "AllocatorMode::HYBRID" not in str(exc):
+                raise
+            pytest.skip("HYBRID allocator mode is not active in this process")
         return num_bytes
 
     yield mesh, place

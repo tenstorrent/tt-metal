@@ -17,38 +17,6 @@ import pytest
 import ttnn
 
 
-def _sharded_l1_config(grid_start, grid_end, shard_shape, layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED):
-    """Sharded L1 memory config over the inclusive core grid grid_start..grid_end."""
-    core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*grid_start), ttnn.CoreCoord(*grid_end))])
-    return ttnn.MemoryConfig(
-        layout,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(core_ranges, list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-
-
-# Exposed as two factories rather than one taking a boolean, so a call site says which kind it
-# is building -- same convention as the per_core_allocation suite next door.
-
-
-@pytest.fixture(scope="module")
-def lockstep_sharded_config():
-    """Factory (grid_start, grid_end, shard_shape) -> ordinary lockstep-allocated config."""
-    return _sharded_l1_config
-
-
-@pytest.fixture(scope="module")
-def range_lockstep_sharded_config():
-    """Factory (grid_start, grid_end, shard_shape) -> config requesting range lockstep."""
-
-    def build(grid_start, grid_end, shard_shape):
-        mem_config = _sharded_l1_config(grid_start, grid_end, shard_shape)
-        mem_config.experimental_set_range_lockstep_allocation(True)
-        return mem_config
-
-    return build
-
-
 @pytest.fixture(scope="function")
 def hybrid_mesh_device():
     """Single-device 1x1 mesh with HYBRID allocator mode.

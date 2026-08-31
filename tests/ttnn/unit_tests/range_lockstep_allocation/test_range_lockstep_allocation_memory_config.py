@@ -83,6 +83,21 @@ def test_rejects_per_core_allocation(expect_error):
         config.experimental_set_range_lockstep_allocation(True)
 
 
+def test_rejects_dram(expect_error):
+    """The scan it narrows runs over L1 banks, so the flag would be ignored anywhere else."""
+    dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, _shard_spec())
+    with expect_error(RuntimeError, "range_lockstep_allocation is only supported for L1 buffers"):
+        dram.experimental_set_range_lockstep_allocation(True)
+
+
+def test_per_core_rejects_range_lockstep(expect_error):
+    """Mutual exclusion has to hold in both orders, or both flags end up set."""
+    config = _sharded_config()
+    config.experimental_set_range_lockstep_allocation(True)
+    with expect_error(RuntimeError, "mutually exclusive"):
+        config.experimental_set_per_core_allocation(True)
+
+
 def test_disable_is_always_allowed():
     """Turning the flag off asserts nothing, so it must not be guarded."""
     interleaved = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)

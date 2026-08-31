@@ -190,44 +190,45 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges;
             if (!hybrid_device_allocators_.empty()) {
                 using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-                std::vector<uint32_t> banks_to_scan;
-                auto add_bank_for = [&](const CoreCoord& core) {
-                    // A claimed service core is a legal shard core with no allocator bank (see the
-                    // shard-grid validation in Buffer), so it holds no per-core ranges to avoid.
-                    if (this->has_bank(BufferType::L1, core)) {
-                        banks_to_scan.push_back(logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0));
-                    }
+                auto gather_from = [&](const AllocatorImpl* dev_alloc, uint32_t bank_id) {
+                    auto ranges = dev_alloc->get_l1_allocated_ranges(AllocatorID{bank_id + 1});
+                    additional_ranges.insert(additional_ranges.end(), ranges.begin(), ranges.end());
                 };
+
+                std::vector<CoreCoord> cores_to_scan;
                 const bool scope_to_own_cores =
                     experimental::range_lockstep_allocation::is_range_lockstep_allocation(*buffer);
                 // A distribution spec reserves L1 on its cores_with_data(), which is what
                 // Buffer::num_cores() reports for it; shard_spec_ is not set on that path.
                 if (const auto& distribution_spec = buffer->buffer_distribution_spec();
                     scope_to_own_cores && distribution_spec.has_value()) {
-                    const auto& cores = distribution_spec->cores_with_data();
-                    banks_to_scan.reserve(cores.size());
-                    for (const auto& core : cores) {
-                        add_bank_for(core);
-                    }
+                    cores_to_scan = distribution_spec->cores_with_data();
                 } else if (scope_to_own_cores && buffer->has_shard_spec()) {
                     const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
                     bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-                    const auto& cores = corerange_to_cores(grid, std::nullopt, row_major);
-                    banks_to_scan.reserve(cores.size());
-                    for (const auto& core : cores) {
-                        add_bank_for(core);
-                    }
-                } else {
-                    uint32_t num_l1_banks = l1_manager_->num_banks();
-                    banks_to_scan.reserve(num_l1_banks);
-                    for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
-                        banks_to_scan.push_back(bank_id);
-                    }
+                    cores_to_scan = corerange_to_cores(grid, std::nullopt, row_major);
                 }
+
                 for (auto* dev_alloc : hybrid_device_allocators_) {
-                    for (uint32_t bank_id : banks_to_scan) {
-                        auto ranges = dev_alloc->get_l1_allocated_ranges(AllocatorID{bank_id + 1});
-                        additional_ranges.insert(additional_ranges.end(), ranges.begin(), ranges.end());
+                    if (!scope_to_own_cores) {
+                        for (uint32_t bank_id = 0; bank_id < l1_manager_->num_banks(); bank_id++) {
+                            gather_from(dev_alloc, bank_id);
+                        }
+                        continue;
+                    }
+                    for (const auto& core : cores_to_scan) {
+                        // Resolve the core in this device's own mapping. L1 bank ids are handed out
+                        // per device, in worker-grid order over that device's ComputeAndStore cores,
+                        // so a core's bank id here is not necessarily its bank id there once the
+                        // compute/dispatch split or the harvesting differs across the mesh.
+                        //
+                        // A core with no bank contributes nothing: a service core claimed by fast
+                        // dispatch is a legal shard core with real L1, but the allocator gives it no
+                        // bank, so it holds no per-core ranges to avoid.
+                        if (!dev_alloc->has_bank(BufferType::L1, core)) {
+                            continue;
+                        }
+                        gather_from(dev_alloc, dev_alloc->logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0));
                     }
                 }
             }

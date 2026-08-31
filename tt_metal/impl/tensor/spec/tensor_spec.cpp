@@ -281,6 +281,24 @@ void TensorSpec::populate_sharding_specs() {
     }
 }
 
+namespace {
+
+// create_memory_config_with_prepopulated_shard_specs() rebuilds a MemoryConfig from a handful of
+// named fields, which drops the experimental allocation flags. Every rebuild on the sharding-spec
+// conversion paths has to put them back, or an opt-in silently degrades to the default at
+// allocation time with nothing on the way there reporting it.
+MemoryConfig restore_experimental_flags(const MemoryConfig& source, MemoryConfig rebuilt) {
+    if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(source)) {
+        tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(rebuilt, true);
+    }
+    if (tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(source)) {
+        tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(rebuilt, true);
+    }
+    return rebuilt;
+}
+
+}  // namespace
+
 MemoryConfig TensorSpec::populate_nd_shard_spec_from_legacy() const {
     const auto& mem_config = memory_config();
     auto mem_layout = mem_config.memory_layout();
@@ -307,13 +325,7 @@ MemoryConfig TensorSpec::populate_nd_shard_spec_from_legacy() const {
         mem_config.shard_spec(),
         std::move(nd_shard_spec),
         mem_config.created_with_nd_shard_spec());
-    if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(mem_config)) {
-        tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(result, true);
-    }
-    if (tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(mem_config)) {
-        tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(result, true);
-    }
-    return result;
+    return restore_experimental_flags(mem_config, std::move(result));
 }
 
 std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() const {
@@ -386,12 +398,14 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
     }
 
     if (shard_kind != TensorMemoryLayout::BLOCK_SHARDED) {
-        return create_memory_config_with_prepopulated_shard_specs(
-            shard_kind,
-            mem_config.buffer_type(),
-            std::move(shard_spec),
-            mem_config.nd_shard_spec(),
-            mem_config.created_with_nd_shard_spec());
+        return restore_experimental_flags(
+            mem_config,
+            create_memory_config_with_prepopulated_shard_specs(
+                shard_kind,
+                mem_config.buffer_type(),
+                std::move(shard_spec),
+                mem_config.nd_shard_spec(),
+                mem_config.created_with_nd_shard_spec()));
     }
 
     // Block sharding requires a contiguous grid of cores
@@ -412,12 +426,14 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
         return std::nullopt;
     }
 
-    return create_memory_config_with_prepopulated_shard_specs(
-        TensorMemoryLayout::BLOCK_SHARDED,
-        mem_config.buffer_type(),
-        std::move(shard_spec),
-        mem_config.nd_shard_spec(),
-        mem_config.created_with_nd_shard_spec());
+    return restore_experimental_flags(
+        mem_config,
+        create_memory_config_with_prepopulated_shard_specs(
+            TensorMemoryLayout::BLOCK_SHARDED,
+            mem_config.buffer_type(),
+            std::move(shard_spec),
+            mem_config.nd_shard_spec(),
+            mem_config.created_with_nd_shard_spec()));
 }
 
 }  // namespace tt::tt_metal
