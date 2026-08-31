@@ -2400,6 +2400,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // slots while only some of its cores use the extra slot, so rotating spreads that waste over
     // every row instead of confining it to one. Latent-V does NOT consult this -- it has no V-chain
     // amortization to lose and measured a win at every base, partial-row core counts included.
+    // Extrapolation caveat: the four points are all from THIS box's reachable core counts (110/100/
+    // 80/60). Other hardware will hit even-fill combinations that were never measured -- e.g. a
+    // 4-device QuietBox at 100 cores gives kimi50k separate-V 20 floats, which is even and so
+    // engages on prediction, not measurement. A wrong prediction costs PERF only: accuracy is
+    // verified independently of this rule and does not depend on it.
     const bool rot_floats_fill_rows_evenly = grid_size.x != 0 && (rot_float_chunks % grid_size.x) == 0;
     const uint32_t full_ring_iter_mask = ring_size >= 32 ? 0xFFFFFFFFu : ((1u << ring_size) - 1);
     // v_shares_k_buffer is required: separate-V modes stream V through the per-head
