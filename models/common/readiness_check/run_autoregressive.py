@@ -95,9 +95,14 @@ def _hf_generate_greedy(
         pad_id = eos[0] if isinstance(eos, (list, tuple)) else eos
 
     input_ids = torch.tensor([prompt_token_ids], dtype=torch.long, device=device)
+    # Pass the mask explicitly. When the tokenizer has no pad token, pad_id above
+    # falls back to EOS, and HF then infers a mask that zeroes out any EOS-valued
+    # token in the prompt. Every prompt token is real here, so the mask is all ones.
+    attention_mask = torch.ones_like(input_ids)
     with torch.no_grad():
         out = model.generate(
             input_ids,
+            attention_mask=attention_mask,
             max_new_tokens=max_new_tokens,
             do_sample=False,
             num_beams=1,
