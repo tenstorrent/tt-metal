@@ -200,8 +200,10 @@ Started: 2026-08-31.
   logs/watcher/generated/watcher/watcher.log (775 KB). Those three stay
   disk-only (documented in README); watcher.log.gz (27 KB, bit-exact) is
   committed in their place.
-- LOCAL CHECKPOINT COMMIT (never pushed):
-  repo /home/stisi/tt-metal, branch ttmodelmanager/glm47-flash-probe,
-  SHA 84282d2466da54bc60df7c016947c51e3775572a
-  (78 files, 43581 insertions; models/autoports/zai_org_glm_4_7_flash only;
-  all pre-commit hooks passed).
+- LOCAL CHECKPOINT COMMITS (never pushed), repo /home/stisi/tt-metal,
+  branch ttmodelmanager/glm47-flash-probe, stage-owned paths only
+  (models/autoports/zai_org_glm_4_7_flash), all pre-commit hooks passed:
+  1. 11d5578c175cdbe63218363fb9168205e6b258e0 - functional decoder stage
+     (78 files, ~43.6k insertions; originally 84282d24, amended once to fold
+     in this work log's commit record).
+  2. (follow-up) work-log SHA record - see `git log` on the branch.
