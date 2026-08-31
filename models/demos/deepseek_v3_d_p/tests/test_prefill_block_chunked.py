@@ -853,7 +853,7 @@ def test_ds_prefill_block_chunked_padded(
 # ---------------------------------------------------------------------------
 # Kimi K2.6 variants
 # ---------------------------------------------------------------------------
-# Same chunked-prefill machinery as the DeepSeek tests, with the kimi_k2_6 variant: the host gate
+# Same chunked-prefill machinery as the DeepSeek tests, with the kimi_k2_7 variant: the host gate
 # (GateComputeMode.HOST_ALL — Kimi has a single expert group and is validated only with the host
 # gate) and KimiK26Config fabric payload size. Kimi has a single dense layer (NUM_DENSE_LAYERS=1,
 # layer 0); the block test reads layer L-1's decoder output as layer L's input, so we cannot drive
@@ -880,7 +880,7 @@ def test_ds_prefill_block_chunked_padded(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi_k2_7"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(1800)
 def test_kimi_prefill_block_chunked(
@@ -927,7 +927,7 @@ def test_kimi_prefill_block_chunked(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi_k2_7"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(3600)
 def test_kimi_prefill_block_chunked_padded(

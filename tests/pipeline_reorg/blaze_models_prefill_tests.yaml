@@ -4,11 +4,11 @@
 #   name: The display name for the job in GitHub Actions. Naming convention:
 #         "(<Models>) <unit under test> <accuracy|perf|determinism> <shape>"
 #         * The model list LEADS, in parentheses, always -- one convention, not two. Comma-separate
-#           any number of them: "(Kimi-K2.6-1T)", "(Kimi-K2.6-1T, GLM-5.2-744B)". This keeps the
+#           any number of them: "(Kimi-K2.7-1T)", "(Kimi-K2.7-1T, GLM-5.2-744B)". This keeps the
 #           models in one place and lets the unit under test read left-to-right after them.
 #         * Do NOT prefix with "Blaze - ": every job here is a Blaze job, so it carries no information.
 #         * Name the model the test actually runs, with version AND parameter count -- "GLM-5.2-744B",
-#           not "GLM"; "Kimi-K2.6-1T"/"Kimi-K2.7-1T"/"Kimi-K3-2.8T", not "Kimi". A job covering every
+#           not "GLM"; "Kimi-K2.7-1T"/"Kimi-K3-2.8T", not "Kimi". A job covering every
 #           gate model says so: "(all prefill gate models)".
 #         * Op-level jobs with no model take NO leading parenthesis and name the op instead
 #           -> "high_bw_all_gather CCL perf + accuracy"
@@ -35,7 +35,7 @@
 #   test_group: Group identifier for selecting multiple related tests at once.
 #   test_tags: Optional list of coarse selectors for workflow_dispatch, matched exactly and
 #              OR-ed with test_type / test_group. Two vocabularies in one list: the model a
-#              leg covers (kimi_k2_6, kimi_k2_7, kimi_k3, glm_5_2, dsv4_flash, minimax_m3)
+#              leg covers (kimi_k2_7, kimi_k3, glm_5_2, dsv4_flash, minimax_m3)
 #              and the unit under test (moe, gate, mla, hca, sdpa, ccl, block, transformer,
 #              kv_cache, dflash, runner, determinism). So `moe` runs every MoE leg and `kimi_k3` every K3
 #              leg. Multiple tokens UNION, they do not intersect: `moe,kimi_k3` is every MoE
@@ -80,9 +80,9 @@
   sp_config: sc1
 
 
-# ===== Kimi-K2.6-1T ====================================================================================
+# ===== Kimi-K2.7-1T ====================================================================================
 
-- name: "(Kimi-K2.6-1T) MLA chunked accuracy 10k@5k + determinism 5k"
+- name: "(Kimi-K2.7-1T) MLA chunked accuracy 10k@5k + determinism 5k"
   fabric_profile: torus_xy
   cmd: |
 
@@ -90,10 +90,10 @@
       set -e
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k2_6 and torus-xy-8x4 and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism and scalar))" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k2_7 and torus-xy-8x4 and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism and scalar))" -vvv --tb=short
     '
   test_type: mla_chunked
-  test_tags: [kimi_k2_6, mla, determinism]
+  test_tags: [kimi_k2_7, mla, determinism]
   test_group: module
   skus:
     bh_sc1:
@@ -103,7 +103,7 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K2.6-1T) MoE accuracy 5k"
+- name: "(Kimi-K2.7-1T) MoE accuracy 5k"
   fabric_profile: torus_xy
   cmd: |
 
@@ -112,7 +112,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "torus-xy-8x4 and kimi-5k-pcc" -vvv --tb=short
     '
   test_type: kimi_moe
-  test_tags: [kimi_k2_6, moe]
+  test_tags: [kimi_k2_7, moe]
   test_group: module
   skus:
     bh_sc1:
@@ -122,7 +122,7 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K2.6-1T, Kimi-K3-2.8T) MoE perf 5k"
+- name: "(Kimi-K2.7-1T, Kimi-K3-2.8T) MoE perf 5k"
   fabric_profile: torus_xy
   cmd: |
 
@@ -131,7 +131,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -vvv --tb=short
     '
   test_type: kimi_moe_perf
-  test_tags: [kimi_k2_6, kimi_k3, moe]
+  test_tags: [kimi_k2_7, kimi_k3, moe]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -141,12 +141,12 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K2.6-1T) prefill block determinism 5k"
+- name: "(Kimi-K2.7-1T) prefill block determinism 5k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
+    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
@@ -154,7 +154,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "torus-xy-8x4 and perf-random-5k and with_determinism and iter2 and not iter25 and not iter2000 and moe_gate_device and not pretrained" -vvv --tb=short --timeout=900
     '
   test_type: prefill_block_determinism
-  test_tags: [kimi_k2_6, block, determinism]
+  test_tags: [kimi_k2_7, block, determinism]
   test_group: module
   skus:
     bh_sc1:
@@ -163,12 +163,12 @@
   team: models
   sp_config: sc1
 
-- name: "(Kimi-K2.6-1T) prefill transformer determinism 5k"
+- name: "(Kimi-K2.7-1T) prefill transformer determinism 5k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
+    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
@@ -176,7 +176,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_kimi_prefill_transformer -k "torus-xy-8x4 and 5_layers and e384_device and 5k and not 25k and iter2 and not iter25 and not iter2000 and smoke and with_determinism and non_balanced and right_pad and json_prompts and pretrained" -vvv --tb=short --timeout=1800
     '
   test_type: prefill_transformer_determinism
-  test_tags: [kimi_k2_6, transformer, determinism]
+  test_tags: [kimi_k2_7, transformer, determinism]
   test_group: module
   skus:
     bh_sc1:
@@ -185,21 +185,21 @@
   team: models
   sp_config: sc1
 
-- name: "(Kimi-K2.6-1T) chunked prefill padded accuracy 15k@5k no-trace"
+- name: "(Kimi-K2.7-1T) chunked prefill padded accuracy 15k@5k no-trace"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi_k2_6 and torus-xy-8x4 and L61 and mid15k and notrace" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi_k2_7 and torus-xy-8x4 and L61 and mid15k and notrace" -vvv --tb=short
     '
   test_type: kimi_chunked_padded
-  test_tags: [kimi_k2_6, transformer]
+  test_tags: [kimi_k2_7, transformer]
   test_group: module
   skus:
     bh_sc1:
@@ -216,20 +216,20 @@
 # that the padded forward is captured once as a ttnn trace and replayed per chunk. Run as its own
 # entry (not a second -k term) so a trace-only regression is attributed on the CI dashboard instead
 # of being hidden inside a two-case job.
-- name: "(Kimi-K2.6-1T) chunked prefill padded accuracy 15k@5k traced"
+- name: "(Kimi-K2.7-1T) chunked prefill padded accuracy 15k@5k traced"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi_k2_6 and torus-xy-8x4 and L61 and mid15k and traced" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi_k2_7 and torus-xy-8x4 and L61 and mid15k and traced" -vvv --tb=short
     '
   test_type: kimi_chunked_padded
-  test_tags: [kimi_k2_6, transformer]
+  test_tags: [kimi_k2_7, transformer]
   test_group: module
   skus:
     bh_sc1:
@@ -241,30 +241,30 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K2.6-1T) chunked prefill perf code_debug 55k@5k no-trace"
+- name: "(Kimi-K2.7-1T) chunked prefill perf code_debug 55k@5k no-trace"
   fabric_profile: torus_xy
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
   # end (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.
   #
   # Paths:
-  #   KIMI_K2_6_HF_MODEL         -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
-  #   TT_KIMI_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache (…/kimi_k2_6_bh_32dev/8x4); required —
+  #   KIMI_K2_7_HF_MODEL         -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
+  #   TT_KIMI_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache (…/kimi_k2_7_bh_32dev/8x4); required —
   #     without it, conftest falls back under model_path and CI may invent HF hub downloads
   #   PREFILL_TRACE_DIR          -> code_debug (56320) golden trace; metadata.json token_ids feed the prefill
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_6 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
     '
   test_type: kimi_chunked
-  test_tags: [kimi_k2_6, transformer]
+  test_tags: [kimi_k2_7, transformer]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -279,30 +279,30 @@
 # Trace twin of the entry above: same 61 layers / 11 chunks / 10 iterations, but the chunk forward
 # is captured once and replayed. Separate entry so the two per-chunk timing tables are attributed
 # independently -- a traced-vs-untraced perf delta is the number this pair exists to surface.
-- name: "(Kimi-K2.6-1T) chunked prefill perf code_debug 55k@5k traced"
+- name: "(Kimi-K2.7-1T) chunked prefill perf code_debug 55k@5k traced"
   fabric_profile: torus_xy
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
   # end (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.
   #
   # Paths:
-  #   KIMI_K2_6_HF_MODEL         -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
-  #   TT_KIMI_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache (…/kimi_k2_6_bh_32dev/8x4); required —
+  #   KIMI_K2_7_HF_MODEL         -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
+  #   TT_KIMI_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache (…/kimi_k2_7_bh_32dev/8x4); required —
   #     without it, conftest falls back under model_path and CI may invent HF hub downloads
   #   PREFILL_TRACE_DIR          -> code_debug (56320) golden trace; metadata.json token_ids feed the prefill
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
-    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
-    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+    export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_6 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and traced" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and traced" -xvs
     '
   test_type: kimi_chunked
-  test_tags: [kimi_k2_6, transformer]
+  test_tags: [kimi_k2_7, transformer]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -314,7 +314,7 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K2.6-1T, GLM-5.2-744B) KV cache table accuracy"
+- name: "(Kimi-K2.7-1T, GLM-5.2-744B) KV cache table accuracy"
   fabric_profile: torus_xy
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
@@ -332,7 +332,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_dflash_kv_cache_mock -k "seq5k and 1user and 2layers" -vvv --tb=short
     '
   test_type: kv_cache_table
-  test_tags: [kimi_k2_6, glm_5_2, kv_cache]
+  test_tags: [kimi_k2_7, glm_5_2, kv_cache]
   test_group: module
   skus:
     bh_sc1:
@@ -342,11 +342,11 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K2.6-1T) DFlash drafter accuracy"
+- name: "(Kimi-K2.7-1T) DFlash drafter accuracy"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
-    export DFLASH_HF_MODEL=/mnt/models/Kimi-K2.6-DFlash
+    export DFLASH_HF_MODEL=/mnt/models/blaze/closed_do_not_share/Kimi-K2.7-Code-DFlash
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
@@ -354,7 +354,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_multiturn_pcc -k "torus-xy-8x4 and pretrained and (aligned_min or midchip_straddle or lastchip or rot_partial)" -vvv --tb=short
     '
   test_type: kimi_dflash
-  test_tags: [kimi_k2_6, dflash]
+  test_tags: [kimi_k2_7, dflash]
   test_group: module
   skus:
     bh_sc1:
@@ -364,15 +364,15 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K2.6-1T) prefill runner accuracy code_debug 55k@5k"
+- name: "(Kimi-K2.7-1T) prefill runner accuracy code_debug 55k@5k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
-    export PREFILL_MODEL=kimi_k2_6
+    export PREFILL_MODEL=kimi_k2_7
     export PREFILL_FABRIC_MODE=2d_torus_xy
-    export PREFILL_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
-    export PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+    export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
+    export PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
     export PREFILL_NUM_LAYERS=61
     export PREFILL_CI_PRODUCER_TIMEOUT_S=1800
     export PREFILL_CI_RUNNER_READY_TIMEOUT_S=1800
@@ -385,7 +385,7 @@
       python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=1800
     '
   test_type: prefill_runner
-  test_tags: [kimi_k2_6, runner]
+  test_tags: [kimi_k2_7, runner]
   test_group: module
   skus:
     bh_sc1:
@@ -797,7 +797,7 @@
       exit $rc
     '
   test_type: ring_joint_sdpa_perf
-  test_tags: [kimi_k2_6, kimi_k3, sdpa, mla, determinism]
+  test_tags: [kimi_k2_7, kimi_k3, sdpa, mla, determinism]
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:

@@ -846,7 +846,7 @@ def test_ds_moe(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi"])
 def test_kimi_moe(
     variant,
     config_only,

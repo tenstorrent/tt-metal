@@ -4,7 +4,7 @@
 
 """
 Kimi MoE device-perf gate on the 8x4 galaxy, one test parametrized over the Kimi generations
-(K2.6 dense-expert MoE and K3 LatentMoE), measured with the real-time program profiler -- same
+(K2.7 dense-expert MoE and K3 LatentMoE), measured with the real-time program profiler -- same
 mechanism as ``test_ttnn_hca_perf.py``, which already gates HCA perf on this SKU.
 
 What the number is: over the programs the MoE forward dispatched, the sum of each program's
@@ -28,7 +28,7 @@ What the number excludes, verified on an 8x4 galaxy (warm caches, 58 programs x 
 
 Recalibrating one generation: set its ``expected_ns`` to ``None`` and the test measures and logs
 without gating, printing the value to set it back to. Do that on any box whose baseline you need to
-re-cut. Both generations run in one job (``kimi_moe_perf``); select one with ``-k k2_6`` / ``-k k3``.
+re-cut. Both generations run in one job (``kimi_moe_perf``); select one with ``-k k2_7`` / ``-k k3``.
 """
 
 import os
@@ -84,7 +84,7 @@ class _MoEPerfCase:
     extra: dict = field(default_factory=dict)
 
 
-# K2.6: 384 experts / top-8 over the 7168 embedding, no LatentMoE plumbing.
+# K2.7: 384 experts / top-8 over the 7168 embedding, no LatentMoE plumbing.
 #
 # Re-centred 2026-08-28: the 2D matmul program configs on this branch moved the midpoint, so the
 # 6,945,590 five-sample mean now measures a matmul shape nothing builds. Per the repo's rule that
@@ -93,11 +93,13 @@ class _MoEPerfCase:
 # Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, run 33194039175: 6,574,780 ns.
 # ONE sample -- the K2.6 warm-up spread below was characterised on the superseded shape and is not
 # re-verified here.
-_K2_6 = _MoEPerfCase(
-    label="kimi-k2.6",
+# K2.7-Code is architecturally identical to K2.6 (61 layers, 384 routed experts, same dims), so the
+# MoE shapes -- and therefore this baseline -- are unchanged; only the label moved.
+_K2_7 = _MoEPerfCase(
+    label="kimi-k2.7",
     config=KimiK26Config,
     expected_ns=6_574_780,
-    # 4%, not 3%: K2.6 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
+    # 4%, not 3%: K2.7 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
     # running second on an already-warm device, does not -- five samples on the previous shape spanned
     # 7.12% peak to peak against K3's 0.44%. Do NOT tighten this to match K3; the asymmetry is a
     # property of the job order, not of the midpoint. Sub-nominal DDR doubles it to 8%.
@@ -135,10 +137,10 @@ _K3 = _MoEPerfCase(
     ),
 )
 
-# "k2_6" / "k3", not "kimi_k2_6" / "kimi_k3": pytest -k is substring-based, so the ids must stay
+# "k2_7" / "k3", not "kimi_k2_7" / "kimi_k3": pytest -k is substring-based, so the ids must stay
 # disjoint -- a bare "kimi" id would match both generations and widen every `-k` selector.
 _CASES = [
-    pytest.param("kimi_k2_6", _K2_6, id="k2_6"),
+    pytest.param("kimi_k2_7", _K2_7, id="k2_7"),
     pytest.param("kimi_k3", _K3, id="k3"),
 ]
 

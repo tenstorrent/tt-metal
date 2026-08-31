@@ -59,7 +59,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBO
 # SCORE_FUNC, so each model is fully described by its config class.
 GATE_MODELS = {
     "dsv3": DeepSeekV3Config,
-    "kimi_k2_6": KimiK26Config,
+    "kimi_k2_7": KimiK26Config,  # K2.7-Code shares K2.6's config exactly
     "kimi_k3": KimiK3Config,
     "glm_5_2": GLM52Config,
     "minimax_m2_7": MiniMaxM27Config,
@@ -242,8 +242,8 @@ GALAXY_TP4_MESH_CONFIG = pytest.param(
 REGULAR_GATE_CASES = [
     pytest.param("dsv3", GateComputeMode.HOST_ALL, id="dsv3-host_all"),
     pytest.param("dsv3", GateComputeMode.DEVICE_FP32, id="dsv3-device_fp32"),
-    pytest.param("kimi_k2_6", GateComputeMode.HOST_ALL, id="kimi_k2_6-host_all"),
-    pytest.param("kimi_k2_6", GateComputeMode.DEVICE_FP32, id="kimi_k2_6-device_fp32"),
+    pytest.param("kimi_k2_7", GateComputeMode.HOST_ALL, id="kimi_k2_7-host_all"),
+    pytest.param("kimi_k2_7", GateComputeMode.DEVICE_FP32, id="kimi_k2_7-device_fp32"),
     pytest.param("kimi_k3", GateComputeMode.HOST_ALL, id="kimi_k3-host_all"),
     pytest.param("kimi_k3", GateComputeMode.DEVICE_FP32, id="kimi_k3-device_fp32"),
     pytest.param("glm_5_2", GateComputeMode.HOST_ALL, id="glm_5_2-host_all"),

@@ -21,10 +21,10 @@ Flow:
 fixtures).
 
 Requires: a Blackhole galaxy; ``$DFLASH_HF_MODEL`` (drafter ``config.json`` [+ ``model.safetensors`` for the
-pretrained axis]); for the pretrained axis also ``KIMI_K2_6_HF_MODEL`` + ``TT_KIMI_PREFILL_TTNN_CACHE``.
+pretrained axis]); for the pretrained axis also ``KIMI_K2_7_HF_MODEL`` + ``TT_KIMI_PREFILL_TTNN_CACHE``.
 
-    DFLASH_HF_MODEL=/path/to/Kimi-K2.6-DFlash \
-    KIMI_K2_6_HF_MODEL=/path/to/Kimi-K2.6 TT_KIMI_PREFILL_TTNN_CACHE=/path/to/kimi_ttnn_cache MESH_DEVICE=8x4 \
+    DFLASH_HF_MODEL=/path/to/Kimi-K2.7-Code-DFlash \
+    KIMI_K2_7_HF_MODEL=/path/to/Kimi-K2.7-Code TT_KIMI_PREFILL_TTNN_CACHE=/path/to/kimi_ttnn_cache MESH_DEVICE=8x4 \
     pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash_prefill_integration.py -svv -k pretrained
 """
 
@@ -82,7 +82,7 @@ MAX_RANDOM_LAYERS = 12
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi"])
 @pytest.mark.timeout(0)
 def test_dflash_prefill_integration(
     variant,
@@ -107,7 +107,7 @@ def test_dflash_prefill_integration(
     if not use_pretrained and num_layers > MAX_RANDOM_LAYERS:
         pytest.skip(
             f"random verifier at {num_layers} layers materializes the whole Kimi model in host RAM "
-            f"(384 experts × 60 MoE layers ≈ 2 TB → OOM). Use -k pretrained (KIMI_K2_6_HF_MODEL + "
+            f"(384 experts × 60 MoE layers ≈ 2 TB → OOM). Use -k pretrained (KIMI_K2_7_HF_MODEL + "
             f"TT_KIMI_PREFILL_TTNN_CACHE, memory-bounded layer-by-layer), or a smaller num_layers."
         )
 
@@ -169,10 +169,10 @@ def test_dflash_prefill_integration(
     #   random     → create_hf_model + extract_tt_state_dict
     if use_pretrained:
         model_path = request.getfixturevalue("model_path")
-        wcp = request.getfixturevalue("weight_cache_path")  # None unless real weights ($KIMI_K2_6_HF_MODEL) present
+        wcp = request.getfixturevalue("weight_cache_path")  # None unless real weights ($KIMI_K2_7_HF_MODEL) present
         if wcp is None:
             pytest.skip(
-                "pretrained verifier needs real Kimi weights: set KIMI_K2_6_HF_MODEL (+ TT_KIMI_PREFILL_TTNN_CACHE)"
+                "pretrained verifier needs real Kimi weights: set KIMI_K2_7_HF_MODEL (+ TT_KIMI_PREFILL_TTNN_CACHE)"
             )
         rows, cols = mesh_shape
         effective_cache_path = wcp / f"{rows}x{cols}"

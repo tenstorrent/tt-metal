@@ -924,12 +924,12 @@ _CHUNKED_SCENARIOS = (
 @pytest.mark.parametrize("kwargs", [kw for _, kw in _CHUNKED_SCENARIOS], ids=[sid for sid, _ in _CHUNKED_SCENARIOS])
 @pytest.mark.parametrize(
     "variant",
-    ["kimi_k2_6", "kimi_k3"],
+    ["kimi_k2_7", "kimi_k3"],
     indirect=True,
     # Name the Kimi generation explicitly. pytest -k is substring-based, so the ids must stay
-    # disjoint: "k2_6" and "k3" cannot cross-match, whereas a bare "kimi" id would match both
+    # disjoint: "k2_7" and "k3" cannot cross-match, whereas a bare "kimi" id would match both
     # generations and silently widen every `-k` selector (CI yaml, tests/perf/test_mla_perf.py).
-    ids=["k2_6", "k3"],
+    ids=["k2_7", "k3"],
 )
 @pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
@@ -943,18 +943,18 @@ def test_mla_chunked_prefill(
     variant has no registered trace), or run with no reference ('func'). Select with e.g.
     -k 'maxedge-1u and trace and 8x4'. See _run_chunked_prefill.
 
-    Real weights on the CPU-reference path: point the variant's HF env var (KIMI_K2_6_HF_MODEL /
+    Real weights on the CPU-reference path: point the variant's HF env var (KIMI_K2_7_HF_MODEL /
     KIMI_K3_HF_MODEL) at a checkpoint to validate the chunked path against the CPU torch reference
     with pretrained weights instead of random. create_mla_reference is config-driven and
     architecture-agnostic (Kimi's YaRN/theta flow through, absorbed-MLA math matches the variant's own
     reference), so this works for both variants. It complements the GPU-trace path, which only
     replays full-chunk iters and so never exercises real weights across the rotation/partial-chunk edge
-    scenarios that the cpu path covers. Without the env var, fall back to random. kimi_k2_6 runs the
-    trace path (loader + k_pe re-interleave are arch-agnostic) against its own registered traces. It
+    scenarios that the cpu path covers. Without the env var, fall back to random. kimi_k2_7 has no
+    registered golden MLA trace (see the skip below), so it runs the cpu and func paths only; it
     otherwise runs the same config-driven driver on any arch/mesh.
 
     kimi_k3 (NoPE + output gate, 96 heads) runs 'scalar' only -- 'metadata' is skipped explicitly
-    below. It runs 'trace' like kimi_k2_6, taking real weights from layer 3 via
+    below. Unlike kimi_k2_7 it runs 'trace', taking real weights from layer 3 via
     variant.pretrained_mla_layer. Its rotation scenarios still matter: rotation comes from the
     block-cyclic cache write and the causal offset, not from RoPE."""
     # Per-variant, not module-level: two CI selectors for this test are variant-unqualified, so
@@ -967,6 +967,17 @@ def test_mla_chunked_prefill(
     # Incidental, not a K3 guarantee; re-enable when K3 has a runtime that actually feeds metadata.
     if variant.name == "kimi_k3" and use_metadata_tensor:
         pytest.skip("kimi_k3 has no runtime, so the metadata (device-scalar) path is unreachable for it")
+    # A variant with no registered golden MLA trace (kimi_k2_7 today: its vllm capture has no mla_io/
+    # streams, so mla_trace_defaults = ()). _run_chunked_prefill asserts on an empty trace list, so skip
+    # instead -- a missing golden is a coverage gap, not a failure of the code under test. Keyed on the
+    # precondition rather than a variant name so this keeps holding as variants are added. No CI selector
+    # reaches it (the yaml's Kimi job is cpu/func), but a bare `-k trace` locally does.
+    if reference == "trace" and not variant.mla_trace_defaults and not MLA_CHUNKED_TRACE_PATH:
+        pytest.skip(
+            f"{variant.name} has no registered golden MLA trace. MLA_CHUNKED_TRACE_PATH overrides the "
+            "trace for EVERY variant, so pair it with a variant-qualified -k (e.g. -k 'k2_7 and trace') "
+            "or other variants will replay the wrong golden."
+        )
     # Opt into real weights on the cpu path when the variant's checkpoint env var is set. The "trace"
     # path already forces pretrained; "func" is ref-less so weights don't matter. The pretrained
     # fixture skips the test if the env var is set but the checkpoint is incomplete.

@@ -109,7 +109,7 @@ def run_model(
     # Kimi's parametrize has no `balanced` entry today (only non_balanced).
     # Applying this skip would zero out Kimi's CI coverage for this test.
     # Remove this exception once there's need to test both balanced and non_balanced for Kimi.
-    if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name != "kimi_k2_6":
+    if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name != "kimi_k2_7":
         pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
 
     # host_gate_all is a local testing aid for sub-256-expert configs (e.g. the 4x4 sub-torus,
@@ -654,7 +654,7 @@ def test_ds_prefill_block(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi_k2_7"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")

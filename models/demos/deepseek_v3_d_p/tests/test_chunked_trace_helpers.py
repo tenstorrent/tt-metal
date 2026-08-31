@@ -27,14 +27,14 @@ def _trace_or_skip(variant_name):
     return resolve_trace_dir(trace)
 
 
-@pytest.mark.parametrize("variant_name", ["deepseek_v3_d_p", "kimi_k2_6"])
+@pytest.mark.parametrize("variant_name", ["deepseek_v3_d_p", "kimi_k2_6", "kimi_k2_7"])
 def test_resolve_trace_dir_has_metadata(variant_name):
     """resolve_trace_dir lands on a dir with metadata.json (descending the vllm hash subdir for Kimi)."""
     trace = _trace_or_skip(variant_name)
     assert (trace / "metadata.json").exists(), trace
 
 
-@pytest.mark.parametrize("variant_name", ["deepseek_v3_d_p", "kimi_k2_6"])
+@pytest.mark.parametrize("variant_name", ["deepseek_v3_d_p", "kimi_k2_6", "kimi_k2_7"])
 def test_load_trace_token_ids(variant_name):
     """token_ids load, truncate to the requested length, and span >= one production chunk."""
     trace = _trace_or_skip(variant_name)
@@ -42,7 +42,7 @@ def test_load_trace_token_ids(variant_name):
     assert len(load_trace_token_ids(trace)) >= PREFILL_CHUNK_TOKENS
 
 
-@pytest.mark.parametrize("variant_name", ["deepseek_v3_d_p", "kimi_k2_6"])
+@pytest.mark.parametrize("variant_name", ["deepseek_v3_d_p", "kimi_k2_6", "kimi_k2_7"])
 @pytest.mark.parametrize("layer", [0, 60])
 def test_golden_kv_post_shape(variant_name, layer):
     """Both formats reassemble to [total_len, 576], finite — DS single-file and Kimi row-shards alike."""
@@ -61,7 +61,7 @@ def test_golden_row_shard_concat_is_contiguous():
     extends the shorter one row-for-row."""
     import torch
 
-    trace = _trace_or_skip("kimi_k2_6")
+    trace = _trace_or_skip("kimi_k2_6")  # row-sharded (14/layer); K2.7's golden is a single shard
     short = _load_golden_kv_post(trace, 0, 4096)
     long = _load_golden_kv_post(trace, 0, 8192)
     assert torch.equal(short, long[:4096])
