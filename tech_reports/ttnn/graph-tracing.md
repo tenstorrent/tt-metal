@@ -634,8 +634,10 @@ Example device-op `function_start` params:
 
 A `function_end` is emitted on both the success and the failure path, by one of two mechanisms:
 
-- **Scope guard.** C++ scopes instrumented with `tt::tt_metal::ScopedTrackedFunction` close from its
-  destructor, which marks the node `aborted` when it detects an in-flight exception.
+- **Scope guard.** C++ scopes instrumented with `tt::tt_metal::internal::ScopedTrackedFunction` close from its
+  destructor, which marks the node `aborted` when it detects an in-flight exception. The guard and the
+  abort payload it sends through `track_function_end` are internal Metal capture transport, not part of
+  the stable tt-metalium processor interface.
 - **Unwinding at the next top-level operation.** Call sites without that guard emit nothing when
   they throw, and the Python decorator's `finally` then closes the innermost scope rather than its
   own, so the operation stays open for the rest of the capture. The next top-level operation, where

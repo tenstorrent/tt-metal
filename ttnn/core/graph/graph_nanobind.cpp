@@ -22,6 +22,7 @@
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/graph/graph_consts.hpp"
 #include <tt-metalium/graph_tracking.hpp>
+#include <internal/graph_tracking.hpp>
 
 namespace ttnn::graph {
 
@@ -345,7 +346,7 @@ void py_graph_module(nb::module_& m) {
 
     m.def(
         "unwind_open_functions",
-        [](const std::string& reason) { GraphTracker::instance().unwind_open_functions(std::string_view(reason)); },
+        [](const std::string& reason) { tt::tt_metal::internal::unwind_open_functions(std::string_view(reason)); },
         R"doc(unwind_open_functions(reason: str = "") -> None
 
         Close every function scope the active capture still holds open, marking each aborted.
