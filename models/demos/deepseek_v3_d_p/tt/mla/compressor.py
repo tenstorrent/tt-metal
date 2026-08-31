@@ -170,6 +170,88 @@ class TtCompressorBase(LightweightModule):
             hidden = torch.nn.functional.pad(hidden, (0, 0, 0, pad))
         return hidden, seq_len_actual
 
+    def _init_compression_weights(
+        self,
+        *,
+        kv_proj_weight: torch.Tensor,
+        gate_proj_weight: torch.Tensor,
+        position_bias: torch.Tensor,
+        kv_norm_weight: torch.Tensor,
+        projection_dim: int,
+    ):
+        self.wkv = self.ops.to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2)
+        self.wgate = self.ops.to_tt_linear_weight(gate_proj_weight, tp_shard_dim=2)
+        self.position_bias = self.ops.from_torch(
+            position_bias.detach().reshape(1, 1, self.compress_rate, projection_dim)
+        )
+        self.kv_norm_weight = self.ops.from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
+        self.trans_mat = self.ops.from_torch(get_rot_transformation_mat())
+        self._entry_rope = None
+        self._entry_index = None
+
+    def _alloc_rope_tables(self, max_seq_len: int, chunk_tokens: int):
+        tokens = rope_table_tokens(max_seq_len, chunk_tokens)
+        self._entry_rope = self.ops.build_rope_table(-(-tokens // self.compress_rate), self.compress_rate)
+        self._entry_index = self.ops.rope_index_base(chunk_tokens // self.sp_factor // self.compress_rate)
+
+    def _project(self, hidden_states):
+        kv = ttnn.linear(hidden_states, self.wkv, memory_config=self.memory_config)
+        gate = ttnn.linear(hidden_states, self.wgate, memory_config=self.memory_config)
+
+        if self.tp_factor > 1:
+            kv = self._tp_all_reduce(kv)
+            gate = self._tp_all_reduce(gate)
+        return kv, gate
+
+    def _tp_all_reduce(self, tensor):
+        tensor = ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            persistent_output_buffers=None,
+            dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.ccl_topology,
+            cluster_axis=self.tp_axis,
+        )
+        return ttnn.experimental.all_gather_async(
+            tensor,
+            dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.ccl_topology,
+            cluster_axis=self.tp_axis,
+        )
+
+    def _normalize_rotate_and_gather(self, pooled, first_window_position: int):
+        batch, n_windows = pooled.shape[0], pooled.shape[1]
+        compressed = ttnn.reshape(pooled, [batch, 1, n_windows, self.head_dim])
+        compressed = ttnn.rms_norm(compressed, weight=self.kv_norm_weight, epsilon=self.rms_norm_eps)
+
+        nope_dim = self.head_dim - self.rope_head_dim
+        nope = ttnn.slice(compressed, [0, 0, 0, 0], [batch, 1, n_windows, nope_dim])
+        rope = ttnn.slice(compressed, [0, 0, 0, nope_dim], [batch, 1, n_windows, self.head_dim])
+        idx = self.ops.rope_index(self._entry_index, first_window_position // self.compress_rate)
+        cos, sin = self.ops.rope_gather(self._entry_rope, idx)
+        rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
+        compressed_kv = ttnn.concat([nope, rope], dim=-1)
+
+        if self.sp_factor > 1:
+            compressed_kv = ttnn.experimental.all_gather_async(
+                compressed_kv,
+                dim=2,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.ccl_topology,
+                cluster_axis=self.sp_axis,
+            )
+        return compressed_kv
+
 
 class TtHCACompressor(TtCompressorBase):
     def __init__(
@@ -207,22 +289,18 @@ class TtHCACompressor(TtCompressorBase):
         self.rope_head_dim = int(rope_head_dim)
         self.rms_norm_eps = float(rms_norm_eps)
 
-        self.wkv = self.ops.to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2)
-        self.wgate = self.ops.to_tt_linear_weight(gate_proj_weight, tp_shard_dim=2)
-        self.position_bias = self.ops.from_torch(
-            position_bias.detach().reshape(1, 1, self.compress_rate, self.head_dim)
+        self._init_compression_weights(
+            kv_proj_weight=kv_proj_weight,
+            gate_proj_weight=gate_proj_weight,
+            position_bias=position_bias,
+            kv_norm_weight=kv_norm_weight,
+            projection_dim=self.head_dim,
         )
-        self.kv_norm_weight = self.ops.from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
-        self.trans_mat = self.ops.from_torch(get_rot_transformation_mat())
-        self._entry_rope = None
-        self._entry_index = None
         self._mask_consts = None
 
     def alloc_tables(self, max_seq_len: int, chunk_tokens: int, mask_width: int):
         """Build the indexed-RoPE and mask constants needed by forward."""
-        tokens = rope_table_tokens(max_seq_len, chunk_tokens)
-        self._entry_rope = self.ops.build_rope_table(-(-tokens // self.compress_rate), self.compress_rate)
-        self._entry_index = self.ops.rope_index_base(chunk_tokens // self.sp_factor // self.compress_rate)
+        self._alloc_rope_tables(max_seq_len, chunk_tokens)
         self._mask_consts = self._build_mask_consts(chunk_tokens, mask_width)
 
     @classmethod
@@ -295,41 +373,7 @@ class TtHCACompressor(TtCompressorBase):
         if seq_len_actual is None:
             seq_len_actual = seq_len * self.sp_factor
 
-        kv = ttnn.linear(hidden_states, self.wkv, memory_config=self.memory_config)
-        gate = ttnn.linear(hidden_states, self.wgate, memory_config=self.memory_config)
-
-        if self.tp_factor > 1:
-            for name in ("kv", "gate"):
-                tensor = kv if name == "kv" else gate
-                tensor = ttnn.experimental.reduce_scatter_minimal_async(
-                    tensor,
-                    persistent_output_buffers=None,
-                    dim=3,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(
-                        cluster_axis=self.tp_axis
-                    ),
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-                    num_links=self.ccl_num_links,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    topology=self.ccl_topology,
-                    cluster_axis=self.tp_axis,
-                )
-                tensor = ttnn.experimental.all_gather_async(
-                    tensor,
-                    dim=3,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(
-                        cluster_axis=self.tp_axis
-                    ),
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-                    num_links=self.ccl_num_links,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    topology=self.ccl_topology,
-                    cluster_axis=self.tp_axis,
-                )
-                if name == "kv":
-                    kv = tensor
-                else:
-                    gate = tensor
+        kv, gate = self._project(hidden_states)
 
         n_windows = seq_len // self.compress_rate
         t_real = seq_len_actual // self.compress_rate
@@ -343,32 +387,125 @@ class TtHCACompressor(TtCompressorBase):
 
         kv = ttnn.reshape(kv, [batch, n_windows, self.compress_rate, self.head_dim])
         pooled = ttnn.sum(ttnn.multiply(kv, weights), dim=2)
-
-        compressed = ttnn.reshape(pooled, [batch, 1, n_windows, self.head_dim])
-        compressed = ttnn.rms_norm(compressed, weight=self.kv_norm_weight, epsilon=self.rms_norm_eps)
-
-        nope_dim = self.head_dim - self.rope_head_dim
-        nope = ttnn.slice(compressed, [0, 0, 0, 0], [batch, 1, n_windows, nope_dim])
-        rope = ttnn.slice(compressed, [0, 0, 0, nope_dim], [batch, 1, n_windows, self.head_dim])
-        idx = self.ops.rope_index(self._entry_index, first_window_position // self.compress_rate)
-        cos, sin = self.ops.rope_gather(self._entry_rope, idx)
-        rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
-        compressed_kv = ttnn.concat([nope, rope], dim=-1)
-
-        if self.sp_factor > 1:
-            compressed_kv = ttnn.experimental.all_gather_async(
-                compressed_kv,
-                dim=2,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
-                num_links=self.ccl_num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_topology,
-                cluster_axis=self.sp_axis,
-            )
+        compressed_kv = self._normalize_rotate_and_gather(pooled, first_window_position)
 
         mask_block = None
         if seq_len_actual > 1 and t_real > 0:
             mask_block = self._mask_block(seq_len, first_window_position, seq_len_actual)
 
         return compressed_kv, mask_block
+
+
+class TtCSACompressor(TtCompressorBase):
+    """Temporary CSA compressor skeleton using only each current window's Cb series.
+
+    The complete CSA compressor pools the previous window's Ca series together with the current
+    window's Cb series. This skeleton intentionally omits the Ca overlap so the projection, ratio-4
+    pooling, normalization, compressed RoPE, and mesh paths can be validated independently.
+    """
+
+    def __init__(
+        self,
+        device,
+        *,
+        kv_proj_weight: torch.Tensor,
+        gate_proj_weight: torch.Tensor,
+        position_bias: torch.Tensor,
+        kv_norm_weight: torch.Tensor,
+        head_dim: int,
+        compress_rate: int,
+        rope_head_dim: int,
+        rotary_emb,
+        rms_norm_eps: float = 1e-6,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
+        topology=ttnn.Topology.Linear,
+        dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    ):
+        super().__init__(
+            device,
+            rotary_emb=rotary_emb,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            topology=topology,
+            dtype=dtype,
+            weights_dtype=weights_dtype,
+            memory_config=memory_config,
+        )
+        self.head_dim = int(head_dim)
+        self.compress_rate = int(compress_rate)
+        self.rope_head_dim = int(rope_head_dim)
+        self.rms_norm_eps = float(rms_norm_eps)
+        self._init_compression_weights(
+            kv_proj_weight=kv_proj_weight,
+            gate_proj_weight=gate_proj_weight,
+            position_bias=position_bias,
+            kv_norm_weight=kv_norm_weight,
+            projection_dim=2 * self.head_dim,
+        )
+
+    def alloc_tables(self, max_seq_len: int, chunk_tokens: int):
+        self._alloc_rope_tables(max_seq_len, chunk_tokens)
+
+    @classmethod
+    def from_reference(cls, device, reference, config, **kwargs) -> "TtCSACompressor":
+        return cls(
+            device,
+            kv_proj_weight=reference.kv_proj.weight,
+            gate_proj_weight=reference.gate_proj.weight,
+            position_bias=reference.position_bias,
+            kv_norm_weight=reference.kv_norm.weight,
+            head_dim=config.head_dim,
+            compress_rate=config.compress_rates["compressed_sparse_attention"],
+            rope_head_dim=config.qk_rope_head_dim,
+            rotary_emb=reference.rotary_emb,
+            rms_norm_eps=config.rms_norm_eps,
+            **kwargs,
+        )
+
+    def forward(
+        self,
+        hidden_states,
+        seq_len_actual: int | None = None,
+        first_window_position: int = 0,
+    ):
+        """Compress the current-window Cb series and return no sparse block bias yet."""
+        input_shape = tuple(hidden_states.shape)
+        if len(input_shape) != 4 or input_shape[1] != 1:
+            raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
+        batch, seq_len = input_shape[0], input_shape[2]
+        if seq_len_actual is None:
+            seq_len_actual = seq_len * self.sp_factor
+        assert 0 <= seq_len_actual <= seq_len * self.sp_factor, (
+            f"seq_len_actual {seq_len_actual} must fit in the padded global sequence " f"{seq_len * self.sp_factor}"
+        )
+
+        kv, gate = self._project(hidden_states)
+        n_windows = seq_len // self.compress_rate
+        assert n_windows > 0, (
+            f"each chip needs at least one whole compression window: {seq_len} rows is under "
+            f"compress_rate {self.compress_rate}; run prepare_input on the hidden states first"
+        )
+
+        projection_dim = 2 * self.head_dim
+        kv = ttnn.reshape(kv, [batch, n_windows, self.compress_rate, projection_dim])
+        gate = ttnn.reshape(gate, [batch, n_windows, self.compress_rate, projection_dim])
+        gate = ttnn.add(gate, self.position_bias)
+
+        # TODO: prepend the previous window's Ca half and pool over 2 * compress_rate slots.
+        kv_cb = ttnn.slice(
+            kv,
+            [0, 0, 0, self.head_dim],
+            [batch, n_windows, self.compress_rate, projection_dim],
+        )
+        gate_cb = ttnn.slice(
+            gate,
+            [0, 0, 0, self.head_dim],
+            [batch, n_windows, self.compress_rate, projection_dim],
+        )
+        weights = ttnn.softmax(gate_cb, dim=2, numeric_stable=True)
+        pooled = ttnn.sum(ttnn.multiply(kv_cb, weights), dim=2)
+        compressed_kv = self._normalize_rotate_and_gather(pooled, first_window_position)
+        return compressed_kv, None
