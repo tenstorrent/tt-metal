@@ -15,8 +15,9 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
     load_kda_layer_state_dict,
     resolve_kda_layer_shards,
 )
-from models.demos.deepseek_v3_d_p.tests.kda.utils import assert_equal, random_weights
+from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.weight_schema import normalize_kda_state_dict
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_equal
 
 
 def _full_rank_config(*, num_heads: int = 2) -> KDAConfig:

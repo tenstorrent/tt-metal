@@ -11,9 +11,10 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_recurrent_reference
-from models.demos.deepseek_v3_d_p.tests.kda.utils import assert_accurate, assert_bit_identical, compare_cpu_device
+from models.demos.deepseek_v3_d_p.tests.kda.utils import compare_cpu_device
 from models.demos.deepseek_v3_d_p.tt.kda import ops
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
 
 pytestmark = [
     run_for_blackhole(),
@@ -161,6 +162,7 @@ def test_chunk_recurrence_pcc(
     print("KDA_CPU_REFERENCE_CACHE=disabled; computing deterministic operation oracle", flush=True)
     reference_start = time.perf_counter()
     golden_output, golden_state = kda_recurrent_reference(q, k, v, gate, beta, state)
+    golden_output = golden_output.to(torch.bfloat16)
     print(f"KDA_CPU_REFERENCE_SECONDS={time.perf_counter() - reference_start:.3f}", flush=True)
 
     with ttnn.manage_config("throw_exception_on_fallback", True):
@@ -208,6 +210,7 @@ def test_grouped_summary_preserves_weak_decay(device: ttnn.Device) -> None:
     beta = torch.sigmoid(torch.randn(1, sequence, heads, generator=generator))
     state = 0.02 * torch.randn(1, heads, dim, dim, generator=generator)
     golden_output, golden_state = kda_recurrent_reference(q, k, v, gate, beta, state)
+    golden_output = golden_output.to(torch.bfloat16)
 
     with ttnn.manage_config("throw_exception_on_fallback", True):
         result_eight = _run_recurrence(

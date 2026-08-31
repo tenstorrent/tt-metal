@@ -11,15 +11,10 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.kda.utils import (
-    assert_accurate,
-    assert_bit_identical,
-    make_config,
-    make_program_config,
-    random_weights,
-)
+from models.demos.deepseek_v3_d_p.tests.kda.utils import make_config, make_program_config, random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
 
 pytestmark = [
     run_for_blackhole(),
@@ -67,7 +62,7 @@ def test_composed_layer_pcc(device: ttnn.Device) -> None:
             golden_state.v_convolution,
         ),
         dim=-1,
-    )
+    ).to(torch.bfloat16)
     assert_accurate(golden_output, actual_output, name=f"T={sequence} output", pcc_threshold=0.999)
     assert_accurate(golden_state.recurrent, actual_recurrent, name=f"T={sequence} recurrent state", pcc_threshold=0.999)
     assert_accurate(golden_convolution, actual_convolution, name=f"T={sequence} convolution state", pcc_threshold=0.999)
@@ -186,7 +181,7 @@ def test_segmented_prefill_rebinds_cache_hit_runtime_inputs(device: ttnn.Device,
             golden_state.v_convolution,
         ),
         dim=-1,
-    )
+    ).to(torch.bfloat16)
     assert_accurate(golden_first, actual_first, name="first prefill segment output", pcc_threshold=0.999)
     assert_accurate(golden_second, actual_second, name="second prefill segment output", pcc_threshold=0.999)
     assert_accurate(golden_state.recurrent, actual_recurrent, name="cache recurrent state", pcc_threshold=0.999)
@@ -233,7 +228,7 @@ def test_explicit_fp32_state_is_replaced_without_mutating_input(device: ttnn.Dev
             golden_state.v_convolution,
         ),
         dim=-1,
-    )
+    ).to(torch.bfloat16)
     assert_accurate(golden_output, actual_output, name="external FP32 output", pcc_threshold=0.999)
     assert_accurate(
         golden_state.recurrent,
