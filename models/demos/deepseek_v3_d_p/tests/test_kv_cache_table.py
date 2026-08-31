@@ -849,7 +849,7 @@ def test_glm52_tp_sharded_kv_cache_mock(
     kvpe_cache_head_dim = 576  # qk_rope_head_dim(64) + kv_lora_rank(512); same for Kimi and DeepSeek
     num_kvpe_cache_layers = num_users * num_layers
 
-    chunk_tokens = PREFILL_CHUNK_OUTPUT_TOKENS
+    chunk_tokens = PREFILL_CHUNK_TOKENS
     tokens_per_chunk_per_device = chunk_tokens // linear_factor  # 160 on sp=8/tp=4 (vs 640 SP-only)
     num_seq_chunks = seq_len // chunk_tokens
     assert chunk_tokens % linear_factor == 0, f"5k chunk must divide evenly across sp*tp={linear_factor}"
