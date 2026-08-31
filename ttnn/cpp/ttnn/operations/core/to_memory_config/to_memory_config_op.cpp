@@ -11,6 +11,7 @@
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp"
 #include "ttnn/operations/data_movement/sharded/reshard/device/reshard_device_operation.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
@@ -59,8 +60,7 @@ bool can_use_sharded_to_interleaved(
         // Input CB aliases the shard buffer (no extra L1). Output CB is additional.
         uint32_t total_cb_size = num_units_per_shard * aligned_output_page_size;
 
-        uint32_t max_l1_size =
-            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        uint32_t max_l1_size = operations::data_movement::get_max_l1_space(input_tensor);
 
         if (total_cb_size >= max_l1_size) {
             return false;
@@ -138,8 +138,7 @@ bool can_use_interleaved_to_sharded(
         total_cb_size += num_units_per_shard * output_page_size;
     }
 
-    uint32_t max_l1_size =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    uint32_t max_l1_size = operations::data_movement::get_max_l1_space(input_tensor);
 
     return total_cb_size < max_l1_size;
 }
@@ -212,8 +211,7 @@ bool can_use_reshard(
         bool unaligned = (remote_unit_size_padded != unit_size) || (local_unit_size_padded != unit_size);
         if (unaligned) {
             uint32_t scratch_cb_size = remote_units_per_shard * remote_unit_size_padded;
-            uint32_t max_l1_size =
-                device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+            uint32_t max_l1_size = operations::data_movement::get_max_l1_space(input_tensor);
             if (scratch_cb_size >= max_l1_size) {
                 return false;
             }
@@ -234,8 +232,7 @@ bool can_use_reshard(
         }
         uint32_t aligned_page_size = tt::align(page_size, input_alignment);
 
-        uint32_t max_l1_size =
-            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        uint32_t max_l1_size = operations::data_movement::get_max_l1_space(input_tensor);
         if (aligned_page_size >= max_l1_size) {
             return false;
         }
