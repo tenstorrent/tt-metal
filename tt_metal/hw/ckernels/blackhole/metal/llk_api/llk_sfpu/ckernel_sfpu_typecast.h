@@ -27,6 +27,16 @@ constexpr std::uint16_t UINT16_LOW_MASK = 0xFFFF;
 // lands in the high 16 bits where the packer reads UInt16 out of a 32-bit dest word.
 constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = 9;
 
+// Int8 tensors hold raw 2's complement bytes and are read through the UInt8 unpacker which zero-extends
+// the byte. The native Int8 unpacker decodes as sign-magnitude. So XOR with 0x80 to get
+//  e = s + 128, where s is the signed value:
+//  b <  128 (s = b): b ^ 0x80 = b + 128 = s + 128
+//  b >= 128 (s = b - 256): b ^ 0x80 = b - 128 = s + 128
+constexpr std::uint32_t TYPECAST_INT8_SIGN_MASK = 0x00000080;
+
+// -128.0f as the upper 16 bits
+constexpr std::uint32_t TYPECAST_INT8_MINUS_128_IMM16 = 0xC300;
+
 // SFPGT mod1 selector that sets the destination to all-ones (-1) when the comparison is true.
 constexpr std::uint32_t SFPGT_MOD1_SET_ALL_ONES = 8;
 
@@ -983,6 +993,45 @@ inline void calculate_typecast_uint_to_uint8() {
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_typecast_int8_to_int32() {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; ++d) {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // e = b ^ 0x80 to get excess 128
+        TTI_SFPIADD(
+            -128 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_typecast_int8_to_fp32() {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; ++d) {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // e = b ^ 0x80 in [0, 255]
+        TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
+        TTI_SFPADDI(TYPECAST_INT8_MINUS_128_IMM16, p_sfpu::LREG0, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_6, 0);
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_typecast_int8_to_uint16() {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; ++d) {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // e = b ^ 0x80 to get excess 128
+        TTI_SFPIADD(
+            -128 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPENCC(0, 0, 0, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);
+    }
+}
+
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_uint8() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
@@ -996,6 +1045,13 @@ inline void init_typecast_uint_to_uint8() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = 0xFF;
     sfpi::vConstIntPrgm1 = UINT16_LOW_MASK;
+}
+
+template <bool APPROXIMATION_MODE>
+inline void init_typecast_int8_input() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpi::vConstIntPrgm0 = TYPECAST_INT8_SIGN_MASK;
 }
 
 }  // namespace sfpu

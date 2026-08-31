@@ -40,9 +40,9 @@ void bind_global_typecast(nb::module_& mod) {
 
                 * - dtype
                     - layout
-                * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8
+                * - BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, INT32, UINT16, UINT8, INT8
                     - TILE
-                * - BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8
+                * - BFLOAT16, FLOAT32, UINT32, INT32, UINT16, UINT8, INT8
                     - ROW_MAJOR
 
             Memory Support:
@@ -51,6 +51,7 @@ void bind_global_typecast(nb::module_& mod) {
 
             Limitations:
                 -  ND Sharded tensors are not supported.
+                -  Narrowing to UINT8 or INT8 truncates towards zero and wraps modulo 256; it does not saturate.
                 -  If preallocated output tensor is used, it must match the input tensor's shape and layout.
         )doc";
 

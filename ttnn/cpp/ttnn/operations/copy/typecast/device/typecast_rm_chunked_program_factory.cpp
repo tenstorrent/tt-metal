@@ -76,9 +76,9 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
 
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "This factory is only for ROW_MAJOR layout");
 
-    const tt::DataFormat cb_data_format_input = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat cb_data_format_input = typecast_buffer_data_format(input.dtype());
     const uint32_t input_element_size = tt::datum_size(cb_data_format_input);
-    const tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const tt::DataFormat cb_data_format_output = typecast_buffer_data_format(output.dtype());
     const uint32_t output_element_size = tt::datum_size(cb_data_format_output);
 
     const auto* device = input.device();

@@ -90,9 +90,9 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
     const DataType& output_dtype = args.output_dtype;
     const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
 
-    const tt::DataFormat cb_data_format_input = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat cb_data_format_input = typecast_buffer_data_format(input.dtype());
     const uint32_t single_tile_size_input = tt::tile_size(cb_data_format_input);
-    const tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const tt::DataFormat cb_data_format_output = typecast_buffer_data_format(output.dtype());
     const uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
     const auto* device = input.device();
@@ -249,9 +249,9 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
 
     TT_FATAL(sub_core_grids.has_value(), "sub_core_grids cannot be null");
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat cb_data_format = typecast_buffer_data_format(input.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat cb_data_format_output = typecast_buffer_data_format(output.dtype());
     uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
     const auto* device = input.device();

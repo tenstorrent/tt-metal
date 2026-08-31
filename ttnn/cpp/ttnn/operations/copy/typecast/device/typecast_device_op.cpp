@@ -20,8 +20,8 @@ bool can_use_sharded_optimized_factory(const TypecastParams& args, const Typecas
     }
     const auto& shard_spec = input.shard_spec().value();
 
-    tt::DataFormat act_df = datatype_to_dataformat_converter(args.input_dtype);
-    tt::DataFormat out_df = datatype_to_dataformat_converter(args.output_dtype);
+    tt::DataFormat act_df = typecast_buffer_data_format(args.input_dtype);
+    tt::DataFormat out_df = typecast_buffer_data_format(args.output_dtype);
 
     if (tt::tile_size(act_df) != tt::tile_size(out_df)) {
         return false;

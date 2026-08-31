@@ -26,4 +26,11 @@ struct TypecastInputs {
     std::optional<Tensor> preallocated_output;
 };
 
+// For INT8 tensors holding raw 2's complement bytes, configuring the buffers with tt::DataFormat::Int8
+// would corrupt every negative value since it emits sign-magnitude. They are configured as UInt8 instead.
+inline tt::DataFormat typecast_buffer_data_format(tt::tt_metal::DataType dtype) {
+    return dtype == tt::tt_metal::DataType::INT8 ? tt::DataFormat::UInt8
+                                                 : tt::tt_metal::datatype_to_dataformat_converter(dtype);
+}
+
 }  // namespace ttnn::prim
