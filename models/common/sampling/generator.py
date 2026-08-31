@@ -1195,6 +1195,9 @@ class SeedManager:
         except (TypeError, ValueError) as exc:
             raise ValueError("seed_values must contain integer-like values") from exc
 
+        if self._seed_buffer is not None:
+            self._write_model_seed_values(wrapped)
+            return
         seed_tt = ttnn.from_torch(
             torch.tensor(wrapped, dtype=torch.uint32),
             dtype=ttnn.uint32,
@@ -1255,15 +1258,6 @@ class SeedManager:
                 assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
                 new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
 
-        if self._seed_buffer is not None:
-            self._write_model_seed_values(new_seeds)
-        else:
-            new_seed_tt = ttnn.from_torch(
-                torch.tensor(new_seeds),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=self._seed_mapper,
-            )
-            ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
+        self.write_device_seed_values(new_seeds)
         self._reseted = False
         return tuple(new_seeds)
