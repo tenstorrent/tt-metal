@@ -325,6 +325,9 @@ class ttKDA:
             # Retained by real-K3 T=5120 component A/B: 74.36-75.76% faster at direct Q/K/V PCC >=0.999989.
         # Resolve the configured ceiling to an exact divisor for this TP-local channel count.
         channel_chunk_size = _effective_qkv_channel_chunk_size(channels, self.qkv_channel_chunk_size)
+        # The operation default differs from self.kda_compute_config only in disabling FP32 destination
+        # accumulation. Against one FP32 session, five default sessions were 0.15-0.25% faster at
+        # real-K3 T=5120 with output PCC >= 0.999893, so do not override the default here.
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             qkv_row_major,
             state_row_major,
@@ -334,7 +337,6 @@ class ttKDA:
             config.v_dim,
             program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=channel_chunk_size),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.kda_compute_config,
         )
         return q, k, v, new_state
 

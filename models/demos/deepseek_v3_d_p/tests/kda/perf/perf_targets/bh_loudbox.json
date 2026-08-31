@@ -13,28 +13,28 @@
     "timing_samples": 5
   },
   "provenance": {
-    "measured_at_commit": "003156d7b4a053876991ebe8e7de2a9ce15306ae",
-    "runtime_source_sha256": "19df22e854a5338528778ba12a2e2cbb76be7af968ebfa57e21c84089b6a8f76",
-    "measured_at_utc": "2026-08-28",
-    "method": "median of five warm synchronized samples per session, then median across five independent sessions; 10 replays per sample; the pinned runtime-source delta preserves the measured T=5120 dispatch"
+    "measured_at_commit": "350413d7a98e9ce12dcbc97e888b24b227420ac0",
+    "runtime_source_sha256": "31c5566e1f4f4e17f65a80df914bfa4cea628f213ff63187cb09e9ec8e97d8a4",
+    "measured_at_utc": "2026-08-31",
+    "method": "median of five warm synchronized samples per session, then median across five independent sessions; 10 replays per sample; QKV uses the operation-default destination accumulation; measured at the named commit plus the reviewed kda.py delta pinned by runtime_source_sha256"
   },
   "targets": {
     "SP1xTP8": {
-      "reference_ms": 9.664,
-      "session_medians_ms": [9.663542, 9.660243, 9.667747, 9.664054, 9.673352],
-      "observed_range_pct": 0.136,
+      "reference_ms": 9.597,
+      "session_medians_ms": [9.597780, 9.599529, 9.597019, 9.588588, 9.596632],
+      "observed_range_pct": 0.114,
       "max_regression_pct": 1.0
     },
     "SP2xTP4": {
-      "reference_ms": 9.602,
-      "session_medians_ms": [9.598364, 9.600928, 9.605699, 9.602122, 9.606675],
-      "observed_range_pct": 0.087,
+      "reference_ms": 9.539,
+      "session_medians_ms": [9.546007, 9.535176, 9.539461, 9.534591, 9.543707],
+      "observed_range_pct": 0.120,
       "max_regression_pct": 1.0
     },
     "SP4xTP2": {
-      "reference_ms": 10.052,
-      "session_medians_ms": [10.059154, 10.059892, 10.051832, 10.047432, 10.048872],
-      "observed_range_pct": 0.124,
+      "reference_ms": 9.991,
+      "session_medians_ms": [9.990718, 9.992186, 9.992724, 9.990918, 9.990647],
+      "observed_range_pct": 0.021,
       "max_regression_pct": 1.0
     }
   }
