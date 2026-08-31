@@ -93,7 +93,31 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
     return result;
 }
 
-inline void softplus_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+// The three lowest-order residual-polynomial coefficients live in the SFPU's programmable
+// constant registers. SFPMAD names a CREG directly in an operand field, so each one costs
+// zero instructions per element instead of the two SFPLOADI a full-fp32 literal needs --
+// and the value keeps its exact fp32 bit pattern, so this is bit-exact, not an accuracy
+// trade. Nothing else in softplus's call graph touches Prgm0/1/2 (its exp tail uses a
+// local 2^23+2^22 constant, which is bf16-exact and already free).
+//
+// Reached from _llk_math_eltwise_unary_sfpu_init_'s SfpuType::softplus arm, which both
+// production (SFPU_UNARY_INIT) and the tt-llk harness run before the calculate step.
+#ifdef INP_FLOAT32
+#define SOFTPLUS_CREG_C0 SOFTPLUS_POLY_C0
+#define SOFTPLUS_CREG_C1 SOFTPLUS_POLY_C1
+#define SOFTPLUS_CREG_C2 SOFTPLUS_POLY_C2
+#else
+#define SOFTPLUS_CREG_C0 SOFTPLUS_BF16_POLY_C0
+#define SOFTPLUS_CREG_C1 SOFTPLUS_BF16_POLY_C1
+#define SOFTPLUS_CREG_C2 SOFTPLUS_BF16_POLY_C2
+#endif
+
+inline void softplus_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpi::vConstFloatPrgm0 = SOFTPLUS_CREG_C0;
+    sfpi::vConstFloatPrgm1 = SOFTPLUS_CREG_C1;
+    sfpi::vConstFloatPrgm2 = SOFTPLUS_CREG_C2;
+}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
@@ -108,9 +132,9 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
         // FP32: f(a) via degree-8 Horner on [0, 5]
         sfpi::vFloat residual = PolynomialEvaluator::eval(
             a,
-            SOFTPLUS_POLY_C0,
-            SOFTPLUS_POLY_C1,
-            SOFTPLUS_POLY_C2,
+            sfpi::vConstFloatPrgm0,  // SOFTPLUS_POLY_C0, parked by softplus_init
+            sfpi::vConstFloatPrgm1,  // SOFTPLUS_POLY_C1
+            sfpi::vConstFloatPrgm2,  // SOFTPLUS_POLY_C2
             SOFTPLUS_POLY_C3,
             SOFTPLUS_POLY_C4,
             SOFTPLUS_POLY_C5,
@@ -130,9 +154,9 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
         // BF16: f(a) via degree-6 Horner on [0, 5]
         sfpi::vFloat residual = PolynomialEvaluator::eval(
             a,
-            SOFTPLUS_BF16_POLY_C0,
-            SOFTPLUS_BF16_POLY_C1,
-            SOFTPLUS_BF16_POLY_C2,
+            sfpi::vConstFloatPrgm0,  // SOFTPLUS_BF16_POLY_C0, parked by softplus_init
+            sfpi::vConstFloatPrgm1,  // SOFTPLUS_BF16_POLY_C1
+            sfpi::vConstFloatPrgm2,  // SOFTPLUS_BF16_POLY_C2
             SOFTPLUS_BF16_POLY_C3,
             SOFTPLUS_BF16_POLY_C4,
             SOFTPLUS_BF16_POLY_C5,

@@ -23,7 +23,19 @@ namespace sfpu {
            t4) *                                                                                                  \
           t4) *                                                                                                   \
      t4)
-inline void i0_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+// Park the three costliest series coefficients in the SFPU's programmable constant
+// registers: SFPMAD names a CREG directly in an operand field, so each costs zero
+// instructions per element instead of the two SFPLOADI a full-fp32 literal needs, and the
+// value keeps its exact fp32 bit pattern (bit-exact, not an accuracy trade). The other
+// coefficients stay literals -- 0.25f and 0.015625f are already bf16-exact and free, and
+// on Wormhole a dependent Horner chain hides some load latency, so draining every load
+// out of the chain trades loads for SFPNOPs rather than removing them outright.
+inline void i0_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpi::vConstFloatPrgm0 = 0.0004340277778f;
+    sfpi::vConstFloatPrgm1 = 0.000006781684028f;
+    sfpi::vConstFloatPrgm2 = 6.78E-08f;
+}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_i0() {
@@ -41,9 +53,9 @@ inline void calculate_i0() {
                             9.39E-15f,
                             2.40E-12f,
                             4.71E-10f,
-                            6.78E-08f,
-                            0.000006781684028f,
-                            0.0004340277778f,
+                            sfpi::vConstFloatPrgm2,  // 6.78E-08f,          parked by i0_init
+                            sfpi::vConstFloatPrgm1,  // 0.000006781684028f, parked by i0_init
+                            sfpi::vConstFloatPrgm0,  // 0.0004340277778f,   parked by i0_init
                             0.015625f,
                             0.25f,
                             x);
