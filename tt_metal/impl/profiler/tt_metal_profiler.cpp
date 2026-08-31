@@ -64,6 +64,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/debug/noc_debugging.hpp>
+#include "tools/profiler/noc_event_profiler_utils.hpp"
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic push
@@ -814,9 +815,8 @@ void InitDeviceProfiler(IDevice* device) {
     setControlBuffer(nullptr, device, control_buffer);
 
     if (MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
-        profiler.dumpRoutingInfo();
-        profiler.dumpSocDescriptor();
-        profiler.dumpClusterCoordinates();
+        tt::tt_metal::dumpRoutingInfo(profiler.getNocTraceDataOutputDir());
+        tt::tt_metal::dumpSocDescriptor(device, profiler.getNocTraceDataOutputDir());
     }
 #endif
 }

@@ -16,6 +16,7 @@
 #include <fstream>
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include "common/filesystem_utils.hpp"
 #include "tt_cluster.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
@@ -65,29 +66,17 @@ private:
     EthCoreToChannelMap eth_core_to_channel_lookup_;
 };
 
-inline void dumpClusterCoordinatesAsJson(const std::filesystem::path& filepath) {
-    Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-
-    nlohmann::ordered_json cluster_json;
-    cluster_json["physical_chip_to_eth_coord"] = nlohmann::ordered_json();
-    for (auto& [chip_id, eth_core] : cluster.get_user_chip_ethernet_coordinates()) {
-        EthCoord eth_coord = eth_core;
-        auto& entry = cluster_json["physical_chip_to_eth_coord"][std::to_string(chip_id)];
-        entry["rack"] = eth_coord.rack;
-        entry["shelf"] = eth_coord.shelf;
-        entry["x"] = eth_coord.x;
-        entry["y"] = eth_coord.y;
+inline void dumpRoutingInfo(const std::filesystem::path& output_dir) {
+    tt::filesystem::safe_create_directories(output_dir);
+    if (!tt::filesystem::safe_is_directory(output_dir).value_or(false)) {
+        log_error(
+            tt::LogMetal,
+            "Could not dump topology to '{}' because the directory path could not be created!",
+            output_dir);
+        return;
     }
+    const std::filesystem::path filepath = output_dir / "topology.json";
 
-    std::ofstream cluster_json_ofs(filepath);
-    if (cluster_json_ofs.is_open()) {
-        cluster_json_ofs << cluster_json.dump(2);
-    } else {
-        log_error(tt::LogMetal, "Failed to open file '{}' for dumping cluster coordinate map", filepath.string());
-    }
-}
-
-inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
     nlohmann::ordered_json topology_json;
 
     const Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -175,6 +164,20 @@ inline std::tuple<int, int> get_routing_start_distance_and_range(uint8_t routing
     int start_distance = tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK & routing_fields_value;
     int range = routing_fields_value >> tt::tt_fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
     return {start_distance, range};
+}
+
+inline void dumpSocDescriptor(IDevice* device, const std::filesystem::path& output_dir) {
+    tt::filesystem::safe_create_directories(output_dir);
+    if (!tt::filesystem::safe_is_directory(output_dir).value_or(false)) {
+        log_error(
+            tt::LogMetal,
+            "Could not dump soc descriptor to '{}' because the directory path could not be created!",
+            output_dir);
+        return;
+    }
+
+    const metal_SocDescriptor& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
+    soc_desc.serialize_to_file(output_dir / "soc_descriptor.yaml");
 }
 
 }  // namespace tt::tt_metal

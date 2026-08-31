@@ -2635,44 +2635,6 @@ void DeviceProfiler::processResults(
 #endif
 }
 
-void DeviceProfiler::dumpSocDescriptor() const {
-    const metal_SocDescriptor& soc_desc = MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);
-    if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir).value_or(false)) {
-        log_error(
-            tt::LogMetal,
-            "Could not dump soc descriptor to '{}' because the directory path could not be created!",
-            noc_trace_data_output_dir);
-        return;
-    }
-    soc_desc.serialize_to_file(noc_trace_data_output_dir / "soc_descriptor.yaml");
-}
-
-void DeviceProfiler::dumpRoutingInfo() const {
-    tt::filesystem::safe_create_directories(noc_trace_data_output_dir);
-    if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir).value_or(false)) {
-        log_error(
-            tt::LogMetal,
-            "Could not dump topology to '{}' because the directory path could not be created!",
-            noc_trace_data_output_dir);
-        return;
-    }
-
-    tt::tt_metal::dumpRoutingInfo(noc_trace_data_output_dir / "topology.json");
-}
-
-void DeviceProfiler::dumpClusterCoordinates() const {
-    tt::filesystem::safe_create_directories(noc_trace_data_output_dir);
-    if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir).value_or(false)) {
-        log_error(
-            tt::LogMetal,
-            "Could not dump cluster coordinates to '{}' because the directory path could not be created!",
-            noc_trace_data_output_dir);
-        return;
-    }
-
-    tt::tt_metal::dumpClusterCoordinatesAsJson(noc_trace_data_output_dir / "cluster_coordinates.json");
-}
-
 bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {
     return (
         (old_info.frequency == 0 && new_info.frequency != 0) ||
