@@ -178,7 +178,15 @@ template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim, DataFormat AForma
 ALWI void bcast_init(LLKOperand<AFormat, AShape> /*a*/) {
     static_assert(is_legal_tile_shape(AShape), "bcast_init: illegal tile shape for operand A.");
     static_assert(tBcastDim != BroadcastType::NONE, "bcast_init: use add/sub/mul_init for BroadcastType::NONE.");
-    MATH((llk_math_eltwise_binary_init<LLKOperand<AFormat, AShape>::descriptor, tBcastOp, tBcastDim, MATH_FIDELITY>()));
+    // Per-op fidelity, matching legacy's fixed-op bcast inits ({add,sub}_bcast_*_init use LoFi;
+    // mul_bcast_*_init uses MATH_FIDELITY): ADD/SUB do not use the fidelity multiplier, so LoFi is
+    // correct and saves cycles; MUL keeps MATH_FIDELITY. The whole ternary MUST stay inside MATH()
+    // because MATH_FIDELITY is a MATH-thread-only macro (undefined on the UNPACK/PACK images).
+    MATH((llk_math_eltwise_binary_init<
+          LLKOperand<AFormat, AShape>::descriptor,
+          tBcastOp,
+          tBcastDim,
+          (tBcastOp == EltwiseBinaryType::ELWMUL) ? MATH_FIDELITY : MathFidelity::LoFi>()));
     UNPACK((llk_unpack_AB_init<LLKOperand<AFormat, AShape>::descriptor, tBcastDim>(ckernel::Transpose::None)));
 }
 
@@ -220,12 +228,16 @@ ALWI void any_tiles_bcast(
     static_assert(tBcastDim != BroadcastType::NONE, "any_tiles_bcast: use add/sub/mul_tiles for BroadcastType::NONE.");
     // Match legacy any_tiles_bcast order: MATH then UNPACK. bcast_row_idx selects which row of B's tile the ROW
     // broadcast reads (legacy parity); it is consumed only by the ROW path and ignored by COL / SCALAR.
+    // Per-op fidelity, matching legacy's fixed-op bcast execute wrappers ({add,sub}_tiles_bcast_* use LoFi;
+    // mul_tiles_bcast_* uses MATH_FIDELITY): ADD/SUB do not use the fidelity multiplier, so LoFi is correct
+    // and saves cycles; MUL keeps MATH_FIDELITY. The whole ternary MUST stay inside MATH() because
+    // MATH_FIDELITY is a MATH-thread-only macro (undefined on the UNPACK/PACK images).
     MATH((llk_math_eltwise_binary<
           LLKOperand<AFormat, AShape>::descriptor,
           tBcastOp,
           tBcastDim,
           DST_ACCUM_MODE,
-          MATH_FIDELITY,
+          (tBcastOp == EltwiseBinaryType::ELWMUL) ? MATH_FIDELITY : MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(idst, true /*clear_fp32_dst_acc*/)));
     UNPACK((llk_unpack_AB<LLKOperand<AFormat, AShape>::descriptor, tBcastDim, static_cast<std::uint8_t>(BFormat)>(
         detail::tile_address(a, itile0), detail::tile_address(b, itile1), bcast_row_idx)));

@@ -28,7 +28,7 @@ void kernel_main() {
     using InOp = experimental::LLKOperand<static_cast<DataFormat>(in_desc.format), in_desc.shape>;
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    experimental::copy_tile_init(InOp(in_cb.read_address()));
+    experimental::copy_init(InOp(in_cb.read_address()));
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; b += BLOCK_TILES) {
         std::uint32_t ntiles = (per_core_tile_cnt - b) < BLOCK_TILES ? (per_core_tile_cnt - b) : BLOCK_TILES;

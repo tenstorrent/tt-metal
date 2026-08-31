@@ -50,14 +50,14 @@ namespace experimental {
  */
 // clang-format on
 template <DataFormat Format, TensorShape Shape>
-ALWI void copy_tile_init(
+ALWI void copy_init(
     LLKOperand<Format, Shape> /*src*/, std::uint32_t transpose = 0, std::uint32_t transpose_within_16x16_face = 0) {
     static_assert(
         is_legal_tile_shape(Shape),
-        "copy_tile_init: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
+        "copy_init: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
     static_assert(
         Format != DataFormat::Fp8_e4m3 && Format != DataFormat::Lf8,
-        "copy_tile_init: fp8 source (Fp8_e4m3/Lf8) is not supported in the 2.0 datacopy path yet -- it requires "
+        "copy_init: fp8 source (Fp8_e4m3/Lf8) is not supported in the 2.0 datacopy path yet -- it requires "
         "the legacy copy_init src zero-flag flush, which is not wired in here. Use the legacy CB-id copy path.");
     UNPACK((llk_unpack_A_init<
             LLKOperand<Format, Shape>::descriptor,
@@ -78,7 +78,7 @@ ALWI void copy_tile_init(
  * Experimental id-free datacopy. Copies one tile from the L1 region described by the LLKOperand into DST.
  * Compile-time "what" = the LLKOperand NTTPs (Format + Shape, fold/DCE); runtime "where" = src.l1_address
  * (from the address seam). No CB id, no register format on the API. Precondition: the DST register must be
- * acquired (tile_regs_acquire) before the call, and copy_tile_init must have run.
+ * acquired (tile_regs_acquire) before the call, and copy_init must have run.
  *
  * | Template | Format         | Buffer L1 data format (deduced from LLKOperand)   | DataFormat  |         | True |
  * | Template | Shape          | Tile geometry (deduced from LLKOperand)           | TensorShape |         | True |
@@ -113,7 +113,7 @@ ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_index)
  * copy_block semantics (tile start_in_tile_index+i lands in DST slot start_dst_tile_index+i). Reuses the
  * existing 2.0 copy_tile per tile; each tile's source address is the operand base offset by
  * (start_in_tile_index + i) * tile_stride_words(Format, Shape) 16-byte words (folds to a compile-time
- * constant). No CB id, no register format on the API. Requires the same init as copy_tile (copy_tile_init).
+ * constant). No CB id, no register format on the API. Requires the same init as copy_tile (copy_init).
  *
  * | Template | Format               | Buffer L1 data format (deduced from LLKOperand)             | DataFormat  |         | True |
  * | Template | Shape                | Tile geometry (deduced from LLKOperand)                    | TensorShape |         | True |
