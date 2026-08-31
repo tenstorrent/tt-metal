@@ -47,6 +47,11 @@ ADALN_OUT = NUM_MODULATION_PARAMS * HIDDEN * MODALITY_NUM
 # production one for this to gate what production runs.
 ROTARY_DIM = 3 * 2 * ROPE_FREQ_DIM
 
+# Rounding budget for one on-device fuse against a host-fused reference. Both are generous against
+# a layout error, which the fixture sizes to land two orders of magnitude past them.
+MAX_ULP_OF_PEAK = 4.0
+MAX_RELATIVE_RMS = 0.002
+
 # The published adapter's counts, asserted against its own __metadata__ when the file is present.
 FASTH3_DENSE_COUNTS = {"lora": 724, "diff": 27, "diff_b": 58, "set_weight": 0}
 FASTH3_VSA_COUNTS = {"lora": 724, "diff": 24, "diff_b": 58, "set_weight": 50}
@@ -64,9 +69,14 @@ BLOCK_LORA_SHAPES = (
 
 
 def _pair(out_features: int, in_features: int, rank: int, generator: torch.Generator):
-    """A LoRA pair small enough that its delta does not swamp a randomly initialised base weight."""
-    a = torch.randn(rank, in_features, generator=generator, dtype=torch.float32) * 0.02
-    b = torch.randn(out_features, rank, generator=generator, dtype=torch.float32) * 0.02
+    """A LoRA pair whose delta is the same order as the base weight it modifies.
+
+    Sized deliberately: a delta at a few percent of the base leaves a wholesale layout error --
+    a delta landing on the wrong columns, or the wrong head interleave -- perturbing the result by
+    only a few percent, which is close enough to the rounding floor to hide in it.
+    """
+    a = torch.randn(rank, in_features, generator=generator, dtype=torch.float32) * 0.1
+    b = torch.randn(out_features, rank, generator=generator, dtype=torch.float32) * 0.1
     return a, b
 
 
@@ -272,36 +282,49 @@ def test_lora_block_weight_parity(
     # `base + delta` once in fp32 while the device rounds both operands and adds in bf16, and on a
     # norm weight -- 1.0 +/- 0.02 -- a single ULP is 39% of sigma, so PCC reads ~99.4% for a result
     # that is correct to the last representable bit. Bound the error where it actually lives.
-    worst: list[tuple[float, str]] = []
+    measured: list[tuple[float, float, str]] = []
     for (path, expected), (_, got) in zip(_named_parameters(reference), _named_parameters(adapted), strict=True):
         a = to_torch(expected.data, mesh_axes=expected.mesh_axes, composer_device=mesh_device)
         b = to_torch(got.data, mesh_axes=got.mesh_axes, composer_device=mesh_device)
         assert a.shape == b.shape, f"{path}: {a.shape} != {b.shape}"
-        worst.append((_max_ulp_error(a, b), path))
+        ulps, relative_rms = _rounding_error(a, b)
+        measured.append((ulps, relative_rms, path))
 
-    for ulps, path in sorted(worst, reverse=True):
-        logger.info(f"  {path:34s} {ulps:5.2f} bf16 ULP")
-    assert worst, "no parameters compared"
+    for ulps, relative_rms, path in sorted(measured, reverse=True):
+        logger.info(f"  {path:34s} max {ulps:6.2f} ULP-of-peak   RMS {relative_rms * 100:7.4f} %")
+    assert measured, "no parameters compared"
 
-    # Two roundings on the device side (base and delta) against one on the reference's.
-    over = [(ulps, path) for ulps, path in worst if ulps > 2.0]
-    assert not over, f"beyond bf16 rounding: {[(p, round(u, 2)) for u, p in sorted(over, reverse=True)]}"
-    logger.info(f"{len(worst)} parameters within {max(u for u, _ in worst):.2f} bf16 ULP at strength {strength}")
+    # The device rounds the base, rounds the rank-r product, and adds; the reference rounds their
+    # fp32 sum once. A few ULP of the peak covers that. A delta on the wrong columns is two orders
+    # of magnitude clear of it, since the fixture's delta is the size of the base.
+    over = [(u, r, p) for u, r, p in measured if u > MAX_ULP_OF_PEAK or r > MAX_RELATIVE_RMS]
+    assert not over, "beyond bf16 rounding: " + ", ".join(
+        f"{p} ({u:.1f} ULP-of-peak, {r * 100:.3f}% RMS)" for u, r, p in sorted(over, reverse=True)
+    )
+    logger.info(
+        f"{len(measured)} parameters within {max(u for u, _, _ in measured):.2f} ULP-of-peak " f"at strength {strength}"
+    )
 
 
-def _max_ulp_error(a: torch.Tensor, b: torch.Tensor) -> float:
-    """Largest elementwise gap between two bf16-valued tensors, in ULPs of the value itself.
+def _rounding_error(a: torch.Tensor, b: torch.Tensor) -> tuple[float, float]:
+    """``(max error in ULPs of the tensor's peak, RMS error relative to the tensor's RMS)``.
 
-    Scaling by each element's own exponent rather than by the tensor's range is what makes this
-    meaningful on a norm weight, where every value sits near 1.0 and a range-relative bound would
-    be satisfied by almost any error.
+    Scaled by the tensor's magnitude, not by each element's own. A bf16 add carries an error of
+    about one ULP *of its operands*; where the operands cancel, the result can be arbitrarily
+    smaller than that while the error stays put, so a per-element scale reports hundreds of ULPs
+    for a bit-correct sum. That is a property of the metric, not of the arithmetic.
+
+    RMS comes back alongside it because the max is one element: a layout error moves the whole
+    tensor and shows in both, while a single unlucky cancellation shows only in the max.
     """
     a, b = a.detach().to(torch.float64), b.detach().to(torch.float64)
-    reference = torch.maximum(a.abs(), b.abs())
-    # bf16 carries 8 significand bits; subnormals near zero would divide by zero, so floor the
-    # exponent at the smallest normal.
-    exponent = torch.floor(torch.log2(reference.clamp(min=2.0**-126)))
-    return ((a - b).abs() / torch.pow(2.0, exponent - 7)).max().item()
+    peak = torch.maximum(a.abs().max(), b.abs().max()).item()
+    if peak == 0.0:
+        return 0.0, 0.0
+    ulp = peak * 2.0**-8  # bf16 keeps 8 significand bits
+    error = (a - b).abs()
+    rms = b.pow(2).mean().sqrt().item()
+    return (error.max() / ulp).item(), (error.pow(2).mean().sqrt() / rms).item()
 
 
 def _named_parameters(module, prefix: str = ""):
