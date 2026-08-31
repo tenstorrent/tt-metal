@@ -90,12 +90,14 @@ the booking table); +21 rvtt checks.
 - t-riscv-tt: all three new engine objects kept (cc-region,
   delivery-cost, timing); #include unions kept in
   gimple-rvtt-invariant.cc / gimple-rvtt-prgm-const.cc.
-- KB BRANCH RECOVERY: agent/laneKB-suffix-discovery 6640ae8ec87 existed
-  on NO remote and NO local ref (dangling commit in the lane clone; the
-  lane's PUSHED record was false).  Caught by the union dg run coming
-  up exactly KB's 21 checks short (7300 vs 7321).  Recovered by
-  fetching the lane clone's HEAD, merged, and the branch re-anchored +
-  pushed to both hops at this ceremony.
+- KB MERGE RECOVERY: agent/laneKB-suffix-discovery 6640ae8ec87 WAS on
+  GitHub (the lane's push record holds) but absent from the local
+  canonical hop and from laneFR's remote-tracking, so the union
+  initially merged five lanes without KB.  Caught by the union dg run
+  coming up exactly KB's 21 checks short (7300 vs 7321).  Merged from
+  the lane clone's HEAD; both hops verified aligned at this ceremony
+  (an earlier 'on NO remote' diagnosis was wrong — the check ran with a
+  bad remote name and the error was swallowed).
 
 ## Gates checked
 
