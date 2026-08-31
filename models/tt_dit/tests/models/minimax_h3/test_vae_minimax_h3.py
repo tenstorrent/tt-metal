@@ -146,8 +146,9 @@ def test_encode_clip_tiled(mesh_device, num_frames, temporal_taps, expected_late
     _assert_same(expected, actual, pcc=0.99)  # ttnn.group_norm has no fp32 path: bf16 floor
 
 
+@pytest.mark.parametrize("dtype", [pytest.param(ttnn.bfloat16, id="bf16"), pytest.param(ttnn.float32, id="fp32")])
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_fl2va_conditioning_rows_proxy(mesh_device):
+def test_fl2va_conditioning_rows_proxy(mesh_device, dtype):
     """E2E proxy for the fl2va conditioning stage: the packed rows the pipeline prepends.
 
     Runs `encode_keyframes` exactly as production does -- raw uint8 pixels into a pixel_norm
@@ -168,7 +169,9 @@ def test_fl2va_conditioning_rows_proxy(mesh_device):
 
     image = Image.fromarray(torch.randint(0, 256, (768, 1344, 3), dtype=torch.uint8).numpy())
 
-    tt_vae = MiniMaxH3Vae(config, mesh_device=mesh_device, pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD))
+    tt_vae = MiniMaxH3Vae(
+        config, mesh_device=mesh_device, dtype=dtype, pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD)
+    )
     tt_vae.load_encoder_state(dict(reference.state_dict()))
     rows_device = encode_keyframes([image], tt_vae.encode_clip, latents_mean, latents_std, raw_pixels=True)
 
@@ -179,8 +182,9 @@ def test_fl2va_conditioning_rows_proxy(mesh_device):
     _assert_same(rows_reference, rows_device, pcc=0.99)
 
 
+@pytest.mark.parametrize("dtype", [pytest.param(ttnn.bfloat16, id="bf16"), pytest.param(ttnn.float32, id="fp32")])
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_encode_video_uint8_pixel_norm(mesh_device):
+def test_encode_video_uint8_pixel_norm(mesh_device, dtype):
     """E2E proxy for the ref2va video-reference encode: chunked `encode` on raw uint8.
 
     22 frames (17 + 5) pad to two 17-frame clips, so this exercises what the single-clip
@@ -200,7 +204,9 @@ def test_encode_video_uint8_pixel_norm(mesh_device):
     with torch.no_grad():
         expected = reference._encode(normalized)
 
-    tt_vae = MiniMaxH3Vae(config, mesh_device=mesh_device, pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD))
+    tt_vae = MiniMaxH3Vae(
+        config, mesh_device=mesh_device, dtype=dtype, pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD)
+    )
     tt_vae.load_encoder_state(dict(reference.state_dict()))
     actual = tt_vae.encode(pixels_uint8)
 
@@ -212,8 +218,9 @@ def test_encode_video_uint8_pixel_norm(mesh_device):
     ("num_frames", "temporal_taps", "expected_latent_frames"),
     [pytest.param(1, 1, 1, id="keyframe"), pytest.param(17, 3, 5, id="clip")],
 )
+@pytest.mark.parametrize("dtype", [pytest.param(ttnn.bfloat16, id="bf16"), pytest.param(ttnn.float32, id="fp32")])
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_encode_clip_uint8_pixel_norm(mesh_device, num_frames, temporal_taps, expected_latent_frames):
+def test_encode_clip_uint8_pixel_norm(mesh_device, dtype, num_frames, temporal_taps, expected_latent_frames):
     """The `pixel_norm` fold: raw uint8 pixels into a folded encoder vs the reference on
     normalized fp32. Gates the conv_in weight/bias fold, the uint8 -> typecast -> pad upload
     chain, and -- on the clip case -- the `255 * mean` causal front-pad values, which only a
@@ -232,7 +239,9 @@ def test_encode_clip_uint8_pixel_norm(mesh_device, num_frames, temporal_taps, ex
     with torch.no_grad():
         expected = reference._encode_clip(normalized)
 
-    tt_vae = MiniMaxH3Vae(config, mesh_device=mesh_device, pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD))
+    tt_vae = MiniMaxH3Vae(
+        config, mesh_device=mesh_device, dtype=dtype, pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD)
+    )
     tt_vae.load_encoder_state(dict(reference.state_dict()))
     actual = tt_vae.encode_clip(pixels_uint8, temporal_taps=temporal_taps)
 

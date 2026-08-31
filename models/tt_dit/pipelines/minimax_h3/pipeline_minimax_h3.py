@@ -1310,6 +1310,11 @@ class MiniMaxH3Pipeline:
                 mesh_device=self.mesh_device,
                 weight_loader=self._cache_submodel,
                 ccl_manager=self.ccl_manager,
+                # Encoder compute dtype (the ViT decoder ignores it). bf16 runs the taps=3 wave
+                # 4.2x faster than fp32 (427 vs 1800 ms) and measures PCC 99.998% against the
+                # reference on the real checkpoint -- within 0.0003% of the fp32 encoder --
+                # before the rows are noise-augmented to t = 0.999 anyway.
+                dtype=ttnn.bfloat16,
                 device_stitch=yuv,
                 # Folded into `proj_out`, so the decoder emits the `[-1, 1]` both the colour kernel
                 # and the uint8 cast take, and `_decode_video` is left with at most a range shift.
