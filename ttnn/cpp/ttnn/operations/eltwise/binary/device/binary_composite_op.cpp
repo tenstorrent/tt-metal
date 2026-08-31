@@ -937,29 +937,75 @@ Tensor situ_glu(
     const Tensor& up,
     float beta1,
     float beta2,
-    const std::optional<MemoryConfig>& output_mem_config) {
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     using namespace operations::unary;
 
     // softcap precomputes 1/beta, so zero would emit inf.
     TT_FATAL(beta1 != 0.0f && beta2 != 0.0f, "situ_glu: beta1 and beta2 must be non-zero");
 
+    // The composed unaries take sub_core_grids but no sub_device_id, so resolve here and let every
+    // step share one core restriction.
+    auto cores = sub_core_grids;
+    if (sub_device_id.has_value()) {
+        TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
+        cores = gate.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+    }
+    if (!cores.has_value()) {
+        // Unrestricted, the composed ops fall back to the worker cores of get_sub_device_ids().front().
+        // That is the whole grid only while the device is unpartitioned: the default manager holds one
+        // sub-device spanning it. Once a custom manager is loaded, front() is sub-device 0 -- some
+        // arbitrary strip -- and silently landing there is never what a caller means.
+        const auto& loaded_sub_devices = gate.device()->get_sub_device_ids();
+        TT_FATAL(
+            loaded_sub_devices.size() == 1,
+            "situ_glu: {} sub-devices are loaded, so leaving the cores unrestricted would run on "
+            "sub-device 0 rather than the full grid. Pass sub_core_grids or sub_device_id.",
+            loaded_sub_devices.size());
+    }
+
+    // A core restriction means another op is running concurrently on the complementary cores, and an
+    // interleaved-L1 buffer comes from the global allocator: it takes L1 on every worker core, the
+    // other op's included, growing down toward that op's circular buffers. A program only re-checks
+    // its CB region against live L1 buffers when it is enqueued, and the concurrent op is already in
+    // flight by then, so an overlap is silent corruption rather than a throw.
+    //
+    // Declining the L1 fast path below is not enough to rule that out: the intermediates then follow
+    // the output placement, which is interleaved L1 whenever the caller asks for it or hands in an
+    // interleaved-L1 gate with no output_mem_config. Sharded L1 stays safe -- its shard spec confines
+    // it to named cores -- so only the interleaved case is rejected.
+    const MemoryConfig effective_out = output_mem_config.value_or(gate.memory_config());
+    TT_FATAL(
+        !(cores.has_value() && effective_out.is_l1() && !effective_out.is_sharded()),
+        "situ_glu: a core restriction cannot be combined with an interleaved-L1 output, which would "
+        "take L1 on the cores restricted away. Use DRAM or a sharded L1 memory config.");
+
     // Sharded inputs keep the ops' own placement: interleaved-L1 intermediates against a sharded
     // input would add an unshard/reshard round-trip, which is the opposite of the point here.
-    const bool use_l1 =
-        !gate.is_sharded() && gate.logical_shape()[-1] <= SITU_GLU_L1_MAX_HIDDEN && situ_glu_intermediates_fit_l1(gate);
+    const bool use_l1 = !gate.is_sharded() && !cores.has_value() &&
+                        gate.logical_shape()[-1] <= SITU_GLU_L1_MAX_HIDDEN && situ_glu_intermediates_fit_l1(gate);
     const std::optional<MemoryConfig> interm_mem =
         use_l1 ? std::optional<MemoryConfig>(ttnn::L1_MEMORY_CONFIG) : output_mem_config;
 
-    Tensor situ_a = ttnn::multiply(
-        ttnn::softcap(gate, beta1, interm_mem),
-        ttnn::sigmoid(gate, static_cast<int>(VecMode::RC), SigmoidMode::ACCURATE, interm_mem),
-        std::nullopt,
-        interm_mem);
-    Tensor up_half = ttnn::softcap(up, beta2, interm_mem);
-    // Pin the output placement, or multiply would inherit situ_a's possibly-L1 config and
-    // make placement depend on the hidden dim.
-    const MemoryConfig out_mem = output_mem_config.value_or(gate.memory_config());
-    return ttnn::multiply(situ_a, up_half, std::nullopt, out_mem);
+    Tensor situ_a = ttnn::softcap(gate, beta1, interm_mem, std::nullopt, cores);
+    {
+        Tensor gate_sigmoid =
+            ttnn::sigmoid(gate, static_cast<int>(VecMode::RC), SigmoidMode::ACCURATE, interm_mem, std::nullopt, cores);
+        ttnn::multiply_(situ_a, gate_sigmoid, {}, {}, {}, std::nullopt, cores);
+    }
+    Tensor up_half = ttnn::softcap(up, beta2, interm_mem, std::nullopt, cores);
+
+    // Without L1 the intermediates already sit at the output placement, so the last multiply can
+    // accumulate in place -- one buffer fewer to allocate and free, which matters when this runs
+    // overlapped with an op that is handed whatever DRAM is freed here.
+    if (!use_l1) {
+        ttnn::multiply_(situ_a, up_half, {}, {}, {}, std::nullopt, cores);
+        return situ_a;
+    }
+    // Pin the output placement, or multiply would inherit situ_a's L1 config and make placement
+    // depend on the hidden dim.
+    return ttnn::multiply(situ_a, up_half, std::nullopt, effective_out);
 }
 
 }  // namespace ttnn

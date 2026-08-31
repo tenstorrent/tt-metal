@@ -322,7 +322,7 @@ models:
   merge_gate:
     wh_galaxy_merge_gate: 5
   sanity:
-    wh_galaxy_perf: 10
+    wh_galaxy_perf: 8
     wh_n300_civ2: 5
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
@@ -336,7 +336,7 @@ models:
     bh_sc1: 20
   e2e_tier1:
     wh_n150: 28
-    wh_galaxy_perf: 120
+    wh_galaxy_perf: 215
     bh_p150: 27
     bh_quietbox_2: 295
     bh_galaxy: 78
@@ -357,14 +357,11 @@ models:
     bh_p150: 33
     bh_p300: 8
     bh_quietbox_2: 42
-  unit:
-    wh_llmbox: 25
-    wh_galaxy_perf: 10
   unit_tier1:
-    wh_llmbox: 100
+    wh_llmbox: 150
     wh_n150: 110
-    wh_galaxy: 235
-    wh_galaxy_perf: 45
+    wh_galaxy: 260
+    wh_galaxy_perf: 60
     bh_p150: 20
     bh_quietbox_2: 410
     bh_galaxy: 75
@@ -375,6 +372,7 @@ models:
     wh_llmbox_perf: 172
     wh_n150: 82
     wh_n300: 30
+    wh_galaxy_perf: 80
     bh_p150: 20
     bh_quietbox_2: 60
   unit_tier3:
@@ -389,15 +387,13 @@ models:
     bh_quietbox_2: 21
   integration:
     wh_llmbox: 0
-  perf:
-    wh_galaxy_perf: 55
   device_perf:
     wh_n150: 20
+    wh_galaxy_perf: 55
     bh_p150: 20
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
-    wh_galaxy_perf: 125
     bh_galaxy: 470
     bh_sc1: 488
     bh_sc1_high_power: 166
@@ -416,6 +412,7 @@ models:
     wh_llmbox: 131
     wh_n150: 30
     wh_galaxy: 40
+    wh_galaxy_perf: 55
     bh_p150: 30
   sweep_tier2:
     wh_n150: 30

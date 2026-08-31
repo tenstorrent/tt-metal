@@ -11,7 +11,6 @@
 
 #include "context.hpp"
 #include "core_coord.hpp"
-#include "device.hpp"
 #include "device_utils.hpp"
 #include "kernel_types.hpp"
 
@@ -21,7 +20,7 @@ class Program;
 
 namespace tt::tt_metal::tools::mem_bench {
 
-std::vector<uint32_t> read_cores(tt::tt_metal::IDevice* device, const CoreRange& cores, uint32_t addr) {
+std::vector<uint32_t> read_cores(distributed::MeshDevice* device, const CoreRange& cores, uint32_t addr) {
     std::vector<uint32_t> data;
     data.reserve(cores.size());
     for (size_t xi = cores.start_coord.x; xi <= cores.end_coord.x; ++xi) {
@@ -35,7 +34,7 @@ std::vector<uint32_t> read_cores(tt::tt_metal::IDevice* device, const CoreRange&
 }
 
 std::optional<CoreRange> configure_kernels(
-    tt::tt_metal::IDevice* device,
+    distributed::MeshDevice* device,
     tt::tt_metal::Program& program,
     const Context& context,
     uint32_t start_y,

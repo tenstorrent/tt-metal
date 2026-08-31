@@ -10,11 +10,6 @@ wormhole_b0:
   - tests/ttnn/unit_tests/base_functionality/test_copy.py::test_copy_rm_interleaved_to_legacy_2D_sharded_large_row
   - tests/ttnn/unit_tests/base_functionality/test_copy.py::test_copy_rm_nd_sharded_to_interleaved_large_row
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture
-  # #53228: these two are ~72 of the core ttnn group's ~109 worker-minutes on their own --
-  # test_to_layout_low_perf is 8 params at ~9 min each, and the single reshape param below took
-  # 754s while its siblings take ~1s, so only that id is deselected.
-  - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_rm_nonclean_large_odd_dest_page_l1_cb[dest_page_200002B_issue_width]
-  - tests/ttnn/unit_tests/base_functionality/test_to_layout.py::test_to_layout_low_perf
   - tests/ttnn/unit_tests/base_functionality/test_to_memory_config.py::test_to_memory_config_rm_interleaved_to_nd_sharded_large_row
   - tests/ttnn/unit_tests/base_functionality/test_to_memory_config.py::test_to_memory_config_rm_interleaved_to_legacy_2D_sharded_large_row
   - tests/ttnn/unit_tests/base_functionality/test_to_memory_config.py::test_to_memory_config_rm_nd_sharded_to_interleaved_large_row
@@ -37,11 +32,6 @@ wormhole_b0:
 
 blackhole:
   # Job-level timeouts
-  # #53228: these two are ~72 of the core ttnn group's ~109 worker-minutes on their own --
-  # test_to_layout_low_perf is 8 params at ~9 min each, and the single reshape param below took
-  # 754s while its siblings take ~1s, so only that id is deselected.
-  - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_rm_nonclean_large_odd_dest_page_l1_cb[dest_page_200002B_issue_width]
-  - tests/ttnn/unit_tests/base_functionality/test_to_layout.py::test_to_layout_low_perf
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py

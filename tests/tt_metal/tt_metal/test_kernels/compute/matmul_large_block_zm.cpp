@@ -46,7 +46,7 @@ void kernel_main() {
                 tile_regs_acquire();
 
                 if (enable_reload) {
-                    copy_tile_to_dst_init_short(tt::CBIndex::c_24);
+                    copy_init(tt::CBIndex::c_24);
                     cb24.wait_front(out_subblock_num_tiles);
                     for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                         copy_tile(tt::CBIndex::c_24, i, i);
