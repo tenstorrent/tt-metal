@@ -21,6 +21,7 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <set>
 #include <tuple>
@@ -1252,6 +1253,11 @@ BatchedTransfers assemble_runtime_args_commands(
         "incorrect.",
         command_count,
         program_command_sequence.runtime_args_command_sequences.size());
+    program_command_sequence.runtime_args_sizeB = std::accumulate(
+        program_command_sequence.runtime_args_command_sequences.begin(),
+        program_command_sequence.runtime_args_command_sequences.end(),
+        uint32_t{0},
+        [](uint32_t size, const HostMemDeviceCommand& command) { return size + command.size_bytes(); });
 
     return transfers;
 }
@@ -2537,6 +2543,39 @@ void assemble_device_commands(
         program_command_sequence,
         program_command_sequence.program_config_buffer_command_sequence,
         DISPATCH_WRITE_OFFSET_ZERO);
+
+    // Cache direct destinations for launch-time CB updates. Core-range membership and buffer
+    // indices are fixed after program finalization, so re-enqueue only needs to refresh values.
+    auto& local_cb_updates = program_command_sequence.local_cb_config_updates;
+    auto& remote_cb_updates = program_command_sequence.remote_cb_config_updates;
+    local_cb_updates.clear();
+    remote_cb_updates.clear();
+    const auto& hal = metal_ctx.hal();
+    const uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+    const uint32_t tensix_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const uint32_t remote_offset_index = program.get_program_config(tensix_index).local_cb_size / sizeof(uint32_t);
+    for (size_t range_index = 0; range_index < program_command_sequence.circular_buffers_on_core_ranges.size();
+         ++range_index) {
+        uint32_t* const payload = program_command_sequence.cb_configs_payloads[range_index];
+        for (const auto& circular_buffer : program_command_sequence.circular_buffers_on_core_ranges[range_index]) {
+            for (const uint32_t buffer_index : circular_buffer->local_buffer_indices()) {
+                local_cb_updates.push_back(
+                    {circular_buffer.get(),
+                     payload + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index,
+                     circular_buffer->page_size(buffer_index),
+                     buffer_index});
+            }
+            for (const uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
+                remote_cb_updates.push_back(
+                    {circular_buffer.get(),
+                     payload + remote_offset_index +
+                         (max_cbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG,
+                     circular_buffer->page_size(buffer_index),
+                     buffer_index});
+            }
+        }
+    }
+
     semaphore_command_generator.assemble_unicast_commands(
         metal_ctx, program_command_sequence.program_config_buffer_command_sequence, program, constants);
     // Ensure that we use the correct amount of space for each command sequence
@@ -2784,7 +2823,6 @@ void update_program_dispatch_commands(
     uint8_t cq_id) {
     TT_ASSERT(cached_program_command_sequence.ctx != nullptr);
     MetalContext& metal_ctx = *cached_program_command_sequence.ctx;
-    uint32_t i = 0;
 
     static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
     static constexpr uint32_t wait_addr_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.addr));
@@ -2846,33 +2884,36 @@ void update_program_dispatch_commands(
             sizeof(uint32_t));
     }
 
-    // Update CB Configs
-    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
-    uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
-    for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
-        uint32_t* cb_config_payload = cached_program_command_sequence.cb_configs_payloads[i];
-        for (const std::shared_ptr<CircularBufferImpl>& cb : cbs_on_core_range) {
-            const uint32_t cb_address = cb->address();
-            const uint32_t cb_size = cb->size();
-            for (const auto& buffer_index : cb->local_buffer_indices()) {
-                // 1 cmd for all 32 buffer indices, populate with real data for specified indices
-
-                // cb config payload
-                uint32_t base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
-                cb_config_payload[base_index] = cb_address;
-                cb_config_payload[base_index + 1] = cb_size;
-                cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
-                cb_config_payload[base_index + 3] = cb->page_size(buffer_index);
-            }
-            for (const auto& buffer_index : cb->remote_buffer_indices()) {
-                const uint32_t base_index = remote_offset_index + ((max_cbs - 1 - buffer_index) *
-                                                                   UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
-                cb_config_payload[base_index] = cb->config_address();
-                cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
-            }
+    // Update CB configs through destinations cached when the command sequence was assembled.
+    const auto get_validated_cb_size = [](const ProgramCommandSequence::CircularBufferConfigUpdate& update) {
+        const uint32_t size = update.circular_buffer->size();
+        if (size % update.page_size != 0) {
+            TT_THROW("Total circular buffer size {} B must be divisible by page size {} B", size, update.page_size);
         }
-        i++;
+        return size;
+    };
+    for (const auto& update : cached_program_command_sequence.local_cb_config_updates) {
+        CircularBufferImpl& circular_buffer = *update.circular_buffer;
+        const uint32_t size = get_validated_cb_size(update);
+        const uint32_t num_pages = size / update.page_size;
+        constexpr uint32_t max_num_cb_pages = std::numeric_limits<uint16_t>::max();
+        TT_FATAL(
+            num_pages <= max_num_cb_pages,
+            "For buffer index {}, number of CB pages {} is greater than {}. Would cause wraparound in the CB "
+            "calculations.",
+            update.buffer_index,
+            num_pages,
+            max_num_cb_pages);
+        update.dst[0] = circular_buffer.address();
+        update.dst[1] = size;
+        update.dst[2] = num_pages;
+        update.dst[3] = update.page_size;
+    }
+    for (const auto& update : cached_program_command_sequence.remote_cb_config_updates) {
+        CircularBufferImpl& circular_buffer = *update.circular_buffer;
+        (void)get_validated_cb_size(update);
+        update.dst[0] = circular_buffer.config_address();
+        update.dst[1] = update.page_size;
     }
 
     {
@@ -3462,7 +3503,8 @@ uint32_t program_base_addr_on_core(
     distributed::MeshWorkloadImpl& mesh_workload,
     distributed::MeshDevice* mesh_device,
     HalProgrammableCoreType programmable_core_type) {
-    const auto& sub_device_ids = mesh_workload.determine_sub_device_ids(mesh_device);
+    const auto& sub_device_ids =
+        mesh_workload.determine_sub_device_ids(mesh_device, *mesh_device->get_active_sub_device_manager_id());
     // TODO: This restriction can be lifted once this function is changed to return a vector of addresses
     // Addresses are not the same across sub-devices
     TT_FATAL(
