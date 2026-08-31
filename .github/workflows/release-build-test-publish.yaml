@@ -193,16 +193,16 @@ jobs:
             echo "::warning::Report file not found: $REPORT_FILE"
           fi
 
-  # Polls the "RTL Sim CI test" GitHub check on stable HEAD (posted by the
-  # tt-umd-simulators polling agent -- GitLab issue #71). Runs in parallel
+  # Polls the "RTL Sim CI test" GitHub check on the released commit (posted by
+  # the tt-umd-simulators polling agent -- GitLab issue #71). Runs in parallel
   # with release-demo-tests so other tests still surface failures, and is
   # non-blocking for now (continue-on-error). 60-min budget covers the sim
   # pipeline's typical 30-60 min runtime.
   #
-  # Only runs when github.ref == refs/heads/stable. Other paths (cron-on-main
-  # dev release, manual dispatches on main) tag artifacts from github.sha per
-  # release-verify-or-create-tag.yaml line 73, so a stable-HEAD check would
-  # give a false-green for them.
+  # Only runs on a release ref -- refs/heads/stable or a version tag. Other
+  # paths (cron-on-main dev release, manual dispatches on main) tag artifacts
+  # from github.sha per release-verify-or-create-tag.yaml line 73, so checking
+  # a release commit would give a false-green for them.
   check-rtl-sim-status:
     # main moved this off the tracy build; keep that. The platform gate is ours:
     # the reusable workflow runs as a per-platform matrix but this check is
@@ -230,16 +230,25 @@ jobs:
             tests/scripts/quasar
           sparse-checkout-cone-mode: false
 
-      - name: Verify RTL Sim CI test check is green on stable HEAD
+      - name: Verify RTL Sim CI test check is green on the released commit
         id: rtl-sim
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
 
-          SHA=$(gh api repos/tenstorrent/tt-metal/branches/stable --jq .commit.sha)
+          # On stable, the sim agent posts its check against the branch HEAD.
+          # On a tag, stable may already have moved past the tagged commit, so
+          # resolving the branch would report some other commit's result. Use
+          # the tagged commit, which was stable HEAD when the tag was cut and
+          # therefore carries the check.
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            SHA="$GITHUB_SHA"
+          else
+            SHA=$(gh api repos/tenstorrent/tt-metal/branches/stable --jq .commit.sha)
+          fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "Checking 'RTL Sim CI test' check on stable HEAD $SHA"
+          echo "Checking 'RTL Sim CI test' check on released commit $SHA"
 
           # Record the failure for the downstream Jira step. Kept as step
           # outputs so the poll step can exit 0 (continue-on-error already makes
@@ -300,6 +309,9 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_RELEASE_API_TOKEN }}
           JIRA_PROJECT_KEY: "RELEASE"
           JIRA_ISSUE_TYPE: "Bug"
+          # Overrides the per-test owners in ai_ip_tests.json while set.
+          # Everything lands on one owner for triage, who reassigns.
+          JIRA_ASSIGNEE_ACCOUNT_ID: ${{ vars.RELEASE_JIRA_ASSIGNEE || '63c5a7806178fcc941d86a9d' }}
           RTL_SIM_DETAIL: ${{ steps.rtl-sim.outputs.detail }}
           RTL_SIM_SHA: ${{ steps.rtl-sim.outputs.sha }}
           RTL_SIM_URL: ${{ steps.rtl-sim.outputs.url }}
@@ -314,7 +326,7 @@ jobs:
       - name: Re-assert sim failure
         if: ${{ always() && steps.rtl-sim.outputs.sim-failed == 'true' }}
         run: |
-          echo "RTL sim check failed on stable HEAD. See the Jira step above for whether an issue was filed."
+          echo "RTL sim check failed on the released commit. See the Jira step above for whether an issue was filed."
           exit 1
 
 
@@ -362,6 +374,8 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_RELEASE_API_TOKEN }}
           JIRA_PROJECT_KEY: "RELEASE"
           JIRA_ISSUE_TYPE: "Task"
+          # Everything lands on one owner for triage, who reassigns.
+          JIRA_ASSIGNEE_ACCOUNT_ID: ${{ vars.RELEASE_JIRA_ASSIGNEE || '63c5a7806178fcc941d86a9d' }}
           RTL_SIM_CONCLUSION: ${{ needs.check-rtl-sim-status.outputs.conclusion }}
           RTL_SIM_DETAIL: ${{ needs.check-rtl-sim-status.outputs.detail }}
           RTL_SIM_SHA: ${{ needs.check-rtl-sim-status.outputs.sha }}
