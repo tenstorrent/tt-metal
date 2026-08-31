@@ -1218,12 +1218,13 @@ def test_conv3d_fp32_exact_tail_streaming(device):
     """Same gate for the streaming-output variant of the fp32-exact tail.
 
     The config forces enable_streaming_output on (single C_in block; C_out_block=32 so fp32
-    writes are 128B <= TILE_WIDTH*4; W_out_block=64 so num_patches=64 -> matmul_M_t=2), which
-    runs the per-row SFPU bias + untilize branch instead of the whole-block one. Measured with
-    the exact tail: 1.150e-3 (matches the whole-block path's 1.155e-3); without it: 1.500e-3.
+    writes are 128B <= TILE_WIDTH*4; W_out_block=40 so num_patches=40 -> matmul_M_t=2), which
+    runs the per-row SFPU bias + untilize branch instead of the whole-block one. C_in=64 keeps
+    the static CBs (vol2col/weights scale with C_in) inside Wormhole's smaller L1. Measured
+    with the exact tail: 1.172e-3; without it: 1.526e-3 (bound 1.35e-3).
     """
     torch.manual_seed(42)
-    C, C_out, W = 128, 32, 64
+    C, C_out, W = 64, 32, 40
     input_shape = (1, C, 4, 6, W)
     kernel_size, padding = (3, 3, 3), (0, 1, 1)
     N = 1
@@ -1254,7 +1255,7 @@ def test_conv3d_fp32_exact_tail_streaming(device):
     config = create_conv3d_config(
         C_in_block=C,
         C_out_block=32,
-        W_out_block=64,
+        W_out_block=W,
         weights_dtype=ttnn.DataType.FLOAT32,
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
     )
