@@ -114,8 +114,8 @@ def run(
     # depth 1, 830.1 at 2 and 842.9 at 3, i.e. steadily worse.
     depth = (2 if mcast else 1) if depth is None else depth
 
-    # `depth` blocks per operand CB. The kernel reserves ONE block at a time -- num_pages
-    # comes from the Shape, not the CB -- so a deeper CB is purely permission for the data
+    # `depth` blocks per operand DFB. The kernel reserves ONE block at a time -- num_entries
+    # comes from the Shape, not the DFB -- so a deeper DFB is purely permission for the data
     # movement thread to run ahead: with one block it cannot reserve k-block b+1 until
     # compute has popped b, so its reads and the compute serialise. The reads within a block
     # are already deep (every page is issued before the single barrier); this is depth
@@ -240,10 +240,10 @@ def main(argv=None):
             if not ok:
                 failed.append(f"mcast-{mtot}-{ktot}-{ntot}-{mt}-{nt}")
 
-        # bfloat8_b weights: B's circular buffer carries a different data format, and so a
+        # bfloat8_b weights: B's dataflow buffer carries a different data format, and so a
         # different page size (1088, not 2048 -- it is a block format with an exponent
         # section), from A's and the output's. matmul_block_init reconfigures the unpacker
-        # from the CB, and pages.page_bytes comes from the CB too, so nothing in the kernel
+        # from the DFB, and entries.entry_bytes comes from the DFB too, so nothing in the kernel
         # names a format; if either of those were not true this would be quietly wrong
         # rather than broken, which is why it is checked against the same threshold.
         # The OUTPUT's format is the one that had a bug: the packer is programmed once, for

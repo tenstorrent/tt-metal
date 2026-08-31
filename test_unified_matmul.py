@@ -50,7 +50,7 @@ def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0, fidelity=
 
     core_ranges, cores = single_core()
 
-    # Each operand CB must hold its whole block: the k-loop indexes tiles inside
+    # Each operand DFB must hold its whole block: the k-loop indexes tiles inside
     # it, so partial residency is not an option here.
     dfbs = [
         dfb("in0", rt * kt),

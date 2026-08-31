@@ -60,7 +60,7 @@ def _stable(value):
     rendered by hand and _cache_key_of refuses anything that still looks like an address.
     """
     if isinstance(value, Dfb):
-        return ("dfb", value.name, value.num_pages, str(value.dtype), value.kind, value.thread)
+        return ("dfb", value.name, value.num_entries, str(value.dtype), value.kind, value.thread)
     if isinstance(value, (list, tuple)):
         return tuple(_stable(v) for v in value)
     if isinstance(value, dict):
@@ -106,7 +106,7 @@ def core_block(n, width=8):
 
     Row-major over a `width`-wide grid, so n=8 is one row and n=12 is a full row plus
     four. The ranges are whole rows where possible and one partial row at the end, rather
-    than n single-core ranges, because a circular buffer is allocated per range.
+    than n single-core ranges, because a dataflow buffer is allocated per range.
 
     The `cores` order IS the partition order for per-core runtime args: cores[i] is unit i
     of whatever the caller is splitting up.
@@ -193,42 +193,42 @@ class Dfb:
     OUTPUT = "output"
     INTERMED = "intermed"
 
-    def __init__(self, name, num_pages=2, *, dtype=ttnn.bfloat16, kind=None, thread=None):
+    def __init__(self, name, num_entries=2, *, dtype=ttnn.bfloat16, kind=None, thread=None):
         self.name = name
-        self.num_pages = num_pages
+        self.num_entries = num_entries
         self.dtype = dtype
         self.kind = kind
         self.thread = thread
 
 
-def dfb(name, num_pages=2, *, dtype=ttnn.bfloat16):
+def dfb(name, num_entries=2, *, dtype=ttnn.bfloat16):
     """A buffer whose endpoints the harness reads off the kernel. The usual form."""
-    return Dfb(name, num_pages, dtype=dtype)
+    return Dfb(name, num_entries, dtype=dtype)
 
 
-def dfb_input(name, thread, *, dtype=ttnn.bfloat16, num_pages=2):
+def dfb_input(name, thread, *, dtype=ttnn.bfloat16, num_entries=2):
     """Filled by DM thread `thread`, read by compute. Stated rather than derived."""
-    return Dfb(name, num_pages, dtype=dtype, kind=Dfb.INPUT, thread=thread)
+    return Dfb(name, num_entries, dtype=dtype, kind=Dfb.INPUT, thread=thread)
 
 
-def dfb_output(name, thread, *, dtype=ttnn.bfloat16, num_pages=2):
+def dfb_output(name, thread, *, dtype=ttnn.bfloat16, num_entries=2):
     """Filled by compute, drained by DM thread `thread`. Stated rather than derived."""
-    return Dfb(name, num_pages, dtype=dtype, kind=Dfb.OUTPUT, thread=thread)
+    return Dfb(name, num_entries, dtype=dtype, kind=Dfb.OUTPUT, thread=thread)
 
 
-def dfb_intermed(name, *, dtype=ttnn.bfloat16, num_pages=2):
+def dfb_intermed(name, *, dtype=ttnn.bfloat16, num_entries=2):
     """Compute on both ends: an accumulator, a retained value, a scratch block."""
-    return Dfb(name, num_pages, dtype=dtype, kind=Dfb.INTERMED, thread=None)
+    return Dfb(name, num_entries, dtype=dtype, kind=Dfb.INTERMED, thread=None)
 
 
 # tt/unified/api.h's Storage declarations and data-movement calls, as patterns. The kernel is
 # the only place that knows which projection stands at which end of a buffer, so it is the
 # place to read it from.
 _RE_STORAGE = re.compile(r"u::Storage<[^;]*?>\s+(\w+)\s*\(\s*(\w+)\s*\)")
-_RE_CB_NAMED = re.compile(r"(\w+)\s*=\s*get_arg\(\s*args::cb_(\w+)\s*\)")
+_RE_DFB_NAMED = re.compile(r"(\w+)\s*=\s*get_arg\(\s*args::dfb_(\w+)\s*\)")
 # A Storage built straight from the argument rather than through a named constant:
-#   u::Storage<S> s1(get_arg(args::cb_s1));
-_RE_STORAGE_INLINE = re.compile(r"u::Storage<[^;]*?>\s+(\w+)\s*\(\s*get_arg\(\s*args::cb_(\w+)\s*\)\s*\)")
+#   u::Storage<S> s1(get_arg(args::dfb_s1));
+_RE_STORAGE_INLINE = re.compile(r"u::Storage<[^;]*?>\s+(\w+)\s*\(\s*get_arg\(\s*args::dfb_(\w+)\s*\)\s*\)")
 _RE_PRODUCED = re.compile(
     r"(?:u::Block[\w<>: ]*|u::RetainedBlock[\w<>: ]*|auto)\s+(\w+)\s*=\s*(\w+)\.(?:store|accumulate)\("
 )
@@ -280,7 +280,7 @@ def derive_roles(kernel_source, defines):
     `thread` argument of every noc_load / noc_store. Having a launcher restate it creates a
     contract with two ends and nothing between them -- and the mismatch is SILENT on Gen1.
     Verified: binding `out` to thread 0 while the kernel stores it on thread 1 runs, and
-    passes, bit-identical. Gen1 circular-buffer state is per core rather than per RISC, so
+    passes, bit-identical. Gen1 dataflow-buffer state is per core rather than per RISC, so
     either data-movement kernel can drive it whatever the host declared; the endpoint masks
     only become load-bearing on Gen2, where they drive the tile counters.
 
@@ -291,12 +291,12 @@ def derive_roles(kernel_source, defines):
     Returns {buffer name: (kind, thread)}. Raises on anything it cannot read.
     """
     src = open(os.path.join(TT_METAL_HOME, kernel_source)).read()
-    # kCbFoo -> "foo" (from its cb_<name> compile-time arg), then Storage variable -> "foo".
-    cb_const = dict(_RE_CB_NAMED.findall(src))
+    # kDfbFoo -> "foo" (from its dfb_<name> compile-time arg), then Storage variable -> "foo".
+    dfb_const = dict(_RE_DFB_NAMED.findall(src))
     storages = {}
-    for var, cb in _RE_STORAGE.findall(src):
-        if cb in cb_const:
-            storages[var] = cb_const[cb]
+    for var, dfb in _RE_STORAGE.findall(src):
+        if dfb in dfb_const:
+            storages[var] = dfb_const[dfb]
     for var, name in _RE_STORAGE_INLINE.findall(src):
         storages[var] = name
     # Block variable -> every Storage it could have come from. A name is reused across
@@ -361,7 +361,7 @@ def unified_program_spec(
             binding), and necessary because a unified kernel names every accessor on every
             projection.
         named_compile_time_args: list of (name, value), shared by all three kernels. The
-            buffer slots are appended to this, so a kernel reads its own circular buffer id
+            buffer slots are appended to this, so a kernel reads its own dataflow buffer id
             by name rather than hardcoding a number.
         runtime_arg_names: names the kernel reads with get_arg(args::<name>). Declared on all
             three kernels, because the uniform argument schema is a property of the model.
@@ -409,7 +409,7 @@ def unified_program_spec(
     slots = {d.name: i for i, d in enumerate(dfbs)}
 
     named_cts = list(named_compile_time_args or [])
-    named_cts += [(f"cb_{d.name}", slots[d.name]) for d in dfbs]
+    named_cts += [(f"dfb_{d.name}", slots[d.name]) for d in dfbs]
 
     # The reserved handshake semaphores, laid out exactly as unified_program() lays them out:
     # two per data-movement thread, then one arrival flag per thread. tt/unified/api.h derives
@@ -531,7 +531,7 @@ def unified_program_spec(
         if d.kind is None:
             if d.name not in derived:
                 raise ValueError(
-                    f"{kernel_source} declares no u::Storage on a cb_{d.name} compile-time arg, so its "
+                    f"{kernel_source} declares no u::Storage on a dfb_{d.name} compile-time arg, so its "
                     f"endpoints "
                     f"cannot be read off the kernel. Name it as the kernel does, or state the role "
                     f"explicitly with dfb_input/dfb_output/dfb_intermed."
@@ -540,7 +540,7 @@ def unified_program_spec(
         spec = ps.DataflowBufferSpec()
         spec.unique_id = d.name
         spec.entry_size = DTYPE_TILE_BYTES[d.dtype]
-        spec.num_entries = d.num_pages
+        spec.num_entries = d.num_entries
         spec.data_format_metadata = d.dtype
         dfb_specs.append(spec)
 

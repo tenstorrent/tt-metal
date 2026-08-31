@@ -15,24 +15,24 @@ using Out = u::Shape<2, 2>;
 using Bias = u::Shape<1, 2>;
 
 void kernel_main() {
-    constexpr uint32_t kCbA = get_arg(args::cb_a);
-    constexpr uint32_t kCbB = get_arg(args::cb_b);
-    constexpr uint32_t kCbBias = get_arg(args::cb_bias);
-    constexpr uint32_t kCbOut = get_arg(args::cb_out);
-    constexpr uint32_t kCbPartials = get_arg(args::cb_partials);
+    constexpr uint32_t kDfbA = get_arg(args::dfb_a);
+    constexpr uint32_t kDfbB = get_arg(args::dfb_b);
+    constexpr uint32_t kDfbBias = get_arg(args::dfb_bias);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
+    constexpr uint32_t kDfbPartials = get_arg(args::dfb_partials);
 
     const auto a = TensorAccessor(tensor::a);
     const auto b = TensorAccessor(tensor::b);
     const auto bias = TensorAccessor(tensor::bias);
     const auto out = TensorAccessor(tensor::out);
 
-    u::matmul_init<A, B>(kCbA, kCbB, kCbOut);
+    u::matmul_init<A, B>(kDfbA, kDfbB, kDfbOut);
 
-    u::Storage<A> a_storage(kCbA);
-    u::Storage<B> b_storage(kCbB);
-    u::Storage<Bias> bias_storage(kCbBias);
-    u::Storage<Out> partials_storage(kCbPartials);
-    u::Storage<Out> out_storage(kCbOut);
+    u::Storage<A> a_storage(kDfbA);
+    u::Storage<B> b_storage(kDfbB);
+    u::Storage<Bias> bias_storage(kDfbBias);
+    u::Storage<Out> partials_storage(kDfbPartials);
+    u::Storage<Out> out_storage(kDfbOut);
 
     const u::LogicalCoord me = u::LogicalCoord::this_core();
     const u::LogicalMcast my_row{u::LogicalCoord::yx(me.y, 0), u::Extent::hw(1, kGridWidth)};

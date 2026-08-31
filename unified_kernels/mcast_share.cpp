@@ -46,10 +46,10 @@ void kernel_main() {
     constexpr uint32_t grid_h = get_arg(args::grid_h);
     constexpr uint32_t grid_w = get_arg(args::grid_w);
 
-    constexpr uint32_t kCbA = get_arg(args::cb_a);
-    constexpr uint32_t kCbB = get_arg(args::cb_b);
-    constexpr uint32_t kCbOut0 = get_arg(args::cb_out0);
-    constexpr uint32_t kCbOut1 = get_arg(args::cb_out1);
+    constexpr uint32_t kDfbA = get_arg(args::dfb_a);
+    constexpr uint32_t kDfbB = get_arg(args::dfb_b);
+    constexpr uint32_t kDfbOut0 = get_arg(args::dfb_out0);
+    constexpr uint32_t kDfbOut1 = get_arg(args::dfb_out1);
 
     const auto in = TensorAccessor(tensor::in);
     const auto out0 = TensorAccessor(tensor::out0);
@@ -57,12 +57,12 @@ void kernel_main() {
 
     using Blk = u::Shape<1, tiles>;
 
-    u::Storage<Blk> a_storage(kCbA);
-    u::Storage<Blk> b_storage(kCbB);
-    u::Storage<Blk> out0_storage(kCbOut0);
-    u::Storage<Blk> out1_storage(kCbOut1);
+    u::Storage<Blk> a_storage(kDfbA);
+    u::Storage<Blk> b_storage(kDfbB);
+    u::Storage<Blk> out0_storage(kDfbOut0);
+    u::Storage<Blk> out1_storage(kDfbOut1);
 
-    u::compute_init(kCbA, kCbOut0);
+    u::compute_init(kDfbA, kDfbOut0);
 
     const u::LogicalCoord me = u::LogicalCoord::this_core();
 

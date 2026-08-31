@@ -18,7 +18,7 @@
 //        UCK_CHLKC_{UNPACK,MATH,PACK} -> compute
 //
 //   2. Map the model's intrinsics onto metal APIs where metal has no
-//      thread-polymorphic name. The CB protocol needs no binding at all:
+//      thread-polymorphic name. The DFB protocol needs no binding at all:
 //      cb_reserve_back / cb_push_back / cb_wait_front / cb_pop_front already
 //      resolve per projection -- dataflow_api.h on a DM core, api/compute/cb_api.h
 //      on a TRISC (where they become PACK(llk_push_tiles) and friends).
@@ -47,7 +47,7 @@
 #include <cstdint>
 #include <type_traits>
 
-// Metal 2.0's dataflow buffer, on EVERY projection. It is the one CB-protocol name that is
+// Metal 2.0's dataflow buffer, on EVERY projection. It is the one DFB-protocol name that is
 // genuinely thread-polymorphic: its reserve/push route to PACK(llk_...) on a TRISC and to the
 // dataflow free functions on a data-movement core, which is exactly what the free functions
 // resolved to before -- byte for byte, see internal/tt-1xx/dataflow_buffer.inl against
@@ -154,7 +154,7 @@ inline std::uint64_t get_noc_addr(uint32_t) {
     return 0;
 }
 // A custom routine targeting a peer's buffer reaches for these: it addresses the
-// peer by its own copy of the same circular buffer.
+// peer by its own copy of the same dataflow buffer.
 inline uint32_t get_write_ptr(uint32_t) {
     ASSERT(false);
     return 0;
@@ -198,7 +198,7 @@ namespace unified {
 // A buffer's handle, by slot. Constructed where it is used rather than stored, because it
 // holds a REFERENCE to the interface and the model's movable types (Block, the Noc*Tx handles)
 // could not then be moved. It is an id and an array lookup, so the compiler folds it.
-inline DataflowBuffer buffer(uint32_t cb) { return DataflowBuffer(static_cast<uint16_t>(cb)); }
+inline DataflowBuffer buffer(uint32_t dfb) { return DataflowBuffer(static_cast<uint16_t>(dfb)); }
 
 // The buffer's *configured* entry size, not the data format's tile size -- get_tile_size() is
 // derived from unpack_tile_size[] and only coincides when an entry happens to hold one tile.
@@ -210,21 +210,21 @@ inline DataflowBuffer buffer(uint32_t cb) { return DataflowBuffer(static_cast<ui
 //
 // Defined on every projection, unlike the NOC intrinsics above: a kernel converting a tile
 // count to a byte offset needs the answer in code shared by all five threads.
-inline uint32_t cb_page_bytes(uint32_t cb) { return buffer(cb).get_entry_size(); }
+inline uint32_t dfb_entry_bytes(uint32_t dfb) { return buffer(dfb).get_entry_size(); }
 
-// How many pages the HOST configured this circular buffer with.
+// How many pages the HOST configured this dataflow buffer with.
 //
-// DATA MOVEMENT ONLY, unlike cb_page_bytes above, and the difference is a LINK one rather
+// DATA MOVEMENT ONLY, unlike dfb_entry_bytes above, and the difference is a LINK one rather
 // than anything about the value. `cb_interface` has no definition in a TRISC link -- a
 // live reference from a compute projection fails with "undefined reference to
-// cb_interface" out of the LLK headers. cb_page_bytes gets away with appearing in shared
+// cb_interface" out of the LLK headers. dfb_entry_bytes gets away with appearing in shared
 // code only because its result is invariably dead on compute and LTO deletes the call
 // before the linker sees it; a use that compute genuinely evaluates would fail the same
 // way. So anything reading this must sit behind a data-movement guard.
 //
 // The value is the same fact on every projection regardless, since the host configures
-// one circular buffer for the core, which is what makes checking it on one thread enough.
-inline uint32_t cb_num_pages(uint32_t cb) { return buffer(cb).get_total_num_entries(); }
+// one dataflow buffer for the core, which is what makes checking it on one thread enough.
+inline uint32_t dfb_num_entries(uint32_t dfb) { return buffer(dfb).get_total_num_entries(); }
 
 }  // namespace unified
 }  // namespace tt

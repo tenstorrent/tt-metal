@@ -23,7 +23,7 @@
 // The whole rotation then lands in one SFPU pass: `x * cos + rot * sin` is a four-leaf
 // tree, the deepest in this model so far.
 //
-// Compile-time args, all named, plus a cb_<name> per buffer:
+// Compile-time args, all named, plus a dfb_<name> per buffer:
 //   tiles per chunk (at most 8)
 //   chunks
 //
@@ -44,12 +44,12 @@ namespace u = tt::unified;
 void kernel_main() {
     constexpr uint32_t chunk = get_arg(args::chunk);
 
-    constexpr uint32_t kCbX = get_arg(args::cb_x);
-    constexpr uint32_t kCbCos = get_arg(args::cb_cos);
-    constexpr uint32_t kCbSin = get_arg(args::cb_sin);
-    constexpr uint32_t kCbM = get_arg(args::cb_m);
-    constexpr uint32_t kCbRot = get_arg(args::cb_rot);
-    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kDfbX = get_arg(args::dfb_x);
+    constexpr uint32_t kDfbCos = get_arg(args::dfb_cos);
+    constexpr uint32_t kDfbSin = get_arg(args::dfb_sin);
+    constexpr uint32_t kDfbM = get_arg(args::dfb_m);
+    constexpr uint32_t kDfbRot = get_arg(args::dfb_rot);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
     [[maybe_unused]] constexpr uint32_t num_chunks = get_arg(args::num_chunks);
     const uint32_t chunk_begin = get_arg(args::chunk_begin);
     const uint32_t chunk_count = get_arg(args::chunk_count);
@@ -57,14 +57,14 @@ void kernel_main() {
     using Blk = u::Shape<chunk, 1>;  // N tiles, shape irrelevant to a per-tile op
     using M = u::Shape<1, 1>;
 
-    u::matmul_init<Blk, M>(kCbX, kCbM, kCbOut);
+    u::matmul_init<Blk, M>(kDfbX, kDfbM, kDfbOut);
 
-    u::Storage<Blk> x_storage(kCbX);
-    u::Storage<Blk> cos_storage(kCbCos);
-    u::Storage<Blk> sin_storage(kCbSin);
-    u::Storage<M> m_storage(kCbM);
-    u::Storage<Blk> rot_storage(kCbRot);
-    u::Storage<Blk> out_storage(kCbOut);
+    u::Storage<Blk> x_storage(kDfbX);
+    u::Storage<Blk> cos_storage(kDfbCos);
+    u::Storage<Blk> sin_storage(kDfbSin);
+    u::Storage<M> m_storage(kDfbM);
+    u::Storage<Blk> rot_storage(kDfbRot);
+    u::Storage<Blk> out_storage(kDfbOut);
 
     const auto x_acc = TensorAccessor(tensor::x);
     const auto cos_acc = TensorAccessor(tensor::cos);

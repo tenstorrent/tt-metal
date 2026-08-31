@@ -128,3 +128,46 @@ dynamic-noc-fix,78b815b6d93,2026-08-28,llama_prefill,Phi-3 mini 3.8B/d96/S512,19
 dynamic-noc-fix,78b815b6d93,2026-08-28,llama_prefill,Qwen3 0.6B/d128/S512,219.1
 dynamic-noc-fix,78b815b6d93,2026-08-28,llama_prefill,Llama 3.2 3B/d128/S512,219.1
 dynamic-noc-fix,78b815b6d93,2026-08-28,llama_prefill,Gemma 3 1B/d256/S512,307.7
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt8/rt1/ct1,3.37
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt8/rt1/ct4,6.25
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt8/rt1/ct8,9.99
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt8/rt4/ct1,6.33
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt8/rt4/ct4,12.60
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt8/rt4/ct8,21.36
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt8/rt8/ct1,10.23
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt8/rt8/ct4,20.98
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt8/rt8/ct8,36.45
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt32/rt1/ct1,8.17
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt32/rt1/ct4,18.43
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt32/rt1/ct8,32.00
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt32/rt4/ct1,18.75
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt32/rt4/ct4,40.24
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt32/rt4/ct8,71.28
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt32/rt8/ct1,32.83
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt32/rt8/ct4,69.93
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,dst/kb1/kt32/rt8/ct8,123.63
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt8/rt1/ct1,3.59
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt8/rt1/ct4,6.77
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt8/rt1/ct8,10.89
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt8/rt4/ct1,6.85
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt8/rt4/ct4,13.45
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt8/rt4/ct8,23.05
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt8/rt8/ct1,11.04
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt8/rt8/ct4,22.63
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt8/rt8/ct8,39.65
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt32/rt1/ct1,8.44
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt32/rt1/ct4,18.93
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt32/rt1/ct8,32.87
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt32/rt4/ct1,19.23
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt32/rt4/ct4,41.09
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt32/rt4/ct8,72.92
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt32/rt8/ct1,33.69
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt32/rt8/ct4,71.61
+dfb-vocabulary,bc95a585b50,2026-08-31,matmul,l1/kb1/kt32/rt8/ct8,126.89
+dfb-vocabulary,bc95a585b50,2026-08-31,llama_prefill,Llama 3.2 1B/d64/S512,176.5
+dfb-vocabulary,bc95a585b50,2026-08-31,llama_prefill,Qwen2.5 0.5B/d64/S512,176.6
+dfb-vocabulary,bc95a585b50,2026-08-31,llama_prefill,TinyLlama 1.1B/d64/S512,176.5
+dfb-vocabulary,bc95a585b50,2026-08-31,llama_prefill,Phi-3 mini 3.8B/d96/S512,198.0
+dfb-vocabulary,bc95a585b50,2026-08-31,llama_prefill,Qwen3 0.6B/d128/S512,219.2
+dfb-vocabulary,bc95a585b50,2026-08-31,llama_prefill,Llama 3.2 3B/d128/S512,219.2
+dfb-vocabulary,bc95a585b50,2026-08-31,llama_prefill,Gemma 3 1B/d256/S512,307.4
