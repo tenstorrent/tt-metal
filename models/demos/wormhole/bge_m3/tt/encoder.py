@@ -173,27 +173,8 @@ def _attention_qkv_dtype(dtype, max_seq_len, max_batch_size):
     return dtype
 
 
-def sequence_parallel_axis(args, mesh_device):
-    """Return the mesh axis that shards the sequence, or None.
-
-    The S8192 shape on a (2, 1) mesh uses axis 0. Data-parallel mode returns
-    None, because each chip owns a full-sequence batch shard.
-    """
-    if args.data_parallel:
-        return None
-    if (
-        args.max_seq_len == 8192
-        and mesh_device is not None
-        and mesh_device.get_num_devices() == 2
-        and tuple(mesh_device.shape) == (2, 1)
-    ):
-        return 0
-    return None
-
-
 def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq_len, max_batch_size, optimizations):
     """Build BgeM3AttentionConfig, overlaying Optimizations.attention fields when provided."""
-    sp_axis = sequence_parallel_axis(args, mesh_device)
     config = BgeM3AttentionConfig(
         data_parallel=args.data_parallel,
         wqkv=attention_weights.wqkv,
@@ -209,7 +190,6 @@ def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq
         output_dtype=dtype,
         max_seq_len=max_seq_len,
         max_batch_size=max_batch_size,
-        sequence_parallel_axis=sp_axis,
         # S8192 folds the attention scale into the Q weight at build time.
         qkv_scale_prefolded=(max_seq_len == 8192),
         # Opt-in JIT encoder SDPA (DP S8192 only), from the explicit model arg.

@@ -1,22 +1,23 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""BGE-M3 custom (generic_op) micro-ops.
+"""BGE-M3 model-local ops built with ``ttnn.generic_op``.
 
-This package hosts model-specific fused/tweaked ops that have *not* yet been
-graduated into the production attention/MLP modules. Each sub-package is
-self-contained and matches the layout:
+The data-parallel serving path imports these ops from ``attention.py``. Treat
+them as production code.
 
     custom_ops/<op_name>/
-        op.py              — Python wrapper around `ttnn.generic_op`
-        kernels/           — .cpp kernels invoked from op.py
-        __init__.py        — public surface
+        op.py              - Python wrapper around `ttnn.generic_op`
+        kernels/           - .cpp kernels that op.py runs
+        __init__.py        - public surface
 
-Ops here are only imported by tests under `tests/perf/sweep_*.py`. They are
-*not* wired into `attention.py`, `mlp.py`, or `model.py` until a sweep
-demonstrates a real device-time win and PCC stays ≥ 0.9999.
+  - ``encoder_sdpa``: the encoder SDPA. Reads BF4 K and V, masks from compact
+    valid lengths, and writes the concat-head order.
+  - ``fused_qkv_heads``: splits a fused QKV tensor into Q, K, and V heads.
+  - ``fused_concat_heads``: concatenates attention heads.
+  - ``qkv_scatter_matmul``: fuses the QKV projection, the head split, and the
+    BF4 conversion into one program. The serving path calls this one.
 
-See `models/demos/wormhole/bge_m3/tests/perf/BGE_M3_B1S512_OPTIMIZATION_PLAN.md`
-(in the upstream tree) and the sweep files in `tests/perf/` for the
-methodology.
+Building the program from Python means a change to a descriptor or a kernel
+needs no ``_ttnn.so`` rebuild.
 """

@@ -70,7 +70,6 @@ class BgeM3AttentionConfig:
     max_batch_size: int | None = None
     # Mesh axis that shards the sequence dim. Each chip keeps S/tp query rows
     # and all-gathers K/V to the full S. None selects the single-chip path.
-    sequence_parallel_axis: int | None = None
     # DP=2: every chip runs an independent B/2 full-sequence replica, no collectives.
     data_parallel: bool = False
     # The build folds the attention scale into the Q weight, so SDPA uses scale=1.0.
@@ -429,12 +428,9 @@ def _retype(tensor: ttnn.Tensor, dtype: ttnn.DataType) -> ttnn.Tensor:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _sdpa_chunks_for_seq_len(seq_len, batch_size=None, sequence_parallel=False, data_parallel=False):
+def _sdpa_chunks_for_seq_len(seq_len, batch_size=None, data_parallel=False):
     if seq_len % 128 == 0:
         if seq_len == 8192:
-            if sequence_parallel:
-                # Local Sq=4096, gathered Sk=8192; k_chunk=512 fits the lower L1.
-                return 512, 512
             if data_parallel:
                 # Query head-fold: Sq=4096, Sk=8192, B6. q128/k2048 uses 4 k-chunks.
                 return 128, 2048
@@ -478,10 +474,8 @@ def _sdpa_compute_grid(mesh_device):
         return (8, 8)
 
 
-def _sdpa_program_config(seq_len, mesh_device, batch_size=None, sequence_parallel=False, data_parallel=False):
-    q_chunk, k_chunk = _sdpa_chunks_for_seq_len(
-        seq_len, batch_size=batch_size, sequence_parallel=sequence_parallel, data_parallel=data_parallel
-    )
+def _sdpa_program_config(seq_len, mesh_device, batch_size=None, data_parallel=False):
+    q_chunk, k_chunk = _sdpa_chunks_for_seq_len(seq_len, batch_size=batch_size, data_parallel=data_parallel)
     grid = _sdpa_compute_grid(mesh_device)
     # B1/S512 on Blackhole: an 8x8 grid beats the default 11x10.
     if seq_len == 512 and batch_size == 1 and mesh_device is not None and ttnn_is_blackhole(mesh_device):

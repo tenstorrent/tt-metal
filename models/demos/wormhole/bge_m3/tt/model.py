@@ -6,7 +6,7 @@ from dataclasses import replace
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.wormhole.bge_m3.tt.embeddings import BgeM3Embedding, BgeM3EmbeddingsConfig
-from models.demos.wormhole.bge_m3.tt.encoder import BgeM3TransformerBlock, sequence_parallel_axis
+from models.demos.wormhole.bge_m3.tt.encoder import BgeM3TransformerBlock
 from models.demos.wormhole.bge_m3.tt.norm import LayerNorm1D, LayerNorm1DConfig
 from models.demos.wormhole.bge_m3.tt.tiny_model import ColBERTLinear, SparseLinear, TinyLinearConfig
 from models.demos.wormhole.bge_m3.tt.weight_adapter import (
@@ -39,9 +39,6 @@ class BgeM3Model(LightweightModule):
         # runs the full forward on its shard and uses no collectives. ModelArgs
         # resolves this, and it takes precedence over sequence-parallel.
         self._data_parallel = args.data_parallel
-        # Sequence-parallel: the caller shards the sequence, and attention
-        # all-gathers K/V. encoder.py derives the matching mesh axis.
-        self._sequence_parallel = sequence_parallel_axis(args, mesh_device) is not None
         self._trace_id = None
         self._trace_device = None
         self._trace_cq_id = 0
@@ -216,21 +213,15 @@ class BgeM3Model(LightweightModule):
             self._require_rank2(token_type_ids, "token_type_ids")
 
         if position_ids is None:
-            if self._sequence_parallel:
-                raise ValueError(
-                    "sequence-parallel path requires host-computed position_ids "
-                    "(device cumsum over a sharded sequence is incorrect)"
-                )
             position_ids = self.create_position_ids_from_input_ids(
                 input_ids=input_ids,
                 padding_idx=self.pad_token_id,
                 past_key_values_length=0,
             )
 
-        # Sequence-parallel cannot consume a global dense mask. Data-parallel
-        # serving remains on the no-mask fast path unless the caller explicitly
-        # supplies a keep/additive mask (for example, fixed-shape MTEB batches).
-        if self._sequence_parallel or (self._data_parallel and attention_mask is None):
+        # Data-parallel serving stays on the no-mask fast path unless the caller
+        # supplies a keep or additive mask (for example, fixed-shape MTEB batches).
+        if self._data_parallel and attention_mask is None:
             prepared_attention_mask = None
         elif self._data_parallel and len(attention_mask.shape) == 2 and attention_mask.shape[1] == 1:
             # Compact per-request valid lengths for fixed-shape DP serving.
