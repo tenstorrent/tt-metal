@@ -113,6 +113,10 @@ PAGE_HTML = r"""<!DOCTYPE html>
   .stack > div { height: 100%; }
   .legend { font-size: 12px; color: var(--dim); display: flex; gap: 14px; flex-wrap: wrap; }
   .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; }
+  .segbar { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
+  .segbar button { background: var(--chip); border: 1px solid var(--line); color: var(--dim);
+                   font-size: 12.5px; padding: 5px 13px; cursor: pointer; border-radius: 999px; }
+  .segbar button.on { color: var(--txt); border-color: var(--blue); font-weight: 650; }
 </style>
 </head>
 <body>
@@ -226,8 +230,6 @@ function renderPerf(S) {
     `<div class="empty">no measurements yet — the baseline is still being measured</div>`;
 }
 
-const STATUS_LABEL = {kept: "✓ applied", reverted: "✗ reverted", wedged: "wedged", "no-gain": "no gain"};
-
 function oppCard(o) {
   const tags = o.tags || {};
   const facts = [fmtMs2(o.device_ms) + " across " + (o.count ?? "?") + " calls — " + fmtPct(o.pct) + " of device time"];
@@ -290,25 +292,317 @@ function renderOpps(S) {
   $("opps").innerHTML = html;
 }
 
+/* ---- optimization-history chart: every logged experiment in the order the run recorded it.
+   y is the full-pipeline verdict that attempt produced (the number the commit gate banks on), so a
+   point's height is the result the run actually measured, and the step line is the engine's OWN
+   best-so-far (fullpipe_best_ms, recorded per attempt) rather than a "best" this file invents.
+
+   The axis is a RATE so that progress reads UPWARD, which is only legitimate when the run itself
+   declared its pipeline time is per token (the full-pipeline baseline's "unit" field — the same thing
+   that gates S.throughput): a verdict of ms-per-token IS 1000/ms tokens per second. A run that never
+   declared that unit keeps its raw ms and therefore reads downward, because turning latency into a
+   rate for it would be a fabricated number. ---- */
+/* Monotone cubic (Fritsch–Carlson) path through [x,y] points. A plain Catmull-Rom/Bezier smoothing
+   overshoots at direction changes, which on a best-so-far line would render a dip the run never
+   measured; clamping the tangents keeps every segment inside its own two endpoints, so the curve
+   only ever states what was recorded. */
+function smoothPath(p) {
+  const n = p.length;
+  if (n < 2) return "";
+  if (n === 2) return `M${p[0][0].toFixed(1)},${p[0][1].toFixed(1)} L${p[1][0].toFixed(1)},${p[1][1].toFixed(1)}`;
+  const dx = [], slope = [];
+  for (let i = 0; i < n - 1; i++) {
+    dx.push(p[i + 1][0] - p[i][0]);
+    slope.push(dx[i] ? (p[i + 1][1] - p[i][1]) / dx[i] : 0);
+  }
+  const t = new Array(n);
+  t[0] = slope[0];
+  t[n - 1] = slope[n - 2];
+  for (let i = 1; i < n - 1; i++) {
+    t[i] = (slope[i - 1] * slope[i] <= 0) ? 0 : (slope[i - 1] + slope[i]) / 2;
+  }
+  for (let i = 0; i < n - 1; i++) {
+    if (slope[i] === 0) { t[i] = 0; t[i + 1] = 0; continue; }
+    const a = t[i] / slope[i], b = t[i + 1] / slope[i], s = a * a + b * b;
+    if (s > 9) {
+      const tau = 3 / Math.sqrt(s);
+      t[i] = tau * a * slope[i];
+      t[i + 1] = tau * b * slope[i];
+    }
+  }
+  let d = `M${p[0][0].toFixed(1)},${p[0][1].toFixed(1)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const h = dx[i] / 3;
+    d += ` C${(p[i][0] + h).toFixed(1)},${(p[i][1] + t[i] * h).toFixed(1)}` +
+         ` ${(p[i + 1][0] - h).toFixed(1)},${(p[i + 1][1] - t[i + 1] * h).toFixed(1)}` +
+         ` ${p[i + 1][0].toFixed(1)},${p[i + 1][1].toFixed(1)}`;
+  }
+  return d;
+}
+
+const HIST_COLOR = {kept: "#34d399", reverted: "#f87171", "no-gain": "#fbbf24", wedged: "#f59e0b"};
+const HIST_LEGEND = {kept: "kept", reverted: "discarded", "no-gain": "no gain", wedged: "crash / no measurement"};
+const histVal = (a) => (a.after_ms != null ? a.after_ms : a.measured_ms);
+
+/* The stacks the run's OWN attempt records carry timings for (record_kernel_attempt's stages_json).
+   Dominant first, then slowest first — the same "where does the time go" ordering the rest of the page
+   uses. Nothing here assumes a particular stage exists. */
+function historyStages(S) {
+  const seen = new Map();
+  (S.attempts || []).forEach(a => (a.stages || []).forEach(st => {
+    if (st && st.name && !seen.has(st.name)) {
+      seen.set(st.name, {name: st.name, ms: st.ms || 0, dom: !!st.dominant});
+    }
+  }));
+  return [...seen.values()].sort((x, y) => (y.dom - x.dom) || (y.ms - x.ms)).map(o => o.name);
+}
+
+/* How to read ONE stack out of the attempt log.
+
+   The per-token stack is special: its number is the one the commit gate BANKS, so its series is the
+   recorded verdict and its best line is the engine's own fullpipe_best_ms. It is also the only stack
+   that converts to a rate (ms per token -> tokens per second), so it is the only one that reads upward.
+
+   Every other stack is a one-shot latency with no gate behind it, so there is no banked best to show:
+   its best line is the running minimum of what was actually measured, called "best recorded" to keep
+   the two apart, and its axis stays in ms where lower is better. */
+function historySeries(S, stage) {
+  const tok = ((S.serving || {}).per_token || {}).stage;
+  if (!stage || stage === tok) {
+    return {
+      stage: tok || null,
+      value: histVal,
+      best: a => a.before_ms,
+      bestLabel: "best so far",
+      rate: (S.throughput || {}).unit || null,
+    };
+  }
+  return {
+    stage: stage,
+    value: a => {
+      const st = (a.stages || []).find(s => s && s.name === stage);
+      return st && st.ms != null ? st.ms : null;
+    },
+    best: null,
+    bestLabel: "best recorded",
+    rate: null,
+  };
+}
+
+function historyChart(S, stage) {
+  const at = S.attempts || [];
+  const W = 1000, H = 340, PL = 62, PR = 16, PT = 16, PB = 50;
+
+  const ser = historySeries(S, stage);
+  const rate = ser.rate;
+  // A non-positive reading has no rate (1000/0 is not a throughput), so it is plotted as "no value"
+  // rather than as an infinity that would collapse the whole axis.
+  const yOf = ms => (ms == null ? null : (rate ? (ms > 0 ? 1000.0 / ms : null) : ms));
+  const yLabel = rate
+    ? rate + (ser.stage ? " · " + ser.stage : "") + " (higher is better)"
+    : (ser.stage ? ser.stage + " ms (lower is better)" : "full-pipeline ms (lower is better)");
+  const fmtY = v => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2));
+
+  const measured = at.filter(a => yOf(ser.value(a)) != null);
+  if (measured.length < 2) return "";
+
+  // The goal line is drawn ONLY when the run's optimized metric is the SAME QUANTITY as the plotted
+  // verdicts — metric.current agreeing with the newest verdict is that proof. A run optimizing
+  // whole-model device time while these verdicts are per-token pipeline time must NOT share an axis,
+  // and silently drawing that target would put the goal off by the ratio between the two.
+  const m = S.metric || {};
+  const last = ser.value(measured[measured.length - 1]);
+  const sameQuantity = m.current != null && last && Math.abs(m.current - last) / last < 0.25;
+
+  const goal = (sameQuantity && m.target != null) ? yOf(m.target) : null;
+  // The best line: the engine's banked best where one exists, otherwise the running minimum of the
+  // readings themselves (a plain description of the data, not a second opinion on what counts as best).
+  let runMin = null;
+  const bestAt = at.map(a => {
+    if (ser.best) return yOf(ser.best(a));
+    const v = ser.value(a);
+    if (v != null && (runMin == null || v < runMin)) runMin = v;
+    return yOf(runMin);
+  });
+  const bests = bestAt.filter(v => v != null);
+  const all = measured.map(a => yOf(ser.value(a))).concat(bests).concat(goal != null ? [goal] : []);
+  let yMin = Math.min(...all), yMax = Math.max(...all);
+  const pad = (yMax - yMin || Math.abs(yMax) || 1) * 0.12;
+  yMin -= pad; yMax += pad;
+  const n = at.length;
+  const X = i => PL + (n <= 1 ? 0 : i / (n - 1)) * (W - PL - PR);
+  const Y = v => H - PB - (v - yMin) / (yMax - yMin) * (H - PT - PB);
+
+  let g = "";
+  for (let k = 0; k <= 5; k++) {
+    const v = yMin + (yMax - yMin) * k / 5;
+    g += `<line x1="${PL}" y1="${Y(v)}" x2="${W - PR}" y2="${Y(v)}" stroke="#1e2c47" stroke-width="1"/>
+      <text x="${PL - 8}" y="${Y(v) + 4}" fill="#8494ad" font-size="11" text-anchor="end">${fmtY(v)}</text>`;
+  }
+  if (goal != null) {
+    g += `<line x1="${PL}" y1="${Y(goal)}" x2="${W - PR}" y2="${Y(goal)}" stroke="#f87171" stroke-width="1.5" stroke-dasharray="6 4"/>
+      <text x="${PL + 6}" y="${Y(goal) - 6}" fill="#f87171" font-size="11">goal ${fmtY(goal)} ${esc(rate || m.unit || "")}</text>`;
+  }
+
+  // The best line, one point per attempt, smoothed. Smoothing here is MONOTONE (see smoothPath): a
+  // best only ever improves, and an ordinary spline would bulge past its own endpoints and draw the
+  // best briefly getting worse — a curve claiming something the run never measured.
+  const line = [];
+  bestAt.forEach((b, i) => {
+    if (b != null) line.push([X(i), Y(b)]);
+  });
+  if (line.length > 1) {
+    g += `<path d="${smoothPath(line)}" fill="none" stroke="#3b82f6" stroke-width="2" stroke-opacity="0.9"
+      stroke-linecap="round"/>`;
+  }
+
+  at.forEach((a, i) => {
+    const ms = ser.value(a), v = yOf(ms);
+    const c = HIST_COLOR[a.status] || "#8494ad";
+    const reading = v == null ? "no measurement"
+      : (rate ? `${fmtY(v)} ${rate} (${ms.toFixed(2)} ms)` : `${ms.toFixed(2)} ms`);
+    const tip = esc(`run ${i + 1} · ${a.lever} · ${a.op} — ${reading}` +
+      ` (${HIST_LEGEND[a.status] || a.status})` +
+      (a.commit ? ` · commit ${String(a.commit).slice(0, 7)}` : "") +
+      (a.note ? "\n" + a.note : ""));
+    if (v == null) {
+      // No verdict recorded (the measurement crashed): marked ON the axis, never at a made-up height.
+      const y = H - PB;
+      g += `<path d="M${X(i) - 4},${y - 4} L${X(i) + 4},${y + 4} M${X(i) + 4},${y - 4} L${X(i) - 4},${y + 4}"
+        stroke="${c}" stroke-width="1.8"><title>${tip}</title></path>`;
+    } else {
+      g += `<circle cx="${X(i)}" cy="${Y(v)}" r="4.2" fill="${c}" fill-opacity="0.9" stroke="#0a1020" stroke-width="0.8">
+        <title>${tip}</title></circle>`;
+    }
+  });
+
+  const counts = {};
+  at.forEach(a => { counts[a.status] = (counts[a.status] || 0) + 1; });
+  let legend = Object.keys(counts).map(k =>
+    `<span><i style="background:${HIST_COLOR[k] || "#8494ad"}"></i>${esc(HIST_LEGEND[k] || k)} (${counts[k]})</span>`).join("");
+  if (line.length > 1) legend += `<span><i style="background:#3b82f6"></i>${esc(ser.bestLabel)}</span>`;
+  if (goal != null) legend += `<span><i style="background:#f87171"></i>goal (${esc(m.name || "target")})</span>`;
+
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">${g}
+    <text x="${PL}" y="${H - PB + 18}" fill="#8494ad" font-size="11">run 1</text>
+    <text x="${W - PR}" y="${H - PB + 18}" fill="#8494ad" font-size="11" text-anchor="end">run ${n}</text>
+    <text x="14" y="${H / 2}" fill="#8494ad" font-size="12" text-anchor="middle" transform="rotate(-90 14 ${H / 2})">${esc(yLabel)}</text>
+    </svg><div class="legend" style="margin:6px 0 14px">${legend}</div>`;
+}
+
+/* One curve per stack, each expressed as speedup against its OWN first recorded reading.
+
+   This is the only way the stacks share an axis honestly. Their measured units genuinely differ — the
+   per-token stack is a rate, the one-shot stacks are latencies, and the run records no work count to
+   turn those into rates (prompt_tokens sits next to a batch size with no per-request split, and the
+   encode stack has no count at all). A ratio against a stack's own baseline needs no such denominator:
+   it is unit-free, so every stack reads upward on the same scale and stays directly comparable. */
+function historyStackSeries(S) {
+  const at = S.attempts || [];
+  return historyStages(S).map(name => {
+    const pts = [];
+    at.forEach((a, i) => {
+      const st = (a.stages || []).find(s => s && s.name === name);
+      if (st && st.ms != null && st.ms > 0) pts.push({i: i, ms: st.ms, a: a});
+    });
+    return {name: name, pts: pts};
+  }).filter(s => s.pts.length > 1);
+}
+
+function speedupChart(S) {
+  const series = historyStackSeries(S);
+  if (!series.length) return "";
+  const n = (S.attempts || []).length;
+  const W = 1000, H = 340, PL = 62, PR = 16, PT = 16, PB = 50;
+  const X = i => PL + (n <= 1 ? 0 : i / (n - 1)) * (W - PL - PR);
+
+  const base = s => s.pts[0].ms;
+  const vals = series.flatMap(s => s.pts.map(p => base(s) / p.ms)).concat([1.0]);
+  let yMin = Math.min(...vals), yMax = Math.max(...vals);
+  const pad = (yMax - yMin || 1) * 0.12;
+  yMin -= pad; yMax += pad;
+  const Y = v => H - PB - (v - yMin) / (yMax - yMin) * (H - PT - PB);
+
+  let g = "";
+  for (let k = 0; k <= 5; k++) {
+    const v = yMin + (yMax - yMin) * k / 5;
+    g += `<line x1="${PL}" y1="${Y(v)}" x2="${W - PR}" y2="${Y(v)}" stroke="#1e2c47" stroke-width="1"/>
+      <text x="${PL - 8}" y="${Y(v) + 4}" fill="#8494ad" font-size="11" text-anchor="end">${v.toFixed(2)}×</text>`;
+  }
+  if (yMin < 1.0 && yMax > 1.0) {
+    g += `<line x1="${PL}" y1="${Y(1)}" x2="${W - PR}" y2="${Y(1)}" stroke="#8494ad" stroke-width="1.2" stroke-dasharray="6 4"/>
+      <text x="${PL + 6}" y="${Y(1) - 6}" fill="#8494ad" font-size="11">1.00× — where each stack started</text>`;
+  }
+
+  series.forEach((s, si) => {
+    const c = PALETTE[si % PALETTE.length];
+    const b = base(s);
+    g += `<path d="${smoothPath(s.pts.map(p => [X(p.i), Y(b / p.ms)]))}" fill="none" stroke="${c}"
+      stroke-width="2" stroke-opacity="0.9" stroke-linecap="round"/>`;
+    s.pts.forEach(p => {
+      const sp = b / p.ms;
+      const tip = esc(`run ${p.i + 1} · ${s.name} ${sp.toFixed(2)}× — ${p.ms.toFixed(2)} ms` +
+        ` (from ${b.toFixed(2)} ms)\n${p.a.lever} · ${p.a.op} — ${HIST_LEGEND[p.a.status] || p.a.status}` +
+        (p.a.note ? "\n" + p.a.note : ""));
+      g += `<circle cx="${X(p.i)}" cy="${Y(sp)}" r="3.4" fill="${c}" fill-opacity="0.95"
+        stroke="#0a1020" stroke-width="0.8"><title>${tip}</title></circle>`;
+    });
+  });
+
+  const legend = series.map((s, si) => {
+    const b = base(s), lastMs = s.pts[s.pts.length - 1].ms;
+    return `<span><i style="background:${PALETTE[si % PALETTE.length]}"></i>${esc(s.name)} —
+      ${(b / lastMs).toFixed(2)}× (${b.toFixed(0)} → ${lastMs.toFixed(0)} ms)</span>`;
+  }).join("");
+
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">${g}
+    <text x="${PL}" y="${H - PB + 18}" fill="#8494ad" font-size="11">run 1</text>
+    <text x="${W - PR}" y="${H - PB + 18}" fill="#8494ad" font-size="11" text-anchor="end">run ${n}</text>
+    <text x="14" y="${H / 2}" fill="#8494ad" font-size="12" text-anchor="middle" transform="rotate(-90 14 ${H / 2})">speedup vs first reading (higher is better)</text>
+    </svg><div class="legend" style="margin:6px 0 14px">${legend}</div>`;
+}
+
+let curHistStage = null;    // null = the run's per-token stack, the number the commit gate banks
+let curHistSpeedup = false; // the all-stacks comparison, kept apart so no stage name can collide
+
 function renderHistory(S) {
-  const at = (S.attempts || []).slice().reverse();
+  const at = S.attempts || [];
   if (!at.length) {
     $("histbody").innerHTML = `<div class="empty">no levers applied yet — every attempt the run records lands here (same kernel log RUN_REPORT.md renders from)</div>`;
     return;
   }
-  const rows = at.map(a => {
-    const d = a.delta_pct;
-    const dTxt = d == null ? "—" : `<span class="${d < 0 ? "up" : "dn"}">${d > 0 ? "+" : ""}${d.toFixed(1)}%</span>`;
-    const commit = a.commit ? `<span class="mono">${esc(String(a.commit).slice(0, 7))}</span>` : "—";
-    const note = a.note ? `<div class="why">${esc(a.note)}</div>` : "";
-    return `<tr><td><span class="chip lever">${esc(a.lever)}</span>${note}</td>
-      <td class="mono">${esc(a.op)}${a.measured_ms != null ? `<div class="why">op: ${fmtMs2(a.measured_ms)}</div>` : ""}</td>
-      <td>${fmtMs2(a.before_ms)}</td><td>${fmtMs2(a.after_ms)}</td><td>${dTxt}</td>
-      <td><span class="chip ${a.status}">${esc(STATUS_LABEL[a.status] || a.status)}</span></td>
-      <td>${commit}</td></tr>`;
-  }).join("");
-  $("histbody").innerHTML = `<table><tr><th>Lever</th><th>Op</th><th>Before</th><th>After</th>
-    <th>Δ%</th><th>Status</th><th>Commit</th></tr>${rows}</table>`;
+  const stages = historyStages(S);
+  const tok = ((S.serving || {}).per_token || {}).stage;
+  // A remembered stage that this run does not report falls back to the default rather than charting
+  // nothing, so the selection survives a poll but never outlives the data.
+  if (curHistStage && !stages.includes(curHistStage)) curHistStage = null;
+  const shown = curHistStage || (stages.includes(tok) ? tok : stages[0]) || null;
+  const canCompare = historyStackSeries(S).length > 1;
+  if (curHistSpeedup && !canCompare) curHistSpeedup = false;
+
+  let bar = "";
+  if (stages.length > 1 || canCompare) {
+    const chips = stages.map(s =>
+      `<button data-stage="${esc(s)}" class="${!curHistSpeedup && s === shown ? "on" : ""}">${esc(s)}${s === tok ? " · per-token" : ""}</button>`);
+    if (canCompare) {
+      chips.push(`<button data-mode="speedup" class="${curHistSpeedup ? "on" : ""}">all stacks · speedup</button>`);
+    }
+    bar = `<div class="segbar">${chips.join("")}</div>`;
+  }
+
+  const chart = curHistSpeedup ? speedupChart(S) : historyChart(S, shown);
+  if (!chart) {
+    $("histbody").innerHTML = bar + `<div class="empty">no charted trend for
+      ${esc(shown || "this run")} yet — ${at.length} attempt(s) recorded, and a trend needs two measured
+      readings of this stack.</div>`;
+    return;
+  }
+  const caption = curHistSpeedup
+    ? `Each stack against its OWN first recorded reading, so the stacks are comparable despite being
+       measured in different units. Hover any point for the reading it came from.`
+    : `Every logged experiment in order. Hover any point for the lever, the op, the reading and why it
+       was tried.`;
+  $("histbody").innerHTML = bar + `<div class="why" style="margin:-2px 0 8px">${caption}</div>` + chart;
 }
 
 const TABS = ["Roofline", "Compute vs Memory", "Latency Breakdown", "Power Analysis", "Scaling"];
@@ -320,6 +614,15 @@ function logTicks(min, max) {
   const t = [];
   for (let e = Math.floor(Math.log10(min)); e <= Math.ceil(Math.log10(max)); e++) t.push(Math.pow(10, e));
   return t;
+}
+
+/* Decade labels for a log axis. Fixed-decimal formatting rounds every decade below 0.1 to the same
+   "0.0", which on these charts spanned five decades and made the whole low end unreadable; an
+   exponent keeps each decade distinct without widening the axis. */
+function logTickLabel(t) {
+  if (t >= 1) return String(t);
+  const e = Math.round(Math.log10(t));
+  return e >= -2 ? t.toFixed(-e) : "1e" + e;
 }
 
 function logScatter({points, xGet, yGet, xLabel, yLabel, roof, height = 380}) {
@@ -334,11 +637,11 @@ function logScatter({points, xGet, yGet, xLabel, yLabel, roof, height = 380}) {
   let g = "";
   logTicks(xMin, xMax).forEach(t => {
     g += `<line x1="${X(t)}" y1="${PT}" x2="${X(t)}" y2="${H - PB}" stroke="#1e2c47" stroke-width="1"/>
-      <text x="${X(t)}" y="${H - PB + 16}" fill="#8494ad" font-size="11" text-anchor="middle">${t >= 1 ? t : t.toFixed(1)}</text>`;
+      <text x="${X(t)}" y="${H - PB + 16}" fill="#8494ad" font-size="11" text-anchor="middle">${logTickLabel(t)}</text>`;
   });
   logTicks(yMin, yMax).forEach(t => {
     g += `<line x1="${PL}" y1="${Y(t)}" x2="${W - PR}" y2="${Y(t)}" stroke="#1e2c47" stroke-width="1"/>
-      <text x="${PL - 8}" y="${Y(t) + 4}" fill="#8494ad" font-size="11" text-anchor="end">${t >= 1 ? t : t.toPrecision(1)}</text>`;
+      <text x="${PL - 8}" y="${Y(t) + 4}" fill="#8494ad" font-size="11" text-anchor="end">${logTickLabel(t)}</text>`;
   });
   if (roof) {
     g += `<polyline points="${X(roof.x0)},${Y(roof.yAt(roof.x0))} ${X(roof.knee)},${Y(roof.yAt(roof.knee))} ${X(roof.x1)},${Y(roof.yAt(roof.x1))}"
@@ -402,11 +705,27 @@ function seriesChart(thermal) {
   const X = i => PL + (nMax <= 1 ? 0 : i / (nMax - 1)) * (W - PL - 20);
   const Y = v => H - PB - (v - yMin + pad) / (yMax - yMin + 2 * pad) * (H - PT - PB);
   let g = "";
+  // Gridded value ticks: without them this chart showed the SHAPE of the samples and none of their
+  // magnitudes, which for a thermal profile is the whole point (how hot, not merely "rising"). No unit
+  // is printed because the profile does not declare one.
+  for (let k = 0; k <= 4; k++) {
+    const v = yMin - pad + (yMax - yMin + 2 * pad) * k / 4;
+    g += `<line x1="${PL}" y1="${Y(v)}" x2="${W - 20}" y2="${Y(v)}" stroke="#1e2c47" stroke-width="1"/>
+      <text x="${PL - 8}" y="${Y(v) + 4}" fill="#8494ad" font-size="11" text-anchor="end">${v.toFixed(1)}</text>`;
+  }
   series.forEach(([k, v], si) => {
     const c = PALETTE[si % PALETTE.length];
     g += `<polyline points="${v.map((x, i) => X(i) + "," + Y(x)).join(" ")}" fill="none" stroke="${c}" stroke-width="2"/>`;
+    v.forEach((x, i) => {
+      g += `<circle cx="${X(i)}" cy="${Y(x)}" r="2.6" fill="${c}"><title>${esc(k)} #${i + 1} — ${x}</title></circle>`;
+    });
   });
-  const legend = series.map(([k], si) => `<span><i style="background:${PALETTE[si % PALETTE.length]}"></i>${esc(k)} (${series[si][1].length})</span>`).join("");
+  const legend = series.map(([k], si) => {
+    const v = series[si][1];
+    const lo = Math.min(...v), hi = Math.max(...v);
+    return `<span><i style="background:${PALETTE[si % PALETTE.length]}"></i>${esc(k)} —
+      ${v.length} samples, ${lo.toFixed(1)}–${hi.toFixed(1)}</span>`;
+  }).join("");
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">${g}
     <text x="${(W + PL) / 2}" y="${H - 6}" fill="#8494ad" font-size="12" text-anchor="middle">sample</text></svg>
     <div class="legend" style="margin:6px 0 4px">${legend}</div>`;
@@ -500,6 +819,16 @@ $("tabbar").addEventListener("click", (e) => {
   curTab = t;
   document.querySelectorAll("#tabbar button").forEach(b => b.classList.toggle("on", b.dataset.t === t));
   if (LAST) renderTab(LAST);
+});
+
+// Delegated: the history panel is rebuilt on every poll, so the listener lives on the container.
+$("histbody").addEventListener("click", (e) => {
+  const d = e.target && e.target.dataset ? e.target.dataset : null;
+  if (!d) return;
+  if (d.mode === "speedup") curHistSpeedup = true;
+  else if (d.stage) { curHistSpeedup = false; curHistStage = d.stage; }
+  else return;
+  if (LAST) renderHistory(LAST);
 });
 
 async function poll() {

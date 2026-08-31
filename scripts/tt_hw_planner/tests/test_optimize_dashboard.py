@@ -134,6 +134,10 @@ def _make_run(tmp_path, slug="some_model_x"):
                 "fullpipe_ms": 80.0,
                 "fullpipe_best_ms": 100.0,
                 "commit": "a3f9c21deadbeef",
+                "stages": [
+                    {"name": "lm_head", "ms": 80.0, "dominant": True},
+                    {"name": "audio_encode", "ms": 20.0},
+                ],
             },
             {
                 "op_signature": "OtherOp",
@@ -141,6 +145,10 @@ def _make_run(tmp_path, slug="some_model_x"):
                 "measured_ms": 10.0,
                 "beat_baseline": False,
                 "claimed_beat_baseline": True,
+                "stages": [
+                    {"name": "lm_head", "ms": 82.0, "dominant": True},
+                    {"name": "audio_encode", "ms": 14.0},
+                ],
             },
             {"op_signature": "ThirdOp", "kernel_kind": "trace", "measured_ms": 9.0, "wedged": True},
         ],
@@ -230,6 +238,22 @@ def test_state_dir_candidates_prefers_env(tmp_path, monkeypatch):
     assert (tmp_path / "repo" / "models/experimental/perf_automation/.state/slug") in cands
 
 
+def test_state_dir_candidates_include_the_shared_root_above_the_model_dir(tmp_path, monkeypatch):
+    """A --persist run points PERF_MCP_STATE_DIR at .state/<slug>, but the board-level profiles (thermal
+    /power) are shared across models and sit in .state itself. Searching only the model dir left the
+    Power Analysis tab empty while its data was on disk."""
+    root = tmp_path / "perf" / ".state"
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(root / "some_model"))
+    cands = state_dir_candidates(tmp_path / "repo", "some_model")
+    assert cands[0] == root / "some_model"
+    assert root in cands and cands.index(root) < len(cands) - 1
+
+    _write(root / "perf_mcp_thermal_profile.json", {"clean_at": [61.0, 64.0], "clamped_at": [72.0]})
+    repo, run_dir, state, slug = _make_run(tmp_path)
+    s = collect_state(run_dir, [root / "some_model", root], slug)
+    assert s["thermal"]["clamped_at"] == [72.0]
+
+
 def test_repo_root_for_run_derives_the_owning_checkout(tmp_path):
     other = tmp_path / "other_checkout"
     run_dir = other / "models/experimental/perf_automation/runs/2026-08-30T10-00-00-x"
@@ -289,6 +313,70 @@ def test_roofline_points_and_roofs_from_run_anchors(tmp_path):
     assert abs(p["intensity"] - flops / 48.0) < 1e-9
     assert abs(p["tflops"] - flops / 0.002 / 1e12) < 1e-6
     assert s["env"]["dram_bw_gbps"] == 512.0
+
+
+def test_overlapping_archive_and_live_log_list_each_attempt_once(tmp_path):
+    """The engine's _fold_cumulative COPIES live rows into the archive, so the two logs overlap by
+    design. Listing both would double every attempt — 24 recorded rungs read as 48, the history chart
+    would restart its best-so-far halfway through, and the status counts would be twice the truth.
+    Collapse on the SAME identity key the engine's _load_attempts_all uses."""
+    repo, run_dir, state, slug = _make_run(tmp_path)
+    archive = json.loads((state / ("cc_kernlog_%s_main.json.cumulative" % slug)).read_text())
+    # the live log holds the same rows the archive already folded in, plus one newer attempt
+    fresh = {"op_signature": "FourthOp", "kernel_kind": "grid", "measured_ms": 7.0, "beat_baseline": True}
+    _write(state / ("cc_kernlog_%s_main.json" % slug), archive + [fresh])
+
+    s = collect_state(run_dir, [state], slug)
+    ops = [a["op"] for a in s["attempts"]]
+    assert len(ops) == len(set(ops)) == 4, ops
+    assert "FourthOp" in ops
+
+    # two DIFFERENT variants of one rung are not the same attempt and must both survive, each
+    # spending its own retry (differing measurement, differing rationale).
+    v1 = {"op_signature": "SameOp", "kernel_kind": "dtype", "measured_ms": 9.0, "note": "bf8_b"}
+    v2 = {"op_signature": "SameOp", "kernel_kind": "dtype", "measured_ms": 8.0, "note": "bf4_b"}
+    _write(state / ("cc_kernlog_%s_main.json" % slug), [v1, v2, dict(v1)])
+    again = collect_state(run_dir, [state], slug)
+    same = [a for a in again["attempts"] if a["op"] == "SameOp"]
+    assert len(same) == 2, same
+
+
+def test_attempts_carry_the_per_stage_timings_they_recorded(tmp_path):
+    """Each stack gets its own history curve, and the only source for that is the per-stage timing list
+    the agent passed to record_kernel_attempt. It must reach the payload per attempt and unaltered:
+    the non-per-token stacks have no banked verdict of their own, so these readings are all there is."""
+    repo, run_dir, state, slug = _make_run(tmp_path)
+    s = collect_state(run_dir, [state], slug)
+    by_op = {a["op"]: a for a in s["attempts"]}
+
+    first = by_op["WeirdOpDeviceOperation 4 x 4"]["stages"]
+    assert [(st["name"], st["ms"]) for st in first] == [("lm_head", 80.0), ("audio_encode", 20.0)]
+    assert first[0]["dominant"] is True
+    # a second reading of the SAME stack, so a per-stage trend has two points to draw between
+    second = by_op["OtherOp"]["stages"]
+    assert [(st["name"], st["ms"]) for st in second] == [("lm_head", 82.0), ("audio_encode", 14.0)]
+    # an attempt that recorded none keeps an empty list rather than borrowing another attempt's
+    assert by_op["ThirdOp"]["stages"] == []
+
+
+def test_liveness_follows_the_agent_log_heartbeat(tmp_path):
+    """A run is live while the AGENT is working. The run dir cannot answer that: state.json moves once
+    per iteration and the attempt log only when a rung RESOLVES (minutes apart), and under --persist
+    the run dir lives in a sandbox checkout the agent never touches. The agent log is the heartbeat."""
+    import os
+    import time
+
+    repo, run_dir, state, slug = _make_run(tmp_path)
+    stale = time.time() - 3600
+    for p in (run_dir / "state.json", run_dir / "events.jsonl"):
+        os.utime(p, (stale, stale))
+    for p in state.glob("cc_kernlog_*"):
+        os.utime(p, (stale, stale))
+    assert collect_state(run_dir, [state], slug)["run"]["live"] is False
+
+    _write(state / ("cc_kernlog_%s_main.json.agent.log" % slug), "working")
+    s = collect_state(run_dir, [state], slug)
+    assert s["run"]["live"] is True and s["run"]["age_s"] < 45.0
 
 
 def test_hitl_decision_requires_a_pending_proposal(tmp_path):

@@ -34,6 +34,14 @@ from .commands.optimize import PERF_DIR
 # interval so an active run never flickers, narrower than a lever measurement (minutes), so a dead
 # run does not look alive.
 _LIVE_WINDOW_S = 45.0
+
+# Which files prove a run is still working. The run dir alone is not enough: the orchestrator writes
+# state.json/events.jsonl once per ITERATION, and the attempt log only when a lever RESOLVES, both of
+# which are minutes apart — so a busy run measuring a candidate would read as dead. The agent's log
+# is the actual heartbeat (it moves every few seconds while the agent works), and under --persist it
+# is the ONLY thing moving, because the run dir then lives in a sandbox checkout the agent never
+# touches while state is written back here.
+_LIVE_STATE_GLOBS = ("cc_kernlog_%s_*.json", "cc_kernlog_%s_*.json.agent.log")
 _EVENTS_TAIL = 60
 _RUN_ID_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})-(.+)$")
 
@@ -131,6 +139,10 @@ def state_dir_candidates(repo_root: Path, slug: str | None) -> list:
     env = os.environ.get("PERF_MCP_STATE_DIR")
     if env:
         out.append(Path(env))
+        # A --persist run points this at .state/<slug>, but the board-level files (the thermal/power
+        # profile) are shared across models and live one level up in .state itself. Without the parent
+        # the Power Analysis tab reads empty while its data sits on disk, so search both.
+        out.append(Path(env).parent)
     state_root = Path(repo_root) / PERF_DIR / ".state"
     if slug:
         out.append(state_root / slug)
@@ -179,7 +191,7 @@ def _load_attempts(dirs: list, slug: str | None) -> list:
     union _load_attempts_all reads, so the dashboard agrees with the engine about what was tried."""
     pattern = "cc_kernlog_%s_*.json" % slug if slug else "cc_kernlog_*.json"
     logs = _glob_first(dirs, pattern + ".cumulative") + _glob_first(dirs, pattern)
-    out = []
+    out, seen = [], set()
     for path in logs:
         data = _read_json(path)
         if not isinstance(data, list):
@@ -191,6 +203,19 @@ def _load_attempts(dirs: list, slug: str | None) -> list:
         for rec in data:
             if not isinstance(rec, dict):
                 continue
+            # The engine's _fold_cumulative COPIES live rows into the archive, so the two logs overlap
+            # by design and a plain concatenation lists every attempt twice. Collapse on the same
+            # identity key _load_attempts_all uses -- op, rung, measurement, note -- so a duplicated
+            # row folds while two genuinely different variants of one rung both survive.
+            key = (
+                rec.get("op_signature"),
+                (rec.get("kernel_kind") or "").lower(),
+                rec.get("measured_ms"),
+                (rec.get("note") or "")[:400],
+            )
+            if key in seen:
+                continue
+            seen.add(key)
             before = rec.get("fullpipe_best_ms")
             after = rec.get("fullpipe_ms")
             delta_pct = None
@@ -313,10 +338,11 @@ def collect_state(run_dir: Path, state_dirs: list, slug: str | None = None) -> d
 
     watched = [run_dir / "state.json", run_dir / "events.jsonl"]
     mtimes = [m for m in (_mtime(p) for p in watched) if m is not None]
-    for log in _glob_first(state_dirs, "cc_kernlog_%s_*.json" % slug if slug else "cc_kernlog_*.json"):
-        mt = _mtime(log)
-        if mt is not None:
-            mtimes.append(mt)
+    for pattern in _LIVE_STATE_GLOBS:
+        for log in _glob_first(state_dirs, pattern % slug if slug else pattern % "*"):
+            mt = _mtime(log)
+            if mt is not None:
+                mtimes.append(mt)
     age = (now - max(mtimes)) if mtimes else None
 
     # Per-stage timings + the full-pipeline baseline the per-lever gate banks (both keyed by the
