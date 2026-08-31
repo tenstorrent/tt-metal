@@ -153,7 +153,7 @@ runs:
         TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH=/work/generated/debug_bus_signal_groups.json
         TT_TRIAGE_OUTPUT_PATH=/work/generated/triage_output.txt
         TT_TRIAGE_LLM_OUTPUT_PATH=/work/generated/triage_llm_output.txt
-        TT_TRIAGE_SQLITE_OUTPUT_PATH=/work/generated/triage_sqlite_output.db
+        TT_TRIAGE_SQLITE_OUTPUT_PATH=/work/generated/triage_sqlite_output.sqlite
         HANG_REPORT="/opt/venv/bin/python3 $(pwd)/.github/scripts/utils/hang_report.py"
         TRIAGE="/opt/venv/bin/python3 $(pwd)/tools/tt-triage.py --disable-progress --path=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH --triage-summary-path=generated/triage_summary.txt --llm-output-path=$TT_TRIAGE_LLM_OUTPUT_PATH --sqlite-output-path=$TT_TRIAGE_SQLITE_OUTPUT_PATH"
         # Only run triage on the first hang of a job: the device isn't reset between
