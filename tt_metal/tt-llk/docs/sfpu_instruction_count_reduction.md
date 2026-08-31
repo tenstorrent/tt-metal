@@ -21,14 +21,14 @@ Measured on one realistic kernel shape (exp-style 5-term Horner, `r = r*x + c` �
 |---|---|---|---|
 | as commonly written today (fp32 literals, 1 elem/body) | 18.0 | 14.0 | — |
 | **§1** three coefficients in the program CREGs | 13.0 (−28 %) | 8.0 (−43 %) | **none, bit-exact** |
-| **§1 + §2** plus 2 elements per replayed body | **8.5 (−53 %)** | **7.5 (−46 %)** | **none, bit-exact** |
+| **§1 + §2** plus 2 elements per iteration | **8.5 (−53 %)** | **7.5 (−46 %)** | **none, bit-exact** |
 
 And on a real shipped kernel, `_relu_max_impl_` (§3): **WH 13 → 6 slots/element (−54 %), BH 12 → 6 (−50 %)**.
 
 | # | idea | typical saving | neutrality |
 |---|---|---|---|
 | 1 | Park hot fp32 constants in `vConstFloatPrgm0/1/2` | **1–2 slots** per constant, per element — see §1's latency caveat | **bit-exact** |
-| 2 | Two elements per replayed body | WH ~35 %, BH ~6 % on top of §1 | **bit-exact** (pure scheduling) |
+| 2 | Two elements per loop iteration, hand-interleaved | **−18.3 %** on `i0` on top of §1 *(hardware)* | **bit-exact** (reordering only) |
 | 3 | Branch-free idioms instead of `v_if` predication | 2–9 slots per site | bit-exact, NaN and −0.0 included — the SFPU compare is the *same* sign-magnitude total order as `SFPSWAP` (§3) |
 | 4 | Reclaiming LREG11 as a 4th constant | 2 slots per element | **unsafe on WH — documented as a trap** |
 
@@ -44,8 +44,12 @@ A/B'd against `main`.
 | kernel | idea | `KERNEL` before → after | delta | `INIT` |
 |---|---|---|---|---|
 | `_relu_max_body_` / `_relu_max_impl_` (LLK) | §3 branch-free clamp | 62850 → **38205** | **−39.2 %** | 245 → 239 |
-| `ckernel_sfpu_i0.h` (MTL) | §1 program CREGs | 180856 → **168760** | **−6.7 %** | 240 → 257 |
+| `ckernel_sfpu_i0.h` (MTL) | §1 program CREGs | 180856 → 168760 | −6.7 % | 240 → 257 |
+| `ckernel_sfpu_i0.h` (MTL) | **§2 2-way interleave**, on top of §1 | 168760 → **137858** | **−18.3 %** | 257 → 256 |
 | `ckernel_sfpu_softplus.h` (MTL) | §1 program CREGs | 198231 → **185561** | **−6.4 %** | 239 → 257 |
+
+`i0` cumulative against `main`: 180856 → **137858, −23.8 %**. §1 and §2 compound on it exactly as
+predicted — §1 converts coefficient loads into `SFPNOP`s, §2 fills them.
 
 `TILE_LOOP` tracks `KERNEL` to within 0.1 % in all three. For `relu_max`, `L1_TO_L1` also fell
 63720 → 38935, so the win is not confined to the isolated math thread. Static check on the real
@@ -56,13 +60,16 @@ math ELF: `relu_max` 14 → 8 SFPU instructions, `SFPSETCC`/`SFPENCC` gone.
 variants that feed NaN, ±inf and −0.0. The skips are the pre-existing ReluMin gate
 (tt-llk#1120), not a consequence of these changes.
 
-### Three assumptions in this document that were wrong
+### Four assumptions in this document that were wrong
 
 1. **§3's clamp rewrite had the operand order backwards.** Corrected in §3.
 2. **§1 saves ~1 slot per coefficient in a long dependent chain, not 2.** Corrected in §1.
    The loads were doing useful work — filling `SFPMAD` latency.
 3. **Whole-ELF static instruction counts cannot measure §1 at all.** Corrected in §6.
    The loads move from the body into init, so the total does not change.
+4. **§2 does not work by restructuring the loop — the interleave must be written out
+   statement by statement.** GCC will not interleave two independent expression trees.
+   Corrected in §2, and it is the difference between −18 % and nothing.
 
 ### Not implemented, and why
 
@@ -74,8 +81,10 @@ variants that feed NaN, ±inf and −0.0. The skips are the pre-existing ReluMin
   tt-llk unary perf sweep (`Logsigmoid` and `BinaryPow` are not even `MathOperation`
   members), so they can be neither measured nor regression-tested in this harness. §1's
   candidate table now flags measurability per kernel.
-- **§2 interleaving** — the structural change. Finding 2 above makes it *more* valuable than
-  when this document was written, not less: it fills exactly the latency slots that §1 exposes.
+- **§2 on `softplus`** — the same rewrite `i0` got. It still carries 6 `SFPNOP` per element after
+  §1. Same `PolynomialEvaluator::eval` shape, so the same statement-level interleave applies.
+- **§2 on the kernels ranked in §2's survey table** — `erfinv` (21 % of its SFPU instructions are
+  `SFPNOP`), `acosh`, `asin`, `asinh` are the densest remaining.
 
 ---
 
@@ -286,11 +295,13 @@ Full per-kernel availability table in Appendix A.
 
 ---
 
-## 2. Two elements per replayed body
+## 2. Two elements per loop iteration, hand-interleaved
 
 ### Mechanism
 
-On Wormhole a dependent `SFPMAD` must be followed by `SFPNOP` before its result can be consumed. A Horner chain is maximally dependent, so it pays that tax on every step. Two *independent* element chains in the same body give the scheduler something to put in those slots. It also halves the `TTINCRWC` overhead, which is why Blackhole — which has no NOP tax — still gains a little.
+On Wormhole a dependent `SFPMAD` must be followed by `SFPNOP` before its result can be consumed. A Horner chain is maximally dependent, so it pays that tax on every step. Two *independent* element chains in the same body give the scheduler something to put in those slots. It also halves the `TTINCRWC` and loop overhead, which is why Blackhole — which has no NOP tax — still gains a little.
+
+The section title said "replayed body" in an earlier draft. That describes the probes, which use `TTREPLAY`; the real kernels this was applied to do not (see limit 2 below). The idea is the same either way — two elements per loop iteration.
 
 Several kernels already interleave *within* one element for this reason, e.g. `ckernel_sfpu_tanh.h:48`: `s = f * f;  // hide SFPMAD latency`. What is missing is interleaving *across* elements.
 
@@ -316,7 +327,7 @@ void ilv2() {
 }
 ```
 
-### Result — 3-coefficient chain, constants in CREGs
+### Probe result — 3-coefficient chain, constants in CREGs
 
 | | body | per element | `SFPNOP` |
 |---|---|---|---|
@@ -339,7 +350,7 @@ Every NOP is gone on WH. The emitted body shows why — the two chains' MADs alt
 	TTINCRWC	0, 4, 0, 0              <- one increment for two elements
 ```
 
-### Result — 5-coefficient chain (the exp-style shape)
+### Probe result — 5-coefficient chain (the exp-style shape)
 
 | | WH | BH |
 |---|---|---|
@@ -357,6 +368,83 @@ With the coefficients still as **fp32 literals**, interleaving duplicates the lo
 
 So §1 and §2 compound, but only in that order. Interleaving a literal-heavy body mostly buys duplicated `SFPLOADI`.
 
+### The interleave must be written out statement by statement
+
+**This is the whole ballgame, and it is not obvious.** GCC will **not** interleave two independent
+expression trees. Handing it two adjacent elements and letting it schedule does nothing:
+
+```cpp
+// DOES NOT WORK -- measured: 18 SFPNOP per two elements, i.e. 9 per element, unchanged.
+dst_reg[0] = I0_SERIES(x0);
+dst_reg[1] = I0_SERIES(x1);
+```
+
+That form emitted the two chains back to back and left every stall in place; only `TTINCRWC`
+amortised, for 37.5 slots/element against 38.0 — nothing. The win appears only when the two
+chains advance in lockstep in the *source*:
+
+```cpp
+// WORKS -- SFPNOP 9 -> 3 per element.
+#define I0_STEP2(c)      \
+    do {                 \
+        r0 = r0 * t0 + (c); \
+        r1 = r1 * t1 + (c); \
+    } while (0)
+
+vFloat r0 = C_hi, r1 = C_hi;
+I0_STEP2(C9); I0_STEP2(C8); ... I0_STEP2(C0);
+```
+
+So §2 is not a loop-restructuring change that can be applied mechanically — it is a rewrite of the
+kernel's polynomial evaluation, per kernel. A `POLYVAL`/`PolynomialEvaluator::eval` macro call has
+to be expanded into explicit alternating steps. Budget accordingly.
+
+The earlier probe in this section happened to be hand-alternated, which is why this constraint went
+unnoticed until `i0` was actually implemented.
+
+### Result on a real kernel: `i0`
+
+| | slots/element | `SFPNOP`/element |
+|---|---|---|
+| after §1 (CREGs), 1 element/iteration | 38.0 | 9 |
+| naive 2-way (two `POLYVAL10` calls) | 37.5 | 9 |
+| **2-way, hand-interleaved** | **31.5** | **3** |
+
+Hardware: `MATH_ISOLATE` `KERNEL` 168760 → **137858, −18.3 %**; `TILE_LOOP` −18.4 %. Bit-exact,
+14/14 correctness tests including the fp32 `_edges` variants.
+
+The 9 stalls came from exactly where §1's correction predicts — the back half of the chain, where
+the coefficients are CREGs or bf16-exact immediates and there is nothing left to fill the latency:
+
+```
+sfploadi / sfploadi / sfpmad   x5   <- fp32 literal loads fill the slot, no NOP
+sfpnop / sfpmad L14                 <- CREG operand: nothing to fill with
+sfpnop / sfpmad L13
+sfpnop / sfpmad L12
+sfpnop / sfpmul ... sfpnop / sfpaddi ...
+```
+
+### Where else to apply it
+
+`SFPNOP` density in the compiled math ELF is the direct signal. Whole-ELF counts, so read it as a
+ranking rather than a per-element figure:
+
+| op | `SFPNOP` | total `sfp*` | NOP share |
+|---|---|---|---|
+| `erfinv` | 42 | 199 | **21.1 %** |
+| `acosh` | 20 | 122 | 16.4 % |
+| `asin` | 11 | 73 | 15.1 % |
+| `asinh` | 24 | 166 | 14.5 % |
+| `atanh` | 10 | 100 | 10.0 % |
+| `celu` | 6 | 60 | 10.0 % |
+| `exponential` | 3 | 31 | 9.7 % |
+| `digamma` | 12 | 137 | 8.8 % |
+| `erf` | 5 | 63 | 7.9 % |
+| `cosh` | 1 | 50 | 2.0 % |
+
+`softplus` still carries 6 per element after §1 and has the same `PolynomialEvaluator::eval` shape
+as `i0`, so it is the cheapest next one.
+
 ### Three measured limits
 
 1. **`dst_reg[k]` immediate window is `[-8, 7]` half-rows** — i.e. `dst_reg[-4]` … `dst_reg[3]`. A 4-way interleave with `dst_reg += 4` overflows it once GCC unrolls, failing to compile outright:
@@ -364,12 +452,28 @@ So §1 and §2 compound, but only in that order. Interleaving a literal-heavy bo
    sfpi_classes.h:404: error: argument 2 '8' is out of range [-8, 7]
    ```
    **2-way is the practical shape.** 4-way needs an extra `TTINCRWC` mid-body, which gives back part of what it won.
-2. **Replay body caps at 32 instructions.** Measured directly — a body that fits emits `TTREPLAY 0, 32, 1, 1`; beyond that GCC splits into several shorter replay segments (still correct, but the clean single-segment structure is lost). Budget the interleaved body against 32.
-3. **Register pressure.** 8 general-purpose LRegs (L0–L7); CREGs occupy 8–15. A 2-way interleave of a chain needing 3 live values per element uses ~6. Deep chains with several live temporaries may not fit, and the compiler will start emitting `SFPMOV` spill-shuffles — that is the signal to stop.
+2. **Replay body caps at 32 instructions — but check whether replay is in use at all.** In the
+   probes (fixed trip count, `#pragma GCC unroll 8`) GCC records the body and emits `TTREPLAY 0,
+   32, 1, 1`, splitting into shorter segments beyond 32. **The real kernels do not do this.** `i0`
+   carries an explicit `#pragma GCC unroll 0` and compiles to a rolled RISC-V loop with no
+   `TTREPLAY` anywhere, so the 32-instruction ceiling never binds and the interleaved 63-slot body
+   is fine. Check the disassembly for `TTREPLAY` before treating the cap as a constraint; on a
+   rolled loop the binding limit is register pressure alone.
+3. **Register pressure — the real limit.** 8 general-purpose LRegs (L0–L7); CREGs occupy 8–15.
+   `i0`'s 2-way interleave holds 2 × (`t`, `r`) plus two loads = 6 of the 8, with the coefficients
+   in CREGs; a third element spills. Deep chains with several live temporaries may not fit even at
+   2-way, and the compiler starts emitting `SFPMOV` spill-shuffles — that is the signal to stop.
 
 ### Caveat
 
-This is a pure reordering: same operations, same operands, same order within each element's own dependency chain. Bit-exact. The only risk is compile-time — if register pressure forces spills, check the emitted count rather than assuming a win.
+This is a pure reordering: same operations, same operands, same order within each element's own
+dependency chain. Bit-exact — including the trailing operations a `POLYVAL` macro adds, which must
+be carried over faithfully when the macro is expanded by hand.
+
+Two risks, neither numerical. If register pressure forces spills, check the emitted count rather
+than assuming a win. And because the polynomial evaluation is being rewritten rather than
+mechanically transformed, each application needs its own bit-exactness argument and correctness
+run — this is not a sweep.
 
 ---
 
@@ -606,17 +710,20 @@ Remaining order of work (items 1–2 are **done** — see §0):
 
 1. ~~`relu_max` clamp rewrite (§3)~~ — **done, −39.2 % on hardware.** Bit-exact, including NaN.
 2. ~~`softplus` and `i0` CREGs (§1)~~ — **done, −6.4 % / −6.7 %.** Bit-exact.
-3. **2-way interleave (§2) on `softplus` and `i0`** — promoted from item 5. These two now carry
-   three exposed `SFPNOP`s each that §1 created and §2 is precisely the fix for, so the two
-   changes together should beat the sum of their separate parts. Both bodies need checking
-   against the 32-instruction replay cap first.
-4. **`tanh_derivative` CREGs** (§1) — needs the `l_reg[LReg0/1/2]` LUT interaction and the two
+3. ~~2-way interleave (§2) on `i0`~~ — **done, −18.3 % on top of §1** (−23.8 % cumulative). The
+   compounding worked as predicted. Note it required expanding `POLYVAL10` into explicit
+   alternating steps; see §2.
+4. **2-way interleave (§2) on `softplus`** — still 6 `SFPNOP` per element after §1, same
+   `PolynomialEvaluator::eval` shape as `i0`. Cheapest next win.
+5. **2-way interleave on the densest remaining kernels** — `erfinv` (21 % NOP share), `acosh`,
+   `asin`, `asinh`; see §2's survey table.
+6. **`tanh_derivative` CREGs** (§1) — needs the `l_reg[LReg0/1/2]` LUT interaction and the two
    init variants resolved first. ~3 slots/element once that is understood.
-5. **`relu.h:125-127` and `:164-166`** (§3) — the two remaining two-sided clamp pairs, in the
+7. **`relu.h:125-127` and `:164-166`** (§3) — the two remaining two-sided clamp pairs, in the
    Metal tree. Mind the bound order: `:125` is low-bound-first and takes `min(max(..))`.
-6. **`logsigmoid`, `binary_pow`** (§1) — blocked on harness coverage, not on the idea. Either add
+8. **`logsigmoid`, `binary_pow`** (§1) — blocked on harness coverage, not on the idea. Either add
    them to the perf sweep or measure them another way; do not land unmeasurable changes.
-7. The remaining ~70 single-sided `v_if` sites (§3, Appendix B) — mechanical, but each needs its
+9. The remaining ~70 single-sided `v_if` sites (§3, Appendix B) — mechanical, but each needs its
    own bound-order and `SPECIALS_READY_OPS` check, so batch them by idiom rather than by file.
 
 ### How this compares to the literal-encoding work
@@ -630,12 +737,15 @@ Static probe figures are marked *(probe)*; figures confirmed on Wormhole n300 ar
 | companion doc, T3 | round approximation coefficients | −17 % on the `silu` body *(probe)* | +8 % on an 8.7e-3 error |
 | **§3 here** | branch-free clamp | **−39.2 %** `relu_max` *(hardware)* | **none, NaN included** |
 | **§1 here** | constants into CREGs | **−6.4 % / −6.7 %** `softplus` / `i0` *(hardware)* | **none, bit-exact** |
-| **§1+§2 here** | both | −53 %/−46 % *(probe, unvalidated)* | **none** |
+| **§2 here** | 2 elements per body, hand-interleaved | **−18.3 %** `i0`, on top of §1 *(hardware)* | **none, bit-exact** |
+| **§1+§2 here** | both | **−23.8 %** `i0` *(hardware)* | **none, bit-exact** |
 
-The two hardware numbers reorder the priorities from the original draft: §3 turned out to be
-much the larger win on a real kernel, and §1 much the smaller. §1 is still worth doing — it is
-free of accuracy risk and cheap to apply — but it is not the headline it looked like, and the
-§1+§2 combination remains a probe figure until somebody lands §2.
+The hardware numbers reorder the priorities from the original draft. §3 is the largest win where
+it applies, but it applies to few sites. §1 alone is much smaller than it looked. **§2 is the one
+with broad remaining headroom** — it is the only idea here that attacks the `SFPNOP` tax directly,
+it compounds with §1, and §2's survey table shows most polynomial kernels still paying 8–21 % of
+their SFPU instructions to stalls. Its cost is that each application is a real rewrite, not a
+mechanical edit.
 
 The literal-encoding work is still worth doing — it applies to kernels that have no free CREGs,
 which is most of them — but it should not be the first thing attempted on the kernels in §1's
@@ -915,9 +1025,13 @@ the two disagree.
 | `softplus` | INIT | 239 | 257 | +7.5 % |
 | `softplus` | KERNEL | 198231 | **185561** | **−6.4 %** |
 | `softplus` | TILE_LOOP | 197786 | 185102 | −6.4 % |
-| `i0` | INIT | 240 | 257 | +7.1 % |
-| `i0` | KERNEL | 180856 | **168760** | **−6.7 %** |
-| `i0` | TILE_LOOP | 180421 | 168302 | −6.7 % |
+| `i0` (§1 CREGs) | INIT | 240 | 257 | +7.1 % |
+| `i0` (§1 CREGs) | KERNEL | 180856 | 168760 | −6.7 % |
+| `i0` (§1 CREGs) | TILE_LOOP | 180421 | 168302 | −6.7 % |
+| `i0` (§2 interleave, on top) | INIT | 257 | 256 | −0.4 % |
+| `i0` (§2 interleave, on top) | KERNEL | 168760 | **137858** | **−18.3 %** |
+| `i0` (§2 interleave, on top) | TILE_LOOP | 168302 | 137391 | −18.4 % |
+| `i0` (§1+§2 vs main) | KERNEL | 180856 | **137858** | **−23.8 %** |
 
 The `INIT` rise on `softplus` and `i0` is the three `SFPCONFIG` CREG writes (+17 cycles); it pays
 back inside the first tile. `relu_max`'s `INIT` fall is incidental.
@@ -937,6 +1051,8 @@ Recorded so they are not rediscovered.
 | 4-way element interleave | `dst_reg[k]` immediate window is `[-8,7]` half-rows; overflows and fails to compile once unrolled. §2. |
 | Round the Horner-tail constant `4.99999851e-1f` to `0.5f` | **Regresses WH** (+1): the bf16 immediate splits the fused `SFPMAD` into `SFPMULI`+`SFPADD` and the added `SFPNOP`s cost more than the two saved loads. Companion doc §4, T1-d. |
 | Assume `erf`/`i1`/`digamma`/`gelu` have free CREG slots | Wrong — all reach `sfpu_reciprocal_init`, which claims all three. Availability must be resolved transitively. §1. |
+| Apply §2 by writing two element expressions back to back and letting GCC schedule them | Does nothing — GCC will not interleave two independent expression trees. Measured 18 `SFPNOP` per two elements on `i0`, identical per-element to the 1-way version. The interleave has to alternate at statement level. §2. |
+| Treat the 32-instruction replay cap as a constraint on every kernel | The real kernels with `#pragma GCC unroll 0` compile to rolled RISC-V loops with no `TTREPLAY` at all, so the cap never binds. `i0`'s interleaved body is 63 slots and fine. Check the disassembly first. §2. |
 | Resolve CREG availability transitively but only parse `inline` function definitions | Still wrong, and worse because it looks rigorous — `void i1_init() {` and `void erf_init() {` are not `inline`, so the recursion never ran. Also mis-reported `lgamma` and `exp` as having free slots. §1. |
 | Two-sided clamp pairs at `relu.h:67-70` (MTL) and `hardtanh.h:34-41` (LLK) | False positives — an `if constexpr`/`else` pair, and two unrelated ops separated by `val += p1`. §3. |
 | Rewrite a predicated two-sided clamp as `min(max(x, lo), hi)` | Wrong when the bounds can cross. `min`/`max` compose in written order, so it must match the order the predicated original applied them. Disagrees with `relu_max` on 6 of 24 sampled cases, all at negative thresholds. Use `max(min(x, hi), lo)` where the original clamped high first. §3. |
