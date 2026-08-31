@@ -400,6 +400,7 @@ class ttMLA:
         # leaves every other variant's op graph byte-identical.
         self._llama4_beta = rope_scaling.get("llama_4_scaling_beta")
         self._llama4_orig_max = rope_scaling.get("original_max_position_embeddings")
+        self._llama4_cache: dict = {}
 
         self.default_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -1117,7 +1118,7 @@ class ttMLA:
 
         start = kv_actual_isl or 0
         key = (start, seq_len_local)
-        cached = getattr(self, "_llama4_cache", {}).get(key)
+        cached = self._llama4_cache.get(key)
         if cached is not None:
             return cached
 
@@ -1142,7 +1143,7 @@ class ttMLA:
                 self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims
             ),
         )
-        self._llama4_cache = {**getattr(self, "_llama4_cache", {}), key: tensor}
+        self._llama4_cache[key] = tensor
         return tensor
 
     def _kv_stem(

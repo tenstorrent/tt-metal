@@ -821,6 +821,44 @@ def test_ds_moe(
     )
 
 
+def _run_moe_case(
+    *,
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    num_links,
+    gate_fallback_mode,
+    request,
+):
+    """Resolve topology from the fabric config, then run_model. Keyword-only: run_model takes 16
+    positional arguments, so the one place that lays them out in order is here."""
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        num_links,
+        per_axis_topology(device_params["fabric_config"]),
+        gate_fallback_mode,
+        request,
+    )
+
+
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
@@ -876,23 +914,21 @@ def test_kimi_moe(
     gate_fallback_mode,
     request,
 ):
-    topology = per_axis_topology(device_params["fabric_config"])
-    run_model(
-        variant,
-        config_only,
-        mesh_device,
-        device_params,
-        seq_len_per_chip,
-        emb_dim,
-        hidden_dim,
-        num_routed_experts,
-        num_experts_per_tok,
-        dispatch_buffer_capacity_factor,
-        run_pcc_check,
-        num_links,
-        topology,
-        gate_fallback_mode,
-        request,
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=seq_len_per_chip,
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=num_experts_per_tok,
+        dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
+        run_pcc_check=run_pcc_check,
+        num_links=num_links,
+        gate_fallback_mode=gate_fallback_mode,
+        request=request,
     )
 
 
@@ -1065,21 +1101,19 @@ def test_mistral4_moe(
     gate_fallback_mode,
     request,
 ):
-    topology = per_axis_topology(device_params["fabric_config"])
-    run_model(
-        variant,
-        config_only,
-        mesh_device,
-        device_params,
-        seq_len_per_chip,
-        emb_dim,
-        hidden_dim,
-        num_routed_experts,
-        num_experts_per_tok,
-        dispatch_buffer_capacity_factor,
-        run_pcc_check,
-        num_links,
-        topology,
-        gate_fallback_mode,
-        request,
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=seq_len_per_chip,
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=num_experts_per_tok,
+        dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
+        run_pcc_check=run_pcc_check,
+        num_links=num_links,
+        gate_fallback_mode=gate_fallback_mode,
+        request=request,
     )
