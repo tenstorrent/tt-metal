@@ -2393,43 +2393,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // always 0 mod grid_size.y, ownership never actually moves, and every row pays the +1 mcast slot
     // every iteration exactly as the flat split does -- all of the cost, none of the win.
     const uint32_t rot_rows_needed = grid_size.x ? tt::div_up(rot_float_chunks, grid_size.x) : 0;
-    // Do the floats fill their hosting rows exactly? This decides whether the rotation PAYS for
-    // separate-V. Empirical rule from four measured points (table above), not a derivation: even fill
-    // won (+4.0% at 100 cores, +8.9% at 80), partial row lost (-11.4% at 110, -3.4% at 60).
-    //
-    // FALSIFIED AS A GENERAL PRINCIPLE, 2026-08-31. Varying grid ROWS as well as cols reaches core
-    // counts where a given num_cores can be either fill class, which controls for num_cores, base and
-    // floats simultaneously. At 48 cores the rule predicts backwards:
-    //   8x6  48 cores base 5 floats 40 EVEN     ON 13.251-13.267  OFF 12.897-12.918  -2.7% (5 runs
-    //                                          per arm, tight -- this is not noise)
-    //   6x8  48 cores base 5 floats 40 PARTIAL  ON 13.511-13.520  OFF 13.555-13.567  +0.3% neutral
-    // while at 60 cores it still holds (10x6 EVEN +5.5%, 6x10 PARTIAL loses). No other candidate
-    // separates the seven points either -- base, cols, rows, rows_needed and float-free-row count
-    // were all checked and all put a win and a loss in the same bucket.
-    // Note also that some of these effects are near the noise floor: 6x10 ON measured 12.721 and
-    // 13.958 ms on consecutive runs, ~9% spread in one configuration.
-    //
-    // The term is KEPT anyway, for a narrower reason than it was introduced with: it happens to make
-    // the right call at both core counts real hardware actually has -- it enables at 100 (stock p150,
-    // +4.0%) and declines at 110 (re-flashed, -11.4%, the largest and most reproducible effect
-    // measured). The 48-core counterexample is a grid override, not a shipping configuration. So this
-    // is now an empirical fit over two real points, NOT a rule that generalizes, and it should not be
-    // extrapolated to a new core count without measuring there.
-    // A principled replacement needs profiling of where the separate-V loss actually goes; the two
-    // structural candidates are the per-iteration accumulator migration (DRAM save/restore plus
-    // semaphore handoff) and the fact that floats read V from local DRAM rather than the head chain,
-    // so a different core set hits DRAM each iteration instead of a fixed one. Total mcast slot count
-    // is NOT the explanation: static and rotated slot totals are identical at every core count.
-    // Mechanism, plausible but unverified: a partially-occupied hosting row still pays base+1 mcast
-    // slots while only some of its cores use the extra slot, so rotating spreads that waste over
-    // every row instead of confining it to one. Latent-V does NOT consult this -- it has no V-chain
-    // amortization to lose and measured a win at every base, partial-row core counts included.
-    // Extrapolation caveat: the four points are all from THIS box's reachable core counts (110/100/
-    // 80/60). Other hardware will hit even-fill combinations that were never measured -- e.g. a
-    // 4-device QuietBox at 100 cores gives kimi50k separate-V 20 floats, which is even and so
-    // engages on prediction, not measurement. A wrong prediction costs PERF only: accuracy is
-    // verified independently of this rule and does not depend on it.
-    const bool rot_floats_fill_rows_evenly = grid_size.x != 0 && (rot_float_chunks % grid_size.x) == 0;
     const uint32_t full_ring_iter_mask = ring_size >= 32 ? 0xFFFFFFFFu : ((1u << ring_size) - 1);
     // v_shares_k_buffer is required: separate-V modes stream V through the per-head
     // store-and-forward chain, whose per-core forwarding counts are built from the flat split and
@@ -2440,31 +2403,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // presence, so "=0" leaves the feature ON as the name implies. Latched once per process, so
     // toggling the variable between dispatches (mock.patch.dict and friends) has no effect after the
     // first ring-joint invocation -- A/B it across two separate runs.
-    // Separate-V rotation is implemented and correct, and its perf is REGIME-DEPENDENT, so it is
-    // opt-in: RING_MLA_ROTATE_SEPARATE_V=1. kimi50k q32/k640 separate-V, in-process profiler, 2 runs
-    // per cell:
-    //    100 cores (grid 10x10, base 2, floats 80): rotated 7.595/7.607 vs static 7.907/7.914 ms
-    //                                               -> rotation WINS by 4.0%
-    //    110 cores (grid 11x10, base 2, floats 60): rotated 8.473/8.465 vs static 7.602/7.600 ms
-    //                                               -> rotation LOSES by 11.4%
-    // So it is NOT inherently slower -- and note 100 cores is the STOCK p150 split, while the
-    // 110-core box these numbers were taken on is the re-flashed outlier. The mechanism behind the
-    // penalty is that under rotation the float chunks land in heads with no base chunks, so their V
-    // is read from DRAM instead of riding the per-head store-and-forward chain; what is not
-    // explained by float count alone is why 80 floats at 100 cores beats 60 floats at 110 (the
-    // partial float row at 110 -- 60 floats over 11-wide rows -- is the obvious suspect and is
-    // unverified). Two data points do not locate the boundary, which is exactly why this stays
-    // opt-in rather than being enabled on a guessed heuristic.
-    // Latent-V never has the penalty at all: V is packed into K and rides the K mcast already.
-    // The principled fix is head-ALIGNED float packing (group floats so each hosting row's floats
-    // share one head, then row-mcast V on the float slot, reusing the head chain's semaphores which
-    // are idle there) -- a separate change, and it would likely make this always-on-able.
-    // Force separate-V rotation on even where the even-fill rule below predicts a loss. For
-    // experimentation only -- it is how the four data points in the table above were taken.
-    static const bool force_rotate_separate_v = []() {
-        const char* value = std::getenv("RING_MLA_ROTATE_SEPARATE_V");
-        return value != nullptr && value[0] != '\0' && std::string_view(value) != "0";
-    }();
     static const bool rotated_q_split_disabled = []() {
         const char* value = std::getenv("RING_MLA_DISABLE_ROTATED_Q_SPLIT");
         return value != nullptr && value[0] != '\0' && std::string_view(value) != "0";
@@ -2545,33 +2483,28 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // !has_sliding_window, enable_kv_chains, k_uses_batch_chain and B == 1, and v_shares_k_buffer
         // subsumes !use_attention_sink (the op rejects that pair outright).
         k_mcast_enabled && build_kv_chains &&
-        // V transport. Latent-V packs V into K's prefix so it rides the K mcast and needs nothing
-        // more. Separate-V puts V on the per-head store-and-forward chain, which works here only
-        // because the chain is rebuilt from the ROTATED base ranges below, and because it must now
-        // state explicitly the three things v_shares_k_buffer was supplying implicitly:
-        // use_streaming_compute (latent-V is TT_FATALed into it; separate-V with fp32_dest_acc_en
-        // would otherwise trip the compute kernel's static_assert), !use_attention_sink (the op
-        // rejects sink+latent-V outright, but permits sink+separate-V, and sink under rotation is
-        // unvalidated), and the head-boundary condition: floats are the TAIL flat ids, so keeping
-        // base*num_cores a whole multiple of num_q_chunks puts the base/float boundary on a head
-        // boundary. Then no float ever belongs to a head that has base chunks, i.e. never to a head
-        // whose chain exists, so every float falls through to the local DRAM V read that
-        // `nq != chain_head` already triggers -- and no core can hit should_receive() at its float
-        // slot against an upstream that will not forward. Without it a "mixed head" holding both
-        // base and float chunks deadlocks in the V relay.
-        (v_shares_k_buffer ||
-         ((rot_floats_fill_rows_evenly || force_rotate_separate_v) && use_head_chain && use_streaming_compute &&
-          !use_attention_sink && num_q_chunks != 0 && (rot_base_chunks * num_cores) % num_q_chunks == 0)) &&
-        // Schedules this rotation cannot model. Balanced/zigzag SKIPS whole Q chunks per device, so
-        // the equal-cost-per-chunk counting the rotation is built on stops holding -- a causal mask
-        // wants enable_zigzag_balancing instead, which is the right tool for that job.
-        // MEASURED, not reasoned: mla_dense_small_balanced (RING_MLA_K_SWEEP, grid 5x6 -> base 2,
-        // floats 2) with this term removed HANGS. It was previously documented as producing silent
-        // garbage from the unscheduled float ids; the real failure is a hang, because an unscheduled
-        // float means a receiver waits on a donor that never runs its handoff. A joint K (L != 0) would
-        // likewise add per-iteration chunks this schedule does not count; unreachable today, since joint tensors
-        // are a video-gen shape and latent-V an MLA one, but validation does not forbid the pair.
-        !args.is_balanced &&
+        // V transport: latent-V only. V is packed into K's prefix, so it rides the K mcast and the
+        // rotation needs nothing extra. This also subsumes !use_attention_sink (the op rejects
+        // sink + latent-V outright) and pins us to the streaming compute path.
+        //
+        // Separate-V rotation was implemented and then REMOVED (2026-08-31). It was correct, but it
+        // bought +4.0% at exactly one core count (100, stock p150) on a path running 16-29% math
+        // utilization, while costing -11.4% at 110 cores and -2.7% at 48. Its enablement rule
+        // (rot_float_chunks % grid_size.x == 0, "floats fill their hosting rows") was fitted to four
+        // points that all varied grid COLUMNS at ten rows; varying ROWS reaches core counts where one
+        // num_cores can be either fill class, and there the rule predicts BACKWARDS:
+        //   8x6  48 cores base 5 floats 40 EVEN     ON 13.251-13.267 OFF 12.897-12.918  -2.7%
+        //   6x8  48 cores base 5 floats 40 PARTIAL  ON 13.511-13.520 OFF 13.555-13.567  +0.3%
+        // (5 runs per arm, tight -- not noise). No other candidate separated the seven points either:
+        // base, cols, rows, rows_needed and float-free-row count each put a win and a loss in the same
+        // bucket. Keeping a perf guard nobody can explain, to gate a feature that helps one grid, was
+        // a worse trade than dropping the branch -- and dropping it deletes six sub-conditions from
+        // this predicate, including that guard and the head-boundary deadlock condition.
+        // If separate-V rotation is ever wanted back, the principled version is head-ALIGNED float
+        // packing: group floats so each hosting row's floats share one head, then row-mcast V on the
+        // float slot reusing the head chain's semaphores, which are idle there. That removes the
+        // reason floats fall off the chain at all, rather than gating on a fitted rule.
+        v_shares_k_buffer && !args.is_balanced &&
         // Partial active masks are handled, not excluded. The rotation schedule is indexed by the
         // ORDINAL of an iteration within the active subsequence (rot_active_ordinal, in
         // chunked_prefill_utils.hpp) rather than by absolute ring_iter, so a skipped iteration is
