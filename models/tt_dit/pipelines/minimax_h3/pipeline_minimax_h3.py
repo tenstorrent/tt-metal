@@ -374,11 +374,17 @@ class MiniMaxH3Pipeline:
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
+        lora_path: str | os.PathLike | None = None,
+        lora_strength: float | None = None,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
         The parallel configuration defaults to this mesh shape's entry in `_PRESETS_BH`; pass any of
         `tp_axis`/`sp_axis`/`num_links`/`topology` to override it.
+
+        `lora_path` takes a distillation or style adapter, applied on device after the base weights
+        load so the weight cache stays adapter-independent. Both it and `lora_strength` fall back to
+        `MINIMAX_H3_LORA_PATH` / `FASTH3_LORA_STRENGTH`, the names FastVideo's own launchers use.
         """
         weights_dir = weights_dir or os.environ.get("MINIMAX_H3_MODEL_PATH")
         if not weights_dir:
@@ -386,6 +392,9 @@ class MiniMaxH3Pipeline:
                 "MiniMax-H3 weights directory not set: pass weights_dir=... or set MINIMAX_H3_MODEL_PATH "
                 "to a diffusers snapshot holding transformer/, text_encoder/, vae/ and audio_vae/."
             )
+        lora_path = lora_path or os.environ.get("MINIMAX_H3_LORA_PATH")
+        if lora_strength is None:
+            lora_strength = float(os.environ.get("FASTH3_LORA_STRENGTH", 1.0))
         return cls(
             mesh_device=mesh_device,
             weights_dir=weights_dir,
@@ -394,6 +403,8 @@ class MiniMaxH3Pipeline:
             num_links=num_links,
             topology=topology,
             task=task,
+            lora_path=lora_path,
+            lora_strength=lora_strength,
         )
 
     @staticmethod
