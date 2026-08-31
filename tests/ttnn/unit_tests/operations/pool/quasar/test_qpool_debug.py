@@ -11,7 +11,7 @@ avg_pool2d while developing the multi-Tensix (num_threads > 1) pool implementati
 sweep suites, this runs a single hand-picked shape with a hand-picked input pattern so a failure
 is immediately attributable, and dumps the worst mismatching output sticks instead of just a PCC.
 
-Run it via the sibling run_qpool_sim.sh (sets up the craq-sim env), or directly on any backend
+Run it via the sibling run_qpool.sh (sets up the craq-sim env), or directly on any backend
 (emulator / WH part) with plain pytest and no TT_METAL_SIMULATOR.
 
 NOTES:
