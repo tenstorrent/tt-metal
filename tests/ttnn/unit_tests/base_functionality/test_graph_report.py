@@ -28,7 +28,7 @@ import graph_report
 # Now import ttnn for device tests
 import ttnn
 
-from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0, skip_for_slow_dispatch
 
 
 @pytest.fixture
@@ -4959,3 +4959,69 @@ class TestPythonStackTraceImport:
         )
         assert c.fetchall() == [(1, str(source_file.resolve()))]
         conn.close()
+
+
+class TestReportConfigDoesNotEnableLegacyTracer:
+    """
+    enable_graph_report used to switch on the legacy ttnn.tracer, which replaced every torch
+    argument with a TracedTorchTensor. nanobind selects its framework conversion fallbacks by
+    string-matching type(obj).__module__, so that subclass ("ttnn.torch_tracer") lost them and
+    any ttnn.from_torch needing a dtype/layout conversion, or carrying requires_grad, failed.
+    """
+
+    @pytest.mark.parametrize(
+        "make_tensor, dtype",
+        [
+            # BN folded into a conv weight outside no_grad: requires_grad=True, non-leaf.
+            (lambda: torch.nn.Parameter(torch.rand((8, 8), dtype=torch.float32)) * 2.0, ttnn.float32),
+            # Rotary matrices and similar: float32 and non-contiguous, converted to bfloat16.
+            (lambda: torch.zeros((8, 8), dtype=torch.float32).T.unsqueeze(0), ttnn.bfloat16),
+            # Control: needs no conversion at all, so it passed even while the tracer was on.
+            (lambda: torch.rand((8, 8), dtype=torch.bfloat16), ttnn.bfloat16),
+        ],
+        ids=["requires_grad", "noncontiguous_float32_to_bfloat16", "no_conversion"],
+    )
+    def test_from_torch_conversions_under_report_config(self, make_tensor, dtype):
+        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
+            "enable_logging", True
+        ), ttnn.manage_config("enable_graph_report", True):
+            assert ttnn.from_torch(make_tensor(), dtype=dtype) is not None
+            assert not ttnn.tracer.ENABLE_TRACER
+
+    def test_explicit_tracer_still_works(self):
+        """Fixing the above must not disable ttnn.tracer for callers that ask for it directly."""
+        with ttnn.manage_config("enable_fast_runtime_mode", False):
+            with ttnn.tracer.trace():
+                assert ttnn.tracer.ENABLE_TRACER
+                assert ttnn.torch_tracer.GRAPH_STACK is not None
+            assert not ttnn.tracer.ENABLE_TRACER
+            assert ttnn.torch_tracer.GRAPH_STACK is None
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.skipif(not is_wormhole_b0(), reason="Requires Wormhole B0")
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+class TestLoggingDuringTraceCapture:
+    """
+    enable_logging synchronizes the device around every op, which is illegal while a metal trace
+    is being captured ("Event Synchronization is not supported during trace capture").
+    """
+
+    def test_is_trace_capture_active_tracks_capture(self, device):
+        assert not ttnn.is_trace_capture_active(device)
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        try:
+            assert ttnn.is_trace_capture_active(device)
+        finally:
+            ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        assert not ttnn.is_trace_capture_active(device)
+
+    def test_op_inside_trace_capture_with_logging(self, device):
+        shape = (1, 1, 32, 32)
+        a = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config("enable_logging", True):
+            ttnn.add(a, a)  # compile the program binaries before capturing
+            trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+            ttnn.add(a, a)
+            ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        ttnn.synchronize_device(device)

@@ -994,10 +994,6 @@ class Operation:
                             f"Pre-operation hook {hook} returned {hook_return_value} but must return None"
                         )
 
-                if ttnn.CONFIG.enable_logging and ttnn.CONFIG.enable_graph_report:
-                    if not ttnn.tracer.is_tracing_enabled():
-                        ttnn.tracer.enable_tracing()
-
                 if ttnn.tracer.ENABLE_TRACER:
                     decorated_function = ttnn.tracer.trace_ttnn_operation(
                         self.python_fully_qualified_name, decorated_function
@@ -1014,7 +1010,9 @@ class Operation:
                 if ttnn.CONFIG.enable_logging:
                     devices = get_devices((function_args, function_kwargs))
                     for device in devices:
-                        ttnn.synchronize_device(device)
+                        # Host synchronization is illegal while a metal trace is being captured.
+                        if not ttnn.is_trace_capture_active(device):
+                            ttnn.synchronize_device(device)
 
                     logger.debug(f"Started {self.python_fully_qualified_name:50}")
 
@@ -1050,7 +1048,8 @@ class Operation:
 
                     if ttnn.CONFIG.enable_logging:
                         for device in devices:
-                            ttnn.synchronize_device(device)
+                            if not ttnn.is_trace_capture_active(device):
+                                ttnn.synchronize_device(device)
                         logger.debug(f"Finished {self.python_fully_qualified_name:50}")
 
                     # Comparison mode: record Python-specific golden comparison data

@@ -381,6 +381,7 @@ from ttnn.device import (
     close_device,
     manage_device,
     synchronize_device,
+    is_trace_capture_active,
     dump_device_memory_state,
     get_memory_view,
     get_allocator_base_address,
