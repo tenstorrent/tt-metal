@@ -185,15 +185,104 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
     v_endif;
 }
 
+#ifndef INP_FLOAT32
+// Horner step of the bf16 residual polynomial, applied to two independent accumulators in
+// lockstep. The steps must alternate at STATEMENT level: GCC will not interleave two
+// independent expression trees on its own, so writing the two chains back to back leaves
+// every dependency stall in place.
+#define SOFTPLUS_STEP2(c)   \
+    do {                    \
+        r0 = r0 * a0 + (c); \
+        r1 = r1 * a1 + (c); \
+    } while (0)
+
+// Two elements per iteration, hand-interleaved (bf16 path only -- the fp32 path's exp tail
+// is a second, deeper chain that does not fit alongside a second element's live values, and
+// the tt-llk perf sweep drives Float16_b, so an fp32 interleave could not be measured here).
+//
+// The residual polynomial is a fully dependent Horner chain: on Blackhole each step stalls
+// on the previous SFPMAD with nothing to fill the slot, and the instruction count does not
+// show it. Two independent chains fill those slots, and one dst_reg advance covers both.
+//
+// §2 cannot cross a v_if -- the condition-code state is one shared resource, so two
+// elements taking different branches serialise their predicated blocks. The single-element
+// body puts the whole polynomial inside `v_if (t <= threshold)`, so interleaving it in
+// place would buy almost nothing. The fix is to lift the chain out of the guard rather
+// than interleave within it (see the store comment below): dependent-adjacent pairs then
+// fall 12 -> 6.5 per element, and loop cc does not grow (8 -> 7 per element, the nested
+// PUSHC/POPC becoming two flat guards).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void calculate_softplus_body2(const float beta, const float beta_reciprocal, const float threshold) {
+    sfpi::vFloat t0 = beta * sfpi::dst_reg[0];
+    sfpi::vFloat t1 = beta * sfpi::dst_reg[1];
+
+    // a = |t| via setsgn (clear sign bit, no branch)
+    sfpi::vFloat a0 = sfpi::setsgn(t0, 0);
+    sfpi::vFloat a1 = sfpi::setsgn(t1, 0);
+
+    // f(a) via degree-6 Horner on [0, 5]. PolynomialEvaluator::eval expands to
+    // `c + a * inner` from the innermost coefficient outwards, so descending C6..C0 with
+    // `r = r * a + c` keeps each element's operations, operands and order: bit-exact.
+    sfpi::vFloat r0 = SOFTPLUS_BF16_POLY_C6;
+    sfpi::vFloat r1 = SOFTPLUS_BF16_POLY_C6;
+    SOFTPLUS_STEP2(SOFTPLUS_BF16_POLY_C5);
+    SOFTPLUS_STEP2(SOFTPLUS_BF16_POLY_C4);
+    SOFTPLUS_STEP2(SOFTPLUS_BF16_POLY_C3);
+    SOFTPLUS_STEP2(sfpi::vConstFloatPrgm2);  // SOFTPLUS_BF16_POLY_C2, parked by softplus_init
+    SOFTPLUS_STEP2(sfpi::vConstFloatPrgm1);  // SOFTPLUS_BF16_POLY_C1
+    SOFTPLUS_STEP2(sfpi::vConstFloatPrgm0);  // SOFTPLUS_BF16_POLY_C0
+
+    // Tail: the degree-6 poly diverges past its [0, 5] fit domain; clamp to 0 as the
+    // single-element body does.
+    v_if(a0 > SOFTPLUS_POLY_BOUNDARY) { r0 = 0.0f; }
+    v_endif;
+    v_if(a1 > SOFTPLUS_POLY_BOUNDARY) { r1 = 0.0f; }
+    v_endif;
+
+    // Reconstruct softplus(t) = max(0, t) + f(|t|), then undo the beta scaling.
+    sfpi::vFloat res0 = beta_reciprocal * (sfpi::max(t0, 0.0f) + r0);
+    sfpi::vFloat res1 = beta_reciprocal * (sfpi::max(t1, 0.0f) + r1);
+
+    // Round-to-nearest for bf16 destination (SFPSTORE defaults to truncation)
+    if constexpr (!is_fp32_dest_acc_en) {
+        res0 = sfpi::convert<sfpi::vFloat16b>(res0, sfpi::RoundMode::Nearest);
+        res1 = sfpi::convert<sfpi::vFloat16b>(res1, sfpi::RoundMode::Nearest);
+    }
+
+    // The guard is applied only to the store, not to the arithmetic. SFPU predication masks
+    // the destination *write* and not the execution, so evaluating the polynomial for every
+    // lane and discarding it on the t > threshold lanes is bit-identical to the predicated
+    // original -- those lanes keep the dst_reg value they came in with either way. This is
+    // what makes the interleave above reachable: the independent work now sits in
+    // straight-line code instead of inside a v_if it cannot cross.
+    v_if(t0 <= threshold) { sfpi::dst_reg[0] = res0; }
+    v_endif;
+    v_if(t1 <= threshold) { sfpi::dst_reg[1] = res1; }
+    v_endif;
+}
+#endif
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::uint32_t param2) {
     const float beta = Converter::as_float(param0);
     const float beta_reciprocal = Converter::as_float(param1);
     const float threshold = Converter::as_float(param2);
+#ifdef INP_FLOAT32
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_softplus_body<APPROXIMATION_MODE, is_fp32_dest_acc_en>(beta, beta_reciprocal, threshold);
         sfpi::dst_reg++;
     }
+#else
+    for (int d = 0; d < ITERATIONS / 2; d++) {
+        calculate_softplus_body2<APPROXIMATION_MODE, is_fp32_dest_acc_en>(beta, beta_reciprocal, threshold);
+        sfpi::dst_reg += 2;
+    }
+    // Odd ITERATIONS: finish the trailing element on the single-element body.
+    if constexpr (ITERATIONS % 2 != 0) {
+        calculate_softplus_body<APPROXIMATION_MODE, is_fp32_dest_acc_en>(beta, beta_reciprocal, threshold);
+        sfpi::dst_reg++;
+    }
+#endif
 }
 
 }  // namespace ckernel::sfpu
