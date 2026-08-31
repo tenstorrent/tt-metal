@@ -6303,6 +6303,61 @@ else:
     ]
 
 
+@pytest.mark.timeout(900)
+@pytest.mark.skipif(
+    not os.environ.get("RING_MLA_K_SWEEP"), reason="Report-only separate-V perf probe for rotated-Q-split A/B"
+)
+@pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
+@pytest.mark.parametrize("q_chunk_size,k_chunk_size", [(32, 640)], ids=["q32-k640"])
+@pytest.mark.parametrize("model_name", ["kimi50k"], ids=["kimi50k"])
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_ring_joint_attention_chunked_perf_check_report_only(model_name, q_chunk_size, k_chunk_size, chunk_size):
+    """SEPARATE-V chunked-prefill math utilization, measured and reported, gating nothing.
+
+    The separate-V chunked path had no perf harness at all: its only perf tests are the tracy
+    perf_table generators, which need a Tracy-enabled build and cannot run here. That left the
+    rotated Q split's effect on separate-V unmeasurable, even though the rotation now engages there
+    (kimi50k q32: 14 heads x 20 chunks = 280 units over 110 cores -> base 2, floats 60). This uses
+    the same in-process profiler as the ring_mla perf check so an A/B against
+    RING_MLA_DISABLE_ROTATED_Q_SPLIT is a ~1 minute run. No expected_util: separate-V floats lose
+    the V head-chain amortization and read V from DRAM, so whether the rotation is a win here is an
+    open measurement, not a committed baseline.
+    """
+    model = CHUNKED_PREFILL_MODEL_CONFIGS[model_name]
+    n_chunks = CHUNKED_PREFILL_TOTAL_SEQ // chunk_size
+    perf_chunk = n_chunks - 1
+
+    config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-fresh_kv"
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    try:
+        with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
+            duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
+                runtime.mesh_device,
+                lambda: run_ring_joint_sdpa_chunked(
+                    MESH_CONFIG,
+                    model,
+                    chunk_size=chunk_size,
+                    qk_configs=[(q_chunk_size, k_chunk_size)],
+                    persistent_buffer_mode="reuse_max",
+                    use_ring_mla=False,
+                    do_check=False,
+                    reuse_kv_buffer=False,
+                    runtime=runtime,
+                ),
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+    utilization, _ = compute_chunked_prefill_perf_check_utilization(
+        MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
+    )
+    logger.info(
+        f"separate-V chunked perf probe {config_id}: duration={duration_ns/1e6:.3f} ms, "
+        f"math_util={utilization:.2f}%, profiler_records={len(perf_records)}"
+    )
+
+
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util",

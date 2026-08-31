@@ -2403,6 +2403,20 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // presence, so "=0" leaves the feature ON as the name implies. Latched once per process, so
     // toggling the variable between dispatches (mock.patch.dict and friends) has no effect after the
     // first ring-joint invocation -- A/B it across two separate runs.
+    // Separate-V rotation is implemented and correct, but MEASURED SLOWER, so it is opt-in:
+    // RING_MLA_ROTATE_SEPARATE_V=1. kimi50k q32/k640 separate-V, in-process profiler, 2 runs each:
+    // rotated 8.456/8.466 ms (26.37/26.34%) vs static 7.581/7.614 ms (29.42/29.29%) -- 11.5% slower.
+    // The cause is structural, not a bug: under rotation the float chunks land in heads that have no
+    // base chunks, so their V is read from DRAM instead of riding the per-head store-and-forward
+    // chain, and losing that amortization costs more than the K-mcast slot the rotation saves.
+    // Latent-V does not have this problem because V is packed into K and rides the K mcast already.
+    // Making it a win needs head-ALIGNED float packing (group floats so each hosting row's floats
+    // share one head, then row-mcast V on the float slot, reusing the head chain's semaphores which
+    // are idle at that slot) -- worthwhile but a separate change.
+    static const bool rotate_separate_v = []() {
+        const char* value = std::getenv("RING_MLA_ROTATE_SEPARATE_V");
+        return value != nullptr && value[0] != '\0' && std::string_view(value) != "0";
+    }();
     static const bool rotated_q_split_disabled = []() {
         const char* value = std::getenv("RING_MLA_DISABLE_ROTATED_Q_SPLIT");
         return value != nullptr && value[0] != '\0' && std::string_view(value) != "0";
@@ -2483,7 +2497,23 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // so the compute kernel static_asserts this too. These two terms also subsume
         // !has_sliding_window, enable_kv_chains, k_uses_batch_chain and B == 1, and v_shares_k_buffer
         // subsumes !use_attention_sink (the op rejects that pair outright).
-        k_mcast_enabled && build_kv_chains && v_shares_k_buffer &&
+        k_mcast_enabled && build_kv_chains &&
+        // V transport. Latent-V packs V into K's prefix so it rides the K mcast and needs nothing
+        // more. Separate-V puts V on the per-head store-and-forward chain, which works here only
+        // because the chain is rebuilt from the ROTATED base ranges below, and because it must now
+        // state explicitly the three things v_shares_k_buffer was supplying implicitly:
+        // use_streaming_compute (latent-V is TT_FATALed into it; separate-V with fp32_dest_acc_en
+        // would otherwise trip the compute kernel's static_assert), !use_attention_sink (the op
+        // rejects sink+latent-V outright, but permits sink+separate-V, and sink under rotation is
+        // unvalidated), and the head-boundary condition: floats are the TAIL flat ids, so keeping
+        // base*num_cores a whole multiple of num_q_chunks puts the base/float boundary on a head
+        // boundary. Then no float ever belongs to a head that has base chunks, i.e. never to a head
+        // whose chain exists, so every float falls through to the local DRAM V read that
+        // `nq != chain_head` already triggers -- and no core can hit should_receive() at its float
+        // slot against an upstream that will not forward. Without it a "mixed head" holding both
+        // base and float chunks deadlocks in the V relay.
+        (v_shares_k_buffer || (rotate_separate_v && use_head_chain && use_streaming_compute && !use_attention_sink &&
+                               num_q_chunks != 0 && (rot_base_chunks * num_cores) % num_q_chunks == 0)) &&
         // !kv_pad_rotation_enabled is MEASURED load-bearing. Removing it does make the rotation
         // engage on the kv-pad path (kv_actual_isl ring MLA, chunk_size_local 256 on a 3x2 grid:
         // base 5, floats 2, active_iters 5 of 8) -- and the device HANGS ("potential hang detected,
@@ -2692,6 +2722,43 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Define value = chunk-list length per iteration; each kernel adds its own header words
         // to get its runtime-arg stride (see chunked_prefill_utils.hpp).
         defines["ROTATED_Q_SPLIT"] = std::to_string(rot_base_chunks + 1);
+
+        if (!v_shares_k_buffer) {
+            // Separate-V: the V head chain's per-(head, core) forwarding counts come from
+            // head_work/head_segments, which were derived from the STATIC flat split. Under rotation
+            // each core instead owns the contiguous base range [i*base, (i+1)*base) on every
+            // iteration, so rebuild both from that. Floats are deliberately NOT added: they are the
+            // tail flat ids and, by the head-boundary term in the predicate, live only in heads with
+            // no base chunks -- heads whose chain is therefore never built (segs.size() < 2), so the
+            // reader's `nq != chain_head` fallback reads their V from DRAM.
+            // The K chain was already built above from the static head_work, which is what its
+            // single-head-injector rule needs; only the head chain, built below, sees this version.
+            for (auto& work : core_work) {
+                work.head_work.clear();
+            }
+            for (auto& segs : head_segments) {
+                segs.clear();
+            }
+            for (uint32_t i = 0; i < num_cores; ++i) {
+                auto& work = core_work.at(i);
+                uint32_t flat_chunk = i * rot_base_chunks;
+                uint32_t remaining = rot_base_chunks;
+                while (remaining > 0) {
+                    const auto [head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
+                    const uint32_t take = std::min(remaining, num_q_chunks - q_chunk_idx);
+                    work.head_work.push_back(CoreHeadWork{.head = head_idx, .q_chunk_count = take});
+                    TT_FATAL(
+                        head_idx < head_segments.size(),
+                        "Rotated head-chain segment index {} is outside {} configured query heads",
+                        head_idx,
+                        head_segments.size());
+                    head_segments[head_idx].push_back(HeadSegmentRef{
+                        .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+                    remaining -= take;
+                    flat_chunk += take;
+                }
+            }
+        }
         // log_info, matching the decline branch below: one line per program compile (programs are
         // cached), and it is the only way a user can confirm the rotation is actually active for a
         // given shape and core count.
