@@ -330,7 +330,7 @@ tt::tt_metal::experimental::ProgramRunArgs TilizeMultiCoreShardedRetileProgramFa
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     // The borrowed input DFB and the output binding (borrowed shard buffer, or interleaved
     // TensorAccessor) both refresh their backing address from the tensor args on a cache hit.
-    // (This replaces the legacy legacy slot-0 patch + borrowed-address rebuild.)
+    // (This replaces the legacy slot-0 patch + borrowed-address rebuild.)
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
 
