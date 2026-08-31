@@ -89,65 +89,59 @@ statically-allocated circular buffers colliding with L1 buffers:
 | decode | `_tp_linear("mlp_down_decode")`, `in0_block_w=17` | `[0-0 - 7-9]` | 811,776 | 777,728 | 34,048 B |
 | decode | `_all_reduce` after the MLP down projection | `[0-0 - 0-0]` | 177,152 | 163,328 | 13,824 B |
 
-**Was it the rebase? Not confirmed.** The circumstantial case is strong, but I
-never found a change in tt-metal that causes it, so this is recorded as
-unattributed.
+**Yes, this is a regression, and it is in a specific new op.**
 
-What supports "regression":
+`ttnn.reduce_scatter` — not `all_gather`; run alone, `all_gather` leaves one
+block at the very top and is harmless — now dispatches small shapes to
+`reduce_scatter_minimal_direct`, an op that **does not exist on the old base**:
 
-- `doc/multichip_decoder/artifacts/tracy/linear_b32_dram_sharded/provenance.txt`
-  records the exact command, and its `trace_result.json` records
-  `candidate=default`, `baseline_candidate=default`, `pcc: [1.0, 1.0, 1.0]`,
-  `multichip_trace_median_ms=4.4718`. Same command, same candidate, no env vars,
-  no setup step. Running it on the rebased tree failed.
-- The harness performs no collective warm-up for `candidate=default`
-  (`_ccl_buffers` is only populated for `multichip_preallocated_ccl`, and holds
-  output tensors, not semaphores), so those green runs took the same path.
-- The single-chip baseline the same harness prints is unchanged (15.8581 ms
-  recorded, 15.8382 ms now), so the environment is comparable.
+| | old base | new base |
+|---|---:|---:|
+| files under `experimental/ccl/reduce_scatter_minimal_direct/` | **0** | **12** |
 
-Candidate causes checked and **ruled out**:
+It arrived in `b76ea5de9b3` *"[Performance] reduce_scatter \"direct\" algorithm
+for small shapes (#51741)"*, which is an ancestor of the new base and not of the
+old one.
 
-| Candidate | Verdict |
-|---|---|
-| `ccl/all_reduce/all_reduce.cpp` changed | No. Only its nanobind docstring moved. |
-| Fabric reserves more L1 | No. `total_bytes_per_bank` is 1,461,248 with `FABRIC_1D_RING` both disabled and enabled. |
-| The composite-vs-RS+AG path flipped for this shape | No. `composite_common` changed only by a namespace refactor and a rank-1 edge case. |
-| Reduce-scatter CBs grew via the `packet_size_bytes` switch in `e4afdb1a8e6` | No. `tile_granularity = min(4 * min(4, pages_per_packet), max_dst_size)` saturates at 8 either way. |
-| `use_l1_small_for_semaphores` is new | No. Present on both bases, defaulting to `false` on both. |
+Three things about it combine into the failure:
 
-**Not** ruled out: the `reduce_scatter_minimal_async` rewrite (+2,192/−1,800
-across the two bases) could have changed the size or ordering of the transient
-that displaces the semaphores. Settling that needs a build of the old base to
-measure the same low-water mark, which this branch did not do.
+1. **It is selected by default for exactly our shape.** The gate is
+   `k_direct_rs_max_input_bytes = 512 KiB` of per-device input; the residual
+   all-reduce at 32x5120 bf16 is 320 KiB, so it qualifies. Passing
+   `intermediate_memory_config` or `use_l1_small_for_semaphores` opts back out
+   to the ring op — which is why setting either one made the symptom vanish.
+2. **It stages in L1 on purpose**, either height-sharded L1 outright or the
+   interleaved fallback at
+   `total_bytes <= k_l1_staging_budget_bytes ? L1 : DRAM` (budget 4 MiB).
+3. **Its semaphores fall back to the main L1 heap when there is no L1-small
+   region.** `reduce_scatter_minimal_direct_factory.cpp`:
+   `sem_buffer_type = l1_small_size > 0 ? BufferType::L1_SMALL : BufferType::L1`.
 
-So the honest position is: the failure is real, reproducible, and fully
-characterized on the current base; whether the current base *changed* it is
-unproven.
+The staging is allocated before the semaphores, so with `l1_small_size == 0` —
+the default, and what every harness here uses — the persistent semaphores are
+placed *beneath* a large L1 staging buffer. Freeing the staging does not move
+them, and contiguous L1 stays capped for the rest of the process.
 
-**Root cause — one thing, not three.** `ttnn.all_reduce` passes no persistent
-semaphores (it forwards `std::nullopt` and falls through to the non-persistent
-`ttnn::reduce_scatter` / `ttnn::all_gather` wrappers), so the op mints its own
-global semaphores and keeps them, cached per collective configuration.
+Measured, first collective in a fresh process, `reduce_scatter` at width 5120:
 
-*That caching is not the bug, and is not a leak.* Repeating one shape holds
-steady at nine 64-byte blocks across six calls; only a new shape adds another
-set. In a real model, where the collective shapes are fixed, it is bounded and
-small.
-
-The problem is **where the first set lands**. The op also allocates a large L1
-transient: a width-5120 `all_reduce` needs roughly 700-900 KiB contiguous, and
-below ~600 KiB it fails inside `bank_manager` rather than degrading — measured
-by reserving L1 with a blocker tensor and starving it. That transient is
-allocated *before* the semaphores, and semaphores are placed top-down into
-whatever is free. So on the first collective, with L1 empty, the transient takes
-the top of L1 and forces the semaphores underneath it. Because they are cached,
-freeing the transient does not move them, and contiguous L1 stays capped there
-for the rest of the process:
-
-| first call width | 32 | 512 | 5120 (the real residual width) |
+| variant | blocks | lowest | largest contiguous L1 after |
 |---|---:|---:|---:|
-| largest contiguous L1 after | 1,461,120 B | 1,329,664 B | **805,376 B** |
+| default (direct op) | 8 | 805,376 | **805,376 B** |
+| `intermediate_memory_config=DRAM` (ring op) | 4 | 1,460,992 | 1,460,992 B |
+| `use_l1_small_for_semaphores=True`, `l1_small_size=32768` | — | — | 1,428,480 B (unchanged) |
+| input 640 KiB, above the 512 KiB gate (ring op) | 4 | 1,460,992 | 1,460,992 B |
+
+The size gate is directly visible in that last row: the same op on a *larger*
+input is harmless, because a larger input is not eligible for the direct path.
+
+**The bug worth reporting upstream** is item 3 — the semaphore fallback. When
+`l1_small_size == 0` the op puts persistent semaphores into the main heap
+underneath its own transient L1 staging, which permanently fragments L1 for
+every program that follows. With an L1-small region configured the same op
+leaves the heap completely untouched.
+
+**Why all three clash sites are one cause.** The capped heap is what every later
+program has to fit under, and three of them do not:
 
 805,376 B is not enough for this layer. The decode MLP down projection's static
 CBs alone reach 811,776 B. The prefill norm needs ~1,080,320 B contiguous,
@@ -297,12 +291,19 @@ autoport's `.gitignore` -- `profile_log_device.csv` alone is 347 MB per arm.
    old base and measuring the same first-collective low-water mark. The fix does
    not depend on it, but the answer belongs upstream: any model that runs a
    collective before a large program inherits this on this base.
-3. Consider whether the collective should allocate its cached semaphores before
-   its large L1 transient rather than after. The caching itself is bounded and
-   correct; it is only the placement of the first set, underneath a transient
-   that is then freed, that is load-bearing for every program that follows.
-   That is a sharp edge for any caller who runs a collective before a large
-   program, and it is invisible until something else fails to fit.
+3. **Report the semaphore fallback upstream.**
+   `reduce_scatter_minimal_direct_factory.cpp` picks
+   `l1_small_size > 0 ? BufferType::L1_SMALL : BufferType::L1` for its
+   persistent semaphores. On a device opened with the default `l1_small_size=0`
+   that puts them in the main heap, underneath the op's own transient L1
+   staging, where they permanently fragment L1 for every later program. Either
+   allocate them before the staging, or keep them out of the main heap when
+   there is no L1-small region. Until then, any caller that runs a small
+   reduce-scatter before a large program inherits this, and it is invisible
+   until something unrelated fails to fit.
+4. Consider whether `ttnn.all_reduce` should expose `use_l1_small_for_semaphores`
+   and `intermediate_memory_config` at all, given either one is enough to avoid
+   the direct path.
 
 ## Note for anyone triaging the MLP down projection
 
