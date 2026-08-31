@@ -6,7 +6,8 @@
 
 Six aspect ratios (21:9 .. 9:16) x three durations (5 / 10 / 15 s), 50 steps. The canvas comes from
 `resolve_canvas_size` and the frame count from `align_num_frames`. Stage durations log on the host
-rank only, and only for the warm generation. Quality gates live in `test_pipeline_minimax_h3.py`.
+rank only, and only for the warm generation. Rank 0 writes the muxed mp4; quality gates live in
+`test_pipeline_minimax_h3.py`.
 """
 
 from __future__ import annotations
@@ -23,7 +24,16 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from .common import GALAXY_MESHES
-from .common_av import CALIBRATED_FOX_PROMPT, is_host, log_pipeline_perf, run_warm_generation, weights_dir
+from .common_av import (
+    CALIBRATED_FOX_PROMPT,
+    artifact_dir,
+    is_host,
+    log_pipeline_perf,
+    run_warm_generation,
+    to_uint8_frames,
+    weights_dir,
+    write_artifacts,
+)
 
 NUM_INFERENCE_STEPS = 50
 SEED = 0
@@ -99,3 +109,9 @@ def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
     if ttnn.using_distributed_env():
         ttnn.distributed_context_barrier()
     pipeline.release_traces()
+
+    if is_host():
+        artifacts = artifact_dir("h3_t2va_artifacts")
+        stem = f"t2va_{aspect_ratio[0]}x{aspect_ratio[1]}_{WIDTH}x{HEIGHT}_{duration_s}s"
+        frames = to_uint8_frames(output)
+        write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
