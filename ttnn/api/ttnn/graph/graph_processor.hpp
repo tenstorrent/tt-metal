@@ -15,10 +15,12 @@
 #include <filesystem>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <stack>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <any>
 
 namespace tt::tt_metal::distributed {
@@ -30,6 +32,13 @@ namespace ttnn::graph {
 
 // Node identifiers in the graph
 using node_id = int;
+
+// One sub-device of a sub-device manager. Sub-device managers partition a MeshDevice uniformly, so
+// this is a mesh-level fact and carries no physical device id.
+struct SubDeviceTopology {
+    uint8_t sub_device_id = 0;
+    tt::tt_metal::CoreRangeSet worker_core_ranges;
+};
 
 // Where one program of a MeshWorkload actually ran. `device_id` is the MeshDevice id so it joins
 // the report's `devices` table; `physical_device_id` is the chip the program landed on.
@@ -114,6 +123,15 @@ public:
 
     void track_program_execution(const ProgramExecutionPlacement& placement);
 
+    // True while this capture has not yet recorded the partition of this sub-device manager.
+    // Lets the caller skip building the topology on the hot path once it has been captured.
+    bool needs_sub_device_manager_snapshot(uint32_t device_id, uint64_t sub_device_manager_id);
+
+    // Records a sub-device manager's full partition, so the report describes every sub-device and
+    // not only those that happened to run an operation. Idempotent per (device, manager).
+    void track_sub_device_manager(
+        uint32_t device_id, uint64_t sub_device_manager_id, const std::vector<SubDeviceTopology>& sub_devices);
+
     void track_function_start(
         std::string_view function_name, std::span<tt::tt_metal::TrackedArgument> input_parameters) override;
 
@@ -158,6 +176,8 @@ private:
 
     // Device info captured at track time (keyed by device_id)
     std::unordered_map<uint32_t, nlohmann::json> captured_device_info;
+    // (device_id, sub_device_manager_id) pairs whose partition this capture has already recorded
+    std::set<std::pair<uint32_t, uint64_t>> captured_sub_device_managers;
     // Device pointers for buffer pages (only valid during capture)
     std::vector<tt::tt_metal::distributed::MeshDevice*> captured_mesh_devices;
     // Per-operation buffer snapshots (function_start counter -> buffers)

@@ -38,6 +38,7 @@ constexpr auto kMaxSizePerBank = "max_size_per_bank";
 constexpr auto kSubDeviceManagerId = "sub_device_manager_id";
 constexpr auto kSubDeviceId = "sub_device_id";
 constexpr auto kWorkerCoreRanges = "worker_core_ranges";
+constexpr auto kSubDevices = "sub_devices";
 constexpr auto kRuntimeId = "runtime_id";
 constexpr auto kGlobalCallCount = "global_call_count";
 constexpr auto kProgramId = "program_id";
@@ -61,6 +62,7 @@ constexpr auto kNodeFunctionEnd = "function_end";
 constexpr auto kNodeCaptureStart = "capture_start";
 constexpr auto kNodeCaptureEnd = "capture_end";
 constexpr auto kNodeProgramExecution = "program_execution";
+constexpr auto kNodeSubDeviceManager = "sub_device_manager";
 // levelized graph keys
 constexpr auto kInEdges = "in_edges";
 constexpr auto kOutEdges = "out_edges";

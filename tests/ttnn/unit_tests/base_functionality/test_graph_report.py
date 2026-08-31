@@ -119,21 +119,39 @@ def _assert_nonempty_tables_rank_equals(cursor, expected_rank: int) -> None:
 
 
 class TestSubDeviceExecutionImport:
-    @staticmethod
-    def _report_with_program_execution():
-        worker_core_ranges = [{"start": {"x": 4, "y": 0}, "end": {"x": 4, "y": 4}}]
+    # Sub-device 0 is declared by the manager but never runs an operation; only sub-device 1 does.
+    IDLE_SUB_DEVICE_RANGES = [{"start": {"x": 0, "y": 0}, "end": {"x": 3, "y": 3}}]
+    BUSY_SUB_DEVICE_RANGES = [{"start": {"x": 4, "y": 0}, "end": {"x": 4, "y": 4}}]
+
+    @classmethod
+    def _report_with_program_execution(cls):
         graph = [
             {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
             {
                 "counter": 1,
                 "node_type": "function_start",
                 "params": {"name": "ttnn.add"},
-                "connections": [2],
+                "connections": [2, 3],
                 "input_tensors": [],
                 "arguments": ["SubDeviceId(0)"],
             },
             {
                 "counter": 2,
+                "node_type": "sub_device_manager",
+                "params": {
+                    "device_id": 5,
+                    "sub_device_manager_id": 7,
+                    "sub_devices": json.dumps(
+                        [
+                            {"sub_device_id": 0, "worker_core_ranges": cls.IDLE_SUB_DEVICE_RANGES},
+                            {"sub_device_id": 1, "worker_core_ranges": cls.BUSY_SUB_DEVICE_RANGES},
+                        ]
+                    ),
+                },
+                "connections": [],
+            },
+            {
+                "counter": 3,
                 "node_type": "program_execution",
                 "params": {
                     # device_id is the MeshDevice id, physical_device_id the chip it landed on.
@@ -142,7 +160,7 @@ class TestSubDeviceExecutionImport:
                     "physical_device_id": 17,
                     "sub_device_manager_id": 7,
                     "sub_device_id": 1,
-                    "worker_core_ranges": json.dumps(worker_core_ranges),
+                    "worker_core_ranges": json.dumps(cls.BUSY_SUB_DEVICE_RANGES),
                     "runtime_id": 3,
                     "global_call_count": (3 << 10) | 17,
                     "program_id": 42,
@@ -151,32 +169,37 @@ class TestSubDeviceExecutionImport:
                 "connections": [],
             },
             {
-                "counter": 3,
+                "counter": 4,
                 "node_type": "function_end",
                 "params": {"name": "ttnn.add"},
                 "connections": [],
                 "duration_ns": 1000,
             },
-            {"counter": 4, "node_type": "capture_end", "params": {}, "connections": []},
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
         ]
-        return _make_report(graph, devices=[{"device_id": 5}]), worker_core_ranges
+        return _make_report(graph, devices=[{"device_id": 5}])
 
     def test_imports_authoritative_program_execution_and_topology(self, tmp_path):
-        report, expected_ranges = self._report_with_program_execution()
+        report = self._report_with_program_execution()
         conn, cursor = _import_to_db(report, tmp_path)
         try:
-            manager = cursor.execute(
-                "SELECT device_id, physical_device_id, sub_device_manager_id, rank FROM sub_device_managers"
-            ).fetchone()
-            assert manager == (0, 17, 7, 0)
+            managers = cursor.execute(
+                "SELECT device_id, sub_device_manager_id, rank FROM sub_device_managers"
+            ).fetchall()
+            assert managers == [(0, 7, 0)]
 
-            sub_device = cursor.execute(
-                "SELECT device_id, physical_device_id, sub_device_manager_id, sub_device_id, "
-                "worker_core_ranges, rank FROM sub_devices"
-            ).fetchone()
-            assert sub_device[:4] == (0, 17, 7, 1)
-            assert json.loads(sub_device[4]) == expected_ranges
-            assert sub_device[5] == 0
+            # Both sub-devices are recorded, including sub-device 0, which ran no operation.
+            sub_devices = cursor.execute(
+                "SELECT device_id, sub_device_manager_id, sub_device_id, worker_core_ranges, rank "
+                "FROM sub_devices ORDER BY sub_device_id"
+            ).fetchall()
+            assert [row[:3] for row in sub_devices] == [(0, 7, 0), (0, 7, 1)]
+            assert json.loads(sub_devices[0][3]) == self.IDLE_SUB_DEVICE_RANGES
+            assert json.loads(sub_devices[1][3]) == self.BUSY_SUB_DEVICE_RANGES
+            assert {row[4] for row in sub_devices} == {0}
+
+            # Only the sub-device that ran is linked to an execution.
+            assert cursor.execute("SELECT sub_device_id FROM execution_sub_devices").fetchall() == [(1,)]
 
             execution = cursor.execute(
                 "SELECT o.name, e.operation_id, e.device_id, e.physical_device_id, e.runtime_id, "
@@ -317,7 +340,7 @@ class TestSubDeviceExecutionImport:
             ):
                 assert cursor.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
             assert cursor.execute("SELECT value FROM report_metadata WHERE key = 'schema_version'").fetchone() == (
-                "3.4",
+                "3.5",
             )
         finally:
             conn.close()
@@ -2493,6 +2516,13 @@ class TestGraphCaptureToFile:
         # Leaf node: no back-edge to the owning operation.
         assert execution_nodes[0]["connections"] == []
 
+        manager_nodes = [node for node in captured_graph if node.get("node_type") == "sub_device_manager"]
+        assert len(manager_nodes) == 1, "the active manager's partition is snapshotted exactly once per capture"
+        manager_params = manager_nodes[0]["params"]
+        assert manager_params["device_id"] == device.id()
+        assert manager_params["sub_device_manager_id"] == params["sub_device_manager_id"]
+        assert [sub["sub_device_id"] for sub in json.loads(manager_params["sub_devices"])] == [0]
+
         db_path = graph_report.import_report(report_path, db_dir)
         with sqlite3.connect(db_path) as conn:
             execution = conn.execute(
@@ -2574,6 +2604,18 @@ class TestGraphCaptureToFile:
             1,
         )
         assert json.loads(execution[6]) == [{"start": {"x": 4, "y": 0}, "end": {"x": 4, "y": 4}}]
+
+        # Sub-device 0 never ran an operation, but the manager snapshot must still describe it, so
+        # the visualizer can draw the full partition of the grid.
+        with sqlite3.connect(db_path) as conn:
+            topology = conn.execute(
+                "SELECT sub_device_id, worker_core_ranges FROM sub_devices "
+                "WHERE sub_device_manager_id = ? ORDER BY sub_device_id",
+                (params["sub_device_manager_id"],),
+            ).fetchall()
+        assert [sub_device_id for sub_device_id, _ in topology] == [0, 1]
+        assert json.loads(topology[0][1]) == [{"start": {"x": 0, "y": 0}, "end": {"x": 3, "y": 3}}]
+        assert json.loads(topology[1][1]) == [{"start": {"x": 4, "y": 0}, "end": {"x": 4, "y": 4}}]
 
     def test_report_contains_device_info(self, device, tmp_report_dir):
         """Test that report contains device information."""

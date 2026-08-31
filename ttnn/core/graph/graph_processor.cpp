@@ -474,18 +474,63 @@ void GraphProcessor::track_program(tt::tt_metal::Program* program, const tt::tt_
     }
 }
 
+namespace {
+nlohmann::json core_range_set_to_json(const tt::tt_metal::CoreRangeSet& core_range_set) {
+    nlohmann::json ranges = nlohmann::json::array();
+    for (const auto& range : core_range_set.ranges()) {
+        ranges.push_back(
+            {{"start", {{"x", range.start_coord.x}, {"y", range.start_coord.y}}},
+             {"end", {{"x", range.end_coord.x}, {"y", range.end_coord.y}}}});
+    }
+    return ranges;
+}
+}  // namespace
+
+bool GraphProcessor::needs_sub_device_manager_snapshot(uint32_t device_id, uint64_t sub_device_manager_id) {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return !current_op_id.empty() && !captured_sub_device_managers.contains({device_id, sub_device_manager_id});
+}
+
+void GraphProcessor::track_sub_device_manager(
+    uint32_t device_id, uint64_t sub_device_manager_id, const std::vector<SubDeviceTopology>& sub_devices) {
+    const std::lock_guard<std::mutex> lock(mutex);
+    if (current_op_id.empty()) {
+        return;
+    }
+    // Re-checked under the lock so the caller's needs_...() probe stays advisory.
+    if (!captured_sub_device_managers.emplace(device_id, sub_device_manager_id).second) {
+        return;
+    }
+
+    nlohmann::json sub_devices_json = nlohmann::json::array();
+    for (const auto& sub_device : sub_devices) {
+        sub_devices_json.push_back(
+            {{kSubDeviceId, sub_device.sub_device_id},
+             {kWorkerCoreRanges, core_range_set_to_json(sub_device.worker_core_ranges)}});
+    }
+
+    const node_id counter = graph.size();
+    graph.push_back(Vertex{
+        .counter = counter,
+        .node_type = kNodeSubDeviceManager,
+        .params =
+            {
+                {kDeviceId, std::to_string(device_id)},
+                {kSubDeviceManagerId, std::to_string(sub_device_manager_id)},
+                {kSubDevices, sub_devices_json.dump()},
+            },
+        .connections = {},
+        .stacking_level = static_cast<int>(current_op_id.size()) - 1});
+    graph[current_op_id.top()].connections.push_back(counter);
+}
+
 void GraphProcessor::track_program_execution(const ProgramExecutionPlacement& placement) {
     const std::lock_guard<std::mutex> lock(mutex);
     if (current_op_id.empty()) {
         return;
     }
 
-    nlohmann::json ranges = nlohmann::json::array();
-    for (const auto& range : placement.worker_core_ranges.ranges()) {
-        ranges.push_back(
-            {{"start", {{"x", range.start_coord.x}, {"y", range.start_coord.y}}},
-             {"end", {{"x", range.end_coord.x}, {"y", range.end_coord.y}}}});
-    }
+    nlohmann::json ranges = core_range_set_to_json(placement.worker_core_ranges);
 
     const node_id counter = graph.size();
     graph.push_back(Vertex{
@@ -534,6 +579,31 @@ void track_mesh_workload_execution(
     const auto manager_id = *mesh_device->get_active_sub_device_manager_id();
     const auto command_queue_id = static_cast<uint8_t>(mesh_device->mesh_command_queue().id());
     const auto mesh_device_id = static_cast<uint32_t>(mesh_device->id());
+
+    // Snapshot the active manager's whole partition the first time a capture sees it. Deriving
+    // topology from executions alone would omit any sub-device that never ran an operation, and
+    // the partition is only readable while the manager is loaded.
+    std::vector<GraphProcessor*> awaiting_snapshot;
+    for (auto* processor : processors) {
+        if (processor->needs_sub_device_manager_snapshot(mesh_device_id, manager_id)) {
+            awaiting_snapshot.push_back(processor);
+        }
+    }
+    if (!awaiting_snapshot.empty()) {
+        const auto num_sub_devices = mesh_device->num_sub_devices();
+        std::vector<SubDeviceTopology> sub_devices;
+        sub_devices.reserve(num_sub_devices);
+        for (uint32_t index = 0; index < num_sub_devices; ++index) {
+            const auto id = tt::tt_metal::SubDeviceId{static_cast<uint8_t>(index)};
+            sub_devices.push_back(SubDeviceTopology{
+                .sub_device_id = static_cast<uint8_t>(index),
+                .worker_core_ranges =
+                    mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, id)});
+        }
+        for (auto* processor : awaiting_snapshot) {
+            processor->track_sub_device_manager(mesh_device_id, manager_id, sub_devices);
+        }
+    }
 
     for (auto& [device_range, program] : workload.get_programs()) {
         // Mirrors MeshWorkloadImpl::determine_sub_device_ids, resolved per program so this stays on
@@ -904,6 +974,7 @@ void GraphProcessor::begin_capture(RunMode mode) {
     graph.clear();
     buffer_id_to_counter.clear();
     captured_device_info.clear();
+    captured_sub_device_managers.clear();
     captured_mesh_devices.clear();
     per_op_buffers_.clear();
     buffer_pages_by_address_.clear();

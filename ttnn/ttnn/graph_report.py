@@ -233,7 +233,10 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 # 3.2 - git hash and remote URL in report_metadata (#43830)
 # 3.3 - rank on local/global_tensor_comparison_records (#45448)
 # 3.4 - normalized sub-device topology and operation/program execution associations
-DATABASE_SCHEMA_VERSION = "3.4"
+# 3.5 - sub-device topology snapshotted per manager (covers sub-devices that ran no operation);
+#       sub_device_managers / sub_devices lose physical_device_id, which a mesh-wide manager
+#       partition does not have (it stays on operation_executions, where the chip is meaningful)
+DATABASE_SCHEMA_VERSION = "3.5"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
@@ -545,7 +548,6 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
         """
         CREATE TABLE IF NOT EXISTS sub_device_managers (
             device_id int,
-            physical_device_id int,
             sub_device_manager_id int,
             rank int NOT NULL DEFAULT 0,
             UNIQUE(device_id, sub_device_manager_id, rank)
@@ -557,7 +559,6 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
         """
         CREATE TABLE IF NOT EXISTS sub_devices (
             device_id int,
-            physical_device_id int,
             sub_device_manager_id int,
             sub_device_id int,
             worker_core_ranges text,
@@ -1305,7 +1306,28 @@ def import_graph(
 
             execution_index = 0
             for execution_node in current_op_nodes:
-                if execution_node.get("node_type") != "program_execution":
+                execution_node_type = execution_node.get("node_type")
+
+                # Sub-device topology is snapshotted per manager by the producer, so it covers
+                # sub-devices that never ran an operation. Deriving it from executions would not.
+                if execution_node_type == "sub_device_manager":
+                    manager_params = execution_node.get("params") or {}
+                    device_id = int(manager_params["device_id"])
+                    manager_id = int(manager_params["sub_device_manager_id"])
+                    sub_device_managers_batch.append((device_id, manager_id, rank))
+                    for sub_device in json.loads(manager_params.get("sub_devices") or "[]"):
+                        sub_devices_batch.append(
+                            (
+                                device_id,
+                                manager_id,
+                                int(sub_device["sub_device_id"]),
+                                json.dumps(sub_device.get("worker_core_ranges", [])),
+                                rank,
+                            )
+                        )
+                    continue
+
+                if execution_node_type != "program_execution":
                     continue
                 execution_params = execution_node.get("params") or {}
                 # Derive the id from operation_id, which is already unique across ranks and merged
@@ -1323,14 +1345,7 @@ def import_graph(
                 physical_device_id = int(execution_params.get("physical_device_id", device_id))
                 manager_id = int(execution_params["sub_device_manager_id"])
                 sub_device_id = int(execution_params["sub_device_id"])
-                worker_core_ranges = execution_params.get("worker_core_ranges", "[]")
-                if not isinstance(worker_core_ranges, str):
-                    worker_core_ranges = json.dumps(worker_core_ranges)
 
-                sub_device_managers_batch.append((device_id, physical_device_id, manager_id, rank))
-                sub_devices_batch.append(
-                    (device_id, physical_device_id, manager_id, sub_device_id, worker_core_ranges, rank)
-                )
                 operation_executions_batch.append(
                     (
                         execution_id,
@@ -1799,12 +1814,12 @@ def import_graph(
         cursor.executemany("""INSERT OR REPLACE INTO operations VALUES (?, ?, ?, ?)""", operations_batch)
     if sub_device_managers_batch:
         cursor.executemany(
-            """INSERT OR IGNORE INTO sub_device_managers VALUES (?, ?, ?, ?)""",
+            """INSERT OR IGNORE INTO sub_device_managers VALUES (?, ?, ?)""",
             sub_device_managers_batch,
         )
     if sub_devices_batch:
         cursor.executemany(
-            """INSERT OR IGNORE INTO sub_devices VALUES (?, ?, ?, ?, ?, ?)""",
+            """INSERT OR IGNORE INTO sub_devices VALUES (?, ?, ?, ?, ?)""",
             sub_devices_batch,
         )
     if operation_executions_batch:
