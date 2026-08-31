@@ -13,7 +13,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-from loguru import logger
 from PIL import Image
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -197,11 +196,6 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
         paths = write_artifacts(
             frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=f"fl2va_{case}"
         )
-        video_path = paths.get("mp4") or paths.get("silent_mp4")
-        if video_path is not None:
-            logger.info(f"saved video: {video_path}")
-        else:
-            logger.info("ffmpeg is missing; skipped mp4")
         for index in (0, 17, 62, frames.shape[0] - 1):
             Image.fromarray(frames[index]).save(artifacts / f"fl2va_{case}_frame_{index}.png")
         check_written_file(paths, expected_frames)
