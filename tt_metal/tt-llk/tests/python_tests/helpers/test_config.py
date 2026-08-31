@@ -716,12 +716,13 @@ class TestConfig:
         """``-I`` dirs for one ``tt_llk_<arch>`` tree. ``-I`` is not recursive.
 
         Headers are spelled ``"ckernel.h"``, ``"experimental/foo.h"``,
-        ``"sfpu/..."`` — the same three roots ``setup_compilation_options``
+        ``"cfg.h"``, ``"sfpu/..."`` — the same four roots ``setup_compilation_options``
         already adds for the in-tree copy.
         """
         root = Path(arch_root)
         return [
             root / "llk_lib",
+            root / "llk_lib" / "hal",
             root / "common" / "inc",
             root / "common" / "inc" / "sfpu",
         ]
