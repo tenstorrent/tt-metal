@@ -1317,8 +1317,8 @@ class TestConfig:
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
 
             if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                # Only compile BRISC with counter support when counters are enabled,
-                # otherwise BRISC arms counter hardware which adds monitoring overhead.
+                # BRISC only gets counter support when counters are enabled: the NC build
+                # then contains no counter code at all, so its codegen is unaffected.
                 perf_cnt_flag = (
                     f"-DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
                     if TestConfig.ENABLE_PERF_COUNTERS
