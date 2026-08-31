@@ -1284,6 +1284,9 @@ struct PerfDebugProfiler::EthTrackState {
         struct DrawRec {
             uint64_t t0 = 0, t1 = 0, t2 = 0;
             int64_t pred_init = 0, pred_tracked = 0;
+            // The sender's round-trip window converted onto the receiver's clock by the CAUSAL tracked
+            // prediction -- drawn on the receiver lane so the echo-inside-window check is anchor-free.
+            int64_t conv_start = 0, conv_end = 0;
         };
         std::vector<DrawRec> draws;
         uint32_t snd_nx = 0, snd_ny = 0, rcv_nx = 0, rcv_ny = 0;  // second-channel NOC0 coords
@@ -1459,6 +1462,12 @@ void PerfDebugProfiler::start_eth_tracker(const std::shared_ptr<distributed::Mes
                     dr.pred_init = static_cast<int64_t>(mid) + ed.off0 +
                                    static_cast<int64_t>(std::llround(dm * (ed.rate0 - 1.0)));
                     dr.pred_tracked = dr.pred_init - corr_prev;
+                    const double d0 = static_cast<double>(static_cast<int64_t>(tr.t0 - ed.ref0));
+                    const double d2 = static_cast<double>(static_cast<int64_t>(tr.t2 - ed.ref0));
+                    dr.conv_start = static_cast<int64_t>(tr.t0) + ed.off0 +
+                                    static_cast<int64_t>(std::llround(d0 * (ed.rate0 - 1.0))) - corr_prev;
+                    dr.conv_end = static_cast<int64_t>(tr.t2) + ed.off0 +
+                                  static_cast<int64_t>(std::llround(d2 * (ed.rate0 - 1.0))) - corr_prev;
                     ed.draws.push_back(dr);
                 }
             }
@@ -1538,6 +1547,7 @@ void PerfDebugProfiler::stop_eth_tracker() {
         static constexpr std::string_view kTrkEcho = "ETH_TRACK_ECHO_MEASURED";
         static constexpr std::string_view kTrkInit = "ETH_TRACK_PRED_INIT_FIT";
         static constexpr std::string_view kTrkLive = "ETH_TRACK_PRED_TRACKED";
+        static constexpr std::string_view kTrkWin = "ETH_TRACK_RTT_TRACKED";
         for (const auto& ed : eth_track_->edges) {
             if (!ed.lanes_ok || ed.draws.empty()) {
                 continue;
@@ -1558,35 +1568,67 @@ void PerfDebugProfiler::stop_eth_tracker() {
                 z.color = 0x1ABC9Cu;  // teal: the resident heartbeat, distinct from init green / close red
                 tracy_->HandleWorkerZone(z);
             }
-            std::vector<std::pair<uint64_t, std::string_view>> ev;
-            ev.reserve(ed.draws.size() * 3);
+            // The receiver lane interleaves the converted windows (zones) with the three markers, in
+            // timestamp order -- CROSS-lane echo-vs-zone is an anchor artifact (the per-core Tracy anchors
+            // are one-shot host fits whose ppm-scale error integrates to tens of us by close), so the
+            // window is carried onto THIS lane where the anchors cancel and echo-inside-window is exact.
+            struct RibItem {
+                uint64_t ts;
+                uint64_t end;
+                std::string_view name;
+                bool is_zone;
+            };
+            std::vector<RibItem> items;
+            items.reserve(ed.draws.size() * 4);
+            size_t in_window = 0;
             for (const auto& dr : ed.draws) {
-                ev.emplace_back(dr.t1, kTrkEcho);
-                ev.emplace_back(static_cast<uint64_t>(dr.pred_init), kTrkInit);
-                ev.emplace_back(static_cast<uint64_t>(dr.pred_tracked), kTrkLive);
+                const uint64_t w0 = static_cast<uint64_t>(dr.conv_start);
+                const uint64_t w1 = static_cast<uint64_t>(dr.conv_end);
+                in_window += (dr.t1 >= w0 && dr.t1 <= w1) ? 1 : 0;
+                items.push_back({w0, w1, kTrkWin, true});
+                items.push_back({dr.t1, 0, kTrkEcho, false});
+                items.push_back({static_cast<uint64_t>(dr.pred_init), 0, kTrkInit, false});
+                items.push_back({static_cast<uint64_t>(dr.pred_tracked), 0, kTrkLive, false});
             }
-            std::sort(ev.begin(), ev.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-            for (const auto& [ts, nm] : ev) {
-                perf_debug::WorkerEventPacket pe;
-                pe.chip_id = ed.rcv_chip;
-                pe.core_virtual_x = ed.rcv_nx;
-                pe.core_virtual_y = ed.rcv_ny;
-                pe.core_noc0_x = ed.rcv_nx;
-                pe.core_noc0_y = ed.rcv_ny;
-                pe.risc = 0;
-                pe.id = 0;
-                pe.name = nm;
-                pe.timestamp = ts;
-                pe.num_values = 0;
-                tracy_->HandleWorkerEvent(pe);
+            std::sort(items.begin(), items.end(), [](const auto& a, const auto& b) { return a.ts < b.ts; });
+            for (const auto& it : items) {
+                if (it.is_zone) {
+                    perf_debug::WorkerZonePacket zw;
+                    zw.chip_id = ed.rcv_chip;
+                    zw.core_virtual_x = ed.rcv_nx;
+                    zw.core_virtual_y = ed.rcv_ny;
+                    zw.core_noc0_x = ed.rcv_nx;
+                    zw.core_noc0_y = ed.rcv_ny;
+                    zw.risc = 0;
+                    zw.timer_id = 0;
+                    zw.name = it.name;
+                    zw.start = it.ts;
+                    zw.end = it.end;
+                    zw.color = 0x76D7C4u;  // light teal: the sender's window, tracked onto this lane
+                    tracy_->HandleWorkerZone(zw);
+                } else {
+                    perf_debug::WorkerEventPacket pe;
+                    pe.chip_id = ed.rcv_chip;
+                    pe.core_virtual_x = ed.rcv_nx;
+                    pe.core_virtual_y = ed.rcv_ny;
+                    pe.core_noc0_x = ed.rcv_nx;
+                    pe.core_noc0_y = ed.rcv_ny;
+                    pe.risc = 0;
+                    pe.id = 0;
+                    pe.name = it.name;
+                    pe.timestamp = it.ts;
+                    pe.num_values = 0;
+                    tracy_->HandleWorkerEvent(pe);
+                }
             }
             const auto& last = ed.draws.back();
             log_info(
                 tt::LogMetal,
                 "[perf-debug profiler] ETH TRACKER ribbon {} -> {}: {} round(s) drawn on second-channel eth "
                 "NOC0 ({},{}) -> ({},{}); at the LAST round the init-fit marker sits {:+.3f} us from the "
-                "measured echo where the causally-tracked marker sits {:+.1f} ns -- the growing same-lane gap "
-                "between ETH_TRACK_PRED_INIT_FIT and ETH_TRACK_ECHO_MEASURED is the error tracking removed",
+                "measured echo where the causally-tracked marker sits {:+.1f} ns -- and {} of {} echoes fall "
+                "INSIDE their causally-tracked ETH_TRACK_RTT_TRACKED window (a miss = a clock step in that "
+                "round's gap, corrected one round later)",
                 ed.snd_chip,
                 ed.rcv_chip,
                 ed.draws.size(),
@@ -1595,7 +1637,9 @@ void PerfDebugProfiler::stop_eth_tracker() {
                 ed.rcv_nx,
                 ed.rcv_ny,
                 static_cast<double>(last.pred_init - static_cast<int64_t>(last.t1)) / freq / 1000.0,
-                static_cast<double>(last.pred_tracked - static_cast<int64_t>(last.t1)) / freq);
+                static_cast<double>(last.pred_tracked - static_cast<int64_t>(last.t1)) / freq,
+                in_window,
+                ed.draws.size());
         }
     }
     delete eth_track_;
@@ -1768,34 +1812,77 @@ void PerfDebugProfiler::check_sync_drift_at_close() {
             const int64_t chost = corr_s - corr_r;
 
             // Tracy wants non-decreasing arrival per lane, and the predicted marker can fall on either side
-            // of the measured one depending on the sign of the drift -- so order them explicitly rather
-            // than assuming. Interleaving them unsorted is what would corrupt the lane.
-            std::vector<std::pair<uint64_t, std::string_view>> echo;
-            echo.reserve(n * 3);
+            // of the measured one depending on the sign of the drift -- so order everything explicitly
+            // rather than assuming. Interleaving unsorted is what would corrupt the lane.
+            //
+            // kWinTracked is the sender's round-trip window carried onto the receiver's OWN lane through
+            // the tracked prediction. Same-lane on purpose: each eth row's Tracy anchor is a one-shot host
+            // MMIO fit from init, and its ppm-scale frequency error integrates to tens of us by close (the
+            // host-vs-eth CROSS-CHECK above measures exactly that disagreement), so CROSS-lane echo-vs-zone
+            // is an anchor artifact, not a sync statement. On this lane the anchor cancels: the measured
+            // echo falls inside the window iff the tracked prediction matches reality. Tracker off:
+            // chost = 0 and the window sits the whole session error away -- honest in both directions.
+            static constexpr std::string_view kWinTracked = "ETH_SYNC_CLOSE_RTT_TRACKED";
+            struct CloseItem {
+                uint64_t ts;
+                uint64_t end;
+                std::string_view name;
+                bool is_zone;
+            };
+            std::vector<CloseItem> items;
+            items.reserve(n * 4);
+            size_t in_window = 0;
+            const double drate = e.rate - 1.0;
             for (size_t i = 0; i < n; i++) {
                 const uint64_t mid = (r.trips[i].t0 + r.trips[i].t2) / 2;
                 const double d = static_cast<double>(static_cast<int64_t>(mid - e.ref_mid));
                 // What the INIT fit says the peer's clock read at this instant.
                 const uint64_t t1_pred = static_cast<uint64_t>(
-                    static_cast<int64_t>(mid) + e.offset + static_cast<int64_t>(std::llround(d * (e.rate - 1.0))));
-                echo.emplace_back(r.trips[i].t1, kMeasured);
-                echo.emplace_back(t1_pred, kPredicted);
-                echo.emplace_back(static_cast<uint64_t>(static_cast<int64_t>(t1_pred) + chost), kTracked);
+                    static_cast<int64_t>(mid) + e.offset + static_cast<int64_t>(std::llround(d * drate)));
+                const auto conv = [&](uint64_t s) {  // sender instant -> tracked receiver clock
+                    const double ds = static_cast<double>(static_cast<int64_t>(s - e.ref_mid));
+                    return static_cast<uint64_t>(
+                        static_cast<int64_t>(s) + e.offset + static_cast<int64_t>(std::llround(ds * drate)) +
+                        chost);
+                };
+                const uint64_t w0 = conv(r.trips[i].t0);
+                const uint64_t w1 = conv(r.trips[i].t2);
+                in_window += (r.trips[i].t1 >= w0 && r.trips[i].t1 <= w1) ? 1 : 0;
+                items.push_back({w0, w1, kWinTracked, true});
+                items.push_back({r.trips[i].t1, 0, kMeasured, false});
+                items.push_back({t1_pred, 0, kPredicted, false});
+                items.push_back({static_cast<uint64_t>(static_cast<int64_t>(t1_pred) + chost), 0, kTracked, false});
             }
-            std::sort(echo.begin(), echo.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
-            for (const auto& [ts, nm] : echo) {
-                perf_debug::WorkerEventPacket ev;
-                ev.chip_id = e.receiver_chip;
-                ev.core_virtual_x = static_cast<uint32_t>(rn.x);
-                ev.core_virtual_y = static_cast<uint32_t>(rn.y);
-                ev.core_noc0_x = static_cast<uint32_t>(rn.x);
-                ev.core_noc0_y = static_cast<uint32_t>(rn.y);
-                ev.risc = 0;
-                ev.id = 0;
-                ev.name = nm;
-                ev.timestamp = ts;
-                ev.num_values = 0;
-                tracy_->HandleWorkerEvent(ev);
+            std::sort(items.begin(), items.end(), [](const auto& x, const auto& y) { return x.ts < y.ts; });
+            for (const auto& it : items) {
+                if (it.is_zone) {
+                    perf_debug::WorkerZonePacket zw;
+                    zw.chip_id = e.receiver_chip;
+                    zw.core_virtual_x = static_cast<uint32_t>(rn.x);
+                    zw.core_virtual_y = static_cast<uint32_t>(rn.y);
+                    zw.core_noc0_x = static_cast<uint32_t>(rn.x);
+                    zw.core_noc0_y = static_cast<uint32_t>(rn.y);
+                    zw.risc = 0;
+                    zw.timer_id = 0;
+                    zw.name = it.name;
+                    zw.start = it.ts;
+                    zw.end = it.end;
+                    zw.color = 0xF1948Au;  // light red: the close window, tracked onto the peer's lane
+                    tracy_->HandleWorkerZone(zw);
+                } else {
+                    perf_debug::WorkerEventPacket ev;
+                    ev.chip_id = e.receiver_chip;
+                    ev.core_virtual_x = static_cast<uint32_t>(rn.x);
+                    ev.core_virtual_y = static_cast<uint32_t>(rn.y);
+                    ev.core_noc0_x = static_cast<uint32_t>(rn.x);
+                    ev.core_noc0_y = static_cast<uint32_t>(rn.y);
+                    ev.risc = 0;
+                    ev.id = 0;
+                    ev.name = it.name;
+                    ev.timestamp = it.ts;
+                    ev.num_values = 0;
+                    tracy_->HandleWorkerEvent(ev);
+                }
             }
             // The sender's round trips too, so the peer's pair has something to sit against.
             for (size_t i = 0; i < n; i++) {
@@ -1817,14 +1904,18 @@ void PerfDebugProfiler::check_sync_drift_at_close() {
                 tt::LogMetal,
                 "[perf-debug profiler] eth sync CLOSE-CHECK {} -> {}: drew {} measured/predicted echo pair(s) "
                 "on chip {} eth NOC0 ({},{}) -- the gap between ETH_SYNC_ECHO_MEASURED and "
-                "ETH_SYNC_ECHO_PREDICTED IS the session's accumulated error ({:+.3f} us)",
+                "ETH_SYNC_ECHO_PREDICTED IS the session's accumulated error ({:+.3f} us); {} of {} echoes "
+                "fall INSIDE their ETH_SYNC_CLOSE_RTT_TRACKED window (same-lane; cross-lane placement is "
+                "host-anchor-limited and NOT a sync statement)",
                 e.sender_chip,
                 e.receiver_chip,
                 n,
                 e.receiver_chip,
                 rn.x,
                 rn.y,
-                err_ns / 1000.0);
+                err_ns / 1000.0,
+                in_window,
+                n);
         }
 
         ++checked;
