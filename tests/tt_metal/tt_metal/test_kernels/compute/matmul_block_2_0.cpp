@@ -45,7 +45,7 @@ void kernel_main() {
     cb0.wait_front(in0_block_tile_cnt);
     cb1.wait_front(in1_block_tile_cnt);
     experimental::matmul_block(
-        In0Op(in0_cb.read_address()), In1Op(in1_cb.read_address()), 0, 0, 0, false, ct_dim, rt_dim, kt_dim);
+        In0Op(in0_cb.read_address()), In1Op(in1_cb.read_address()), 0, 0, 0, ct_dim, rt_dim, kt_dim);
     cb0.pop_front(in0_block_tile_cnt);
     cb1.pop_front(in1_block_tile_cnt);
     tile_regs_commit();

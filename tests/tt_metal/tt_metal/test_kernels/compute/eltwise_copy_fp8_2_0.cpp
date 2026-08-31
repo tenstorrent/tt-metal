@@ -32,6 +32,8 @@ void kernel_main() {
     using OutOp = experimental::LLKOperand<static_cast<DataFormat>(out_desc.format), out_desc.shape>;
 
     compute_kernel_hw_startup(InOp(in_cb.read_address()), OutOp(out_cb.write_address()));
+    // fp8 input: the 2.0 experimental::copy_init static_asserts against fp8 (it does not wire the Src
+    // zero-substitution flag), so fp8 datacopy MUST keep the legacy CB-id copy_tile_init here.
     copy_tile_init(tt::CBIndex::c_0);
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; ++b) {

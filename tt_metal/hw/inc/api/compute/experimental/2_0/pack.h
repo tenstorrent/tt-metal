@@ -125,6 +125,52 @@ ALWI void pack_rows(LLKOperand<Format, Shape> out, std::uint32_t idst) {
     PACK((llk_pack_rows<LLKOperand<Format, Shape>::descriptor>(idst, out.l1_address)));
 }
 
+// clang-format off
+/**
+ * Experimental id-free row-pack init. Configures the packer to pack `num_rows` row-major rows (each 16 datums)
+ * from a DST tile to L1 -- the id-free successor to the (already CB-id-free) legacy pack_rows_init(num_rows).
+ * Takes the OUTPUT LLKOperand for API symmetry with the other 2.0 pack ops, but the row-pack init path programs
+ * ONLY the packer counters/addrmods -- NO data format (formats come from compute_kernel_hw_startup / pack_init).
+ * The operand therefore supplies only the compile-time shape (for the legal-shape guard); its address/format are
+ * not read here. Reuses the existing format-free llk_pack_rows_init core (no new LLK op). Pair with pack_rows and
+ * pack_rows_uninit. Legacy ckernel::pack_rows_init is untouched.
+ *
+ * | Param Type | Name     | Description                                                   | Type        | Valid Range | Required |
+ * |------------|----------|---------------------------------------------------------------|-------------|-------------|----------|
+ * | Template   | Format   | Output buffer L1 data format (deduced from LLKOperand)        | DataFormat  |             | True     |
+ * | Template   | Shape    | Output tile geometry (deduced from LLKOperand)               | TensorShape |             | True     |
+ * | Function   | out      | The output L1 operand (used only for the compile-time shape)  | LLKOperand  |             | True     |
+ * | Function   | num_rows | Number of rows to pack from DST to L1 (each row = 16 datums)  | uint32_t    | 1 to 64     | True     |
+ */
+// clang-format on
+template <DataFormat Format, TensorShape Shape>
+ALWI void pack_rows_init(LLKOperand<Format, Shape> /*out*/, std::uint32_t num_rows) {
+    static_assert(is_legal_tile_shape(Shape), "pack_rows_init: illegal output tile shape.");
+    PACK((llk_pack_rows_init(num_rows)));
+}
+
+// clang-format off
+/**
+ * Experimental id-free row-pack uninit. Restores the packer addrmods/counters to their default state after a run
+ * of pack_rows, so subsequent standard packing (e.g. pack_tile) works -- the id-free successor to the (already
+ * CB-id-free) legacy pack_rows_uninit(). Takes the OUTPUT LLKOperand for API symmetry only; the uninit path
+ * programs no data format and reads nothing from the operand (the shape is used solely for the legal-shape guard).
+ * Reuses the existing format-free llk_pack_rows_uninit core (no new LLK op). Legacy ckernel::pack_rows_uninit is
+ * untouched.
+ *
+ * | Param Type | Name | Description                                                  | Type        | Valid Range | Required |
+ * |------------|------|--------------------------------------------------------------|-------------|-------------|----------|
+ * | Template   | Format | Output buffer L1 data format (deduced from LLKOperand)      | DataFormat  |             | True     |
+ * | Template   | Shape  | Output tile geometry (deduced from LLKOperand)             | TensorShape |             | True     |
+ * | Function   | out    | The output L1 operand (used only for the compile-time shape) | LLKOperand  |             | True     |
+ */
+// clang-format on
+template <DataFormat Format, TensorShape Shape>
+ALWI void pack_rows_uninit(LLKOperand<Format, Shape> /*out*/) {
+    static_assert(is_legal_tile_shape(Shape), "pack_rows_uninit: illegal output tile shape.");
+    PACK((llk_pack_rows_uninit()));
+}
+
 #endif  // ARCH_BLACKHOLE
 
 }  // namespace experimental

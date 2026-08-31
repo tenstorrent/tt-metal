@@ -5,8 +5,9 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
-#include "api/compute/tile_move_copy.h"
+#include "api/compute/tile_move_copy.h"  // legacy copy_tile OP (the copy-into-DST op stays CB-id)
 #include "api/dataflow/circular_buffer.h"
+#include "api/compute/experimental/2_0/tile_move_copy.h"  // id-free copy_init
 #include "api/compute/experimental/2_0/pack.h"
 #include "tests/tt_metal/tt_metal/test_kernels/compute/cb_operand_helpers.h"
 
@@ -25,13 +26,17 @@ void kernel_main() {
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb16(tt::CBIndex::c_16);
 
-    // Compile-time CB accessor -> folded descriptor; the operand bundles descriptor + runtime L1 address.
+    // Compile-time CB accessors -> folded descriptors; the operand bundles descriptor + runtime L1 address.
+    constexpr auto in_cb = experimental::Cb<tt::CBIndex::c_0>{};
+    constexpr auto in_desc = experimental::to_llk_mem_descriptor(in_cb);
+    using InOp = experimental::LLKOperand<static_cast<DataFormat>(in_desc.format), in_desc.shape>;
     constexpr auto out_cb = experimental::Cb<tt::CBIndex::c_16>{};
     constexpr auto out_desc = experimental::to_llk_mem_descriptor(out_cb);
     using OutOp = experimental::LLKOperand<static_cast<DataFormat>(out_desc.format), out_desc.shape>;
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    copy_tile_init(tt::CBIndex::c_0);
+    // Id-free copy-into-DST init from the input CB (c_0); the copy_tile OP below stays the legacy CB-id call.
+    experimental::copy_init(InOp(in_cb.read_address()));
 
     for (std::uint32_t b = 0; b < per_core_tile_cnt; b += block) {
         tile_regs_acquire();

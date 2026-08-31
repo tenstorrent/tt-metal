@@ -120,13 +120,11 @@ ALWI void matmul_block_init(
  * rt_dim x ct_dim tiles -- i.e. ct_dim*rt_dim output tiles produced in one call (kt_dim tiles along the shared
  * inner dim). The output must fit in DST. in0_tile_index / in1_tile_index are the base tile within in0 / in1;
  * the block strides across the operands from there. Geometry (partial_face + per-tile stride) comes from the
- * operand descriptors. transpose is programmed at matmul_block_init; it is accepted here for signature parity
- * with the legacy matmul_block but does not re-program the MOP.
+ * operand descriptors. transpose is programmed at matmul_block_init; the execute takes no transpose arg.
  *
  * | Function | in0 / in1                       | Input operands (in0 -> SrcB, in1 -> SrcA)    | LLKOperand | | True |
  * | Function | in0_tile_index / in1_tile_index | Base tile indices within in0 / in1           | uint32_t   | | True |
  * | Function | idst                            | DST register index for the first result tile | uint32_t   | | True |
- * | Function | transpose                       | Transpose flag for tiles in B (see above)    | uint32_t   | | True |
  * | Function | ct_dim                          | Output block column dim (== B col dim)       | uint32_t   | | True |
  * | Function | rt_dim                          | Output block row dim (== A row dim)          | uint32_t   | | True |
  * | Function | kt_dim                          | Inner dim (== A col dim)                     | uint32_t   | | True |
@@ -139,7 +137,6 @@ ALWI void matmul_block(
     std::uint32_t in0_tile_index,
     std::uint32_t in1_tile_index,
     std::uint32_t idst,
-    const std::uint32_t /*transpose*/,
     std::uint32_t ct_dim,
     std::uint32_t rt_dim,
     std::uint32_t kt_dim) {
