@@ -14,11 +14,16 @@ host failure.
 
 Two distinct failure modes, hence two tests:
 
-  * **transcription drift** -- ``KimiK26Config`` is hand-transcribed from a checkpoint config, so a
-    mistyped digit would pass the entire suite. ``test_..._vendored_config`` pins it against the
-    in-tree ``reference/kimi_k2_6/config.json``, which is also the config the K2.7 adapter's
-    reference model actually loads (``KimiK27Adapter`` inherits ``reference_model_cls`` and
-    ``hf_model_default`` from K2.6). Hermetic: runs everywhere, needs no mount.
+  * **transcription drift** -- the values are hand-transcribed from a checkpoint config, so a
+    mistyped digit would pass the entire suite. ``test_..._vendored_config`` pins them against
+    ``reference/kimi_k2_7/config.json``, vendored verbatim from the K2.7-Code checkpoint the same way
+    ``reference/kimi_k3/config.json`` is. Hermetic: runs everywhere, needs no mount.
+
+    Note the vendored file is read with plain ``json.load``, never ``AutoConfig``: its ``auto_map``
+    names ``configuration_kimi_k25`` modules that are not vendored, so a ``trust_remote_code`` load
+    would fail. That is also why ``KimiK27Adapter.hf_model_default`` still resolves to
+    ``reference/kimi_k2_6`` -- that dir carries the vendored *modeling* code, which is genuinely
+    shared, and only this config file needed a K2.7 copy.
   * **the inheritance premise breaking** -- if a future K2.7 checkpoint revision changes a dimension,
     inheriting K2.6's numbers becomes wrong. ``test_..._staged_checkpoint`` pins it against the real
     staged K2.7 checkpoint. Skips cleanly when that is not mounted, so it is advisory on a dev box
@@ -41,17 +46,16 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Confi
 K2_7_CHECKPOINT_ENV = "KIMI_K2_7_HF_MODEL"
 K2_7_CHECKPOINT_DEFAULT = Path("/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized")
 
-VENDORED_CONFIG = Path(__file__).parents[2] / "reference" / "kimi_k2_6" / "config.json"
+VENDORED_CONFIG = Path(__file__).parents[2] / "reference" / "kimi_k2_7" / "config.json"
 
 
 def _text_config(path: Path) -> dict:
     """Load a checkpoint config and return the LM fields.
 
-    Kimi ships two shapes and both are in play here: the staged K2.7 checkpoint is the multimodal
-    wrapper (``KimiK25ForConditionalGeneration``) whose LM fields live under ``text_config``, while
-    the in-tree K2.6 config is the flat text-only form. Reading through ``.get`` handles both without
-    branching on ``model_type``, which differs between them for reasons unrelated to dimensions
-    (``kimi_k25`` vs ``deepseek_v3``).
+    Both configs read here are the multimodal wrapper (``KimiK25ForConditionalGeneration``), so the
+    LM fields live under ``text_config``. The ``.get`` fallback keeps this working against a flat
+    text-only config too -- the shape ``reference/kimi_k2_6/config.json`` has -- so the helper is
+    reusable if a leg is ever pointed at one.
     """
     with open(path) as f:
         cfg = json.load(f)
@@ -104,7 +108,7 @@ def _mismatches(expected: dict) -> dict:
 
 
 def test_k2_7_constants_match_the_vendored_config():
-    """Every ``KimiK27Config`` constant equals the in-tree ``reference/kimi_k2_6/config.json`` value.
+    """Every ``KimiK27Config`` constant equals the vendored ``reference/kimi_k2_7/config.json`` value.
 
     Catches a transcription slip in the hand-written config class. Hermetic -- no mount, no network.
     """
