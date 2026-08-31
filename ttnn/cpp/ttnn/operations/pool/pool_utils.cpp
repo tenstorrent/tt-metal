@@ -182,14 +182,12 @@ FactoryParameters get_factory_parameters(
         TT_FATAL(!is_avg_pool, "return_indices only applies for MaxPool");
     }
     uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
-    // QSR pack-bounds fix: cap tiles-per-pack to 4. pack_untilize_dest<N> faults with PACR0_TILE_INC
-    // (ERROR_TRISC1 code 0x19) for N>=6 -- the pack's per-tile increment crosses the scratch CB's
-    // descriptor L1_LIMIT_ADDR (N<=5 works, N>=6 faults on the emulator). Forcing MAX_TILES_PER_REDUCTION=4
-    // makes any channel count >4 tiles chunk (in_nblocks_c>1) into <=4-tile packs, staying within bounds.
-    // <=4-tile configs (incl. the resnet stem = 2 tiles) keep in_nblocks_c==1 / is_wide==false -> unchanged.
-    // Paired with force_max_tiles_per_reduction_4=1u (compute + reader compile args in the quasar factory)
-    // so all three agree on the 4-tile chunk size. Caller-keyed (not hal-arch): the quasar op runs this
-    // pack path on WH silicon too.
+    // Opt-in 4-tile cap (default false; no caller passes true today). Upstream #54284 root-caused
+    // the 0x19 fault this used to work around (a GPR read parked behind a MOP waiting on SrcAB
+    // dvalid; fixed by a larger CSR timeout) and retired the always-on cap — kernels now take a
+    // resolved max_tiles_per_reduction compile arg. Retained as a debug knob (e.g. forcing
+    // in_nblocks_c>1 at small C to exercise the wide path). Caller-keyed, not hal-arch: the
+    // quasar op runs this pack path on WH silicon too.
     if (force_max_tiles_per_reduction_4) {
         MAX_TILES_PER_REDUCTION = 4;
     }
