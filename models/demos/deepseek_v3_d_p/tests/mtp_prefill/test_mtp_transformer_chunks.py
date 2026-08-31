@@ -77,7 +77,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_f
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.token_windows import GEN_SLOT, mtp_chunk_stream
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import CHAIN_FROM_NORM, TtMTPPredictor
-from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import enable_mtp_indexer_slot
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import MTP_CACHE_ENV, MTP_CACHE_PREFIX, enable_mtp_indexer_slot
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -115,10 +115,6 @@ MTP_MODULE_OUTPUT_PCC = 0.96
 # test_prefill_transformer_chunked.py runs the pretrained 78-layer model with; the default is 2.
 DISPATCH_BUFFER_CAPACITY_FACTOR = 8
 
-# Cache-key namespace for the four MTP tensors, TtFusedMTP's own default. Named here because the
-# constructor and check_cache_complete must be handed the same one.
-MTP_CACHE_PREFIX = "mtp_0"
-
 # Where layer 78's cache goes: a SIBLING of the trunk cache, derived from it rather than hardcoded,
 # so it follows wherever TT_GLM52_PREFILL_TTNN_CACHE points. Layer 78 is not part of the transformer
 # the trunk cache was built for, and that directory is read-only to us anyway -- but its parent is
@@ -133,7 +129,10 @@ MTP_CACHE_PREFIX = "mtp_0"
 #
 # 48 files, written on the first run and read on every run after. ONE layer, not four:
 # TtMTPPredictor builds a single TtMTPModule and replays it K times, so all four levels share it.
-MTP_CACHE_ENV = "TT_GLM52_MTP_TTNN_CACHE"
+#
+# MTP_CACHE_ENV / MTP_CACHE_PREFIX are imported from tt/mtp_prefill/utils.py, not redeclared: the
+# prefill runner reads the cache THIS test writes, and a divergence would surface as nothing worse
+# than "cache incomplete" at serving time.
 
 CHUNK = 5 * 1024  # 5120 -- the "5k chunk" of #53533, and TtPrefillTransformer.seq_len
 NUM_CHUNKS = 3

@@ -29,6 +29,13 @@ NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", "2"))
 # 56320 rows (= 11 x CHUNK_SIZE). The adapter's own prefill_trace_default omits dsa/, which would leave
 # the merged table's index config with no golden to PCC against.
 GLM52_TRACE = "/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k"
+# GLM-5.2 pretrained checkpoint + the MTP weight cache tree (layer 78 block + the fused MTP weights),
+# for the MTP4 scenario. The MTP weights are keyed on layer 78, which the trunk cache does not carry,
+# so they live in their own tree with the same <variant>_<arch>_<N>dev/<sp>x<tp> leaf.
+GLM52_HF_MODEL = os.environ.get("GLM52_HF_MODEL", "/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8")
+GLM52_MTP_TTNN_CACHE = os.environ.get(
+    "TT_GLM52_MTP_TTNN_CACHE", "/mnt/models/deepseek-prefill-cache/glm52_mtp_ttnn_cache"
+)
 SERVICE_ID = "ci_ds_prefill"
 TABLE_PATH = "/tmp/ci_prefill_kv_table.pb"  # IPC rendezvous files; cleaned up around each scenario
 DEVMAP_PATH = "/tmp/ci_prefill_kv_devmap.json"
@@ -158,6 +165,46 @@ SCENARIOS = {
         # 78 layers of GLM-5.2 weights + kernel JIT, then a two-config PCC sweep of ~174k sequential
         # read_dram_umd block reads (78 x 1760 for KVPE + 21 x 1760 for the index cache). Both phases
         # are far past the Kimi-sized defaults.
+        "ready_timeout_s": 3600,
+        "producer_timeout_s": 7200,
+        "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
+    },
+    # 5) GLM-5.2 with MTP4 (#53533): scenario 4 plus four Multi-Token-Prediction levels after the
+    #    trunk's last layer. What this exercises that scenario 4 does not, end to end through the
+    #    real serving path:
+    #      * the H2D socket carries CHUNK_SIZE + K tokens per chunk, in rows that OVERLAP by K, so
+    #        MTP level k's window is the same local slice on every SP chip (no cross-chip rotation);
+    #      * the runner slices the trunk's own CHUNK_SIZE tokens back out ON DEVICE and the trunk
+    #        forward is bit-identical to scenario 4's -- which is exactly what the 78-layer KVPE +
+    #        21-rank index PCC below re-proves;
+    #      * the last rank embeds each level's window on device and runs the four levels, writing
+    #        KVPE slots 78..81 and sharing one indexer slot (index_share_for_mtp_iteration).
+    #
+    #    The golden trace carries no KV for the layers past the trunk, so the MTP-vs-golden PCC SKIPS
+    #    itself and says which layers it wanted; that math is gated against a torch reference in
+    #    deepseek_v3_d_p/tests/mtp_prefill/. The comparison is written and starts running by itself
+    #    the moment a trace carrying kv_cache/layer_{78..81} is dropped in -- no edit here. What a
+    #    serving run does gate is the pair of things only it can show: every level's slot was written,
+    #    and no two levels share a slot (a collision is invisible in the model outputs).
+    #
+    #    Needs the MTP weight cache (layer 78 + the fused MTP weights); the runner will NOT build it
+    #    inside the serving process. Populate it with tests/mtp_prefill/test_mtp_transformer_chunks.py.
+    "glm52_mtp4": {
+        "users": 1,
+        "layers": 78,
+        "max_seq_len": 56320,
+        "env": {
+            "PREFILL_MODEL": "glm_5_2",
+            "PREFILL_TRACE_DIR": GLM52_TRACE,
+            "PREFILL_KV_ONLY_LAST_LAYER": "0",  # MTP level 1 consumes the last layer's post-norm hidden
+            "PREFILL_MTP_LEVELS": "4",
+            # Read by BOTH roles: the runner sizes its sockets/caches from it and the producer builds
+            # the overlapping H2D rows from it. A mismatch is caught by the payload-size assert.
+            "TT_GLM52_MTP_TTNN_CACHE": GLM52_MTP_TTNN_CACHE,
+            "PREFILL_HF_MODEL": GLM52_HF_MODEL,
+        },
+        # Scenario 4's budgets plus the MTP tail: 4 more blocks per chunk on the last rank, and 4 more
+        # KVPE layers to read back (78 + 4 of 1760 block reads each).
         "ready_timeout_s": 3600,
         "producer_timeout_s": 7200,
         "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},

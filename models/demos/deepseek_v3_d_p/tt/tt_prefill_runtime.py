@@ -13,13 +13,23 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.common.prefill.runners.runner_utils import d2d_activation_width, h2d_lookahead
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import (
+    MTPTokenWindows,
+    TokenDigitCodec,
+    token_block_cols,
+)
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtMTPPredictor
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import MTP_CACHE_ENV, MTP_CACHE_PREFIX, enable_mtp_indexer_slot
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, allocate_dflash_kv_cache
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
@@ -63,6 +73,11 @@ class TtPrefillRuntimeConfig:
     # Build the DFlash drafter context-KV cache during this prefill (opt-in). Every rank builds its owned fc
     # slices from $DFLASH_HF_MODEL; only the last rank builds the KV tail + cache.
     dflash_enabled: bool = False
+    # GLM-5.2 MTP (#53533): number of prediction levels K to run after the trunk, 0 = off. K > 0 makes
+    # the runtime build a TtMTPPredictor, widens the H2D chunk to `chunk_size + K` tokens (level k needs
+    # the window shifted k tokens right) and the D2D activation by 32*K columns per chip (the token ids
+    # ride along as base-256 digits), and adds K KV-cache slots per user. See tt/mtp_prefill/.
+    mtp_levels: int = 0
     # Pipeline-parallel rank slicing. first_layer_idx is the global index of this
     # rank's first layer; is_first_rank gates the embedding, is_last_rank marks the
     # final stage (non-last ranks forward the hidden state instead of running a tail).
@@ -127,6 +142,11 @@ class TtPrefillRuntime:
         self.drafter = None
         self._dflash_k_cache = None
         self._dflash_v_cache = None
+        # GLM-5.2 MTP (#53533). The predictor is built in _build_model on the LAST rank only; the
+        # digit codec is built lazily and ONLY where the D2D transport needs it, so a single-rank
+        # run (first rank == last rank, no D2D at all) never allocates the ~10 MB/chip table.
+        self.mtp_predictor = None
+        self._mtp_codec = None
 
         assert (
             config.max_seq_len % config.chunk_size == 0
@@ -180,6 +200,10 @@ class TtPrefillRuntime:
                 is_first_rank=self.config.is_first_rank,
                 is_last_rank=self.config.is_last_rank,
                 kv_only_last_layer=self.config.kv_only_last_layer,
+                # A last rank running MTP loads the embedding table too (it embeds its own shifted
+                # token windows). Without this the check skips the embedding on a non-first tail rank
+                # and calls a cache missing it complete; single-rank hid it, is_first_rank being true.
+                mtp_levels=self.config.mtp_levels,
                 # Required for a LatentMoE model (Kimi-K3): without it the per-block check cannot know
                 # to look for the latent-projection cache files and would call an incomplete cache
                 # complete. model_cfg is already in hand two lines up.
@@ -192,6 +216,15 @@ class TtPrefillRuntime:
                     f"build will fail without a populated cache. "
                     f"Run the pretrained smoke test once to populate it."
                 )
+        # MTP must be resolved BEFORE the transformer is constructed: the extra indexer slot changes
+        # how every trunk block sizes its index cache (full_indexer_rank counts "full" entries up to
+        # first_layer_idx + layer_num, and layer_num is now num_layers + K), and the predictor is a
+        # constructor argument. Only the last rank runs the levels, so only the last rank pays for
+        # any of it.
+        if self.config.mtp_levels and self.config.is_last_rank:
+            enable_mtp_indexer_slot(self.hf_config)
+            self._build_mtp_predictor()
+
         self.model = TtPrefillTransformer(
             mesh_device=self.mesh_device,
             config=self.hf_config,
@@ -222,11 +255,115 @@ class TtPrefillRuntime:
             is_last_rank=self.config.is_last_rank,
             sparse_kv_cache_format=self.config.sparse_kv_cache_format,
             overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
+            mtp_predictor=self.mtp_predictor,
         )
         self.model_built = True
 
         if self.config.dflash_enabled:
             self._build_dflash_drafter()
+
+    def _build_mtp_predictor(self) -> None:
+        """Build this rank's ``TtMTPPredictor`` (GLM-5.2, #53533). Last rank only.
+
+        Cache-ONLY: state_dict is ``{"mtp": {}, "layer": {}}``. ``TtFusedMTP`` reads its weights with
+        ``sd.get(...)`` and ``TtPrefillBlock`` already loads a block from cache with ``state_dict={}``
+        (that is how the trunk builds here), so an empty dict plus a populated cache is a supported
+        build -- and the only viable one inside a serving process, since the alternative is
+        dequantising layer 78's 256 fp8 experts (~19 GiB) on every runner start. Hence the *assert*
+        rather than the trunk's warning: a missing MTP cache cannot be recovered from here.
+
+        The MTP weights live in their OWN cache tree (they are keyed on layer 78, which the trunk
+        cache does not carry), rooted at ``$TT_GLM52_MTP_TTNN_CACHE`` or a sibling of the trunk root,
+        with the same ``<variant>_<arch>_<N>dev/<sp>x<tp>`` leaf.
+        """
+        k = self.config.mtp_levels
+        # The build is cache-only, so the checkpoint is not needed to construct anything -- the loaded
+        # hf_config already carries every field MTPConfig reads. When a checkpoint dir IS named, prefer
+        # from_pretrained: it additionally verifies layer mtp_layer_idx really holds eh_proj in the
+        # tensor index, which catches a config/checkpoint mismatch before any weight is touched.
+        path = os.environ.get("GLM52_HF_MODEL") or os.environ.get("PREFILL_HF_MODEL")
+        mtp_cfg = (
+            MTPConfig.from_pretrained(path, num_levels=k)
+            if path
+            else MTPConfig.from_hf_config(self.hf_config, num_levels=k)
+        )
+
+        eff = Path(self.config.weight_cache_path)
+        assert eff.name and eff.parent.name, (
+            f"weight_cache_path {eff} is not the expected <root>/<variant>_<arch>_<N>dev/<sp>x<tp> "
+            "layout, so the sibling MTP cache path cannot be derived; set TT_GLM52_MTP_TTNN_CACHE"
+        )
+        mtp_root = Path(os.environ.get(MTP_CACHE_ENV) or eff.parent.parent.parent / "glm52_mtp_ttnn_cache")
+        mtp_cache_path = mtp_root / eff.parent.name / eff.name
+
+        num_devices = self.config.mesh_shape[0] * self.config.mesh_shape[1]
+        experts_per_chip = self.config.model_cfg.NUM_ROUTED_EXPERTS // num_devices
+        # check_cache_complete resolves its patterns against the PROCESS-GLOBAL fast-cache checker
+        # directory, so point the checker at the MTP tree before asking, then put it back -- the
+        # transformer built next re-checks the TRUNK cache and would otherwise look in the wrong dir.
+        # Checked before init_checker: FastCacheChecker iterdir()s eagerly, so a missing directory
+        # raises FileNotFoundError from inside the check instead of reporting "not cached".
+        mtp_cached = mtp_cache_path.is_dir()
+        if mtp_cached:
+            init_checker(mtp_cache_path)
+            mtp_cached = TtMTPPredictor.check_cache_complete(
+                mtp_cache_path,
+                mtp_cfg.mtp_layer_idx,
+                cache_name_prefix=MTP_CACHE_PREFIX,
+                experts_per_chip=experts_per_chip,
+                model_cfg=self.config.model_cfg,
+            )
+            init_checker(eff)
+        assert mtp_cached, (
+            f"MTP weight cache incomplete at {mtp_cache_path}. Building it here would dequantise "
+            f"layer {mtp_cfg.mtp_layer_idx}'s 256 fp8 experts inside the serving process; populate it "
+            "once with tests/mtp_prefill/test_mtp_transformer_chunks.py, or point "
+            "TT_GLM52_MTP_TTNN_CACHE at a populated tree."
+        )
+
+        logger.info(
+            f"Building MTP predictor: num_levels={k}, layer_idx={mtp_cfg.mtp_layer_idx}, "
+            f"first_cache_slot={self.config.num_layers}, layer_num={self.config.num_layers + k}, "
+            f"index_share={mtp_cfg.index_share_for_mtp_iteration}, cache={mtp_cache_path}"
+        )
+        self.mtp_predictor = TtMTPPredictor(
+            self.mesh_device,
+            self.hf_config,
+            self.config.model_cfg,
+            {"mtp": {}, "layer": {}},  # cache-only; asserted complete above
+            mtp_cfg,
+            seq_len=self.config.chunk_size,
+            num_levels=k,
+            layer_idx=mtp_cfg.mtp_layer_idx,
+            # Level 1 writes the slot right after the trunk's last; the transformer asserts this.
+            first_cache_slot=self.config.num_layers,
+            tp_axis=self.config.tp_axis,
+            sp_axis=self.config.sp_axis,
+            num_links=self.config.num_links,
+            topology=self.config.topology,
+            gate_fallback_mode=self.config.gate_fallback_mode,
+            dispatch_buffer_capacity_factor=self.config.capacity_factor,
+            routed_expert_activations_dtype=self.config.routed_expert_activations_dtype,
+            routed_expert_weights_dtype=self.config.routed_expert_weights_dtype,
+            shared_expert_activations_dtype=self.config.shared_expert_activations_dtype,
+            shared_expert_weights_dtype=self.config.shared_expert_weights_dtype,
+            routing_use_l1_small_for_semaphores=self.config.routing_use_l1_small_for_semaphores,
+            sparse_kv_cache_format=self.config.sparse_kv_cache_format,
+            overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
+            weight_cache_path=mtp_cache_path,
+            cache_name_prefix=MTP_CACHE_PREFIX,
+            # Rank-local index-cache numbering, exactly like every trunk block on this rank: without
+            # it the MTP block falls back to GLOBAL full-indexer ranks, which agree on a single rank
+            # (first_layer_idx == 0) and are off by this rank's base on any pipeline split.
+            first_layer_idx=self.config.first_layer_idx,
+            is_chunked=True,
+            max_seq_len=self.config.max_seq_len,
+            slot_num=self.config.num_users,
+            is_balanced=False,  # chunked prefill is block-cyclic, like every trunk block
+            # The flat KV slot is cache_user_id * layer_num + cache_layer_idx, so EVERY block in the
+            # model -- trunk and MTP alike -- must stride users by the cache's true depth.
+            layer_num=self.config.num_layers + k,
+        )
 
     def _build_dflash_drafter(self) -> None:
         """Build this rank's DFlash speculative-drafter when ``config.dflash_enabled``.
@@ -333,20 +470,103 @@ class TtPrefillRuntime:
         partial = ttnn.slice(packed, [0, 0, 0, half], [s0, s1, s2, s3])
         return hidden, partial
 
+    def _mtp_pack_activation(self, hidden: ttnn.Tensor, block: ttnn.Tensor) -> ttnn.Tensor:
+        """Fuse this rank's output hidden and the chunk's MTP token digits into ONE D2D activation —
+        per-chip ``[1,1,L,H/tp]`` -> ``[1,1,L,H/tp + 32K]``. Consumes both; only a non-last rank packs.
+
+        Same shape of operation as :meth:`_pack_activation`, and for the same reason: there is one
+        socket between ranks, so anything the downstream rank needs travels in the activation. What
+        travels here is the tokens themselves — the MTP levels run on the LAST rank, and their ids
+        entered the pipeline at the first.
+        """
+        packed = ttnn.concat([hidden, block], dim=3)
+        ttnn.deallocate(hidden)
+        ttnn.deallocate(block)
+        return packed
+
+    def _mtp_unpack_activation(self, packed: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Inverse of :meth:`_mtp_pack_activation`. Does NOT free ``packed`` — the caller does, as on
+        the DFlash path.
+
+        The split point is NOT ``//2`` like DFlash's: the token block is ``32K`` columns per chip and
+        the hidden is ``H/tp``, two numbers that are only equal by accident. Both are known from the
+        config, so assert the received width against them rather than infer it — a socket whose width
+        disagrees with this rank's K produces a plausible tensor and silently wrong ids.
+        """
+        cols = token_block_cols(self.config.mtp_levels)
+        s0, s1, s2, s3 = packed.shape
+        expected = self.hf_config.hidden_size // self.config.tp_factor + cols
+        assert s3 == expected, (
+            f"D2D activation is {s3} columns per chip, expected H/tp + 32K = "
+            f"{self.hf_config.hidden_size // self.config.tp_factor} + {cols}. The sending rank and "
+            "this one disagree on PREFILL_MTP_LEVELS, or the socket was built without it."
+        )
+        hidden = ttnn.slice(packed, [0, 0, 0, 0], [s0, s1, s2, s3 - cols])
+        block = ttnn.slice(packed, [0, 0, 0, s3 - cols], [s0, s1, s2, s3])
+        return hidden, block
+
+    @property
+    def mtp_codec(self) -> TokenDigitCodec:
+        """The token<->digit codec for the D2D transport, built on first use.
+
+        Lazy on purpose, twice over: a single-rank runner never crosses a D2D socket, so it reads its
+        windows straight off the H2D uint32 tensor and never builds one; and the codec builds its
+        ``[vocab, 32]`` table lazily too, so even holding one costs nothing until a rank encodes or
+        decodes.
+        """
+        if self._mtp_codec is None:
+            self._mtp_codec = TokenDigitCodec(self.mesh_device, self.hf_config.vocab_size)
+        return self._mtp_codec
+
+    def _mtp_codec_or_none(self, windows) -> Optional[TokenDigitCodec]:
+        """The codec `windows` needs to yield its levels, or None when it needs none.
+
+        Windows holding the uint32 ids (this rank is also the first) slice them directly; only a
+        rank that received them as digits has to decode. Asking for the codec builds one, so gate on
+        that rather than pass it unconditionally.
+        """
+        if windows is None or windows.has_tokens:
+            return None
+        return self.mtp_codec
+
+    def _mtp_prepare_input(self, input_tensor: ttnn.Tensor) -> Tuple[MTPTokenWindows, ttnn.Tensor]:
+        """Split what the socket delivered into ``(windows, trunk input)``.
+
+        First rank: the H2D tensor is ``[sp, 1, L + K]`` — this chip's ``L`` trunk tokens plus ``K``
+        of overlap with the next chip — so the trunk input is its local ``[0, L)`` slice and level
+        ``k``'s window is ``[k, k + L)``, the same local slice on every chip.
+        Downstream rank: the digit block rides in the activation; unpack it off the hidden.
+        """
+        k = self.config.mtp_levels
+        window_len = self.config.chunk_size // self.config.sp_factor
+        if self.config.is_first_rank:
+            windows = MTPTokenWindows.from_tokens(input_tensor, k, window_len)
+            return windows, windows.trunk_tokens()
+        hidden, block = self._mtp_unpack_activation(input_tensor)
+        ttnn.deallocate(input_tensor)
+        return MTPTokenWindows.from_block(block, k, window_len), hidden
+
     def make_placeholder_activation(self) -> ttnn.Tensor:
         """Allocate a zero hidden-state activation matching what the D2D socket delivers:
-        [1, 1, chunk_per_chip, emb_dim/tp] — or 2·emb_dim/tp under DFlash, which packs the drafter
-        partial alongside the hidden — TILE_LAYOUT, DRAM, replicated.
+        [1, 1, chunk_per_chip, emb_dim/tp] — 2·emb_dim/tp under DFlash, which packs the drafter
+        partial alongside the hidden, or emb_dim/tp + 32K under MTP, which packs the chunk's token
+        ids — TILE_LAYOUT, DRAM, replicated.
 
         Stand-in input for a non-first rank until the upstream D2D-socket sync op
         delivers the real activation. The first block's attn_norm reads from this
-        tensor; once the sync op lands, the wait-op overwrites it in place. Under DFlash the
-        delivered tensor is the packed [hidden ‖ partial]; prefill_chunk unpacks it before the model runs.
+        tensor; once the sync op lands, the wait-op overwrites it in place. Under DFlash or MTP the
+        delivered tensor is packed; prefill_chunk unpacks it before the model runs.
         """
         chunk_per_chip = self.config.chunk_size // self.config.sp_factor
-        # DFlash packs [hidden ‖ drafter-partial] into the D2D activation, so a non-first rank receives a
-        # 2H-wide tensor and this receive buffer must match. Non-dflash keeps H.
-        feature_size = self.hf_config.hidden_size * (2 if self.config.dflash_enabled else 1)
+        # DFlash packs [hidden ‖ drafter-partial] into the D2D activation (2H) and MTP packs
+        # [hidden ‖ K token-digit groups] (+32K per chip), so a non-first rank receives a wider tensor
+        # and this receive buffer must match. The runner sizes the socket with this same function.
+        feature_size = d2d_activation_width(
+            self.hf_config.hidden_size,
+            mtp_levels=self.config.mtp_levels,
+            tp_factor=self.config.tp_factor,
+            dflash=self.config.dflash_enabled,
+        )
         emb_per_tp = feature_size // self.config.tp_factor
         zeros = torch.zeros(1, 1, chunk_per_chip, emb_per_tp, dtype=torch.bfloat16)
         return ttnn.from_torch(
@@ -358,11 +578,23 @@ class TtPrefillRuntime:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-    def make_chunk_input(self, token_ids: list[int]) -> ttnn.Tensor:
+    def _h2d_lookahead(self) -> int:
+        """Ids past this chip's trunk shard that the H2D socket delivers — `mtp_levels` rounded up to
+        the socket's PCIe page. Same function the runner sizes the socket with and the producer
+        builds its rows with, so a locally-built input matches a socket-delivered one exactly."""
+        return h2d_lookahead(self.config.chunk_size, self.config.sp_factor, self.config.mtp_levels)
+
+    def make_chunk_input(self, token_ids: list[int], *, lookahead: Optional[int] = None) -> ttnn.Tensor:
         """Build one chunk's device input for `prefill_chunk`. First-rank input is
         SP-sharded token IDs; a non-first pipeline rank instead gets a placeholder
         hidden-state activation (it does not embed — it receives the real activation
-        over the D2D socket)."""
+        over the D2D socket).
+
+        `lookahead` defaults to this runtime's MTP level count, so a locally-built input has the
+        SAME per-chip width the H2D socket delivers under MTP (`chunk_size/sp + K`, overlapping
+        rows) and `prefill_chunk` can slice both with one set of bounds. `token_ids` must then be
+        `chunk_size + K` long. Pass `lookahead=0` to build a plain trunk-width input regardless —
+        the host MTP path does, since there the levels get their windows as separate uploads."""
         if self.config.is_first_rank:
             return prepare_prefill_input_tensor(
                 token_ids,
@@ -371,6 +603,7 @@ class TtPrefillRuntime:
                 False,  # chunked prefill is block-cyclic (non-balanced)
                 self.config.mesh_shape,
                 self.config.sp_axis,
+                lookahead=self._h2d_lookahead() if lookahead is None else lookahead,
             )
         return self.make_placeholder_activation()
 
@@ -396,7 +629,9 @@ class TtPrefillRuntime:
             "K positions past the chunk's right edge, so it is strictly longer than the chunk; a "
             "chunk_size-long list is the trunk input, not an MTP stream."
         )
-        return self.make_chunk_input(list(mtp_stream[:c]))
+        # lookahead=0: on the HOST path the trunk input is the plain chunk and each level is uploaded
+        # separately by prepare_prefill_mtp_window, so this must NOT take the overlapping-row layout.
+        return self.make_chunk_input(list(mtp_stream[:c]), lookahead=0)
 
     def compile(self, kv_caches: MlaKvCaches) -> None:
         """Warm up one chunk so the per-chunk loop hits no first-run cost. The engine passes the
@@ -428,8 +663,14 @@ class TtPrefillRuntime:
             self._kv_cache = kv_caches  # kept so capture_trace() can record after the ack is registered
             self._prepare_trace(kv_caches)
         else:
+            # The warm-up input must have the width the serving loop will actually receive, not the
+            # trunk width: under MTP the H2D socket delivers chunk_size/sp + K ids per chip, and
+            # prefill_chunk slices the K windows straight off it. Compiling against a narrower
+            # tensor would either fail here (it did: "H2D row is 640 ids, expected 640 + 4") or warm
+            # the wrong program shapes.
+            warm = chunk + self._h2d_lookahead()
             logger.info(f"TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
-            tt_input = self.make_chunk_input([0] * chunk)
+            tt_input = self.make_chunk_input([0] * warm)
             self.prefill_chunk(tt_input, kv_caches, slot_id=0, actual_start=0, actual_end=chunk)
             ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
@@ -603,10 +844,9 @@ class TtPrefillRuntime:
                 into slots [num_layers, num_layers + K) of this same user's slice, so kv_caches.kvpe
                 must have been allocated with those extra slots — allocate it to
                 `self.model.num_kvpe_cache_layers`, which is the single number every block strides
-                users by. Not yet reconciled with KV migration: build_kv_chunk_table still strides
-                by config.num_layers, so a migrated run with MTP on and num_users > 1 would describe
-                the wrong rows. MTP and migration are not a combination that exists yet; do not turn
-                both on without fixing that stride first. None disables MTP for this chunk.
+                users by. Migration knows about those slots: `kv_migration_stages` declares
+                num_layers + K on the last rank, which is what the chunk-address table strides users
+                by. None disables MTP for this chunk.
             mtp_seed_token: optional t_P for the last chunk (saves one 32-row LM head call).
             on_mtp_complete: tap fired once with (MTPPredictorOutput, generated_tokens).
         """
@@ -648,10 +888,17 @@ class TtPrefillRuntime:
             # That means the pipelined sink's request_id cannot be re-bound per call the way the eager
             # path does below — publish this chunk's id instead; the captured callback built by
             # set_layer_completion_sink() reads it at replay time.
-            assert mtp_tokens is None, (
-                "use_trace does not support MTP: the shift-windows are uploaded per chunk (fresh "
-                "addresses) and the last chunk's levels round-trip through the host LM head, neither "
-                "of which survives a capture; run with PREFILL_USE_TRACE=0"
+            # Both MTP entry points are rejected here, and they fail differently if they are not.
+            # `mtp_tokens` is the host list; `config.mtp_levels` is the device path the runner uses,
+            # where mtp_tokens is legitimately None -- so checking only the former would let a traced
+            # replay run the trunk and SILENTLY skip every level, producing a plausible KV cache with
+            # slots NUM_LAYERS+k left untouched. The runner refuses this combination up front
+            # (prefill_runner.py's PREFILL_MTP_LEVELS/PREFILL_USE_TRACE assert); this is the backstop
+            # for anyone driving TtPrefillRuntime directly.
+            assert mtp_tokens is None and not self.config.mtp_levels, (
+                "use_trace does not support MTP: the shift-windows are sliced/uploaded per chunk (fresh "
+                "addresses) and the levels run after the captured segment, neither of which survives a "
+                "capture; run with PREFILL_USE_TRACE=0"
             )
             self._trace_request_id = request_id
             ttnn.copy(input_tensor, self._trace_input)
@@ -677,12 +924,20 @@ class TtPrefillRuntime:
             on_layer_complete = self._on_layer_complete
 
         model_input = input_tensor
+        mtp_windows = None
         if self.config.dflash_enabled:
             self.drafter.reset()
             if not self.config.is_first_rank:
                 model_input, partial = self._unpack_activation(input_tensor)
                 ttnn.deallocate(input_tensor)
                 self.drafter.import_partial(partial)
+        elif self.config.mtp_levels:
+            assert mtp_tokens is None, (
+                "mtp_tokens (a host list) was passed to a runtime configured for the DEVICE MTP path "
+                "(config.mtp_levels > 0). The runner's tokens arrive over the H2D socket and are "
+                "sliced on device; passing a host list too would prefill two different streams."
+            )
+            mtp_windows, model_input = self._mtp_prepare_input(input_tensor)
 
         out = self.model.forward(
             model_input,
@@ -697,6 +952,10 @@ class TtPrefillRuntime:
             cache_user_id=slot_id,
             index_kv_cache=kv_caches.index,
             mtp_tokens=mtp_tokens,
+            # Only the rank that BUILT a predictor runs the levels; an upstream rank just carries the
+            # windows across its socket, so it must not hand them to a transformer that has none.
+            mtp_token_windows=mtp_windows if self.mtp_predictor is not None else None,
+            mtp_codec=self._mtp_codec_or_none(mtp_windows),
             mtp_seed_token=mtp_seed_token,
             on_mtp_complete=on_mtp_complete,
         )
@@ -716,6 +975,17 @@ class TtPrefillRuntime:
                 return None
             # Non-last rank: pack this rank's finalized FC partial alongside the hidden for the next rank.
             return self._pack_activation(out, self.drafter.export_partial())
+
+        if mtp_windows is not None:
+            if self.config.is_last_rank:
+                mtp_windows.deallocate()
+                return None
+            # Non-last rank: re-pack the tokens alongside the hidden so they reach the rank that runs
+            # MTP. .block() hands over ownership of a received block, so this costs an encode only on
+            # the first rank and nothing at all in the middle of the pipeline.
+            packed = self._mtp_pack_activation(out, mtp_windows.block(self.mtp_codec))
+            mtp_windows.deallocate()
+            return packed
 
         # Non-last rank: forward returns the hidden-state activation to forward downstream.
         # Last/single rank: forward returns the (token, prob, intermediates) tuple, which this
@@ -797,18 +1067,27 @@ class TtPrefillRuntime:
         this stage's layers under the model's global numbering, while the index cache is numbered in
         COMPACTED full-indexer space (`full_indexer_rank`) because only `full` layers own an indexer and
         write a slot. Both hold THIS stage only, so each stage's layers sit at its own slot 0.
+
+        MTP (#53533) extends the LAST rank's stage by K layers: level k writes KVPE slot
+        ``num_layers + k`` and the K levels share one indexer slot, exactly as the adapter's
+        allocate_kv_cache sizes the two caches. The count is not cosmetic -- the table's address walk
+        is a bank round-robin over ``slot -> local_layer -> chunk``, so a stage short by K would give
+        every user but 0 the wrong base for EVERY layer, trunk layers included.
         """
         from models.demos.common.prefill.runners.migration import KvCacheStage
         from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
 
         first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
         num_my_layers = self.config.num_layers if num_my_layers is None else int(num_my_layers)
-        stages = [KvCacheStage(self.kv_migration_base_address(kv_caches), first_layer_idx, num_my_layers)]
+        mtp_tail = self.config.mtp_levels if self.config.is_last_rank else 0
+        stages = [KvCacheStage(self.kv_migration_base_address(kv_caches), first_layer_idx, num_my_layers + mtp_tail)]
 
         index_cache = kv_caches.index
         if index_cache is not None:
             first_full = full_indexer_rank(self.hf_config, first_layer_idx)
-            count_full = full_indexer_rank(self.hf_config, first_layer_idx + num_my_layers) - first_full
+            # Same expression the adapter sizes the cache with, MTP tail included: with the MTP slot
+            # declared, `full` at index num_layers makes this one more than the trunk's rank count.
+            count_full = full_indexer_rank(self.hf_config, first_layer_idx + num_my_layers + mtp_tail) - first_full
             slots_per_user = index_cache.shape[0] // self.config.num_users
             if slots_per_user != count_full:
                 raise RuntimeError(

@@ -44,8 +44,11 @@ from models.demos.common.prefill.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
     compute_layer_split,
-    open_mesh_device,
 )
+from models.demos.common.prefill.runners.runner_utils import (
+    d2d_activation_width as d2d_width,  # aliased: the local below holds the resolved width
+)
+from models.demos.common.prefill.runners.runner_utils import open_mesh_device
 
 # NOTE: the layer_completion classes (the standalone `_layer_completion` extension)
 # are imported lazily at point-of-use — its .so is built only under WITH_PYTHON_BINDINGS and may be
@@ -139,6 +142,12 @@ KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
 DFLASH_ENABLED = (
     ADAPTER.supports_dflash and os.environ.get("PREFILL_DFLASH", "0") == "1" and bool(os.environ.get("DFLASH_HF_MODEL"))
 )
+# Number of MTP levels to run after the trunk's last layer (0 = off). Two gates: the model declares the
+# capability (ADAPTER.supports_mtp — only GLM 5.2) and the run asks for a level count. K > 0 widens the
+# H2D chunk to CHUNK_SIZE + K tokens (level k reads the window shifted k tokens right), adds K KV-cache
+# slots per user, and widens the D2D activation by the packed token block (see runner_utils.MTP_TOKEN_COLS).
+MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0)) if ADAPTER.supports_mtp else 0
+assert MTP_LEVELS >= 0, f"PREFILL_MTP_LEVELS must be >= 0, got {MTP_LEVELS}"
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
@@ -157,6 +166,20 @@ _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 
 assert not (DFLASH_ENABLED and USE_TRACE), (
     "PREFILL_DFLASH=1 is incompatible with PREFILL_USE_TRACE=1: the DFlash drafter path is not "
     "trace-captured. Run DFlash with PREFILL_USE_TRACE=0."
+)
+# Same reason for MTP, and asserted by the runtime too (prefill_chunk's traced branch): the MTP levels
+# run after the captured segment and consume per-chunk token windows, so a replay would silently skip them.
+assert not (MTP_LEVELS and USE_TRACE), (
+    "PREFILL_MTP_LEVELS>0 is incompatible with PREFILL_USE_TRACE=1: the MTP levels are not "
+    "trace-captured. Run MTP with PREFILL_USE_TRACE=0."
+)
+# One tap, one packed D2D payload, one set of extra KV slots — running both at once has never been
+# defined, so reject it here rather than let two features fight over the same activation width.
+assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DFLASH=1 are mutually exclusive"
+# MTP needs the trunk's real hidden out of the last layer to seed level 1, which kv-only skips.
+assert not (MTP_LEVELS and KV_ONLY_LAST_LAYER), (
+    "PREFILL_MTP_LEVELS>0 requires PREFILL_KV_ONLY_LAST_LAYER=0: MTP level 1 consumes the last layer's "
+    "post-norm hidden state, which the kv-only path never computes."
 )
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
@@ -536,6 +559,7 @@ def _print_config() -> None:
             f"{DFLASH_ENABLED} (adapter.supports_dflash={ADAPTER.supports_dflash}, "
             f"DFLASH_HF_MODEL={os.environ.get('DFLASH_HF_MODEL') or '<unset>'})",
         ),
+        ("PREFILL_MTP_LEVELS", f"{MTP_LEVELS} (adapter.supports_mtp={ADAPTER.supports_mtp})"),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
@@ -591,6 +615,10 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "max_seq_len": MAX_SEQ_LEN,
         "num_users": NUM_USERS,
         "mesh_shape": GLOBAL_MESH_SHAPE,
+        # Sets the H2D row length, the D2D activation width, and the pipeline layer split on every
+        # rank; a mismatch would be a socket-spec mismatch at rendezvous (or two ranks disagreeing on
+        # who owns which layer), which is far harder to read than this named failure.
+        "mtp_levels": MTP_LEVELS,
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
     }
     fingerprint = "|".join(f"{k}={v}" for k, v in fields.items())
@@ -624,7 +652,7 @@ def main() -> None:
     num_ranks = int(ttnn.distributed_context_get_size())
     _assert_ranks_agree_on_config(rank, num_ranks)
 
-    layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS))
+    layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS), MTP_LEVELS)
     first_layer_idx, num_my_layers = layer_split[rank]
     is_first_rank = rank == 0
     is_last_rank = rank == num_ranks - 1
@@ -660,6 +688,11 @@ def main() -> None:
         # NOT gated on is_last_rank: every rank builds its owned fc slices; the runtime derives the
         # last-rank KV tail from is_last_rank.
         dflash_enabled=DFLASH_ENABLED,
+        # NOT gated on is_last_rank either: every rank must know K to size its D2D sockets (the token
+        # ids ride the activation the whole way down the pipeline), and the runtime/adapter narrow it
+        # to the last rank for the parts that really are last-rank-only (the predictor, the K extra
+        # KV slots, the MTP indexer slot).
+        mtp_levels=MTP_LEVELS,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=USE_TRACE,
@@ -700,9 +733,13 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     num_ranks>1. Shutdown for num_ranks>1 is rough: downstream ranks block in D2D recv when rank 0
     stops, so they exit on teardown / SIGKILL."""
     single_rank = num_ranks == 1
-    # DFlash packs the drafter's FC partial alongside the hidden (concat on the feature dim), so the D2D
-    # activation is 2H wide when enabled; the non-dflash path (every other model) stays H.
-    d2d_activation_width = hf_config.hidden_size * (2 if DFLASH_ENABLED else 1)
+    # DFlash packs the drafter's FC partial alongside the hidden (concat on the feature dim) and MTP
+    # packs the chunk's token ids as one 32-column group per level, so the D2D activation is wider
+    # than H when either is enabled; plain prefill stays H. The runtime's own pack/unpack and its
+    # placeholder receive buffer size themselves with this same function.
+    d2d_activation_width = d2d_width(
+        hf_config.hidden_size, mtp_levels=MTP_LEVELS, tp_factor=GLOBAL_MESH_SHAPE[1], dflash=DFLASH_ENABLED
+    )
 
     ttnn.distributed_context_barrier()  # warm-up: all ranks finish compile before chunks flow
 
@@ -719,6 +756,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             mapper_config=H2D_MAPPER_CONFIG,
             worker_cores=SYNC_WORKER_CORES,
             metadata_size_bytes=METADATA_SIZE_BYTES,
+            # MTP: each chip's row overlaps the next chip's by K tokens, so level k's window is the
+            # same local slice on every chip. The producer builds the same overlapping rows.
+            lookahead=MTP_LEVELS,
         )
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
         descriptor_path = h2d_service.export_descriptor(service_id)
@@ -829,9 +869,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         # The layer-aware merge gathers each rank's range so the table spans all stages; pass this
         # rank's range -- via the adapter's boundaries, so it is the split the MODEL was built with in
         # main(). Without them a cross-layer-reuse model (GLM-5.2 snaps 39/39 to 38/40) describes a
-        # partition its KV cache does not hold, mismapping every layer of the second stage.
+        # partition its KV cache does not hold, mismapping every layer of the second stage. MTP_LEVELS
+        # moves those boundaries too (22/20/20/16, not 18/20/20/20), so it has to be passed here as well.
         first_layer_idx, num_my_layers = compute_layer_split(
-            NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
+            NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS), MTP_LEVELS
         )[rank]
         table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
         wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
@@ -1053,8 +1094,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             # are None and this equals the even split; for a DSA/cross-layer-reuse model (GLM) the snapped
             # split differs, and an unsnapped one here would hand the router overlapping/gapped seqs, which
             # its reorder buffer cannot sequence — it would stall head-of-line instead of failing loudly.
+            # MTP_LEVELS shifts the boundaries as well, so it must match main()'s call too.
             first_layer_idx, num_my_layers = compute_layer_split(
-                NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
+                NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS), MTP_LEVELS
             )[rank]
             d2h_service = ttnn.D2HStreamService(
                 mesh_device,

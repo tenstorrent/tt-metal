@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPDeviceEmbedSource
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.token_windows import MTPEmbedSource
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import build_position_zero_mask, prepare_prefill_mtp_window
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
@@ -33,6 +34,23 @@ from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbe
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
+
+
+def rank_loads_embedding(is_first_rank: bool, is_last_rank: bool, mtp_levels: int) -> bool:
+    """Does this rank load the token-embedding table?
+
+    The first rank embeds the trunk's prompt. A last rank running MTP embeds its own shifted token
+    windows, so on a pipeline split it needs the SAME table -- rank 0 cannot embed a window whose
+    ids only reach the tail over the D2D socket.
+
+    Single source of truth, because the question is asked twice from different vantage points: the
+    constructor asks it with the predictor OBJECT in hand, while ``check_cache_complete`` is a
+    staticmethod that runs BEFORE the object exists and has to predict the same answer from raw
+    config. When those two drifted, ``check_cache_complete`` stopped looking for the embedding at
+    all on a non-first tail rank -- latent today, since the builder writes the table unconditionally
+    into a rank-shared cache dir, but it would call a cache that lacks it complete.
+    """
+    return bool(is_first_rank or (mtp_levels and is_last_rank))
 
 
 class TtPrefillTransformer(LightweightModule):
@@ -58,6 +76,7 @@ class TtPrefillTransformer(LightweightModule):
         is_last_rank: bool = True,
         kv_only_last_layer: bool = False,
         model_cfg: type | None = None,
+        mtp_levels: int = 0,
     ) -> bool:
         """
         Top-level cache completeness check for the full transformer.
@@ -81,6 +100,9 @@ class TtPrefillTransformer(LightweightModule):
                 so existing callers are unaffected, but MUST be passed for a LatentMoE model
                 (Kimi-K3): without it the block check cannot know to look for the
                 latent-projection cache files and reports a cache missing them as complete.
+            mtp_levels: K, the MTP levels this model runs (0 = none). A last rank running MTP
+                loads the embedding table too, so the check has to look for it there -- pass the
+                config value and let rank_loads_embedding() decide; the rank flags are already args.
 
         Returns:
             True if all expected cache files exist, False otherwise
@@ -92,8 +114,10 @@ class TtPrefillTransformer(LightweightModule):
         # Initialize fast cache checker for this directory
         init_checker(cache_path)
 
-        # Embedding (first rank only)
-        if is_first_rank and not TtParallelEmbedding.check_cache_complete(cache_path):
+        # Embedding: the first rank, plus any rank that embeds MTP windows.
+        if rank_loads_embedding(
+            is_first_rank, is_last_rank, mtp_levels
+        ) and not TtParallelEmbedding.check_cache_complete(cache_path):
             return False
 
         # Per-layer blocks — cache keys are global, so index globally.
@@ -182,7 +206,13 @@ class TtPrefillTransformer(LightweightModule):
 
         logger.info(f"Building TtPrefillTransformer with {num_layers} layers, seq_len={seq_len}")
 
-        # --- Embedding (first rank only) ---
+        # Needed before the embedding: whether this rank loads the table depends on it, and so does
+        # the KV-cache stride below.
+        num_mtp_levels = 0 if mtp_predictor is None else int(mtp_predictor.num_levels)
+
+        # --- Embedding ---
+        # rank_loads_embedding() owns the rule; check_cache_complete() asks it the same question
+        # before this object exists, so the cache check and this build cannot disagree.
         self.embed = (
             TtParallelEmbedding(
                 mesh_device=mesh_device,
@@ -193,7 +223,7 @@ class TtPrefillTransformer(LightweightModule):
                 tp_axis=tp_axis,
                 weight_cache_path=weight_cache_path,
             )
-            if is_first_rank
+            if rank_loads_embedding(is_first_rank, is_last_rank, num_mtp_levels)
             else None
         )
 
@@ -203,7 +233,6 @@ class TtPrefillTransformer(LightweightModule):
         # number. Striding the trunk by num_layers while the cache is deeper puts user 1's layer 0
         # on top of user 0's MTP slots: silent corruption, invisible at num_users == 1, which is
         # exactly the configuration MTP is being brought up in.
-        num_mtp_levels = 0 if mtp_predictor is None else int(mtp_predictor.num_levels)
         self.num_kvpe_cache_layers = num_layers + num_mtp_levels
 
         # --- Transformer layers ---
@@ -365,12 +394,9 @@ class TtPrefillTransformer(LightweightModule):
                 f"layer_num={self.num_kvpe_cache_layers} (it reaches TtPrefillBlock through "
                 "TtMTPModule's **block_kwargs)"
             )
-            assert self.embed is not None, (
-                "MTP embeds its own shifted token windows, and the embedding table is built only on "
-                "the first rank. Single-galaxy (is_first_rank == is_last_rank == True) works today; a "
-                "multi-rank split needs the table replicated onto the last rank -- rank 0 cannot embed "
-                "a token that does not exist until the last rank has run."
-            )
+            # Built above precisely because mtp_predictor is not None; assert the wiring rather
+            # than trust it, since a None table fails deep inside the first level's embed call.
+            assert self.embed is not None, "MTP needs the embedding table on this rank (see --- Embedding ---)"
 
         logger.info(f"TtPrefillTransformer construction complete ({num_layers} layers)")
 
@@ -431,6 +457,8 @@ class TtPrefillTransformer(LightweightModule):
         index_kv_cache: Optional[ttnn.Tensor] = None,
         metadata: Optional[ttnn.Tensor] = None,
         mtp_tokens: Optional[list[int]] = None,
+        mtp_token_windows=None,
+        mtp_codec=None,
         mtp_seed_token: Optional[int] = None,
         on_mtp_complete: Optional[Callable] = None,
     ):
@@ -471,8 +499,17 @@ class TtPrefillTransformer(LightweightModule):
                         mtp_extended_stream(), indexed by chunk-local position, so level k's window is
                         the slice [k : k+seq_len]. None disables MTP for this chunk. Requires an
                         mtp_predictor; the K levels run after the trunk tail, off model.norm's output.
+            mtp_token_windows: the DEVICE alternative to `mtp_tokens` — an `MTPTokenWindows` holding
+                        this chunk's `L + K` ids per chip (or the digit block they arrived packed in),
+                        from which each level slices its own window on device. This is what the
+                        prefill runner passes: its tokens come off the H2D socket and never touch the
+                        host. Mutually exclusive with `mtp_tokens`.
+            mtp_codec: `TokenDigitCodec` used to decode `mtp_token_windows` when the ids arrived as
+                        base-256 digits over the D2D socket. Unused (and may be None) when this rank
+                        holds the uint32 ids directly, i.e. whenever it is also the first rank.
             mtp_seed_token: optional t_P for the last chunk, saving one 32-row LM head call. Only pass
-                        it when it was produced greedily — see _mtp_next_token_fn.
+                        it when it was produced greedily — see _mtp_next_token_fn. Host path only:
+                        the device path never runs the LM head (see `MTPDeviceEmbedSource`).
             on_mtp_complete: tap fired once with (MTPPredictorOutput, generated_tokens). A tap rather
                         than an extra return value, so the trunk's return arity is unchanged whether or
                         not MTP ran — the same reason on_layer_complete is a callback.
@@ -501,6 +538,16 @@ class TtPrefillTransformer(LightweightModule):
         # the very end of this forward (run_mtp -> MTPEmbedSource, which asserts the same length), so
         # a wrong-length list otherwise costs a whole trunk chunk -- one that has already written KV --
         # before it raises. Pure host arithmetic; it costs nothing.
+        assert mtp_tokens is None or mtp_token_windows is None, (
+            "mtp_tokens (host list) and mtp_token_windows (device slices) are two spellings of the "
+            "same input; pass exactly one"
+        )
+        if mtp_token_windows is not None:
+            assert self.mtp_predictor is not None, "mtp_token_windows passed but this transformer has no mtp_predictor"
+            assert mtp_token_windows.num_levels == self.num_mtp_levels, (
+                f"windows carry {mtp_token_windows.num_levels} levels, predictor runs "
+                f"{self.num_mtp_levels}; the runner and the runtime disagree on PREFILL_MTP_LEVELS"
+            )
         if mtp_tokens is not None:
             assert self.mtp_predictor is not None, "mtp_tokens passed but this transformer has no mtp_predictor"
             assert len(mtp_tokens) == self.seq_len + self.num_mtp_levels, (
@@ -638,8 +685,8 @@ class TtPrefillTransformer(LightweightModule):
         # --- MTP levels (GLM-5.2, #53533) ---------------------------------------------------
         # After the trunk tail, so the trunk path is byte-identical when MTP is off. `h` is h^0
         # (post-model.norm) and is still live: neither the LM head nor _sample frees it.
-        if mtp_tokens is not None:
-            assert self.mtp_predictor is not None, "mtp_tokens passed but this transformer has no mtp_predictor"
+        if mtp_tokens is not None or mtp_token_windows is not None:
+            assert self.mtp_predictor is not None, "MTP tokens passed but this transformer has no mtp_predictor"
             assert actual_start is not None, (
                 "MTP needs actual_start on the host to know whether this chunk contains absolute "
                 "position 0, where vLLM zeroes the embedding on every level; the on-device metadata "
@@ -657,6 +704,8 @@ class TtPrefillTransformer(LightweightModule):
                 actual_isl,
                 zero_position_0=(actual_start == 0),
                 seed_token=mtp_seed_token,
+                windows=mtp_token_windows,
+                codec=mtp_codec,
                 cache_user_id=cache_user_id,
                 actual_start=actual_start,
                 actual_end=actual_end,
@@ -739,6 +788,15 @@ class TtPrefillTransformer(LightweightModule):
         tt_ids = prepare_prefill_mtp_window(
             window_ids, self.mesh_device, self.sp_factor, self.is_balanced, self.mesh_shape, self.sp_axis
         )
+        return self._mtp_embed_window_dev(tt_ids, zero_position_0)
+
+    def _mtp_embed_window_dev(self, tt_ids: ttnn.Tensor, zero_position_0: bool) -> ttnn.Tensor:
+        """Embed ONE already-on-device MTP window: ``[sp, 1, L]`` uint32 -> ``[1, 1, L, H/tp]`` TILE.
+
+        The device half of :meth:`_mtp_embed_window`, shared with the runner path, where the ids were
+        sliced out of the H2D chunk (or decoded out of the D2D digit block) and never reached the
+        host. Consumes ``tt_ids``: it is a per-level temporary either way.
+        """
         emb = ttnn.unsqueeze_to_4D(self.embed(tt_ids))
         ttnn.deallocate(tt_ids)
         if zero_position_0:
@@ -774,11 +832,13 @@ class TtPrefillTransformer(LightweightModule):
         h_normed: ttnn.Tensor,
         kvpe_cache: MlaKvCache,
         rope_tensors: dict,
-        mtp_tokens: list[int],
+        mtp_tokens: Optional[list[int]],
         actual_isl: int,
         *,
         zero_position_0: bool,
         seed_token: Optional[int] = None,
+        windows=None,
+        codec=None,
         **fwd_kwargs,
     ):
         """Run the K MTP levels off ``h^0``. Returns ``(MTPPredictorOutput, generated_tokens)``.
@@ -788,7 +848,12 @@ class TtPrefillTransformer(LightweightModule):
             mtp_tokens: this chunk's ``C + K`` extended token stream from
                 ``mtp_extended_stream``. Interior chunks carry the next chunk's first ``K`` ids;
                 the last chunk carries ``K`` generation slots instead, filled level by level from
-                each level's own LM head.
+                each level's own LM head. None when ``windows`` is given.
+            windows: ``MTPTokenWindows`` — the on-device alternative to ``mtp_tokens``, where each
+                level's ids are a ``ttnn.slice`` rather than a host list. It never runs the LM head,
+                so the last chunk's ``K`` trailing positions carry whatever the producer padded them
+                with and ``generated_tokens`` comes back empty.
+            codec: ``TokenDigitCodec`` for ``windows``, needed only when the ids arrived as digits.
             actual_isl: this chunk's real-token count -- both the LM-head row and where the last
                 chunk's generation slots start.
             zero_position_0: True only on the chunk containing absolute position 0.
@@ -801,15 +866,23 @@ class TtPrefillTransformer(LightweightModule):
                 ``layer_num``, since the flat slot is ``cache_user_id * layer_num + cache_layer_idx``.
         """
         assert self.mtp_predictor is not None, "run_mtp called on a transformer built without an mtp_predictor"
-        source = MTPEmbedSource(
-            mtp_tokens,
-            self.seq_len,
-            self.num_mtp_levels,
-            embed_fn=lambda window: self._mtp_embed_window(window, zero_position_0),
-            next_token_fn=self._mtp_next_token_fn(actual_isl),
-            real_len=actual_isl,
-            seed_token=seed_token,
-        )
+        assert (mtp_tokens is None) != (windows is None), "run_mtp takes exactly one of mtp_tokens/windows"
+        if windows is not None:
+            source = MTPDeviceEmbedSource(
+                windows,
+                embed_fn=lambda tt_ids: self._mtp_embed_window_dev(tt_ids, zero_position_0),
+                codec=codec,
+            )
+        else:
+            source = MTPEmbedSource(
+                mtp_tokens,
+                self.seq_len,
+                self.num_mtp_levels,
+                embed_fn=lambda window: self._mtp_embed_window(window, zero_position_0),
+                next_token_fn=self._mtp_next_token_fn(actual_isl),
+                real_len=actual_isl,
+                seed_token=seed_token,
+            )
         # Forwarded here rather than by the caller: `actual_isl` is a named parameter of this
         # method AND something every level's block needs, so a caller that passed both would hit
         # "got multiple values for argument 'actual_isl'". It cannot already be in fwd_kwargs --

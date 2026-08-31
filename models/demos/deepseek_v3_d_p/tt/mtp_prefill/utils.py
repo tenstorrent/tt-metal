@@ -15,6 +15,15 @@ import os
 
 import torch
 
+MTP_CACHE_PREFIX = "mtp_0"
+"""TTNN weight-cache key prefix for the shared MTP weight module. Shared by whoever BUILDS the cache
+and whoever checks it: a prefix mismatch does not raise, it just reports the cache incomplete."""
+
+MTP_CACHE_ENV = "TT_GLM52_MTP_TTNN_CACHE"
+"""Env override for the MTP cache ROOT (the ``<variant>_<arch>_<N>dev/<sp>x<tp>`` leaf is appended).
+The MTP weights are keyed on layer 78, which the trunk cache does not carry, so they live in their
+own tree."""
+
 # The four non-decoder-layer tensors an MTP module adds on top of a normal GLM decoder layer.
 # `shared_head.norm` is the only one on the OUTPUT side.
 MTP_TENSOR_SUFFIXES = {

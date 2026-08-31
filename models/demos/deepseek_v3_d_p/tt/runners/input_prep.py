@@ -31,23 +31,44 @@ def prepare_prefill_input_tensor(
     is_balanced: bool,
     mesh_shape: tuple,
     sp_axis: int,
+    lookahead: int = 0,
 ) -> ttnn.Tensor:
     """Shard and upload token IDs to device as a prefill input tensor.
 
     Produces an SP-sharded uint32 ROW_MAJOR DRAM tensor of shape
-    [sp_factor, 1, len(token_ids) // sp_factor] — the format expected by
+    [sp_factor, 1, (len(token_ids) - lookahead) // sp_factor + lookahead] — the format expected by
     TtPrefillTransformer.forward.
+
+    ``lookahead`` (MTP, #53533) makes the rows OVERLAP: chip ``c`` gets
+    ``token_ids[c*L : c*L + L + K]`` instead of its disjoint ``[c*L, (c+1)*L)`` shard, so it holds
+    every token an MTP level needs from it and level ``k``'s window is the same local ``[k, k+L)``
+    slice on every chip. This is the SAME layout ``prefill_producer._chunk_to_host_array`` builds
+    for the H2D socket, and it has to be, because ``TtPrefillRuntime.prefill_chunk`` slices whatever
+    arrives with one set of bounds. Only the block-cyclic layout is supported: under ``is_balanced``
+    the row->position map is a permutation, so "the next K tokens" is not a contiguous row tail.
     """
-    isl_per_chip = len(token_ids) // sp_factor
+    assert lookahead >= 0, f"lookahead must be non-negative, got {lookahead}"
+    assert not (
+        lookahead and is_balanced
+    ), "MTP lookahead rows are only defined for the block-cyclic (non-balanced) layout"
+    isl_per_chip = (len(token_ids) - lookahead) // sp_factor
+    assert (
+        len(token_ids) == sp_factor * isl_per_chip + lookahead
+    ), f"got {len(token_ids)} ids, expected sp_factor*L + lookahead = {sp_factor}*{isl_per_chip} + {lookahead}"
     if is_balanced:
         chunk_order = create_balanced_chunk_order(sp_factor)
         t = torch.tensor(token_ids, dtype=torch.int64).unsqueeze(0).unsqueeze(0).unsqueeze(-1)
         t = reorder_tensor_chunks(t, chunk_order, seq_dim=2)
         token_ids_sharded = t.squeeze(0).squeeze(-1).reshape(sp_factor, 1, isl_per_chip)
+    elif lookahead:
+        # unfold gives the sp overlapping windows of length L+K at stride L, as a view.
+        token_ids_sharded = (
+            torch.tensor(token_ids, dtype=torch.int64).unfold(0, isl_per_chip + lookahead, isl_per_chip).unsqueeze(1)
+        )
     else:
         token_ids_sharded = torch.tensor(token_ids, dtype=torch.int64).reshape(sp_factor, 1, isl_per_chip)
     return ttnn.from_torch(
-        token_ids_sharded,
+        token_ids_sharded.contiguous(),
         device=mesh_device,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
