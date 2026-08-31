@@ -30,7 +30,7 @@ size_t harvested_before(uint32_t dram_harvesting_mask, size_t channel) {
 }
 }  // namespace
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const {
+tt::tt_metal::xy_pair metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const {
     TT_ASSERT(
         dram_view < this->dram_view_worker_cores.size(),
         "dram_view={} must be within range of dram_view_worker_cores.size={}",
@@ -40,7 +40,7 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_
     return this->dram_view_worker_cores.at(dram_view).at(noc);
 };
 
-bool metal_SocDescriptor::is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const {
+bool metal_SocDescriptor::is_noc0_dram_endpoint(const tt::tt_metal::xy_pair& translated_coord) const {
     // dram_view_worker_cores (and thus get_preferred_worker_core_for_dram_view) holds TRANSLATED
     // coords, so this compares like-for-like against a TRANSLATED argument. See the header note.
     for (size_t dram_view = 0; dram_view < this->dram_view_worker_cores.size(); ++dram_view) {
@@ -51,12 +51,12 @@ bool metal_SocDescriptor::is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& t
     return false;
 }
 
-std::vector<tt::tt_metal::CoreCoord> metal_SocDescriptor::get_metal_dram_cores(tt::CoordSystem coord_system) const {
+std::vector<tt::tt_metal::xy_pair> metal_SocDescriptor::get_metal_dram_cores(tt::CoordSystem coord_system) const {
     // Blackhole reserves each DRAM view's NOC0 worker endpoint for the syseng firmware; no other
     // architecture has that restriction (and future ones won't), so the exclusion is confined to this
     // one spot rather than every DRAM loop in Metal.
     const bool exclude_noc0_endpoints = (this->arch == tt::ARCH::BLACKHOLE);
-    std::vector<tt::tt_metal::CoreCoord> dram_cores;
+    std::vector<tt::tt_metal::xy_pair> dram_cores;
     const auto& umd_dram_cores = get_cores(tt::CoreType::DRAM, coord_system);
     dram_cores.reserve(umd_dram_cores.size());
     for (const tt::umd::CoreCoord& core : umd_dram_cores) {
@@ -79,8 +79,8 @@ std::vector<tt::tt_metal::CoreCoord> metal_SocDescriptor::get_metal_dram_cores(t
     return dram_cores;
 }
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_logical_dram_core_from_translated(
-    const tt::tt_metal::CoreCoord& translated_coord) const {
+tt::tt_metal::xy_pair metal_SocDescriptor::get_logical_dram_core_from_translated(
+    const tt::tt_metal::xy_pair& translated_coord) const {
     // A view can share its NOC endpoints with the other views carved out of the same channel, so this
     // returns the lowest view index that reaches translated_coord. Every such coord resolves back to
     // translated_coord through get_physical_dram_core_from_logical, which is what callers rely on; use
@@ -89,7 +89,7 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_logical_dram_core_from_translat
         const auto& endpoints = this->dram_bank_endpoint_coords[dram_view];
         for (size_t idx = 0; idx < endpoints.size(); ++idx) {
             if (endpoints[idx] == translated_coord) {
-                return tt::tt_metal::CoreCoord{static_cast<uint32_t>(dram_view), static_cast<uint32_t>(idx)};
+                return tt::tt_metal::xy_pair{static_cast<uint32_t>(dram_view), static_cast<uint32_t>(idx)};
             }
         }
     }
@@ -102,7 +102,7 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_logical_dram_core_from_translat
         this->dram_bank_endpoint_coords.size());
 }
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const {
+tt::tt_metal::xy_pair metal_SocDescriptor::get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const {
     TT_ASSERT(
         dram_view < this->dram_view_eth_cores.size(),
         "dram_view={} must be within range of dram_view_eth_cores.size={}",
@@ -112,14 +112,14 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_vie
     return this->dram_view_eth_cores.at(dram_view).at(noc);
 };
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_logical_core_for_dram_view(int dram_view) const {
+tt::tt_metal::xy_pair metal_SocDescriptor::get_logical_core_for_dram_view(int dram_view) const {
     const uint32_t num_dram_views = this->get_num_dram_views();
     TT_FATAL(
         dram_view < num_dram_views,
         "dram_view={} must be within range of num_dram_views={}",
         dram_view,
         num_dram_views);
-    return tt::tt_metal::CoreCoord(dram_view, 0);
+    return tt::tt_metal::xy_pair(dram_view, 0);
 }
 
 size_t metal_SocDescriptor::get_address_offset(int dram_view) const {
@@ -153,7 +153,7 @@ size_t metal_SocDescriptor::get_channel_for_dram_view(int dram_view) const {
 
 size_t metal_SocDescriptor::get_num_dram_views() const { return this->dram_view_eth_cores.size(); }
 
-int metal_SocDescriptor::get_dram_channel_from_logical_core(const tt::tt_metal::CoreCoord& logical_coord) const {
+int metal_SocDescriptor::get_dram_channel_from_logical_core(const tt::tt_metal::xy_pair& logical_coord) const {
     const uint32_t num_dram_views = this->get_num_dram_views();
     TT_FATAL(
         logical_coord.x < num_dram_views &&
@@ -165,25 +165,29 @@ int metal_SocDescriptor::get_dram_channel_from_logical_core(const tt::tt_metal::
     return logical_coord.x;
 }
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_ethernet_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const {
+tt::tt_metal::xy_pair metal_SocDescriptor::get_physical_ethernet_core_from_logical(
+    const tt::tt_metal::xy_pair& logical_coord) const {
     tt::umd::CoreCoord physical_coord =
         translate_coord_to({logical_coord, tt::CoreType::ETH, tt::CoordSystem::LOGICAL}, tt::CoordSystem::NOC0);
     return {physical_coord.x, physical_coord.y};
 }
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_logical_ethernet_core_from_physical(const tt::tt_metal::CoreCoord& physical_coord) const {
+tt::tt_metal::xy_pair metal_SocDescriptor::get_logical_ethernet_core_from_physical(
+    const tt::tt_metal::xy_pair& physical_coord) const {
     tt::umd::CoreCoord logical_coord =
         translate_coord_to({physical_coord, tt::CoreType::ETH, tt::CoordSystem::NOC0}, tt::CoordSystem::LOGICAL);
     return {logical_coord.x, logical_coord.y};
 }
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const {
+tt::tt_metal::xy_pair metal_SocDescriptor::get_physical_tensix_core_from_logical(
+    const tt::tt_metal::xy_pair& logical_coord) const {
     tt::umd::CoreCoord physical_coord =
         translate_coord_to({logical_coord, tt::CoreType::TENSIX, tt::CoordSystem::LOGICAL}, tt::CoordSystem::NOC0);
     return {physical_coord.x, physical_coord.y};
 }
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_dram_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const {
+tt::tt_metal::xy_pair metal_SocDescriptor::get_physical_dram_core_from_logical(
+    const tt::tt_metal::xy_pair& logical_coord) const {
     TT_FATAL(
         logical_coord.x < dram_bank_endpoint_coords.size() &&
             logical_coord.y < dram_bank_endpoint_coords[logical_coord.x].size(),
@@ -194,10 +198,10 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_dram_core_from_logical
     return dram_bank_endpoint_coords[logical_coord.x][logical_coord.y];
 }
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_logical_dram_core_for_subchannel(int dram_view, int subchannel) const {
+tt::tt_metal::xy_pair metal_SocDescriptor::get_logical_dram_core_for_subchannel(int dram_view, int subchannel) const {
     const int channel = static_cast<int>(get_channel_for_dram_view(dram_view));
     const tt::umd::CoreCoord phys_umd = get_dram_core_for_channel(channel, subchannel, tt::CoordSystem::TRANSLATED);
-    const tt::tt_metal::CoreCoord phys{phys_umd.x, phys_umd.y};
+    const tt::tt_metal::xy_pair phys{phys_umd.x, phys_umd.y};
     TT_FATAL(
         dram_view >= 0 && static_cast<size_t>(dram_view) < dram_bank_endpoint_coords.size(),
         "dram_view {} out of range (num_views={})",
@@ -206,7 +210,7 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_logical_dram_core_for_subchanne
     const auto& endpoints = dram_bank_endpoint_coords[static_cast<size_t>(dram_view)];
     for (size_t idx = 0; idx < endpoints.size(); ++idx) {
         if (endpoints[idx] == phys) {
-            return tt::tt_metal::CoreCoord{static_cast<uint32_t>(dram_view), static_cast<uint32_t>(idx)};
+            return tt::tt_metal::xy_pair{static_cast<uint32_t>(dram_view), static_cast<uint32_t>(idx)};
         }
     }
     TT_THROW(
@@ -217,7 +221,8 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_logical_dram_core_for_subchanne
         phys.y);
 }
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_dispatch_engine_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const {
+tt::tt_metal::xy_pair metal_SocDescriptor::get_physical_dispatch_engine_core_from_logical(
+    const tt::tt_metal::xy_pair& logical_coord) const {
     const auto dispatch_noc0_cores = get_cores(tt::CoreType::DISPATCH, tt::CoordSystem::NOC0);
     TT_FATAL(
         logical_coord.y == 0,
@@ -236,8 +241,8 @@ uint32_t metal_SocDescriptor::get_num_dispatch_engine_cores() const {
     return static_cast<uint32_t>(get_cores(tt::CoreType::DISPATCH, tt::CoordSystem::NOC0).size());
 }
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_core_from_logical_core(
-    const tt::tt_metal::CoreCoord& logical_coord, const tt::CoreType& core_type) const {
+tt::tt_metal::xy_pair metal_SocDescriptor::get_physical_core_from_logical_core(
+    const tt::tt_metal::xy_pair& logical_coord, const tt::CoreType& core_type) const {
     switch (core_type) {
         case tt::CoreType::ETH: return this->get_physical_ethernet_core_from_logical(logical_coord);
         case tt::CoreType::WORKER: return this->get_physical_tensix_core_from_logical(logical_coord);
@@ -247,10 +252,12 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_physical_core_from_logical_core
     }
 }
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_dram_grid_size() const { return tt::tt_metal::CoreCoord(this->get_num_dram_views(), 1); }
+tt::tt_metal::xy_pair metal_SocDescriptor::get_dram_grid_size() const {
+    return tt::tt_metal::xy_pair(this->get_num_dram_views(), 1);
+}
 
-tt::tt_metal::CoreCoord metal_SocDescriptor::get_dram_compute_grid_size() const {
-    return tt::tt_metal::CoreCoord(this->get_num_dram_views(), get_grid_size(tt::CoreType::DRAM).y);
+tt::tt_metal::xy_pair metal_SocDescriptor::get_dram_compute_grid_size() const {
+    return tt::tt_metal::xy_pair(this->get_num_dram_views(), get_grid_size(tt::CoreType::DRAM).y);
 }
 
 void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
@@ -283,7 +290,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         size_t address_offset = dram_view["address_offset"].as<size_t>();
 
         const auto eth_endpoint_ids = dram_view["eth_endpoint"].as<std::vector<int>>();
-        std::vector<tt::tt_metal::CoreCoord> eth_dram_cores;
+        std::vector<tt::tt_metal::xy_pair> eth_dram_cores;
         std::vector<size_t> eth_endpoints;
         eth_dram_cores.reserve(eth_endpoint_ids.size());
         eth_endpoints.reserve(eth_endpoint_ids.size());
@@ -301,7 +308,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         }
 
         const auto worker_endpoint_ids = dram_view["worker_endpoint"].as<std::vector<int>>();
-        std::vector<tt::tt_metal::CoreCoord> worker_dram_cores;
+        std::vector<tt::tt_metal::xy_pair> worker_dram_cores;
         std::vector<size_t> worker_endpoints;
         worker_dram_cores.reserve(worker_endpoint_ids.size());
         worker_endpoints.reserve(worker_endpoint_ids.size());
@@ -335,7 +342,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
             "DRAM view {} declares no worker_endpoint, so its logical y=0 would not name the NOC0 worker endpoint",
             this->dram_view_channels.size() - 1);
         std::vector<bool> placed(num_subchannels, false);
-        std::vector<tt::tt_metal::CoreCoord> bank_endpoints;
+        std::vector<tt::tt_metal::xy_pair> bank_endpoints;
         bank_endpoints.reserve(num_subchannels);
         const auto push_subchannel = [&](size_t sub) {
             placed[sub] = true;
@@ -369,11 +376,11 @@ void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
 void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 #if defined(TRACY_ENABLE)
     for (auto& core : get_cores(tt::CoreType::TENSIX, tt::CoordSystem::NOC0)) {
-        this->physical_routing_to_profiler_flat_id.emplace((tt::tt_metal::CoreCoord){core.x, core.y}, 0);
+        this->physical_routing_to_profiler_flat_id.emplace((tt::tt_metal::xy_pair){core.x, core.y}, 0);
     }
 
     for (auto& core : this->get_cores(tt::CoreType::ETH, tt::CoordSystem::NOC0)) {
-        this->physical_routing_to_profiler_flat_id.emplace((tt::tt_metal::CoreCoord){core.x, core.y}, 0);
+        this->physical_routing_to_profiler_flat_id.emplace((tt::tt_metal::xy_pair){core.x, core.y}, 0);
     }
 
     int flat_id = 0;

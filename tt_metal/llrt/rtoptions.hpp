@@ -80,7 +80,7 @@ extern const char* RunTimeDebugClassNames[RunTimeDebugClassCount];
 // TargetSelection stores the targets for a given debug feature. I.e. for which chips, cores, harts
 // to enable the feature.
 struct TargetSelection {
-    std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>> cores;
+    std::map<CoreType, std::vector<tt::tt_metal::xy_pair>> cores;
     std::map<CoreType, int> all_cores;
     bool enabled{};
     std::vector<int> chip_ids;
@@ -555,10 +555,11 @@ public:
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
     void set_feature_enabled(RunTimeDebugFeatures feature, bool enabled) { feature_targets[feature].enabled = enabled; }
     // Note: dprint cores are logical
-    const std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) const {
+    const std::map<CoreType, std::vector<tt::tt_metal::xy_pair>>& get_feature_cores(
+        RunTimeDebugFeatures feature) const {
         return feature_targets[feature].cores;
     }
-    void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>> cores) {
+    void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<tt::tt_metal::xy_pair>> cores) {
         feature_targets[feature].cores = std::move(cores);
     }
     // An alternative to setting cores by range, a flag to enable all.
@@ -569,8 +570,9 @@ public:
         return feature_targets[feature].all_cores.at(core_type);
     }
     // Note: core range is inclusive
-    void set_feature_core_range(RunTimeDebugFeatures feature, tt::tt_metal::CoreCoord start, tt::tt_metal::CoreCoord end, CoreType core_type) {
-        feature_targets[feature].cores[core_type] = std::vector<tt::tt_metal::CoreCoord>();
+    void set_feature_core_range(
+        RunTimeDebugFeatures feature, tt::tt_metal::xy_pair start, tt::tt_metal::xy_pair end, CoreType core_type) {
+        feature_targets[feature].cores[core_type] = std::vector<tt::tt_metal::xy_pair>();
         for (uint32_t x = start.x; x <= end.x; x++) {
             for (uint32_t y = start.y; y <= end.y; y++) {
                 feature_targets[feature].cores[core_type].push_back({x, y});
