@@ -13,7 +13,7 @@
 #     Runs one group only (same as a single CI matrix job).
 #     Groups: unit, phys-grouping, control-plane, t3k, wh-galaxy,
 #       bh-6u, bh-single-galaxy, bh-dual-galaxy,
-#       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-ring-stress, bh-misc
+#       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-ring-stress, bh-heterogeneous, bh-misc
 #
 #   Parallel (all groups at once):
 #     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --parallel
@@ -236,7 +236,7 @@ done
 
 CURRENT_GROUP="$GROUP"
 
-VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-misc"
+VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous bh-misc"
 if ! echo "$VALID_GROUPS" | tr ' ' '\n' | grep -qx "$GROUP"; then
   echo "Invalid --group value '$GROUP'. Valid groups: $VALID_GROUPS" >&2; exit 1
 fi
@@ -248,7 +248,7 @@ if [[ "$GROUP" == "all" && "$PARALLEL" -eq 1 ]]; then
   GROUPS=(
     unit phys-grouping control-plane t3k wh-galaxy
     bh-6u bh-single-galaxy bh-dual-galaxy
-    bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-misc
+    bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous bh-misc
   )
   tmpdir=$(mktemp -d)
   trap 'rm -rf "$tmpdir"' EXIT
@@ -498,6 +498,7 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 # Heterogeneous multi-mesh ring with STRICT inter-mesh links: the ring closes and the whole graph maps
 # (Phase-1 control-plane init). Only the two 2x2 audio meshes are pinned (tray 4). Verified on all four
 # SC4 single-pod (128-ASIC quad) mocks: revAB aisle-C/D and revC aisle-C/D.
+# The unpinned copy of this graph runs in the bh-heterogeneous group.
 for mock in \
     "${SC4_REVAB_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" \
     "${SC4_REVAB_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}" \
@@ -727,6 +728,39 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${
     -- ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.SweepConsumer_SolutionSpansExpectedHosts:${GTEST_SUBTORUS_2X4_PIPELINE}"
 
 fi # bh-ring-stress
+
+######################################
+# BH Galaxy: heterogeneous mesh graphs (LONG RUNNING -- own group)
+# Mesh graphs whose meshes do NOT all share one shape, so the mapper has to place each mesh
+# individually instead of dealing identical host_topology slices out of a single BigMesh.
+#
+# 1. bh_glx_2branch_mesh_per_stage_router_pipeline on the full SC36 mock: 69 single-rank meshes
+#    (4x1 / 4x2 / 4x4, row axis RING) forming a two-branch FABRIC-return fork off a degree-4 router
+#    mesh -- 352 chips = 11 of the 36 SC36 galaxies. Multi-mesh placement at the largest mock scale.
+# 2. llama_8b_4galaxy_unpinned on the four SC4 single-pod (128-ASIC quad) mocks: the llama + audio
+#    7-mesh ring (3x 4x8 + 2x 4x2 + 2x 2x2 audio, STRICT inter-mesh links) with the tray-4 audio
+#    pinnings removed, so the mapper places every mesh free of the audio-tray constraint. The pinned
+#    variant of the same graph stays in bh-subtorus.
+#
+# Layout checks validate the resulting control plane: host topology vs runtime plus per-host
+# rank-group tray/asic checks.
+######################################
+if run_group "bh-heterogeneous"; then
+
+ROUTER_PIPELINE_TIMEOUT=600
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${ROUTER_PIPELINE_TIMEOUT} tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/bh_glx_2branch_mesh_per_stage_router_pipeline.textproto" --mock-cluster-rank-binding "${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}"
+
+# Corner-pin checks are not run for the llama ring: the corner-fold invariant does not hold for its
+# 4x2 / 2x2 mesh endpoints (same reason as the pinned variant in bh-subtorus).
+for mock in \
+    "${SC4_REVAB_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" \
+    "${SC4_REVAB_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}" \
+    "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" \
+    "${SC4_REVC_SUBTORUS_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}"; do
+  run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/llama_8b_4galaxy_unpinned_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}"
+done
+
+fi # bh-heterogeneous
 
 ######################################
 # BH Galaxy: pod pipeline MGDs (TestGalaxyLayoutCheck + TestGalaxyCornerPins)
