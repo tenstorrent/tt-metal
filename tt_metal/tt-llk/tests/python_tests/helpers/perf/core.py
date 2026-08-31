@@ -5,6 +5,7 @@
 import glob
 import os
 import re
+import shutil
 from dataclasses import fields
 from datetime import datetime, timezone
 from functools import reduce
@@ -342,21 +343,8 @@ def get_unique_base_names(input_dir: Path):
     return sorted(unique_bases)
 
 
-def _collapse_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
-    """Collapse rows sharing the same (sweep-params, marker) key into a single row.
-
-    Two distinct sweep variants can resolve to an identical recorded key when the
-    harness normalizes a parameter before recording it (e.g. dest_acc forced from
-    No to Yes for an outlier format combo in TestConfig). Such rows are repeated
-    measurements of the same effective kernel, so their metric columns are averaged
-    into one row.
-
-    A warning is always emitted when duplicates are found, and it flags how many
-    collapsed keys disagreed on a metric value: a differing same-key pair is usually
-    benign run-to-run noise, but it is also the signature of a test that failed to
-    record a parameter that actually changes the kernel, so it should not pass
-    silently.
-    """
+def _reject_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
+    """Fail the session if any rows share the same (sweep-params, marker) key."""
     if frame.empty or MARKER not in frame.columns:
         return frame
 
@@ -382,26 +370,25 @@ def _collapse_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
             ].nunique()
             differing = int((nunique > 1).any(axis=1).sum())
 
-        logger.warning(
-            "{}: collapsing {} duplicate (sweep-params, marker) key(s) spanning "
-            "{} rows into one row each (mean of metric columns); {} key(s) had "
-            "differing metric values (run-to-run noise, or a distinguishing "
-            "parameter not recorded as a column).",
-            label,
-            int(len(dup_groups)),
-            int(dup_groups.sum()),
-            differing,
+        examples = [
+            dict(zip(key_cols, key if isinstance(key, tuple) else (key,)))
+            for key in list(dup_groups.index[:3])
+        ]
+        raise PerfSchemaError(
+            f"{label}: {int(len(dup_groups))} duplicate (sweep-params, marker) "
+            f"key(s) spanning {int(dup_groups.sum())} rows; {differing} key(s) "
+            "disagreed on a metric value. A key must identify one measurement. "
+            "Either the sweep varies something that is not recorded as a column, "
+            "or two sweep points normalize onto the same recorded value (e.g. "
+            "dest_acc promoted from No to Yes for an outlier format combo). "
+            f"First duplicate key(s): {examples}"
         )
-
-        agg = {c: ("mean" if c in numeric_cols else "first") for c in value_cols}
-        collapsed = (
-            frame.groupby(key_cols, dropna=False, sort=False).agg(agg).reset_index()
-        )
-        # Restore the original column order (groupby/agg reorders columns).
-        return collapsed[list(frame.columns)]
+    except PerfSchemaError:
+        raise
     except Exception as e:
-        logger.warning("{}: duplicate-key collapse skipped due to error: {}", label, e)
-        return frame
+        raise PerfSchemaError(
+            f"{label}: duplicate-key check failed: {type(e).__name__}: {e}"
+        ) from e
 
 
 def _assert_combined_schema(dfs: list[pd.DataFrame], label: str):
@@ -439,6 +426,26 @@ def _assert_combined_schema(dfs: list[pd.DataFrame], label: str):
     )
 
 
+def _run_id() -> str:
+    """The ROW_KEY component that identifies one CI run, re-runs included.
+
+    "Re-run all/failed jobs" keeps ``GITHUB_RUN_ID`` and bumps
+    ``GITHUB_RUN_ATTEMPT``. Without the attempt, a re-run republishes a second,
+    different measurement under the same (test_name, commit_sha, arch, run_id) —
+    a colliding ROW_KEY. Attempt 1 stays bare so every row already archived keeps
+    the identity it was published with; every shard of one attempt still shares
+    one run_id, which is what the data team means by "one run".
+
+    Off CI there is no run id. The run tag is unique per invocation, so two local
+    runs of the same commit no longer collide the way the old constant "local" did.
+    """
+    run = os.environ.get("GITHUB_RUN_ID", "").strip()
+    if not run:
+        return TestConfig.perf_run_tag()
+    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1").strip() or "1"
+    return run if attempt == "1" else f"{run}-{attempt}"
+
+
 def _ci_provenance() -> dict:
     """Run-context provenance for a published Parquet batch, read from the CI
     environment (best-effort defaults when run off-CI)."""
@@ -446,11 +453,83 @@ def _ci_provenance() -> dict:
     return {
         "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
         "arch": os.environ.get("CHIP_ARCH", "unknown"),
-        "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+        "run_id": _run_id(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "pipeline": "PR" if event == "pull_request" else "nightly",
         "pr_number": os.environ.get("PR_NUMBER") or None,
     }
+
+
+def _refresh_latest(run_dir: Path) -> None:
+    """Point ``perf_data/latest`` at this run, so callers keep a stable path.
+
+    Best-effort: a report that exists but is not linked is still a usable report.
+    """
+    link = run_dir.parent.parent / "latest"
+    if link.exists() and not link.is_symlink():
+        # A real directory here is somebody's data, not our link. Leave it.
+        logger.warning(f"perf_data/latest exists and is not a symlink: {link}")
+        return
+    # Swap through a temporary name: Path.replace is one rename, so a reader that
+    # opens the link mid-update sees the old run or the new one, never nothing.
+    # The pid keeps two concurrent runs from fighting over the temporary.
+    tmp = link.with_name(f".latest.tmp.{os.getpid()}")
+    try:
+        tmp.unlink(missing_ok=True)  # debris from a crashed run with this pid
+        tmp.symlink_to(run_dir.relative_to(link.parent), target_is_directory=True)
+        tmp.replace(link)
+    except OSError as exc:  # noqa: BLE001 — the link is a convenience, not the report
+        logger.warning(f"perf_data/latest not updated: {exc}")
+        tmp.unlink(missing_ok=True)
+
+
+def _keep_runs() -> int:
+    """How many run directories to retain locally (``PERF_KEEP_RUNS``, default 10).
+
+    The archive is the published Parquet, not this directory, so local history is
+    a debugging convenience and wants a bound. 0 or less disables pruning.
+    """
+    raw = os.environ.get("PERF_KEEP_RUNS", "10")
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(f"PERF_KEEP_RUNS={raw!r} is not an integer; keeping 10 runs")
+        return 10
+
+
+def _prune_runs(runs_dir: Path, keep: int, current: Path) -> None:
+    """Keep the newest ``keep`` run directories, never deleting ``current``.
+
+    ``keep <= 0`` disables pruning. Every step is survivable on its own: one
+    unreadable directory costs that directory, not the whole prune, and the run
+    that just finished is protected by nfame rather than by being the newest —
+    a clock that jumped backwards must not be able to delete it.
+    """
+    if keep <= 0:
+        return
+    run_dirs: list[tuple[float, Path]] = []
+    try:
+        entries = list(runs_dir.iterdir())
+    except OSError as exc:
+        logger.warning(f"perf_data runs not pruned ({runs_dir}): {exc}")
+        return
+    for d in entries:
+        try:
+            if not d.is_dir() or d.is_symlink():
+                continue
+            run_dirs.append((d.stat().st_mtime, d))
+        except OSError as exc:
+            logger.warning(f"skipping run directory {d}: {exc}")
+    run_dirs.sort(key=lambda pair: pair[0], reverse=True)
+    survivors = {d for _, d in run_dirs[:keep]}
+    survivors.add(current)
+    for _, stale in run_dirs:
+        if stale in survivors:
+            continue
+        try:
+            shutil.rmtree(stale)
+        except OSError as exc:
+            logger.warning(f"failed to prune run directory {stale}: {exc}")
 
 
 def _write_run_parquet(raw_csv_paths, out_dir) -> None:
@@ -473,7 +552,12 @@ def _write_run_parquet(raw_csv_paths, out_dir) -> None:
         from .parquet import convert_csvs_to_parquet
 
         prov = _ci_provenance()
-        parquet_path = Path(out_dir) / f"{prov['run_id']}.parquet"
+        # Named from the run tag, not run_id. run_id is a ROW_KEY column and is
+        # shared by every shard of one CI workflow by design, so naming files
+        # after it gives all ten shards the same filename -- fine while each
+        # stays in its own directory, wrong the moment they are collected into
+        # one archive. The tag is the filesystem-unique name; use it here.
+        parquet_path = Path(out_dir) / f"{TestConfig.perf_run_tag()}.parquet"
         convert_csvs_to_parquet(
             sorted(raw_csv_paths), parquet_path, strict=True, **prov
         )
@@ -490,8 +574,14 @@ def combine_perf_reports():
     - One for regular files (without .post.csv)
     - One for post files (with .post.csv)
 
+    Output goes to this run's own directory, ``perf_data/runs/<tag>/``, and
+    ``perf_data/latest`` is pointed at it. Writing every run into one shared
+    directory used to overwrite the previous run's reports and — worse — a
+    narrower second run left the first run's test directories untouched, so the
+    tree read as complete while holding a blend of two runs.
+
     Also publishes the run's raw combined CSVs as one Parquet batch
-    (perf_data/<run_id>.parquet) so a run emits both CSV and Parquet.
+    (runs/<tag>/<tag>.parquet) so a run emits both CSV and Parquet.
     Unknown Parquet columns raise ``PerfSchemaError`` (CSV is already written).
     """
 
@@ -499,7 +589,7 @@ def combine_perf_reports():
     if not unique_module_names:
         return
 
-    output_dir = TestConfig.LLK_ROOT / "perf_data"
+    output_dir = TestConfig.perf_run_dir()
 
     if not output_dir.exists():
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -542,7 +632,7 @@ def combine_perf_reports():
 
             _assert_combined_schema(dfs_regular, f"{base_name}.csv")
             combined_regular = pd.concat(dfs_regular, ignore_index=True)
-            combined_regular = _collapse_duplicate_keys(
+            combined_regular = _reject_duplicate_keys(
                 combined_regular, f"{base_name}.csv"
             )
             combined_regular = combined_regular.sort_values(
@@ -567,7 +657,7 @@ def combine_perf_reports():
 
             _assert_combined_schema(dfs_post, f"{base_name}.post.csv")
             combined_post = pd.concat(dfs_post, ignore_index=True)
-            combined_post = _collapse_duplicate_keys(
+            combined_post = _reject_duplicate_keys(
                 combined_post, f"{base_name}.post.csv"
             )
             combined_post = combined_post.sort_values(
@@ -586,7 +676,7 @@ def combine_perf_reports():
 
             if dfs_counters:
                 combined_counters = pd.concat(dfs_counters, ignore_index=True)
-                combined_counters = _collapse_duplicate_keys(
+                combined_counters = _reject_duplicate_keys(
                     combined_counters, f"{base_name}.counters.csv"
                 )
                 combined_counters = combined_counters.sort_values(
@@ -601,6 +691,8 @@ def combine_perf_reports():
             Path(file).unlink()
 
     _write_run_parquet(raw_outputs, output_dir)
+    _refresh_latest(output_dir)
+    _prune_runs(output_dir.parent, _keep_runs(), output_dir)
 
 
 class PerfConfig(TestConfig):

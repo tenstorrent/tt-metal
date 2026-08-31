@@ -383,9 +383,9 @@ void compute_sdpa_chunk(
     // OV-trim (ov_kt_dim < chunk_size on the masked last chunk) keeps the exp->OV SFPU_FPU handshake
     // balanced ONLY when the whole chunk is a single signal group
     // TODO: support finer granularity via an aggregate end-of-remainder drain if needed.
-    MATH((LLK_ASSERT(
+    MATH(LLK_ASSERT(
         ov_kt_dim == chunk_size || exp_signal_granularity == chunk_size,
-        "OV-trim (ov_kt_dim != chunk_size) requires exp_signal_granularity == chunk_size")));
+        "OV-trim (ov_kt_dim != chunk_size) requires exp_signal_granularity == chunk_size"));
     sdpa_custom_mm_reuse_dest_srcb_block_init_short(cb_q, ov_cb, cb_out, transpose_v, chunk_size, num_tiles_v);
     sdpa_custom_mm_reuse_dest_srcb_block<output_granularity, exp_signal_granularity>(
         cb_q,
@@ -478,7 +478,7 @@ template <
     bool dense = false>
 ALWI void sdpa_tail_ms_reduce(
     std::uint32_t cb_worker_ms, std::uint32_t cb_prev_ms, std::uint32_t cb_cur_ms, std::uint32_t cb_l_for_init) {
-    copy_tile_to_dst_init_short(cb_worker_ms);
+    copy_init(cb_worker_ms);
     cb_wait_front(cb_worker_ms, 1);
     cb_wait_front(cb_prev_ms, 1);
     constexpr std::uint32_t dst_reg_0 = 0;  // prev_ms

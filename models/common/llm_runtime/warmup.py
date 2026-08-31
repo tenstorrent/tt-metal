@@ -5,8 +5,9 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import torch
 from loguru import logger
@@ -14,6 +15,7 @@ from loguru import logger
 from models.common.llm_runtime.config import PageTableLayout, TraceConfig, WarmupConfig
 from models.common.llm_runtime.decode import DecodeRuntimeConfig
 from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
+from models.common.llm_runtime.program_compiler import CompiledProgram
 from models.common.sampling import SamplingParams
 
 
@@ -33,12 +35,31 @@ class WarmupPlan:
 
 
 @dataclass(frozen=True)
+class CoverageAlias:
+    """One exact compiled-program association with a configured trace."""
+
+    program_signature: Any
+    trace_signature: Any
+
+
+@dataclass(frozen=True)
+class CoverageManifest:
+    """Registry-authoritative operation identities sealed at activation."""
+
+    eager_program_signatures: tuple[Any, ...]
+    traced_source_program_signatures: tuple[Any, ...]
+    trace_signatures: tuple[Any, ...]
+    aliases: tuple[CoverageAlias, ...]
+
+
+@dataclass(frozen=True)
 class WarmupCoordinatorConfig:
     """Fully resolved immutable warmup policy and coverage."""
 
     warmup: WarmupConfig
     model: Any
-    page_table_layout: PageTableLayout
+    page_table_layout: PageTableLayout  # Current geometry used to build coverage plans.
+    page_table_layout_ceiling: PageTableLayout  # Construction-time upper bound retained across replacement.
     prefill_sequence_lengths: tuple[int, ...]
     lane_batch_size: int
     device_sampling_enabled: bool
@@ -48,9 +69,6 @@ class WarmupCoordinatorConfig:
     decode_trace_enabled: bool
     eager_plan: WarmupPlan
     sampled_plan: WarmupPlan
-    max_page_table_capacity_width: int
-    max_prefill_page_table_width: int
-    max_decode_page_table_width: int
 
     def __post_init__(self) -> None:
         if not isinstance(self.warmup, WarmupConfig):
@@ -74,19 +92,17 @@ class WarmupCoordinatorConfig:
             raise ValueError("force-argmax capability requires device sampling")
         if self.prime_q128_tile_ends is not (self.device_sampling_enabled and self.lane_batch_size >= 32):
             raise ValueError("prime_q128_tile_ends must match resolved sampling and lane capabilities")
-        ceilings = (
-            ("max_page_table_capacity_width", self.max_page_table_capacity_width),
-            ("max_prefill_page_table_width", self.max_prefill_page_table_width),
-            ("max_decode_page_table_width", self.max_decode_page_table_width),
-        )
-        for name, value in ceilings:
-            _require_positive_int(name, value)
-        if self.page_table_layout.raw_capacity_width > self.max_page_table_capacity_width:
-            raise ValueError("max_page_table_capacity_width must cover page_table_layout")
-        if self.page_table_layout.prefill_width > self.max_prefill_page_table_width:
-            raise ValueError("max_prefill_page_table_width must cover page_table_layout")
-        if self.page_table_layout.decode_width > self.max_decode_page_table_width:
-            raise ValueError("max_decode_page_table_width must cover page_table_layout")
+        if not isinstance(self.page_table_layout_ceiling, PageTableLayout):
+            raise TypeError("page_table_layout_ceiling must be a PageTableLayout")
+        if self.page_table_layout.block_size != self.page_table_layout_ceiling.block_size:
+            raise ValueError("page_table_layout_ceiling cannot change block_size")
+        if self.page_table_layout.raw_capacity_width > self.page_table_layout_ceiling.raw_capacity_width:
+            raise ValueError("page_table_layout_ceiling must cover page_table_layout capacity")
+        if (
+            self.page_table_layout.prefill_width > self.page_table_layout_ceiling.prefill_width
+            or self.page_table_layout.decode_width > self.page_table_layout_ceiling.decode_width
+        ):
+            raise ValueError("page_table_layout_ceiling must cover canonical page-table geometry")
         expected_eager = _build_plan(
             warmup=self.warmup,
             layout=self.page_table_layout,
@@ -136,10 +152,8 @@ class WarmupCoordinatorConfig:
             raise ValueError("prefill and decode configs must share device-sampling policy")
         if decode.allow_force_argmax is not prefill.allow_force_argmax:
             raise ValueError("prefill and decode configs must share force-argmax capability")
-        if decode.max_page_table_capacity_width != prefill.max_page_table_capacity_width:
-            raise ValueError("prefill and decode configs must share the original capacity ceiling")
-        if decode.max_decode_page_table_width != prefill.max_decode_page_table_width:
-            raise ValueError("prefill and decode configs must share the original decode-width ceiling")
+        if decode.page_table_layout_ceiling != prefill.page_table_layout_ceiling:
+            raise ValueError("prefill and decode configs must share one page-table layout ceiling")
 
         source_lengths = warmup.prefill_seq_lens
         if source_lengths is None:
@@ -179,9 +193,7 @@ class WarmupCoordinatorConfig:
             decode_trace_enabled=trace.decode_enabled,
             eager_plan=eager_plan,
             sampled_plan=sampled_plan,
-            max_page_table_capacity_width=prefill.max_page_table_capacity_width,
-            max_prefill_page_table_width=prefill.max_prefill_page_table_width,
-            max_decode_page_table_width=decode.max_decode_page_table_width,
+            page_table_layout_ceiling=prefill.page_table_layout_ceiling,
         )
 
     def with_page_table_layout(self, layout: PageTableLayout) -> "WarmupCoordinatorConfig":
@@ -191,11 +203,11 @@ class WarmupCoordinatorConfig:
             raise TypeError("layout must be a PageTableLayout")
         if layout.block_size != self.page_table_layout.block_size:
             raise ValueError("page-table layout replacement cannot change block_size")
-        if layout.raw_capacity_width > self.max_page_table_capacity_width:
+        if layout.raw_capacity_width > self.page_table_layout_ceiling.raw_capacity_width:
             raise ValueError("page-table layout replacement cannot exceed the construction-time capacity ceiling")
         if (
-            layout.prefill_width > self.max_prefill_page_table_width
-            or layout.decode_width > self.max_decode_page_table_width
+            layout.prefill_width > self.page_table_layout_ceiling.prefill_width
+            or layout.decode_width > self.page_table_layout_ceiling.decode_width
         ):
             raise ValueError("page-table layout replacement cannot expand canonical geometry")
         return replace(
@@ -276,7 +288,14 @@ class WarmupCoordinator:
         self._eager: set[WarmupCase] = set()
         self._trace_registered: set[WarmupCase] = set()
         self._trace_decisions: dict[str, bool] = {}
+        self._sampling_decisions: dict[str, bool] = {}
         self._captured = False
+        self._coverage_manifest: CoverageManifest | None = None
+        self._required_program_keys: set[Any] = set()
+        self._required_trace_program_keys: set[Any] = set()
+        self._capture_deferred = False
+        self._capture_pending = False
+        self._pending_manifest: CoverageManifest | None = None
         self._prefill_trace_postprocess_primed = False
         self._configuration_sealed = False
 
@@ -286,12 +305,58 @@ class WarmupCoordinator:
     def already_warmed_up_prefill(self) -> bool:
         """Whether all configured prefill programs and traces are ready."""
 
-        required = set(self._plan(can_sample_on_device=self.config.device_sampling_enabled).prefill)
+        can_sample_on_device = self._sampling_decisions.get("prefill", self.config.device_sampling_enabled)
+        required = set(self._plan(can_sample_on_device=can_sample_on_device).prefill)
         if not required.issubset(self._eager):
             return False
         if not self.config.prefill_trace_enabled or self._trace_decisions.get("prefill") is False:
             return True
         return required.issubset(self._trace_registered) and self._captured
+
+    @property
+    def coverage_manifest(self) -> CoverageManifest | None:
+        """Return the immutable identities verified by successful activation."""
+
+        return self._coverage_manifest
+
+    @property
+    def capture_pending(self) -> bool:
+        """Whether complete validated coverage is staged for activation."""
+
+        return self._capture_pending
+
+    @property
+    def trace_activated(self) -> bool:
+        """Whether this coordinator has completed trace capture and activation."""
+
+        return self._captured
+
+    @contextmanager
+    def defer_capture(self) -> Iterator["WarmupCoordinator"]:
+        """Stage readiness without capturing until a multi-lane barrier commits."""
+
+        if self._capture_deferred:
+            raise RuntimeError("trace capture deferral is already active")
+        if self._capture_pending:
+            raise RuntimeError("trace capture is already pending")
+        self._capture_deferred = True
+        try:
+            yield self
+        finally:
+            self._capture_deferred = False
+            self._capture_pending = False
+            self._pending_manifest = None
+
+    def activate_pending_capture(self) -> None:
+        """Commit one validated capture while its deferral context is active."""
+
+        if not self._capture_deferred:
+            raise RuntimeError("pending trace capture can only activate inside its deferral context")
+        if not self._capture_pending:
+            raise RuntimeError("no trace capture is pending")
+        self._capture_now(self._pending_manifest)
+        self._capture_pending = False
+        self._pending_manifest = None
 
     def configure_page_table_layout(self, layout: PageTableLayout) -> None:
         """Install final paged-KV geometry before warmup compiles any program."""
@@ -316,6 +381,7 @@ class WarmupCoordinator:
 
         self._validate_hints("prefill", enable_trace, can_sample_on_device)
         self._validate_bound_cache(kv_cache)
+        self._sampling_decisions["prefill"] = bool(can_sample_on_device)
         self._trace_decisions["prefill"] = bool(enable_trace)
         if enable_trace and self._trace_decisions.get("decode") is False and self.config.decode_trace_enabled:
             del self._trace_decisions["decode"]
@@ -361,8 +427,8 @@ class WarmupCoordinator:
                 start_pos = (
                     torch.full((case.batch_size,), case.cached_tokens, dtype=torch.long) if case.cached_tokens else None
                 )
-                compile_target = self.execution if enable_trace and case.cached_tokens == 0 else self.eager
-                compile_target.compile_prefill(
+                compile_target = self.execution if enable_trace else self.eager
+                programs = compile_target.compile_prefill(
                     tokens=tokens,
                     page_table=page_table,
                     prompt_lens=prompt_lens,
@@ -370,6 +436,7 @@ class WarmupCoordinator:
                     empty_slots=list(range(case.batch_size)),
                     sampling_params=sampling,
                 )
+                self._record_required_programs(programs, traced=enable_trace)
             destination.add(case)
         self._maybe_capture()
 
@@ -391,6 +458,7 @@ class WarmupCoordinator:
             raise ValueError(f"decode warmup batch {max_batch_size} does not match lane capacity {lane_batch}")
         if int(num_blocks) <= 0:
             raise ValueError("decode warmup num_blocks must be positive")
+        self._sampling_decisions["decode"] = bool(can_sample_on_device)
         self._trace_decisions["decode"] = bool(enable_trace)
         self._configuration_sealed = True
         if can_sample_on_device:
@@ -406,12 +474,13 @@ class WarmupCoordinator:
             elif case.sampling_path == "topk":
                 sampling = _topk_sampling_params(lane_batch)
             compile_target = self.execution if enable_trace else self.eager
-            compile_target.compile_decode(
+            program = compile_target.compile_decode(
                 tokens=torch.zeros(lane_batch, dtype=torch.long),
                 start_pos=torch.zeros(lane_batch, dtype=torch.long),
                 page_table=torch.zeros((lane_batch, int(num_blocks)), dtype=torch.int32),
                 sampling_params=sampling,
             )
+            self._record_required_programs(program, traced=enable_trace)
             if not enable_trace:
                 logger.info("Compiled decode")
                 if sampling is not None:
@@ -427,27 +496,63 @@ class WarmupCoordinator:
     def _maybe_capture(self) -> None:
         if self.trace_compiler is None or self._captured:
             return
-        required = self._plan(can_sample_on_device=self.config.device_sampling_enabled)
         required_trace: set[WarmupCase] = set()
         if self.config.prefill_trace_enabled:
             prefill_decision = self._trace_decisions.get("prefill")
             if prefill_decision is None:
                 return
             if prefill_decision:
-                required_trace.update(required.prefill)
+                prefill_plan = self._plan(can_sample_on_device=self._sampling_decisions["prefill"])
+                required_trace.update(prefill_plan.prefill)
         if self.config.decode_trace_enabled:
             decode_decision = self._trace_decisions.get("decode")
             if decode_decision is None:
                 return
             if decode_decision:
-                required_trace.update(required.decode)
+                decode_plan = self._plan(can_sample_on_device=self._sampling_decisions["decode"])
+                required_trace.update(decode_plan.decode)
         if not required_trace:
             return
         if not required_trace.issubset(self._trace_registered):
             return
+        manifest = self._prepare_capture_manifest()
+        if self._capture_deferred:
+            self._pending_manifest = manifest
+            self._capture_pending = True
+            return
+        self._capture_now(manifest)
+
+    def _prepare_capture_manifest(self) -> CoverageManifest | None:
+        # WarmupCase is only an idempotency key for public warmup calls. The
+        # compiler registries own identity coverage: validate their exact state
+        # before a single-lane capture or a multi-lane barrier reports ready.
+        manifest = _resolve_coverage_manifest(
+            self.eager,
+            self.trace_compiler,
+            required_program_keys=self._required_program_keys,
+            required_trace_program_keys=self._required_trace_program_keys,
+        )
+        if manifest is not None and not manifest.aliases:
+            raise RuntimeError("Configured trace warmup registered no program-to-trace aliases")
+        return manifest
+
+    def _capture_now(self, manifest: CoverageManifest | None) -> None:
         self.trace_compiler.capture_all()
         self._captured = True
+        self._coverage_manifest = manifest
         self._prime_prefill_trace_postprocess()
+
+    def _record_required_programs(self, programs: Any, *, traced: bool) -> None:
+        if programs is None:
+            return
+        if isinstance(programs, CompiledProgram):
+            programs = (programs,)
+        if not isinstance(programs, tuple) or any(not isinstance(program, CompiledProgram) for program in programs):
+            raise TypeError("compile targets must return CompiledProgram values")
+        keys = {program.key for program in programs}
+        self._required_program_keys.update(keys)
+        if traced:
+            self._required_trace_program_keys.update(keys)
 
     def _prime_prefill_trace_postprocess(self) -> None:
         if (
@@ -456,7 +561,8 @@ class WarmupCoordinator:
             or not self.config.prefill_trace_enabled
         ):
             return
-        if not self.config.device_sampling_enabled or not self.config.allow_force_argmax:
+        prefill_can_sample = self._sampling_decisions.get("prefill", self.config.device_sampling_enabled)
+        if not prefill_can_sample or not self.config.allow_force_argmax:
             self._prefill_trace_postprocess_primed = True
             return
         sequence_length = (
@@ -490,6 +596,60 @@ def _validate_prefill_sequence_lengths(values: Any) -> None:
         raise ValueError("prefill sequence lengths must contain positive integers")
     if len(set(values)) != len(values):
         raise ValueError("prefill sequence lengths must be unique")
+
+
+def _resolve_coverage_manifest(
+    eager: Any,
+    trace_compiler: Any,
+    *,
+    required_program_keys: set[Any] | None = None,
+    required_trace_program_keys: set[Any] | None = None,
+) -> CoverageManifest | None:
+    """Resolve actual registered identities when concrete registries are available."""
+
+    program_compiler = getattr(eager, "program_compiler", None)
+    programs = getattr(program_compiler, "compiled_programs", None)
+    if programs is None or not callable(getattr(trace_compiler, "trace_key_for_program", None)):
+        # Lightweight host-contract doubles intentionally need not reproduce
+        # compiler internals; production executors always expose both registries.
+        return None
+
+    required_program_keys = set() if required_program_keys is None else set(required_program_keys)
+    required_trace_program_keys = set() if required_trace_program_keys is None else set(required_trace_program_keys)
+    programs_by_key = {program.key: program for program in programs}
+    missing_programs = required_program_keys.difference(programs_by_key)
+    if missing_programs:
+        digests = sorted(key.digest for key in missing_programs)
+        raise RuntimeError(f"Coverage manifest is missing required compiled programs: {digests}")
+    missing_aliases = {key for key in required_trace_program_keys if trace_compiler.trace_key_for_program(key) is None}
+    if missing_aliases:
+        digests = sorted(key.digest for key in missing_aliases)
+        raise RuntimeError(f"Coverage manifest is missing required trace aliases: {digests}")
+
+    eager_signatures = []
+    traced_signatures = []
+    aliases = []
+    trace_signatures_by_key = {}
+    for program in programs:
+        if not isinstance(program, CompiledProgram):
+            raise TypeError("program compiler snapshots must contain CompiledProgram values")
+        trace_key = trace_compiler.trace_key_for_program(program.key)
+        if trace_key is None:
+            eager_signatures.append(program.signature)
+            continue
+        record = trace_compiler.get(trace_key)
+        if record is None:
+            raise RuntimeError(f"Trace association {trace_key.digest} has no registered trace record")
+        traced_signatures.append(program.signature)
+        aliases.append(CoverageAlias(program.signature, record.signature))
+        trace_signatures_by_key.setdefault(trace_key, record.signature)
+
+    return CoverageManifest(
+        eager_program_signatures=tuple(eager_signatures),
+        traced_source_program_signatures=tuple(traced_signatures),
+        trace_signatures=tuple(trace_signatures_by_key.values()),
+        aliases=tuple(aliases),
+    )
 
 
 def _require_positive_int(name: str, value: Any) -> None:
