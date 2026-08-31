@@ -166,19 +166,18 @@ def model_cache_dir(
 def _cache_ownership_suffix(mesh_device: ttnn.MeshDevice) -> str:
     """Multi-host cache dir suffix keyed by local mesh-coordinate ownership.
 
-    Single-host / no distributed context: empty (same unsuffixed path as before).
+    Single-host: empty (same unsuffixed path as before).
     Multi-host: ``host_coords_r{r0}-{r1}_c{c0}-{c1}`` for the local coord bounding box.
     """
-    if _distributed_world_size() <= 1:
+    view = mesh_device.get_view()
+    all_coords = list(ttnn.MeshCoordinateRange(view.shape()))
+    local_coords = [c for c in all_coords if view.is_local(c)]
+
+    if len(local_coords) == len(all_coords):
         return ""
 
-    view = mesh_device.get_view()
-    rows = []
-    cols = []
-    for coord in ttnn.MeshCoordinateRange(view.shape()):
-        if view.is_local(coord):
-            rows.append(int(coord[0]))
-            cols.append(int(coord[1]))
+    rows = [int(c[0]) for c in local_coords]
+    cols = [int(c[1]) for c in local_coords]
     return f"host_coords_r{min(rows)}-{max(rows)}_c{min(cols)}-{max(cols)}"
 
 
@@ -188,12 +187,6 @@ def _cache_is_complete(cache_dir: str | Path) -> bool:
 
 def _mark_cache_complete(cache_dir: str | Path) -> None:
     (Path(cache_dir) / CACHE_DICT_FILE).touch()
-
-
-def _distributed_world_size() -> int:
-    if not ttnn.distributed_context_is_initialized():
-        return 1
-    return int(ttnn.distributed_context_world_size())
 
 
 def _cache_root() -> str | None:
