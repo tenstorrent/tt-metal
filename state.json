@@ -1,6 +1,6 @@
 {
-  "last_run": "2026-08-31T06:54Z",
-  "run_id": "33365632291",
+  "last_run": "2026-08-31T09:00Z",
+  "run_id": "33392576475",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -81,6 +81,12 @@
       "branch": "repo-assist/fix-issue-54896-softshrink-negative-lambda",
       "status": "opened_this_run_ci_pending",
       "title": "Reject negative/infinite lambda in softshrink"
+    },
+    "54897_hardsigmoid_fp32": {
+      "issue": 54897,
+      "branch": "repo-assist/fix-issue-54897-hardsigmoid-fp32-cancellation",
+      "status": "opened_this_run_pending_ci",
+      "date": "2026-08-31"
     }
   },
   "issues_labeled": [
@@ -134,7 +140,9 @@
     "54725:bug",
     "54798:bug",
     "54883:bug",
-    "54882:bug"
+    "54882:bug",
+    "54897:bug",
+    "54910:bug"
   ],
   "covered_no_duplicate": {
     "52131": "PR #52136 already closes it",
@@ -202,7 +210,8 @@
     "54779": "has open community fix PR #54780, no duplicate needed",
     "54868": "has open fix PR #54871 (tzh476) - reflection-identity fix for FP32 gelu_bw saturation",
     "54878": "linked PR #54776 already open",
-    "54877": "linked PR #54675 already open"
+    "54877": "linked PR #54675 already open",
+    "54899": "PR #54905 already fixes it"
   },
   "dropped_fix_targets": {
     "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
@@ -217,7 +226,8 @@
     "53047": "fixes #53046 lgamma bridge guards <= fix; overlaps #51991, needs coordination before merge",
     "53103": "draft PR fixing #53078 matmul unpacker miscompares; AI-generated, needs human review before ready-for-review",
     "53690": "test-coverage objection from ncvetkovicTT resolved 2026-08-21 by nvelickovicTT (OK if CI passes); awaiting CI re-run results (Sanity/L2/BH e2e triggered by nvelickovicTT)",
-    "51868": "reviewer kanapitsas (2026-08-22) confirmed Ring Joint SDPA logsigmoid_sub shares same bug; repo-assist replied confirming + asked maintainer to add boundary test (no HW access to verify numerics); PR still open, mergeable_state=behind"
+    "51868": "reviewer kanapitsas (2026-08-22) confirmed Ring Joint SDPA logsigmoid_sub shares same bug; repo-assist replied confirming + asked maintainer to add boundary test (no HW access to verify numerics); PR still open, mergeable_state=behind",
+    "54690": "Now has 4 approvals (bbradelTT, wenbinlyuTT, mcw-anasuya, vtsilytskyiTT). CI green (217 checks). Need to confirm 4th approval covers previously-missing metalium-developers-ttnn-core CodeOwners group. Checked 2026-08-31."
   },
   "sfpu_clamp_family": {
     "note": "Family in #52178 (kinginu). Still open no-PR: erfc #51137, digamma #51128, snake_beta #51116. sin/cos #51845 blocked. softplus #51866 has PR #51868 pending gate. lgamma z=0.75 boundary #53046 has PR #53047 pending, overlaps #51991.",
@@ -783,6 +793,11 @@
       "run_id": "33365632291",
       "date": "2026-08-31T06:54Z",
       "summary": "Re-verified 3 tracked PRs (#54792/#54848/#54858) still stuck action_required (no build-artifact run); PR #54690 unchanged blocked. Opened new fix PR for #54896 (softshrink negative/infinite lambda TT_FATAL guard in unary_op_utils.cpp + unary_device_operation.cpp). Confirmed #54878/#54877 already covered by existing linked PRs. Deferred #54897 (hardsigmoid) fix to next run. Assessed #54899 as too complex/risky for surgical fix."
+    },
+    {
+      "run_id": "33392576475",
+      "date": "2026-08-31T09:00Z",
+      "summary": "Labeled #54897 (bug) and #54910 (bug). Opened fix PR for #54897 (hardsigmoid FP32 cancellation near x=-3, branch repo-assist/fix-issue-54897-hardsigmoid-fp32-cancellation, both wormhole_b0 and blackhole ckernel_sfpu_activations.h). Confirmed #54899 already covered by PR #54905 (no duplicate). #54926 already assigned/triaged, no action. #54690 gained 4th CodeOwners approval (vtsilytskyiTT) - not yet confirmed if this covers metalium-developers-ttnn-core group. #54792/#54848/#54858 unchanged, still action_required. Updated monthly summary issue #51865. No new stale-PR nudges (too soon after prior run same day)."
     }
   ],
   "no_action_reviewed": [
@@ -791,7 +806,9 @@
     "reviewed ~15 fresh community bug issues (53975,53971,53984,53981,53978,53973,53969,53963 etc) 2026-08-22: all already have open linked fix PRs from reporting contributor; no duplicate PR/comment needed",
     "54144: argmax SFPU feature request, already labeled feature/community, no action needed (2026-08-24)",
     "54133: sub-issue of #53060, already covered by open PR #53837 (2026-08-24)",
-    "54264/54221/54215/54294/54261: collaborator-authored coverage/perf/bounty tracking issues, no confirmed defect, left unlabeled (2026-08-25)"
+    "54264/54221/54215/54294/54261: collaborator-authored coverage/perf/bounty tracking issues, no confirmed defect, left unlabeled (2026-08-25)",
+    "54926: branch-specific test failure on uvelimirovic/4row_arch, already assigned to uvelimirovicTT (2026-08-31)",
+    "54910: confirmed genuine defect (bug label applied) but root cause is architectural SFPU init path; no fix PR attempted, too risky (2026-08-31)"
   ],
   "resolved": {
     "52673": {
