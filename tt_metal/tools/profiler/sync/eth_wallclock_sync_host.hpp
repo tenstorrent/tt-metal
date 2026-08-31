@@ -133,9 +133,13 @@ inline LinkSyncResult measure_link(
         lay.result,
         lay.channel,
         lay.handshake,
-        gap_cycles};
+        gap_cycles,
+        0u,   // resident: one-shot
+        0u,   // mailbox unused
+        0u,
+        0u};
     std::vector<uint32_t> rcv_args = snd_args;
-    rcv_args.back() = 0;  // only the sender paces; the receiver just answers
+    rcv_args[6] = 0;  // only the sender paces; the receiver just answers
 
     Program p_snd = CreateProgram();
     Program p_rcv = CreateProgram();
@@ -192,6 +196,154 @@ inline LinkSyncResult measure_link(
         out.solution = solve(out.trips);
     }
     return out;
+}
+
+// ---- RESIDENT link: one launch, many measurement rounds -------------------------------------------
+//
+// The per-measurement LaunchProgram is what makes mid-capture re-syncs illegal (dram_barrier against
+// resident drainers) and expensive. A resident pair is launched ONCE and then commanded through an L1
+// mailbox: each GO runs one bounded measurement burst with the samples landing at the same L1 layout the
+// one-shot uses, so read_samples/build_trips/solve are reused untouched.
+struct ResidentLink {
+    IDevice* snd_dev = nullptr;
+    IDevice* rcv_dev = nullptr;
+    CoreCoord snd_eth, rcv_eth, snd_v, rcv_v;
+    Program p_snd, p_rcv;
+    detail_host::EthL1Layout lay{};
+    uint32_t mbox = 0;
+    LinkSyncConfig cfg{};
+    bool up = false;
+};
+
+inline ResidentLink start_resident_link(
+    IDevice* snd_dev,
+    const CoreCoord& snd_eth,
+    IDevice* rcv_dev,
+    const CoreCoord& rcv_eth,
+    const LinkSyncConfig& cfg = {},
+    uint64_t idle_spin_cap = 120ull * 1000 * 1000 * 1000) {
+    ResidentLink L;
+    L.snd_dev = snd_dev;
+    L.rcv_dev = rcv_dev;
+    L.snd_eth = snd_eth;
+    L.rcv_eth = rcv_eth;
+    L.cfg = cfg;
+
+    auto& cluster = MetalContext::instance().get_cluster();
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t base =
+        static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED));
+    L.lay = detail_host::make_layout(base);
+    L.mbox = base + 8192;  // far above result header + 256 samples; nothing else lives there
+
+    const double ghz = cluster.get_device_aiclk(snd_dev->id()) / 1000.0;
+    const uint32_t gap_cycles = static_cast<uint32_t>(cfg.gap_us * ghz * 1000.0);
+    const uint64_t timeout_cycles =
+        static_cast<uint64_t>(static_cast<double>(cfg.n_samples) * gap_cycles) + static_cast<uint64_t>(ghz * 1e9);
+
+    const std::vector<uint32_t> snd_args = {
+        cfg.n_samples,
+        static_cast<uint32_t>(timeout_cycles & 0xFFFFFFFFull),
+        static_cast<uint32_t>(timeout_cycles >> 32),
+        L.lay.result,
+        L.lay.channel,
+        L.lay.handshake,
+        gap_cycles,
+        1u,  // resident
+        L.mbox,
+        static_cast<uint32_t>(idle_spin_cap & 0xFFFFFFFFull),
+        static_cast<uint32_t>(idle_spin_cap >> 32)};
+    std::vector<uint32_t> rcv_args = snd_args;
+    rcv_args[6] = 0;
+
+    CreateKernel(
+        L.p_snd,
+        "tt_metal/tools/profiler/sync/eth_wallclock_sync_sender.cpp",
+        snd_eth,
+        EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = snd_args});
+    CreateKernel(
+        L.p_rcv,
+        "tt_metal/tools/profiler/sync/eth_wallclock_sync_receiver.cpp",
+        rcv_eth,
+        EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = rcv_args});
+    detail::CompileProgram(rcv_dev, L.p_rcv);
+    detail::CompileProgram(snd_dev, L.p_snd);
+    // Receiver first, same as the one-shot.
+    detail::LaunchProgram(rcv_dev, L.p_rcv, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+    detail::LaunchProgram(snd_dev, L.p_snd, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+
+    L.snd_v = snd_dev->virtual_core_from_logical_core(snd_eth, CoreType::ETH);
+    L.rcv_v = rcv_dev->virtual_core_from_logical_core(rcv_eth, CoreType::ETH);
+    L.up = true;
+    return L;
+}
+
+inline LinkSyncResult resident_round(ResidentLink& L) {
+    LinkSyncResult out;
+    if (!L.up) {
+        return out;
+    }
+    auto& cluster = MetalContext::instance().get_cluster();
+    const tt_cxy_pair sc(L.snd_dev->id(), L.snd_v);
+    const tt_cxy_pair rc(L.rcv_dev->id(), L.rcv_v);
+    // Old DONE would satisfy the poll before the new round starts; clear both status words first.
+    const uint32_t idle = ETH_SYNC_IDLE;
+    cluster.write_core(&idle, sizeof(idle), sc, L.lay.result);
+    cluster.write_core(&idle, sizeof(idle), rc, L.lay.result);
+    const uint32_t go = 1;
+    cluster.write_core(&go, sizeof(go), rc, L.mbox);  // receiver first, so it is waiting at the handshake
+    cluster.write_core(&go, sizeof(go), sc, L.mbox);
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(L.cfg.host_timeout_ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+        EthSyncResult a{}, b{};
+        cluster.read_core(&a, sizeof(a), sc, L.lay.result);
+        cluster.read_core(&b, sizeof(b), rc, L.lay.result);
+        out.sender_status = a.status;
+        out.receiver_status = b.status;
+        if (a.status >= ETH_SYNC_DONE && b.status >= ETH_SYNC_DONE) {
+            break;
+        }
+    }
+    uint32_t sa = 0, sb = 0;
+    auto snd_s = detail_host::read_samples(cluster, L.snd_dev->id(), L.snd_v, L.lay.result, L.cfg.n_samples, sa);
+    auto rcv_s = detail_host::read_samples(cluster, L.rcv_dev->id(), L.rcv_v, L.lay.result, L.cfg.n_samples, sb);
+    out.sender_status = sa;
+    out.receiver_status = sb;
+    out.sender_samples = snd_s.size();
+    out.receiver_samples = rcv_s.size();
+    const size_t n = snd_s.size() < rcv_s.size() ? snd_s.size() : rcv_s.size();
+    if (n >= 4) {
+        out.trips = build_trips(snd_s, rcv_s, n);
+        out.solution = solve(out.trips);
+    }
+    return out;
+}
+
+inline void stop_resident_link(ResidentLink& L) {
+    if (!L.up) {
+        return;
+    }
+    auto& cluster = MetalContext::instance().get_cluster();
+    const tt_cxy_pair sc(L.snd_dev->id(), L.snd_v);
+    const tt_cxy_pair rc(L.rcv_dev->id(), L.rcv_v);
+    const uint32_t ex = 2;
+    cluster.write_core(&ex, sizeof(ex), sc, L.mbox);
+    cluster.write_core(&ex, sizeof(ex), rc, L.mbox);
+    // Wait for the exit markers (bounded), THEN reap -- the kernels always return, by construction.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline) {
+        uint32_t ma = 0, mb = 0;
+        cluster.read_core(&ma, sizeof(ma), sc, L.mbox);
+        cluster.read_core(&mb, sizeof(mb), rc, L.mbox);
+        if (ma == 0xD00DD00Du && mb == 0xD00DD00Du) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    detail::WaitProgramDone(L.snd_dev, L.p_snd, false);
+    detail::WaitProgramDone(L.rcv_dev, L.p_rcv, false);
+    L.up = false;
 }
 
 }  // namespace tt::tt_metal::eth_sync

@@ -28,6 +28,13 @@
 #include "umd/device/types/cluster_types.hpp"
 #include "umd/device/arc/arc_telemetry_reader.hpp"
 #include "umd/device/tt_device/tt_device.hpp"
+#include <optional>
+#include <set>
+#include <string>
+
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+
 #include "tools/profiler/sync/eth_wallclock_sync_host.hpp"
 
 using namespace tt;
@@ -140,6 +147,28 @@ int main(int argc, char** argv) {
     // message is implemented in CMFW but wrapped by nothing in UMD, so the argument format is a GUESS:
     // arg0 = frequency in MHz, 0 = release. Verified against reported aiclk before trusting it.
     uint32_t force_aiclk_mhz = 0;
+    // --fabric N: bring FABRIC up before opening the mesh (FabricConfig enum value: 2=1D, 4=2D,
+    // 5=2D_TORUS_X). The point is to test the sync against LIVE routers instead of assuming anything
+    // about which channels they hold.
+    // --planes N: cap fabric to N routing planes per direction. Whether that leaves the OTHER trained
+    // channels genuinely free for a sync pair is exactly what --census + --free-only measure.
+    // --census: print every view of the eth channels that exists -- cluster-trained, device-active,
+    // control-plane router channels, per-direction planes -- because which of these means "claimed by a
+    // live router" is the question, and the DISABLED arm calibrates what each API reports when no router
+    // runs.
+    // --free-only: pick measurement links only from cluster-trained channels NOT in the control plane's
+    // claimed set, on BOTH ends. Degrades loudly (exit 2) if nothing is free.
+    uint32_t fabric_mode = 0;
+    uint32_t fabric_planes = 0;
+    bool census = false;
+    bool free_only = false;
+    // --resident N --hz H: launch the sync pair ONCE as resident kernels on the chosen link (honours
+    // --free-only), command N measurement rounds at H Hz through the L1 mailbox, then stop. Prints one
+    // line per round plus a cross-round fit, and finishes with an INDEPENDENT one-shot measure_link
+    // (fresh launch, 256 samples) scored against the fit -- the scorer shares no launch and no rounds
+    // with the thing it is testing.
+    uint32_t resident_rounds = 0;
+    uint32_t resident_hz = 20;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--samples") == 0 && i + 1 < argc) {
             cfg.n_samples = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
@@ -183,9 +212,31 @@ int main(int argc, char** argv) {
             show_arb = true;
         } else if (std::strcmp(argv[i], "--forceaiclk") == 0 && i + 1 < argc) {
             force_aiclk_mhz = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
+        } else if (std::strcmp(argv[i], "--fabric") == 0 && i + 1 < argc) {
+            fabric_mode = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
+        } else if (std::strcmp(argv[i], "--planes") == 0 && i + 1 < argc) {
+            fabric_planes = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
+        } else if (std::strcmp(argv[i], "--census") == 0) {
+            census = true;
+        } else if (std::strcmp(argv[i], "--free-only") == 0) {
+            free_only = true;
+        } else if (std::strcmp(argv[i], "--resident") == 0 && i + 1 < argc) {
+            resident_rounds = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
+        } else if (std::strcmp(argv[i], "--hz") == 0 && i + 1 < argc) {
+            resident_hz = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
         }
     }
 
+    if (fabric_mode != 0) {
+        // Must run while no devices are active; the routers load during mesh open.
+        printf("[ethsync] enabling fabric: FabricConfig=%u, planes=%u (0=default)\n", fabric_mode, fabric_planes);
+        std::optional<uint8_t> planes_opt =
+            fabric_planes != 0 ? std::optional<uint8_t>((uint8_t)fabric_planes) : std::nullopt;
+        tt::tt_fabric::SetFabricConfig(
+            (tt::tt_fabric::FabricConfig)fabric_mode,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+            planes_opt);
+    }
     const auto shape = distributed::SystemMesh::instance().shape();
     printf("[ethsync] system mesh %ux%u\n", (unsigned)shape[0], (unsigned)shape[1]);
     auto mesh_device = unit_mesh ? distributed::MeshDevice::create_unit_mesh(0)
@@ -201,19 +252,106 @@ int main(int argc, char** argv) {
     const double ghz = cluster.get_device_aiclk(devices.front()->id()) / 1000.0;
     const double cyc_to_us = 1.0 / (ghz * 1000.0);
 
+    // Which eth channels does LIVE fabric actually hold? The claimed set is the control plane's
+    // POST-TRIM router channel map -- trim_ethernet_channels_not_mapped_to_live_routing_planes cuts it
+    // down to the planes that actually got routers, so after bring-up this is the live-claim list, not
+    // the topology. The census prints the other views beside it so the arms can be compared.
+    std::set<std::pair<unsigned, int>> fabric_claimed;
+    {
+        auto& cp = MetalContext::instance().get_control_plane();
+        for (IDevice* d : devices) {
+            const auto& sd = cluster.get_soc_desc(d->id());
+            unsigned n_trained = 0;
+            std::map<int, unsigned> trained_chans;
+            for (const auto& [peer, cores] : cluster.get_ethernet_cores_grouped_by_connected_chips(d->id())) {
+                for (const auto& c : cores) {
+                    trained_chans[sd.logical_eth_core_to_chan_map.at(c)] = (unsigned)peer;
+                    n_trained++;
+                }
+            }
+            std::string claimed_str;
+            unsigned n_claimed = 0;
+            try {
+                auto node = cp.get_fabric_node_id_from_physical_chip_id(d->id());
+                for (const auto& [ch, dir] : cp.get_active_fabric_eth_channels(node)) {
+                    fabric_claimed.insert({(unsigned)d->id(), (int)ch});
+                    claimed_str += " " + std::to_string((int)ch) + "(d" + std::to_string((int)dir) + ")";
+                    n_claimed++;
+                }
+            } catch (const std::exception& e) {
+                claimed_str = std::string(" <unavailable: ") + e.what() + ">";
+            }
+            if (census) {
+                std::string trained_str;
+                for (auto& [ch, peer] : trained_chans) {
+                    trained_str += " " + std::to_string(ch) + "->chip" + std::to_string(peer);
+                }
+                printf("[census] dev %d: trained %u chan(s):%s\n", d->id(), n_trained, trained_str.c_str());
+                printf(
+                    "[census] dev %d: device get_active_ethernet_cores(true): %zu\n",
+                    d->id(),
+                    d->get_active_ethernet_cores(true).size());
+                printf("[census] dev %d: control-plane router channels %u:%s\n", d->id(), n_claimed, claimed_str.c_str());
+                try {
+                    auto node = cp.get_fabric_node_id_from_physical_chip_id(d->id());
+                    const char* dn[4] = {"N", "E", "S", "W"};
+                    for (int di = 0; di < 4; di++) {
+                        auto dir = (tt::tt_fabric::RoutingDirection)di;
+                        auto chans = cp.get_active_fabric_eth_channels_in_direction(node, dir);
+                        if (chans.empty()) {
+                            continue;
+                        }
+                        auto planes = cp.get_active_fabric_eth_routing_planes_in_direction(node, dir);
+                        printf(
+                            "[census] dev %d:   dir %s: channels %zu, routing planes %zu\n",
+                            d->id(),
+                            dn[di],
+                            chans.size(),
+                            planes.size());
+                    }
+                } catch (const std::exception&) {
+                }
+            }
+        }
+    }
+
     // One representative link per ordered device pair. With --all-links, every pair found; otherwise the
     // first. Measuring each pair once is what a spanning tree needs, and measuring BOTH directions of a
     // pair is the cheapest self-check there is: the two offsets must be equal and opposite.
     struct Edge { IDevice* a; CoreCoord ac; IDevice* b; CoreCoord bc; };
     std::vector<Edge> edges;
     for (IDevice* d : devices) {
-        for (const CoreCoord& ec : d->get_active_ethernet_cores(true)) {
+        std::vector<CoreCoord> ec_candidates;
+        if (free_only) {
+            // Enumerate from the CLUSTER (trained links), not the device -- under fabric the device view
+            // may already be trimmed to router channels, which would hide exactly the free ones.
+            const auto& sd = cluster.get_soc_desc(d->id());
+            for (const auto& [peer, cores] : cluster.get_ethernet_cores_grouped_by_connected_chips(d->id())) {
+                for (const auto& c : cores) {
+                    if (fabric_claimed.count({(unsigned)d->id(), sd.logical_eth_core_to_chan_map.at(c)})) {
+                        continue;  // a live router owns this channel; launching here would evict it
+                    }
+                    ec_candidates.push_back(c);
+                }
+            }
+        } else {
+            for (const CoreCoord& c : d->get_active_ethernet_cores(true)) {
+                ec_candidates.push_back(c);
+            }
+        }
+        for (const CoreCoord& ec : ec_candidates) {
             auto [peer_id, peer_core] = d->get_connected_ethernet_core(ec);
             IDevice* peer = nullptr;
             for (IDevice* p : devices) {
                 if (p->id() == (int)peer_id && p != d) { peer = p; break; }
             }
             if (peer == nullptr) { continue; }
+            if (free_only) {
+                const auto& psd = cluster.get_soc_desc(peer->id());
+                if (fabric_claimed.count({(unsigned)peer->id(), psd.logical_eth_core_to_chan_map.at(peer_core)})) {
+                    continue;  // OUR end is free but the PEER end is a router; both ends must be free
+                }
+            }
             bool seen = false;
             for (const auto& e : edges) {
                 if ((e.a == d && e.b == peer) || (e.a == peer && e.b == d)) { seen = true; break; }
@@ -225,6 +363,133 @@ int main(int argc, char** argv) {
         if (!all_links && !edges.empty()) { break; }
     }
     printf("[ethsync] %zu link(s) to measure, %u samples %u us apart\n", edges.size(), cfg.n_samples, cfg.gap_us);
+    if (free_only && edges.empty()) {
+        printf(
+            "[ethsync] --free-only: NO fabric-free eth channel pair exists on any link under this fabric "
+            "configuration -- the sync has no core to run on\n");
+        mesh_device->close();
+        return 2;
+    }
+
+    if (resident_rounds != 0 && !edges.empty()) {
+        auto& e = edges[0];
+        LinkSyncConfig rcfg = cfg;
+        rcfg.host_timeout_ms = 1000;  // a round is ~16 back-to-back trips; 1 s means something is wrong
+        printf(
+            "[resident] link dev %d eth (%zu,%zu) -> dev %d eth (%zu,%zu): %u rounds at %u Hz, %u samples/round\n",
+            e.a->id(), e.ac.x, e.ac.y, e.b->id(), e.bc.x, e.bc.y, resident_rounds, resident_hz, rcfg.n_samples);
+        auto L = start_resident_link(e.a, e.ac, e.b, e.bc, rcfg);
+        struct Round { double t_host_s; uint64_t ref; int64_t off; int64_t spread; uint64_t rtt; };
+        std::vector<Round> rounds;
+        uint32_t bad = 0;
+        const auto t0h = std::chrono::steady_clock::now();
+        for (uint32_t r = 0; r < resident_rounds; r++) {
+            auto rr = resident_round(L);
+            const double th = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0h).count();
+            if (rr.solution.valid) {
+                rounds.push_back(Round{th, rr.solution.mid_ref, rr.solution.offset, rr.solution.offset_spread,
+                                       rr.solution.rtt_min});
+            } else {
+                bad++;
+                printf("[resident] round %u INVALID: status %u/%u samples %zu/%zu\n", r, rr.sender_status,
+                       rr.receiver_status, (size_t)rr.sender_samples, (size_t)rr.receiver_samples);
+            }
+            if (resident_hz != 0) {
+                std::this_thread::sleep_until(t0h + std::chrono::microseconds((uint64_t)(r + 1) * 1000000ull / resident_hz));
+            }
+        }
+        const double wall_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0h).count();
+        stop_resident_link(L);
+        printf("[resident] %zu/%u rounds valid in %.2f s (%.1f Hz achieved)\n", rounds.size(), resident_rounds,
+               wall_s, rounds.size() / wall_s);
+        if (rounds.size() >= 4) {
+            // Fit offset vs sender-clock ref across rounds: slope = inter-chip rate; residuals = per-round
+            // noise + any step that landed between rounds.
+            double mr = 0, mo = 0;
+            for (auto& x : rounds) { mr += (double)x.ref; mo += (double)x.off; }
+            mr /= rounds.size(); mo /= rounds.size();
+            double sxx = 0, sxy = 0;
+            for (auto& x : rounds) { const double dx = (double)x.ref - mr; sxx += dx * dx; sxy += dx * ((double)x.off - mo); }
+            const double slope = sxx > 0 ? sxy / sxx : 0.0;
+            double rms = 0, mx = 0; uint64_t rtt_lo = ~0ull, rtt_hi = 0;
+            for (auto& x : rounds) {
+                const double resid = ((double)x.off - mo) - slope * ((double)x.ref - mr);
+                rms += resid * resid; if (std::fabs(resid) > mx) mx = std::fabs(resid);
+                if (x.rtt < rtt_lo) rtt_lo = x.rtt; if (x.rtt > rtt_hi) rtt_hi = x.rtt;
+            }
+            rms = std::sqrt(rms / rounds.size());
+            printf("[resident] cross-round fit: rate %.3f ppm | residual RMS %.1f cyc (%.4f us) | max |resid| %.1f cyc"
+                   " (%.4f us) | rtt_min %llu..%llu\n",
+                   slope * 1e6, rms, rms * cyc_to_us, mx, mx * cyc_to_us,
+                   (unsigned long long)rtt_lo, (unsigned long long)rtt_hi);
+            // PIECEWISE analysis -- what a live corrector would actually apply. The global line above is
+            // deliberately naive: one clock step inside the span tilts it (that is how the step is
+            // DETECTED). Adjacent-round deltas are immune: a step contaminates exactly one inter-round
+            // gap, and every other gap measures the true local rate.
+            {
+                std::vector<double> gap_rates;
+                for (size_t i = 1; i < rounds.size(); i++) {
+                    const double dref = (double)rounds[i].ref - (double)rounds[i - 1].ref;
+                    if (dref > 0) {
+                        gap_rates.push_back(((double)rounds[i].off - (double)rounds[i - 1].off) / dref);
+                    }
+                }
+                std::vector<double> sorted = gap_rates;
+                std::sort(sorted.begin(), sorted.end());
+                const double med_rate = sorted[sorted.size() / 2];
+                double rms2 = 0, mx2 = 0;
+                uint32_t steps = 0;
+                for (size_t i = 1; i < rounds.size(); i++) {
+                    const double dref = (double)rounds[i].ref - (double)rounds[i - 1].ref;
+                    const double resid = ((double)rounds[i].off - (double)rounds[i - 1].off) - med_rate * dref;
+                    if (std::fabs(resid) > 100.0) {  // ~74 ns: far above round noise, far below any step
+                        steps++;
+                        printf("[resident]   STEP between rounds %zu and %zu: %+.0f cyc (%+.3f us)\n",
+                               i - 1, i, resid, resid * cyc_to_us);
+                        continue;  // exclude the step gap from the tracking-error stats
+                    }
+                    rms2 += resid * resid;
+                    if (std::fabs(resid) > mx2) { mx2 = std::fabs(resid); }
+                }
+                const size_t clean_gaps = rounds.size() - 1 - steps;
+                rms2 = clean_gaps ? std::sqrt(rms2 / clean_gaps) : 0.0;
+                printf("[resident] PIECEWISE: median rate %.3f ppm | per-gap tracking residual RMS %.1f cyc "
+                       "(%.4f us) max %.1f cyc (%.4f us) over %zu clean gaps | %u step(s) detected\n",
+                       med_rate * 1e6, rms2, rms2 * cyc_to_us, mx2, mx2 * cyc_to_us, clean_gaps, steps);
+            }
+            // Independent scorer: a FRESH one-shot launch with the full 256-sample protocol, predicted by
+            // the resident fit at its own ref instant.
+            LinkSyncConfig full{};
+            auto chk = measure_link(e.a, e.ac, e.b, e.bc, full);
+            if (chk.solution.valid) {
+                const double predicted = mo + slope * ((double)chk.solution.mid_ref - mr);
+                const double delta = (double)chk.solution.offset - predicted;
+                printf("[resident] CROSS-CHECK vs independent one-shot: measured %lld cyc, predicted %.0f cyc, "
+                       "delta %.0f cyc (%.4f us) [global fit]\n",
+                       (long long)chk.solution.offset, predicted, delta, delta * cyc_to_us);
+                // The causal estimator: last round's offset carried forward at the robust per-gap rate.
+                std::vector<double> gr2;
+                for (size_t i = 1; i < rounds.size(); i++) {
+                    const double dref = (double)rounds[i].ref - (double)rounds[i - 1].ref;
+                    if (dref > 0) { gr2.push_back(((double)rounds[i].off - (double)rounds[i - 1].off) / dref); }
+                }
+                std::sort(gr2.begin(), gr2.end());
+                const double mrate = gr2[gr2.size() / 2];
+                const auto& last = rounds.back();
+                const double pred2 = (double)last.off + mrate * ((double)chk.solution.mid_ref - (double)last.ref);
+                const double d2 = (double)chk.solution.offset - pred2;
+                printf("[resident] CROSS-CHECK causal (last round + median rate): delta %.0f cyc (%.4f us); gap "
+                       "last-round -> one-shot %.2f s\n",
+                       d2, d2 * cyc_to_us, ((double)chk.solution.mid_ref - (double)last.ref) * cyc_to_us / 1e6);
+            } else {
+                printf("[resident] CROSS-CHECK one-shot INVALID (status %u/%u)\n", chk.sender_status,
+                       chk.receiver_status);
+            }
+        }
+        if (bad != 0) { printf("[resident] %u invalid round(s)\n", bad); }
+        mesh_device->close();
+        return 0;
+    }
 
     if (driftcheck != 0 && devices.size() >= 2) {
         constexpr uint64_t kWallL = 0xFFB121F0ULL;
