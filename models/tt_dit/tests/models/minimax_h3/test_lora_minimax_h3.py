@@ -47,10 +47,16 @@ ADALN_OUT = NUM_MODULATION_PARAMS * HIDDEN * MODALITY_NUM
 # production one for this to gate what production runs.
 ROTARY_DIM = 3 * 2 * ROPE_FREQ_DIM
 
-# Rounding budget for one on-device fuse against a host-fused reference. Both are generous against
-# a layout error, which the fixture sizes to land two orders of magnitude past them.
+# Rounding budget for one on-device fuse against a host-fused reference, generous against a layout
+# error -- the fixture sizes the delta so a wrong-column delta lands two orders of magnitude past it.
 MAX_ULP_OF_PEAK = 4.0
-MAX_RELATIVE_RMS = 0.002
+
+# The RMS budget is calibrated in-run instead of fixed, as a multiple of the dense-delta path's own
+# error. A `.diff` target does no matmul and carries no factors: it is a bf16 delta added to a bf16
+# weight, which is the floor for expressing the delta in bf16 at all and cannot be improved on. The
+# low-rank path pays that floor plus the rounding of A and B and the rank-r accumulation, and
+# measures about 1.5x it. Three leaves room without admitting a layout error.
+MAX_RMS_OVER_DENSE_FLOOR = 3.0
 
 # The published adapter's counts, asserted against its own __metadata__ when the file is present.
 FASTH3_DENSE_COUNTS = {"lora": 724, "diff": 27, "diff_b": 58, "set_weight": 0}
@@ -282,6 +288,7 @@ def test_lora_block_weight_parity(
     # `base + delta` once in fp32 while the device rounds both operands and adds in bf16, and on a
     # norm weight -- 1.0 +/- 0.02 -- a single ULP is 39% of sigma, so PCC reads ~99.4% for a result
     # that is correct to the last representable bit. Bound the error where it actually lives.
+    dense_paths = {delta.path for delta in report.deltas}
     measured: list[tuple[float, float, str]] = []
     for (path, expected), (_, got) in zip(_named_parameters(reference), _named_parameters(adapted), strict=True):
         a = to_torch(expected.data, mesh_axes=expected.mesh_axes, composer_device=mesh_device)
