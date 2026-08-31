@@ -743,7 +743,7 @@ fi # bh-blitz-decode
 #   - SC28 revC subtorus aisleD (28-host SC28-ring subset of the aisleD capture, 112 slots):
 #     16/64 (96/112 disabled, see #51629 note below).
 #   - SC24 revC subtorus aisleC (24 hosts, 96 slots; pending tt-cluster-descriptors PR 17 +
-#     submodule bump): 16/64 (96 disabled, see #51629 note below).
+#     submodule bump): 16 only (64 embedded + 96 disabled, see #51629 note below).
 # Own shard; see tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml for the CI budget.
 ######################################
 if run_group "bh-ring-stress"; then
@@ -762,11 +762,15 @@ LONG_RING_STRESS_TIMEOUT=600
 # 33221850239), blowing the 45-min step timeout -- the 600 s TT_METAL_OPERATION_TIMEOUT does not
 # cover the phase-1 solve. Re-add "96"/"112"/"128"/"144" to the stage lists below once #51629
 # lands. (The standalone SC24 96-stage exact-fit entry further down stays: its solve is ~27 s.)
+# ALSO disabled per #51629: 64-stage on the SC24 110-aisleC mock -- the 64-ring-into-96-slots
+# embedding hung the mapper >40 min on CI (run 33224879320; solver went silent right after phase-1
+# setup) even though 64-into-144 (SC36, ~3 min) and 64-into-80 (SC20 aisleC, ~42 s) solve fine;
+# the general-SAT host-minimization cost is erratic in the embedded case.
 for entry in \
     "SC36_revC_subtorus_120_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64" \
     "SC36_revAB_subtorus_120_aisleC_sc20:${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
     "SC28_revC_subtorus_120_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64" \
-    "SC24_revC_subtorus_110_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" ; do
+    "SC24_revC_subtorus_110_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
   if [[ ! -f "${cluster_map}" ]]; then
     # Pending tt-cluster-descriptors merge + submodule bump (see the mapping vars' TODOs).
