@@ -132,8 +132,8 @@ SECTIONS
     *(.bss .bss.* .gnu.linkonce.b.*)
     *(COMMON)
     . = ALIGN(4);
-    /* Counter-build only, so it goes last: its presence must not shift other globals' gp-relative
-       offsets between builds. Inside [__ldm_bss_start, __ldm_bss_end), so do_crt0() zero-inits it. */
+    /* Last, so that adding the counter build's globals cannot move any other global and change
+       the codegen that the counter-vs-no-counter .text comparison relies on. */
     *(.perf_counters_bss)
     . = ALIGN(4);
     __ldm_bss_end = .;

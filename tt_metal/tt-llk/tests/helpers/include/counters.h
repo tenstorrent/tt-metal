@@ -12,16 +12,13 @@
 #include "ckernel.h"
 #include "profiler.h" // the zone/timestamp layer (TRISC only)
 
-// BRISC gets PERF_COUNTERS_COMPILED (config only, sections 1-6); TRISCs also get LLK_PROFILER
-// and the per-zone measurement layer (section 7 onward, guarded by #if defined(LLK_PROFILER)).
+// BRISC builds the config only; the per-zone measurement layer below also needs LLK_PROFILER.
 
-// Quasar has no counter config here and is unsupported; the build keeps the flag off (this guards it).
 #ifdef ARCH_QUASAR
 #error "Perf counters are not supported on Quasar yet (no Quasar hw_counters.h; untested register set)."
 #endif
 
-// Canonical counter inventory, shared with metal and the host decode. Include order matters:
-// hw_counters.h uses PerfCounterType, which perf_counters.hpp defines.
+// Include order matters: hw_counters.h uses PerfCounterType, which perf_counters.hpp defines.
 #include <array>
 // clang-format off
 #include "perf_counters.hpp"
@@ -45,23 +42,21 @@ constexpr std::uint32_t perf_counters_zone_data_addr(std::uint32_t zone)
     return PERF_COUNTERS_ZONES_BASE + zone * PERF_COUNTERS_ZONE_SIZE;
 }
 
-// sync_ctrl block sits after each zone's data; +0 holds the SYNC_ZONE_COMPLETE flag the host polls.
+// +0 holds the SYNC_ZONE_COMPLETE flag the host polls.
 constexpr std::uint32_t perf_counters_sync_ctrl_addr(std::uint32_t zone)
 {
     return perf_counters_zone_data_addr(zone) + PERF_COUNTERS_ZONE_DATA_BYTES;
 }
 
-// Trailing metadata written by configure_all_zones() for the host.
 constexpr std::uint32_t PERF_COUNTERS_ENABLED_FLAG_ADDR = PERF_COUNTERS_ZONES_BASE + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE;
 constexpr std::uint32_t PERF_COUNTERS_BANK_MASK_ADDR    = PERF_COUNTERS_ENABLED_FLAG_ADDR + 4;
 constexpr std::uint32_t PERF_COUNTERS_VALID_COUNT_ADDR  = PERF_COUNTERS_BANK_MASK_ADDR + 4;
 constexpr std::uint32_t PERF_COUNTERS_LAYOUT_END        = PERF_COUNTERS_VALID_COUNT_ADDR + PERF_COUNTERS_MAX_ZONES * 4;
 
-// Ceiling = profiler's lowest L1 addr (llk_profiler::EPOCH_ADDR, 0x16AFF0). Literal here (BRISC has
-// no llk_profiler ns); the LLK_PROFILER section adds a symbolic assert so it can't drift.
+// A literal because BRISC has no llk_profiler namespace; the LLK_PROFILER section asserts it symbolically.
 static_assert(PERF_COUNTERS_LAYOUT_END <= 0x16AFF0u, "Perf counter L1 layout overflows into the profiler region");
 
-// Values are the on-wire bank IDs; their order is a contract with base_addrs[], banks[], and the host.
+// On-wire bank IDs; the order is a contract with base_addrs[], banks[] and the host.
 enum class counter_bank : std::uint8_t
 {
     instrn_thread = 0,
@@ -73,10 +68,8 @@ enum class counter_bank : std::uint8_t
 
 constexpr std::uint32_t COUNTER_BANK_COUNT = 5;
 
-// Bounds the counter-select readback spin: it runs on one TRISC while the others wait, so an unbounded
-// spin on a corrupt config word would hang the whole Tensix and surface only as TENSIX TIMED OUT.
+// Unbounded, a corrupt config word would hang every thread and surface only as TENSIX TIMED OUT.
 constexpr std::uint32_t MODE_REG_POLL_LIMIT = 1024;
-// Number of config slots (length of the shared config array); every config-scan loop uses this.
 constexpr std::uint32_t COUNTER_SLOT_COUNT = PERF_COUNTERS_CONFIG_WORDS;
 
 constexpr std::uint32_t PERF_CFG_VALID_BIT     = 1u << 31; // bit 31: slot active
@@ -86,8 +79,7 @@ constexpr std::uint32_t PERF_CFG_COUNTER_SHIFT = 8; // bits 16:8 (9-bit counter_
 constexpr std::uint32_t PERF_CFG_COUNTER_MASK  = 0x1FFu;
 constexpr std::uint32_t PERF_CFG_BANK_MASK     = 0xFFu; // bits 7:0
 
-// L1 mux position inside PERF_CNT_MUX_CTRL. The field is arch-specific and hw_counters.h is the
-// authority: L1_MUX_MASK is already shifted (0x1 << 4 on Wormhole, 0x7 << 4 on Blackhole).
+// hw_counters.h is the authority and L1_MUX_MASK arrives already shifted.
 constexpr std::uint32_t PERF_CNT_MUX_CTRL_SHIFT = 4;
 constexpr std::uint32_t PERF_CNT_MUX_CTRL_MASK  = L1_MUX_MASK;
 constexpr std::uint32_t PERF_L1_MUX_MAX         = PERF_CNT_MUX_CTRL_MASK >> PERF_CNT_MUX_CTRL_SHIFT;
@@ -98,7 +90,7 @@ constexpr std::uint32_t _perf_cfg(std::uint8_t bank, std::uint16_t cid, std::uin
            (static_cast<std::uint32_t>(cid & PERF_CFG_COUNTER_MASK) << PERF_CFG_COUNTER_SHIFT) | static_cast<std::uint32_t>(bank);
 }
 
-// Volatile index cast prevents GCC CSWTCH (shifts GP-offsets, breaking counter/no-counter bit-identity).
+// The volatile index stops GCC emitting a CSWTCH table, which shifts GP offsets and breaks NC/WC .text equality.
 inline std::uint32_t get_counter_base_addr(counter_bank bank)
 {
     static constexpr std::uint32_t base_addrs[COUNTER_BANK_COUNT] = {
@@ -108,22 +100,20 @@ inline std::uint32_t get_counter_base_addr(counter_bank bank)
         RISCV_DEBUG_REG_PERF_CNT_L1_0,
         RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0,
     };
-    // static_assert keeps the enum a safe index into base_addrs[]; the runtime bound is defensive.
     static_assert(
         static_cast<std::uint32_t>(counter_bank::tdma_pack) == COUNTER_BANK_COUNT - 1, "counter_bank enumerators must be contiguous 0..COUNTER_BANK_COUNT-1");
     volatile auto b = static_cast<std::uint32_t>(bank);
     return b < COUNTER_BANK_COUNT ? base_addrs[b] : 0u;
 }
 
-// Only 8 physical L1 counters exist and PERF_CNT_MUX_CTRL picks which group of 8 client interfaces
-// feeds them *while they count*, not at read time. One group per run; sweep the groups across runs.
+// Only 8 physical L1 counters exist, and the mux selects which group feeds them while they count,
+// not at read time, so a run sees one group and the groups have to be swept across runs.
 #ifndef LLK_PERF_L1_MUX_GROUP
 #define LLK_PERF_L1_MUX_GROUP 0
 #endif
 
 constexpr std::uint8_t L1_MUX_GROUP = LLK_PERF_L1_MUX_GROUP;
 
-// Groups an arch does not expose are declared empty, so a zero size means "not available here".
 constexpr std::uint32_t l1_group_size(std::uint8_t mux)
 {
     return mux == 0   ? l1_0_counters.size()
@@ -137,14 +127,12 @@ constexpr std::uint32_t l1_group_size(std::uint8_t mux)
 static_assert(L1_MUX_GROUP <= PERF_L1_MUX_MAX, "LLK_PERF_L1_MUX_GROUP does not fit this architecture's PERF_CNT_MUX_CTRL mux field");
 static_assert(l1_group_size(L1_MUX_GROUP) > 0, "LLK_PERF_L1_MUX_GROUP selects an L1 mux group this architecture does not expose");
 
-// Total counters across all bank arrays (per arch), evaluated at compile time.
 constexpr std::uint32_t builtin_counter_count()
 {
     return instrn_counters.size() + fpu_counters.size() + unpack_counters.size() + pack_counters.size() + l1_group_size(L1_MUX_GROUP);
 }
 
-// Concatenate the per-bank arrays into config words, in the fixed order the readout expects:
-// INSTRN, FPU, TDMA_UNPACK, TDMA_PACK, then the single selected L1 mux group.
+// Fixed order, matched by the readout: INSTRN, FPU, TDMA_UNPACK, TDMA_PACK, selected L1 group.
 constexpr std::array<std::uint32_t, builtin_counter_count()> build_builtin_config()
 {
     std::array<std::uint32_t, builtin_counter_count()> cfg {};
@@ -183,25 +171,19 @@ constexpr std::array<std::uint32_t, builtin_counter_count()> build_builtin_confi
     return cfg;
 }
 
-// l1_group_size() decides which groups exist; adding one there without an emitter above would
-// otherwise fall through and record nothing.
 static_assert(L1_MUX_GROUP <= 4, "LLK_PERF_L1_MUX_GROUP has no emitter in build_builtin_config()");
 
 constexpr auto BUILTIN_COUNTER_CONFIG         = build_builtin_config();
 constexpr std::uint32_t BUILTIN_COUNTER_COUNT = BUILTIN_COUNTER_CONFIG.size();
 
-// Generated from hw_counters.h, so it can grow without this file changing, and is copied straight
-// into the fixed-size shared config region.
 static_assert(BUILTIN_COUNTER_COUNT <= COUNTER_SLOT_COUNT, "Counter inventory overflows the shared config region into zone 0 data");
 
-// Stateless — all state lives in L1 at fixed addresses, so these are plain free functions.
 
 inline std::uint32_t get_active_bank_mask()
 {
     return *reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_BANK_MASK_ADDR);
 }
 
-// Configure each populated bank's reference-period + mode register once (configured_mask dedups to banks).
 inline void configure_hardware()
 {
     const volatile std::uint32_t* config_mem = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
@@ -236,7 +218,6 @@ inline void configure_hardware()
     }
 }
 
-// Per-bank arm + global PERF_CNT_ALL broadcast (rising edge 0→1 clears + starts).
 inline void arm_hardware()
 {
     for (std::uint32_t b = 0; b < COUNTER_BANK_COUNT; ++b)
@@ -253,11 +234,9 @@ inline void arm_hardware()
     ckernel::reg_write(RISCV_DEBUG_REG_PERF_CNT_ALL, 0);
 }
 
-// Scan config, publish enabled flag + bank mask + per-zone valid_count to L1, then configure + arm.
 inline void configure_all_zones()
 {
-    // One shared config describes every zone, so scan once and replicate. Scanning per zone re-read
-    // the same words 8 times, on BRISC, immediately before it releases the TRISCs.
+    // One config covers every zone, so scan once: the per-zone scan re-read it 8 times on BRISC.
     bool found_valid        = false;
     std::uint32_t bank_mask = 0;
     std::uint32_t count     = 0;
@@ -322,8 +301,7 @@ inline void configure_and_arm_from_brisc()
 
 namespace detail
 {
-// Its own section name keeps this out of the `.bss.*` catch-all so the linker places it last
-// deterministically (see sections.ld); do_crt0() still zero-inits it by address.
+// Placed last via its own section (see sections.ld) so adding it cannot move other globals.
 __attribute__((section(".perf_counters_bss"))) static std::uint32_t zone_hashes[PERF_COUNTERS_MAX_ZONES];
 __attribute__((section(".perf_counters_bss"))) static std::uint32_t next_zone_id;
 
@@ -363,7 +341,6 @@ __attribute__((always_inline)) inline std::uint32_t get_zone_id(std::uint32_t ha
 
 #if defined(LLK_PROFILER)
 
-// Drift-proof version of the layout ceiling above (tracks the profiler region symbolically).
 static_assert(PERF_COUNTERS_LAYOUT_END <= llk_profiler::EPOCH_ADDR, "Perf counter L1 layout overflows into the profiler region");
 
 inline __attribute__((always_inline)) void arm_all_counters()
@@ -427,12 +404,10 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
             continue; // corrupt config word: do not index banks[] out of range
         }
         const bank_regs& br = banks[bank_id];
-        // No L1 mux write here: the mux routes interfaces into the counters as they count, so it is fixed
-        // once by configure_hardware and cannot be re-aimed after the fact.
+        // No mux write: it is fixed once by configure_hardware and cannot be re-aimed afterwards.
         const std::uint32_t expected_mode = counter_id << PERF_CFG_COUNTER_SHIFT;
         ckernel::reg_write(br.mode_reg, expected_mode);
-        // MMIO fence so the counter-select store lands before the OUT_H read; reg_write is only a
-        // volatile store, so without it the read can sample the previous counter.
+        // reg_write is only a volatile store, so without this fence the read samples the previous counter.
         for (std::uint32_t spin = 0; spin < MODE_REG_POLL_LIMIT && ckernel::reg_read(br.mode_reg) != expected_mode; ++spin)
         {
         }
@@ -538,7 +513,6 @@ struct perf_counter_scoped
 
 #define PERF_COUNTER_VAR_CONCAT_(a, b) a##b
 #define PERF_COUNTER_VAR_(line)        PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
-// perf_counter_scoped only exists under LLK_PROFILER, which is set independently of this flag.
 #if defined(LLK_PROFILER)
 #define MEASURE_PERF_COUNTERS(zone_name) \
     const llk_perf::perf_counter_scoped<PERF_RUN_TYPE> PERF_COUNTER_VAR_(__LINE__)(llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name)));
@@ -560,7 +534,7 @@ inline void configure_and_arm_from_brisc()
 
 #endif // PERF_COUNTERS_COMPILED
 
-// One measured scope = a perf-counter window + a profiler timing zone; NC activates timing only, WC activates both, keyed by `zone_name`.
+// One measured scope: NC activates timing only, WC both.
 #define START_PERF_MEASURE(zone_name) \
     MEASURE_PERF_COUNTERS(zone_name)  \
     ZONE_SCOPED(zone_name)
