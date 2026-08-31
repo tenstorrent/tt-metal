@@ -238,10 +238,9 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
                         // A core with no bank contributes nothing: a service core claimed by fast
                         // dispatch is a legal shard core with real L1, but the allocator gives it no
                         // bank, so it holds no per-core ranges to avoid.
-                        if (!dev_alloc->has_bank(BufferType::L1, core)) {
-                            continue;
+                        if (const auto* bank_ids = dev_alloc->find_bank_ids(BufferType::L1, core)) {
+                            gather_from(dev_alloc, bank_ids->front());
                         }
-                        gather_from(dev_alloc, dev_alloc->logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0));
                     }
                 }
             }
@@ -254,11 +253,9 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             if (scope_to_own_cores) {
                 scoped_dependent_allocators.emplace();
                 for (const auto& core : cores_to_scan) {
-                    if (!this->has_bank(BufferType::L1, core)) {
-                        continue;
+                    if (const auto* bank_ids = this->find_bank_ids(BufferType::L1, core)) {
+                        scoped_dependent_allocators->insert(bank_ids->front() + 1);
                     }
-                    scoped_dependent_allocators->insert(
-                        logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0) + 1);
                 }
             }
             address = l1_manager_->allocate_buffer(
@@ -438,11 +435,19 @@ const std::vector<uint32_t>& AllocatorImpl::get_bank_ids_from_logical_core(
     return logical_core_to_bank_ids_.at(buffer_type).at(logical_core);
 }
 
-bool AllocatorImpl::has_bank(BufferType buffer_type, const CoreCoord& logical_core) const {
+const std::vector<uint32_t>* AllocatorImpl::find_bank_ids(BufferType buffer_type, const CoreCoord& logical_core) const {
     // Don't lock mutex_ because logical_core_to_bank_ids_ is populated during init and is not
     // mutated afterwards, the same reasoning get_num_banks() relies on.
     auto banks = logical_core_to_bank_ids_.find(buffer_type);
-    return banks != logical_core_to_bank_ids_.end() && banks->second.contains(logical_core);
+    if (banks == logical_core_to_bank_ids_.end()) {
+        return nullptr;
+    }
+    auto core_banks = banks->second.find(logical_core);
+    return core_banks == banks->second.end() ? nullptr : &core_banks->second;
+}
+
+bool AllocatorImpl::has_bank(BufferType buffer_type, const CoreCoord& logical_core) const {
+    return this->find_bank_ids(buffer_type, logical_core) != nullptr;
 }
 
 const AllocatorConfig& AllocatorImpl::get_config() const { return *config_; }
