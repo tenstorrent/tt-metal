@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
@@ -44,10 +45,10 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void copy_init(
-    uint32_t cbid,
-    uint32_t transpose = 0,
-    uint32_t transpose_within_16x16_face = false,
-    uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t cbid,
+    std::uint32_t transpose = 0,
+    std::uint32_t transpose_within_16x16_face = false,
+    std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(cbid, call_line);
@@ -67,27 +68,31 @@ ALWI void copy_init(
     // config: records no format-reconfig diff, so single-SrcA reconfig tracking is unchanged. Not on Quasar.
     MATH((ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))));
 #else
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
-        cbid)));
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          DataCopyType::A2D,
+          is_fp32_dest_acc_en,
+          BroadcastType::NONE,
+          UnpackToDestEn>(cbid)));
 #endif
 }
 // clang-format off
 /**
  * Issue a single lightweight clear-SrcA unpacker op (UNPACR_NOP, no dvalid). Intended to be called between
  * cb_wait_front and cb_pop_front when a circular buffer must be drained/flow-controlled without a real
- * consume. On Quasar this satisfies the unpacker's requirement that a POP_TILES be ordered after its
- * WAIT_TILES by a real unpacker op (TEN-4746 / #48552) -- a bare TTI_NOP/DMANOP does NOT (they issue no
- * unpacker transaction), and a real read (copy_tile / UNPACR_TILE) is heavier and, if partial, corrupts
+ * consume. This satisfies the unpacker's requirement that a POP_TILES be ordered after its WAIT_TILES by a
+ * real unpacker op (Quasar TEN-4746 / #48552) -- a bare TTI_NOP/DMANOP does NOT (they issue no unpacker
+ * transaction), and a real read (copy_tile / UNPACR_TILE) is heavier and, if partial, corrupts
  * PACKER_L1_ACC offsets. This clears SrcA only (harmless: the next op re-unpacks SrcA) and never reads the
- * CB, so it is correct and side-effect free. On WH/BH there is no such HW ordering bug, so this is a no-op.
+ * CB, so it is correct and side-effect free.
+ *
+ * The clear is preceded by a STALLWAIT on SrcA-clear (stalling the unpacker) so the NOP cannot clobber the
+ * SrcA bank while another op still holds it -- we only clear once SrcA is no longer in use. Each arch
+ * supplies its own llk_unpack_dummy() with the matching STALLWAIT + UNPACR_NOP encoding. Outside Quasar
+ * there is no such ordering requirement, so this is just a SrcA flush -- not needed unless for debug.
  * Return value: None
  */
 // clang-format on
-ALWI void dummy_unpack() {
-#ifdef ARCH_QUASAR
-    UNPACK(TTI_UNPACR_NOP(p_unpacr::UNP_A, 0, 0, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC));
-#endif
-}
+ALWI void dummy_unpack() { UNPACK((llk_unpack_dummy())); }
 
 // clang-format off
 /**
@@ -111,7 +116,7 @@ ALWI void dummy_unpack() {
  * */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
@@ -147,14 +152,21 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
  * */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
+ALWI void copy_block(
+    std::uint32_t in_cb_id,
+    std::uint32_t start_in_tile_index,
+    std::uint32_t start_dst_tile_index,
+    std::uint32_t ntiles) {
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, start_in_tile_index, ntiles)));
-    MATH((llk_math_eltwise_unary_datacopy_block<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
-        start_dst_tile_index, ntiles, in_cb_id)));
+    MATH((llk_math_eltwise_unary_datacopy_block<
+          DataCopyType::A2D,
+          is_fp32_dest_acc_en,
+          BroadcastType::NONE,
+          UnpackToDestEn>(start_dst_tile_index, ntiles, in_cb_id)));
 }
 
 // =====================================================================================================================
@@ -179,7 +191,7 @@ ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t s
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
-    uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t cbid, std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
     copy_init<is_fp32_dest_acc_en>(cbid, 0, false, call_line);
 }
@@ -199,10 +211,10 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_to_dst_init_short(
-    uint32_t cbid,
-    uint32_t transpose = 0,
-    uint32_t transpose_within_16x16_face = false,
-    uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t cbid,
+    std::uint32_t transpose = 0,
+    std::uint32_t transpose_within_16x16_face = false,
+    std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
     copy_init<is_fp32_dest_acc_en>(cbid, transpose, transpose_within_16x16_face, call_line);
 }
@@ -225,7 +237,7 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated(
     "Call reconfig_data_format_srca(old, new) then copy_init(new, transpose). This will be removed after "
     "20-09-2026.")]] ALWI void
-copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32_t transpose = 0) {
+copy_tile_to_dst_init_short_with_dt(std::uint32_t old_cbid, std::uint32_t new_cbid, std::uint32_t transpose = 0) {
     LLK_SAN_FUNCTION();
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
@@ -252,7 +264,10 @@ copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32
 // clang-format on
 [[deprecated("Use copy_block(); copy_block_matmul_partials will be removed after August 15th, 2026.")]] ALWI void
 copy_block_matmul_partials(
-    uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
+    std::uint32_t in_cb_id,
+    std::uint32_t start_in_tile_index,
+    std::uint32_t start_dst_tile_index,
+    std::uint32_t ntiles) {
     copy_block(in_cb_id, start_in_tile_index, start_dst_tile_index, ntiles);
 }
 

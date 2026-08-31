@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_A.h"
 #include "llk_unpack_common_api.h"
 
@@ -82,13 +83,25 @@ inline void llk_unpack_A_block(
 
     LLK_ASSERT(cb_access_within_bounds(operand_id, start_tile_index, ntiles), "Block tile read exceeds CB boundary");
 
-    for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
         _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
             address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
         address += offset_address;
         WAYPOINT("UPAD");
     }
+}
+
+/**
+ * @brief Flush the SrcA bank: STALLWAIT on SrcA-clear (stalling the unpacker) then a clear-SrcA UNPACR_NOP.
+ *
+ * The STALLWAIT ensures SrcA is free before the clear, so this cannot clobber a SrcA bank still owned by an
+ * in-flight op; it clears SrcA only (the next op re-unpacks it) and reads nothing from L1. Kernels do not
+ * need this in normal operation -- use it only for debug when an explicit SrcA flush is wanted.
+ */
+inline void llk_unpack_dummy() {
+    TTI_STALLWAIT(ckernel::p_stall::STALL_UNPACK, ckernel::p_stall::SRCA_CLR);
+    TTI_UNPACR_NOP(ckernel::SrcA, ckernel::p_unpacr_nop::UNP_ZEROSRC);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>

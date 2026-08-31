@@ -193,5 +193,20 @@ inline void llk_unpack_A_block(
     }
 }
 
+/**
+ * @brief Drain / flow-control NOP for the unpacker (no CB read, no DEST write).
+ *
+ * Issues a STALLWAIT on SrcA-clear followed by a clear-SrcA UNPACR_NOP. Used between cb_wait_front and
+ * cb_pop_front to order a POP_TILES after its WAIT_TILES with a real unpacker op (TEN-4746 / #48552)
+ * without consuming a tile: a bare TTI_NOP / DMANOP issues no unpacker transaction and does not satisfy
+ * the ordering, while a real read (UNPACR_TILE) is heavier and, if partial, corrupts PACKER_L1_ACC offsets.
+ * The STALLWAIT ensures SrcA is free before the clear, so this cannot clobber a SrcA bank still owned by an
+ * in-flight op. Clears SrcA only (the next op re-unpacks it) and reads nothing from L1.
+ */
+inline void llk_unpack_dummy() {
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, 0, 0, p_stall::SRCA_CLR);
+    TTI_UNPACR_NOP(p_unpacr::UNP_A, 0, 0, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
+}
+
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_A_uninit() {}
