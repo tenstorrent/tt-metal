@@ -335,7 +335,7 @@ def _validate_grouped_scan_capacity(
         )
     group_heads = batch_heads * (num_chunks // summary_group_chunks)
     grid = device.compute_with_storage_grid_size()
-    capacity = min(grid.x * grid.y, 128)
+    capacity = grid.x * grid.y
     if group_heads > capacity:
         raise ValueError(f"grouped KDA needs {group_heads} summary owners, but only {capacity} are supported")
 
