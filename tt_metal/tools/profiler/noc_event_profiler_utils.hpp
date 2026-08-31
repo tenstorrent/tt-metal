@@ -17,6 +17,7 @@
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "common/filesystem_utils.hpp"
+#include "context/context_types.hpp"
 #include "tt_cluster.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
@@ -66,7 +67,7 @@ private:
     EthCoreToChannelMap eth_core_to_channel_lookup_;
 };
 
-inline void dumpRoutingInfo(const std::filesystem::path& output_dir) {
+inline void dumpRoutingInfo(IDevice* device, const std::filesystem::path& output_dir) {
     tt::filesystem::safe_create_directories(output_dir);
     if (!tt::filesystem::safe_is_directory(output_dir).value_or(false)) {
         log_error(
@@ -79,7 +80,8 @@ inline void dumpRoutingInfo(const std::filesystem::path& output_dir) {
 
     nlohmann::ordered_json topology_json;
 
-    const Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    ContextId context_id = extract_context_id(device);
+    const Cluster& cluster = tt::tt_metal::MetalContext::instance(context_id).get_cluster();
 
     topology_json["mesh_shapes"] = nlohmann::ordered_json::array();
     for (const auto& [mesh_id, mesh_shape] : tt::tt_fabric::get_physical_mesh_shapes()) {
@@ -98,8 +100,9 @@ inline void dumpRoutingInfo(const std::filesystem::path& output_dir) {
             fabric_node_id.mesh_id.get(), fabric_node_id.chip_id};
     }
 
-    topology_json["fabric_config"] = enchantum::to_string(tt::tt_metal::MetalContext::instance().get_fabric_config());
-    if (tt::tt_metal::MetalContext::instance().get_fabric_config() != tt_fabric::FabricConfig::DISABLED) {
+    topology_json["fabric_config"] =
+        enchantum::to_string(tt::tt_metal::MetalContext::instance(context_id).get_fabric_config());
+    if (tt::tt_metal::MetalContext::instance(context_id).get_fabric_config() != tt_fabric::FabricConfig::DISABLED) {
         topology_json["routing_planes"] = nlohmann::ordered_json::array();
         for (auto physical_chip_id : cluster.get_cluster_desc()->get_all_chips()) {
             auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(physical_chip_id);
@@ -176,7 +179,8 @@ inline void dumpSocDescriptor(IDevice* device, const std::filesystem::path& outp
         return;
     }
 
-    const metal_SocDescriptor& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
+    ContextId context_id = extract_context_id(device);
+    const metal_SocDescriptor& soc_desc = MetalContext::instance(context_id).get_cluster().get_soc_desc(device->id());
     soc_desc.serialize_to_file(output_dir / "soc_descriptor.yaml");
 }
 

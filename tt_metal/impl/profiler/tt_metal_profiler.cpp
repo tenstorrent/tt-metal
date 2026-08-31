@@ -815,7 +815,7 @@ void InitDeviceProfiler(IDevice* device) {
     setControlBuffer(nullptr, device, control_buffer);
 
     if (MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
-        tt::tt_metal::dumpRoutingInfo(profiler.getNocTraceDataOutputDir());
+        tt::tt_metal::dumpRoutingInfo(device, profiler.getNocTraceDataOutputDir());
         tt::tt_metal::dumpSocDescriptor(device, profiler.getNocTraceDataOutputDir());
     }
 #endif
