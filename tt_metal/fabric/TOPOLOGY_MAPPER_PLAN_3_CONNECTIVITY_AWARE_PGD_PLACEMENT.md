@@ -14,6 +14,9 @@ Sibling plans: [Plan 1 — PGD-shape-aware inter-mesh constraints](TOPOLOGY_MAPP
 Plans 1 and 2 make the *inter-mesh solve* cheap and correct. Neither stops Phase 6 from choosing a
 disjoint packing whose seams are unroutable — that is this plan.
 
+"Seam" is used throughout and is not a codebase term; §3 defines it and says exactly what the seam check
+does and does not test.
+
 ---
 
 ## 1. Where placements are chosen today
@@ -45,7 +48,60 @@ in #54623 verbatim.
 It gets *more* likely as shapes approach physical capacity: packing slack is what accidentally saves
 the seams today, and slack vanishes exactly when the MGD is interesting.
 
-## 3. Design — cross-shape seam feasibility as a first-class filter
+## 3. Terminology: what a "seam" is, and what the check asks
+
+"Seam" is not a term in the codebase. It is shorthand for **one declared inter-mesh boundary**: a single
+edge of the MGD's mesh-level graph. In the textproto that is exactly one `connections` block between two
+mesh instances:
+
+```proto
+connections {
+  nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 6 } }
+  nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 7 } }
+  channels { count: 8 policy: RELAXED }
+}  # A group 0 stage 4 -> A group 0 join
+```
+
+That is one seam: logical mesh 6 and logical mesh 7 have declared they must be able to talk, over 8
+channels. Those edges are collected by `get_requested_intermesh_from_mgd` and land in
+`LogicalMultiMeshGraph::mesh_level_graph_`
+(`tt_metal/api/tt-metalium/experimental/fabric/topology_mapper_utils.hpp:309`), built by
+`build_logical_multi_mesh_adjacency_graph_impl` (`topology_mapper_utils.cpp:395–524`). Channel
+multiplicity is represented as duplicate entries in the neighbour vector, so "8 channels" is 8 parallel
+edges rather than a weight.
+
+**Same-shape vs cross-shape seams.** A seam is *same-shape* when both endpoints use the same mesh
+descriptor (mesh 2 → mesh 3, both `S4x1`) and *cross-shape* when they differ (mesh 6 `S4x1` → mesh 7
+`S4x2`). This distinction is the whole problem: `build_mgd_mesh_level_subgraph_for_mesh_descriptor_name`
+(`topology_mapper_utils.cpp:1037`) keeps only the same-shape seams for each per-shape solve, so the
+cross-shape seams are the ones nobody reasons about. In the router-pipeline MGD every group boundary
+(`4x1 → 4x2`, `4x2 → 4x1`, `4x2 → 4x4`, `4x4 → 4x2`) is cross-shape, and so is every one of the router
+mesh's four edges.
+
+**What the check asks.** After the packing DFS has assigned every logical mesh a physical region — a
+chip set from a `PsdPlacement` — take each seam `(Li, Lj)`, look up the regions `Ri` and `Rj` they were
+assigned, and ask the hardware one question:
+
+> Is there at least one ethernet link from some chip in `Ri` to some chip in `Rj`?
+
+The PSD flat graph answers it directly: `build_flat_adjacency_map_from_psd`
+(`topology_mapper_utils.cpp:737`) already emits one edge per ethernet link, including the cross-host
+links that form the inter-galaxy seams. So the check is a set-crossing count over an edge list, which is
+what the region-adjacency oracle in §4 memoizes.
+
+**What the check is not.** It is deliberately coarse, and three other things stay where they are:
+
+| Not this | Where it actually happens |
+| --- | --- |
+| Which *chip* in `Ri` talks to which chip in `Rj` | Inter-mesh port assignment, later, from the exit-node graphs (`mesh_exit_node_graphs_`) |
+| Whether the logical mesh's internal shape fits the region | The intra-mesh solve, `map_multi_mesh_to_physical:3550+` |
+| Whether the region is the *right* region for that logical mesh | [Plan 1](TOPOLOGY_MAPPER_PLAN_1_PGD_SHAPE_INTERMESH_CONSTRAINTS.md) — shape-class domain filter |
+
+The seam check only answers "could these two regions ever talk?" — which is precisely the question
+nothing asks today, and precisely the one whose absence lets a perfectly disjoint packing strand half a
+ring.
+
+## 4. Design — cross-shape seam feasibility as a first-class filter
 
 Keep the per-shape enumeration (it is what makes the search tractable) and add a **seam check** to the
 combination step, plus a **seam-aware ordering** so good combinations surface early.
@@ -55,16 +111,46 @@ Three layers, cheapest first.
 ### (a) Seam check at the leaf of the packing DFS
 
 When a full combination is assembled, every logical mesh has a physical region. Walk the MGD's
-cross-shape mesh-level edges and require each to land on a physical region pair with at least one link —
-and, in `STRICT`, at least the requested channel count. Reject the combination otherwise, exactly like
-the overlap rejection.
+cross-shape mesh-level edges and require each to land on a physical region pair with at least one link.
+Reject the combination otherwise, exactly like the overlap rejection.
 
-This needs a **region-adjacency oracle**: given two candidate placements (chip sets), how many links run
+> **TODO — defer channel counts and STRICT/RELAXED for the placement seam check.**
+> Start at **existence only**: `link_count(Ri, Rj) >= 1`, regardless of the seam's declared
+> `channels { count: N }`. Explicitly push "≥ the requested channel count" and any STRICT/RELAXED
+> distinction to a follow-up, and only add it if a real MGD is shown to need it.
+>
+> Rationale: existence is the weakest predicate that still kills the #54623 failure mode (a stranded
+> seam has *zero* links, not too few), and a weaker predicate is a strictly larger feasible set — the
+> packing DFS reaches an accepted combination sooner and cannot be driven infeasible by a channel
+> shortfall on an otherwise correct placement. Counting channels also makes the oracle below more
+> expensive: existence can short-circuit on the first crossing edge found, whereas a count must walk
+> every crossing edge for every region pair.
+>
+> Worth knowing before revisiting: the two solves on either side of this check already disagree about
+> strictness. The per-shape placement enumeration runs **STRICT**
+> (`pull_next_solution`, `topology_mapper_utils.cpp:1162`), while the inter-mesh solve defaults to
+> **RELAXED** (`determine_inter_mesh_validation_mode`, `2722–2727`, overridable via
+> `TopologyMappingConfig::inter_mesh_validation_mode`). So the natural default for the seam check is to
+> follow the inter-mesh mode it is protecting — i.e. existence, matching RELAXED — and to consider
+> honouring the requested count only when the caller has explicitly asked for STRICT inter-mesh
+> validation.
+>
+> The cost of deferring, stated honestly: a placement can pass an existence-only seam check and still
+> fail later under STRICT inter-mesh validation because the seam resolved to fewer channels than the MGD
+> asked for. That trades early, precise failure for a faster and more permissive search. It is the right
+> trade while the common bug is "zero channels", and the wrong one once the common bug becomes "not
+> enough channels" — which is the signal to pick this back up.
+
+This needs a **region-adjacency oracle**: given two candidate placements (chip sets), do any links run
 between them? Build it once from the PSD flat graph (`build_flat_adjacency_map_from_psd`, `737`) at the
 same point the per-placement bitmasks are built (`927–946`): for each ordered pair of candidate
-placements across shapes, count flat-graph edges crossing the two footprints. Cost is bounded by
+placements across shapes, look for a flat-graph edge crossing the two footprints. Cost is bounded by
 `Σ_placements (chips × degree)`, i.e. one pass over the PSD edge list per placement pair bucket — the
 same order as the bitmask precompute already accepted there.
+
+Cache a `bool` per pair for now. Keep the interface returning a count-shaped answer
+(`std::size_t link_count(a, b)` with an early-out at 1) only if that costs nothing, so the deferred
+channel-count work above is a change of threshold rather than a change of data structure.
 
 ### (b) Seam-aware ordering
 
@@ -83,7 +169,7 @@ region-adjacency encoded as support clauses. The mechanism already exists for in
 Layers (a) and (b) are worth doing first regardless: they are small, they make the failure *loud*
 instead of silent, and they give a correctness oracle to test (c) against.
 
-## 4. Ownership and function passing
+## 5. Ownership and function passing
 
 | Concern | Owner | Notes |
 | --- | --- | --- |
@@ -97,14 +183,14 @@ instead of silent, and they give a correctness oracle to test (c) against.
 until layer (c) needs it in the header. Key it by `(shape_name, placement_index)` — the same key space
 `group_bits_by_name` and `placements_by_shape` already use — so no new index mapping is introduced.
 
-## 5. Interaction with Plan 1
+## 6. Interaction with Plan 1
 
 Complementary, and they compose cleanly. Plan 1 fixes *which physical region a logical mesh may use*,
 given a set of regions. This plan fixes *which set of regions gets chosen*. Doing 3 without 1 still
 leaves the inter-mesh solve free to permute within a shape class; doing 1 without 3 leaves the seam
 problem intact. Both are needed to close #54623.
 
-## 6. Validation
+## 7. Validation
 
 - The issue's 4-slot cycle example is small enough to encode directly as a unit test in
   `tests/tt_metal/tt_fabric/fabric_router/test_topology_mapper_utils.cpp`: 4 physical slots in a cycle,
@@ -117,12 +203,16 @@ problem intact. Both are needed to close #54623.
   `tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh` with a boundary-resolution assertion
   rather than only `TestGalaxyLayoutCheck`.
 
-## 7. Open questions
+## 8. Open questions
 
 - Should the seam check be hard, or hard-with-soft-fallback like the host cap? The issue argues hard
   ("fails loudly with an infeasibility core"); the host-cap precedent argues for an orchestration-level
   relaxation. **Recommend hard**, since an unroutable seam is a wrong answer rather than a suboptimal
-  one.
+  one. Note this is orthogonal to the channel-count deferral in §4(a): "hard" is about whether a failed
+  seam check can be relaxed away, "existence only" is about what the check tests in the first place.
+- What is the trigger to pick the deferred channel-count check back up? Proposed: the first MGD whose
+  seams resolve to a non-zero but insufficient channel count under STRICT inter-mesh validation. Until
+  that exists, counting channels during placement is speculative work.
 - Is the full pairwise oracle affordable at SC36 scale, or does it need to be built lazily per queried
   pair? The bitmask precompute is `O(placements)`; the oracle is `O(placements²)` in the worst case.
   Lazy-with-memo is the obvious fallback if the eager build shows up in profiles.
