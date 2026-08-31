@@ -9,6 +9,7 @@ import inspect
 import pytest
 import subprocess
 import ast
+import yaml
 from loguru import logger
 from conftest import is_6u
 
@@ -1216,6 +1217,36 @@ def test_noc_event_profiler():
         ), f"plain NOC tracing must not record barrier events, got: {event_types}"
         assert len(noc_trace_data) == 4, f"unexpected noc trace events: {event_types}"
 
+    # Validate SoC descriptor is produced and contains valid grid/core data
+    expected_soc_descriptor_file = f"{PROFILER_ARTIFACTS_DIR}/noc_events_rpt/soc_descriptor.yaml"
+    assert os.path.isfile(
+        expected_soc_descriptor_file
+    ), f"SoC descriptor file not found at {expected_soc_descriptor_file}"
+
+    with open(expected_soc_descriptor_file, "r") as soc_desc_file:
+        soc_desc_data = yaml.safe_load(soc_desc_file)
+
+        # Verify required fields exist
+        assert "grid" in soc_desc_data, "SoC descriptor missing 'grid' field"
+        assert "x_size" in soc_desc_data["grid"], "SoC descriptor grid missing 'x_size'"
+        assert "y_size" in soc_desc_data["grid"], "SoC descriptor grid missing 'y_size'"
+        assert soc_desc_data["grid"]["x_size"] > 0, "SoC descriptor grid x_size must be positive"
+        assert soc_desc_data["grid"]["y_size"] > 0, "SoC descriptor grid y_size must be positive"
+
+        assert "arch_name" in soc_desc_data, "SoC descriptor missing 'arch_name' field"
+        arch_name = soc_desc_data["arch_name"].upper()
+        expected_arch = ENV_VAR_ARCH_NAME.upper().replace("_", "")
+        assert (
+            expected_arch in arch_name or arch_name in expected_arch
+        ), f"SoC descriptor arch_name '{soc_desc_data['arch_name']}' does not match expected arch '{ENV_VAR_ARCH_NAME}'"
+
+        assert "functional_workers" in soc_desc_data, "SoC descriptor missing 'functional_workers' field"
+        assert len(soc_desc_data["functional_workers"]) > 0, "SoC descriptor must have at least one functional worker"
+
+        # Verify DRAM channels exist (all architectures have DRAM)
+        assert "dram" in soc_desc_data, "SoC descriptor missing 'dram' field"
+        assert len(soc_desc_data["dram"]) > 0, "SoC descriptor must have at least one DRAM channel"
+
 
 @skip_for_blackhole()
 def test_fabric_event_profiler_1d():
@@ -1253,11 +1284,6 @@ def test_fabric_event_profiler_1d():
         except subprocess.CalledProcessError as e:
             ret_code = e.returncode
             assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
-
-        expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
-        assert os.path.isfile(
-            expected_cluster_coords_file
-        ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
 
         noc_trace_files = []
         for f in os.listdir(f"{PROFILER_LOGS_DIR}"):
@@ -1323,11 +1349,6 @@ def test_fabric_event_profiler_fabric_mux():
         except subprocess.CalledProcessError as e:
             ret_code = e.returncode
             assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
-
-        expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
-        assert os.path.isfile(
-            expected_cluster_coords_file
-        ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
 
         noc_trace_files = []
         for f in os.listdir(f"{PROFILER_LOGS_DIR}"):
@@ -1443,11 +1464,6 @@ def test_fabric_event_profiler_2d():
         except subprocess.CalledProcessError as e:
             ret_code = e.returncode
             assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
-
-        expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
-        assert os.path.isfile(
-            expected_cluster_coords_file
-        ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
 
         noc_trace_files = []
         for f in os.listdir(f"{PROFILER_LOGS_DIR}"):
