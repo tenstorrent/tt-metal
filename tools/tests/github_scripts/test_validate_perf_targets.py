@@ -55,7 +55,6 @@ def _write_complete_run(
     seq_len: int,
     decode_tsu: float,
     extra_measurements: list[dict] | None = None,
-    optimization_profile: str | None = None,
 ) -> None:
     payload = {
         "ml_model_name": model,
@@ -65,8 +64,6 @@ def _write_complete_run(
             {"step_name": "inference_decode", "name": "tokens/s/user", "value": decode_tsu},
         ],
     }
-    if optimization_profile is not None:
-        payload["config_params"] = {"optimization_profile": optimization_profile}
     if extra_measurements:
         payload["measurements"].extend(extra_measurements)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -264,51 +261,6 @@ def test_validate_perf_targets_detects_regression(tmp_path):
     result = _run_validator(tmp_path)
     assert result.returncode == 1
     assert "decode_t/s/u" in result.stdout
-
-
-def test_validate_perf_targets_reports_accuracy_profile_perf_without_applying_performance_floor(tmp_path):
-    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
-    (tmp_path / "models").mkdir(parents=True)
-    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
-
-    _write_complete_run(
-        tmp_path / "generated/benchmark_data/complete_run_1.json",
-        model="demo-model",
-        batch_size=32,
-        seq_len=128,
-        decode_tsu=40.0,
-        optimization_profile="accuracy",
-    )
-
-    targets = {
-        "version": 1,
-        "targets": {
-            "demo-model": {
-                "aliases": [],
-                "skus": {
-                    "wh_n150": {
-                        "entries": [
-                            {
-                                "batch_size": 32,
-                                "seq_len": 128,
-                                "status": "active",
-                                "perf": {"decode_t/s/u": 100.0},
-                                "accuracy": {},
-                            }
-                        ]
-                    }
-                },
-            }
-        },
-    }
-    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
-    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
-    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
-
-    result = _run_validator(tmp_path)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "| no-target |" in result.stdout
-    assert "| fail |" not in result.stdout
 
 
 def test_validate_perf_targets_supports_per_metric_tolerance_override(tmp_path):

@@ -592,21 +592,10 @@ def validate(
         measured = _measurement_lookup(run)
         is_accuracy_run = _is_accuracy_run(measured)
         is_single_pass_run = _is_single_pass_run(measured)
-        config_params = run.get("config_params", {})
-        optimization_profile = None
-        if isinstance(config_params, dict):
-            profile_value = config_params.get("optimization_profile")
-            if isinstance(profile_value, str) and profile_value.strip():
-                optimization_profile = profile_value.strip().lower()
         thresholds: dict[str, Any] = {}
         perf = entry.get("perf", {})
         accuracy = entry.get("accuracy", {})
-        # Central perf entries currently describe the performance optimization
-        # profile. An accuracy-profile eval is still valuable telemetry, but it
-        # must not be graded against a performance-profile floor. Preserve the
-        # legacy behavior for artifacts that predate the explicit profile field.
-        enforce_perf_profile = optimization_profile in {None, "performance"}
-        if isinstance(perf, dict) and enforce_perf_profile:
+        if isinstance(perf, dict):
             thresholds.update(perf)
         if isinstance(accuracy, dict):
             thresholds.update(accuracy)
