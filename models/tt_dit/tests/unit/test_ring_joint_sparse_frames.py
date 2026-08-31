@@ -854,12 +854,9 @@ class TestSparseFramesRing:
     @_MESH_TOPOLOGY_GALAXY
     @pytest.mark.parametrize(
         "tokens_per_frame",
-        # nf=6 frames on sp=8 -> 0.75 frames/shard (sub-frame), mirroring the real 4x32 sp=32 config
-        # (0.69 frames/shard). The reference frame lands on the far shards (6-7 of 8, like 30-31 of 32),
-        # so peeling it collapses the windowed spatial radius (W 7->4 here, like 31->5 at sp=32). This is
-        # the closest single-galaxy (4x8 sp8) equivalent of the four-galaxy (4x32 sp32) reference-delivery
-        # mechanics; only the W/ring_size ratio (the bandwidth win magnitude) differs, being inherent to
-        # the mesh size. tpf=2560 -> 3 q_chunks/device, tpf=5120 -> 6, to cover chunk counts.
+        # nf=6 frames on sp=8 -> 0.75 frames/shard (sub-frame).
+        # The reference frame lands on the far shards (6-7 of 8),
+        # so peeling it collapses the windowed spatial radius (W 7->4 here).
         [pytest.param(2560, id="tpf2560_3chunks"), pytest.param(5120, id="tpf5120_6chunks")],
     )
     def test_reference_as_extra_k_sub_frame(
@@ -875,8 +872,7 @@ class TestSparseFramesRing:
         reset_seeds,
         tokens_per_frame,
     ):
-        """Sub-frame (frames/shard < 1) reference-as-extra-K, the regime of the production 4x32 sp=32 SR
-        config, run on a single 4x8 sp=8 galaxy. 6 real frames, window 5 + reference frame 5 (far)."""
+        """Sub-frame (frames/shard < 1)."""
         _run_sparse_frames_op(
             mesh_device=mesh_device,
             sp_axis=sp_axis,
@@ -899,6 +895,54 @@ class TestSparseFramesRing:
             k_chunk_size_tokens=160,
             sparse_frames_enabled=True,
             reference_as_extra_k=True,
+        )
+
+    @_MESH_TOPOLOGY_GALAXY
+    @pytest.mark.parametrize(
+        ("tokens_per_frame", "num_frames_real", "num_frames_padded", "q_chunk", "k_chunk", "reference"),
+        [
+            pytest.param(3840, 21, 22, 320, 320, False, id="sp8native_fsl3840"),
+            pytest.param(9600, 5, 6, 160, 160, True, id="sp32shapes_fsl9600"),
+        ],
+    )
+    def test_single_galaxy_mesh_configs(
+        self,
+        mesh_device,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
+        device_params,
+        all_gather_topology,
+        reset_seeds,
+        tokens_per_frame,
+        num_frames_real,
+        num_frames_padded,
+        q_chunk,
+        k_chunk,
+        reference,
+    ):
+        _run_sparse_frames_op(
+            mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            tp_axis=tp_axis,
+            tp_factor=tp_factor,
+            num_links=num_links,
+            num_frames_real=num_frames_real,
+            num_frames_padded=num_frames_padded,
+            tokens_per_frame=tokens_per_frame,
+            b=1,
+            nh=8,
+            d=128,
+            window=5,
+            add_last_frame=True,
+            all_gather_topology=all_gather_topology,
+            q_chunk_size_tokens=q_chunk,
+            k_chunk_size_tokens=k_chunk,
+            sparse_frames_enabled=True,
+            reference_as_extra_k=reference,
         )
 
     @_MESH_TOPOLOGY
