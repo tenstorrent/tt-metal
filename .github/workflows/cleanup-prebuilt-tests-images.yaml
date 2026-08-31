@@ -10,10 +10,19 @@ name: "Cleanup prebuilt tests images"
 # safety mechanism. Note that N counts untagged versions too, so tagged
 # retention is lower than the number says.
 #
-# That 100/run limit is why this is sized for today's volume, where only the
-# producer's own test workflow pushes. Once a gate workflow consumes these
-# images the push rate goes far above 100/day and the schedule, the limit, or
-# the number of images built per run all have to be revisited together.
+# The action deletes at most 100 versions per run, which is why the schedule is
+# hourly rather than daily. PR Gate builds two images per run at roughly 600
+# runs/day, so ~1,200 versions/day, or ~50/hour, against 24 x 100 deletions.
+#
+# min-versions-to-keep is sized from that RATE, not picked round: retention in
+# hours is roughly N / 50. An image must outlive the gap between its build and
+# the last consumer pulling it, and a hardware leg can sit queued for hours, so
+# N = 1200 buys about a day. Too small a value deletes an image out from under a
+# queued leg, which fails at container startup with no fallback, because
+# container.image is resolved before any step runs.
+#
+# Recompute N if the push rate changes: wiring more consumers raises it, and
+# building one image per run instead of two would halve it.
 #
 # This deletes irreversibly. It is scoped to the one package the
 # build-prebuilt-tests-image producer creates, and never touches a base image.
@@ -23,14 +32,14 @@ permissions:
 
 on:
   schedule:
-    - cron: "30 6 * * *"
+    - cron: "30 * * * *"
   workflow_dispatch:
     inputs:
       min-versions-to-keep:
         description: "Newest versions to keep. Set very high for a safe no-op run."
         required: false
         type: string
-        default: "50"
+        default: "1200"
 
 jobs:
   cleanup:
@@ -45,4 +54,21 @@ jobs:
           owner: tenstorrent
           package-name: tt-metal/prebuilt-tests-image
           package-type: container
-          min-versions-to-keep: ${{ inputs.min-versions-to-keep || '50' }}
+          min-versions-to-keep: ${{ inputs.min-versions-to-keep || '1200' }}
+
+      # A GC that silently falls behind looks exactly like one that is working.
+      - name: Report what is left
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEP: ${{ inputs.min-versions-to-keep || '1200' }}
+        run: |
+          set -euo pipefail
+          COUNT=$(gh api "/orgs/tenstorrent/packages/container/tt-metal%2Fprebuilt-tests-image" --jq '.version_count')
+          echo "versions remaining: ${COUNT}" | tee -a "$GITHUB_STEP_SUMMARY"
+          # Steady state sits near the retention value, so warn relative to it
+          # rather than at a fixed number. A deliberate high-retention no-op run
+          # would otherwise report falling behind.
+          THRESHOLD=$(( KEEP * 2 ))
+          if [ "${COUNT}" -gt "${THRESHOLD}" ]; then
+            echo "::warning::${COUNT} versions left, over ${THRESHOLD}; cleanup is not keeping up with the push rate"
+          fi
