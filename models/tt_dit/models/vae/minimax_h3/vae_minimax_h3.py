@@ -235,6 +235,7 @@ class MiniMaxH3Vae(Module):
         profile: bool = False,
         ccl_manager=None,
         pixel_denorm: tuple[Sequence[float], Sequence[float]] | None = None,
+        pixel_norm: tuple[Sequence[float], Sequence[float]] | None = None,
         readback_uint8: bool = False,
         waves_per_device: int = 1,
     ) -> None:
@@ -264,6 +265,11 @@ class MiniMaxH3Vae(Module):
         # caller keeps no copy of the constants. Left unset the decoder emits reference-space values,
         # which is what the numerics tests compare against.
         self.pixel_denorm = pixel_denorm
+        # The encode-side mirror: set it and `(x/255 - mean)/std` folds into each per-shape
+        # encoder's conv_in, so `encode` / `encode_clip` take the decoder's raw **uint8** pixels
+        # (1 byte across PCIe instead of 4) and the host never runs a normalize pass. Left unset
+        # they take reference-space normalized fp32, which the numerics tests feed directly.
+        self.pixel_norm = pixel_norm
         # Cast decoded tiles to uint8 before the DMA, halving what crosses PCIe. Applies to the
         # host path only: `device_stitch` reads back a canvas and never calls `_read_wave_units`,
         # so the two are alternatives, not a combination.
@@ -429,9 +435,15 @@ class MiniMaxH3Vae(Module):
                 temporal_taps=temporal_taps,
                 mesh_device=self.mesh_device,
                 dtype=self.dtype,
+                pixel_norm=self.pixel_norm,
             )
+            # `_pxnorm` keys the cache: the fold rewrites conv_in's weight and bias, so cached
+            # bytes from a fold-less build must never load into a folded encoder or vice versa.
+            variant = "_pxnorm" if self.pixel_norm is not None else ""
             self._load_submodel(
-                encoder, f"vae_encoder_t{num_frames}_h{height}_w{width}_taps{temporal_taps}", dict(self._encoder_state)
+                encoder,
+                f"vae_encoder_t{num_frames}_h{height}_w{width}_taps{temporal_taps}{variant}",
+                dict(self._encoder_state),
             )
             self._encoders[key] = encoder
         return self._encoders[key]
@@ -471,7 +483,30 @@ class MiniMaxH3Vae(Module):
             # the device pad is bit-exact against the host pad and nearly free next to the DMA.
             return unit.permute(0, 2, 3, 4, 1).contiguous()
 
+        def read_wave(encoded: ttnn.Tensor, count: int) -> list[torch.Tensor]:
+            mark = time.perf_counter()
+            out = fast_device_to_host(encoded, self.mesh_device, [0, 0], ccl_manager=self.ccl_manager).float()
+            elapsed = time.perf_counter() - mark
+            profile["readback"] += elapsed
+            profile["readback_each"].append(elapsed)
+            profile["readback_mb"] += out.numel() * out.element_size() / 1e6
+            profile["shape"] = tuple(encoded.shape)
+            profile["dtype"] = str(encoded.dtype)
+            ttnn.deallocate(encoded)
+
+            mark = time.perf_counter()
+            tiles = [
+                out[index : index + 1, ..., :moments].permute(0, 4, 1, 2, 3).contiguous() for index in range(count)
+            ]
+            profile["unpatchify"] += time.perf_counter() - mark
+            return tiles
+
+        # Same schedule as `_stream_decoder_units`: wave k's readback is deferred until wave
+        # k + 1 is prepared, uploaded and enqueued, so the host work and the k - 1 transfer run
+        # under wave k's compute instead of after it. Two waves' outputs are live at once, which
+        # is one extra latent tile per device.
         results: list[torch.Tensor] = []
+        pending: tuple[ttnn.Tensor, int] | None = None
         for start in range(0, len(units), wave_size):
             # Prepared per wave, not up front: `units` are cheap views into the source video,
             # but permute().contiguous() materialises 13.4 MB each, so preparing all of them
@@ -483,14 +518,26 @@ class MiniMaxH3Vae(Module):
             batch = torch.cat(padded, dim=0)
             profile["host_prep"] += time.perf_counter() - mark
 
+            raw = batch.dtype == torch.uint8
+            assert raw == (self.pixel_norm is not None), (
+                f"{batch.dtype} pixels against pixel_norm={'set' if self.pixel_norm else 'unset'}: a folded "
+                "conv_in takes raw uint8 and an unfolded one takes normalized floats -- mixing them "
+                "double- or un-normalizes with no error anywhere downstream"
+            )
             mark = time.perf_counter()
             x_device = ttnn.from_torch(
                 batch,
-                dtype=self.dtype,
+                dtype=ttnn.uint8 if raw else self.dtype,
                 device=self.mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             )
+            if raw:
+                # ttnn.pad refuses uint8, so the cast comes first; the fp32 intermediate is
+                # device-side and cheap next to the 4x it removes from the transfer.
+                cast = ttnn.typecast(x_device, self.dtype)
+                ttnn.deallocate(x_device)
+                x_device = cast
             if batch.shape[-1] < in_channels:
                 # Zero-pad the channel axis to conv_in's tile alignment on device (the padded
                 # weight channels are zeros, so any fill works; zero matches the host pad
@@ -505,27 +552,23 @@ class MiniMaxH3Vae(Module):
 
             mark = time.perf_counter()
             encoded = encoder(x_device)
+            ttnn.deallocate(x_device)
+            # Opt-in sync, as in decode: it makes `device` and `readback` separable in the
+            # profile but serializes the streaming, so leave it off to go fast.
             if self.profile:
                 ttnn.synchronize_device(self.mesh_device)
             elapsed = time.perf_counter() - mark
             profile["device"] += elapsed
             profile["device_each"].append(elapsed)
 
-            mark = time.perf_counter()
-            out = fast_device_to_host(encoded, self.mesh_device, [0, 0], ccl_manager=self.ccl_manager).float()
-            elapsed = time.perf_counter() - mark
-            profile["readback"] += elapsed
-            profile["readback_each"].append(elapsed)
-            profile["readback_mb"] += out.numel() * out.element_size() / 1e6
-            profile["shape"] = tuple(encoded.shape)
-            profile["dtype"] = str(encoded.dtype)
-
-            mark = time.perf_counter()
-            for index in range(count):
-                results.append(out[index : index + 1, ..., :moments].permute(0, 4, 1, 2, 3).contiguous())
-            profile["unpatchify"] += time.perf_counter() - mark
+            if pending is not None:
+                results.extend(read_wave(*pending))
+            pending = (encoded, count)
             profile["waves"] += 1
             profile["units"] += count
+
+        if pending is not None:
+            results.extend(read_wave(*pending))
         return results
 
     def encode_clip(self, x_BCTHW: torch.Tensor, *, temporal_taps: int | None = None) -> torch.Tensor:
