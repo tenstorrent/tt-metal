@@ -48,7 +48,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_tp_mesh_composer,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     compare_recall,
@@ -114,6 +114,8 @@ def run_model(
     shared_hidden_dim=None,
     latent_use_norm=True,
     rms_norm_eps=1e-5,
+    shared_output_pcc=0.997,
+    routed_output_pcc=0.96,
     final_output_pcc=0.982,
     routed_activation=ttnn.RoutedExpertActivation.Silu,
     shared_activation=ACTIVATION_SILU,
@@ -149,6 +151,7 @@ def run_model(
     upstream_activation = _UPSTREAM_ACT[routed_activation]
     if shared_activation not in (ACTIVATION_SILU, ACTIVATION_SITU):
         raise ValueError(f"unknown shared_activation {shared_activation!r}")
+    assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
 
     profiler.clear()
     profiler.start("test_ttnn_moe")
@@ -251,8 +254,9 @@ def run_model(
             shared_expert_weights = None
         gate_weights = create_gate_weights(num_routed_experts, emb_dim, seed=9012)
         if bias_free_router:
-            # Zero is this bias's exact identity in every consumer -- top-k on (logits + bias) and
-            # the sigmoid affinity alike -- so the golden matches a router that has no bias at all.
+            # For the DEVICE side only: TtMoe indexes this key directly, and TtMoEGatePrefill
+            # substitutes torch.empty (uninitialized, not zeros) for a None bias and then persists it
+            # to the weight cache. TorchMoe gets the key removed instead -- see torch_gate_weights.
             gate_weights["e_score_correction_bias"] = torch.zeros_like(gate_weights["e_score_correction_bias"])
         # Fixed seed for the same reason as above: a perf-built cache must match the PCC reference.
         latent_weights = create_latent_weights(emb_dim, routed_emb, seed=3456) if use_latent else None
@@ -348,6 +352,13 @@ def run_model(
     # ========================================
     if run_pcc_check:
         profiler.start("torch_moe_creation")
+        # Drop the key rather than passing the zeroed tensor, so the reference builds its own
+        # bias-free gate -- the behaviour a model with no correction bias actually has.
+        torch_gate_weights = (
+            {k: v for k, v in gate_weights.items() if k != "e_score_correction_bias"}
+            if bias_free_router
+            else gate_weights
+        )
         torch_moe = TorchMoe(
             topk_method=(
                 "gpt_softmax"
@@ -368,7 +379,7 @@ def run_model(
             num_dispatch_groups=num_dispatch_groups,
             routed_expert_weights=all_routed_weights,
             shared_expert_weights=shared_expert_weights,
-            gate_weights=gate_weights,
+            gate_weights=torch_gate_weights,
             n_expert_groups=config.n_group,
             n_limited_groups=config.topk_group,
             route_scale=config.routed_scaling_factor,
@@ -513,8 +524,8 @@ def run_model(
     # Dense tensor checks with PCC
     # fmt: off
     dense_checks = [
-        ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device), 0.997),
-        ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), 0.96),
+        ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device), shared_output_pcc),
+        ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), routed_output_pcc),
         ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), final_output_pcc),
     ]
     if use_latent:
@@ -835,6 +846,7 @@ def _run_moe_case(
     num_links,
     gate_fallback_mode,
     request,
+    **run_model_kwargs,
 ):
     """Resolve topology from the fabric config, then run_model. Keyword-only: run_model takes 16
     positional arguments, and a reordering slip in them is silent, so the per-variant entrypoints
@@ -856,6 +868,7 @@ def _run_moe_case(
         per_axis_topology(device_params["fabric_config"]),
         gate_fallback_mode,
         request,
+        **run_model_kwargs,
     )
 
 
@@ -1042,8 +1055,9 @@ def test_kimi_k3_moe(
 # reference is a different class; the shared run_model body is unchanged.
 #
 # 640 x dgs 8 = 5120 tokens, matching the rest of the mistral4 suite. 128 experts at top-4 exercises
-# the unfused extract -> FFN -> insert path that DSv3/Kimi/GLM only cover at top-8. Random weights
-# only: the checkpoint stacks the routed experts, so the pretrained fixture loads attention alone.
+# the unfused extract -> FFN -> insert path that DSv3/Kimi/GLM only cover at top-8. 3200 x dgs 8 =
+# 25600 tokens is the same shape at 5x the load. Random weights only: the checkpoint stacks the
+# routed experts, so the pretrained fixture loads attention alone.
 #
 # GPT_DEVICE, not DEVICE_FP32. Mistral's router is softmax -> top-4 -> renormalize, which at zero
 # bias equals top-4 on the raw logits followed by softmax over the selection -- what the GPT gate
@@ -1060,6 +1074,7 @@ def test_kimi_k3_moe(
     [
         # fmt: off
         pytest.param( 640, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.GPT_DEVICE, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-5k-pcc"),
+        pytest.param(3200, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.GPT_DEVICE, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-25k-pcc"),
         # fmt: on
     ],
 )
@@ -1115,4 +1130,10 @@ def test_mistral4_moe(
         num_links=num_links,
         gate_fallback_mode=gate_fallback_mode,
         request=request,
+        # Measured on this row, and identical at 5k and 25k to within 2e-5: shared 0.999761,
+        # routed 0.976144, final 0.994548. The inherited defaults (0.997 / 0.96 / 0.982) are
+        # DeepSeek-derived and leave enough slack here to pass a real regression through.
+        shared_output_pcc=0.998,
+        routed_output_pcc=0.972,
+        final_output_pcc=0.992,
     )

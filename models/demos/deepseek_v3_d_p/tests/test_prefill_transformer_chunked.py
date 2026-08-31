@@ -56,7 +56,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     blockcyclic_positions,
     rotated_chip_positions,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -1311,6 +1311,9 @@ def run_chunked_transformer_updated(
     baseline; a single `perf_margin` covers every chunk. The table appends the baseline, tolerance band,
     and PASS/FAIL per chunk, and the run fails if any chunk is out of band. When no baseline is given the
     table is record-only (perf-exploration combos)."""
+    # The routing family this row drives must match the one the adapter declares; crossing
+    # families applies a different affinity function with no error (see the assert).
+    assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
 
@@ -2239,6 +2242,9 @@ def run_chunked_transformer_padded_trace(
         metadata tensors. They pass actual_isl=CHUNK, which now only flags padding awareness as ON --
         the real per-chunk bound comes from those tensors, which is what makes ONE capture replay
         correctly across chunks."""
+    # The routing family this row drives must match the one the adapter declares; crossing
+    # families applies a different affinity function with no error (see the assert).
+    assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
     trace_dir = _resolve_trace_dir(variant)
