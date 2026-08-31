@@ -348,7 +348,7 @@ endif()
 CPMAddPackage(
     NAME Taskflow
     GITHUB_REPOSITORY taskflow/taskflow
-    GIT_TAG v3.7.0
+    GIT_TAG v4.1.0
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE" # Taskflow's CMakeLists.txt is super noisy
         "TF_BUILD_TESTS OFF"
