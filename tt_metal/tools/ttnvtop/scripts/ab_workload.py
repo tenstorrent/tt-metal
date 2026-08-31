@@ -47,6 +47,13 @@ def main() -> int:
     # test_line_all_gather_after_reshape: all_gather(dim=2, cluster_axis=0).
     ap.add_argument("--ccl", type=int, default=0, help="all_gathers per iteration over tt-fabric (0 = compute only)")
     ap.add_argument("--ccl-dim", type=int, default=2048, help="width of the CCL tensor")
+    # Matmuls per CCL group. The loop was hard-wired to 1 matmul per `--ccl` all-gathers,
+    # which is fabric-dominated: at --ccl 4 the all-gathers take ~97% of wall time and the
+    # monitor correctly reported ~0.5% FPU against the 22% that calibration says is 100%
+    # compute duty. Saturating compute AND fabric together needs this ratio to be a knob,
+    # not a constant, so the loss measurement can be swept across the whole spectrum
+    # instead of asserted at one arbitrary point.
+    ap.add_argument("--mm", type=int, default=1, help="matmuls per CCL group (raise to shift toward compute)")
     # Run for a bounded WALL TIME and exit through the normal `finally`, closing the mesh
     # device cleanly.
     #
@@ -65,7 +72,7 @@ def main() -> int:
     import torch
     import ttnn
 
-    result = {"label": args.label, "ok": False, "ccl_per_iter": args.ccl}
+    result = {"label": args.label, "ok": False, "ccl_per_iter": args.ccl, "mm_per_iter": args.mm}
 
     # FABRIC MUST BE CONFIGURED BEFORE THE MESH DEVICE IS CREATED.
     #
@@ -127,16 +134,18 @@ def main() -> int:
             # per matmul would show up in a 0.18 ms/iter loop.
             while time.perf_counter() - t0 < args.seconds:
                 for _ in range(50):
-                    c = ttnn.matmul(a, b)
-                    ttnn.deallocate(c)
+                    for _ in range(args.mm):
+                        c = ttnn.matmul(a, b)
+                        ttnn.deallocate(c)
                     for _ in range(args.ccl):
                         g = ttnn.all_gather(ccl_t, dim=ccl_gather_dim, cluster_axis=ccl_axis)
                         ttnn.deallocate(g)
                 done += 50
         else:
             for _ in range(args.iters):
-                c = ttnn.matmul(a, b)
-                ttnn.deallocate(c)
+                for _ in range(args.mm):
+                    c = ttnn.matmul(a, b)
+                    ttnn.deallocate(c)
                 for _ in range(args.ccl):
                     g = ttnn.all_gather(ccl_t, dim=ccl_gather_dim, cluster_axis=ccl_axis)
                     ttnn.deallocate(g)

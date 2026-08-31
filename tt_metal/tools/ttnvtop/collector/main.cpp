@@ -624,6 +624,14 @@ struct ChipState {
     size_t drain_rr_cursor = 0;
     double drain_tokens = 0.0;
     std::chrono::steady_clock::time_point drain_last_refill{};
+    // Same token bucket for the REGISTER SAMPLER. `--remote-budget` only ever throttled
+    // the L1 ring drain, but the sampler is the bigger consumer of the tunnel: it reads
+    // the perf and mailbox registers of every core every tick, unthrottled, on remote
+    // chips too. At 300 Hz x 64 cores that is the traffic that holds NON_MMIO_<n>_PCIe
+    // nearly continuously and starves everything else on the box.
+    size_t samp_rr_cursor = 0;
+    double samp_tokens = 0.0;
+    std::chrono::steady_clock::time_point samp_last_refill{};
     uint64_t drain_cores_sampled = 0;  // since the last drain debug line
     // ---- END ported from tt_coremon
 
@@ -678,6 +686,12 @@ struct ChipState {
     std::vector<ttnvtop_agg::Landing> landings;
     uint64_t journal_entries_seen = 0;
     uint64_t journal_lost_reported = 0;  // `lost` as counted BY THE AGGREGATOR, on-chip
+    // Baseline for the periodic [agg-loss] line. The aggregator's counters are
+    // free-running, so loss over a window is a delta, not an absolute.
+    uint32_t agg_first_head = 0;
+    uint32_t agg_first_lost = 0;
+    bool agg_loss_primed = false;
+    std::chrono::steady_clock::time_point agg_last_report{};
     uint64_t journal_torn_headers = 0;   // checksum mismatches: read again, never skip forward
     uint64_t journal_stale_ticks = 0;
 };
@@ -984,6 +998,9 @@ constexpr auto kDramSampleInterval = std::chrono::milliseconds(200);  // 5 Hz, v
 // it counts what it dropped in ChipState::drain_lost_samples -- so a too-small budget
 // here degrades visibly rather than lying, which is the whole point of the fallback.
 constexpr double kDrainOpsPerCore = 1.0;
+// Reads the register sampler issues per core per tick: the go/mailbox block, the launch
+// read-pointer, the host_assigned_id, and the perf counter plus wall clock.
+constexpr double kSamplerOpsPerCore = 5.0;
 
 // Roll one chip's DRAM rates forward over `dt` seconds. The first call only
 // primes the anchor. Read failures leave the previous rate standing rather than
@@ -2702,7 +2719,32 @@ int main(int argc, char* argv[]) {
                 if (cli.journal_transport && chip.is_remote) {
                     continue;
                 }
-                for (auto& c : chip.cores) {
+                // Spend the remote budget here too, rotating coverage so a constrained
+                // budget samples every core in turn instead of the same first N forever.
+                // A local chip takes no NON_MMIO lock, so there is nothing to be polite
+                // about and it is never budgeted.
+                size_t samp_cores = chip.cores.size();
+                if (chip.is_remote && cli.remote_budget > 0.0 && !chip.cores.empty()) {
+                    const auto tnow = std::chrono::steady_clock::now();
+                    if (chip.samp_last_refill.time_since_epoch().count() == 0) {
+                        chip.samp_last_refill = tnow;
+                    }
+                    const double dt = std::chrono::duration<double>(tnow - chip.samp_last_refill).count();
+                    chip.samp_last_refill = tnow;
+                    chip.samp_tokens += cli.remote_budget * dt;
+                    const double cap = kSamplerOpsPerCore * static_cast<double>(chip.cores.size());
+                    if (chip.samp_tokens > cap) {
+                        chip.samp_tokens = cap;
+                    }
+                    samp_cores = static_cast<size_t>(chip.samp_tokens / kSamplerOpsPerCore);
+                    if (samp_cores > chip.cores.size()) {
+                        samp_cores = chip.cores.size();
+                    }
+                    chip.samp_tokens -= static_cast<double>(samp_cores) * kSamplerOpsPerCore;
+                }
+                for (size_t sk = 0; sk < samp_cores; ++sk) {
+                    auto& c = chip.cores[chip.samp_rr_cursor];
+                    chip.samp_rr_cursor = (chip.samp_rr_cursor + 1) % chip.cores.size();
                     uint8_t now_bit = 0;
                     bool have_dispatch = false;
                     try {
@@ -3362,7 +3404,7 @@ int main(int argc, char* argv[]) {
             return;
         }
         std::vector<uint8_t> buf;
-        std::map<uint32_t, uint64_t> jf_ticks, jf_pub, jf_skip_seq, jf_skip_dwall;
+        std::map<uint32_t, uint64_t> jf_ticks, jf_pub, jf_skip_seq, jf_skip_dwall, jf_skip_impossible;
         while (!g_stop.load(std::memory_order_relaxed)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             {
@@ -3395,6 +3437,44 @@ int main(int argc, char* argv[]) {
                 }
                 util_agg_hdr_view_t hdr{};
                 std::memcpy(&hdr, buf.data(), sizeof(hdr));
+
+                // LOSS, REPORTED BY THE COLLECTOR THAT IS ALREADY ATTACHED.
+                //
+                // This used to require `--fidelity-probe`, a separate process that re-runs
+                // topology discovery. Under exactly the load worth measuring -- a workload,
+                // this collector, and anything else on the box -- that extra process cannot
+                // finish discovery, so the loss column came back EMPTY from the one run
+                // meant to prove losslessness. A metric you cannot collect while the system
+                // is busy is not a metric.
+                //
+                // `head` is what the on-chip sweep folded, `lost` what it knows it dropped.
+                // Both free-running, so a window is a delta against a baseline. Costs
+                // nothing: the header is already in `buf` for this tick.
+                if (hdr.magic == UTIL_AGG_MAGIC && util_agg_hdr_ok(hdr)) {
+                    const auto tnow = std::chrono::steady_clock::now();
+                    if (!chip.agg_loss_primed) {
+                        chip.agg_first_head = hdr.head;
+                        chip.agg_first_lost = hdr.lost;
+                        chip.agg_loss_primed = true;
+                        chip.agg_last_report = tnow;
+                    } else if (tnow - chip.agg_last_report > std::chrono::seconds(10)) {
+                        chip.agg_last_report = tnow;
+                        const uint32_t folded = hdr.head - chip.agg_first_head;
+                        const uint32_t lost = hdr.lost - chip.agg_first_lost;
+                        const double denom = static_cast<double>(folded) + static_cast<double>(lost);
+                        chip.journal_lost_reported = lost;
+                        std::fprintf(
+                            stderr,
+                            "[agg-loss] chip=%u %s folded=%u lost=%u loss=%.4f%% sweeps=%u\n",
+                            static_cast<unsigned>(chip.chip_id),
+                            chip.is_remote ? "remote" : "mmio",
+                            folded,
+                            lost,
+                            denom > 0.0 ? 100.0 * static_cast<double>(lost) / denom : 0.0,
+                            hdr.sweep_count);
+                        std::fflush(stderr);
+                    }
+                }
                 if (trace) {
                     std::fprintf(
                         stderr,
@@ -3447,8 +3527,21 @@ int main(int argc, char* argv[]) {
                         continue;
                     }
                     ++jf_pub[chip.chip_id];
-                    double util = static_cast<double>(dbusy) / static_cast<double>(dwall);
-                    util = std::clamp(util, 0.0, 1.0);
+                    // A duty cycle above 1 is not a saturated core, it is a broken
+                    // interval -- so refuse it instead of clamping it into something that
+                    // looks like a legitimate reading.
+                    //
+                    // Clamping is how a whole remote chip came to display a flat, confident
+                    // 100.0% on all 64 cores while the host's own register path read ~22%
+                    // for the same load. The on-chip cause is fixed (the sweep now drops
+                    // intervals where the busy delta exceeds the elapsed one), but the host
+                    // must not manufacture a plausible number from an impossible one either:
+                    // if this ever fires again it should show up as a gap, not as 100%.
+                    if (dbusy > dwall) {
+                        ++jf_skip_impossible[chip.chip_id];
+                        continue;
+                    }
+                    const double util = static_cast<double>(dbusy) / static_cast<double>(dwall);
                     auto& v = chip.publisher.cores()[static_cast<size_t>(ci)];
                     // counter_sel says WHICH pipe the accumulated deltas came from, so the
                     // number lands in the matching field rather than being asserted as FPU.
@@ -3470,12 +3563,14 @@ int main(int argc, char* argv[]) {
                     std::fprintf(
                         stderr,
                         "[journal-feed] chip=%u ticks=%lu published=%lu skipped_seq=%lu skipped_dwall=%lu "
+                        "skipped_impossible=%lu "
                         "hdr_head=%u last_samples=%u last_busy=%u last_wall=%u\n",
                         static_cast<unsigned>(chip.chip_id),
                         static_cast<unsigned long>(jf_ticks[chip.chip_id]),
                         static_cast<unsigned long>(jf_pub[chip.chip_id]),
                         static_cast<unsigned long>(jf_skip_seq[chip.chip_id]),
                         static_cast<unsigned long>(jf_skip_dwall[chip.chip_id]),
+                        static_cast<unsigned long>(jf_skip_impossible[chip.chip_id]),
                         hdr.head,
                         dbg_samples,
                         dbg_busy,

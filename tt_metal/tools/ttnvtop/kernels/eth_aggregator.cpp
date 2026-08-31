@@ -284,12 +284,29 @@ void kernel_main() {
                         nresets++;
                     } else {
                         const uint32_t wall_d = wall_now - prev_wall;  // wrap-correct
+                        const uint32_t fpu_d = fpu_now - prev_fpu;
                         // Guard against an implausible interval, which means we lost the
                         // thread of this core's timeline rather than genuinely idled.
-                        if (wall_d != 0 && wall_d < kMaxPlausibleWallDelta) {
-                            busy_acc += fpu_now - prev_fpu;
+                        //
+                        // fpu_d <= wall_d is the one that was missing, and it is not a
+                        // nicety: a core cannot be busy for more cycles than elapsed. When
+                        // it fails, the timeline is broken -- `wall_clock_l` is 32-bit and
+                        // wraps every ~4.3 s at 1 GHz, so a core whose ring the sweep has
+                        // not reached for that long yields a SMALL wrapped wall_d against a
+                        // LARGE fpu_d. Accumulating that pushes busy_acc past wall_acc, the
+                        // host divides, gets >1, and clamps -- which is why whole remote
+                        // chips displayed a flat, impossible 100.0% on every core while the
+                        // host's own register path (which has always had this guard, see
+                        // the sampler's `fpu_d <= wall_d`) read ~22% for the same load.
+                        //
+                        // Dropping the interval is right: it is unmeasurable, not saturated.
+                        // It lands in `resets`, which the host already surfaces.
+                        if (wall_d != 0 && wall_d < kMaxPlausibleWallDelta && fpu_d <= wall_d) {
+                            busy_acc += fpu_d;
                             wall_acc += wall_d;
                             nsamples++;
+                        } else if (wall_d != 0) {
+                            nresets++;
                         }
                     }
                 }
