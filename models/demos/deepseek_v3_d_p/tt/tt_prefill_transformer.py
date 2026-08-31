@@ -363,7 +363,7 @@ class TtPrefillTransformer(LightweightModule):
         read_profiler: bool = False,
         temperature: Union[float, list[float]] = 0.0,
         d2h_service=None,
-        record_dev: Optional[ttnn.Tensor] = None,
+        metadata_msg: Optional[ttnn.Tensor] = None,
         on_layer_complete: Optional[Callable[[int], None]] = None,
         on_layer_hidden: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_start: Optional[int] = None,
@@ -398,7 +398,7 @@ class TtPrefillTransformer(LightweightModule):
                         each layer's KV cache has been populated on device. When set, each block zeros the
                         cache pad window and enqueues the ack via the outbound_socket_service_sync device op
                         on the same CQ (no host sync). When None, no ack or zeroing.
-            record_dev: the chunk's PrefillMetadata device tensor sent as each ack record; required when
+            metadata_msg: the chunk's PrefillMetadata device tensor sent as each ack record; required when
                         d2h_service is set.
             on_layer_complete: the HOST-callback alternative to d2h_service (used by pipelined prefill's
                         layer-completion router). Called as on_layer_complete(layer_idx) after the same
@@ -477,7 +477,7 @@ class TtPrefillTransformer(LightweightModule):
                 cache_layer_idx=i,
                 return_intermediates=return_intermediates,
                 d2h_service=d2h_service,
-                record_dev=record_dev,
+                metadata_msg=metadata_msg,
                 on_layer_complete=on_layer_complete,
                 on_layer_hidden=on_layer_hidden,
                 actual_start=actual_start,
