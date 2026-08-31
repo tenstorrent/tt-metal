@@ -804,29 +804,26 @@ def test_eltwise_unary_sfpu_edges(
 # ─────────────────────────────────────────────────────────────────────────────
 # Format extremes and the subnormal band (cat F)
 #
-# The registry's widest domain is Square at +/-1000, so the sweeps above jump from ~10 straight
-# to infinity and nothing occupies the thirty-odd decades in between or the band immediately
-# above zero. That band is not decoration: the goldens model flush-to-zero carefully
-# (golden_generators._FTZ_THRESHOLD, _apply_ftz), stimuli_generator's
-# _format_elem_min_magnitude() exists specifically to keep random draws *away* from denormals,
-# and until this nothing drove an input that reached either.
+# The registry's widest domain is +/-1000, so the sweeps above jump from ~10 straight to infinity
+# with nothing in the thirty-odd decades between or in the band just above zero. That band is not
+# decoration: the goldens model flush-to-zero carefully (_FTZ_THRESHOLD, _apply_ftz) and
+# stimuli_generator's _format_elem_min_magnitude() exists to keep random draws away from
+# denormals, yet until this nothing drove an input that reached either.
 #
-# ITS OWN VARIANT, NOT AN EXTRA FLAG ON test_eltwise_unary_sfpu_edges. Convention: one failure
-# class per variant. A saturation failure at the ceiling and a signed-zero failure at a pole
-# have nothing to do with each other, and sharing a tensor means one xfail covers both and the
-# second is invisible for as long as the first survives. extreme_values() returns cat F alone
-# for exactly this reason.
+# ITS OWN VARIANT, NOT A FLAG ON test_eltwise_unary_sfpu_edges: one failure class per variant. A
+# saturation failure at the ceiling and a signed-zero failure at a pole are unrelated, and
+# sharing a tensor lets one xfail hide the other. extreme_values() returns cat F alone for that
+# reason.
 #
-# Two independent gates, as everywhere else: EXTREMES_READY_OPS says the op's *golden* defines
-# an answer at a format extreme, extremes_safe() says the *pipeline* delivers one. The second
-# is not specials_safe() -- a finite datum with an extreme exponent is not a non-finite, and the
-# breakers that stop a NaN reaching the SFPU do not apply to it. See extremes_safe().
+# Two independent gates, as everywhere: EXTREMES_READY_OPS says the op's *golden* defines an
+# answer at a format extreme, extremes_safe() says the *pipeline* delivers one -- and it is not
+# specials_safe(), because the breakers that stop a NaN reaching the SFPU say nothing about a
+# finite datum with an extreme exponent.
 #
-# WHAT THE FIRST TRANCHE IS FOR. These are the ops whose behaviour at an extreme is
-# uncontroversial and whose golden is plain arithmetic -- magnitude, sign, the rounding family,
-# the pass-throughs and the comparisons. They also settle a second question for free: above
-# 2**mantissa every float is already an integer, so floor, ceil, round and trunc must be the
-# identity there, and nothing else in the suite checks that.
+# THE FIRST TRANCHE is the ops whose behaviour at an extreme is uncontroversial and whose golden
+# is plain arithmetic -- magnitude, sign, rounding, the pass-throughs, the comparisons. They
+# settle a second question for free: above 2**mantissa every float is already an integer, so
+# floor, ceil, round and trunc must be the identity there, and nothing else checks that.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _EXTREME_SWEEP_OPS = sorted(
@@ -891,36 +888,31 @@ def test_eltwise_unary_sfpu_extremes(
 # ─────────────────────────────────────────────────────────────────────────────
 # Overflow saturation
 #
-# The cat-F tranche above is deliberately the ops that *cannot* overflow: every one of them
-# returns its input, a bounded constant, or a magnitude no larger than the input, so the
-# ceiling probe asks whether the pipeline delivered the datum and nothing more. This is the
-# other half of cat F -- the ops whose *result* leaves the format -- and it is a different
-# assertion with a different failure mode.
+# The cat-F tranche above is deliberately the ops that *cannot* overflow, so its ceiling probe
+# asks only whether the pipeline delivered the datum. This is the other half -- the ops whose
+# *result* leaves the format -- and a different assertion with a different failure mode.
 #
-# It is worth its own sweep because the failure is invisible to everything else in the suite.
-# The convert from the SFPU's fp32 to a narrower output must saturate to +/-inf; if it ever
-# wrapped instead, +/-inf would still come out right for a non-finite *input* -- so every cat-B
-# probe would keep passing -- while every large finite input silently returned a tiny wrong
-# value, which no random sweep would reach because the widest registered domain in
-# _OP_DOMAIN_REGISTRY is Square at +/-1000.
+# Its own sweep because that failure is invisible to everything else here. The convert from the
+# SFPU's fp32 to a narrower output must saturate to +/-inf; one that wrapped would keep every
+# cat-B probe green (a non-finite *input* still comes out right) while every large finite input
+# silently returned a tiny wrong value -- and no random sweep would reach it, the widest
+# registered domain being +/-1000.
 #
-# Table-driven, and only now. Square was written on its own first and the other six measured
-# individually against it before this was derived: a shared harness built before two or three
-# ops exist fits the op it was written against and nothing else. What the seven turned out to
-# share is exactly two lists of magnitudes and a sign flag.
+# Table-driven, and only now: Square was written alone first and the other six measured against
+# it individually before this was derived, because a shared harness built before two or three ops
+# exist fits the one it was written against. What the seven share turned out to be two lists of
+# magnitudes and a sign flag.
 #
-# EVERY PROBE IS EXACT IN EVERY FORMAT THIS RUNS ON. Square's are powers of two and the rest
-# are integers below 256, which bfloat16's 8 mantissa bits hold exactly. A decimal written near
-# a threshold is the trap: 88.7 is 88.5 in bfloat16, so the test would pin a threshold other
-# than the one it names.
+# EVERY PROBE IS EXACT IN EVERY FORMAT THIS RUNS ON -- powers of two for Square, integers below
+# 256 for the rest, which bfloat16's 8 mantissa bits hold exactly. A decimal near a threshold is
+# the trap: 88.7 is 88.5 in bfloat16, so the test would pin a threshold other than the one it
+# names. The overflowing probes also stay clear of the band between bfloat16's ceiling and
+# fp32's, where a value is finite on one output format and infinite on the other and the variant
+# would be measuring the format rather than the kernel.
 #
-# The overflowing probes are also clear of the band between bfloat16's ceiling and fp32's. A
-# value in there is finite on a Float32 output and infinite on a Float16_b one, and the variant
-# would then be measuring the output format rather than the kernel.
-#
-# Underflow is not here. It is the same convert and the opposite end, but a result flushed to
-# zero is the subnormal question cat F already covers through subnormal_delivered(), and
-# putting both in one tensor would give one xfail two causes.
+# Underflow is absent: same convert, opposite end, but a result flushed to zero is the subnormal
+# question cat F already covers through subnormal_delivered(), and one tensor would give one
+# xfail two causes.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -981,18 +973,17 @@ _SATURATION_FORMATS = [DataFormat.Float16_b, DataFormat.Float32]
 def _assert_saturation_probes_straddle_the_ceiling():
     """Every op's finite probes must stay under the ceiling and its overflowing ones exceed it.
 
-    Without this, a probe list is a set of literals that stays plausible while the thing it was
-    chosen to straddle moves: a wider ceiling makes every probe finite and the sweep asserts
-    ordinary arithmetic, a narrower one makes every probe overflow and it asserts saturation
-    with no control. Either way it still passes, which is the failure mode worth an assert.
+    Without this the probe list is literals that stay plausible while the thing they straddle
+    moves: a wider ceiling makes every probe finite and the sweep asserts ordinary arithmetic, a
+    narrower one makes every probe overflow and it asserts saturation with no control. Both still
+    pass, which is what earns an assert.
 
-    The classification comes from the *golden*, so there is no second copy of what each op
-    computes -- only of where its overflow point is, which is what the table is. The goldens
-    evaluate in fp64, so `math.isfinite` alone is not the test: Square(2**64) and Cosh(90) are
-    both finite in fp64 and both above every ceiling this sweep runs on. UnarySFPUGolden is
-    instantiated directly rather than through get_golden_generator for the reason
-    _classify_edge_pair records: the harness swaps in a stub under --compile-producer, and this
-    runs at import.
+    Classified by the *golden*, so nothing here restates what each op computes -- only where its
+    overflow point is, which is the table. `math.isfinite` alone will not do it, since the
+    goldens evaluate in fp64 and Square(2**64) and Cosh(90) are finite there and above every
+    ceiling this runs on. UnarySFPUGolden is instantiated directly rather than through
+    get_golden_generator for the reason _classify_edge_pair records: the harness swaps in a stub
+    under --compile-producer, and this runs at import.
     """
     golden = UnarySFPUGolden()
     for fmt in _SATURATION_FORMATS:
@@ -1056,45 +1047,33 @@ def test_eltwise_unary_sfpu_saturation(
 # ─────────────────────────────────────────────────────────────────────────────
 # Mixed-magnitude block-float blocks
 #
-# Bfp8_b, Bfp4_b and Bfp2_b share one exponent across each 16-element block, so the stimulus
-# that actually exercises the format is a block holding one large element and fifteen small
-# ones -- where the small values quantize hard, or to zero. Every other stimulus in this suite
-# is a narrow-range uniform or gaussian, so the shared exponent never bites and
-# `_bfp_block_aware_compare`'s lattice fallback in helpers/utils.py is never stressed. The edge
-# sweeps cannot reach it either: their format axis is Float16_b / Float32, and block-float
-# inputs are excluded from cat B on the correct grounds that the unpack quantization destroys a
-# NaN.
+# Bfp8_b, Bfp4_b and Bfp2_b share one exponent per 16-element block, so the stimulus that
+# exercises the format is a block holding one large element and fifteen small ones, where the
+# small values quantize hard or to zero. Every other stimulus here is a narrow-range uniform or
+# gaussian, so the shared exponent never bites; the edge sweeps cannot reach it either, their
+# format axis being Float16_b / Float32 with block-float excluded from cat B because the unpack
+# quantization destroys a NaN.
 #
-# A face callable rather than a new DistributionKind member: the pattern is one op's stimulus,
-# not a distribution the generator needs to know about, and a callable keeps the strategy
-# registry out of it.
+# A face callable rather than a new DistributionKind: this is one op's stimulus, not a
+# distribution the generator needs to know about.
 #
-# THE GOLDEN WAS CHECKED FIRST, which is what step 3 of the plan asks. Abs at Bfp8_b, Bfp4_b
-# and Bfp2_b over spreads of 2**-4 through 2**-24 on a Blackhole p150: zero mismatching lanes
-# in every case, so the host quantizer models a mixed block exactly the way the unpacker does
-# and any failure here is the op, not the model. The spread does bite -- at 2**-8 in Bfp8_b,
-# 512 of 4096 elements flush to zero, and at 2**-24, 2816 do; Bfp2_b collapses fifteen of every
-# sixteen at every spread, which is its one-magnitude-bit encoding doing exactly what its
-# docstring says.
+# THE GOLDEN WAS CHECKED FIRST (plan step 3). Abs at all three formats over spreads of 2**-4
+# through 2**-24 on a Blackhole p150: zero mismatching lanes, so the host quantizer models a
+# mixed block the way the unpacker does and any failure here is the op. The spread does bite --
+# in Bfp8_b, 512 of 4096 elements flush to zero at 2**-8 and 2816 at 2**-24; Bfp2_b collapses
+# fifteen of every sixteen at every spread, its one magnitude bit doing what its docstring says.
 #
-# TWO VARIANTS, because there are two questions and their product is not needed. The op sweep
-# asks whether each op survives a block whose small elements have been quantized away; the
-# format sweep asks whether each block format quantizes as modelled, which is op-independent
-# and so uses one pass-through op as its instrument.
+# TWO VARIANTS for two questions whose product is not needed: the op sweep asks whether each op
+# survives a block with its small elements quantized away, the format sweep whether each format
+# quantizes as modelled -- op-independent, so one pass-through op is the instrument.
 #
-# WHERE THE VERDICT COMES FROM, corrected. An earlier version of this comment said the
-# Bfp8_b lattice path was "never reached" -- measured over Exp, Gelu, Silu and Sqrt at every
-# spread, torch.isclose accepted all 4096 elements, so passed_test never fell through to it.
-# That was true of *this variant* and false as a general claim, which is a distinction worth
-# keeping: counting calls to _bfp_block_aware_compare across the whole block-float half of this
-# file gives 370, of which 112 are Bfp8_b -- so the tolerance does reject on other stimuli and
-# the fallback behind it is live.
-#
-# The block spread reaches it on the narrower formats by construction rather than by luck: for
-# a Bfp4_b or Bfp2_b output passed_test has no tolerance pre-check at all and the lattice is the
-# only verdict (255 and 3 of those calls). On Bfp8_b this variant's own elements stay inside
-# atol, because golden and hardware agree closely once both have been through the same output
-# quantization -- which says the stimulus is well modelled, not that the comparator is dead.
+# WHERE THE VERDICT COMES FROM, corrected. An earlier version said the Bfp8_b lattice path in
+# `_bfp_block_aware_compare` was "never reached": true of *this variant*, where torch.isclose
+# accepted all 4096 elements over Exp, Gelu, Silu and Sqrt, and false as a general claim --
+# across the block-float half of this file it takes 370 calls, 112 of them Bfp8_b. The spread
+# reaches it on the narrower formats by construction, since a Bfp4_b or Bfp2_b output has no
+# tolerance pre-check at all and the lattice is the only verdict (255 and 3 calls). Bfp8_b
+# staying inside atol says the stimulus is well modelled, not that the comparator is dead.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BLOCK_ELEMENTS = 16
