@@ -3148,20 +3148,12 @@ void kernel_main() {
     } else {
         ASSERT(0);
     }
-#if defined(COMPILE_FOR_IDLE_ERISC)
-    if (early_exit()) {
-        noc_async_full_barrier();
-        noc_clear_packet_tags(my_noc_index);
-        set_l1_data_cache<false>();
-        return;
-    }
-#endif
+    IDLE_ERISC_RETURN();
 
     // Confirm expected number of pages, spinning here is a leak
     DispatchRelayInlineState::cb_writer.wait_all_pages(downstream_cb_pages);
 
     noc_async_full_barrier();
-    noc_clear_packet_tags(my_noc_index);
 
     DPRINT("prefetcher_{}{}: out\n", is_h_variant, is_d_variant);
     set_l1_data_cache<false>();
