@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-08-28",
+  "last_scan_date": "2026-08-30",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -33,7 +33,8 @@
     "33040738562",
     "33158955938",
     "33244209984",
-    "33274485285"
+    "33274485285",
+    "33300580035"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -60,7 +61,8 @@
     "t3000-integration-tests.yaml",
     "runtime-sanity-tests.yaml",
     "galaxy-integration-tests.yaml",
-    "models-t2-e2e-tests.yaml"
+    "models-t2-e2e-tests.yaml",
+    "blackhole-e2e-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -254,7 +256,15 @@
       "number": 54851,
       "dispatched_workflow": "perf-device-models.yaml",
       "note": "Reconciled this run: validation run 33274485285 (perf-device-models) completed, mixed conclusion. N300 WH B0 Set 1 & Set 2 device-perf jobs success; P150 BH device-perf job failed on unrelated panoptic_deeplab test + artifact-upload steps. Re-grepped job 99159752598 (N300 WH B0 Set 2): 0 occurrences of the pydantic protected-namespace warning text confirmed. Outcome commented (/codeowners ping) this run. NOT yet marked ready-for-review (mark_pull_request_as_ready_for_review max:1/run was spent on #54818) -- do this first thing next run."
+    },
+    {
+      "pr": 0,
+      "branch": "silencer/demote-apply-device-delay-info-logs",
+      "pattern": "apply_device_delay per-mesh-coordinate log_info spam (Creating/Created delay program, Starting/Ending delay primitive, Initializing delay op structs)",
+      "status": "open-pr",
+      "dispatched_workflow": "blackhole-e2e-tests.yaml",
+      "note": "PR created and blackhole-e2e-tests dispatched this run on branch silencer/demote-apply-device-delay-info-logs; actual PR number not visible to this session (safe-output write-once). Reconcile next run: find the PR by branch name, check CI run, comment + mark ready-for-review."
     }
   ],
-  "backlog_cursor": "Phase A this run reconciled #54818 (resolved, ready-for-review done) and #54851 (comment posted, ready-for-review still owed next run due to max:1/run cap). perf-device-models.yaml and models-t3-e2e-tests.yaml both sampled recently via these validations. Next: mark #54851 ready-for-review first, then continue backlog rotation to a workflow not sampled recently."
+  "backlog_cursor": "This run: Phase A marked #54851 ready-for-review (done). Phase B sampled blackhole-e2e-tests run 33300580035 (3 jobs: 99277253800, 99277254362, 99277254474). Confirmed PR #54224 (Fabric config changed same-value log) is still OPEN/unmerged on main - the 25x/4x same-value 'Fabric config changed' occurrences seen in this run's sample are NOT a new target, just evidence #54224 is still needed; do not open a duplicate for this pattern. Also confirmed 'Unknown motherboard' (ledger 7c2e91a4b6f0) and 'Fabric packet size suboptimal' (PR #54679) are already tracked - skip. New target found and PR opened this run: apply_device_delay log_info->log_debug demotion (branch silencer/demote-apply-device-delay-info-logs), dispatched blackhole-e2e-tests for validation. Untriaged candidates for next runs: (a) 'Building missing direction tensix builder for fabric_node...' warning in tt_metal/fabric/fabric_builder.cpp:261 (12x in sample, warning severity, not yet in ledger) - needs root-cause read of compile_kernels_for_missing_directions to see if the warning fires redundantly or legitimately once; (b) UMD topology-discovery/cluster-lifecycle info lines (71x/5x/3x in sample) - check if already covered by known 'UMD | Starting devices in cluster' pattern before treating as new. Next: reconcile the just-opened PR's CI result next run (find by branch name since PR number wasn't returned), then continue rotation with a workflow not recently sampled."
 }
