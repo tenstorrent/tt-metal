@@ -41,7 +41,7 @@ case "${MODEL}" in
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MGD="${MGD_DIR}/kimi27_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; export PREFILL_USE_TRACE=1;"
+    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; export PREFILL_USE_TRACE=1; export PREFILL_LAYER_ACK_D2H=1;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
     ;;
   glm52)
@@ -50,6 +50,9 @@ case "${MODEL}" in
     # multi-galaxy pipeline prefill, so the descriptor declares no wrap and the fabric mode stays 2d.
     MGD="${MGD_DIR}/glm52_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/glm52.json"
+    # No traced prefill path for glm52 yet, so exercise the D2H layer-ack backend untraced (no
+    # PREFILL_USE_TRACE) -- the same ack backend kimi27 runs under trace.
+    RUNNER_ENV="export PREFILL_LAYER_ACK_D2H=1;"
     # Sparse DSA: TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over the
     # 21 `full` layers), both PCC'd. The trace must be the indexer-K dump -- the adapter's default golden
     # carries no dsa/indexer_k_layer_*, which would silently downgrade this leg to a KVPE-only check.
