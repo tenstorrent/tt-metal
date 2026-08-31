@@ -34,7 +34,12 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import DEFAULT_CKPT  # noqa: E402
-from models.experimental.voxtral_tts.tests.sentence_corpus import WER_SENTENCES, lang_of  # noqa: E402
+from models.experimental.voxtral_tts.tests.sentence_corpus import (  # noqa: E402
+    BANDS,
+    WER_SENTENCES,
+    lang_of,
+    wer_band,
+)
 
 ASR_MODEL = "openai/whisper-large-v3"  # small hallucinates on short audio and is weak outside en
 ASR_SR = 16000
@@ -42,39 +47,75 @@ OUTPUT_SR = 24000
 SEED = 0
 FULL_SWEEP_LANG = "en"
 
-# (ceiling, collapse) per language, MEASURED on this branch: 100 runs, whisper-large-v3, seed 0.
+# Past this a run did not say the sentence, so it is counted rather than averaged -- a mean over ten
+# runs barely moves when one collapses. Uniform across languages and bands: the worst single medium
+# run across 100 was 0.135, so this keeps real headroom on the noisiest cell.
+COLLAPSE = 0.30
+
+# Ceiling per (language, band), MEASURED on this branch -- seed 0, whisper-large-v3. The table and
+# the run that produced it are in VOXTRAL_TTS_STATUS.md.
 #
-#         mean    worst  perfect   ceiling
-#   en  0.0010    0.024    24/25      0.02
-#   de  0.0000    0.000    10/10      0.03
-#   es  0.0000    0.000    10/10      0.03
-#   fr  0.0000    0.000    10/10      0.03
-#   pt  0.0077    0.050     8/10      0.03
-#   nl  0.0091    0.045     8/10      0.03
-#   it  0.0105    0.067     8/10      0.04
-#   ar  0.0274    0.087      3/5      0.09
-#   hi  0.0615    0.135     1/10      0.20
+# BANDED RATHER THAN POOLED because the bands are not comparable. A five-word sentence quantises to
+# multiples of 0.20, so its rate is coarse however good the audio is, and pooling it with a 115-word
+# passage lets the short band set the language's number.
 #
-# ceiling  -- ~3x the language's measured mean, floored at 0.03 so one unlucky draw cannot breach a
-#             language that is currently perfect: with ten runs a single collapse to WER 0.10 moves
-#             the mean to 0.010, so the floor absorbs three of them. English keeps 0.02 on 25 runs.
-#             These are TIGHTER than the sibling xtts_v2 port's for pt, nl and it, because this
-#             model measures better on them -- do not copy that table back over this one.
-# collapse -- past this a run did not say the sentence, so it is counted rather than averaged; a
-#             mean over ten runs barely moves when one collapses. Uniform 0.30: the worst single
-#             run across all 100 was 0.135, so this has 2.2x headroom on the noisiest language and
-#             does not need xtts_v2's per-language tiering.
-LIMITS = {
-    "en": (0.02, 0.30),
-    "de": (0.03, 0.30),
-    "es": (0.03, 0.30),
-    "fr": (0.03, 0.30),
-    "pt": (0.03, 0.30),
-    "nl": (0.03, 0.30),
-    "it": (0.04, 0.30),
-    "ar": (0.09, 0.30),
-    "hi": (0.20, 0.30),
+# ~3x the cell's measured mean, floored per band because coarser bands need more room: one wrong
+# word is 0.20 of a five-word sentence and 0.01 of a hundred-word one.
+CEILINGS = {
+    # ("lang", "band"): ceiling.   Rule: min(max(3 x measured mean, per-band floor), COLLAPSE).
+    #
+    # Capping at COLLAPSE matters. The 3x rule alone wanted 0.59 for ("hi", "long"), and a cell
+    # whose MEAN may sit at 0.59 would pass with every one of its runs past the line at which we
+    # declare the sentence unsaid. A ceiling above COLLAPSE is not a gate.
+    #
+    # Per-band floors, because one wrong word is a different rate in each band: 0.20 of a five-word
+    # sentence, ~0.03 of a thirty-word one, ~0.01 of a hundred-word one. The short floor of 0.25
+    # therefore buys exactly "one word may go"; two makes 0.40 and fails.
+    #
+    #   band          floor
+    #   short         0.25
+    #   medium        0.03
+    #   long          0.02
+    #   voice_sweep   0.03
+    ("ar", "short"): 0.25,          # measured 0.0000
+    ("ar", "medium"): 0.08,         # measured 0.0274
+    ("ar", "long"): 0.04,           # measured 0.0119
+    ("de", "short"): 0.25,          # measured 0.0000
+    ("de", "medium"): 0.03,         # measured 0.0000
+    ("de", "long"): 0.02,           # measured 0.0000
+    ("en", "short"): 0.25,          # measured 0.0000
+    ("en", "medium"): 0.03,         # measured 0.0010
+    ("en", "long"): 0.02,           # measured 0.0000  (5/5 word-perfect, ~445 frames)
+    ("es", "short"): 0.25,          # measured 0.0000
+    ("es", "medium"): 0.03,         # measured 0.0000
+    ("es", "long"): 0.02,           # measured 0.0000
+    ("fr", "short"): 0.25,          # measured 0.0000
+    ("fr", "medium"): 0.03,         # measured 0.0000
+    ("fr", "long"): 0.02,           # measured 0.0049
+    ("hi", "short"): 0.25,          # measured 0.0000
+    ("hi", "medium"): 0.18,         # measured 0.0615
+    # THE WEAKEST CELL, and the only one whose ceiling is the cap rather than 3x its mean. Measured
+    # 0.1966 as the mean of two very unlike draws: hi_female 0.0513 (117 of 117 words) and hi_male
+    # 0.3419 (80 of 117). hi_male generated 671 frames -- 53.7 s of audio for a passage that should
+    # run ~30 s -- and stopped on its own, well short of the 821-frame cap. More audio carrying
+    # fewer words is the model repeating and losing the tail, not a scoring artefact. Hindi has only
+    # two voices, so this mean rests on two draws and is correspondingly unstable.
+    ("hi", "long"): 0.30,           # measured 0.1966, capped at COLLAPSE
+    ("it", "short"): 0.25,          # measured 0.0000
+    ("it", "medium"): 0.03,         # measured 0.0105
+    ("it", "long"): 0.02,           # measured 0.0000
+    ("nl", "short"): 0.25,          # measured 0.0000
+    ("nl", "medium"): 0.03,         # measured 0.0091
+    ("nl", "long"): 0.03,           # measured 0.0095
+    ("pt", "short"): 0.25,          # measured 0.0000
+    ("pt", "medium"): 0.03,         # measured 0.0077
+    ("pt", "long"): 0.02,           # measured 0.0000
+    ("en", "voice_sweep"): 0.03,    # measured 0.0032, 38/40 perfect, worst single 0.091
 }
+
+VOICE_SWEEP_LANG = "en"
+VOICE_SWEEP_SENTENCES = 2  # breadth over voices, not depth over sentences
+
 MAX_DEGENERATE = 2
 # generate() stops on [END_AUDIO]; hitting the frame cap instead means the model never closed the
 # utterance. WER hears nothing of a missing tail, so it is asserted separately.
@@ -160,10 +201,12 @@ def test_every_voice_language_has_wer_sentences():
     assert not missing, f"languages with voices but no WER sentences: {missing}"
 
 
-def test_every_language_is_gated():
-    """A language in the corpus with no LIMITS entry would raise mid-run instead of being gated."""
-    assert sorted(WER_SENTENCES) == sorted(LIMITS), \
-        f"corpus {sorted(WER_SENTENCES)} != gated {sorted(LIMITS)}"
+def test_every_language_band_is_gated():
+    """A cell with no ceiling would raise mid-run, after paying for the generation, instead of
+    being gated. Checked host-side so the mistake costs nothing."""
+    want = {(l, b) for l in WER_SENTENCES for b in BANDS} | {(VOICE_SWEEP_LANG, "voice_sweep")}
+    missing, extra = sorted(want - set(CEILINGS)), sorted(set(CEILINGS) - want)
+    assert not missing and not extra, f"missing ceilings {missing}, unexpected {extra}"
 
 
 # ---------------------------------------------------------------------------------------- the run
@@ -193,13 +236,23 @@ class Asr:
         n = int(audio.shape[1] * ASR_SR / OUTPUT_SR)
         audio = torch.nn.functional.interpolate(audio.unsqueeze(0), size=n, mode="linear",
                                                 align_corners=False).squeeze(0)
-        feats = self.proc(audio[0].numpy(), sampling_rate=ASR_SR,
-                          return_tensors="pt").input_features
+        # PAST 30 s WHISPER MUST BE ASKED FOR LONG FORM. The processor's default pads or TRUNCATES
+        # to 3000 mel frames, which is exactly 30 s, and says nothing when it cuts: a 36 s utterance
+        # transcribes to its first 30 s and the rest scores as deletions. That reads as the model
+        # losing the thread on long input -- it measured WER 0.245 on a passage that is actually
+        # word-perfect. Under 30 s the default padding is required instead, because the encoder
+        # wants the full 3000 frames.
+        long_form = n > 30 * ASR_SR
+        kw = ({"truncation": False, "padding": "longest", "return_attention_mask": True}
+              if long_form else {})
+        inp = self.proc(audio[0].numpy(), sampling_rate=ASR_SR, return_tensors="pt", **kw)
+        gen = {"language": lang, "task": "transcribe", "do_sample": False, "num_beams": 1}
+        if long_form:
+            gen |= {"attention_mask": inp.attention_mask, "return_timestamps": True}
         with torch.no_grad():
             # told the language, not left to detect it: detection on a few seconds is unreliable
             # and a wrong guess transcribes into the wrong script entirely
-            ids = self.model.generate(feats, language=lang, task="transcribe",
-                                      do_sample=False, num_beams=1)
+            ids = self.model.generate(inp.input_features, **gen)
         return self.proc.batch_decode(ids, skip_special_tokens=True)[0].strip()
 
 
@@ -208,14 +261,19 @@ def voices_for(lang, all_voices):
     return tuple(v for v in all_voices if lang_of(v) == lang)
 
 
-def run_language(lang, asr, pipe, verbose=True):
-    """One language's voice x sentence matrix -> stats dict. No assertions, so a probe can reuse it."""
+def run_language(lang, asr, pipe, band="medium", voices=None, max_sentences=None,
+                 collapse=COLLAPSE, verbose=True):
+    """One (language, band) voice x sentence matrix -> stats dict.
+
+    No assertions, so the measurement probe and the gate share one code path.
+    """
     from models.experimental.voxtral_tts.tests.reference_helpers import all_voices, corpus_embeds
 
-    voices = voices_for(lang, all_voices())
+    voices = voices if voices is not None else voices_for(lang, all_voices())
+    texts = wer_band(lang, band)[:max_sentences]   # a wide voice sweep pays breadth, not depth
     scores, non_terminating = {}, []
     for voice in voices:
-        for si, text in enumerate(WER_SENTENCES[lang]):
+        for si, text in enumerate(texts):
             cap = frame_budget(text)
             embeds = corpus_embeds(text, voice, pipe.wb)
             pipe.backbone.reset()
@@ -224,17 +282,16 @@ def run_language(lang, asr, pipe, verbose=True):
                 non_terminating.append(f"{voice}/s{si}")
             scores[(voice, si)] = wer(text, asr(pipe.decode(frames), lang))
         if verbose:
-            row = [scores[(voice, i)] for i in range(len(WER_SENTENCES[lang]))]
-            print(f"  {lang}  {voice:18s} " + " ".join(f"{w:.3f}" for w in row)
+            row = [scores[(voice, i)] for i in range(len(texts))]
+            print(f"  {lang}/{band:<6} {voice:18s} " + " ".join(f"{w:.3f}" for w in row)
                   + f"   mean {sum(row) / len(row):.4f}", flush=True)
     vals = list(scores.values())
-    ceiling, collapse = LIMITS[lang]
     return {
-        "lang": lang, "n_voices": len(voices), "n_runs": len(vals),
+        "lang": lang, "band": band, "n_voices": len(voices), "n_runs": len(vals),
         "mean": sum(vals) / len(vals), "worst": max(vals),
         "perfect": sum(1 for w in vals if w == 0),
         "degenerate": [f"{v}/s{i}" for (v, i), w in scores.items() if w >= collapse],
-        "non_terminating": non_terminating, "ceiling": ceiling, "collapse": collapse,
+        "non_terminating": non_terminating, "collapse": collapse,
     }
 
 
@@ -253,24 +310,60 @@ def rig():
 
 
 @pytest.mark.slow
-# The default 300 s covers a two-voice language and not the English sweep's 25 runs, each of which
-# generates an utterance and then transcribes it.
-@pytest.mark.timeout(2400)
+# The default 300 s covers a two-voice medium cell and not the long band, where one utterance is
+# ~36 s of audio and Whisper pays two 30 s windows for it.
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("band", BANDS)
 @pytest.mark.parametrize("lang", sorted(WER_SENTENCES), ids=lambda l: LANG_NAMES[l])
-def test_wer_per_language(rig, lang):
-    """This language's own ceiling, collapse count and termination, so a failure names the language."""
+def test_wer_per_language_band(rig, lang, band):
+    """This cell's own ceiling, so a failure names both the language and the length."""
     asr, pipe = rig
-    s = run_language(lang, asr, pipe)
-    limit = MAX_NON_TERMINATING
-    print(f"\n  {lang}: {s['n_voices']} voices x {len(WER_SENTENCES[lang])} sentences, "
+    s = run_language(lang, asr, pipe, band=band)
+    ceiling = CEILINGS[(lang, band)]
+    print(f"\n  {lang}/{band}: {s['n_voices']} voices x {s['n_runs'] // s['n_voices']} sentences, "
           f"WER {s['mean']:.4f} (worst {s['worst']:.3f}, perfect {s['perfect']}/{s['n_runs']}, "
           f"degenerate {len(s['degenerate'])}, non-terminating {len(s['non_terminating'])}) "
-          f"ceiling {s['ceiling']}", flush=True)
-    assert s["mean"] <= s["ceiling"], (
-        f"{lang}: mean WER {s['mean']:.4f} over {s['n_runs']} runs above ceiling {s['ceiling']}")
+          f"ceiling {ceiling}", flush=True)
+    assert s["mean"] <= ceiling, (
+        f"{lang}/{band}: mean WER {s['mean']:.4f} over {s['n_runs']} runs above ceiling {ceiling}")
     assert len(s["degenerate"]) <= MAX_DEGENERATE, (
-        f"{lang}: {len(s['degenerate'])} runs at or above WER {s['collapse']} "
+        f"{lang}/{band}: {len(s['degenerate'])} runs at or above WER {COLLAPSE} "
         f"(limit {MAX_DEGENERATE}): {s['degenerate']}")
-    assert len(s["non_terminating"]) <= limit, (
-        f"{lang}: {len(s['non_terminating'])} runs hit the frame cap without [END_AUDIO] "
-        f"(limit {limit}): {s['non_terminating']}")
+    assert len(s["non_terminating"]) <= MAX_NON_TERMINATING, (
+        f"{lang}/{band}: {len(s['non_terminating'])} runs hit the frame cap without [END_AUDIO] "
+        f"(limit {MAX_NON_TERMINATING}): {s['non_terminating']}")
+
+
+# Every voice, not just the English ones. MEASURED: English survives a foreign preset -- 14 of the
+# 15 non-English presets transcribed an English sentence at WER 0.000 and the fifteenth at 0.091,
+# against 0.000 for the five English presets. The other languages do NOT survive it (French 0.0000
+# native against 0.0476 borrowed, Hindi 0.0556 against 0.3148, with one borrowed run at 0.444 --
+# past COLLAPSE on a healthy build), so this sweep is English-only by measurement, not by taste.
+# Sweeping them too would gate cross-lingual preset transfer, which is a model property.
+@pytest.mark.slow
+@pytest.mark.timeout(3600)
+def test_wer_every_voice_english(rig):
+    """All twenty presets on English, so a defect in one voice's prompt geometry is audible here.
+
+    Voice breadth and length breadth are crossed separately on purpose: the full matrix is twenty
+    voices x nine languages x three bands, which measures little that these two do not and costs
+    hours.
+    """
+    from models.experimental.voxtral_tts.tests.reference_helpers import all_voices
+
+    asr, pipe = rig
+    voices = tuple(all_voices())
+    s = run_language(VOICE_SWEEP_LANG, asr, pipe, band="medium", voices=voices,
+                     max_sentences=VOICE_SWEEP_SENTENCES)
+    # one ceiling for the sweep, looser than the native-voice cell: fifteen of these presets are
+    # carrying a language other than their own
+    ceiling = CEILINGS[("en", "voice_sweep")]
+    print(f"\n  en/voice_sweep: {len(voices)} voices, WER {s['mean']:.4f} "
+          f"(worst {s['worst']:.3f}, perfect {s['perfect']}/{s['n_runs']}, "
+          f"degenerate {len(s['degenerate'])}) ceiling {ceiling}", flush=True)
+    assert s["mean"] <= ceiling, (
+        f"en/voice_sweep: mean WER {s['mean']:.4f} over {s['n_runs']} runs above {ceiling}")
+    assert len(s["degenerate"]) <= MAX_DEGENERATE, (
+        f"en/voice_sweep: {len(s['degenerate'])} collapsed runs: {s['degenerate']}")
+    assert len(s["non_terminating"]) <= MAX_NON_TERMINATING, (
+        f"en/voice_sweep: {len(s['non_terminating'])} hit the frame cap: {s['non_terminating']}")

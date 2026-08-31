@@ -194,3 +194,44 @@ WER_SENTENCES = {
 def wer_sentences_for(voice):
     """-> the five WER sentences for this voice's language."""
     return WER_SENTENCES[lang_of(voice)]
+
+
+# The SHORT band: one sentence of five to seven words per language, ~20-30 frames. Taken from the
+# sibling port's `language_corpus.SENTENCES`, so it is text that has already been driven through a
+# model and transcribed. Short utterances quantise coarsely -- at five words one wrong word is WER
+# 0.20 -- so this band carries its own ceilings rather than being pooled with the others.
+WER_SHORT = {
+    "en": "The winter market opened early today.",
+    "de": "Der Wintermarkt öffnete heute früh.",
+    "fr": "Le marché d'hiver a ouvert tôt aujourd'hui.",
+    "es": "El mercado de invierno abrió temprano hoy.",
+    "it": "Il mercato invernale ha aperto presto oggi.",
+    "pt": "O mercado de inverno abriu cedo hoje.",
+    "nl": "De wintermarkt opende vandaag vroeg.",
+    "hi": "सर्दियों का बाज़ार आज जल्दी खुला।",
+    "ar": "افتتح سوق الشتاء مبكرا اليوم.",
+}
+
+
+# How many of a language's WER_SENTENCES are joined to make the LONG band. Four gives 84-117 words
+# and 322-449 frames, which brackets the 469-frame fixture utterance the decode and codec
+# full-length tests use -- so the WER gate now reaches the same lengths they do.
+LONG_BAND_PARTS = 4
+
+BANDS = ("short", "medium", "long")
+
+
+def wer_band(lang, band):
+    """-> the list of sentences for one (language, band).
+
+    The long band is JOINED from that language's own WER_SENTENCES rather than newly written: every
+    part already scores near zero on its own, so a regression in the long band is length-dependent
+    behaviour and not unvetted text.
+    """
+    if band == "short":
+        return [WER_SHORT[lang]]
+    if band == "medium":
+        return list(WER_SENTENCES[lang])
+    if band == "long":
+        return [" ".join(WER_SENTENCES[lang][:LONG_BAND_PARTS])]
+    raise ValueError(f"unknown band {band!r}")
