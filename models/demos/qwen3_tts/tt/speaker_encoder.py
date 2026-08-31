@@ -14,9 +14,10 @@ Architecture:
     - Attentive Statistics Pooling
     - Final FC (3072 -> 2048)
 
-Note: Reflect ``conv1d`` runs on host PyTorch inside ``_conv1d_same_padding`` (no TTNN
-reflect pad). Activations use ``ttnn.relu`` / ``ttnn.tanh`` where possible; conv/FC
-weights are cached on device. Mel filterbank + Hann window are cached on host.
+Note: Dilated / reflect ``conv1d`` (Res2Net, k>1 TDNN) still uses host PyTorch —
+TTNN conv has no reflect pad. k=1 TDNNs and SE 1x1 convs are device
+``ttnn.linear`` with fused ReLU / sigmoid. Res2Net slice/add/concat/relu stay
+on device. Mel filterbank + Hann window are cached on host.
 """
 
 import os
@@ -27,6 +28,12 @@ import torch.nn.functional as F
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.linear_1d_program_config import (
+    find_1d_mcast_grid,
+    find_2d_mcast_grid,
+    make_linear_1d_program_config,
+    make_linear_2d_program_config,
+)
 from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
 
 
@@ -85,6 +92,12 @@ class SpeakerEncoder(LightweightModule):
         self.pytorch_weights = {k: v.float() for k, v in self.weights.items()}
         self._conv1d_param_tt_cache = {}
         self._conv1d_prepared_cache = {}  # keyed by (cache_key, input_length, ...)
+        self._linear_param_tt_cache = {}  # 1x1 conv → ttnn.linear [1,1,in,out]
+        self._linear_prog_cache = {}
+        _grid = device.compute_with_storage_grid_size()
+        self._compute_grid_x = int(_grid.x)
+        self._compute_grid_y = int(_grid.y)
+        self._fp32_dest_acc_en = False
         self._se_current_cache_id = None  # set by _se_res2net_block per block
         self._mel_stft_key = None
         self._fc_linear_weight_tt = None
@@ -213,6 +226,120 @@ class SpeakerEncoder(LightweightModule):
             x_nlc = ttnn.reshape(x_nlc, (sh[0], sh[2], sh[3]), memory_config=m)
         return ttnn.permute(x_nlc, (0, 2, 1), memory_config=m)
 
+    def _ttnn_nlc_to_torch_nlc(self, x: ttnn.Tensor) -> torch.Tensor:
+        """Device NLC (or ``[B, 1, L, C]``) → host float32 ``[B, L, C]``."""
+        x_t = _mesh_to_torch(x, dtype=torch.float32)
+        if x_t.dim() == 4:
+            x_t = x_t.squeeze(1)
+        return x_t
+
+    def _torch_nlc_to_ttnn(self, x_nlc: torch.Tensor) -> ttnn.Tensor:
+        return ttnn.from_torch(
+            x_nlc.contiguous(),
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _torch_conv_weight_bias(self, weight, bias) -> Tuple[torch.Tensor, torch.Tensor]:
+        if isinstance(weight, torch.Tensor):
+            w_t = weight.float()
+        else:
+            w_t = _mesh_to_torch(weight, dtype=torch.float32)
+        if w_t.dim() == 4:
+            w_t = w_t.squeeze(-1)
+        if isinstance(bias, torch.Tensor):
+            b_t = bias.float().reshape(-1)
+        else:
+            b_t = _mesh_to_torch(bias, dtype=torch.float32).reshape(-1)
+        return w_t, b_t
+
+    def _conv1d_same_padding_torch_nlc(self, x_nlc: torch.Tensor, weight, bias, dilation: int = 1) -> torch.Tensor:
+        """Host reflect-pad conv1d. I/O NLC ``[B, L, C]``."""
+        w_t, b_t = self._torch_conv_weight_bias(weight, bias)
+        x_ncl = x_nlc.permute(0, 2, 1).contiguous()
+        kernel_size = w_t.shape[-1]
+        effective_kernel = dilation * (kernel_size - 1) + 1
+        pad_total = effective_kernel - 1
+        pad_left = pad_total // 2
+        pad_right = pad_total - pad_left
+        x_padded = F.pad(x_ncl, (pad_left, pad_right), mode="reflect")
+        out_t = F.conv1d(x_padded, w_t, b_t, dilation=dilation)
+        return out_t.permute(0, 2, 1).contiguous()
+
+    def _ensure_pointwise_linear_params(
+        self, weight: torch.Tensor, bias: torch.Tensor
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Lazy-cache ``conv1d`` k=1 weights as ``ttnn.linear`` ``[1, 1, in, out]`` + bias."""
+        key = (weight.data_ptr(), bias.data_ptr())
+        hit = self._linear_param_tt_cache.get(key)
+        if hit is None:
+            w = weight.squeeze(-1).float()
+            in_f, out_f = w.shape[1], w.shape[0]
+            w_host = w.T.contiguous().reshape(1, 1, in_f, out_f)
+            w_tt = ttnn.from_torch(
+                w_host,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            b_tt = ttnn.from_torch(
+                bias.float().reshape(1, 1, 1, -1),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            hit = (w_tt, b_tt)
+            self._linear_param_tt_cache[key] = hit
+        return hit
+
+    def _program_config_for_linear(self, m: int, k: int, n: int, fused_activation):
+        """1D mcast when M is one tile; 2D mcast for speaker TDNNs (M=384)."""
+        act_key = None if fused_activation is None else str(fused_activation)
+        key = (m, k, n, act_key)
+        hit = self._linear_prog_cache.get(key)
+        if hit is not None:
+            return hit
+        gx_max, gy_max = self._compute_grid_x, self._compute_grid_y
+        if m > 32:
+            gx, gy = find_2d_mcast_grid(m, k, n, gx_max, gy_max)
+            prog = make_linear_2d_program_config(
+                m, k, n, gx, gy, self._fp32_dest_acc_en, fused_activation=fused_activation
+            )
+        else:
+            gx, gy = find_1d_mcast_grid(k, n, gx_max, gy_max)
+            prog = make_linear_1d_program_config(
+                m, k, n, gx, gy, self._fp32_dest_acc_en, fused_activation=fused_activation
+            )
+        self._linear_prog_cache[key] = prog
+        return prog
+
+    def _tuned_linear(
+        self,
+        x_4d: ttnn.Tensor,
+        weight: ttnn.Tensor,
+        bias: ttnn.Tensor,
+        fused_activation,
+        memory_config,
+    ) -> ttnn.Tensor:
+        """Device linear with program_config (fused act + sized grid). in0 prefers L1."""
+        if x_4d.memory_config().buffer_type == ttnn.BufferType.DRAM:
+            x_4d = ttnn.to_memory_config(x_4d, ttnn.L1_MEMORY_CONFIG)
+        m, k = int(x_4d.shape[-2]), int(x_4d.shape[-1])
+        n = int(weight.shape[-1])
+        prog = self._program_config_for_linear(m, k, n, fused_activation)
+        return ttnn.linear(
+            x_4d,
+            weight,
+            bias=bias,
+            program_config=prog,
+            compute_kernel_config=self._compute_kernel_config,
+            memory_config=memory_config,
+        )
+
     def _run_ttnn_conv1d(
         self,
         x_nlc: ttnn.Tensor,
@@ -268,43 +395,30 @@ class SpeakerEncoder(LightweightModule):
         garbage post-trace-exec, so when we have torch weights in hand we
         skip the round-trip entirely.
         """
-        x_t = _mesh_to_torch(x, dtype=torch.float32)
-        if x_t.dim() == 4:
-            x_t = x_t.squeeze(1)
-        x_t = x_t.permute(0, 2, 1).contiguous()
-        if isinstance(weight, torch.Tensor):
-            w_t = weight.float()
-        else:
-            w_t = _mesh_to_torch(weight, dtype=torch.float32)
-        if w_t.dim() == 4:
-            w_t = w_t.squeeze(-1)
-        if isinstance(bias, torch.Tensor):
-            b_t = bias.float().reshape(-1)
-        else:
-            b_t = _mesh_to_torch(bias, dtype=torch.float32).reshape(-1)
-
-        kernel_size = w_t.shape[-1]
-        effective_kernel = dilation * (kernel_size - 1) + 1
-        pad_total = effective_kernel - 1
-        pad_left = pad_total // 2
-        pad_right = pad_total - pad_left
-        x_padded = F.pad(x_t, (pad_left, pad_right), mode="reflect")
-        out_t = F.conv1d(x_padded, w_t, b_t, dilation=dilation)
-        out_nlc = out_t.permute(0, 2, 1).contiguous()
-        return ttnn.from_torch(
-            out_nlc,
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        return self._torch_nlc_to_ttnn(
+            self._conv1d_same_padding_torch_nlc(self._ttnn_nlc_to_torch_nlc(x), weight, bias, dilation)
         )
+
+    def _is_pointwise_conv(self, weight: torch.Tensor, dilation: int) -> bool:
+        k = int(weight.shape[-1]) if weight.dim() >= 3 else 1
+        return k == 1 and dilation == 1
+
+    def _pointwise_linear_relu(self, x: ttnn.Tensor, weight: torch.Tensor, bias: torch.Tensor) -> ttnn.Tensor:
+        """Device ``conv1d`` k=1 + ReLU as fused ``ttnn.linear`` (NLC in/out)."""
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        x_nlc = x if len(tuple(x.shape)) == 3 else ttnn.reshape(x, (x.shape[0], x.shape[2], x.shape[3]))
+        batch, seq_len, channels = int(x_nlc.shape[0]), int(x_nlc.shape[1]), int(x_nlc.shape[2])
+        w_tt, b_tt = self._ensure_pointwise_linear_params(weight, bias)
+        y = ttnn.reshape(x_nlc, (batch, 1, seq_len, channels))
+        y = self._tuned_linear(y, w_tt, b_tt, ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), mc)
+        return ttnn.reshape(y, (batch, seq_len, int(y.shape[-1])))
 
     def _time_delay_net_block(
         self, x: ttnn.Tensor, conv_weight: torch.Tensor, conv_bias: torch.Tensor, dilation: int = 1
     ) -> ttnn.Tensor:
-        """Time Delay Network Block in TTNN (NLC in/out)."""
-        # Pass torch weights directly into _conv1d_same_padding (avoids a
-        # device round-trip whose output is corrupted post-trace-exec).
+        """Time Delay Network Block in TTNN (NLC in/out). k=1 stays on device."""
+        if self._is_pointwise_conv(conv_weight, dilation):
+            return self._pointwise_linear_relu(x, conv_weight, conv_bias)
         y_tt = self._conv1d_same_padding(x, conv_weight, conv_bias, dilation)
         return ttnn.relu(y_tt)
 
@@ -354,50 +468,32 @@ class SpeakerEncoder(LightweightModule):
     def _squeeze_excitation_block(
         self,
         x: ttnn.Tensor,
-        conv1_weight: ttnn.Tensor,
-        conv1_bias: ttnn.Tensor,
-        conv2_weight: ttnn.Tensor,
-        conv2_bias: ttnn.Tensor,
+        conv1_weight: torch.Tensor,
+        conv1_bias: torch.Tensor,
+        conv2_weight: torch.Tensor,
+        conv2_bias: torch.Tensor,
     ) -> ttnn.Tensor:
-        """Squeeze-and-Excitation block in TTNN (NLC in/out)."""
-        mc = ttnn.L1_MEMORY_CONFIG
-        x_nlc = (
-            x if len(tuple(x.shape)) == 3 else ttnn.reshape(x, (x.shape[0], x.shape[2], x.shape[3]), memory_config=mc)
-        )
+        """Squeeze-and-Excitation block in TTNN (NLC in/out).
+
+        1x1 convs are ``ttnn.linear`` with fused ReLU / sigmoid so the unfused
+        Unary after each conv does not appear on the device op list.
+        """
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        x_nlc = x if len(tuple(x.shape)) == 3 else ttnn.reshape(x, (x.shape[0], x.shape[2], x.shape[3]))
         batch = int(x_nlc.shape[0])
-        seq_len = int(x_nlc.shape[1])
+        channels = int(x_nlc.shape[2])
 
-        # NOTE: ALL SE-block intermediates use DRAM (not L1). When SpeakerEncoder
-        # is invoked from a server context that holds persistent buffers in L1
-        # (KV caches, trace mask tensors, prepared conv weights), the L1
-        # allocator can't satisfy fresh allocations from these ops and the
-        # call hangs silently. DRAM is plentiful and removes the contention.
-        dram = ttnn.DRAM_MEMORY_CONFIG
-
-        # Squeeze over sequence length: [B, L, C] -> [B, 1, C]
+        # Squeeze over sequence length: [B, L, C] -> [B, 1, 1, C] for linear.
         y = ttnn.mean(x_nlc, dim=1, keepdim=True)
-        y = ttnn.to_layout(y, ttnn.TILE_LAYOUT, memory_config=dram)
+        y = ttnn.reshape(y, (batch, 1, 1, channels))
 
-        se_cache_id = getattr(self, "_se_current_cache_id", None)
-        y, y_len, out1_ch = self._run_ttnn_conv1d(
-            y,
-            conv1_weight,
-            conv1_bias,
-            input_length=1,
-            cache_key=("se", se_cache_id, "conv1") if se_cache_id is not None else None,
-        )
-        y = ttnn.reshape(y, (batch, y_len, out1_ch), memory_config=dram)
-        y = ttnn.relu(y, memory_config=dram)
-
-        y, y_len, out2_ch = self._run_ttnn_conv1d(
-            y,
-            conv2_weight,
-            conv2_bias,
-            input_length=y_len,
-            cache_key=("se", se_cache_id, "conv2") if se_cache_id is not None else None,
-        )
-        y = ttnn.reshape(y, (batch, y_len, out2_ch), memory_config=dram)
-        y = ttnn.sigmoid(y, memory_config=dram)
+        w1, b1 = self._ensure_pointwise_linear_params(conv1_weight, conv1_bias)
+        w2, b2 = self._ensure_pointwise_linear_params(conv2_weight, conv2_bias)
+        # Tiny [1,1,C] SE activations stay in L1 so in0 is not DRAM-interleaved.
+        se_l1 = ttnn.L1_MEMORY_CONFIG
+        y = self._tuned_linear(y, w1, b1, ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), se_l1)
+        y = self._tuned_linear(y, w2, b2, ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID), se_l1)
+        y = ttnn.reshape(y, (batch, 1, int(y.shape[-1])))
         if bool(int(os.environ.get("SE_VDBG", "0"))):
             sv = _mesh_to_torch(y, dtype=torch.float32).flatten()
             iv = _mesh_to_torch(x_nlc, dtype=torch.float32).flatten()
@@ -411,8 +507,7 @@ class SpeakerEncoder(LightweightModule):
             )
 
         # Apply channel-wise scale via broadcasting: [B,L,C] * [B,1,C] -> [B,L,C].
-        # Skips materializing y to seq-length (saves Untilize+Repeat+Tilize chain).
-        return ttnn.multiply(x_nlc, y, memory_config=dram)
+        return ttnn.multiply(x_nlc, y, memory_config=mc)
 
     def _squeeze_excitation_block_traced(self, x: ttnn.Tensor, block_idx: int) -> ttnn.Tensor:
         """SE block via pre-captured trace. ``x`` is [B, L, C]; output is [B, L, C]."""
@@ -473,9 +568,7 @@ class SpeakerEncoder(LightweightModule):
             x = self._time_delay_net_block(x, tdnn1_weight, tdnn1_bias, dilation=1)
         _mk("after TDNN1")
 
-        # Res2Net
-        # Pass dilation per HF: blocks[1]=2, blocks[2]=3, blocks[3]=4 (matches
-        # config.enc_dilations[i] in HF Qwen3TTSSpeakerEncoder). Was always 1.
+        # Res2Net — dilation per HF: blocks[1]=2, blocks[2]=3, blocks[3]=4.
         x = self._res2net_block(x, f"{prefix}res2net_block.", scale, dilation=block_idx + 1)
         _mk("after Res2Net")
 
@@ -486,9 +579,7 @@ class SpeakerEncoder(LightweightModule):
             x = self._time_delay_net_block(x, tdnn2_weight, tdnn2_bias, dilation=1)
         _mk("after TDNN2")
 
-        # SE block — prepared conv weights are cached inside _run_ttnn_conv1d
-        # under cache_key=("se", block_idx, "convN"). First call preps via
-        # ttnn.prepare_conv_weights/bias; subsequent calls reuse and skip prep.
+        # SE block — untraced path is fused linear; traced path replays conv1d.
         se_conv1_weight = self.pytorch_weights.get(f"{prefix}se_block.conv1.weight")
         se_conv1_bias = self.pytorch_weights.get(f"{prefix}se_block.conv1.bias")
         se_conv2_weight = self.pytorch_weights.get(f"{prefix}se_block.conv2.weight")
@@ -500,14 +591,7 @@ class SpeakerEncoder(LightweightModule):
                 # Traced path — replays pre-captured ops; safe post-trace-exec.
                 x = self._squeeze_excitation_block_traced(x, block_idx)
             else:
-                se_w1_tt, se_b1_tt = self._conv1d_params_to_ttnn(se_conv1_weight, se_conv1_bias)
-                se_w2_tt, se_b2_tt = self._conv1d_params_to_ttnn(se_conv2_weight, se_conv2_bias)
-                _mk("after SE conv weight upload")
-                self._se_current_cache_id = block_idx
-                try:
-                    x = self._squeeze_excitation_block(x, se_w1_tt, se_b1_tt, se_w2_tt, se_b2_tt)
-                finally:
-                    self._se_current_cache_id = None
+                x = self._squeeze_excitation_block(x, se_conv1_weight, se_conv1_bias, se_conv2_weight, se_conv2_bias)
             _mk("after SE block")
 
         result = ttnn.add(x, residual, memory_config=ttnn.L1_MEMORY_CONFIG)
