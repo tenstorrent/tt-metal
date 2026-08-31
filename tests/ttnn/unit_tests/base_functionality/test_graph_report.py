@@ -3588,7 +3588,6 @@ class TestPytestGraphReportFixture:
             fixturenames = ()
 
         with (
-            ttnn.manage_config("enable_torch_tracer", False),
             ttnn.manage_config("enable_logging", True),
             ttnn.manage_config("enable_graph_report", True),
             ttnn.manage_config("enable_detailed_buffer_report", False),
