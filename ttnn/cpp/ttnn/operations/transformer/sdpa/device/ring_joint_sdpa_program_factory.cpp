@@ -2538,43 +2538,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         (v_shares_k_buffer ||
          ((rot_floats_fill_rows_evenly || force_rotate_separate_v) && use_head_chain && use_streaming_compute &&
           !use_attention_sink && num_q_chunks != 0 && (rot_base_chunks * num_cores) % num_q_chunks == 0)) &&
-        // !kv_pad_rotation_enabled is MEASURED load-bearing. Removing it does make the rotation
-        // engage on the kv-pad path (kv_actual_isl ring MLA, chunk_size_local 256 on a 3x2 grid:
-        // base 5, floats 2, active_iters 5 of 8) -- and the device HANGS ("potential hang detected,
-        // unrecoverable", cores 15-3/15-2). Rebuilding the rotation cycle over the ordinal sequence
-        // of active iterations did NOT fix it, and the reason is structural: under kv-pad the
-        // KERNELS derive their own active mask on device (ring_joint_reader.cpp / ring_joint_writer.cpp
-        // overwrite active_ring_iter_mask from the kv-pad metadata), so the host's notion of which
-        // iterations run is not what the kernels obey. A skipped iteration then means the donor
-        // never reaches flush_deferred_save() and its Semaphore(...).up(), while the next receiver
-        // blocks in handoff_sem.wait_min() -- a post that never happens.
-        //
-        // ATTEMPT 2 got much closer and is the right shape: stop trying to match the device mask and
-        // make the handoff MASK-INDEPENDENT instead, via three writer changes -- (a) flush a
-        // migrating float EAGERLY in its own iteration so its accumulators are in DRAM regardless of
-        // whether that core runs the next iteration, (b) have the donor therefore signal slot
-        // (ring_iter + 1), the receiver's iteration, and (c) emit the ownership token (a pure signal,
-        // no data) even on a SKIPPED iteration so the chain advances through iterations the host
-        // cannot predict. That WORKS for kv-pad: rotation engages on the metadata path and
-        // test_ring_mla_metadata_matches_scalar_rotation passes BIT-EXACT (3 passed).
-        // It was still reverted, because it breaks rot_base_chunks == 2: the latent-V sweep went
-        // 4 failed / 6 passed (every q64 id) and determinism 4 failed. The eager flush removes the
-        // cross-iteration pending save that the deferred-save / TRID / prefetch machinery at base 2
-        // depends on -- the same interaction behind the two bugs fixed earlier in this branch
-        // (flush_before_prefetch's positional proxy, and the cross-ring prefetch ordering).
-        // So kv-pad is NOT architecturally blocked. The remaining work is narrow and named: make the
-        // eager flush coexist with the deferred/TRID scheme at base 2. Note the default q32 set does
-        // NOT catch this -- the base-2 shapes are the q64 ids behind RING_MLA_K_SWEEP.
-        // test_ring_mla_chunked_kv_actual_isl_rotated_q_split_accuracy is the reachable case to
-        // re-attempt with -- the default kv-pad configs have total_q_chunks == 4, too small to engage
-        // at any grid.
-        //
         // Schedules this rotation cannot model. Balanced/zigzag SKIPS whole Q chunks per device, so
         // the equal-cost-per-chunk counting the rotation is built on stops holding -- a causal mask
-        // wants enable_zigzag_balancing instead, which is the right tool for that job. The kv-pad
-        // variants do their own per-iteration index remapping, which would have to COMPOSE with
-        // rotated ownership rather than merely coexist. A joint K (L != 0) would likewise add
-        // per-iteration chunks this schedule does not count; unreachable today, since joint tensors
+        // wants enable_zigzag_balancing instead, which is the right tool for that job. A joint K (L != 0) would
+        // likewise add per-iteration chunks this schedule does not count; unreachable today, since joint tensors
         // are a video-gen shape and latent-V an MLA one, but validation does not forbid the pair.
         !args.is_balanced &&
         // Partial active masks are handled, not excluded. The rotation schedule is indexed by the
