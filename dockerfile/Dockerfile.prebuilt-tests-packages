@@ -25,7 +25,7 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 RUN --mount=type=bind,source=artifact,target=/tmp/pkgs \
     shopt -s nullglob \
     && case "${PROFILE}:${PRODUCT}" in \
-        smoke:*) \
+        smoke:tt-metalium|smoke:tt-nn) \
             base=( /tmp/pkgs/tt-metalium_*.deb /tmp/pkgs/tt-metalium-jit_*.deb /tmp/pkgs/tt-metalium-validation_*.deb ); \
             product=( "/tmp/pkgs/${PRODUCT}"_*.deb "/tmp/pkgs/${PRODUCT}"-validation_*.deb ); \
             extra=() ;; \

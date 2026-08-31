@@ -19,13 +19,16 @@ name: "Cleanup prebuilt tests images"
 # hours is roughly N divided by the hourly push rate, so N = 4800 buys about a
 # day at ~200/hour.
 #
-# A day is chosen for the RE-RUN window, not for queue time. Measured, the gap
-# between an image being pushed and the last consumer pulling it is 9 min in PR
-# Gate and 28 min in Merge Gate, which ~100 versions would cover. But GitHub
-# allows re-running a job for 30 days and a re-run pulls the same ref, so N sets
-# how far back a leg can be re-run. Too small a value deletes an image out from
-# under a queued or re-run leg, which fails at container startup with no
-# fallback, because container.image is resolved before any step runs.
+# A day is chosen deliberately, and it defines a SUPPORTED RE-RUN WINDOW of
+# about a day. GitHub allows re-running a job for 30 days, but retaining that
+# long would mean ~144,000 versions, so we do not. Re-running an individual leg
+# after roughly a day fails at container startup, because container.image is
+# resolved before any step runs and there is no fallback at that point. Re-run
+# the whole workflow instead: that rebuilds the image and works at any age.
+#
+# A day is far more than the in-run need. Measured, the gap between an image
+# being pushed and the last consumer pulling it is 9 min in PR Gate and 28 min
+# in Merge Gate, which ~100 versions would cover.
 #
 # Recompute N if the push rate changes: wiring more consumers raises it, and
 # building one image per run instead of two would halve it.
