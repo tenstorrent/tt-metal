@@ -9,6 +9,7 @@ import pytest
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import KIMI_K3_FIRST_KDA_LAYER
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     check_kimi_k3_accuracy,
@@ -18,28 +19,33 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 
-pytestmark = [
-    run_for_blackhole(),
-    pytest.mark.parametrize(
-        "device_params",
-        [{"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-        indirect=True,
-    ),
-]
+pytestmark = [run_for_blackhole()]
 
 
 @pytest.mark.parametrize(
-    "mesh_device,tensor_parallel_axis",
-    [((1, 8), 1), ((2, 4), 1), ((2, 4), 0)],
-    indirect=["mesh_device"],
-    ids=["SP1xTP8", "SP2xTP4", "SP4xTP2"],
+    "mesh_device,tensor_parallel_axis,device_params,sequence",
+    [
+        pytest.param((1, 8), 1, fabric_1d_device_params(l1_small_size=24576), 128, id="SP1xTP8"),
+        pytest.param((2, 4), 1, fabric_1d_device_params(l1_small_size=24576), 128, id="SP2xTP4"),
+        pytest.param((2, 4), 0, fabric_1d_device_params(l1_small_size=24576), 128, id="SP4xTP2"),
+        pytest.param(
+            (8, 4),
+            1,
+            torus_xy_device_params(l1_small_size=24576),
+            512,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="SP8xTP4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
 def test_kimi_k3_layer_1_real_weights_pcc(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
     kimi_k3_checkpoint_dir: Path,
+    sequence: int,
 ) -> None:
-    case = make_kimi_k3_test_case(kimi_k3_checkpoint_dir, sequence=128)
+    case = make_kimi_k3_test_case(kimi_k3_checkpoint_dir, sequence=sequence)
     golden_output, golden_state = kda_forward_reference(case.hidden, case.state_dict, case.config)
     cache_path = kimi_k3_tensor_cache_path(case.checkpoint_identity, mesh_device, tensor_parallel_axis)
     cache_prefix = f"layer_{KIMI_K3_FIRST_KDA_LAYER}.kda"
@@ -74,8 +80,9 @@ def test_kimi_k3_layer_1_real_weights_pcc(
     )
     sequence_parallel_axis = 1 - tensor_parallel_axis
     local_chunks = case.hidden.shape[1] // tuple(mesh_device.shape)[sequence_parallel_axis] // ttnn.TILE_SIZE
-    # Accuracy uses the shortest tile-aligned global sequence shared by all three mesh geometries.
-    # Keep the production K3 tuning except for this local grouping constraint.
+    # Existing eight-device layouts retain their shortest common tile-aligned T=128; the
+    # Galaxy case uses T=512 so SP8 has two local chunks. Keep production K3 tuning
+    # except for this local grouping constraint.
     layer, hidden_tt = make_kimi_k3_device_case(
         mesh_device,
         case,
