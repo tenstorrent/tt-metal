@@ -95,7 +95,7 @@ def test_offline_cache_and_cache_only_layer_pcc(device: ttnn.Device, tmp_path: P
     cached_output, _ = _forward(cached_layer, hidden, cached_layer.allocate_state())
     assert_accurate(golden_output, cached_output, name="loaded-cache output", pcc_threshold=0.999)
 
-    cache_only_layer = ttKDA(device, config, {}, weight_cache_path=tmp_path, layer_idx=0)
+    cache_only_layer = ttKDA(device, config, None, weight_cache_path=tmp_path, layer_idx=0)
     cache_only_output, _ = _forward(cache_only_layer, hidden, cache_only_layer.allocate_state())
     assert_accurate(golden_output, cache_only_output, name="cache-only output", pcc_threshold=0.999)
 

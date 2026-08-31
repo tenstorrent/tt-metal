@@ -8,7 +8,7 @@ import torch
 
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256
 from models.demos.deepseek_v3_d_p.tests.kda.utils import make_config
-from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, _cache_stem
+from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, _cache_stem, load_kda_weights
 
 
 def test_checkpoint_identity_depends_on_weight_content() -> None:
@@ -21,6 +21,16 @@ def test_checkpoint_identity_depends_on_weight_content() -> None:
 
 def test_cache_completeness_is_false_for_missing_directory(tmp_path) -> None:
     assert not KDAWeights.check_cache_complete(tmp_path / "missing", "layer_0.kda", make_config(), object())
+
+
+def test_weight_loader_rejects_empty_state_dict(expect_error) -> None:
+    with expect_error(ValueError, "state_dict must be non-empty"):
+        load_kda_weights(object(), make_config(), {})
+
+
+def test_cache_build_requires_state_dict(tmp_path, expect_error) -> None:
+    with expect_error(ValueError, "requires a state_dict"):
+        KDAWeights.build_ttnn_cache(None, tmp_path, "layer_0.kda", make_config(), object())
 
 
 def test_tensor_cache_stem_identifies_config_and_placement() -> None:

@@ -105,16 +105,15 @@ class KDAWeights:
         tensor_parallel_axis: int = 1,
     ) -> None:
         """Build all KDA tensorbins without copying weights to device memory."""
-        result = load_kda_weights(
+        _convert_kda_weights(
             mesh_device,
             config,
             state_dict,
             cache_path,
             cache_name_prefix=cache_name_prefix,
             tensor_parallel_axis=tensor_parallel_axis,
-            _load_to_device=False,
+            load_to_device=False,
         )
-        assert result is None
 
     @classmethod
     def from_cache(
@@ -127,7 +126,7 @@ class KDAWeights:
         tensor_parallel_axis: int = 1,
     ) -> "KDAWeights":
         """Construct device weights exclusively from a complete TTNN cache."""
-        result = load_kda_weights(
+        return load_kda_weights(
             mesh_device,
             config,
             None,
@@ -135,11 +134,9 @@ class KDAWeights:
             cache_name_prefix=cache_name_prefix,
             tensor_parallel_axis=tensor_parallel_axis,
         )
-        assert result is not None
-        return result
 
 
-def load_kda_weights(
+def _convert_kda_weights(
     device: ttnn.Device | ttnn.MeshDevice,
     config: KDAConfig,
     state_dict: Mapping[str, torch.Tensor] | None,
@@ -147,21 +144,21 @@ def load_kda_weights(
     *,
     cache_name_prefix: str = "kda",
     tensor_parallel_axis: int = 1,
-    _load_to_device: bool = True,
+    load_to_device: bool,
 ) -> KDAWeights | None:
-    """Fuse compatible projections and place whole-head shards on device."""
+    """Convert KDA weights, optionally writing cache artifacts without device placement."""
     mesh_shape, tensor_parallel_size = _parallel_geometry(device, tensor_parallel_axis)
     if state_dict is not None and not state_dict:
-        state_dict = None
+        raise ValueError("state_dict must be non-empty when provided; use None for cache-only loading")
     if config.num_heads % tensor_parallel_size != 0:
         raise ValueError(
             f"num_heads {config.num_heads} must be divisible by tensor parallel size {tensor_parallel_size}"
         )
-    if not state_dict and not _load_to_device:
+    if state_dict is None and not load_to_device:
         raise ValueError("building the KDA TTNN cache requires a state_dict")
-    if state_dict:
+    if state_dict is not None:
         state_dict = normalize_kda_state_dict(state_dict, config)
-    elif _load_to_device and not KDAWeights.check_cache_complete(
+    elif not KDAWeights.check_cache_complete(
         tensor_cache_path,
         cache_name_prefix,
         config,
@@ -196,9 +193,9 @@ def load_kda_weights(
             tensor.contiguous(),
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
-            device=device if _load_to_device else None,
+            device=device if load_to_device else None,
             mesh_mapper=mesh_mapper,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if _load_to_device else None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if load_to_device else None,
             cache_file_name=cache_file,
         )
         return converted
@@ -215,7 +212,7 @@ def load_kda_weights(
             grouped.append(torch.cat(device_weights, dim=0))
         return torch.cat(grouped, dim=0)
 
-    if state_dict:
+    if state_dict is not None:
         common_input_weights = (
             state_dict["q_proj.weight"],
             state_dict["k_proj.weight"],
@@ -280,7 +277,7 @@ def load_kda_weights(
     convolution_taps = tuple(
         device_tensor(tensor, f"conv_tap_{tap}", shard_dim=-1) for tap, tensor in enumerate(convolution_host_taps)
     )
-    if not _load_to_device:
+    if not load_to_device:
         return None
     return KDAWeights(
         **converted,
@@ -288,3 +285,26 @@ def load_kda_weights(
         tensor_parallel_size=tensor_parallel_size,
         tensor_parallel_axis=tensor_parallel_axis,
     )
+
+
+def load_kda_weights(
+    device: ttnn.Device | ttnn.MeshDevice,
+    config: KDAConfig,
+    state_dict: Mapping[str, torch.Tensor] | None,
+    tensor_cache_path: Path | None = None,
+    *,
+    cache_name_prefix: str = "kda",
+    tensor_parallel_axis: int = 1,
+) -> KDAWeights:
+    """Fuse compatible projections and place whole-head shards on device."""
+    weights = _convert_kda_weights(
+        device,
+        config,
+        state_dict,
+        tensor_cache_path,
+        cache_name_prefix=cache_name_prefix,
+        tensor_parallel_axis=tensor_parallel_axis,
+        load_to_device=True,
+    )
+    assert weights is not None, "load_to_device=True always constructs KDAWeights"
+    return weights
