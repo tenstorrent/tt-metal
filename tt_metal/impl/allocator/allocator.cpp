@@ -209,9 +209,22 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
                     cores_to_scan = corerange_to_cores(grid, std::nullopt, row_major);
                 }
 
+                // Scanning nothing is not a safe fallback -- it would place the buffer without
+                // avoiding anything. set_range_lockstep_allocation() requires one of the two specs
+                // and Buffer carries both through, so this cannot fire, but that invariant now
+                // lives in another file and this is where it is relied on.
+                TT_FATAL(
+                    !scope_to_own_cores || !cores_to_scan.empty(),
+                    "range lockstep resolved to zero cores to scan; the buffer must carry a shard spec or a "
+                    "distribution spec naming the cores it occupies");
+
                 for (auto* dev_alloc : hybrid_device_allocators_) {
                     if (!scope_to_own_cores) {
-                        for (uint32_t bank_id = 0; bank_id < l1_manager_->num_banks(); bank_id++) {
+                        // Each device's own bank count: harvesting varies across a mesh, so the
+                        // reference device's count would leave the extra banks of a less-harvested
+                        // device unscanned. Pre-existing, kept in step with the narrowed branch.
+                        const uint32_t num_l1_banks = dev_alloc->get_num_banks(BufferType::L1);
+                        for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
                             gather_from(dev_alloc, bank_id);
                         }
                         continue;

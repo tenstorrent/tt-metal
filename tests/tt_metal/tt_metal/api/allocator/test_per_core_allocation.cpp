@@ -302,6 +302,25 @@ TEST_F(PerCoreAllocationTest, RangeLockstepMemoryConfigReachesShardingArgs) {
         << "range lockstep set on the MemoryConfig did not reach the buffer's sharding args";
 }
 
+TEST_F(PerCoreAllocationTest, RangeLockstepSurvivesNdShardSpecConversion) {
+    // TensorSpec rebuilds the MemoryConfig from named fields when it converts an nd shard spec to
+    // a legacy one, and a rebuild drops the experimental flags unless they are explicitly restored.
+    // Nothing on that path reports the loss: the buffer just reverts to the chip-wide scan. Whether
+    // the conversion runs at all is shape-dependent, so this uses a shape it succeeds for.
+    //
+    // per_core_allocation cannot reach this path -- it refuses an NdShardSpec outright -- so this
+    // flag is the only one for which the restore is live.
+    const CoreRangeSet grid(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));
+    MemoryConfig config(BufferType::L1, NdShardSpec{.shard_shape = Shape({1, 32}), .grid = grid});
+    range_lockstep::set_range_lockstep_allocation(config, true);
+
+    const TensorSpec spec(Shape({2, 32}), TensorLayout(DataType::UINT8, PageConfig(Layout::ROW_MAJOR), config));
+    EXPECT_TRUE(range_lockstep::is_range_lockstep_allocation(spec.memory_config()))
+        << "the nd -> legacy shard spec conversion dropped range lockstep";
+    EXPECT_TRUE(range_lockstep::is_range_lockstep_allocation(spec.compute_buffer_sharding_args()))
+        << "range lockstep did not reach the buffer's sharding args from an nd shard spec";
+}
+
 TEST_F(PerCoreAllocationTest, RangeLockstepMemoryConfigRejectsPerCoreAndInterleaved) {
     auto per_core_config = sharded_l1_memory_config();
     per_core::set_per_core_allocation(per_core_config, true);

@@ -10,6 +10,10 @@ succeeds beside a per-core allocation -- rather than reading the flag back.
 
 Mesh, not a plain device: hybrid_device_allocators_ is only populated for mesh allocations, and
 the ranges are only gathered when it is non-empty. A 1x1 mesh is enough.
+
+Known gap: one mesh device means these cannot see the allocator resolving each scanned core in
+that device's own bank mapping. L1 bank ids are handed out per device config, so exercising it
+needs a mesh whose devices differ in harvesting or in their compute/dispatch split.
 """
 
 import pytest
