@@ -4,11 +4,8 @@
 """Qwen2-7B construction entry point over the shared Qwen2 executor."""
 
 from models.common.models.qwen2_7b.hf_adaptor import Qwen2ForCausalLM
-from models.common.models.qwen2_executor import (
-    Qwen2Executor,
-    Qwen2ExecutorConfig,
-    build_qwen2_7b_executor as _build_qwen2_7b_executor,
-)
+from models.common.models.qwen2_executor import Qwen2Executor, Qwen2ExecutorConfig
+from models.common.models.qwen2_executor import build_qwen2_7b_executor as _build_qwen2_7b_executor
 
 
 def build_qwen2_7b_executor(llm: Qwen2ForCausalLM, config: Qwen2ExecutorConfig) -> Qwen2Executor:

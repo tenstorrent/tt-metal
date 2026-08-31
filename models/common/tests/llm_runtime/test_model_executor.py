@@ -89,15 +89,15 @@ def test_direct_composition_examples_do_not_depend_on_shared_family_executors(re
     assert "models.common.models.qwen2_executor" not in imports
 
 
-def test_common_config_is_frozen_and_rejects_non_exact_nested_config_types() -> None:
+def test_common_config_is_frozen_and_rejects_non_exact_nested_config_types(expect_error) -> None:
     config = _config()
-    with pytest.raises(AttributeError):
+    with expect_error(AttributeError, "cannot assign to field"):
         config.device_sampling_enabled = True
 
     class TraceConfigSubclass(TraceConfig):
         pass
 
-    with pytest.raises(TypeError, match="trace must be exactly TraceConfig"):
+    with expect_error(TypeError, "trace must be exactly TraceConfig"):
         ModelExecutorConfig(
             trace=TraceConfigSubclass(mode="none"),
             warmup=config.warmup,
@@ -106,15 +106,15 @@ def test_common_config_is_frozen_and_rejects_non_exact_nested_config_types() -> 
         )
 
 
-def test_sampling_state_inputs_are_an_optional_owned_pair() -> None:
-    with pytest.raises(ValueError, match="must be supplied together"):
+def test_sampling_state_inputs_are_an_optional_owned_pair(expect_error) -> None:
+    with expect_error(ValueError, "must be supplied together"):
         ModelExecutor(
             None,
             None,
             _config(device_sampling_enabled=True),
             sampling_state_controller=object(),
         )
-    with pytest.raises(ValueError, match="requires device sampling"):
+    with expect_error(ValueError, "requires device sampling"):
         ModelExecutor(
             None,
             None,
@@ -242,7 +242,7 @@ def test_layout_refresh_preserves_owner_and_sampling_state_identity(monkeypatch)
     assert decode_resolve.call_args.kwargs["sampling_state"] is state
 
 
-def test_cleanup_is_ordered_retryable_idempotent_and_terminal() -> None:
+def test_cleanup_is_ordered_retryable_idempotent_and_terminal(expect_error) -> None:
     events = []
     failing = {"reader", "trace"}
 
@@ -277,7 +277,7 @@ def test_cleanup_is_ordered_retryable_idempotent_and_terminal() -> None:
     target.kv_cache_manager = _Owner("kv")
 
     expected = ["decode", "reader", "prefill", "decode", "trace", "program", "sampling-state", "sampling", "kv"]
-    with pytest.raises(RuntimeError, match="reader") as raised:
+    with expect_error(RuntimeError, "reader") as raised:
         target.cleanup()
     assert events == expected
     assert [str(error) for error in raised.value.cleanup_failures] == ["trace"]

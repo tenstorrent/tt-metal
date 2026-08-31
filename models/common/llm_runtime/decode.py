@@ -30,7 +30,7 @@ from models.common.modules.sampling.params import (
     prepare_sampling_params,
     slice_sampling_params,
 )
-from models.common.modules.sampling.seed_manager_1d import SeedManager1D, SeedState
+from models.common.modules.sampling.seed_manager_1d import SeedManager1D
 from models.common.sampling.sampling_params import SamplingParams
 
 
@@ -360,12 +360,16 @@ class DecodeRuntime:
         self._seed_manager = (
             self._sampling_state_controller.seed_manager
             if self._sampling_state_controller is not None
-            else SeedManager1D(sampling_config) if config.device_sampling_enabled and has_mutable_seed_buffer else None
+            else SeedManager1D(sampling_config)
+            if config.device_sampling_enabled and has_mutable_seed_buffer
+            else None
         )
         self._seed_state = (
             self._sampling_state.seed_state
             if self._sampling_state is not None
-            else self._seed_manager.create_state() if self._seed_manager is not None else None
+            else self._seed_manager.create_state()
+            if self._seed_manager is not None
+            else None
         )
         if self._seed_state is not None and self._seed_state.capacity < config.lane_capacity:
             raise ValueError("model sampling seed buffer is smaller than the decode lane capacity")

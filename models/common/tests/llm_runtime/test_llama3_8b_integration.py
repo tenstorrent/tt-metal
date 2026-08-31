@@ -12,7 +12,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.llm_runtime.config import PageTableLayout, PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.llm_runtime.config import PagedKVCacheConfig, PageTableLayout, TraceConfig, WarmupConfig
 from models.common.llm_runtime.execution import EagerExecutor, TracedExecutor
 from models.common.llm_runtime.lane_group import LaneGroupExecutor
 from models.common.llm_runtime.warmup import _build_plan
@@ -165,10 +165,10 @@ def test_executor_resolves_batched_prefill_policy(
     assert executor.prefill_runtime.config.batched_prefill_batched_extract is True
 
 
-def test_executor_rejects_batched_prefill_diagnostic_override_without_device_sampling():
+def test_executor_rejects_batched_prefill_diagnostic_override_without_device_sampling(expect_error):
     base_config = _config()
 
-    with pytest.raises(ValueError, match="requires device_sampling_enabled"):
+    with expect_error(ValueError, "requires device_sampling_enabled"):
         llama_executor.Llama3ExecutorConfig(
             trace=base_config.trace,
             warmup=base_config.warmup,

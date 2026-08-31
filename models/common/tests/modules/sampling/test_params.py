@@ -38,8 +38,8 @@ def test_stochastic_top_k_device_boundaries_are_preserved_exactly(top_k):
 
 
 @pytest.mark.parametrize("top_k", [0, -1, 33, 50, 128256])
-def test_unsupported_stochastic_top_k_raises_instead_of_clamping(top_k):
-    with pytest.raises(ValueError, match="route this request to host sampling"):
+def test_unsupported_stochastic_top_k_raises_instead_of_clamping(top_k, expect_error):
+    with expect_error(ValueError, "route this request to host sampling"):
         _prepare(SamplingParams(temperature=0.7, top_k=top_k, top_p=0.9))
 
 
@@ -68,8 +68,8 @@ def test_mixed_greedy_and_stochastic_rows_use_batch_wide_topk_path():
     assert prepared.top_k[:2] == (1, 32)
 
 
-def test_one_unsupported_stochastic_row_rejects_the_complete_batch():
-    with pytest.raises(ValueError, match=r"top_k\[1\]=33"):
+def test_one_unsupported_stochastic_row_rejects_the_complete_batch(expect_error):
+    with expect_error(ValueError, r"top_k\[1\]=33"):
         _prepare(
             SamplingParams(
                 temperature=[0.0, 0.5],

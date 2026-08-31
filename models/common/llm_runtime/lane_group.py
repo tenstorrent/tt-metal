@@ -451,7 +451,9 @@ class LaneGroupExecutor:
                 (
                     "activated"
                     if coordinator.trace_activated
-                    else "pending" if coordinator.capture_pending else "incomplete"
+                    else "pending"
+                    if coordinator.capture_pending
+                    else "incomplete"
                 )
                 for coordinator in coordinators
             )

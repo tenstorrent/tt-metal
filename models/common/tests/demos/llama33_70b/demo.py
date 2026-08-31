@@ -289,6 +289,7 @@ def _preflight_perf_target(
         return _resolve_local_perf_target(expected, case_name=case_name)
     return None
 
+
 # batch-32-ci per-SKU max_seq_len (TTTv1 ci-32 parity is seq2048). DRAM trap: raising max_seq_len
 # doubles the batch-32 KV cache, and 70B is the extreme case — BFP8 weights are ~9 GB/device on T3K,
 # leaving only ~3 GB for KV + activations. batch-32 already runs at seq1024 (see the test body);
@@ -723,9 +724,7 @@ def test_llama33_70b(test_config, mesh_device, optimizations):
         perf_expected = expected
         if test_config == "batch-1":
             perf_expected = (
-                EXPECTED_METRICS_BATCH1.get(_sampling_bucket(), {})
-                .get(optimizations, {})
-                .get(device_name, {})
+                EXPECTED_METRICS_BATCH1.get(_sampling_bucket(), {}).get(optimizations, {}).get(device_name, {})
             )
         resolved_perf_expected = _preflight_perf_target(
             test_config=test_config,
@@ -1167,9 +1166,7 @@ def _run_eval_repeat_batch32(
             first_repeat_profiler=profiler,
             page_table_mode=os.environ.get("EVAL_PAGE_TABLE_MODE", "slot-stable"),
             identical_prompt_index=(
-                int(os.environ["EVAL_IDENTICAL_PROMPT_INDEX"])
-                if "EVAL_IDENTICAL_PROMPT_INDEX" in os.environ
-                else None
+                int(os.environ["EVAL_IDENTICAL_PROMPT_INDEX"]) if "EVAL_IDENTICAL_PROMPT_INDEX" in os.environ else None
             ),
             active_batch_size=(
                 int(os.environ["EVAL_ACTIVE_BATCH_SIZE"]) if "EVAL_ACTIVE_BATCH_SIZE" in os.environ else None

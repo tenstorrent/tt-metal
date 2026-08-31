@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import ttnn
-from models.common.device_utils import is_blackhole
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.modules.tt_ccl import (

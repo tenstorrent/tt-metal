@@ -16,9 +16,9 @@ import pytest
 import torch
 
 from models.common.modules.lazy_buffer import LazyBuffer
+from models.common.modules.sampling import penalties_1d as penalties_module
 from models.common.modules.sampling.params import PreparedSamplingParams, place_prepared_sampling_params
 from models.common.modules.sampling.penalties_1d import Penalties1D
-from models.common.modules.sampling import penalties_1d as penalties_module
 from models.common.modules.sampling.sampling_state_1d import SamplingState1D
 
 
@@ -293,8 +293,8 @@ def test_constructor_derives_exact_penalty_contract_from_borrowed_sampler():
     assert controller.seed_manager.seed_buffer is sampling.config.seeds
 
 
-def test_constructor_rejects_non_1d_topology_before_constructing_state():
-    with pytest.raises(ValueError, match="only supports 1D"):
+def test_constructor_rejects_non_1d_topology_before_constructing_state(expect_error):
+    with expect_error(ValueError, "only supports 1D"):
         _make_controller(shape=(2, 2))
 
 
@@ -307,12 +307,12 @@ def test_constructor_rejects_non_1d_topology_before_constructing_state():
         ({"sub_core_grids": object()}, "sub_core_grids"),
     ],
 )
-def test_constructor_rejects_penalty_contract_drift(updates, message):
-    with pytest.raises(ValueError, match=message):
+def test_constructor_rejects_penalty_contract_drift(updates, message, expect_error):
+    with expect_error(ValueError, message):
         _make_controller(penalty_config_updates=updates)
 
 
-def test_create_state_materializes_noop_params_and_clears_history():
+def test_create_state_materializes_noop_params_and_clears_history(expect_error):
     controller, _, penalties, events = _make_controller()
     state = controller.create_state()
 
@@ -325,7 +325,7 @@ def test_create_state_materializes_noop_params_and_clears_history():
     assert torch.equal(penalties.config.inverse_repetition_penalties.source, torch.ones(4, 1))
     assert _event_names(events)[-3:] == ["seed.reset", "penalty.prompt", "penalty.output_reset"]
 
-    with pytest.raises(RuntimeError, match="already live"):
+    with expect_error(RuntimeError, "already live"):
         controller.create_state()
 
 
@@ -360,35 +360,35 @@ def test_admit_updates_params_seeds_histories_and_static_identity():
     assert torch.equal(events[-1][1], prepared.output_tokens)
 
 
-def test_admit_validates_repetition_history_before_mutating_seed_state():
+def test_admit_validates_repetition_history_before_mutating_seed_state(expect_error):
     controller, _, _, events = _make_controller()
     state = controller.create_state()
     prepared = replace(_prepared(), prompt_tokens=None)
     events.clear()
 
-    with pytest.raises(ValueError, match="prompt_tokens are required"):
+    with expect_error(ValueError, "prompt_tokens are required"):
         controller.admit(state, prepared)
 
     assert events == []
     assert not any(state.seed_state.active)
 
 
-def test_prepared_capability_must_match_the_borrowed_sampler():
+def test_prepared_capability_must_match_the_borrowed_sampler(expect_error):
     controller, _, _, _ = _make_controller()
     state = controller.create_state()
     prepared = replace(_prepared(), max_device_top_k=64)
 
-    with pytest.raises(ValueError, match="max_device_top_k"):
+    with expect_error(ValueError, "max_device_top_k"):
         controller.admit(state, prepared)
 
 
-def test_decode_reset_validates_history_before_mutating_seed_state():
+def test_decode_reset_validates_history_before_mutating_seed_state(expect_error):
     controller, _, _, events = _make_controller()
     state = controller.create_state()
     prepared = replace(_prepared(), prompt_tokens=None)
     events.clear()
 
-    with pytest.raises(ValueError, match="prompt_tokens are required"):
+    with expect_error(ValueError, "prompt_tokens are required"):
         controller.synchronize_decode(state, prepared, reset_batch=True)
 
     assert events == []
@@ -495,7 +495,7 @@ def test_decode_identity_remap_admits_new_slot_without_reset_and_preserves_survi
     assert events[2] == ("seed.synchronize", (0, 1), False)
 
 
-def test_decode_new_slot_without_remap_remains_strict_and_does_not_leak():
+def test_decode_new_slot_without_remap_remains_strict_and_does_not_leak(expect_error):
     controller, _, _, events = _make_controller()
     state = controller.create_state()
     initial = replace(
@@ -510,14 +510,14 @@ def test_decode_new_slot_without_remap_remains_strict_and_does_not_leak():
     events.clear()
     expanded = _prepared(penalties=False, seeds=(11, 22, None, None))
 
-    with pytest.raises(RuntimeError, match="reset_batch=True"):
+    with expect_error(RuntimeError, "reset_batch=True"):
         controller.synchronize_decode(state, expanded, reset_batch=False)
 
     assert (tuple(state.seed_state.active), tuple(state.seed_state.seeds)) == before
     assert events == [("seed.synchronize", (0, 1), False)]
 
 
-def test_decode_nonidentity_remap_changed_survivor_rejects_before_mutation():
+def test_decode_nonidentity_remap_changed_survivor_rejects_before_mutation(expect_error):
     controller, _, _, events = _make_controller()
     state = controller.create_state()
     initial = replace(
@@ -536,14 +536,14 @@ def test_decode_nonidentity_remap_changed_survivor_rejects_before_mutation():
         slot_remap=(1, 0, 2, 3),
     )
 
-    with pytest.raises(RuntimeError, match="changed active seed slots"):
+    with expect_error(RuntimeError, "changed active seed slots"):
         controller.synchronize_decode(state, changed, reset_batch=False)
 
     assert (tuple(state.seed_state.active), tuple(state.seed_state.seeds)) == before
     assert events == []
 
 
-def test_decode_remap_validates_new_penalty_history_before_mutation():
+def test_decode_remap_validates_new_penalty_history_before_mutation(expect_error):
     controller, _, _, events = _make_controller()
     state = controller.create_state()
     initial = replace(
@@ -561,7 +561,7 @@ def test_decode_remap_validates_new_penalty_history_before_mutation():
         prompt_tokens=None,
     )
 
-    with pytest.raises(ValueError, match="prompt_tokens are required"):
+    with expect_error(ValueError, "prompt_tokens are required"):
         controller.synchronize_decode(state, incomplete, reset_batch=False)
 
     assert (tuple(state.seed_state.active), tuple(state.seed_state.seeds)) == before
@@ -638,12 +638,12 @@ def test_penalized_prefill_gap_decode_rebuilds_history_on_batch_reset():
     ]
 
 
-def test_refresh_rejects_static_identity_change_until_trace_is_reselected():
+def test_refresh_rejects_static_identity_change_until_trace_is_reselected(expect_error):
     controller, _, _, _ = _make_controller()
     state = controller.create_state()
     controller.admit(state, _prepared())
 
-    with pytest.raises(RuntimeError, match="static identity changed"):
+    with expect_error(RuntimeError, "static identity changed"):
         controller.refresh_dynamic_inputs(state, _prepared(sampling_path="argmax"))
 
 
@@ -671,7 +671,7 @@ def test_slot_remap_moves_seed_state_and_rebuilds_penalty_history():
     assert _event_names(events) == ["seed.synchronize", "seed.refresh"]
 
 
-def test_before_after_sampling_enforces_penalty_order_and_exactly_once_update():
+def test_before_after_sampling_enforces_penalty_order_and_exactly_once_update(expect_error):
     controller, _, _, events = _make_controller()
     state = controller.create_state()
     prepared = _prepared()
@@ -688,7 +688,7 @@ def test_before_after_sampling_enforces_penalty_order_and_exactly_once_update():
         "penalty.decode",
         "penalty.update",
     ]
-    with pytest.raises(RuntimeError, match="not the pending"):
+    with expect_error(RuntimeError, "not the pending"):
         controller.after_sampling(state, "token", sample_id=sample_id)
 
 
@@ -726,7 +726,7 @@ def test_atomic_decode_composes_penalties_sampling_seeds_and_history():
     assert state.pending_sample_id is None
 
 
-def test_sampling_failure_cancels_pending_step_without_updating_history():
+def test_sampling_failure_cancels_pending_step_without_updating_history(expect_error):
     controller, sampling, _, events = _make_controller()
     state = controller.create_state()
     prepared = _prepared()
@@ -734,7 +734,7 @@ def test_sampling_failure_cancels_pending_step_without_updating_history():
     sampling.raise_on_decode = True
     events.clear()
 
-    with pytest.raises(RuntimeError, match="sampling failed"):
+    with expect_error(RuntimeError, "sampling failed"):
         controller.decode_forward(
             "logits",
             state,
@@ -820,14 +820,14 @@ def test_argmax_restores_default_seeds_and_does_not_require_kpt():
     assert "penalty.update" not in _event_names(events)
 
 
-def test_cleanup_validates_before_mutating_and_rebuilds_live_history():
+def test_cleanup_validates_before_mutating_and_rebuilds_live_history(expect_error):
     controller, _, _, events = _make_controller()
     state = controller.create_state()
     prepared = _prepared()
     controller.admit(state, prepared)
     events.clear()
 
-    with pytest.raises(ValueError, match="prepared sampling state is required"):
+    with expect_error(ValueError, "prepared sampling state is required"):
         controller.cleanup(state, (0, 1))
     assert events == []
 
@@ -835,7 +835,7 @@ def test_cleanup_validates_before_mutating_and_rebuilds_live_history():
     assert _event_names(events) == ["seed.cleanup", "penalty.prompt", "penalty.output_reset"]
 
 
-def test_release_resets_caller_state_and_releases_only_owned_penalties():
+def test_release_resets_caller_state_and_releases_only_owned_penalties(expect_error):
     controller, sampling, penalties, events = _make_controller()
     state = controller.create_state()
     controller.admit(state, _prepared())
@@ -847,7 +847,7 @@ def test_release_resets_caller_state_and_releases_only_owned_penalties():
     assert penalties.released
     assert not sampling.released
     assert _event_names(events) == ["seed.reset", "penalty.release"]
-    with pytest.raises(RuntimeError, match="released"):
+    with expect_error(RuntimeError, "released"):
         controller.reset(state)
     controller.release(state)
 

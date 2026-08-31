@@ -161,7 +161,9 @@ def build_trace_signature(
         operation_variant=(
             "chunked"
             if request.uses_chunked_prefill
-            else "regular-batched" if request.kind == "batched" else "regular-single"
+            else "regular-batched"
+            if request.kind == "batched"
+            else "regular-single"
         ),
         padded_batch_size=request.padded_batch_size,
         padded_sequence_length=chunk.chunk_size,

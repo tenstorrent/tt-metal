@@ -8,15 +8,10 @@ import random
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 import torch
 
 from models.common.modules.lazy_buffer import LazyBuffer
-from models.common.modules.sampling.seed_manager_1d import (
-    SeedManager1D,
-    SeedState,
-    _hash_request_seed_to_device_seed,
-)
+from models.common.modules.sampling.seed_manager_1d import SeedManager1D, SeedState, _hash_request_seed_to_device_seed
 
 
 class _EntropySequence:
@@ -55,8 +50,8 @@ def _make_manager(capacity=4):
     return manager, manager.create_state(), buffer, defaults
 
 
-def test_seed_state_requires_consistent_caller_owned_slot_storage():
-    with pytest.raises(ValueError, match="same capacity"):
+def test_seed_state_requires_consistent_caller_owned_slot_storage(expect_error):
+    with expect_error(ValueError, "same capacity"):
         SeedState(
             active=[False],
             request_seeds=[],
@@ -68,12 +63,12 @@ def test_seed_state_requires_consistent_caller_owned_slot_storage():
         )
 
 
-def test_seed_manager_requires_sampling_config_lazy_buffer_and_matching_capacity():
-    with pytest.raises(TypeError, match="mutable LazyBuffer-compatible"):
+def test_seed_manager_requires_sampling_config_lazy_buffer_and_matching_capacity(expect_error):
+    with expect_error(TypeError, "mutable LazyBuffer-compatible"):
         SeedManager1D(SimpleNamespace(max_batch_size=4, seeds=torch.arange(4)))
 
     buffer = _TrackingSeedBuffer(torch.arange(3, dtype=torch.int32))
-    with pytest.raises(ValueError, match="does not match"):
+    with expect_error(ValueError, "does not match"):
         SeedManager1D(SimpleNamespace(max_batch_size=4, seeds=buffer))
 
 
@@ -147,11 +142,11 @@ def test_unseeded_rng_state_is_diverse_and_same_position_trace_refresh_does_not_
     assert state.snapshot().token_counters[:2] == (2, 2)
 
 
-def test_synchronize_requires_reset_for_admission_and_preserves_survivor_state():
+def test_synchronize_requires_reset_for_admission_and_preserves_survivor_state(expect_error):
     manager, state, _, _ = _make_manager()
     slot_seeds = [42, None, None, None]
 
-    with pytest.raises(RuntimeError, match="reset_batch=True"):
+    with expect_error(RuntimeError, "reset_batch=True"):
         manager.synchronize(state, slot_seeds, [0], reset_batch=False)
 
     manager.synchronize(state, slot_seeds, [0], reset_batch=True)
@@ -165,7 +160,7 @@ def test_synchronize_requires_reset_for_admission_and_preserves_survivor_state()
     assert updated.current_device_seeds[0] == survivor.current_device_seeds[0]
     assert updated.salts[1] == 1
 
-    with pytest.raises(RuntimeError, match="reset_batch=True"):
+    with expect_error(RuntimeError, "reset_batch=True"):
         manager.synchronize(state, [77, 42, None, None], [0, 1], reset_batch=False)
     assert state.snapshot() == updated
 
@@ -265,22 +260,22 @@ def test_refresh_updates_one_stable_handle_and_never_promotes_request_values_to_
     assert torch.equal(buffer.source, defaults)
 
 
-def test_slot_validation_rejects_ambiguous_or_out_of_capacity_lifecycle_updates():
+def test_slot_validation_rejects_ambiguous_or_out_of_capacity_lifecycle_updates(expect_error):
     manager, state, _, _ = _make_manager()
 
-    with pytest.raises(ValueError, match="unique"):
+    with expect_error(ValueError, "unique"):
         manager.admit(state, [1, 2], [0, 0])
-    with pytest.raises(ValueError, match="outside"):
+    with expect_error(ValueError, "outside"):
         manager.admit(state, [1], [4])
-    with pytest.raises(ValueError, match="expected 2 request seeds"):
+    with expect_error(ValueError, "expected 2 request seeds"):
         manager.admit(state, [1], [0, 1])
-    with pytest.raises(ValueError, match="must contain 4"):
+    with expect_error(ValueError, "must contain 4"):
         manager.apply_slot_remap(state, [0, 1])
 
     manager.admit(state, [1], [3])
-    with pytest.raises(ValueError, match="do not cover active seed slot 3"):
+    with expect_error(ValueError, "do not cover active seed slot 3"):
         manager.refresh(state, [3], positions=[0])
-    with pytest.raises(ValueError, match="multiple destinations"):
+    with expect_error(ValueError, "multiple destinations"):
         manager.apply_slot_remap(state, [3, 3, 2, 3])
 
 

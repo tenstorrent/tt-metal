@@ -5,11 +5,8 @@
 
 import ttnn
 from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
-from models.common.models.qwen2_executor import (
-    Qwen25Coder32BExecutor,
-    Qwen25Coder32BExecutorConfig,
-    build_qwen25_coder_32b_executor as _build_qwen25_coder_32b_executor,
-)
+from models.common.models.qwen2_executor import Qwen25Coder32BExecutor, Qwen25Coder32BExecutorConfig
+from models.common.models.qwen2_executor import build_qwen25_coder_32b_executor as _build_qwen25_coder_32b_executor
 from models.common.models.qwen25_coder_32b.hf_adaptor import Qwen25Coder32BForCausalLM
 from models.common.models.qwen25_coder_32b.model import _slice_last_token_tile
 

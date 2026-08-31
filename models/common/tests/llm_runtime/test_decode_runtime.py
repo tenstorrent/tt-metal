@@ -269,7 +269,7 @@ def _stub_compile_only_decode(runtime, monkeypatch, run_body):
     monkeypatch.setattr(runtime, "_run_body", run_body)
 
 
-def test_compile_only_sampled_decode_temporarily_admits_and_resets_fallback_seed_slots(monkeypatch):
+def test_compile_only_sampled_decode_temporarily_admits_and_resets_fallback_seed_slots(monkeypatch, expect_error):
     runtime, seed_buffer = make_four_slot_seed_runtime()
     defaults = seed_buffer.source.clone()
     prepared = four_slot_sampled_warmup(runtime)
@@ -291,11 +291,11 @@ def test_compile_only_sampled_decode_temporarily_admits_and_resets_fallback_seed
     assert reset.active_slots == ()
     assert reset.buffer_is_default
     assert torch.equal(seed_buffer.source, defaults)
-    with pytest.raises(RuntimeError, match="reset_batch=True"):
+    with expect_error(RuntimeError, "reset_batch=True"):
         runtime._refresh_sampling_seeds(prepared)
 
 
-def test_compile_only_sampled_decode_resets_fallback_seed_slots_after_failure(monkeypatch):
+def test_compile_only_sampled_decode_resets_fallback_seed_slots_after_failure(monkeypatch, expect_error):
     runtime, seed_buffer = make_four_slot_seed_runtime()
     defaults = seed_buffer.source.clone()
     prepared = four_slot_sampled_warmup(runtime)
@@ -307,7 +307,7 @@ def test_compile_only_sampled_decode_resets_fallback_seed_slots_after_failure(mo
     _stub_compile_only_decode(runtime, monkeypatch, run_body)
     monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda owned: [])
 
-    with pytest.raises(RuntimeError, match="compile boom"):
+    with expect_error(RuntimeError, "compile boom"):
         runtime.invoke(prepared, count_tokens=False)
 
     reset = runtime._seed_state.snapshot()

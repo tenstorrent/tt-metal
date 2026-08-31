@@ -79,9 +79,10 @@ def test_p150x4_token_accuracy_uses_independently_existing_central_floor():
     assert "is_ci_env or device_name == 'P150x4'" in source
     assert "token accuracy is observational" not in source
     assert _calls("_run_token_accuracy", "resolve_accuracy_targets")
-    assert resolve_accuracy_targets(
-        "meta-llama/Llama-3.3-70B-Instruct", "P150x4", batch_size=1, seq_len=512
-    ) == {"top1": 96, "top5": 100}
+    assert resolve_accuracy_targets("meta-llama/Llama-3.3-70B-Instruct", "P150x4", batch_size=1, seq_len=512) == {
+        "top1": 96,
+        "top5": 100,
+    }
 
 
 def test_p150x4_eval_perf_has_no_independent_floor_to_copy_or_invent():
@@ -247,9 +248,7 @@ def test_eval_perf_targets_observe_when_missing_but_enforce_complete_floor(expec
     }
     exec(compile(ast.Module(body=[resolve_function], type_ignores=[]), _DEMO_PATH, "exec"), missing_namespace)
     assert (
-        missing_namespace["_resolve_eval32_perf_targets"](
-            "meta-llama/Llama-3.3-70B-Instruct", "P150x4", "performance"
-        )
+        missing_namespace["_resolve_eval32_perf_targets"]("meta-llama/Llama-3.3-70B-Instruct", "P150x4", "performance")
         is None
     )
 
@@ -321,8 +320,7 @@ def test_eval_perf_targets_observe_when_missing_but_enforce_complete_floor(expec
     resolver_calls = []
     good_namespace = {
         "resolve_perf_targets": lambda *args, **kwargs: (
-            resolver_calls.append((args, kwargs))
-            or {"decode_t/s/u": 10.0, "prefill_time_to_first_token": 100.0}
+            resolver_calls.append((args, kwargs)) or {"decode_t/s/u": 10.0, "prefill_time_to_first_token": 100.0}
         ),
         "_EVAL32_FIXED_PROVENANCE": incomplete_namespace["_EVAL32_FIXED_PROVENANCE"],
         "_EVAL32_TARGET_PROVENANCE": incomplete_namespace["_EVAL32_TARGET_PROVENANCE"],
@@ -409,9 +407,7 @@ def test_eval_perf_preflight_applies_to_every_sku_and_canonical_sampling_is_earl
             ("eval_target", model, device, profile)
         )
         or {"floor": True},
-        "_resolve_local_perf_target": lambda expected, case_name: calls.append(
-            ("local_target", expected, case_name)
-        )
+        "_resolve_local_perf_target": lambda expected, case_name: calls.append(("local_target", expected, case_name))
         or expected,
     }
     exec(

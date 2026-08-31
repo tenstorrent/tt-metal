@@ -17,6 +17,7 @@ import ttnn
 from models.common.models.llama33_70b import weight_utils
 from models.common.models.llama33_70b.model import (
     LLAMA33_70B_ACCURACY,
+    LLAMA33_70B_BH_TP4_CLUSTER_TYPES,
     LLAMA33_70B_PERFORMANCE,
     Llama33_70BLayerWeights,
     Llama33_70BModelParameters,
@@ -24,7 +25,6 @@ from models.common.models.llama33_70b.model import (
     Llama33_70BPrecisionConfig,
     Llama33_70BTransformer1D,
     Llama33_70BWeights,
-    LLAMA33_70B_BH_TP4_CLUSTER_TYPES,
     _llama33_70b_ccl_topology,
     build_llama33_70b_transformer_1d_config,
 )

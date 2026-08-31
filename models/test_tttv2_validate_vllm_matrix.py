@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """CPU-only fail-closed contract tests for the TTTv2 vLLM gate tools."""
 
 from __future__ import annotations

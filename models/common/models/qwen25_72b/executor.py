@@ -3,11 +3,8 @@
 
 """Qwen2.5-72B construction and concrete compatibility entry points."""
 
-from models.common.models.qwen2_executor import (
-    Qwen25_72BExecutor,
-    Qwen25_72BExecutorConfig,
-    build_qwen25_72b_executor as _build_qwen25_72b_executor,
-)
+from models.common.models.qwen2_executor import Qwen25_72BExecutor, Qwen25_72BExecutorConfig
+from models.common.models.qwen2_executor import build_qwen25_72b_executor as _build_qwen25_72b_executor
 from models.common.models.qwen25_72b.hf_adaptor import Qwen25_72BForCausalLM
 from models.common.models.qwen25_72b.model import _slice_last_token_tile
 

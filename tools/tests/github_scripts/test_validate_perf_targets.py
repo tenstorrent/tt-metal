@@ -303,9 +303,7 @@ def test_validate_perf_targets_reports_accuracy_profile_perf_without_applying_pe
     }
     (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
     tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
-    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(
-        yaml.safe_dump(tests_yaml), encoding="utf-8"
-    )
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
 
     result = _run_validator(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr

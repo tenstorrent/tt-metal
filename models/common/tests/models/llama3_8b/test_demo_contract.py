@@ -75,11 +75,14 @@ def test_missing_or_incomplete_performance_targets_do_not_block_measurement_on_b
     )
 
     assert namespace["_expected_for_case"]({}, "batch-1", device_name="P150") is None
-    assert namespace["_expected_for_case"](
-        {"batch-32": {"tok_s_u": 1.0}},
-        "batch-32",
-        device_name="P150x4",
-    ) is None
+    assert (
+        namespace["_expected_for_case"](
+            {"batch-32": {"tok_s_u": 1.0}},
+            "batch-32",
+            device_name="P150x4",
+        )
+        is None
+    )
     assert len(warnings) == 2
     assert "missing tok_s_u, ttft_ms" in warnings[0]
     assert "Running on P150 without an in-test performance gate" in warnings[0]
@@ -139,7 +142,7 @@ def test_dp_smoke_loads_one_converted_state_dict_for_every_lane():
     assert ast.unparse(converted.value) == "converted_state_dict"
 
 
-def test_supplied_performance_targets_fail_on_any_miss_and_accept_all_passes():
+def test_supplied_performance_targets_fail_on_any_miss_and_accept_all_passes(expect_error):
     namespace = {"PERF_TOLERANCE": 0.05}
     exec(
         compile(ast.Module(body=[_function("_assert_performance_targets")], type_ignores=[]), _DEMO_PATH, "exec"),
@@ -158,7 +161,7 @@ def test_supplied_performance_targets_fail_on_any_miss_and_accept_all_passes():
         ttft_ms=120.0,
         meets_target=lambda targets, tolerance: {"tok_s_u": False, "ttft_ms": False},
     )
-    with pytest.raises(AssertionError, match="tok_s_u.*ttft_ms"):
+    with expect_error(AssertionError, "tok_s_u.*ttft_ms"):
         namespace["_assert_performance_targets"](failed, expected, case_name="performance/batch-32")
 
     report_source = ast.unparse(_function("_report_performance"))
@@ -209,7 +212,7 @@ def test_seeded_cross_cardinality_contract_records_complete_token_mismatch_as_re
 @pytest.mark.parametrize(
     "failure", ["missing_cardinality", "wrong_request_order", "empty", "truncated", "truncated_control"]
 )
-def test_seeded_cross_cardinality_contract_fails_closed(failure):
+def test_seeded_cross_cardinality_contract_fails_closed(failure, expect_error):
     request_ids, controls, outputs = _valid_cross_cardinality_outputs()
     if failure == "missing_cardinality":
         del outputs[4]
@@ -223,7 +226,7 @@ def test_seeded_cross_cardinality_contract_fails_closed(failure):
     else:
         controls[request_ids[0]] = controls[request_ids[0]][:-1]
 
-    with pytest.raises(AssertionError):
+    with expect_error(AssertionError, "seeded cross-cardinality|sequential controls|cardinality|returned"):
         evaluate_seeded_cross_cardinality_consistency(
             outputs, controls, request_ids=request_ids, expected_token_count=2
         )

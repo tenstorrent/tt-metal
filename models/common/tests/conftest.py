@@ -160,11 +160,7 @@ def ttnn_mesh_device(request):
     sys_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()  # type: ignore[attr-defined]
     sys_shape = tuple(sys_desc.shape())
     req_shape = tuple(mesh_shape)
-    if (
-        blackhole_selected
-        and req_shape == (1, 4)
-        and not _is_physical_p150x4_cluster(ttnn.cluster.get_cluster_type())
-    ):
+    if blackhole_selected and req_shape == (1, 4) and not _is_physical_p150x4_cluster(ttnn.cluster.get_cluster_type()):
         pytest.skip(
             "Exact P150x4 hardware coverage requires a physical P150_X4 or P300_X2 cluster; "
             "other submeshes are not SKU-equivalent"

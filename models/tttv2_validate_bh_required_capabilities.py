@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """Validate immutable TTTv2 BlackHole required-capability contracts.
 
 The qualification path is deliberately host-only and dependency-free: it
@@ -18,7 +21,6 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-
 MODELS_DIR = Path(__file__).resolve().parent
 DEFAULT_SCHEMA = MODELS_DIR / "tttv2_bh_required_capabilities.schema.json"
 DEFAULT_CONTRACTS = (
@@ -36,14 +38,37 @@ _CAPABILITIES = {"functional", "token_accuracy", "determinism", "performance", "
 _CONTEXT_SUBCASES = {"long_prefill", "chunked_prefill", "cached_prefill"}
 
 _ROOT_KEYS = (
-    "$schema", "schema_version", "contract_id", "model", "authority", "scope", "geometries",
-    "demo_requirements", "serving_requirements", "cross_cutting_requirements", "excluded_or_deferred",
+    "$schema",
+    "schema_version",
+    "contract_id",
+    "model",
+    "authority",
+    "scope",
+    "geometries",
+    "demo_requirements",
+    "serving_requirements",
+    "cross_cutting_requirements",
+    "excluded_or_deferred",
 )
 _MODEL_KEYS = ("package", "hf_model_id", "demo_entry_point")
 _DEMO_KEYS = (
-    "id", "geometry_id", "profile", "demo_case", "source_parameter_id", "node_id",
-    "batch_size", "decode_tokens", "repeat_batches", "report_perf", "dp", "trace_mode",
-    "context_bucket", "cache_protocol", "capabilities", "required_resolution", "acceptance_condition",
+    "id",
+    "geometry_id",
+    "profile",
+    "demo_case",
+    "source_parameter_id",
+    "node_id",
+    "batch_size",
+    "decode_tokens",
+    "repeat_batches",
+    "report_perf",
+    "dp",
+    "trace_mode",
+    "context_bucket",
+    "cache_protocol",
+    "capabilities",
+    "required_resolution",
+    "acceptance_condition",
 )
 
 # These identities select immutable, model-specific requirements.  In
@@ -146,39 +171,57 @@ _LLAMA_DEMO_MANIFESTS = {
 }
 _QWEN_DEMO_MANIFEST = {
     "p150x4.performance.token_accuracy": (
-        "performance", "token-accuracy", "token-accuracy",
+        "performance",
+        "token-accuracy",
+        "token-accuracy",
         "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[performance-token-accuracy-P150x4]",
     ),
     "p150x4.accuracy.token_accuracy": (
-        "accuracy", "token-accuracy", "token-accuracy",
+        "accuracy",
+        "token-accuracy",
+        "token-accuracy",
         "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[accuracy-token-accuracy-P150x4]",
     ),
     "p150x4.performance.eval_32": (
-        "performance", "eval-32", "eval-32",
+        "performance",
+        "eval-32",
+        "eval-32",
         "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[performance-eval-32-P150x4]",
     ),
     "p150x4.accuracy.eval_32": (
-        "accuracy", "eval-32", "eval-32",
+        "accuracy",
+        "eval-32",
+        "eval-32",
         "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[accuracy-eval-32-P150x4]",
     ),
     "p150x4.performance.eval_32_perf_report": (
-        "performance", "eval-32-perf-report", "eval-32-perf-report",
+        "performance",
+        "eval-32-perf-report",
+        "eval-32-perf-report",
         "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[performance-eval-32-perf-report-P150x4]",
     ),
     "p150x4.accuracy.eval_32_perf_report": (
-        "accuracy", "eval-32-perf-report", "eval-32-perf-report",
+        "accuracy",
+        "eval-32-perf-report",
+        "eval-32-perf-report",
         "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[accuracy-eval-32-perf-report-P150x4]",
     ),
     "p150x4.performance.batch_32_ci": (
-        "performance", "batch-32-ci", "batch-32-ci",
+        "performance",
+        "batch-32-ci",
+        "batch-32-ci",
         "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[performance-batch-32-ci-P150x4]",
     ),
     "p150x4.accuracy.batch_32_ci": (
-        "accuracy", "batch-32-ci", "batch-32-ci",
+        "accuracy",
+        "batch-32-ci",
+        "batch-32-ci",
         "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[accuracy-batch-32-ci-P150x4]",
     ),
     "p150x4.accuracy.seeded_cross_cardinality": (
-        "accuracy", "seeded-cross-cardinality", "seeded-cross-cardinality",
+        "accuracy",
+        "seeded-cross-cardinality",
+        "seeded-cross-cardinality",
         "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b_p150x4_seeded_cross_cardinality[P150x4]",
     ),
 }
@@ -204,9 +247,7 @@ def load_schema(schema_path: Path = DEFAULT_SCHEMA) -> dict[str, Any]:
 
     schema = _read_json(schema_path)
     if schema.get("$schema") != _DRAFT_2020_12:
-        raise CapabilityContractValidationError(
-            f"{schema_path}: $schema must declare JSON Schema Draft 2020-12"
-        )
+        raise CapabilityContractValidationError(f"{schema_path}: $schema must declare JSON Schema Draft 2020-12")
     if schema.get("$id") != _INSTANCE_SCHEMA:
         raise CapabilityContractValidationError(f"{schema_path}: unexpected or missing $id")
     if schema.get("type") != "object" or schema.get("additionalProperties") is not False:
@@ -407,9 +448,21 @@ def _validate_context(value: Any, path: str) -> list[str]:
 
 def _validate_serving(value: Any, path: str) -> list[str]:
     keys = (
-        "row_id", "geometry_id", "profile", "model_optimization_profile", "dp", "trace_mode",
-        "trace_prefill_buckets", "context_requirements", "cached_prefill", "chunked_prefill",
-        "tier0_smoke", "tier1_performance", "tier2_quality", "required_resolution", "acceptance_condition",
+        "row_id",
+        "geometry_id",
+        "profile",
+        "model_optimization_profile",
+        "dp",
+        "trace_mode",
+        "trace_prefill_buckets",
+        "context_requirements",
+        "cached_prefill",
+        "chunked_prefill",
+        "tier0_smoke",
+        "tier1_performance",
+        "tier2_quality",
+        "required_resolution",
+        "acceptance_condition",
     )
     row, errors = _closed_object(value, path, required=keys)
     if row is None or errors:
@@ -426,9 +479,7 @@ def _validate_serving(value: Any, path: str) -> list[str]:
     else:
         for index, bucket in enumerate(buckets):
             errors.extend(_integer(bucket, f"{path}.trace_prefill_buckets.{index}", minimum=1))
-        all_integer_buckets = all(
-            isinstance(bucket, int) and not isinstance(bucket, bool) for bucket in buckets
-        )
+        all_integer_buckets = all(isinstance(bucket, int) and not isinstance(bucket, bool) for bucket in buckets)
         if all_integer_buckets and len(buckets) != len(set(buckets)):
             errors.append(f"{path}.trace_prefill_buckets must not contain duplicates")
     contexts = row["context_requirements"]
@@ -566,11 +617,7 @@ def _demo_source_errors(contract: Mapping[str, Any]) -> list[str]:
     except (OSError, SyntaxError) as error:
         return [f"cannot parse declared demo entry point {entry_point}: {error}"]
 
-    functions = {
-        node.name: node
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
+    functions = {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     parametrizations = {name: _literal_parametrize_ids(function) for name, function in functions.items()}
 
     for row in contract["demo_requirements"]:
@@ -593,9 +640,7 @@ def _demo_source_errors(contract: Mapping[str, Any]) -> list[str]:
         parameters = parametrizations[function_name]
         profiles = parameters.get("optimizations")
         if profiles is not None and row["profile"] not in profiles:
-            errors.append(
-                f"demo requirement {row['id']} profile {row['profile']!r} is not declared by {function_name}"
-            )
+            errors.append(f"demo requirement {row['id']} profile {row['profile']!r} is not declared by {function_name}")
         source_ids: set[str] = set()
         for parameter_name, ids in parameters.items():
             if parameter_name != "optimizations":
@@ -786,9 +831,7 @@ def _semantic_errors(contract: Mapping[str, Any]) -> list[str]:
         if performance_policy is None:
             errors.append("llama3_8b must preserve the observational performance-floor policy")
         else:
-            performance_text = (
-                f"{performance_policy['capability']} {performance_policy['acceptance_condition']}"
-            )
+            performance_text = f"{performance_policy['capability']} {performance_policy['acceptance_condition']}"
             for phrase in (
                 "must not block BH model execution or observational measurement",
                 "cannot establish performance acceptance",
@@ -824,9 +867,7 @@ def _semantic_errors(contract: Mapping[str, Any]) -> list[str]:
 
     if contract_id == _QWEN_CONTRACT_ID:
         actual_manifest = {
-            item["id"]: (
-                item["profile"], item["demo_case"], item["source_parameter_id"], item["node_id"]
-            )
+            item["id"]: (item["profile"], item["demo_case"], item["source_parameter_id"], item["node_id"])
             for item in demos
         }
         missing_ids = sorted(set(_QWEN_DEMO_MANIFEST) - set(actual_manifest))
@@ -838,11 +879,7 @@ def _semantic_errors(contract: Mapping[str, Any]) -> list[str]:
         for row_id in sorted(set(actual_manifest) & set(_QWEN_DEMO_MANIFEST)):
             if actual_manifest[row_id] != _QWEN_DEMO_MANIFEST[row_id]:
                 errors.append(f"qwen3_32b demo manifest row {row_id} does not match its immutable identity")
-        if (
-            not missing_ids
-            and not extra_ids
-            and _demo_manifest_digest(demos) != _QWEN_DEMO_MANIFEST_SHA256
-        ):
+        if not missing_ids and not extra_ids and _demo_manifest_digest(demos) != _QWEN_DEMO_MANIFEST_SHA256:
             errors.append(
                 "qwen3_32b demo manifest does not match immutable row/node/profile/case/geometry/"
                 "workload/trace/cache/capability/acceptance fields"
@@ -867,8 +904,7 @@ def _semantic_errors(contract: Mapping[str, Any]) -> list[str]:
 
         cross_rows = [item for item in demos if item["demo_case"] == "seeded-cross-cardinality"]
         expected_cross_node = (
-            "models/common/tests/demos/qwen3_32b/demo.py::"
-            "test_qwen3_32b_p150x4_seeded_cross_cardinality[P150x4]"
+            "models/common/tests/demos/qwen3_32b/demo.py::" "test_qwen3_32b_p150x4_seeded_cross_cardinality[P150x4]"
         )
         if len(cross_rows) != 1:
             errors.append("qwen3_32b must declare one canonical seeded cross-cardinality node")

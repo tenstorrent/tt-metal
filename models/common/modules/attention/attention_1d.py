@@ -40,7 +40,6 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import ttnn
-from models.common.device_utils import is_blackhole
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig
@@ -196,9 +195,9 @@ class Attention1DConfig:
 
     # Prefill program configs (Callable factories: seq_len → config)
     prefill_input_memcfg: ttnn.MemoryConfig | None = None  # DRAM interleaved input for prefill
-    prefill_xqkv_prg_config: Callable[[int], ttnn.MatmulMultiCoreReuseMultiCastProgramConfig] | None = (
-        None  # f(seq_len)
-    )
+    prefill_xqkv_prg_config: Callable[
+        [int], ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
+    ] | None = None  # f(seq_len)
     prefill_sdpa_prg_config: Callable[[int, int | None], ttnn.SDPAProgramConfig] | None = None  # f(seq_len, chunk_size)
     prefill_wo_prg_config: Callable[[int], ttnn.MatmulMultiCoreReuseMultiCastProgramConfig] | None = None  # f(seq_len)
     prefill_kv_memcfg: Callable[[int], ttnn.MemoryConfig] | None = None  # f(seq_len) for KV cache write

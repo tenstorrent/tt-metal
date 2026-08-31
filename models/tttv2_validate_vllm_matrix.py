@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """Validate canonical TTTv2 vLLM smoke, benchmark, or quality evidence."""
 
 from __future__ import annotations

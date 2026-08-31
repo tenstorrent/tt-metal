@@ -13,7 +13,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.llm_runtime.config import PageTableLayout, PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.llm_runtime.config import PagedKVCacheConfig, PageTableLayout, TraceConfig, WarmupConfig
 from models.common.llm_runtime.decode import DecodeTraceSignature
 from models.common.llm_runtime.execution import EagerExecutor
 from models.common.llm_runtime.lane_group import LaneGroupExecutor

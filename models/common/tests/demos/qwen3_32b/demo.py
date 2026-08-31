@@ -960,9 +960,7 @@ def test_qwen3_32b(test_config, mesh_device, optimizations):
         elif test_config in ("eval-32", "eval-32-perf-report"):
             # 32-user cross-batch determinism (self-consistency under prompt rotation).
             perf_report = test_config == "eval-32-perf-report"
-            eval_expected = (
-                _resolve_eval32_perf_targets(hf_model, device_name, optimizations) if perf_report else None
-            )
+            eval_expected = _resolve_eval32_perf_targets(hf_model, device_name, optimizations) if perf_report else None
             _run_eval_repeat_batch32(
                 model,
                 mesh_device,
@@ -1207,9 +1205,7 @@ def test_qwen3_32b_p150x4_seeded_cross_cardinality(mesh_device):
                 top_p=[0.95] * len(request_seeds),
                 seed=list(request_seeds),
             )
-            geometry = _snapshot_cross_cardinality_prefill(
-                executor, input_tokens, page_table, prompt_lens
-            )
+            geometry = _snapshot_cross_cardinality_prefill(executor, input_tokens, page_table, prompt_lens)
             _require_cross_cardinality_prefill_geometry(
                 geometry,
                 cardinality=len(request_seeds),
@@ -1268,9 +1264,7 @@ def test_qwen3_32b_p150x4_seeded_cross_cardinality(mesh_device):
                 "replay_count_before_requests": compiler.replay_count,
             }, topk_trace_key
 
-        def run_requests(
-            executor, kv_cache, prepared_case, *, expected_topk_trace_key, expected_semantic_trace_count
-        ):
+        def run_requests(executor, kv_cache, prepared_case, *, expected_topk_trace_key, expected_semantic_trace_count):
             input_tokens, prompt_lens, sampling_params, geometry = prepared_case
             compiler = executor.trace_compiler
             traced = executor.traced_executor
@@ -1318,13 +1312,17 @@ def test_qwen3_32b_p150x4_seeded_cross_cardinality(mesh_device):
             assert compiler.get(expected_topk_trace_key).artifact is not None
             assert traced.coverage_miss_count == 0
             assert executor.program_compiler.post_activation_compile_rejections == 0
-            return generated, geometry, {
-                "cardinality": len(prompt_lens),
-                "decode_trace_replays": decode_replay_delta,
-                "trace_key": expected_topk_trace_key.digest,
-                "coverage_misses": traced.coverage_miss_count,
-                "post_activation_compile_rejections": executor.program_compiler.post_activation_compile_rejections,
-            }
+            return (
+                generated,
+                geometry,
+                {
+                    "cardinality": len(prompt_lens),
+                    "decode_trace_replays": decode_replay_delta,
+                    "trace_key": expected_topk_trace_key.digest,
+                    "coverage_misses": traced.coverage_miss_count,
+                    "post_activation_compile_rejections": executor.program_compiler.post_activation_compile_rejections,
+                },
+            )
 
         controls = {}
         control_geometry = []
@@ -1342,9 +1340,7 @@ def test_qwen3_32b_p150x4_seeded_cross_cardinality(mesh_device):
                 sequential_executor, sequential_kv_cache
             )
             control_replay_evidence = []
-            for request_id, prepared_case in zip(
-                _CROSS_CARDINALITY_REQUEST_IDS, control_cases, strict=True
-            ):
+            for request_id, prepared_case in zip(_CROSS_CARDINALITY_REQUEST_IDS, control_cases, strict=True):
                 generated, geometry, replay_evidence = run_requests(
                     sequential_executor,
                     sequential_kv_cache,
@@ -1399,7 +1395,9 @@ def test_qwen3_32b_p150x4_seeded_cross_cardinality(mesh_device):
                             _CROSS_CARDINALITY_REQUEST_IDS[:cardinality], generated, strict=True
                         )
                     }
-                candidate_trace_lifecycle["replay_count_after_requests"] = candidate_executor.trace_compiler.replay_count
+                candidate_trace_lifecycle[
+                    "replay_count_after_requests"
+                ] = candidate_executor.trace_compiler.replay_count
                 assert candidate_trace_lifecycle["replay_count_after_requests"] == (
                     len(_CROSS_CARDINALITIES) * _CROSS_CARDINALITY_DECODE_TOKENS
                 )
@@ -1869,9 +1867,7 @@ def _run_eval_repeat_batch32(
             model,
             mesh_device,
             ondevice_decode_loop=sampling_params is not None,
-            trace_mode=(
-                "all" if perf_report else eval_decode_trace_mode(os.environ.get("EVAL_DECODE_MODE", "traced"))
-            ),
+            trace_mode=("all" if perf_report else eval_decode_trace_mode(os.environ.get("EVAL_DECODE_MODE", "traced"))),
         )
 
     def allocate_kv_cache(executor):

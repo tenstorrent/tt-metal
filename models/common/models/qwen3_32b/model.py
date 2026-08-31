@@ -66,14 +66,8 @@ def _qwen3_ccl_topology(mesh_device) -> ttnn.Topology:
     arch = mesh_device.arch()
     cluster_type = ttnn.cluster.get_cluster_type()
     num_devices = mesh_device.get_num_devices()
-    if (
-        arch == ttnn.device.Arch.WORMHOLE_B0
-        and cluster_type == ttnn.cluster.ClusterType.T3K
-        and num_devices == 8
-    ) or (
-        arch == ttnn.device.Arch.BLACKHOLE
-        and cluster_type in QWEN3_32B_BH_TP4_CLUSTER_TYPES
-        and num_devices == 4
+    if (arch == ttnn.device.Arch.WORMHOLE_B0 and cluster_type == ttnn.cluster.ClusterType.T3K and num_devices == 8) or (
+        arch == ttnn.device.Arch.BLACKHOLE and cluster_type in QWEN3_32B_BH_TP4_CLUSTER_TYPES and num_devices == 4
     ):
         return ttnn.Topology.Ring
     raise ValueError(

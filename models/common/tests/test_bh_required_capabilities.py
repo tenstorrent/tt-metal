@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """Host-only tests for immutable BlackHole required-capability contracts."""
 
 from __future__ import annotations
@@ -9,11 +12,11 @@ import unittest
 from pathlib import Path
 
 from models.tttv2_validate_bh_required_capabilities import (
+    _QWEN_DEMO_MANIFEST_SHA256,
     DEFAULT_CONTRACTS,
     DEFAULT_SCHEMA,
-    _QWEN_DEMO_MANIFEST_SHA256,
-    _demo_manifest_digest,
     CapabilityContractValidationError,
+    _demo_manifest_digest,
     load_schema,
     validate_contract_data,
     validate_contracts,
@@ -121,9 +124,7 @@ class TestBhRequiredCapabilities(unittest.TestCase):
 
     def test_llama_completed_negative_disposition_is_valid_and_policy_stays_sequential(self) -> None:
         contract = self._load_contract(0)
-        cross_rows = [
-            row for row in contract["demo_requirements"] if row["demo_case"] == "seeded-cross-cardinality"
-        ]
+        cross_rows = [row for row in contract["demo_requirements"] if row["demo_case"] == "seeded-cross-cardinality"]
         self.assertEqual(len(cross_rows), 4)
         for row in cross_rows:
             self.assertIn("INVARIANT", row["acceptance_condition"])
@@ -160,16 +161,12 @@ class TestBhRequiredCapabilities(unittest.TestCase):
         row = next(
             row for row in contract["demo_requirements"] if row["id"] == "p150.performance.seeded_cross_cardinality"
         )
-        row["acceptance_condition"] = row["acceptance_condition"].replace(
-            "Malformed or incomplete outputs", "Outputs"
-        )
+        row["acceptance_condition"] = row["acceptance_condition"].replace("Malformed or incomplete outputs", "Outputs")
         self._assert_invalid(contract, "including 'Malformed or incomplete outputs'")
 
     def test_llama_missing_performance_floor_allows_observation_but_not_acceptance(self) -> None:
         contract = self._load_contract(0)
-        policy = next(
-            row for row in contract["cross_cutting_requirements"] if row["id"] == "fail_closed_performance"
-        )
+        policy = next(row for row in contract["cross_cutting_requirements"] if row["id"] == "fail_closed_performance")
         policy_text = f"{policy['capability']} {policy['acceptance_condition']}"
         self.assertIn("must not block BH model execution or observational measurement", policy_text)
         self.assertIn("cannot establish performance acceptance", policy_text)
@@ -236,9 +233,7 @@ class TestBhRequiredCapabilities(unittest.TestCase):
 
     def test_llama70_performance_policy_preserves_observation_without_acceptance(self) -> None:
         contract = self._load_contract(2)
-        policy = next(
-            row for row in contract["cross_cutting_requirements"] if row["id"] == "fail_closed_performance"
-        )
+        policy = next(row for row in contract["cross_cutting_requirements"] if row["id"] == "fail_closed_performance")
         policy["acceptance_condition"] = "Missing targets block execution before measurements are collected."
         self._assert_invalid(
             contract,
@@ -312,17 +307,13 @@ class TestBhRequiredCapabilities(unittest.TestCase):
             ),
             (
                 lambda contract: next(
-                    row
-                    for row in contract["demo_requirements"]
-                    if row["demo_case"] == "seeded-cross-cardinality"
+                    row for row in contract["demo_requirements"] if row["demo_case"] == "seeded-cross-cardinality"
                 ).__setitem__("node_id", "wrong-node"),
                 "does not match its immutable identity",
             ),
             (
                 lambda contract: next(
-                    row
-                    for row in contract["demo_requirements"]
-                    if row["demo_case"] == "seeded-cross-cardinality"
+                    row for row in contract["demo_requirements"] if row["demo_case"] == "seeded-cross-cardinality"
                 ).__setitem__(
                     "acceptance_condition",
                     "A passing node is enough without a recorded experiment verdict.",
@@ -501,9 +492,7 @@ class TestBhRequiredCapabilities(unittest.TestCase):
                 "role must be one of",
             ),
             (
-                lambda contract: contract["serving_requirements"][0].__setitem__(
-                    "tier1_performance", "optional"
-                ),
+                lambda contract: contract["serving_requirements"][0].__setitem__("tier1_performance", "optional"),
                 "tier1_performance must equal 'required'",
             ),
             (lambda contract: contract.__setitem__("schema_version", 2), "schema_version must equal 1"),

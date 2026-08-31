@@ -80,6 +80,7 @@ class LazyWeight(CommonLazyWeight):
 # =============================================================================
 # Runtime Config
 
+
 class Llama31DecoderPrecision:
     """Per-decoder tensor dtype and math-fidelity selection."""
 

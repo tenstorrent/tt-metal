@@ -76,9 +76,7 @@ def _cross_cardinality_namespace():
         "_require_cross_cardinality_prefill_geometry",
     }
     nodes = [
-        node
-        for node in _DEMO_TREE.body
-        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in names
+        node for node in _DEMO_TREE.body if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in names
     ]
     namespace = {
         "_CROSS_CARDINALITY_REQUEST_IDS": tuple(f"request-{index}" for index in range(32)),
@@ -152,8 +150,7 @@ def test_cross_cardinality_experiment_is_one_canonical_exact_token_node():
         for node in _DEMO_TREE.body
         if isinstance(node, ast.Assign)
         and any(
-            isinstance(target, ast.Name) and target.id == "_CROSS_CARDINALITY_PROMPT_ORDER"
-            for target in node.targets
+            isinstance(target, ast.Name) and target.id == "_CROSS_CARDINALITY_PROMPT_ORDER" for target in node.targets
         )
     )
     order_namespace = {}
@@ -162,7 +159,9 @@ def test_cross_cardinality_experiment_is_one_canonical_exact_token_node():
     assert len(_calls("test_qwen3_32b_p150x4_seeded_cross_cardinality", "make_executor")) == 2
     make_calls = _calls("test_qwen3_32b_p150x4_seeded_cross_cardinality", "make_executor")
     expected_policies = {
-        ast.literal_eval(next(keyword.value for keyword in call.keywords if keyword.arg == "expected_disable_batched_prefill"))
+        ast.literal_eval(
+            next(keyword.value for keyword in call.keywords if keyword.arg == "expected_disable_batched_prefill")
+        )
         for call in make_calls
     }
     assert expected_policies == {True, False}
@@ -505,9 +504,7 @@ def test_eval_repeat_warms_executor_before_shared_perf_runner_replay():
 
     assert keywords["prefill_compile_case"] == "representative_prefill"
     assert keywords["prefill_sampling_params"] == "sampling_params"
-    assert keywords["prefill_compile_execution"] == (
-        "executor.traced_prefill_execution if perf_report else None"
-    )
+    assert keywords["prefill_compile_execution"] == ("executor.traced_prefill_execution if perf_report else None")
     assert warmup_call.lineno < runner_call.lineno
 
     helper_source = ast.unparse(_function("_warmup_demo_executor"))
@@ -540,19 +537,15 @@ def test_eval_perf_targets_run_observationally_when_profile_floor_is_missing_but
     }
     resolve_function = _function("_resolve_eval32_perf_targets")
     exec(compile(ast.Module(body=[resolve_function], type_ignores=[]), _DEMO_PATH, "exec"), resolve_namespace)
-    assert (
-        resolve_namespace["_resolve_eval32_perf_targets"]("Qwen/Qwen3-32B", "P150x4", "accuracy") is None
-    )
-    assert resolve_namespace["_resolve_eval32_perf_targets"](
-        "Qwen/Qwen3-32B", "P150x4", "performance"
-    ) == {"decode_t/s/u": 21.6, "prefill_time_to_first_token": 87}
+    assert resolve_namespace["_resolve_eval32_perf_targets"]("Qwen/Qwen3-32B", "P150x4", "accuracy") is None
+    assert resolve_namespace["_resolve_eval32_perf_targets"]("Qwen/Qwen3-32B", "P150x4", "performance") == {
+        "decode_t/s/u": 21.6,
+        "prefill_time_to_first_token": 87,
+    }
     assert "observationally" in warnings[0]
 
     resolve_namespace["resolve_perf_targets"] = lambda *args, **kwargs: None
-    assert (
-        resolve_namespace["_resolve_eval32_perf_targets"]("Qwen/Qwen3-32B", "P150x4", "performance")
-        is None
-    )
+    assert resolve_namespace["_resolve_eval32_perf_targets"]("Qwen/Qwen3-32B", "P150x4", "performance") is None
     with expect_error(ValueError, "qualification gates fail closed"):
         resolve_namespace["_resolve_eval32_perf_targets"]("Qwen/Qwen3-32B", "T3K", "performance")
 
@@ -576,9 +569,7 @@ def test_other_declared_p150x4_perf_nodes_run_observationally_without_floor_and_
     assert namespace["_resolve_local_perf_floor"]("T3K", {}, case_name="WH") == {}
     assert namespace["_resolve_local_perf_floor"]("P150x4", {}, case_name="BH/batch-32-ci") is None
     complete = {"tok_s_u": 20.0, "ttft_ms": 120.0}
-    assert namespace["_resolve_local_perf_floor"](
-        "P150x4", complete, case_name="BH/batch-32-ci"
-    ) == complete
+    assert namespace["_resolve_local_perf_floor"]("P150x4", complete, case_name="BH/batch-32-ci") == complete
     assert "observationally" in warnings[0]
 
 

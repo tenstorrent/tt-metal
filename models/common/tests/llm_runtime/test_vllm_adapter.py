@@ -18,14 +18,14 @@ from models.common.llm_runtime.vllm_adapter import (
     VLLMAdapterConfig,
 )
 from models.common.models.llama3_8b import generator as llama3_generator_module
-from models.common.models.llama33_70b import generator as llama70_generator_module
-from models.common.models.qwen3_32b import generator as qwen3_generator_module
 from models.common.models.llama3_8b.executor import Llama3Executor
 from models.common.models.llama3_8b.generator import Llama3Generator
-from models.common.models.qwen25_72b.generator import Qwen25_72BGenerator
-from models.common.models.qwen25_7b.generator import Qwen25Generator
-from models.common.models.qwen25_coder_32b.generator import Qwen25Coder32BGenerator
+from models.common.models.llama33_70b import generator as llama70_generator_module
 from models.common.models.qwen2_7b.generator import Qwen2Generator
+from models.common.models.qwen3_32b import generator as qwen3_generator_module
+from models.common.models.qwen25_7b.generator import Qwen25Generator
+from models.common.models.qwen25_72b.generator import Qwen25_72BGenerator
+from models.common.models.qwen25_coder_32b.generator import Qwen25Coder32BGenerator
 
 
 def _adapter(
