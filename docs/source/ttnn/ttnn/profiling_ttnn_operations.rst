@@ -244,9 +244,6 @@ The following metrics are automatically computed from raw counters. Each metric 
 
 *Fidelity Metrics*
 
-- **Fidelity Stall Rate (%)**: Fraction of math-valid cycles spent in a fidelity phase (multi-HF-cycle math instruction). 0% = pure LoFi; >0% = HiFi math is active.
-- **HiFi Fraction (%)**: Fraction of issued math instructions that took more than 1 HF cycle (HiFi2 + HiFi4 over total).
-- **Avg HF Cycles Per Instrn** (raw number): Weighted average of HF cycles per issued math instruction. 1.0 = all LoFi, 2.0 = all HiFi2, 4.0 = all HiFi4.
 
 *Wormhole-Only Metrics*
 

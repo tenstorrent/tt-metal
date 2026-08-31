@@ -16,7 +16,7 @@ enum PerfCounterType : uint16_t {
     // TDMA_UNPACK Group
     MATH_SRC_DATA_READY,
     DATA_HAZARD_STALLS_MOVD2A,
-    MATH_FIDELITY_STALL,
+    MATH_FIDELITY_STALL, // tied off in hardware, kept so the ordinals below do not shift
     MATH_INSTRN_STARTED,
     MATH_INSTRN_AVAILABLE,
     SRCB_WRITE_AVAILABLE,
@@ -25,9 +25,9 @@ enum PerfCounterType : uint16_t {
     UNPACK1_BUSY_THREAD0,
     UNPACK0_BUSY_THREAD1,
     UNPACK1_BUSY_THREAD1,
-    MATH_INSTRN_HF_1_CYCLE,
-    MATH_INSTRN_HF_2_CYCLE,
-    MATH_INSTRN_HF_4_CYCLE,
+    MATH_INSTRN_HF_1_CYCLE, // tied off in hardware, kept so the ordinals below do not shift
+    MATH_INSTRN_HF_2_CYCLE, // tied off in hardware
+    MATH_INSTRN_HF_4_CYCLE, // tied off in hardware
     // TDMA_PACK Group
     PACKER_DEST_READ_AVAILABLE,
     PACKER_BUSY,
