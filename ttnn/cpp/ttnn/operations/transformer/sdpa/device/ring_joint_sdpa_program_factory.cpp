@@ -2396,6 +2396,30 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Do the floats fill their hosting rows exactly? This decides whether the rotation PAYS for
     // separate-V. Empirical rule from four measured points (table above), not a derivation: even fill
     // won (+4.0% at 100 cores, +8.9% at 80), partial row lost (-11.4% at 110, -3.4% at 60).
+    //
+    // FALSIFIED AS A GENERAL PRINCIPLE, 2026-08-31. Varying grid ROWS as well as cols reaches core
+    // counts where a given num_cores can be either fill class, which controls for num_cores, base and
+    // floats simultaneously. At 48 cores the rule predicts backwards:
+    //   8x6  48 cores base 5 floats 40 EVEN     ON 13.251-13.267  OFF 12.897-12.918  -2.7% (5 runs
+    //                                          per arm, tight -- this is not noise)
+    //   6x8  48 cores base 5 floats 40 PARTIAL  ON 13.511-13.520  OFF 13.555-13.567  +0.3% neutral
+    // while at 60 cores it still holds (10x6 EVEN +5.5%, 6x10 PARTIAL loses). No other candidate
+    // separates the seven points either -- base, cols, rows, rows_needed and float-free-row count
+    // were all checked and all put a win and a loss in the same bucket.
+    // Note also that some of these effects are near the noise floor: 6x10 ON measured 12.721 and
+    // 13.958 ms on consecutive runs, ~9% spread in one configuration.
+    //
+    // The term is KEPT anyway, for a narrower reason than it was introduced with: it happens to make
+    // the right call at both core counts real hardware actually has -- it enables at 100 (stock p150,
+    // +4.0%) and declines at 110 (re-flashed, -11.4%, the largest and most reproducible effect
+    // measured). The 48-core counterexample is a grid override, not a shipping configuration. So this
+    // is now an empirical fit over two real points, NOT a rule that generalizes, and it should not be
+    // extrapolated to a new core count without measuring there.
+    // A principled replacement needs profiling of where the separate-V loss actually goes; the two
+    // structural candidates are the per-iteration accumulator migration (DRAM save/restore plus
+    // semaphore handoff) and the fact that floats read V from local DRAM rather than the head chain,
+    // so a different core set hits DRAM each iteration instead of a fixed one. Total mcast slot count
+    // is NOT the explanation: static and rotated slot totals are identical at every core count.
     // Mechanism, plausible but unverified: a partially-occupied hosting row still pays base+1 mcast
     // slots while only some of its cores use the extra slot, so rotating spreads that waste over
     // every row instead of confining it to one. Latent-V does NOT consult this -- it has no V-chain
