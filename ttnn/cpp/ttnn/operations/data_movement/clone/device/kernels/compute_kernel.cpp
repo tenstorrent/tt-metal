@@ -12,7 +12,8 @@ void kernel_main() {
     constexpr auto num_tiles = get_arg(args::num_tiles);
     DataflowBuffer src_dfb(dfb::src);
     DataflowBuffer dst_dfb(dfb::dst);
-    unary_op_init_common(dfb::src, dfb::dst);
+    compute_kernel_hw_startup(dfb::src, dfb::dst);
+    copy_init(dfb::src);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         src_dfb.wait_front(1);
         tile_regs_acquire();

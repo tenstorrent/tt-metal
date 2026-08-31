@@ -32,6 +32,15 @@ ULP_THRESHOLD = {
 SHAPE = (64, 64)
 
 
+@pytest.fixture
+def isolate_program_cache(device):
+    """Empty cache for the test; always disable and clear on the way out."""
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    yield
+    device.disable_and_clear_program_cache()
+
+
 def _preallocate(device, torch_input, in_dtype, out_dtype):
     input_tensor = ttnn.from_torch(torch_input, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.from_torch(
@@ -43,15 +52,12 @@ def _preallocate(device, torch_input, in_dtype, out_dtype):
     return input_tensor, output_tensor
 
 
-def test_neg_mixed_dtype(device):
+def test_neg_mixed_dtype(device, isolate_program_cache):
     """Preallocated output dtype can differ from the input. Each distinct (in, out)
     pair must miss the program cache once; a second pass over the same pairs must hit."""
     torch.manual_seed(0)
     fixed_input = torch.ones(SHAPE, dtype=torch.float32) * 1.22
     ttnn_op = ttnn.neg
-
-    device.disable_and_clear_program_cache()
-    device.enable_program_cache()
 
     pairs = []
     for in_dt in FLOAT_DTYPES:

@@ -465,7 +465,6 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
     srand(config.seed);
 
     auto device_coord = distributed::MeshCoordinate(0, 0);
-    auto* device = mesh_device->get_devices()[0];
 
     for (const bool cq_write : {true, false}) {
         for (const bool cq_read : {true, false}) {
@@ -503,10 +502,11 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                     distributed::WriteShard(cq, buf, src, device_coord, false);
                 } else {
                     local_test_functions::WriteToUnitMeshBuffer(mesh_device, test_config, src, buf, std::nullopt);
+                    const auto device_id = mesh_device->get_device_ids()[0];
                     if (buftype == BufferType::DRAM) {
-                        tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
+                        tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device_id);
                     } else {
-                        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+                        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
                     }
                 }
 
@@ -1642,11 +1642,11 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDra
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
     auto mesh_device = this->device_;
-    auto* device = mesh_device->get_devices()[0];
     uint32_t page_size = 2048;
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+    const auto device_id = mesh_device->get_device_ids()[0];
+    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
     uint32_t command_queue_size =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(device->id(), channel);
+        tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(device_id, channel);
     uint32_t num_pages = command_queue_size / page_size;
 
     TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};

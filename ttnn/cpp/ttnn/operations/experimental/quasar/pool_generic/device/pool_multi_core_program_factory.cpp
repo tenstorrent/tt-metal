@@ -44,6 +44,17 @@ namespace ttnn::operations::pool::quasar {
 
 namespace {
 
+// Largest divisor of total_tiles that is <= cap. Ensures all c-blocks have equal width,
+// which pack_untilize requires for correct block_c_index addressing.
+constexpr uint32_t largest_uniform_block_width(uint32_t total_tiles, uint32_t cap) {
+    for (uint32_t width = cap; width >= 1; --width) {
+        if (total_tiles % width == 0) {
+            return width;
+        }
+    }
+    return 1;
+}
+
 // ---------------------------------------------------------------------------
 // Op-owned scalar-config tensor for avg pool (unchanged host computation).
 // ---------------------------------------------------------------------------
@@ -559,16 +570,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         in_w,
         output_layout);
 
-    // QSR pack-bounds fix: cap tiles-per-pack to 4. pack_untilize_dest<N> faults with PACR0_TILE_INC
-    // (ERROR_TRISC1 code 0x19) for N>=6 -- the pack's per-tile increment crosses the scratch CB's
-    // descriptor L1_LIMIT_ADDR (N<=5 works, N>=6 faults on the emulator). Forcing MAX_TILES_PER_REDUCTION=4
-    // makes any channel count >4 tiles chunk (in_nblocks_c>1) into <=4-tile packs, staying within bounds.
-    // <=4-tile configs (incl. the resnet stem = 2 tiles) keep in_nblocks_c==1 / is_wide==false -> unchanged.
-    // Paired with force_max_tiles_per_reduction_4=1u (compute + reader compile args below) so all three
-    // agree on the 4-tile chunk size.
-    params.MAX_TILES_PER_REDUCTION = 4;
-    params.is_wide_reduction = params.in_ntiles_c > params.MAX_TILES_PER_REDUCTION;
-
     // QSR: the reduce-col strided tilize consumes a full 32x32 (num_faces=4) SrcA tile (see the
     // num_faces_in_input_tile_for_cb=4 override below; the LLK asserts total_row_dim()==total_col_dim()==32).
     // The shared WH/BH small-window optimization (pool_utils.cpp) sizes num_tilized_rows to only
@@ -582,6 +583,12 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     if (!return_indices) {
         params.num_tilized_rows = tt::constants::TILE_HEIGHT;
     }
+
+    // Narrow MAX_TILES_PER_REDUCTION to the largest divisor of in_ntiles_c that fits within the
+    // DEST-capacity cap, so every c-block has equal width (pack_untilize cannot address a
+    // remainder block). The resolved value is passed to compute and reader kernels as a compile-time arg.
+    params.MAX_TILES_PER_REDUCTION = largest_uniform_block_width(params.in_ntiles_c, params.MAX_TILES_PER_REDUCTION);
+    params.is_wide_reduction = params.in_ntiles_c > params.MAX_TILES_PER_REDUCTION;
 
     const uint32_t eff_kernel_h = ((kernel_h - 1) * dilation_h) + 1;
     const uint32_t eff_kernel_w = ((kernel_w - 1) * dilation_w) + 1;
@@ -902,9 +909,9 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         {"in_nblocks_c", in_nblocks_c},
         {"in_cb_sz", cb_sizes.in_cb_raw_size},
         {"max_sticks_for_reduction", params.max_rows_for_reduction},
+        {"max_tiles_per_reduction", params.MAX_TILES_PER_REDUCTION},
         {"ceil_pad_w", setup.ceil_pad_w},
         {"pool_type_is_avg", static_cast<uint32_t>(params.is_avg_pool)},
-        {"force_max_tiles_per_reduction_4", 1u},  // QSR: match compute's 4-tile pack cap (PACR0 bounds)
         {"one_scalar_per_core", static_cast<uint32_t>(one_scalar_per_core)},
         {"in_nbytes_c", in_nbytes_c},
         // [DEBUG scratch->out] output row stride (bytes) for the DM NoC copy of scratch row 0.
@@ -1206,7 +1213,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         {"one_scalar_per_core", static_cast<uint32_t>(one_scalar_per_core)},
         {"is_output_tiled", static_cast<uint32_t>(is_output_tiled)},
         {"is_output_block_format", static_cast<uint32_t>(is_output_block_format)},
-        {"force_max_tiles_per_reduction_4", 1u},  // QSR: cap pack_untilize_dest to 4 tiles (PACR0 bounds)
+        {"max_tiles_per_reduction", params.MAX_TILES_PER_REDUCTION},
         // [DEBUG scratch->out] full page count of one scratch CB (one full-tile write). Compute
         // reserves/pushes the WHOLE CB per stick so the single-tile scratch serializes cleanly.
         {"scratch_npages", (output_shard_shape[1] / tt::constants::FACE_WIDTH) * tt::constants::TILE_HEIGHT},
@@ -1351,18 +1358,12 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         /*default_l1_acc=*/false,
         /*default_dst_full_sync_en=*/(params.is_large_kernel && return_indices) || indexes_32_bit);
 
-    // QSR: fp32_dest_acc_en=true is a KNOWN-BROKEN config for the tilizeA_B reduce on Quasar (ISSUE #48504;
-    // the LLK test QuasarComputeUnpackTilizeA_B in test_untilize_tilize.cpp:1210 disables the fp32 case with a
-    // TODO). The pool reduce ALWAYS goes through tilizeA_B, so any path that would enable fp32 dest-acc here
-    // (notably avg-pool large-kernel: default_fp32_acc = is_avg_pool && is_large_kernel) would hit the broken
-    // primitive. Force it OFF until #48504 is fixed — bf16 dest accumulate is the safe fallback vs a wrong
-    // result. (MAX pool already defaults false; this pins the avg-pool/large-kernel path too.)
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
         device_arch,
         ttnn::ComputeKernelConfig{
             .math_fidelity = get_math_fidelity(device_compute_kernel_config),
             .math_approx_mode = false,
-            .fp32_dest_acc_en = false,  // was: get_fp32_dest_acc_en(device_compute_kernel_config); see #48504
+            .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
             .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config)});
 
     KernelSpec compute{

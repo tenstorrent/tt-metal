@@ -822,22 +822,28 @@ def test_tilize_col_major_orientation(device, memory_layout, tensor_shape, shard
 
 
 @pytest.mark.parametrize(
-    "tensor_shape, num_cores",
+    "tensor_shape, num_cores, shard_h",
     [
-        ([1, 1, 32, 64], 1),
-        ([1, 1, 64, 64], 2),
-        ([1, 1, 128, 64], 4),
-        ([1, 1, 256, 128], 8),
-        ([1, 1, 512, 64], 8),
-        ([1, 1, 96, 128], 3),
-        ([1, 1, 192, 256], 6),
+        ([1, 1, 32, 64], 1, None),
+        ([1, 1, 64, 64], 2, None),
+        ([1, 1, 128, 64], 4, None),
+        ([1, 1, 256, 128], 8, None),
+        ([1, 1, 512, 64], 8, None),
+        ([1, 1, 96, 128], 3, None),
+        ([1, 1, 192, 256], 6, None),
+        # Uneven shard (last core does not have a full shard, i.e. total height is less
+        # than shard_h * num_cores) across ranks 2/3/4, via ttnn.to_layout's height-sharded
+        ([63, 32], 2, 32),
+        ([1, 63, 32], 2, 32),
+        ([1, 1, 63, 32], 2, 32),
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
-def test_tilize_height_sharded_shapes(device, tensor_shape, num_cores, dtype):
+def test_tilize_height_sharded_shapes(device, tensor_shape, num_cores, shard_h, dtype):
     torch.manual_seed(42)
     H, W = tensor_shape[-2], tensor_shape[-1]
-    shard_h = H // num_cores
+    if shard_h is None:
+        shard_h = H // num_cores
     if shard_h == 0 or shard_h % 32 != 0:
         pytest.skip(f"shard_height={shard_h} not tile-aligned")
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
@@ -848,9 +854,10 @@ def test_tilize_height_sharded_shapes(device, tensor_shape, num_cores, dtype):
     tt_input = ttnn.from_torch(
         torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
     )
-    tt_output = ttnn.tilize(tt_input, memory_config=mem_cfg)
+    tt_output = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)
     assert tt_output.layout == ttnn.TILE_LAYOUT
     assert tt_output.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert list(tt_output.shape) == tensor_shape
     assert_equal(torch_input, ttnn.to_torch(tt_output))
 
 
