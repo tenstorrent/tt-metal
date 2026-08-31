@@ -18,7 +18,7 @@
 //   in_ht, in_wt             this core's block is in_ht x in_wt tiles
 //   num_cores_y              cores in a column: the gather's height, and so the
 //                            number of writers row 0 collects
-//   cb_<name> per buffer
+//   dfb_<name> per buffer
 //
 // No runtime args: the tensors are bound, so their addresses ride along with the
 // accessors.
@@ -57,13 +57,13 @@ void kernel_main() {
     // stage-1 results, which the gather has laid out as num_cores_y x in_wt.
     constexpr auto kAxis = u::ReduceAxis::Rows;
 
-    constexpr uint32_t kCbIn0 = get_arg(args::cb_in0);
-    constexpr uint32_t kCbTmp0 = get_arg(args::cb_tmp0);
-    constexpr uint32_t kCbTmp1 = get_arg(args::cb_tmp1);
-    constexpr uint32_t kCbScaler = get_arg(args::cb_scaler);
-    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kDfbIn0 = get_arg(args::dfb_in0);
+    constexpr uint32_t kDfbTmp0 = get_arg(args::dfb_tmp0);
+    constexpr uint32_t kDfbTmp1 = get_arg(args::dfb_tmp1);
+    constexpr uint32_t kDfbScaler = get_arg(args::dfb_scaler);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
 
-    u::compute_init(kCbIn0, kCbOut);
+    u::compute_init(kDfbIn0, kDfbOut);
 
     // Shapes, not page counts: `Gathered` is the stage-1 result stacked once per
     // core in the column, which is exactly stage 2's input shape -- so the
@@ -73,11 +73,11 @@ void kernel_main() {
     using Reduced = u::reduce_shape<In, kAxis>;
     using Gathered = u::Shape<num_cores_y * Reduced::rows, Reduced::cols>;
 
-    u::Storage<In> in0_storage(kCbIn0);
-    u::Storage<u::Shape<1, 1>> scaler_storage(kCbScaler);
-    u::Storage<Reduced> tmp0_storage(kCbTmp0);
-    u::Storage<Gathered> tmp1_storage(kCbTmp1);
-    u::Storage<Reduced> out_storage(kCbOut);
+    u::Storage<In> in0_storage(kDfbIn0);
+    u::Storage<u::Shape<1, 1>> scaler_storage(kDfbScaler);
+    u::Storage<Reduced> tmp0_storage(kDfbTmp0);
+    u::Storage<Gathered> tmp1_storage(kDfbTmp1);
+    u::Storage<Reduced> out_storage(kDfbOut);
 
     const auto in0 = TensorAccessor(tensor::in0);
     const auto out = TensorAccessor(tensor::out);
@@ -103,8 +103,8 @@ void kernel_main() {
 
     // Where this core's partial lands in the gather buffer. In BYTES: the offset
     // goes straight onto a write pointer, and each core owns one slice of
-    // Reduced::num_pages pages.
-    const uint32_t byte_offset = this_core.y * Reduced::num_pages * u::cb_page_bytes(kCbTmp1);
+    // Reduced::num_entries pages.
+    const uint32_t byte_offset = this_core.y * Reduced::num_entries * u::dfb_entry_bytes(kDfbTmp1);
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
         // Column x owns its own input block, the same index its result goes to.
@@ -132,7 +132,7 @@ void kernel_main() {
             // Every column has a root, and they all finish block b together, so the
             // block index alone would have them all writing the same pages. Give
             // each column its own slot: `out` is num_blocks rows of kCoreGridW
-            // results, so column x's Reduced::num_pages tiles land contiguously
+            // results, so column x's Reduced::num_entries tiles land contiguously
             // at b * kCoreGridW + x. The width comes from the harness's core-grid
             // define, so it costs no compile-time arg.
             u::noc_store<1>(std::move(result), out, b * u::kCoreGridW + this_core.x);

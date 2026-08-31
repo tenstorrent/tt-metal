@@ -45,7 +45,7 @@ def run(device, num_blocks=1, tiles_per_block=1, custom_load=False, seed=0):
     # CT args: [num_blocks, tiles_per_block] then TensorAccessorArgs for in0, in1, out
     named_ct_args = [("num_blocks", num_blocks), ("tiles_per_block", tiles_per_block)]
 
-    # Double-buffer the inputs; the output CB must hold a whole block because the
+    # Double-buffer the inputs; the output DFB must hold a whole block because the
     # SFPU strategy reserves the block, packs each tile, then pushes once.
     dfbs = [
         dfb("in0", 2 * tiles_per_block),
@@ -84,7 +84,7 @@ def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--num-blocks", type=int, default=1)
     p.add_argument("--tiles-per-block", type=int, default=1)
-    p.add_argument("--custom-load", action="store_true", help="fill the input CBs with a user-written routine")
+    p.add_argument("--custom-load", action="store_true", help="fill the input DFBs with a user-written routine")
     p.add_argument("--pcc", type=float, default=0.99)
     args = p.parse_args(argv)
 

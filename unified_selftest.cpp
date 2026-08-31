@@ -5,10 +5,10 @@
 //   tt/unified/api.h       -- core API (Storage / Block / ComputeBlock / noc_*)
 //   tt/unified/impl.hpp    -- its definitions
 //
-// Those headers are a design sketch: the CB / NOC / Tensix intrinsics they call
+// Those headers are a design sketch: the DFB / NOC / Tensix intrinsics they call
 // come from the metal kernel headers in a real build. This file supplies traced
 // versions of just those, then runs the example kernels once per thread
-// projection, checks that every circular buffer balances, and checks that the
+// projection, checks that every dataflow buffer balances, and checks that the
 // method and free-function spellings of the ops emit the same instructions.
 //
 // -Werror is deliberate. This is the only build that compiles the headers with
@@ -34,7 +34,7 @@
 #include <vector>
 
 // One tile per page, and room for a handful of them.
-static constexpr uint32_t kPageBytes = 2048;
+static constexpr uint32_t kEntryBytes = 2048;
 static constexpr uint32_t kFakeL1Bytes = 64 * 1024;
 
 static std::vector<std::string> trace;
@@ -43,11 +43,11 @@ static std::string n(int v) { return std::to_string(v); }
 static std::string n(uint32_t v) { return std::to_string(v); }
 static void T2(const std::string& s) { trace.push_back(s); }
 
-// ---- CB protocol -----------------------------------------------------------
-inline void cb_reserve_back(uint32_t cb, uint32_t p) { T("cb_reserve_back(cb" + n(cb) + "," + n(p) + ")"); }
-inline void cb_push_back(uint32_t cb, uint32_t p) { T("cb_push_back   (cb" + n(cb) + "," + n(p) + ")"); }
-inline void cb_wait_front(uint32_t cb, uint32_t p) { T("cb_wait_front  (cb" + n(cb) + "," + n(p) + ")"); }
-inline void cb_pop_front(uint32_t cb, uint32_t p) { T("cb_pop_front   (cb" + n(cb) + "," + n(p) + ")"); }
+// ---- DFB protocol -----------------------------------------------------------
+inline void cb_reserve_back(uint32_t dfb, uint32_t p) { T("cb_reserve_back(dfb" + n(dfb) + "," + n(p) + ")"); }
+inline void cb_push_back(uint32_t dfb, uint32_t p) { T("cb_push_back   (dfb" + n(dfb) + "," + n(p) + ")"); }
+inline void cb_wait_front(uint32_t dfb, uint32_t p) { T("cb_wait_front  (dfb" + n(dfb) + "," + n(p) + ")"); }
+inline void cb_pop_front(uint32_t dfb, uint32_t p) { T("cb_pop_front   (dfb" + n(dfb) + "," + n(p) + ")"); }
 
 // ---- NOC -------------------------------------------------------------------
 inline void noc_async_read() { T("noc_async_read()"); }
@@ -75,28 +75,28 @@ inline void tile_regs_acquire() { T("  tile_regs_acquire"); }
 inline void tile_regs_commit() { T("  tile_regs_commit"); }
 inline void tile_regs_wait() { T("  tile_regs_wait"); }
 inline void tile_regs_release() { T("  tile_regs_release"); }
-inline void copy_tile(uint32_t cb, uint32_t tile, uint32_t dst) {
-    T("    copy_tile(cb" + n(cb) + ",tile=" + n(tile) + " -> dst" + n(dst) + ")");
+inline void copy_tile(uint32_t dfb, uint32_t tile, uint32_t dst) {
+    T("    copy_tile(dfb" + n(dfb) + ",tile=" + n(tile) + " -> dst" + n(dst) + ")");
 }
 
 enum class PoolType { SUM, AVG, MAX };
 enum class ReduceDim { REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR };
 
 inline void reconfig_data_format(uint32_t srca, uint32_t srcb) {
-    T("    reconfig_data_format(cb" + n(srca) + ",cb" + n(srcb) + ")");
+    T("    reconfig_data_format(dfb" + n(srca) + ",dfb" + n(srcb) + ")");
 }
 template <PoolType pool, ReduceDim dim>
 inline void reduce_init(uint32_t icb, uint32_t iscaler, uint32_t ocb) {
-    T("  reduce_init(cb" + n(icb) + ",scaler=cb" + n(iscaler) + " -> cb" + n(ocb) + ")");
+    T("  reduce_init(dfb" + n(icb) + ",scaler=dfb" + n(iscaler) + " -> dfb" + n(ocb) + ")");
 }
 template <PoolType pool, ReduceDim dim>
 inline void reduce_tile(uint32_t icb, uint32_t iscaler, uint32_t itile, uint32_t, uint32_t idst) {
-    T("    reduce_tile(cb" + n(icb) + ",tile=" + n(itile) + ",scaler=cb" + n(iscaler) + " -> dst" + n(idst) + ")");
+    T("    reduce_tile(dfb" + n(icb) + ",tile=" + n(itile) + ",scaler=dfb" + n(iscaler) + " -> dst" + n(idst) + ")");
 }
-inline void reduce_uninit(uint32_t icb = 0) { T("  reduce_uninit(cb" + n(icb) + ")"); }
+inline void reduce_uninit(uint32_t icb = 0) { T("  reduce_uninit(dfb" + n(icb) + ")"); }
 
 inline void add_bcast_rows_init_short(uint32_t icb0, uint32_t icb1) {
-    T("  add_bcast_rows_init(cb" + n(icb0) + ",cb" + n(icb1) + ")");
+    T("  add_bcast_rows_init(dfb" + n(icb0) + ",dfb" + n(icb1) + ")");
 }
 // metal's own enums, under its names, since the FPU binary calls are templated on them.
 enum class EltwiseBinaryType { ELWMUL, ELWDIV, ELWADD, ELWSUB };
@@ -109,93 +109,99 @@ inline std::string op_name(EltwiseBinaryType t) {
                                             : "div";
 }
 
-// The reuse forms: one operand from a circular buffer, the other already in DST. The
+// The reuse forms: one operand from a dataflow buffer, the other already in DST. The
 // trace spells out which side DST is on, because a chain that got that backwards would
 // compute buffer - dst where it meant dst - buffer and still look plausible.
 template <EltwiseBinaryType Type, EltwiseBinaryReuseDestType Dir>
-inline void binary_dest_reuse_tiles_init(uint32_t cb) {
-    T("      " + op_name(Type) + "_reuse_init(cb" + n(cb) +
+inline void binary_dest_reuse_tiles_init(uint32_t dfb) {
+    T("      " + op_name(Type) + "_reuse_init(dfb" + n(dfb) +
       (Dir == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? ",dst=lhs)" : ",dst=rhs)"));
 }
 
 template <EltwiseBinaryType Type, EltwiseBinaryReuseDestType Dir>
-inline void binary_dest_reuse_tiles(uint32_t cb, uint32_t tile, uint32_t dst) {
+inline void binary_dest_reuse_tiles(uint32_t dfb, uint32_t tile, uint32_t dst) {
     const bool dst_lhs = Dir == EltwiseBinaryReuseDestType::DEST_TO_SRCA;
-    T("    " + op_name(Type) + "_reuse(" + (dst_lhs ? "dst" + n(dst) + " " : "cb" + n(cb) + "[" + n(tile) + "] ") +
-      (dst_lhs ? "cb" + n(cb) + "[" + n(tile) + "]" : "dst" + n(dst)) + " -> dst" + n(dst) + ")");
+    T("    " + op_name(Type) + "_reuse(" + (dst_lhs ? "dst" + n(dst) + " " : "dfb" + n(dfb) + "[" + n(tile) + "] ") +
+      (dst_lhs ? "dfb" + n(dfb) + "[" + n(tile) + "]" : "dst" + n(dst)) + " -> dst" + n(dst) + ")");
 }
 
-// FPU elementwise binaries: two circular buffers in, DST out, no copy_tile in sight.
-// The trace shows the CBs rather than DST slots for the operands, which is the whole
+// FPU elementwise binaries: two dataflow buffers in, DST out, no copy_tile in sight.
+// The trace shows the DFBs rather than DST slots for the operands, which is the whole
 // difference from the SFPU forms above.
-inline void add_tiles_init(uint32_t cb0, uint32_t cb1) { T("      add_tiles_init(cb" + n(cb0) + ",cb" + n(cb1) + ")"); }
-inline void sub_tiles_init(uint32_t cb0, uint32_t cb1) { T("      sub_tiles_init(cb" + n(cb0) + ",cb" + n(cb1) + ")"); }
-inline void mul_tiles_init(uint32_t cb0, uint32_t cb1) { T("      mul_tiles_init(cb" + n(cb0) + ",cb" + n(cb1) + ")"); }
-inline void add_tiles(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t d) {
-    T("    add_tiles(cb" + n(cb0) + "[" + n(t0) + "],cb" + n(cb1) + "[" + n(t1) + "] -> dst" + n(d) + ")");
+inline void add_tiles_init(uint32_t dfb0, uint32_t dfb1) {
+    T("      add_tiles_init(dfb" + n(dfb0) + ",dfb" + n(dfb1) + ")");
 }
-inline void sub_tiles(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t d) {
-    T("    sub_tiles(cb" + n(cb0) + "[" + n(t0) + "],cb" + n(cb1) + "[" + n(t1) + "] -> dst" + n(d) + ")");
+inline void sub_tiles_init(uint32_t dfb0, uint32_t dfb1) {
+    T("      sub_tiles_init(dfb" + n(dfb0) + ",dfb" + n(dfb1) + ")");
 }
-inline void mul_tiles(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t d) {
-    T("    mul_tiles(cb" + n(cb0) + "[" + n(t0) + "],cb" + n(cb1) + "[" + n(t1) + "] -> dst" + n(d) + ")");
+inline void mul_tiles_init(uint32_t dfb0, uint32_t dfb1) {
+    T("      mul_tiles_init(dfb" + n(dfb0) + ",dfb" + n(dfb1) + ")");
+}
+inline void add_tiles(uint32_t dfb0, uint32_t dfb1, uint32_t t0, uint32_t t1, uint32_t d) {
+    T("    add_tiles(dfb" + n(dfb0) + "[" + n(t0) + "],dfb" + n(dfb1) + "[" + n(t1) + "] -> dst" + n(d) + ")");
+}
+inline void sub_tiles(uint32_t dfb0, uint32_t dfb1, uint32_t t0, uint32_t t1, uint32_t d) {
+    T("    sub_tiles(dfb" + n(dfb0) + "[" + n(t0) + "],dfb" + n(dfb1) + "[" + n(t1) + "] -> dst" + n(d) + ")");
+}
+inline void mul_tiles(uint32_t dfb0, uint32_t dfb1, uint32_t t0, uint32_t t1, uint32_t d) {
+    T("    mul_tiles(dfb" + n(dfb0) + "[" + n(t0) + "],dfb" + n(dfb1) + "[" + n(t1) + "] -> dst" + n(d) + ")");
 }
 
 inline void add_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    T("    add_bcast_rows(cb" + n(icb0) + ",tile=" + n(itile0) + " + cb" + n(icb1) + ",tile=" + n(itile1) + " -> dst" +
-      n(idst) + ")");
+    T("    add_bcast_rows(dfb" + n(icb0) + ",tile=" + n(itile0) + " + dfb" + n(icb1) + ",tile=" + n(itile1) +
+      " -> dst" + n(idst) + ")");
 }
 // The nine (op, axis) broadcast pairs. The init_short names are metal's own and are
 // NOT uniform -- add's scalar form omits `tiles_` where sub's and mul's include it.
 inline void add_bcast_cols_init_short(uint32_t b, uint32_t v) {
-    T("    add_bcast_cols_init(cb" + n(b) + ",cb" + n(v) + ")");
+    T("    add_bcast_cols_init(dfb" + n(b) + ",dfb" + n(v) + ")");
 }
 inline void add_tiles_bcast_cols(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {
-    T("      add_bcast_cols(cb" + n(b) + "[" + n(bt) + "],cb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
+    T("      add_bcast_cols(dfb" + n(b) + "[" + n(bt) + "],dfb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
 }
 inline void add_bcast_scalar_init_short(uint32_t b, uint32_t v) {
-    T("    add_bcast_scalar_init(cb" + n(b) + ",cb" + n(v) + ")");
+    T("    add_bcast_scalar_init(dfb" + n(b) + ",dfb" + n(v) + ")");
 }
 inline void add_tiles_bcast_scalar(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {
-    T("      add_bcast_scalar(cb" + n(b) + "[" + n(bt) + "],cb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
+    T("      add_bcast_scalar(dfb" + n(b) + "[" + n(bt) + "],dfb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
 }
 inline void sub_bcast_rows_init_short(uint32_t b, uint32_t v) {
-    T("    sub_bcast_rows_init(cb" + n(b) + ",cb" + n(v) + ")");
+    T("    sub_bcast_rows_init(dfb" + n(b) + ",dfb" + n(v) + ")");
 }
 inline void sub_tiles_bcast_rows(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {
-    T("      sub_bcast_rows(cb" + n(b) + "[" + n(bt) + "],cb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
+    T("      sub_bcast_rows(dfb" + n(b) + "[" + n(bt) + "],dfb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
 }
 inline void sub_bcast_cols_init_short(uint32_t b, uint32_t v) {
-    T("    sub_bcast_cols_init(cb" + n(b) + ",cb" + n(v) + ")");
+    T("    sub_bcast_cols_init(dfb" + n(b) + ",dfb" + n(v) + ")");
 }
 inline void sub_tiles_bcast_cols(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {
-    T("      sub_bcast_cols(cb" + n(b) + "[" + n(bt) + "],cb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
+    T("      sub_bcast_cols(dfb" + n(b) + "[" + n(bt) + "],dfb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
 }
 inline void sub_tiles_bcast_scalar_init_short(uint32_t b, uint32_t v) {
-    T("    sub_bcast_scalar_init(cb" + n(b) + ",cb" + n(v) + ")");
+    T("    sub_bcast_scalar_init(dfb" + n(b) + ",dfb" + n(v) + ")");
 }
 inline void sub_tiles_bcast_scalar(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {
-    T("      sub_bcast_scalar(cb" + n(b) + "[" + n(bt) + "],cb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
+    T("      sub_bcast_scalar(dfb" + n(b) + "[" + n(bt) + "],dfb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
 }
 inline void mul_bcast_rows_init_short(uint32_t b, uint32_t v) {
-    T("    mul_bcast_rows_init(cb" + n(b) + ",cb" + n(v) + ")");
+    T("    mul_bcast_rows_init(dfb" + n(b) + ",dfb" + n(v) + ")");
 }
 inline void mul_tiles_bcast_rows(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {
-    T("      mul_bcast_rows(cb" + n(b) + "[" + n(bt) + "],cb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
+    T("      mul_bcast_rows(dfb" + n(b) + "[" + n(bt) + "],dfb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
 }
 inline void mul_bcast_cols_init_short(uint32_t b, uint32_t v) {
-    T("    mul_bcast_cols_init(cb" + n(b) + ",cb" + n(v) + ")");
+    T("    mul_bcast_cols_init(dfb" + n(b) + ",dfb" + n(v) + ")");
 }
 inline void mul_tiles_bcast_cols(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {
-    T("      mul_bcast_cols(cb" + n(b) + "[" + n(bt) + "],cb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
+    T("      mul_bcast_cols(dfb" + n(b) + "[" + n(bt) + "],dfb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
 }
 inline void mul_tiles_bcast_scalar_init_short(uint32_t b, uint32_t v) {
-    T("    mul_bcast_scalar_init(cb" + n(b) + ",cb" + n(v) + ")");
+    T("    mul_bcast_scalar_init(dfb" + n(b) + ",dfb" + n(v) + ")");
 }
 inline void mul_tiles_bcast_scalar(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {
-    T("      mul_bcast_scalar(cb" + n(b) + "[" + n(bt) + "],cb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
+    T("      mul_bcast_scalar(dfb" + n(b) + "[" + n(bt) + "],dfb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
 }
-inline void pack_tile(uint32_t dst, uint32_t cb) { T("  pack_tile(dst" + n(dst) + " -> cb" + n(cb) + ")"); }
+inline void pack_tile(uint32_t dst, uint32_t dfb) { T("  pack_tile(dst" + n(dst) + " -> dfb" + n(dfb) + ")"); }
 inline void add_binary_tile_init() {}
 inline void add_binary_tile(uint32_t a, uint32_t b, uint32_t o) {
     T("    add_binary_tile(dst" + n(a) + ",dst" + n(b) + " -> dst" + n(o) + ")");
@@ -235,25 +241,25 @@ inline void sqrt_tile_init() {}
 inline void sqrt_tile(uint32_t o) { T("    sqrt_tile(dst" + n(o) + ")"); }
 inline void rsqrt_tile_init() {}
 inline void rsqrt_tile(uint32_t o) { T("    rsqrt_tile(dst" + n(o) + ")"); }
-inline void copy_tile_to_dst_init_short_with_dt(uint32_t old_cb, uint32_t new_cb) {
-    T("  copy_tile_to_dst_init_short_with_dt(cb" + n(old_cb) + " -> cb" + n(new_cb) + ")");
+inline void copy_tile_to_dst_init_short_with_dt(uint32_t old_dfb, uint32_t new_dfb) {
+    T("  copy_tile_to_dst_init_short_with_dt(dfb" + n(old_dfb) + " -> dfb" + n(new_dfb) + ")");
 }
-inline void copy_block(uint32_t cb, uint32_t start_tile, uint32_t start_dst, uint32_t n_tiles) {
-    T("  copy_block(cb" + n(cb) + "[" + n(start_tile) + "] -> dst" + n(start_dst) + ".." + n(start_dst + n_tiles - 1) +
-      ")  [reload]");
+inline void copy_block(uint32_t dfb, uint32_t start_tile, uint32_t start_dst, uint32_t n_tiles) {
+    T("  copy_block(dfb" + n(dfb) + "[" + n(start_tile) + "] -> dst" + n(start_dst) + ".." +
+      n(start_dst + n_tiles - 1) + ")  [reload]");
 }
-inline void reconfig_data_format_srca(uint32_t old_cb, uint32_t new_cb) {
-    T("  reconfig_data_format_srca(cb" + n(old_cb) + " -> cb" + n(new_cb) + ")");
+inline void reconfig_data_format_srca(uint32_t old_dfb, uint32_t new_dfb) {
+    T("  reconfig_data_format_srca(dfb" + n(old_dfb) + " -> dfb" + n(new_dfb) + ")");
 }
 // One-argument form: unconditional, needs no previous operand. What an SFPU leaf uses.
-inline void reconfig_data_format_srcb(uint32_t new_cb) { T("        reconfig_srcb(cb" + n(new_cb) + ")"); }
-inline void reconfig_data_format_srca(uint32_t new_cb) { T("      reconfig_srca(cb" + n(new_cb) + ")"); }
-inline void copy_tile_to_dst_init_short(uint32_t cb) { T("      copy_init(cb" + n(cb) + ")"); }
-inline void init_sfpu(uint32_t icb, uint32_t ocb) { T("  init_sfpu(cb" + n(icb) + " -> cb" + n(ocb) + ")"); }
+inline void reconfig_data_format_srcb(uint32_t new_dfb) { T("        reconfig_srcb(dfb" + n(new_dfb) + ")"); }
+inline void reconfig_data_format_srca(uint32_t new_dfb) { T("      reconfig_srca(dfb" + n(new_dfb) + ")"); }
+inline void copy_tile_to_dst_init_short(uint32_t dfb) { T("      copy_init(dfb" + n(dfb) + ")"); }
+inline void init_sfpu(uint32_t icb, uint32_t ocb) { T("  init_sfpu(dfb" + n(icb) + " -> dfb" + n(ocb) + ")"); }
 // pack_to's two forms: unconditional on the first pass, old -> new after that.
-inline void pack_reconfig_data_format(uint32_t new_cb) { T("  pack_reconfig(cb" + n(new_cb) + ")"); }
-inline void pack_reconfig_data_format(uint32_t old_cb, uint32_t new_cb) {
-    T("  pack_reconfig(cb" + n(old_cb) + " -> cb" + n(new_cb) + ")");
+inline void pack_reconfig_data_format(uint32_t new_dfb) { T("  pack_reconfig(dfb" + n(new_dfb) + ")"); }
+inline void pack_reconfig_data_format(uint32_t old_dfb, uint32_t new_dfb) {
+    T("  pack_reconfig(dfb" + n(old_dfb) + " -> dfb" + n(new_dfb) + ")");
 }
 }  // namespace ckernel
 
@@ -286,7 +292,7 @@ inline uint32_t* l1_base() {
 
 inline uint32_t get_write_ptr(uint32_t) { return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(l1_base())); }
 inline uint32_t get_read_ptr(uint32_t) { return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(l1_base())); }
-inline uint32_t cb_page_bytes(uint32_t) { return kPageBytes; }
+inline uint32_t dfb_entry_bytes(uint32_t) { return kEntryBytes; }
 
 // Metal 2.0's buffer handle. Every method traces EXACTLY what the free function it
 // replaced traced, which is the point: the balance checker below parses those strings,
@@ -295,14 +301,14 @@ inline uint32_t cb_page_bytes(uint32_t) { return kPageBytes; }
 // is actually tested.
 class DataflowBuffer {
 public:
-    explicit DataflowBuffer(uint16_t cb) : cb_(cb) {}
-    void reserve_back(uint32_t p) const { cb_reserve_back(cb_, p); }
-    void push_back(uint32_t p) const { cb_push_back(cb_, p); }
-    void wait_front(uint32_t p) const { cb_wait_front(cb_, p); }
-    void pop_front(uint32_t p) const { cb_pop_front(cb_, p); }
-    uint32_t get_write_ptr() const { return ::get_write_ptr(cb_); }
-    uint32_t get_read_ptr() const { return ::get_read_ptr(cb_); }
-    uint32_t get_entry_size() const { return kPageBytes; }
+    explicit DataflowBuffer(uint16_t dfb) : dfb_(dfb) {}
+    void reserve_back(uint32_t p) const { cb_reserve_back(dfb_, p); }
+    void push_back(uint32_t p) const { cb_push_back(dfb_, p); }
+    void wait_front(uint32_t p) const { cb_wait_front(dfb_, p); }
+    void pop_front(uint32_t p) const { cb_pop_front(dfb_, p); }
+    uint32_t get_write_ptr() const { return ::get_write_ptr(dfb_); }
+    uint32_t get_read_ptr() const { return ::get_read_ptr(dfb_); }
+    uint32_t get_entry_size() const { return kEntryBytes; }
     // What the HOST configured. This harness has no host, so the number is a stand-in
     // large enough never to be the binding constraint -- which does make Storage's
     // capacity assert (hazard A1/A2) VACUOUS here. That check belongs to the device
@@ -310,10 +316,10 @@ public:
     uint32_t get_total_num_entries() const { return 1u << 16; }
 
 private:
-    uint16_t cb_;
+    uint16_t dfb_;
 };
-inline DataflowBuffer buffer(uint32_t cb) { return DataflowBuffer(static_cast<uint16_t>(cb)); }
-inline uint32_t cb_num_pages(uint32_t cb) { return buffer(cb).get_total_num_entries(); }
+inline DataflowBuffer buffer(uint32_t dfb) { return DataflowBuffer(static_cast<uint16_t>(dfb)); }
+inline uint32_t dfb_num_entries(uint32_t dfb) { return buffer(dfb).get_total_num_entries(); }
 
 // An L1 pointer attribute on device (risc_attribs.h); nothing on the host.
 #define tt_l1_ptr
@@ -328,9 +334,9 @@ struct TensorAccessor {
     constexpr TensorAccessor(FakeArgs a, uint32_t) : id(a.id) {}
     // encode (tensor, page) into the fake address so traces stay readable
     uint64_t get_noc_addr(uint32_t page) const { return (uint64_t(id) << 32) | page; }
-    // D19's check compares this against cb_page_bytes; agreeing here keeps it quiet,
+    // D19's check compares this against dfb_entry_bytes; agreeing here keeps it quiet,
     // which is right -- the mismatch it catches is a HOST configuration error.
-    uint32_t get_aligned_page_size() const { return kPageBytes; }
+    uint32_t get_aligned_page_size() const { return kEntryBytes; }
 };
 inline void noc_async_read(uint64_t src, uint32_t, uint32_t) {
     T2("noc_async_read (t" + n(uint32_t(src >> 32)) + ",page=" + n(uint32_t(src & 0xffffffffu)) + ")");
@@ -410,12 +416,12 @@ namespace ckernel {
 enum class SrcOrder { Regular, Reverse };
 template <SrcOrder order = SrcOrder::Regular>
 inline void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
-    T("  hw_startup(cb" + n(icb0) + ",cb" + n(icb1) + " -> cb" + n(ocb) +
+    T("  hw_startup(dfb" + n(icb0) + ",dfb" + n(icb1) + " -> dfb" + n(ocb) +
       (order == SrcOrder::Reverse ? ", SrcOrder::Reverse)" : ")"));
 }
 inline void matmul_block_init(uint32_t in0, uint32_t in1, uint32_t transpose, uint32_t ct, uint32_t rt, uint32_t kt) {
     (void)transpose;
-    T("  matmul_block_init(cb" + n(in0) + ",cb" + n(in1) + " ct=" + n(ct) + " rt=" + n(rt) + " kt=" + n(kt) + ")");
+    T("  matmul_block_init(dfb" + n(in0) + ",dfb" + n(in1) + " ct=" + n(ct) + " rt=" + n(rt) + " kt=" + n(kt) + ")");
 }
 inline void matmul_block(
     uint32_t in0,
@@ -429,12 +435,12 @@ inline void matmul_block(
     uint32_t kt) {
     (void)transpose;
     (void)kt;
-    T("    matmul_block(cb" + n(in0) + "[" + n(in0_tile) + "],cb" + n(in1) + "[" + n(in1_tile) + "] -> dst" + n(idst) +
-      ".." + n(idst + rt * ct - 1) + ")");
+    T("    matmul_block(dfb" + n(in0) + "[" + n(in0_tile) + "],dfb" + n(in1) + "[" + n(in1_tile) + "] -> dst" +
+      n(idst) + ".." + n(idst + rt * ct - 1) + ")");
 }
 inline void pack_reconfig_l1_acc(uint32_t en) { T("  pack_reconfig_l1_acc(" + n(en) + ")"); }
-inline void pack_block(uint32_t dst, uint32_t cb, uint32_t count) {
-    T("  pack_block(dst" + n(dst) + ".." + n(dst + count - 1) + " -> cb" + n(cb) + ")");
+inline void pack_block(uint32_t dst, uint32_t dfb, uint32_t count) {
+    T("  pack_block(dst" + n(dst) + ".." + n(dst + count - 1) + " -> dfb" + n(dfb) + ")");
 }
 }  // namespace ckernel
 
@@ -469,7 +475,7 @@ namespace unified {
 //
 //  Each is written as if single-threaded. The same source is compiled once per
 //  baby RISC-V thread, and each statement lowers to that thread's half of the
-//  circular-buffer protocol.
+//  dataflow-buffer protocol.
 // ===========================================================================
 
 // INPUT + INTERMED + OUTPUT: two DRAM loads, an SFPU add into an intermediate,
@@ -885,7 +891,7 @@ void example_matmul_acc() {
     using Sq2 = Shape<2, 2>;
     Storage<Sq2> a_storage(0);
     Storage<Sq2> b_storage(1);
-    Storage<Sq2> acc_storage(24);  // running total -- a different CB from out
+    Storage<Sq2> acc_storage(24);  // running total -- a different DFB from out
     Storage<Sq2> out_storage(3);
 
     Accumulator<Sq2, AccumulatorMode::Dst> acc(acc_storage, out_storage);
@@ -961,13 +967,13 @@ static bool report(const char* title) {
         printf("  %s\n", s.c_str());
     }
     bool bad = false;
-    // Every circular buffer the model uses, not 0..4: the output CB is 16 and the
+    // Every dataflow buffer the model uses, not 0..4: the output DFB is 16 and the
     // accumulator's is 24. And the tag needs the COMMA, because every trace line writes
-    // "cb3,2" -- the page count follows the id. Matching "cb3)" matched nothing at all,
+    // "dfb3,2" -- the entry count follows the id. Matching "dfb3)" matched nothing at all,
     // which made this whole check vacuous for as long as it has existed.
-    for (int cb = 0; cb < 32; ++cb) {
+    for (int dfb = 0; dfb < 32; ++dfb) {
         int res = 0, push = 0, wait = 0, pop = 0;
-        std::string tag = "(cb" + n(cb) + ",";
+        std::string tag = "(dfb" + n(dfb) + ",";
         for (auto& s : trace) {
             if (s.find(tag) == std::string::npos) {
                 continue;
@@ -997,8 +1003,8 @@ static bool report(const char* title) {
 
             bad |= !ok;
             printf(
-                "  [cb%d] reserve=%d push=%d | wait=%d pop=%d -> %s\n",
-                cb,
+                "  [dfb%d] reserve=%d push=%d | wait=%d pop=%d -> %s\n",
+                dfb,
                 res,
                 push,
                 wait,

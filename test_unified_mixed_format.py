@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""An SFPU tree whose two leaves live in circular buffers of DIFFERENT data formats.
+"""An SFPU tree whose two leaves live in dataflow buffers of DIFFERENT data formats.
 
 in0 is bfloat16, in1 is float32, and one expression reads both. Every other test in this
 suite is uniformly bfloat16, which is exactly why this one exists: copy_tile does not

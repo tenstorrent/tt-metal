@@ -19,7 +19,7 @@
 // every row keeps at least its diagonal, so no row sums to zero and the reciprocal is
 // finite.
 //
-// Compile-time args, all named, plus a cb_<name> per buffer:
+// Compile-time args, all named, plus a dfb_<name> per buffer:
 //   Sq in tiles
 //   Sk in tiles
 //   D  in tiles
@@ -38,20 +38,20 @@ void kernel_main() {
     constexpr uint32_t sk = get_arg(args::sk);
     constexpr uint32_t dt = get_arg(args::dt);
 
-    constexpr uint32_t kCbQ = get_arg(args::cb_q);
-    constexpr uint32_t kCbK = get_arg(args::cb_k);
-    constexpr uint32_t kCbV = get_arg(args::cb_v);
-    constexpr uint32_t kCbMask = get_arg(args::cb_mask);
-    constexpr uint32_t kCbOne = get_arg(args::cb_one);
-    constexpr uint32_t kCbScale = get_arg(args::cb_scale);
-    constexpr uint32_t kCbScores = get_arg(args::cb_scores);
-    constexpr uint32_t kCbScaled = get_arg(args::cb_scaled);
-    constexpr uint32_t kCbMasked = get_arg(args::cb_masked);
-    constexpr uint32_t kCbRowMax = get_arg(args::cb_row_max);
-    constexpr uint32_t kCbExp = get_arg(args::cb_exp);
-    constexpr uint32_t kCbRecip = get_arg(args::cb_recip);
-    constexpr uint32_t kCbProb = get_arg(args::cb_prob);
-    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kDfbQ = get_arg(args::dfb_q);
+    constexpr uint32_t kDfbK = get_arg(args::dfb_k);
+    constexpr uint32_t kDfbV = get_arg(args::dfb_v);
+    constexpr uint32_t kDfbMask = get_arg(args::dfb_mask);
+    constexpr uint32_t kDfbOne = get_arg(args::dfb_one);
+    constexpr uint32_t kDfbScale = get_arg(args::dfb_scale);
+    constexpr uint32_t kDfbScores = get_arg(args::dfb_scores);
+    constexpr uint32_t kDfbScaled = get_arg(args::dfb_scaled);
+    constexpr uint32_t kDfbMasked = get_arg(args::dfb_masked);
+    constexpr uint32_t kDfbRowMax = get_arg(args::dfb_row_max);
+    constexpr uint32_t kDfbExp = get_arg(args::dfb_exp);
+    constexpr uint32_t kDfbRecip = get_arg(args::dfb_recip);
+    constexpr uint32_t kDfbProb = get_arg(args::dfb_prob);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
     const uint32_t scale_bits = get_arg(args::scale_bits);
 
     using Q = u::Shape<sq, dt>;                          // Sq x D
@@ -65,22 +65,22 @@ void kernel_main() {
     // registers and the packer, which is a superset of what the SFPU path needs, and the
     // broadcast, reduce and SFPU passes each re-init their own state per use. Its
     // SrcOrder::Reverse is what matmul requires.
-    u::matmul_init<Q, Kt>(kCbQ, kCbK, kCbOut);
+    u::matmul_init<Q, Kt>(kDfbQ, kDfbK, kDfbOut);
 
-    u::Storage<Q> q_storage(kCbQ);
-    u::Storage<Kt> k_storage(kCbK);
-    u::Storage<V> v_storage(kCbV);
-    u::Storage<Scores> mask_storage(kCbMask);
-    u::Storage<u::Shape<1, 1>> one_storage(kCbOne);
-    u::Storage<u::Shape<1, 1>> scale_storage(kCbScale);
-    u::Storage<Scores> scores_storage(kCbScores);
-    u::Storage<Scores> scaled_storage(kCbScaled);
-    u::Storage<Scores> masked_storage(kCbMasked);
-    u::Storage<Vec> rowmax_storage(kCbRowMax);
-    u::Storage<Scores> exp_storage(kCbExp);
-    u::Storage<Vec> recip_storage(kCbRecip);
-    u::Storage<Scores> prob_storage(kCbProb);
-    u::Storage<Out> out_storage(kCbOut);
+    u::Storage<Q> q_storage(kDfbQ);
+    u::Storage<Kt> k_storage(kDfbK);
+    u::Storage<V> v_storage(kDfbV);
+    u::Storage<Scores> mask_storage(kDfbMask);
+    u::Storage<u::Shape<1, 1>> one_storage(kDfbOne);
+    u::Storage<u::Shape<1, 1>> scale_storage(kDfbScale);
+    u::Storage<Scores> scores_storage(kDfbScores);
+    u::Storage<Scores> scaled_storage(kDfbScaled);
+    u::Storage<Scores> masked_storage(kDfbMasked);
+    u::Storage<Vec> rowmax_storage(kDfbRowMax);
+    u::Storage<Scores> exp_storage(kDfbExp);
+    u::Storage<Vec> recip_storage(kDfbRecip);
+    u::Storage<Scores> prob_storage(kDfbProb);
+    u::Storage<Out> out_storage(kDfbOut);
 
     const auto q_acc = TensorAccessor(tensor::q);
     const auto k_acc = TensorAccessor(tensor::k);

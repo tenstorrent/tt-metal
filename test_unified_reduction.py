@@ -73,14 +73,14 @@ def run(device, ht=4, wt=4, grid_h=2, grid_w=2, num_blocks=1, op="sum", single_s
     #           for the gather and thread 1 for the direct store, so the role differs.
     #   tmp1    the gather destination: DM thread 0 writes it, compute reduces it. Declared
     #           even single-stage, where nothing touches it, because the kernel declares its
-    #           Storage unconditionally -- exactly as the circular buffer was allocated
+    #           Storage unconditionally -- exactly as the dataflow buffer was allocated
     #           unconditionally before.
     #   out     compute stores it, DM thread 1 drains it
     dfbs = [
         dfb("in0", ht * wt),
         # tmp0's drain differs by shape -- the gather takes it on thread 0, the single-stage
         # store on thread 1 -- and both spellings live in the source, so it is stated.
-        dfb_output("tmp0", thread=1 if single_stage else 0, num_pages=wt),
+        dfb_output("tmp0", thread=1 if single_stage else 0, num_entries=wt),
         dfb("tmp1", wt * grid_h),
         dfb("scaler", 1),
         dfb("out", wt),

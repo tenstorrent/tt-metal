@@ -99,8 +99,8 @@ def bf16_pair(v):
 # --- one launch per kernel ------------------------------------------------------------
 
 
-def launch(device, kernel, cbs, tensors, rt_args=None, defines=None, named_ct_args=None):
-    """`cbs` entries are (name, pages) or (name, pages, dtype); the default is bfloat16.
+def launch(device, kernel, buffers, tensors, rt_args=None, defines=None, named_ct_args=None):
+    """`buffers` entries are (name, entries) or (name, entries, dtype); the default is bfloat16.
 
     A buffer's format must match the DRAM tensor it is read from or written to: the entry
     size follows the format (1088 bytes for bfloat8_b, 2048 for bfloat16) and a disagreement
@@ -113,7 +113,7 @@ def launch(device, kernel, cbs, tensors, rt_args=None, defines=None, named_ct_ar
     spec = unified_program_spec(
         kernel_source=kernel,
         nodes=core_ranges,
-        dfbs=[dfb(c[0], c[1], dtype=(c[2] if len(c) > 2 else ttnn.bfloat16)) for c in cbs],
+        dfbs=[dfb(c[0], c[1], dtype=(c[2] if len(c) > 2 else ttnn.bfloat16)) for c in buffers],
         tensors=tensors,
         named_compile_time_args=named_ct_args,
         runtime_arg_names=sorted(rt_args or {}),
@@ -126,7 +126,7 @@ def launch(device, kernel, cbs, tensors, rt_args=None, defines=None, named_ct_ar
 
 def rmsnorm(device, x, w, ht, wt):
     out = nan_out(device, ht * TILE, wt * TILE, ACT)
-    cbs = [
+    buffers = [
         ("x", ht * wt, ACT),
         ("w", wt, WGT),
         ("eps", 1),
@@ -145,13 +145,13 @@ def rmsnorm(device, x, w, ht, wt):
     # height as one chunk. Named now, so leaving one out is an error rather than a garbage
     # loop bound -- which is how this hung the device once.
     rt = {"eps_bits": bf16_pair(EPS), "chunk_begin": 0, "chunk_count": 1}
-    return launch(device, RMSNORM_KERNEL, cbs, {"x": x, "w": w, "out": out}, rt, None, [("ht", ht), ("wt", wt)])
+    return launch(device, RMSNORM_KERNEL, buffers, {"x": x, "w": w, "out": out}, rt, None, [("ht", ht), ("wt", wt)])
 
 
 def matmul(device, a, b, rt_dim, ct_dim, kt_dim):
     """Single-shot [rt, kt] @ [kt, ct]; the whole of b lives in L1."""
     out = nan_out(device, rt_dim * TILE, ct_dim * TILE, ACT)
-    cbs = [
+    buffers = [
         ("in0", rt_dim * kt_dim, ACT),
         ("in1", kt_dim * ct_dim, WGT),
         ("out", rt_dim * ct_dim, ACT),
@@ -167,14 +167,14 @@ def matmul(device, a, b, rt_dim, ct_dim, kt_dim):
         ("MM_SINGLE_SHOT", "1"),
     ]
     # bias is bound even unfused: the kernel names tensor::bias on every projection.
-    return launch(device, MATMUL_KERNEL, cbs, {"in0": a, "in1": b, "out": out, "bias": b}, None, defines)
+    return launch(device, MATMUL_KERNEL, buffers, {"in0": a, "in1": b, "out": out, "bias": b}, None, defines)
 
 
 def apply_rope(device, x, cos, sin, m, seq_t, dim_t, chunk):
     out = nan_out(device, seq_t * TILE, dim_t * TILE, ACT)
     total = seq_t * dim_t
     assert total % chunk == 0
-    cbs = [
+    buffers = [
         ("x", chunk, ACT),
         ("cos", chunk),
         ("sin", chunk),
@@ -188,7 +188,7 @@ def apply_rope(device, x, cos, sin, m, seq_t, dim_t, chunk):
     return launch(
         device,
         ROPE_KERNEL,
-        cbs,
+        buffers,
         {"x": x, "cos": cos, "sin": sin, "m": m, "out": out},
         rt,
         None,
@@ -200,14 +200,14 @@ def binary(device, a, b, rows, cols, mode=None):
     """Elementwise over rows x cols tiles; mode None is add, "silu_mul" is silu(a) * b."""
     out = nan_out(device, rows * TILE, cols * TILE, ACT)
     tiles = rows * cols
-    cbs = [("in0", 2 * tiles, ACT), ("in1", 2 * tiles, ACT), ("out", 2 * tiles, ACT)]
+    buffers = [("in0", 2 * tiles, ACT), ("in1", 2 * tiles, ACT), ("out", 2 * tiles, ACT)]
     # The last two are the block range binary.cpp partitions across cores. This layer is
     # one core and one block, so it owns block 0 and there is exactly one of them. Omitting
     # them compiles fine and feeds the loop whatever is in that arg slot -- a hang.
     rt = {"block_begin": 0, "block_count": 1}
     defines = [("BN_SILU_MUL", "1")] if mode == "silu_mul" else None
     named = [("num_blocks", 1), ("tiles_per_block", tiles)]
-    return launch(device, BINARY_KERNEL, cbs, {"in0": a, "in1": b, "out": out}, rt, defines, named)
+    return launch(device, BINARY_KERNEL, buffers, {"in0": a, "in1": b, "out": out}, rt, defines, named)
 
 
 # --- the host-side layout gap --------------------------------------------------------

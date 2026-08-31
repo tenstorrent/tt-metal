@@ -735,6 +735,54 @@ function? -- had been answered by a measurement it explicitly asked for. Leaving
 open invites someone to re-run settled experiments, which on this project costs a device and
 half a day.
 
+### 7.8 The vocabulary, and the half of stage 1a that was missed
+
+Two words changed, both of them metal's rather than ours.
+
+**Circular buffer -> dataflow buffer.** The host API had said `dfb` since the port -- the
+harness builds `DataflowBufferSpec`s through `dfb()`, `dfb_input()`, `dfb_intermed()` -- while
+every kernel still declared `kCbIn = get_arg(args::cb_in)`. Two names for one thing, split
+across the host/kernel boundary, in a project whose hazard list is mostly two-places-must-agree
+contracts. The `cb_` prefix was itself part of that contract: `derive_roles` reads endpoint
+roles off the kernel by matching `args::cb_<name>`, so the prefix had to move on both sides at
+once or roles stop being derivable. It did, and the failure mode if a site had been missed is
+loud -- a kernel naming an argument the host never emitted does not compile.
+
+**Pages -> entries, on the buffer side only.** This is a distinction metal 2.0 draws and the
+library had lost: `dataflow_buffer.h` says `get_entry_size` and `get_total_num_entries` and
+uses "page" twice in the entire header, while `tensor_accessor.h` says `page_id` and
+`get_aligned_page_size` throughout. A TENSOR has pages; a BUFFER has entries. Using one word
+for both made D19 read as a tautology --
+
+    ASSERT(cb_page_bytes(cb_id) == acc.get_aligned_page_size());     // before
+    ASSERT(dfb_entry_bytes(dfb_id) == acc.get_aligned_page_size());  // after
+
+-- when what it checks is that a buffer entry is the size of the tensor page it carries. The
+check is unchanged; it just says so now. The two vocabularies met on one line of the harness,
+which read `spec.num_entries = d.num_pages`.
+
+Metal's own names were held fixed throughout: `cb_interface`, `cb_addr_shift`,
+`fifo_page_size`, `LocalCBInterface`, `cb_api.h`, `get_aligned_page_size`, `page_id`, and the
+four free functions the library no longer calls but still describes. Renaming those would make
+the comments describe an API that does not exist. `srcB` and `DEST_TO_SRCB` are the Tensix SrcB
+register and were never candidates -- worth stating because a careless `cb` -> `dfb` sweep
+takes them.
+
+**Stage 1a was half done, and this is what exposed it.** Its title said "the circular-buffer
+protocol becomes DataflowBuffer" and its body said "every one in impl_v1.hpp -- 31 call
+sites". Those are not the same claim, and `math.hpp` had 26 more that were never in scope. So
+renaming variables there would have produced `buffer(acc_dfb)`-shaped names around
+`cb_wait_front` calls: a cosmetic change dressed as a real one. They are converted, and by
+stage 1a's own argument -- `dataflow_buffer.inl` routes `wait_front`/`pop_front` to
+`UNPACK(llk_*)` and `reserve_back`/`push_back` to `PACK(llk_*)` on a TRISC, which is exactly
+where these live.
+
+**The selftest earned its repair immediately.** It proved the `math.hpp` conversion emits a
+BYTE-IDENTICAL trace on all three projections, and then proved the rename does too, modulo the
+buffer's printed label. That is the whole claim of a change of spelling, checked rather than
+asserted -- and it is only checkable because the traced stubs kept metal's primitive names, so
+a trace taken before compares against one taken after.
+
 ## 8. What this buys, against the hazard ledger
 
 | hazard | today | after |

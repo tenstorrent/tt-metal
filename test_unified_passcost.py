@@ -9,7 +9,7 @@ mode here has a trivial reference. Runtime against the number of passes cancels
 every fixed cost (program launch, first load, last store), because those are paid
 once whatever the pass count is, so nothing has to be modelled or guessed at.
 
-  copy    the control: one L1 round trip and its CB handshake, no math
+  copy    the control: one L1 round trip and its DFB handshake, no math
   bcast   shape-preserving, so chainable; minus the copy slope it is bcast's math
   reduce  collapses, so it cannot be chained and is swept by shape instead
 
@@ -92,7 +92,7 @@ def run(device, mode="copy", passes=1, rows=1, cols=8, seed=0, buffering=2, fide
     tensors = [ta, tv, tout] if two_operand else [ta, tout]
     named_ct_args = [("rows", rows), ("cols", cols)]
 
-    # The vector CB holds the broadcast operand, or the 1x1 reduce scaler.
+    # The vector DFB holds the broadcast operand, or the 1x1 reduce scaler.
     vec_pages = rows if mode in ("bcast", "alt") else (rows * cols if mode == "matmul" or mode in BIN else 1)
     dfbs = [
         dfb("in", buffering * rows * cols),

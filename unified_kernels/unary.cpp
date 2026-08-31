@@ -10,7 +10,7 @@
 // torch -- a chain that silently dropped a link would still match torch on the
 // op that survived.
 //
-// Compile-time args, all named: num_blocks, tiles_per_block, and a cb_<name> per buffer.
+// Compile-time args, all named: num_blocks, tiles_per_block, and a dfb_<name> per buffer.
 // No runtime args at all -- the tensors are BOUND, so their addresses
 // ride along with the accessors rather than being passed and counted.
 //
@@ -37,14 +37,14 @@ void kernel_main() {
     constexpr uint32_t num_blocks = get_arg(args::num_blocks);
     constexpr uint32_t tiles_per_block = get_arg(args::tiles_per_block);
 
-    constexpr uint32_t kCbIn = get_arg(args::cb_in);
-    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kDfbIn = get_arg(args::dfb_in);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
 
-    u::compute_init(kCbIn, kCbOut);
+    u::compute_init(kDfbIn, kDfbOut);
 
     using Block1D = u::Shape<1, tiles_per_block>;
-    u::Storage<Block1D> in_storage(kCbIn);
-    u::Storage<Block1D> out_storage(kCbOut);
+    u::Storage<Block1D> in_storage(kDfbIn);
+    u::Storage<Block1D> out_storage(kDfbOut);
 
     const auto in = TensorAccessor(tensor::in);
     const auto out = TensorAccessor(tensor::out);

@@ -636,6 +636,22 @@ sets its own environment per case and ignores both.
   Repairing it immediately earned its keep, catching three live `-Werror` findings in
   `math.hpp` that no other build can see -- `bias_cb` and `epi_bias_cb` missing from the
   non-compute `(void)` lists, and `kAccTiles` declared outside the guard that uses it.
+- **The library speaks Metal 2.0's vocabulary**: dataflow buffers, not circular buffers,
+  and a buffer holds ENTRIES while a tensor has PAGES. That second half is metal's
+  distinction, not ours -- `dataflow_buffer.h` says `get_entry_size` and
+  `get_total_num_entries` and uses the word "page" twice in the whole header, while
+  `tensor_accessor.h` says `page_id` and `get_aligned_page_size` a hundred times over. The
+  library had used one word for both, which made D19 read like a tautology:
+
+      ASSERT(cb_page_bytes(cb_id) == acc.get_aligned_page_size());     // before
+      ASSERT(dfb_entry_bytes(dfb_id) == acc.get_aligned_page_size());  // after
+
+  The check has not changed. What changed is that it now says what it tests -- a buffer
+  entry must be the size of the tensor page it carries -- instead of appearing to compare a
+  page size against a page size.
+
+  The host said `dfb` and `num_entries` already, so the mismatch was visible on a single
+  line of the harness: `spec.num_entries = d.num_pages`.
 
 ### Verification status, stated exactly
 

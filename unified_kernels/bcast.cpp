@@ -10,7 +10,7 @@
 // filled 0-column" and "C[h,w] = A[h,w] + B[w]"), so the mapping is established by
 // numbers rather than by reading.
 //
-// Compile-time args, all named, plus a cb_<name> per buffer:
+// Compile-time args, all named, plus a dfb_<name> per buffer:
 //   block height in tiles
 //   block width in tiles
 //
@@ -44,21 +44,21 @@ void kernel_main() {
     constexpr uint32_t ht = get_arg(args::ht);
     constexpr uint32_t wt = get_arg(args::wt);
 
-    constexpr uint32_t kCbBlock = get_arg(args::cb_block);
-    constexpr uint32_t kCbVec = get_arg(args::cb_vec);
-    constexpr uint32_t kCbOut = get_arg(args::cb_out);
-    constexpr uint32_t kCbTmp = get_arg(args::cb_tmp);
+    constexpr uint32_t kDfbBlock = get_arg(args::dfb_block);
+    constexpr uint32_t kDfbVec = get_arg(args::dfb_vec);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
+    constexpr uint32_t kDfbTmp = get_arg(args::dfb_tmp);
 
-    u::compute_init(kCbBlock, kCbOut);
+    u::compute_init(kDfbBlock, kDfbOut);
 
     // The vector's shape is not stated: it is whatever the axis requires of the block,
     // which is the same shape a reduction along that axis produces.
     using In = u::Shape<ht, wt>;
     using Vec = u::reduce_shape<In, kAxis>;
 
-    u::Storage<In> block_storage(kCbBlock);
-    u::Storage<Vec> vec_storage(kCbVec);
-    u::Storage<In> out_storage(kCbOut);
+    u::Storage<In> block_storage(kDfbBlock);
+    u::Storage<Vec> vec_storage(kDfbVec);
+    u::Storage<In> out_storage(kDfbOut);
 
     const auto block_acc = TensorAccessor(tensor::block);
     const auto vec_acc = TensorAccessor(tensor::vec);
@@ -72,7 +72,7 @@ void kernel_main() {
     // put it back or it reads the broadcast operand's replication instead of whole tiles.
     // Phase 4 gave every SFPU leaf its own copy_tile_to_dst_init_short; this path is what
     // proves that covers it.
-    u::Storage<In> tmp_storage(kCbTmp);
+    u::Storage<In> tmp_storage(kDfbTmp);
     u::ComputeBlock t = tmp_storage.store(BC_APPLY(b, v));
     u::noc_store<1>(out_storage.store(u::relu(t + t)), out, 0);
 #else

@@ -35,11 +35,11 @@
 //
 // What each thread ends up executing, per query chunk:
 //
-//   NCRISC   per k-block: cb_a (mt x kt) and cb_b (kt x nt), both gathered
+//   NCRISC   per k-block: dfb_a (mt x kt) and dfb_b (kt x nt), both gathered
 //   TRISC    matmul per k-block into the accumulator, then the mt x nt block in subblocks
-//   BRISC    drain cb_out (mt * nt tiles) per output block
+//   BRISC    drain dfb_out (mt * nt tiles) per output block
 //
-// Compile-time args, all named, plus a cb_<name> per buffer:
+// Compile-time args, all named, plus a dfb_<name> per buffer:
 //   mt          rows per M-block, in tiles
 //   ktot        K in tiles
 //   ntot        N in tiles
@@ -98,10 +98,10 @@ void kernel_main() {
     constexpr uint32_t kt = get_arg(args::kt);
     constexpr uint32_t nt = get_arg(args::nt);
 
-    constexpr uint32_t kCbIn = get_arg(args::cb_in);
-    constexpr uint32_t kCbWo = get_arg(args::cb_wo);
-    constexpr uint32_t kCbOut = get_arg(args::cb_out);
-    constexpr uint32_t kCbAcc = get_arg(args::cb_acc);
+    constexpr uint32_t kDfbIn = get_arg(args::dfb_in);
+    constexpr uint32_t kDfbWo = get_arg(args::dfb_wo);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
+    constexpr uint32_t kDfbAcc = get_arg(args::dfb_acc);
 
     static_assert(kt > 0 && ktot % kt == 0, "the k-block width must divide K");
     static_assert(nt > 0 && ntot % nt == 0, "the output-column block width must divide N");
@@ -125,12 +125,12 @@ void kernel_main() {
     using W = u::Shape<kt, nt>;    // one (k, n) tile of B
     using Out = u::Shape<mt, nt>;  // one (m, n) tile of the output
 
-    u::matmul_init<A, W>(kCbIn, kCbWo, kCbOut);
+    u::matmul_init<A, W>(kDfbIn, kDfbWo, kDfbOut);
 
-    u::Storage<A> a_storage(kCbIn);
-    u::Storage<W> w_storage(kCbWo);
-    u::Storage<Out> acc_storage(kCbAcc);
-    u::Storage<Out> out_storage(kCbOut);
+    u::Storage<A> a_storage(kDfbIn);
+    u::Storage<W> w_storage(kDfbWo);
+    u::Storage<Out> acc_storage(kDfbAcc);
+    u::Storage<Out> out_storage(kDfbOut);
 
     const auto a_acc = TensorAccessor(tensor::attn);
     const auto b_acc = TensorAccessor(tensor::wo);
@@ -185,19 +185,19 @@ void kernel_main() {
         // operand movement costs, which is the question once fidelity has shown the math is
         // not on the critical path at all.
         u::ComputeBlock a_h =
-            u::noc_load<MMB_IN0_THREAD, 0>(a_storage, row, [&](u::L1Pages pages) {
+            u::noc_load<MMB_IN0_THREAD, 0>(a_storage, row, [&](u::L1Entries pages) {
                 for (uint32_t p = 0; p < pages.count; ++p) {
                     const uint32_t rr = i * mt + p / kt;
                     const uint32_t cc = p % kt;
-                    noc_async_read(a_acc.get_noc_addr(rr * ktot + cc), pages.addr(p), pages.page_bytes);
+                    noc_async_read(a_acc.get_noc_addr(rr * ktot + cc), pages.addr(p), pages.entry_bytes);
                 }
             }).wait();
         u::ComputeBlock w_h =
-            u::noc_load<MMB_IN1_THREAD, 1>(w_storage, col, [&](u::L1Pages pages) {
+            u::noc_load<MMB_IN1_THREAD, 1>(w_storage, col, [&](u::L1Entries pages) {
                 for (uint32_t p = 0; p < pages.count; ++p) {
                     const uint32_t rr = p / nt;
                     const uint32_t cc = n * nt + p % nt;
-                    noc_async_read(b_acc.get_noc_addr(rr * ntot + cc), pages.addr(p), pages.page_bytes);
+                    noc_async_read(b_acc.get_noc_addr(rr * ntot + cc), pages.addr(p), pages.entry_bytes);
                 }
             }).wait();
 #endif
@@ -215,23 +215,23 @@ void kernel_main() {
             const u::ComputeBlock<W>& w = w_h;
 #else
             u::ComputeBlock a =
-                u::noc_load<MMB_IN0_THREAD, /*pair=*/0>(a_storage, row, [&](u::L1Pages pages) {
+                u::noc_load<MMB_IN0_THREAD, /*pair=*/0>(a_storage, row, [&](u::L1Entries pages) {
                     for (uint32_t p = 0; p < pages.count; ++p) {
                         const uint32_t rr = i * mt + p / kt;
                         const uint32_t cc = b * kt + p % kt;
-                        noc_async_read(a_acc.get_noc_addr(rr * ktot + cc), pages.addr(p), pages.page_bytes);
+                        noc_async_read(a_acc.get_noc_addr(rr * ktot + cc), pages.addr(p), pages.entry_bytes);
                     }
                 }).wait();
             u::ComputeBlock w =
 #if defined(MMB_SHARE_PAIR)
-                u::noc_load<MMB_IN1_THREAD, /*pair=*/0>(w_storage, col, [&](u::L1Pages pages) {
+                u::noc_load<MMB_IN1_THREAD, /*pair=*/0>(w_storage, col, [&](u::L1Entries pages) {
 #else
-                u::noc_load<MMB_IN1_THREAD, /*pair=*/1>(w_storage, col, [&](u::L1Pages pages) {
+                u::noc_load<MMB_IN1_THREAD, /*pair=*/1>(w_storage, col, [&](u::L1Entries pages) {
 #endif
                     for (uint32_t p = 0; p < pages.count; ++p) {
                         const uint32_t rr = b * kt + p / nt;
                         const uint32_t cc = n * nt + p % nt;
-                        noc_async_read(b_acc.get_noc_addr(rr * ntot + cc), pages.addr(p), pages.page_bytes);
+                        noc_async_read(b_acc.get_noc_addr(rr * ntot + cc), pages.addr(p), pages.entry_bytes);
                     }
                 }).wait();
 #endif
@@ -252,11 +252,11 @@ void kernel_main() {
 #endif
 
             auto store_block = [&](u::Block<Out> blk) {
-                u::noc_store<0>(std::move(blk), [&](u::L1Pages pages) {
+                u::noc_store<0>(std::move(blk), [&](u::L1Entries pages) {
                     for (uint32_t p = 0; p < pages.count; ++p) {
                         const uint32_t rr = i * mt + p / nt;
                         const uint32_t cc = n * nt + p % nt;
-                        noc_async_write(pages.addr(p), out.get_noc_addr(rr * ntot + cc), pages.page_bytes);
+                        noc_async_write(pages.addr(p), out.get_noc_addr(rr * ntot + cc), pages.entry_bytes);
                     }
                 });
             };
@@ -284,11 +284,11 @@ void kernel_main() {
 
             // This block of the output: rows [i*mt, +mt) by columns [n*nt, +nt).
             auto store_block = [&](u::Block<Out> blk) {
-                u::noc_store<0>(std::move(blk), [&](u::L1Pages pages) {
+                u::noc_store<0>(std::move(blk), [&](u::L1Entries pages) {
                     for (uint32_t p = 0; p < pages.count; ++p) {
                         const uint32_t row = i * mt + p / nt;
                         const uint32_t col = n * nt + p % nt;
-                        noc_async_write(pages.addr(p), out.get_noc_addr(row * ntot + col), pages.page_bytes);
+                        noc_async_write(pages.addr(p), out.get_noc_addr(row * ntot + col), pages.entry_bytes);
                     }
                 });
             };
@@ -299,22 +299,22 @@ void kernel_main() {
                 // A's (m, k) tile: rows [i*mt, +mt) by columns [b*kt, +kt). Strided, because A's
                 // rows are what is contiguous.
                 u::ComputeBlock a =
-                    u::noc_load<MMB_IN0_THREAD>(a_storage, [&](u::L1Pages pages) {
+                    u::noc_load<MMB_IN0_THREAD>(a_storage, [&](u::L1Entries pages) {
                         for (uint32_t p = 0; p < pages.count; ++p) {
                             // Row-major in L1: page p is tile (p / kt, p % kt).
                             const uint32_t row = i * mt + p / kt;
                             const uint32_t col = b * kt + p % kt;
-                            noc_async_read(a_acc.get_noc_addr(row * ktot + col), pages.addr(p), pages.page_bytes);
+                            noc_async_read(a_acc.get_noc_addr(row * ktot + col), pages.addr(p), pages.entry_bytes);
                         }
                     }).wait();
 
                 // B's (k, n) tile: rows [b*kt, +kt) by columns [n*nt, +nt).
                 u::ComputeBlock w =
-                    u::noc_load<MMB_IN1_THREAD>(w_storage, [&](u::L1Pages pages) {
+                    u::noc_load<MMB_IN1_THREAD>(w_storage, [&](u::L1Entries pages) {
                         for (uint32_t p = 0; p < pages.count; ++p) {
                             const uint32_t row = b * kt + p / nt;
                             const uint32_t col = n * nt + p % nt;
-                            noc_async_read(b_acc.get_noc_addr(row * ntot + col), pages.addr(p), pages.page_bytes);
+                            noc_async_read(b_acc.get_noc_addr(row * ntot + col), pages.addr(p), pages.entry_bytes);
                         }
                     }).wait();
 

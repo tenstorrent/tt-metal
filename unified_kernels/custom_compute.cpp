@@ -26,9 +26,9 @@ namespace u = tt::unified;
 void kernel_main() {
     constexpr uint32_t tiles = get_arg(args::tiles);
 
-    constexpr uint32_t kCbA = get_arg(args::cb_a);
-    constexpr uint32_t kCbB = get_arg(args::cb_b);
-    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kDfbA = get_arg(args::dfb_a);
+    constexpr uint32_t kDfbB = get_arg(args::dfb_b);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
 
     const auto a_acc = TensorAccessor(tensor::a);
     const auto b_acc = TensorAccessor(tensor::b);
@@ -36,28 +36,28 @@ void kernel_main() {
 
     using Blk = u::Shape<1, tiles>;
 
-    u::Storage<Blk> a_storage(kCbA);
-    u::Storage<Blk> b_storage(kCbB);
-    u::Storage<Blk> out_storage(kCbOut);
+    u::Storage<Blk> a_storage(kDfbA);
+    u::Storage<Blk> b_storage(kDfbB);
+    u::Storage<Blk> out_storage(kDfbOut);
 
-    u::compute_init(kCbA, kCbOut);
+    u::compute_init(kDfbA, kDfbOut);
 
     u::ComputeBlock a = u::noc_load<0>(a_storage, a_acc, 0).wait();
     u::ComputeBlock b = u::noc_load<0>(b_storage, b_acc, 0).wait();
 
-    u::custom_compute(a, b, [&](uint32_t a_cb, uint32_t b_cb) {
+    u::custom_compute(a, b, [&](uint32_t a_dfb, uint32_t b_dfb) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        cb_reserve_back(kCbOut, tiles);
-        ckernel::sub_init(a_cb, b_cb);
+        cb_reserve_back(kDfbOut, tiles);
+        ckernel::sub_init(a_dfb, b_dfb);
         for (uint32_t t = 0; t < tiles; ++t) {
             ckernel::tile_regs_acquire();
-            ckernel::sub_tiles(a_cb, b_cb, t, t, 0);
+            ckernel::sub_tiles(a_dfb, b_dfb, t, t, 0);
             ckernel::tile_regs_commit();
             ckernel::tile_regs_wait();
-            ckernel::pack_tile(0, kCbOut);
+            ckernel::pack_tile(0, kDfbOut);
             ckernel::tile_regs_release();
         }
-        cb_push_back(kCbOut, tiles);
+        cb_push_back(kDfbOut, tiles);
 #endif
     });
 

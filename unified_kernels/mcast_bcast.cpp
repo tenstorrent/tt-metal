@@ -9,7 +9,7 @@
 // output slice should be identical -- which is what makes a mis-addressed
 // semaphore or a skipped handshake visible.
 //
-// Compile-time args, all named: tiles_per_block, and a cb_<name> per buffer.
+// Compile-time args, all named: tiles_per_block, and a dfb_<name> per buffer.
 //
 // Runtime args, identical on all three kernels: out_block, this core's output slice, read by
 // NAME. That is hazard D17 closed -- a missing or misspelled name is an error from metal
@@ -41,15 +41,15 @@ namespace u = tt::unified;
 void kernel_main() {
     constexpr uint32_t tiles_per_block = get_arg(args::tiles_per_block);
 
-    constexpr uint32_t kCbIn = get_arg(args::cb_in);
-    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kDfbIn = get_arg(args::dfb_in);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
     const uint32_t out_block = get_arg(args::out_block);
 
-    u::compute_init(kCbIn, kCbOut);
+    u::compute_init(kDfbIn, kDfbOut);
 
     using Block1D = u::Shape<1, tiles_per_block>;
-    u::Storage<Block1D> in_storage(kCbIn);
-    u::Storage<Block1D> out_storage(kCbOut);
+    u::Storage<Block1D> in_storage(kDfbIn);
+    u::Storage<Block1D> out_storage(kDfbOut);
 
     const auto in = TensorAccessor(tensor::in);
     const auto out = TensorAccessor(tensor::out);

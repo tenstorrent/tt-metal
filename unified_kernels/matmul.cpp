@@ -12,12 +12,12 @@
 //
 // What each thread ends up executing:
 //
-//   NCRISC   fill cb_in0 (RT*KT tiles) and cb_in1 (KT*CT tiles)
+//   NCRISC   fill dfb_in0 (RT*KT tiles) and dfb_in1 (KT*CT tiles)
 //   TRISC    wait both, matmul_block across k accumulating into DST,
-//            pack the RT*CT subblock, push cb_out
-//   BRISC    drain cb_out (RT*CT tiles)
+//            pack the RT*CT subblock, push dfb_out
+//   BRISC    drain dfb_out (RT*CT tiles)
 //
-// Compile-time args: a cb_<name> per buffer.
+// Compile-time args: a dfb_<name> per buffer.
 //
 // No runtime args: the tensors are bound, so their addresses ride with the accessors.
 
@@ -53,11 +53,11 @@ constexpr uint32_t kIn1Tiles = MM_KT_DIM * MM_CT_DIM;
 constexpr uint32_t kOutTiles = MM_RT_DIM * MM_CT_DIM;
 
 void kernel_main() {
-    constexpr uint32_t kCbIn0 = get_arg(args::cb_in0);
-    constexpr uint32_t kCbIn1 = get_arg(args::cb_in1);
-    constexpr uint32_t kCbBias = get_arg(args::cb_bias);
-    constexpr uint32_t kCbOut = get_arg(args::cb_out);
-    constexpr uint32_t kCbAcc = get_arg(args::cb_acc);
+    constexpr uint32_t kDfbIn0 = get_arg(args::dfb_in0);
+    constexpr uint32_t kDfbIn1 = get_arg(args::dfb_in1);
+    constexpr uint32_t kDfbBias = get_arg(args::dfb_bias);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
+    constexpr uint32_t kDfbAcc = get_arg(args::dfb_acc);
 #if defined(MM_BIAS)
     // Last, so a build without MM_BIAS sees exactly the layout it always did.
 #endif
@@ -70,15 +70,15 @@ void kernel_main() {
     using In1 = u::Shape<MM_KT_DIM, MM_CT_DIM>;
     using Out = u::Shape<MM_RT_DIM, MM_CT_DIM>;
 
-    u::Storage<In0> in0_storage(kCbIn0);
-    u::Storage<In1> in1_storage(kCbIn1);
-    u::Storage<Out> acc_storage(kCbAcc);  // running total -- must NOT be kCbOut
-    u::Storage<Out> out_storage(kCbOut);
+    u::Storage<In0> in0_storage(kDfbIn0);
+    u::Storage<In1> in1_storage(kDfbIn1);
+    u::Storage<Out> acc_storage(kDfbAcc);  // running total -- must NOT be kDfbOut
+    u::Storage<Out> out_storage(kDfbOut);
 
     // The FPU path needs its own hardware startup: SrcOrder::Reverse plus the
     // block dims. compute_init() (init_sfpu) would leave the ALU configured for
     // SFPU work and matmul could not run against it.
-    u::matmul_init<In0, In1, kTransposeB>(kCbIn0, kCbIn1, kCbOut);
+    u::matmul_init<In0, In1, kTransposeB>(kDfbIn0, kDfbIn1, kDfbOut);
 
     const auto in0 = TensorAccessor(tensor::in0);
     const auto in1 = TensorAccessor(tensor::in1);
@@ -89,9 +89,9 @@ void kernel_main() {
     // stay in the buffer for the whole kernel -- and a ComputeBlock pops in its
     // destructor, which here is the end of the kernel. Declared inside the loop it
     // would be popped after one use and the next block would hang waiting for a
-    // refill that never comes. The CB holds exactly ct tiles, so the one reserve
+    // refill that never comes. The DFB holds exactly ct tiles, so the one reserve
     // below is the only one it ever gets.
-    u::Storage<u::Shape<1, MM_CT_DIM>> bias_storage(kCbBias);
+    u::Storage<u::Shape<1, MM_CT_DIM>> bias_storage(kDfbBias);
     const auto bias_acc = TensorAccessor(tensor::bias);
     u::ComputeBlock bias = u::noc_load<0>(bias_storage, bias_acc, 0).wait();
 #endif

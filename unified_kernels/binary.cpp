@@ -60,20 +60,20 @@ namespace u = tt::unified;
 #endif
 
 void kernel_main() {
-    constexpr uint32_t kCbIn0 = get_arg(args::cb_in0);
-    constexpr uint32_t kCbIn1 = get_arg(args::cb_in1);
-    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kDfbIn0 = get_arg(args::dfb_in0);
+    constexpr uint32_t kDfbIn1 = get_arg(args::dfb_in1);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
     [[maybe_unused]] constexpr uint32_t num_blocks = get_arg(args::num_blocks);
     constexpr uint32_t tiles_per_block = get_arg(args::tiles_per_block);
     const uint32_t block_begin = get_arg(args::block_begin);
     const uint32_t block_count = get_arg(args::block_count);
 
-    u::compute_init(kCbIn0, kCbOut);
+    u::compute_init(kDfbIn0, kDfbOut);
 
     using Block1D = u::Shape<1, tiles_per_block>;
-    u::Storage<Block1D> in0_storage(kCbIn0);
-    u::Storage<Block1D> in1_storage(kCbIn1);
-    u::Storage<Block1D> out_storage(kCbOut);
+    u::Storage<Block1D> in0_storage(kDfbIn0);
+    u::Storage<Block1D> in1_storage(kDfbIn1);
+    u::Storage<Block1D> out_storage(kDfbOut);
 
     const auto in0 = TensorAccessor(tensor::in0);
     const auto in1 = TensorAccessor(tensor::in1);

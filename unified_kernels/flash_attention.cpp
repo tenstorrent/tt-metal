@@ -37,10 +37,10 @@
 // passes per chunk, where the first working version had fifteen.
 //
 // Passes are the right thing to count: measured, an extra chunk costs ~29us whatever its SIZE,
-// so per-chunk cost is dominated by fixed per-pass overhead -- a circular-buffer round trip
+// so per-chunk cost is dominated by fixed per-pass overhead -- a dataflow-buffer round trip
 // and an acquire/pack cycle each -- rather than by arithmetic.
 //
-// STATE BUFFERS. One circular buffer each, sized 2x the block: release() waits on the live
+// STATE BUFFERS. One dataflow buffer each, sized 2x the block: release() waits on the live
 // value, store() reserves the free half, and the pop happens at the end of the iteration --
 // so the next iteration finds the new value at the front. No parity bookkeeping.
 //
@@ -58,7 +58,7 @@
 // A rectangular score block cannot express the half-masked diagonal chunk, but it can skip
 // the wholly-masked ones, and that is what the loop bound does.
 //
-// Compile-time args, all named, plus a cb_<name> per buffer:
+// Compile-time args, all named, plus a dfb_<name> per buffer:
 //   Sq per query CHUNK, in tiles
 //   Sk per key CHUNK, in tiles
 //   D in tiles
@@ -84,25 +84,25 @@ void kernel_main() {
     constexpr uint32_t dt = get_arg(args::dt);
     constexpr uint32_t num_q_chunks = get_arg(args::num_q_chunks);
 
-    constexpr uint32_t kCbQ = get_arg(args::cb_q);
-    constexpr uint32_t kCbK = get_arg(args::cb_k);
-    constexpr uint32_t kCbV = get_arg(args::cb_v);
-    constexpr uint32_t kCbMask = get_arg(args::cb_mask);
-    constexpr uint32_t kCbOne = get_arg(args::cb_one);
-    constexpr uint32_t kCbColOnes = get_arg(args::cb_col_ones);
-    constexpr uint32_t kCbMasked = get_arg(args::cb_masked);
-    constexpr uint32_t kCbRowMax = get_arg(args::cb_row_max);
-    constexpr uint32_t kCbProb = get_arg(args::cb_prob);
-    constexpr uint32_t kCbRowSum = get_arg(args::cb_row_sum);
-    constexpr uint32_t kCbPV = get_arg(args::cb_p_v);
-    constexpr uint32_t kCbOScaled = get_arg(args::cb_o_scaled);
-    constexpr uint32_t kCbCorrOld = get_arg(args::cb_corr_old);
-    constexpr uint32_t kCbOut = get_arg(args::cb_out);
-    constexpr uint32_t kCbM = get_arg(args::cb_m);
-    constexpr uint32_t kCbL = get_arg(args::cb_l);
-    constexpr uint32_t kCbO = get_arg(args::cb_o);
-    constexpr uint32_t kCbRecipL = get_arg(args::cb_recip_l);
-    constexpr uint32_t kCbMNow = get_arg(args::cb_m_now);
+    constexpr uint32_t kDfbQ = get_arg(args::dfb_q);
+    constexpr uint32_t kDfbK = get_arg(args::dfb_k);
+    constexpr uint32_t kDfbV = get_arg(args::dfb_v);
+    constexpr uint32_t kDfbMask = get_arg(args::dfb_mask);
+    constexpr uint32_t kDfbOne = get_arg(args::dfb_one);
+    constexpr uint32_t kDfbColOnes = get_arg(args::dfb_col_ones);
+    constexpr uint32_t kDfbMasked = get_arg(args::dfb_masked);
+    constexpr uint32_t kDfbRowMax = get_arg(args::dfb_row_max);
+    constexpr uint32_t kDfbProb = get_arg(args::dfb_prob);
+    constexpr uint32_t kDfbRowSum = get_arg(args::dfb_row_sum);
+    constexpr uint32_t kDfbPV = get_arg(args::dfb_p_v);
+    constexpr uint32_t kDfbOScaled = get_arg(args::dfb_o_scaled);
+    constexpr uint32_t kDfbCorrOld = get_arg(args::dfb_corr_old);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
+    constexpr uint32_t kDfbM = get_arg(args::dfb_m);
+    constexpr uint32_t kDfbL = get_arg(args::dfb_l);
+    constexpr uint32_t kDfbO = get_arg(args::dfb_o);
+    constexpr uint32_t kDfbRecipL = get_arg(args::dfb_recip_l);
+    constexpr uint32_t kDfbMNow = get_arg(args::dfb_m_now);
     // Key tiles already behind the first query chunk. Zero is a fresh prefill; a positive
     // value is prefill-with-history, where the queries see context they did not produce.
     constexpr uint32_t k_offset = get_arg(args::k_offset);
@@ -124,7 +124,7 @@ void kernel_main() {
     // every projection reads the same values from them: a head range derived from
     // PhysicalCoord::this_core() would be right on the two data-movement threads and the
     // ORIGIN's range on compute, so the loads and the compute would disagree about how
-    // many blocks exist and the circular buffers would deadlock. See the warning on
+    // many blocks exist and the dataflow buffers would deadlock. See the warning on
     // PhysicalCoord::this_core() in api.h. LogicalCoord::this_core() would be safe, but
     // the partition is a host policy and this keeps it there.
     const uint32_t head_begin = get_arg(args::head_begin);
@@ -141,7 +141,7 @@ void kernel_main() {
     // row is a matvec. Cheaper than reduce_sum along the same axis -- a reduction folds
     // sk INPUT tiles per output tile through reduce_tile, where the matmul does sk MACs
     // and the FPU is what that unit is for. ttnn's SDPA does the same thing and calls it
-    // matmul_reduce against a cb_col_identity.
+    // matmul_reduce against a dfb_col_identity.
     //
     // The ones sit in COLUMN 0 only, which keeps the result identical to what the
     // reduction produced: column 0 carries the sum and the rest of the tile is zero.
@@ -180,27 +180,27 @@ void kernel_main() {
         "k_offset + sq, and sq as well when there is more than one query chunk");
 #endif
 
-    u::matmul_init<Q, Kt>(kCbQ, kCbK, kCbOut);
+    u::matmul_init<Q, Kt>(kDfbQ, kDfbK, kDfbOut);
 
-    u::Storage<Q> q_storage(kCbQ);
-    u::Storage<Kt> k_storage(kCbK);
-    u::Storage<V> v_storage(kCbV);
-    u::Storage<Scores> mask_storage(kCbMask);
-    u::Storage<One> one_storage(kCbOne);
-    u::Storage<Kt1> colones_storage(kCbColOnes);
-    u::Storage<Scores> masked_storage(kCbMasked);
-    u::Storage<Vec> rowmax_storage(kCbRowMax);
-    u::Storage<Scores> prob_storage(kCbProb);
-    u::Storage<Vec> rowsum_storage(kCbRowSum);
-    u::Storage<Out> pv_storage(kCbPV);
-    u::Storage<Out> oscaled_storage(kCbOScaled);
-    u::Storage<Vec> corrold_storage(kCbCorrOld);
-    u::Storage<Vec> m_storage(kCbM);
-    u::Storage<Vec> l_storage(kCbL);
-    u::Storage<Out> o_storage(kCbO);
-    u::Storage<Vec> recipl_storage(kCbRecipL);
-    u::Storage<Vec> mnow_storage(kCbMNow);
-    u::Storage<Out> out_storage(kCbOut);
+    u::Storage<Q> q_storage(kDfbQ);
+    u::Storage<Kt> k_storage(kDfbK);
+    u::Storage<V> v_storage(kDfbV);
+    u::Storage<Scores> mask_storage(kDfbMask);
+    u::Storage<One> one_storage(kDfbOne);
+    u::Storage<Kt1> colones_storage(kDfbColOnes);
+    u::Storage<Scores> masked_storage(kDfbMasked);
+    u::Storage<Vec> rowmax_storage(kDfbRowMax);
+    u::Storage<Scores> prob_storage(kDfbProb);
+    u::Storage<Vec> rowsum_storage(kDfbRowSum);
+    u::Storage<Out> pv_storage(kDfbPV);
+    u::Storage<Out> oscaled_storage(kDfbOScaled);
+    u::Storage<Vec> corrold_storage(kDfbCorrOld);
+    u::Storage<Vec> m_storage(kDfbM);
+    u::Storage<Vec> l_storage(kDfbL);
+    u::Storage<Out> o_storage(kDfbO);
+    u::Storage<Vec> recipl_storage(kDfbRecipL);
+    u::Storage<Vec> mnow_storage(kDfbMNow);
+    u::Storage<Out> out_storage(kDfbOut);
 
     const auto q_acc = TensorAccessor(tensor::q);
     const auto k_acc = TensorAccessor(tensor::k);
@@ -330,12 +330,12 @@ void kernel_main() {
         // This costs NO extra NOC traffic. The built-in store already issues one write
         // per page, since consecutive pages of an interleaved tensor sit on different
         // banks, so all that changes is the destination page index each write is given.
-        u::noc_store<1>(out_storage.store(o_done * u::bcast<u::Axis::Cols>(rl)), [&](u::L1Pages pages) {
+        u::noc_store<1>(out_storage.store(o_done * u::bcast<u::Axis::Cols>(rl)), [&](u::L1Entries pages) {
             for (uint32_t p = 0; p < pages.count; ++p) {
                 // The block is row-major in L1: page p is its tile (p / dt, p % dt).
                 const uint32_t row = i * sq + p / dt;
                 const uint32_t col = h * dt + p % dt;
-                noc_async_write(pages.addr(p), out.get_noc_addr(row * dm + col), pages.page_bytes);
+                noc_async_write(pages.addr(p), out.get_noc_addr(row * dm + col), pages.entry_bytes);
             }
         });
         }

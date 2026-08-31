@@ -13,13 +13,13 @@
 //
 // What each thread ends up executing:
 //
-//   NCRISC   cb_reserve(in0) -> noc_read x N -> cb_push(in0)   (and in1)
-//   TRISC    cb_wait(in0), cb_wait(in1), cb_reserve(out)
+//   NCRISC   dfb_reserve(in0) -> noc_read x N -> dfb_push(in0)   (and in1)
+//   TRISC    dfb_wait(in0), dfb_wait(in1), dfb_reserve(out)
 //              per tile: acquire -> copy,copy,add,exp -> commit/wait -> pack
-//            cb_push(out), cb_pop(in1), cb_pop(in0)
-//   BRISC    cb_wait(out) -> noc_write x N -> cb_pop(out)
+//            dfb_push(out), dfb_pop(in1), dfb_pop(in0)
+//   BRISC    dfb_wait(out) -> noc_write x N -> dfb_pop(out)
 //
-// Compile-time args, all named, plus a cb_<name> per buffer:
+// Compile-time args, all named, plus a dfb_<name> per buffer:
 //   num_blocks
 //   tiles_per_block
 //
@@ -34,16 +34,16 @@ void kernel_main() {
     constexpr uint32_t num_blocks = get_arg(args::num_blocks);
     constexpr uint32_t tiles_per_block = get_arg(args::tiles_per_block);
 
-    constexpr uint32_t kCbIn0 = get_arg(args::cb_in0);
-    constexpr uint32_t kCbIn1 = get_arg(args::cb_in1);
-    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kDfbIn0 = get_arg(args::dfb_in0);
+    constexpr uint32_t kDfbIn1 = get_arg(args::dfb_in1);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
 
-    u::compute_init(kCbIn0, kCbOut);
+    u::compute_init(kDfbIn0, kDfbOut);
 
     using Block1D = u::Shape<1, tiles_per_block>;
-    u::Storage<Block1D> in0_storage(kCbIn0);
-    u::Storage<Block1D> in1_storage(kCbIn1);
-    u::Storage<Block1D> out_storage(kCbOut);
+    u::Storage<Block1D> in0_storage(kDfbIn0);
+    u::Storage<Block1D> in1_storage(kDfbIn1);
+    u::Storage<Block1D> out_storage(kDfbOut);
 
     const auto in0 = TensorAccessor(tensor::in0);
     const auto in1 = TensorAccessor(tensor::in1);
@@ -55,15 +55,15 @@ void kernel_main() {
         // on all five projections, so it doubles as the check that the compute
         // projection can see the data-movement intrinsics.
         u::ComputeBlock a =
-            u::noc_load<0>(in0_storage, [&](u::L1Pages pages) {
+            u::noc_load<0>(in0_storage, [&](u::L1Entries pages) {
                 for (uint32_t p = 0; p < pages.count; ++p) {
-                    noc_async_read(in0.get_noc_addr(b * tiles_per_block + p), pages.addr(p), pages.page_bytes);
+                    noc_async_read(in0.get_noc_addr(b * tiles_per_block + p), pages.addr(p), pages.entry_bytes);
                 }
             }).wait();
         u::ComputeBlock c =
-            u::noc_load<0>(in1_storage, [&](u::L1Pages pages) {
+            u::noc_load<0>(in1_storage, [&](u::L1Entries pages) {
                 for (uint32_t p = 0; p < pages.count; ++p) {
-                    noc_async_read(in1.get_noc_addr(b * tiles_per_block + p), pages.addr(p), pages.page_bytes);
+                    noc_async_read(in1.get_noc_addr(b * tiles_per_block + p), pages.addr(p), pages.entry_bytes);
                 }
             }).wait();
 #else

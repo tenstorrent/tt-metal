@@ -26,7 +26,7 @@ import textwrap
 
 from loguru import logger
 
-# A circular buffer one page smaller than the block the kernel declares. Nothing connects
+# A dataflow buffer one page smaller than the block the kernel declares. Nothing connects
 # the host's page count to the kernel's Shape, so before the check in Storage's constructor
 # this waited on cb_reserve_back forever -- no assert, no output, and the device needed
 # tt-smi -r. Verified: without the check it hangs, and it hangs under the watcher too.
@@ -130,7 +130,7 @@ finally:
 # lightweight halts the RISC, which the host cannot tell from a hang. A compile-time
 # refusal needs neither.
 CASES = [
-    ("circular buffer smaller than the block", UNDERSIZED_CB, True, "tripped an assert"),
+    ("dataflow buffer smaller than the block", UNDERSIZED_CB, True, "tripped an assert"),
     ("no-region barrier on a non-rectangular grid", NON_RECTANGULAR_BARRIER, False, "static assertion failed"),
     # No watcher needed any more, and no assert: this is refused on the HOST, before a kernel
     # runs at all. Worth noting what metal's check actually is, since it is weaker than the

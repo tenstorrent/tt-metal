@@ -13,7 +13,7 @@
 // case the axis has to be DECLARED for: against a Shape<Ht, 1> block, both Axis::Both and
 // Axis::Rows want a Shape<1, 1> vector, so no shape could tell them apart.
 //
-// Compile-time args, all named, plus a cb_<name> per buffer:
+// Compile-time args, all named, plus a dfb_<name> per buffer:
 //   rows in tiles
 //   cols in tiles
 //
@@ -26,15 +26,15 @@
 namespace u = tt::unified;
 
 void kernel_main() {
-    constexpr uint32_t kCbX = get_arg(args::cb_x);
-    constexpr uint32_t kCbW = get_arg(args::cb_w);
-    constexpr uint32_t kCbEps = get_arg(args::cb_eps);
-    constexpr uint32_t kCbInvN = get_arg(args::cb_inv_n);
-    constexpr uint32_t kCbSq = get_arg(args::cb_sq);
-    constexpr uint32_t kCbMean = get_arg(args::cb_mean);
-    constexpr uint32_t kCbRsqrt = get_arg(args::cb_rsqrt);
-    constexpr uint32_t kCbNormed = get_arg(args::cb_normed);
-    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kDfbX = get_arg(args::dfb_x);
+    constexpr uint32_t kDfbW = get_arg(args::dfb_w);
+    constexpr uint32_t kDfbEps = get_arg(args::dfb_eps);
+    constexpr uint32_t kDfbInvN = get_arg(args::dfb_inv_n);
+    constexpr uint32_t kDfbSq = get_arg(args::dfb_sq);
+    constexpr uint32_t kDfbMean = get_arg(args::dfb_mean);
+    constexpr uint32_t kDfbRsqrt = get_arg(args::dfb_rsqrt);
+    constexpr uint32_t kDfbNormed = get_arg(args::dfb_normed);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
     // ht is the ROW-CHUNK height, not the whole tensor's: rows are normalised
     // independently -- each one's RMS depends on that row alone -- so the tensor is walked
     // in chunks of ht rows and only ht*wt tiles are ever resident. Which chunks this core
@@ -53,17 +53,17 @@ void kernel_main() {
     using W = u::Shape<1, wt>;              // one weight per feature column
     using One = u::Shape<1, 1>;
 
-    u::compute_init(kCbX, kCbOut);
+    u::compute_init(kDfbX, kDfbOut);
 
-    u::Storage<X> x_storage(kCbX);
-    u::Storage<W> w_storage(kCbW);
-    u::Storage<One> eps_storage(kCbEps);
-    u::Storage<One> inv_n_storage(kCbInvN);
-    u::Storage<X> sq_storage(kCbSq);
-    u::Storage<Vec> mean_storage(kCbMean);
-    u::Storage<Vec> rsqrt_storage(kCbRsqrt);
-    u::Storage<X> normed_storage(kCbNormed);
-    u::Storage<X> out_storage(kCbOut);
+    u::Storage<X> x_storage(kDfbX);
+    u::Storage<W> w_storage(kDfbW);
+    u::Storage<One> eps_storage(kDfbEps);
+    u::Storage<One> inv_n_storage(kDfbInvN);
+    u::Storage<X> sq_storage(kDfbSq);
+    u::Storage<Vec> mean_storage(kDfbMean);
+    u::Storage<Vec> rsqrt_storage(kDfbRsqrt);
+    u::Storage<X> normed_storage(kDfbNormed);
+    u::Storage<X> out_storage(kDfbOut);
 
     const auto x_acc = TensorAccessor(tensor::x);
     const auto w_acc = TensorAccessor(tensor::w);
