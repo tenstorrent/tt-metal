@@ -2393,6 +2393,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // always 0 mod grid_size.y, ownership never actually moves, and every row pays the +1 mcast slot
     // every iteration exactly as the flat split does -- all of the cost, none of the win.
     const uint32_t rot_rows_needed = grid_size.x ? tt::div_up(rot_float_chunks, grid_size.x) : 0;
+    // Do the floats fill their hosting rows exactly? This decides whether the rotation PAYS for
+    // separate-V. Empirical rule from four measured points (table above), not a derivation: even fill
+    // won (+4.0% at 100 cores, +8.9% at 80), partial row lost (-11.4% at 110, -3.4% at 60).
+    // Mechanism, plausible but unverified: a partially-occupied hosting row still pays base+1 mcast
+    // slots while only some of its cores use the extra slot, so rotating spreads that waste over
+    // every row instead of confining it to one. Latent-V does NOT consult this -- it has no V-chain
+    // amortization to lose and measured a win at every base, partial-row core counts included.
+    const bool rot_floats_fill_rows_evenly = grid_size.x != 0 && (rot_float_chunks % grid_size.x) == 0;
     const uint32_t full_ring_iter_mask = ring_size >= 32 ? 0xFFFFFFFFu : ((1u << ring_size) - 1);
     // v_shares_k_buffer is required: separate-V modes stream V through the per-head
     // store-and-forward chain, whose per-core forwarding counts are built from the flat split and
@@ -2422,7 +2430,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // The principled fix is head-ALIGNED float packing (group floats so each hosting row's floats
     // share one head, then row-mcast V on the float slot, reusing the head chain's semaphores which
     // are idle there) -- a separate change, and it would likely make this always-on-able.
-    static const bool rotate_separate_v = []() {
+    // Force separate-V rotation on even where the even-fill rule below predicts a loss. For
+    // experimentation only -- it is how the four data points in the table above were taken.
+    static const bool force_rotate_separate_v = []() {
         const char* value = std::getenv("RING_MLA_ROTATE_SEPARATE_V");
         return value != nullptr && value[0] != '\0' && std::string_view(value) != "0";
     }();
@@ -2527,8 +2537,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // `nq != chain_head` already triggers -- and no core can hit should_receive() at its float
         // slot against an upstream that will not forward. Without it a "mixed head" holding both
         // base and float chunks deadlocks in the V relay.
-        (v_shares_k_buffer || (rotate_separate_v && use_head_chain && use_streaming_compute && !use_attention_sink &&
-                               num_q_chunks != 0 && (rot_base_chunks * num_cores) % num_q_chunks == 0)) &&
+        (v_shares_k_buffer ||
+         ((rot_floats_fill_rows_evenly || force_rotate_separate_v) && use_head_chain && use_streaming_compute &&
+          !use_attention_sink && num_q_chunks != 0 && (rot_base_chunks * num_cores) % num_q_chunks == 0)) &&
         // !kv_pad_rotation_enabled is MEASURED load-bearing. Removing it does make the rotation
         // engage on the kv-pad path (kv_actual_isl ring MLA, chunk_size_local 256 on a 3x2 grid:
         // base 5, floats 2, active_iters 5 of 8) -- and the device HANGS ("potential hang detected,

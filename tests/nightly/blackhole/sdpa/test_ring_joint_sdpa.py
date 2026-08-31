@@ -6309,6 +6309,9 @@ else:
 )
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
 @pytest.mark.parametrize("q_chunk_size,k_chunk_size", [(32, 640)], ids=["q32-k640"])
+# kimi50k is the ONLY separate-V chunked model the rotation can engage: CHUNKED_PREFILL_MODEL_CONFIGS
+# holds just kimi50k and minimax3_55k, and minimax3 is GQA (gqa_grouped_kv -> no batch chain -> no K
+# mcast -> rotation declines). So this one shape is exactly the shape the even-fill default governs.
 @pytest.mark.parametrize("model_name", ["kimi50k"], ids=["kimi50k"])
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
