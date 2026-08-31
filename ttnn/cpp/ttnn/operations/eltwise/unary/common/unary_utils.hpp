@@ -34,6 +34,23 @@ CoreRangeSet get_worker_grid(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const tt::tt_metal::MemoryConfig& memory_config_actual);
 
+/** Right-size an interleaved eltwise worker grid to the work size.
+ *
+ * The per-call cost of an interleaved eltwise program scales with the grid its kernels are
+ * created on, not with the active work: every core of the worker grid gets kernels, and every
+ * program-cache hit rewrites every core's runtime args. At a handful of tiles per core that
+ * overhead dominates the op. This returns a contiguous sub-grid of `full_grid` sized
+ * max(ceil(sqrt(num_tiles)), ceil(num_tiles/max_tiles_per_core)) — the measured optimum for
+ * light eltwise ops (sqrt) with the per-core work capped so compute-heavy SFPU ops do not
+ * regress (4 tiles/core for SFPU-chain work, 8 for plain binary FPU work) — rounded up to a
+ * power of two so the number of distinct grids (each one is a separate program-cache entry,
+ * since the worker grid is hashed) stays logarithmic. Returns `full_grid` unchanged once the
+ * target reaches the full grid, so large-tensor calls keep today's grid and cache entry.
+ * Shared by the unary and binary_ng interleaved default paths.
+ */
+CoreRangeSet right_size_worker_grid(
+    const CoreRangeSet& full_grid, uint64_t num_tiles, uint32_t max_tiles_per_core);
+
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
 

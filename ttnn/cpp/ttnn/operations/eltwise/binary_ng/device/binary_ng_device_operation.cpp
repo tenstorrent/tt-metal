@@ -7,6 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_dtype_policy.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "binary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <cmath>
@@ -144,12 +145,46 @@ CoreRangeSet get_worker_grid(
     const std::optional<Tensor>& output_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const MemoryConfig& memory_config_actual) {
+    const MemoryConfig& memory_config_actual,
+    uint32_t max_tiles_per_core) {
     // If sub_core_grids is provided, use it directly
     if (sub_core_grids.has_value()) {
         log_debug(tt::LogOp, "Using provided sub_core_grids for worker grid {}", sub_core_grids->str());
         return sub_core_grids.value();
     }
+
+    // Fully interleaved calls may run on a work-sized sub-grid; any sharded tensor pins the
+    // worker grid to the full sub-device worker set the shard grid lives in.
+    const bool all_interleaved = !input_tensor_a.is_sharded() &&
+                                 !(input_tensor_b != nullptr && input_tensor_b->is_sharded()) &&
+                                 !memory_config_actual.is_sharded() &&
+                                 !(output_tensor.has_value() && output_tensor->is_sharded());
+    auto interleaved_grid = [&](const CoreRangeSet& full_grid) -> CoreRangeSet {
+        if (!all_interleaved) {
+            return full_grid;
+        }
+        const auto tile_hw = input_tensor_a.tensor_spec().tile().get_tile_hw();
+        uint64_t volume = 1;
+        if (output_tensor.has_value()) {
+            volume = output_tensor->physical_volume();
+        } else if (input_tensor_b != nullptr) {
+            // Padded broadcast volume: per-dim max, right-aligned. Padding is monotone, so the
+            // max of the padded dims equals the padded output dim for broadcast-compatible
+            // inputs; sizing only needs the approximation.
+            const auto& pa = input_tensor_a.padded_shape();
+            const auto& pb = input_tensor_b->padded_shape();
+            const int rank = std::max<int>(pa.rank(), pb.rank());
+            for (int i = -1; i >= -rank; --i) {
+                const uint64_t da = (-i <= static_cast<int>(pa.rank())) ? pa[i] : 1;
+                const uint64_t db = (-i <= static_cast<int>(pb.rank())) ? pb[i] : 1;
+                volume *= std::max(da, db);
+            }
+        } else {
+            volume = input_tensor_a.physical_volume();
+        }
+        const uint64_t num_tiles = (volume + tile_hw - 1) / tile_hw;
+        return unary::right_size_worker_grid(full_grid, num_tiles, max_tiles_per_core);
+    };
 
     auto get_tensor_grid = [](const Tensor& tensor) -> CoreRangeSet {
         const auto& grid = tensor.shard_spec()->grid;
@@ -195,7 +230,8 @@ CoreRangeSet get_worker_grid(
         log_debug(
             tt::LogOp, "Using all worker cores of the device for worker grid, output or memory config not sharded");
         auto* device = input_tensor_a.device();
-        return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
+        return interleaved_grid(
+            device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front()));
     }
 
     if (is_native_L1_sharding(
@@ -220,7 +256,8 @@ CoreRangeSet get_worker_grid(
     // use all worker cores of the device
     log_debug(tt::LogOp, "Using all worker cores of the device for worker grid");
     auto* device = input_tensor_a.device();
-    return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
+    return interleaved_grid(
+        device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front()));
 }
 
 SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint32_t b_h, uint32_t b_w) {
@@ -712,7 +749,15 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
                                           // dtype depending on which LLK is meant to be used.
         output_dtype,
         ttnn::operations::binary_ng::get_worker_grid(
-            input_tensor_a, &input_tensor_b, output_tensor, memory_config, resolved_sub_core_grids, mem_config_actual),
+            input_tensor_a,
+            &input_tensor_b,
+            output_tensor,
+            memory_config,
+            resolved_sub_core_grids,
+            mem_config_actual,
+            // Plain FPU binary work takes 8 tiles/core; an SFPU activation chain gets the
+            // measured heavy-op cap of 4 (see right_size_worker_grid).
+            (lhs_activations.empty() && rhs_activations.empty() && post_activations.empty()) ? 8 : 4),
         std::nullopt,
         resolved_sub_core_grids,
         sub_device_id,
@@ -809,7 +854,13 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         input_tensor_a.dtype(),
         output_dtype,
         ttnn::operations::binary_ng::get_worker_grid(
-            input_tensor_a, nullptr, output_tensor, memory_config, resolved_sub_core_grids, mem_config_actual),
+            input_tensor_a,
+            nullptr,
+            output_tensor,
+            memory_config,
+            resolved_sub_core_grids,
+            mem_config_actual,
+            (lhs_activations.empty() && rhs_activations.empty() && post_activations.empty()) ? 8 : 4),
         std::nullopt,
         resolved_sub_core_grids,
         sub_device_id,

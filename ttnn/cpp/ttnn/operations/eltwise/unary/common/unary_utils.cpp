@@ -5,6 +5,10 @@
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
+#include <tt-metalium/work_split.hpp>
+
+#include <bit>
+#include <cmath>
 #include <mutex>
 
 namespace ttnn::operations::unary {
@@ -128,6 +132,39 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     return ret;
 }
 
+CoreRangeSet right_size_worker_grid(const CoreRangeSet& full_grid, uint64_t num_tiles, uint32_t max_tiles_per_core) {
+    const uint32_t full_cores = full_grid.num_cores();
+    if (full_cores <= 1 || num_tiles == 0 || max_tiles_per_core == 0) {
+        return full_grid;
+    }
+    const auto sqrt_cores = static_cast<uint64_t>(std::ceil(std::sqrt(static_cast<double>(num_tiles))));
+    const uint64_t target =
+        std::bit_ceil(std::max<uint64_t>(sqrt_cores, (num_tiles + max_tiles_per_core - 1) / max_tiles_per_core));
+    if (target >= full_cores) {
+        return full_grid;
+    }
+    const auto& ranges = full_grid.ranges();
+    if (ranges.size() == 1) {
+        const CoreRange& cr = *ranges.begin();
+        const uint32_t grid_w = cr.end_coord.x - cr.start_coord.x + 1;
+        uint32_t w = target;
+        uint32_t h = 1;
+        if (target > grid_w) {
+            h = (target + grid_w - 1) / grid_w;
+            w = (target + h - 1) / h;
+        }
+        if (w * h >= full_cores) {
+            return full_grid;
+        }
+        return CoreRangeSet(
+            CoreRange(cr.start_coord, CoreCoord(cr.start_coord.x + w - 1, cr.start_coord.y + h - 1)));
+    }
+    // Non-rectangular worker set (custom sub-device configurations): first `target` cores in
+    // row-major order.
+    return tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+        ranges.begin()->start_coord, target, full_grid, /*row_wise=*/true);
+}
+
 CoreRangeSet get_worker_grid(
     const Tensor& input_tensor,
     const std::optional<Tensor>& output_tensor,
@@ -138,6 +175,21 @@ CoreRangeSet get_worker_grid(
         log_debug(tt::LogOp, "Unary: Using provided sub_core_grids for worker grid {}", sub_core_grids->str());
         return sub_core_grids.value();
     }
+
+    // Fully interleaved calls may run on a work-sized sub-grid; any sharded tensor pins the
+    // worker grid to the full sub-device worker set the shard grid lives in.
+    const bool all_interleaved = !input_tensor.is_sharded() && !memory_config_actual.is_sharded() &&
+                                 !(output_tensor.has_value() && output_tensor->is_sharded());
+    auto interleaved_grid = [&](const CoreRangeSet& full_grid) -> CoreRangeSet {
+        if (!all_interleaved) {
+            return full_grid;
+        }
+        const auto tile_hw = input_tensor.tensor_spec().tile().get_tile_hw();
+        const uint64_t num_tiles = (input_tensor.physical_volume() + tile_hw - 1) / tile_hw;
+        // Unary work is an SFPU chain: cap at 4 tiles/core (measured bound below which the
+        // heaviest SFPU unaries never lose to the full grid on either architecture).
+        return right_size_worker_grid(full_grid, num_tiles, 4);
+    };
 
     auto get_tensor_grid = [](const Tensor& tensor) -> CoreRangeSet {
         const auto& grid = tensor.shard_spec()->grid;
@@ -174,8 +226,8 @@ CoreRangeSet get_worker_grid(
     if (output_tensor.has_value() || memory_config.has_value()) {
         log_debug(tt::LogOp, "Unary: Using all worker cores (output or memory config not sharded)");
         auto* device = input_tensor.device();
-        return device->worker_cores(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
+        return interleaved_grid(device->worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front()));
     }
 
     if (input_tensor.is_sharded() && is_native_L1_sharding(input_tensor.tensor_spec(), memory_config_actual)) {
@@ -186,7 +238,8 @@ CoreRangeSet get_worker_grid(
 
     log_debug(tt::LogOp, "Unary: Using all worker cores of the device");
     auto* device = input_tensor.device();
-    return device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
+    return interleaved_grid(
+        device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front()));
 }
 
 tt::tt_metal::ShardSpec generate_shard_spec_all_cores(

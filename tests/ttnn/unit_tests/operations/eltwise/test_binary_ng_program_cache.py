@@ -28,6 +28,11 @@ Fields correctly excluded from hash (handled by override_runtime_arguments):
   kernel defines), and on the accessor path the TensorAccessor's page geometry is
   baked into the program. So sharded operands and sharded outputs each contribute
   their tensor shape in pages to the key (issue #54138)
+  Within the interleaved case this now means: shapes whose right-sized worker grid is the
+  same share an entry (the worker grid IS hashed and is sized from the tensor volume:
+  max(ceil(sqrt(tiles)), ceil(tiles/cap)) cores, cap 8 tiles/core for plain binary, 4 with
+  an SFPU activation chain, power-of-two rounded); volumes in different buckets get
+  separate entries
 - scalar.has_value(): not in attribute_values(), but compute_program_hash branches
   on input_tensor_b presence
 - input_dtype: not in attribute_values(), but compute_program_hash includes input
@@ -110,17 +115,18 @@ def test_ng_cache_reuse_same_config(device, isolate_program_cache):
 @pytest.mark.parametrize(
     "shape_first, shape_second",
     [
-        ([1, 1, 32, 64], [1, 1, 128, 256]),  # grow volume
-        ([1, 1, 128, 256], [1, 1, 32, 64]),  # shrink volume
+        ([1, 1, 32, 160], [1, 1, 128, 128]),  # grow volume: 5 tiles -> 16 tiles, same 4-core bucket
+        ([1, 1, 128, 128], [1, 1, 32, 160]),  # shrink volume
     ],
 )
 def test_ng_inplace_cache_reuse_different_shapes(device, isolate_program_cache, shape_first, shape_second):
     """binary_ng re-applies all per-dispatch state on a cache hit via override_runtime_arguments
-    (#48928). An in-place add (output_tensor aliases input) with different logical shapes shares one
-    cache entry (volume is excluded from the hash), so the second call is a cache HIT that reuses the
-    first program WITHOUT rebuild. binary_ng's override_runtime_arguments must re-derive every per-core
-    arg for the current shape or the reused program corrupts the result. Regression guard for the
-    in-place cache-hit path (the SDXL silu / moreh class of bug)."""
+    (#48928). An in-place add (output_tensor aliases input) with different logical shapes in the same
+    worker-grid bucket shares one cache entry (volume is excluded from the hash within a bucket), so
+    the second call is a cache HIT that reuses the first program WITHOUT rebuild. binary_ng's
+    override_runtime_arguments must re-derive every per-core arg for the current shape or the reused
+    program corrupts the result. Regression guard for the in-place cache-hit path (the SDXL silu /
+    moreh class of bug)."""
 
     def inplace_add(shape, seed):
         torch.manual_seed(seed)
@@ -441,10 +447,11 @@ def test_ng_different_input_dtypes_same_output_dtype(device, isolate_program_cac
 
 
 def test_ng_cache_reuse_different_logical_shapes(device, isolate_program_cache):
-    """Different logical shapes share 1 cache entry, different outputs (by design).
-    logical_shape is correctly excluded from compute_program_hash();
-    override_runtime_arguments handles shape differences at runtime."""
-    torch_ref1, tt_out1 = run_binary_ng_op(device, ttnn.add, [1, 1, 32, 32], [1, 1, 32, 32], dtype=ttnn.float32)
+    """Logical shapes in the same worker-grid bucket share 1 cache entry, different outputs
+    (by design). logical_shape is correctly excluded from compute_program_hash();
+    override_runtime_arguments handles shape differences at runtime. A volume in a different
+    bucket gets its own right-sized worker grid and therefore its own entry."""
+    torch_ref1, tt_out1 = run_binary_ng_op(device, ttnn.add, [1, 1, 32, 64], [1, 1, 32, 64], dtype=ttnn.float32)
     assert_with_pcc(torch_ref1, tt_out1, 0.9999)
 
     torch_ref2, tt_out2 = run_binary_ng_op(device, ttnn.add, [1, 1, 64, 64], [1, 1, 64, 64], dtype=ttnn.float32)
@@ -453,12 +460,18 @@ def test_ng_cache_reuse_different_logical_shapes(device, isolate_program_cache):
     assert device.cache_entries_counter.total == 1
     assert tt_out1.shape != tt_out2.shape
 
+    # 16 tiles: next bucket (4 cores) -> one new entry
+    torch_ref3, tt_out3 = run_binary_ng_op(device, ttnn.add, [1, 1, 128, 128], [1, 1, 128, 128], dtype=ttnn.float32)
+    assert_with_pcc(torch_ref3, tt_out3, 0.9999)
+
+    assert device.cache_entries_counter.total == 2
+
 
 def test_ng_cache_reuse_different_logical_shapes_correctness(device, isolate_program_cache):
-    """Correctness across multiple logical shapes sharing a single cache entry.
+    """Correctness across multiple logical shapes sharing a single cache entry
+    (6, 9 and 16 tiles all right-size to the same 4-core worker grid).
     override_runtime_arguments correctly updates runtime args for each shape."""
-    for shape_dim in [32, 64, 128]:
-        shape = [1, 1, shape_dim, shape_dim]
+    for shape in [[1, 1, 64, 96], [1, 1, 96, 96], [1, 1, 128, 128]]:
         torch_a = torch.rand(shape, dtype=torch.float32)
         torch_b = torch.rand(shape, dtype=torch.float32)
 
@@ -722,3 +735,20 @@ def test_ng_where_scalar_preallocated_output_dtype(device, isolate_program_cache
 
     ref = torch.where(pred.bool(), t_true.float(), torch.full(shape, scalar_false))
     assert_with_pcc(ref, ttnn.to_torch(res).float(), 0.999)
+
+
+def test_ng_cache_worker_grid_buckets(device, isolate_program_cache):
+    """Bucket boundaries of the right-sized interleaved worker grid: tile counts mapping to the
+    same bucket share one entry, crossing a boundary adds exactly one. Also guards worker_grid
+    being part of the attribute hash — without it, differently-sized grids would collide on one
+    entry and reuse a program whose kernels live on the wrong cores."""
+    for shape, expected_total in [
+        ([1, 1, 32, 32], 1),  # 1 tile -> 1-core bucket
+        ([1, 1, 32, 64], 2),  # 2 tiles -> 2-core bucket
+        ([1, 1, 64, 64], 2),  # 4 tiles -> same 2-core bucket (hit)
+        ([1, 1, 32, 160], 3),  # 5 tiles -> 4-core bucket
+        ([1, 1, 128, 128], 3),  # 16 tiles -> same 4-core bucket (hit)
+    ]:
+        torch_ref, tt_out = run_binary_ng_op(device, ttnn.add, shape, shape, dtype=ttnn.float32)
+        assert_with_pcc(torch_ref, tt_out, 0.9999)
+        assert device.cache_entries_counter.total == expected_total, f"after {shape}"

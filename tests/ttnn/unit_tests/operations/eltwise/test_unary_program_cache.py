@@ -29,6 +29,13 @@ cache entry and override_runtime_arguments re-applies the new shape's work split
 on the hit. Because addresses are re-derived from the actual current tensors
 (never inferred from Buffer* identity), in-place (out=x) and mixed in-place/
 out-of-place reuse of one cache entry stay correct by construction.
+
+The interleaved default worker grid is right-sized to the tensor volume
+(right_size_worker_grid: max(ceil(sqrt(tiles)), ceil(tiles/cap)) cores, cap 4
+tiles/core for unary SFPU work, rounded up to a power of two, full grid once
+that reaches it). The worker grid is hashed, so volume-sharing of one cache
+entry holds WITHIN a bucket; volumes in different buckets get separate entries
+(logarithmically many).
 """
 
 import pytest
@@ -94,19 +101,27 @@ def test_unary_cache_reuse_same_volume_different_shapes(device):
 
 
 def test_unary_cache_reuse_different_volumes(device):
-    """TILE layout: different volumes -> still 1 cache entry.
-    unary uses runtime tile counts (not compile-time), so different volumes
-    share the same compiled program. override_runtime_arguments handles the
-    different per-core tile distributions on cache hit."""
+    """TILE layout: different volumes in the same worker-grid bucket -> 1 cache entry.
+    unary uses runtime tile counts (not compile-time), so volumes whose right-sized
+    worker grid is the same share one compiled program; override_runtime_arguments
+    re-applies the per-core tile distribution on every hit. A volume in a different
+    bucket gets its own right-sized grid and therefore its own entry."""
     device.cache_entries_counter.reset()
 
-    torch_ref1, tt_out1 = run_unary_op(device, ttnn.relu, [1, 1, 32, 32], dtype=ttnn.float32)
+    # 2 tiles and 4 tiles: same right-sized grid (2 cores)
+    torch_ref1, tt_out1 = run_unary_op(device, ttnn.relu, [1, 1, 32, 64], dtype=ttnn.float32)
     assert_equal(torch_ref1, tt_out1)
 
     torch_ref2, tt_out2 = run_unary_op(device, ttnn.relu, [1, 1, 64, 64], dtype=ttnn.float32)
     assert_equal(torch_ref2, tt_out2)
 
     assert device.cache_entries_counter.total == 1
+
+    # 16 tiles: next bucket (4 cores) -> one new entry
+    torch_ref3, tt_out3 = run_unary_op(device, ttnn.relu, [1, 1, 128, 128], dtype=ttnn.float32)
+    assert_equal(torch_ref3, tt_out3)
+
+    assert device.cache_entries_counter.total == 2
 
 
 # =============================================================================
@@ -355,16 +370,17 @@ def test_unary_sharded_mixed_inplace_outofplace(device, first_inplace):
 @pytest.mark.parametrize(
     "shape_first, shape_second",
     [
-        ([1, 1, 32, 64], [1, 1, 128, 256]),  # grow volume
-        ([1, 1, 128, 256], [1, 1, 32, 64]),  # shrink volume
+        ([1, 1, 32, 160], [1, 1, 128, 128]),  # grow volume: 5 tiles -> 16 tiles, same 4-core bucket
+        ([1, 1, 128, 128], [1, 1, 32, 160]),  # shrink volume
     ],
 )
 def test_unary_inplace_cache_reuse_different_shapes(device, shape_first, shape_second):
     """MIGRATION GUARD (override_runtime_arguments): interleaved TILE in-place relu (output_tensor
-    aliases the input) reused across DIFFERENT logical shapes sharing ONE cache entry (TILE layout
-    excludes volume from compute_program_hash). The second call is a cache HIT that reuses the first
-    program WITHOUT rebuild; override_runtime_arguments must re-derive every per-core work-split arg
-    (per-core tile counts, start_tile_id, and the work-core set itself) for the new shape, or the
+    aliases the input) reused across DIFFERENT logical shapes sharing ONE cache entry (both volumes
+    right-size to the same worker grid, and within a bucket TILE layout excludes volume from
+    compute_program_hash). The second call is a cache HIT that reuses the first program WITHOUT
+    rebuild; override_runtime_arguments must re-derive every per-core work-split arg (per-core tile
+    counts, start_tile_id, and the uneven group-1/group-2 partition) for the new shape, or the
     reused program corrupts the result. Interleaved analog of the SDXL in-place silu class of bug."""
     device.cache_entries_counter.reset()
 
@@ -440,3 +456,21 @@ def test_unary_inplace_cache_hit_interleaved_readdresses(device):
 
     # One shared program reused across all four differently-addressed in-place hits.
     assert device.cache_entries_counter.total == 1
+
+
+def test_unary_cache_worker_grid_buckets(device):
+    """Bucket boundaries of the right-sized interleaved worker grid: tile counts mapping to the
+    same bucket share one entry, crossing a boundary adds exactly one. Buckets are grid-size
+    independent at these volumes (1 tile -> 1 core, 2-4 tiles -> 2, 5-16 tiles -> 4)."""
+    device.cache_entries_counter.reset()
+
+    for shape, expected_total in [
+        ([1, 1, 32, 32], 1),  # 1 tile -> 1-core bucket
+        ([1, 1, 32, 64], 2),  # 2 tiles -> 2-core bucket
+        ([1, 1, 64, 64], 2),  # 4 tiles -> same 2-core bucket (hit)
+        ([1, 1, 32, 160], 3),  # 5 tiles -> 4-core bucket
+        ([1, 1, 128, 128], 3),  # 16 tiles -> same 4-core bucket (hit)
+    ]:
+        torch_ref, tt_out = run_unary_op(device, ttnn.relu, shape, dtype=ttnn.float32)
+        assert_equal(torch_ref, tt_out)
+        assert device.cache_entries_counter.total == expected_total, f"after {shape}"

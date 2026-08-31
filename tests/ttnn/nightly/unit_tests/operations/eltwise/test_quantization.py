@@ -435,31 +435,33 @@ def test_quantization_per_channel_4d(device, x0, x1, x2, x3, input_dtype):
 # kernels used
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
 def test_quantization_per_tensor_program_cache(device, input_dtype):
-    torch.manual_seed(0)
+    def sweep():
+        torch.manual_seed(0)  # identical data both passes; only the cache state differs
+        for dim in [1, 2, 3, 4]:
+            for i in range(5):
+                # Each iteration gets completely different input tensors, quant ranges, etc.
+                input_tr = torch.rand([30 + i] * dim, dtype=torch.float32)
 
-    num_program_cache_entries_list = []
+                scale, zero_point = calculate_scale_zero_point_per_tensor(input_tr, -120 + i, 121 - i)
+                scale_r, zero_point_r = calculate_scale_zero_point_per_tensor(input_tr, -50 - i, 42 + i)
 
-    for dim in [1, 2, 3, 4]:
-        for i in range(5):
-            # Each iteration gets completely different input tensors, quant ranges, etc.
-            input_tr = torch.rand([30 + i] * dim, dtype=torch.float32)
+                input_tt = ttnn.from_torch(input_tr, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+                quantized_tt = ttnn.quantize(input_tt, scale, zero_point)
+                requantized_tt = ttnn.requantize(quantized_tt, scale, zero_point, scale_r, zero_point_r)
+                derequantized_tt = ttnn.dequantize(requantized_tt, scale_r, zero_point_r, dtype=input_dtype)
+                result_tr = ttnn.to_torch(derequantized_tt)
 
-            scale, zero_point = calculate_scale_zero_point_per_tensor(input_tr, -120 + i, 121 - i)
-            scale_r, zero_point_r = calculate_scale_zero_point_per_tensor(input_tr, -50 - i, 42 + i)
+                check_pcc(input_tr, result_tr, False)
+                check_match_ratio(input_tr, result_tr, input_dtype)
 
-            input_tt = ttnn.from_torch(input_tr, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-            quantized_tt = ttnn.quantize(input_tt, scale, zero_point)
-            requantized_tt = ttnn.requantize(quantized_tt, scale, zero_point, scale_r, zero_point_r)
-            derequantized_tt = ttnn.dequantize(requantized_tt, scale_r, zero_point_r, dtype=input_dtype)
-            result_tr = ttnn.to_torch(derequantized_tt)
-
-            check_pcc(input_tr, result_tr, False)
-            check_match_ratio(input_tr, result_tr, input_dtype)
-
-            num_program_cache_entries_list.append(device.num_program_cache_entries())
-
-    assert num_program_cache_entries_list[0] > 0
-    assert max(num_program_cache_entries_list) == min(num_program_cache_entries_list)
+    # First pass may create one entry per (op, worker-grid bucket): the interleaved default
+    # grid is right-sized to the tensor volume, so volumes in different buckets get separate
+    # (logarithmically many) entries. A second identical pass must be all cache hits.
+    sweep()
+    entries_after_first = device.num_program_cache_entries()
+    assert entries_after_first > 0
+    sweep()
+    assert device.num_program_cache_entries() == entries_after_first
 
 
 @pytest.mark.parametrize("x0", [32])
