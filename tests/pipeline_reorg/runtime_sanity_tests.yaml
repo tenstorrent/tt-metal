@@ -99,50 +99,10 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
-# Quasar simulator coverage. The ttsim team already runs this exact list against their
-# Quasar simulator by hand; wiring it here runs it automatically on every sanity run.
-#
-# NOC_API_V2 must be turned off for sim_quasar (workaround from Matt Craighead, ttsim).
-# Quasar kernels compile against noc_nonblocking_api_v2.h by default, which drives the NOC
-# through custom-0 RISC-V instructions (__builtin_riscv_ttrocc_cmdbuf_wr_reg). libttsim_qsr.so
-# does not model all of them, so any NOC-touching kernel aborts the simulator process outright:
-#   ERROR: UnimplementedFunctionality: rv64_custom_0: funct3=2 reg_index=32 cmd_buf=0
-# (reg_index 32 = byte offset 0x100 = CMD_BUF_R_MAX_BYTES_IN_PACKET, which every
-# init_wr/rd/at_cmd_buf() in noc_nonblocking_api_v2.h writes). Deleting the `#define NOC_API_V2`
-# selects noc_nonblocking_api_v1.h instead, whose plain memory-mapped NOC registers the
-# simulator does model. ttsim does exactly this on their own side. Kernels are JIT-compiled at
-# test-run time, so editing the header under TT_METAL_HOME is enough — no tt-metal rebuild.
-#
-# This is a sim_quasar limitation, not a general one, so the edit lives in this entry's cmd and
-# touches no other simulator or hardware leg. Tracking issue #54794 — delete the grep/sed once
-# ttsim models the V2 path. The grep guard makes the workaround fail loudly instead of silently
-# becoming a no-op if that define is ever renamed or moved.
-#
-# sim_quasar resolves to libttsim_qsr.so + quasar_32_arch.yaml (see .github/sku_config.yaml
-# and .github/actions/setup-ttsim/action.yml). That action also exports
-# TT_METAL_SLOW_DISPATCH_MODE=1, which MeshDeviceSingleCardFixture (base of both
-# UnitMeshFixture and QuasarMeshDeviceSingleCardFixture) requires or it GTEST_SKIPs.
-#
-# The non-Quasar-fixture entries (HostOnlyTest, UnitMeshFixture, RISCVAtomicsFixture) are
-# arch-agnostic and are included deliberately: the ttsim list uses them as a baseline that the
-# simulator can run the ordinary host/L1 paths, not just the Quasar-specific kernels.
-#
-# 9 of the 14 tests in ttsim's list are here. The other 5 are deferred because turning off
-# NOC_API_V2 stops their kernels compiling at all — tt-2xx/noc_zero_l1.inl unconditionally calls
-# init_wr_cmd_buf(noc_local_xy()), and both symbols are defined only in noc_nonblocking_api_v2.h,
-# so the V1 path fails to build for any kernel that reaches it via core_local_mem.h /
-# circular_buffer.h / dataflow_buffer.h:
-#   noc_zero_l1.inl:96: error: 'noc_local_xy' was not declared in this scope
-# Deferred (all data-movement / semaphore tests, all blocked on the above, not on a test bug):
-#   QuasarMeshDeviceSingleCardFixture.DmLoopback
-#   QuasarMeshDeviceSingleCardFixture.MultiDmAddTwoInts
-#   QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline
-#   QuasarMeshDeviceSingleCardFixture.QuasarMultipleClustersMultiSemaphorePipeline
-#   QuasarMeshDeviceSingleCardFixture.SingleDmL1Write
-# Restore them once #54794 is resolved — either ttsim models the V2 custom instructions (in which
-# case the grep/sed above goes away too), or noc_zero_l1.inl grows a V1 fallback.
-#
-# The filter is accumulated one test per line so each is greppable.
+# Quasar simulator coverage (ttsim-owned list). NOC_API_V2 is deleted at test-run time
+# because libttsim_qsr.so doesn't model it yet; runs 9 of ttsim's 14 tests. The other 5
+# (data-movement/semaphore) fail to compile without NOC_API_V2 and are deferred here.
+# TODO(#54794): add them back once ttsim models NOC_API_V2 or noc_zero_l1.inl gets a V1 fallback.
 - name: runtime_sim_quasar_cpp_unit_tests
   cmd: >-
     hdr=$TT_METAL_HOME/tt_metal/hw/inc/internal/tt-2xx/quasar/noc_nonblocking_api.h;
