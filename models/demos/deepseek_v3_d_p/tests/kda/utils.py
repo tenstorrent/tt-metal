@@ -11,7 +11,6 @@ from pathlib import Path
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
@@ -26,6 +25,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, kimi_k3
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.tt_transformers.tt.ccl import TT_CCL
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
 
 
 @dataclass(frozen=True)
@@ -35,92 +35,6 @@ class KimiK3TestCase:
     hidden: torch.Tensor
     checkpoint_dir: Path
     checkpoint_identity: str
-
-
-def report_finiteness(name: str, tensor: torch.Tensor) -> tuple[bool, str]:
-    """Report absolute/relative non-finite counts and return the verdict."""
-    element_count = tensor.numel()
-    nan_count = int(torch.isnan(tensor).sum().item())
-    positive_inf_count = int(torch.isposinf(tensor).sum().item())
-    negative_inf_count = int(torch.isneginf(tensor).sum().item())
-    non_finite_count = nan_count + positive_inf_count + negative_inf_count
-
-    def fraction(count: int) -> float:
-        return count / element_count if element_count else 0.0
-
-    summary = (
-        f"{name} finiteness: "
-        f"non_finite={non_finite_count}/{element_count} ({fraction(non_finite_count):.6e}), "
-        f"nan={nan_count}/{element_count} ({fraction(nan_count):.6e}), "
-        f"+inf={positive_inf_count}/{element_count} ({fraction(positive_inf_count):.6e}), "
-        f"-inf={negative_inf_count}/{element_count} ({fraction(negative_inf_count):.6e})"
-    )
-    print(summary)
-    return non_finite_count == 0, summary
-
-
-def assert_accurate(
-    golden: torch.Tensor,
-    actual: torch.Tensor,
-    *,
-    name: str = "accuracy",
-    pcc_threshold: float = 0.999,
-) -> float:
-    """Require finite tensors and a passing PCC, and return the measured PCC."""
-    golden_finite, golden_summary = report_finiteness(f"{name} golden", golden)
-    actual_finite, actual_summary = report_finiteness(f"{name} actual", actual)
-    failures = []
-    if not golden_finite:
-        failures.append(golden_summary)
-    if not actual_finite:
-        failures.append(actual_summary)
-    if golden.shape != actual.shape:
-        failures.append(f"{name} shape {tuple(actual.shape)} != {tuple(golden.shape)}")
-        pcc = float("nan")
-        max_abs = float("nan")
-    else:
-        passed, pcc = comp_pcc(golden, actual, pcc=pcc_threshold)
-        max_abs = (golden.float() - actual.float()).abs().max().item()
-        if not passed:
-            failures.append(f"{name} PCC {pcc:.6f} < {pcc_threshold}")
-    print(f"{name}: PCC={pcc:.6f}, max_abs={max_abs:.6e}")
-    assert not failures, "\n".join(failures)
-    return pcc
-
-
-def assert_equal(
-    expected: torch.Tensor,
-    actual: torch.Tensor,
-    *,
-    name: str = "equality",
-) -> None:
-    """Require finite tensors with identical metadata and values."""
-    expected_finite, expected_summary = report_finiteness(f"{name} expected", expected)
-    actual_finite, actual_summary = report_finiteness(f"{name} actual", actual)
-    failures = []
-    if not expected_finite:
-        failures.append(expected_summary)
-    if not actual_finite:
-        failures.append(actual_summary)
-    if expected.shape != actual.shape:
-        failures.append(f"{name} shape {tuple(actual.shape)} != {tuple(expected.shape)}")
-    if expected.dtype != actual.dtype:
-        failures.append(f"{name} dtype {actual.dtype} != {expected.dtype}")
-    if expected.shape == actual.shape and expected.dtype == actual.dtype and not torch.equal(expected, actual):
-        failures.append(f"{name} values differ")
-    assert not failures, "\n".join(failures)
-
-
-def assert_bit_identical(
-    expected: torch.Tensor,
-    actual: torch.Tensor,
-    *,
-    name: str = "determinism",
-) -> None:
-    """Require two implementation results to have identical metadata and values."""
-    assert expected.shape == actual.shape, f"{name} shape {tuple(actual.shape)} != {tuple(expected.shape)}"
-    assert expected.dtype == actual.dtype, f"{name} dtype {actual.dtype} != {expected.dtype}"
-    assert torch.equal(expected, actual), f"{name} is not bit-identical"
 
 
 def _mesh_coordinate(sp_rank: int, tp_rank: int, sp_axis: int) -> tuple[int, int]:
@@ -239,9 +153,10 @@ def check_kimi_k3_accuracy(
         tp_dim=2,
         sp_dim=1,
     )
+    golden_output = golden_output.to(torch.bfloat16)
     golden_convolution = torch.cat(
         (golden_state.q_convolution, golden_state.k_convolution, golden_state.v_convolution), dim=-1
-    )
+    ).to(torch.bfloat16)
     local_width = case.config.num_heads // tp_size * case.config.head_k_dim
     output_pcc, failures = compare_cpu_device(
         f"{name} output", golden_output, actual_output, pcc_threshold=pcc_threshold

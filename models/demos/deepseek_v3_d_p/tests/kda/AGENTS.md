@@ -6,12 +6,13 @@ Run every device test through `scripts/run_safe_pytest.sh`. A passing hardware r
 
 - Hermetic tests use deterministic synthetic weights and never depend on local checkpoint discovery.
 - Real-weight tests require an explicit `KIMI_K3_CKPT` path, provided by `conftest.py`.
-- Numerical result assertions use only the three contracts in `utils.py`; do not add local wrappers
+- Numerical result assertions import the three shared contracts from `tests/ttnn/unit_tests/operations/experimental/kda/kda_test_utils.py`; do not add local wrappers
   or direct Torch tensor comparisons.
-- `assert_accurate` compares an oracle with an implementation: both tensors must be finite and their
-  PCC must meet the test's threshold.
+- `assert_accurate` compares an oracle with an implementation: shape and dtype must match, both tensors
+  must be finite, and PCC must meet the test's threshold.
 - `assert_equal` checks finite oracle/implementation tensors for identical shape, dtype, and values.
-- `assert_bit_identical` compares implementation repetitions without computing a CPU oracle.
+- `assert_bit_identical` requires matching shape and dtype, finite values, and identical bit patterns across
+  implementation repetitions without computing a CPU oracle.
 - Dedicated determinism tests run the implementation three times from identical inputs and state.
   They do not compute a CPU reference; every output and final-state tensor must be bit-identical.
 - CPU-reference determinism uses T=32 and compares two repetitions with the initial result.
@@ -32,9 +33,7 @@ tests/
 ├── checkpoint_utils.py                 — Indexed Kimi-K3 layer loading for tests.
 ├── test_cache_fingerprints.py           — Persistent checkpoint-content, config, and placement identities.
 ├── test_host_config.py                 — Host-only recurrence and program-config validation.
-├── test_numeric_validation.py          — Accuracy, equality, bit-identity, and finiteness contracts.
-├── utils.py                            — Three numeric contracts; case builders,
-│                                         reconstruction, and device-case support.
+├── utils.py                            — Case builders, reconstruction, and device-case support.
 ├── checkpoint/
 │   └── test_checkpoint.py              — Indexed-shard loading, failures, and weight
 │                                         validation, and padded K3 A_log normalization.
@@ -62,6 +61,9 @@ tests/
                                           SP1xTP8, SP2xTP4, and SP4xTP2.
 ```
 
+Shared numeric assertion contract tests live at
+`tests/ttnn/unit_tests/operations/experimental/kda/test_kda_test_utils.py`.
+
 Direct tests for the six split device operations live under
 `tests/ttnn/nightly/unit_tests/operations/experimental/kda/`; do not duplicate
 them in the model test tree.
@@ -84,6 +86,7 @@ KIMI_K3_CKPT=/path/to/pinned/kimi-k3 \
 scripts/run_safe_pytest.sh --run-all \
   models/demos/deepseek_v3_d_p/tests/kda \
   models/demos/deepseek_v3_d_p/reference/kda/tests \
+  tests/ttnn/unit_tests/operations/experimental/kda/test_kda_test_utils.py \
   --ignore=models/demos/deepseek_v3_d_p/tests/kda/perf -q -s
 ```
 

@@ -9,15 +9,15 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.tests.kda.utils import (
-    assert_accurate,
-    assert_bit_identical,
-    assert_equal,
-    random_weights,
-)
+from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.kda import _output_projection_program_config, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    assert_accurate,
+    assert_bit_identical,
+    assert_equal,
+)
 
 pytestmark = [
     run_for_blackhole(),
@@ -160,7 +160,7 @@ def test_tp_layer_pcc(mesh_device: ttnn.MeshDevice) -> None:
     )
     golden_convolution = torch.cat(
         (golden_state.q_convolution, golden_state.k_convolution, golden_state.v_convolution), dim=-1
-    )
+    ).to(torch.bfloat16)
 
     for name, golden, actual in (
         ("output", golden_output, actual_output),

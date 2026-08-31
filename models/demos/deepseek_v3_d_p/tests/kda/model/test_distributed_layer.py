@@ -12,8 +12,6 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
-    assert_accurate,
-    assert_bit_identical,
     random_weights,
     reconstruct_convolution_at_sp_rank,
     reconstruct_sp_tp_tensor,
@@ -22,6 +20,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.tt_transformers.tt.ccl import TT_CCL
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
 
 pytestmark = [
     run_for_blackhole(),
@@ -101,9 +100,10 @@ def test_sp_layer_matches_serial_reference(
         tp_dim=2,
         sp_dim=1,
     )
+    expected_output = expected_output.to(torch.bfloat16)
     expected_convolution = torch.cat(
         (expected_state.q_convolution, expected_state.k_convolution, expected_state.v_convolution), dim=-1
-    )
+    ).to(torch.bfloat16)
     local_heads = config.num_heads // tuple(mesh_device.shape)[tensor_parallel_axis]
     local_width = local_heads * config.head_k_dim
     sp_size = tuple(mesh_device.shape)[sp_axis]

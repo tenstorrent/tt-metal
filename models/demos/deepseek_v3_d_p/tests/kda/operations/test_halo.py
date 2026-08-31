@@ -9,8 +9,8 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.kda.utils import assert_bit_identical, assert_equal
 from models.demos.deepseek_v3_d_p.tt.kda import ops
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, assert_equal
 
 pytestmark = [
     run_for_blackhole(),

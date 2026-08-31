@@ -17,11 +17,15 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     "value,label",
     [(float("nan"), "nan=1"), (float("inf"), r"\+inf=1"), (-float("inf"), "-inf=1")],
 )
+@pytest.mark.parametrize("side", ["expected", "actual"])
 @pytest.mark.parametrize("assertion", [assert_accurate, assert_equal, assert_bit_identical])
-def test_assertions_reject_nonfinite_values(assertion, value: float, label: str, expect_error) -> None:
-    tensor = torch.tensor([value])
+def test_assertions_reject_nonfinite_values(assertion, side: str, value: float, label: str, expect_error) -> None:
+    expected = torch.zeros(1)
+    actual = expected.clone()
+    target = expected if side == "expected" else actual
+    target[0] = value
     with expect_error(AssertionError, label):
-        assertion(tensor, tensor.clone())
+        assertion(expected, actual)
 
 
 @pytest.mark.parametrize("assertion", [assert_accurate, assert_equal, assert_bit_identical])
@@ -56,6 +60,12 @@ def test_assert_bit_identical_rejects_bit_mismatch(expect_error) -> None:
 def test_assert_bit_identical_rejects_signed_zero_mismatch(expect_error) -> None:
     with expect_error(AssertionError, "bit patterns differ"):
         assert_bit_identical(torch.tensor([0.0]), torch.tensor([-0.0]))
+
+
+@pytest.mark.parametrize("assertion", [assert_equal, assert_bit_identical])
+def test_exact_assertions_accept_identical_finite_tensors(assertion) -> None:
+    expected = torch.tensor([1.0, 2.0])
+    assertion(expected, expected.clone())
 
 
 def test_assert_accurate_returns_measured_pcc() -> None:
