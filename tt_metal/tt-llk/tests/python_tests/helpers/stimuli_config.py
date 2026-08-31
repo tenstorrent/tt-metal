@@ -482,6 +482,10 @@ class StimuliConfig:
         for addr, data in zip(addresses, packed_data_list):
             write_to_device(location, addr, data)
 
+        # laneJN bit-exact sweep instrumentation: expose the exact bytes that
+        # landed in L1 so an exhaustive sweep can verify its input coverage.
+        return b"".join(packed_data_list)
+
     @staticmethod
     def write_matrix_w_tile_dimensions(
         buffer,
@@ -540,6 +544,9 @@ class StimuliConfig:
         for addr, data in zip(addresses, packed_data_list):
             write_to_device(location, addr, data)
 
+        # laneJN bit-exact sweep instrumentation (see write_matrix).
+        return b"".join(packed_data_list)
+
     def write(self, location: str = "0,0"):
         """
         Write method that dispatches to appropriate implementation.
@@ -597,19 +604,47 @@ class StimuliConfig:
                 f"Unsupported data formats: srcA({self.stimuli_A_format.name}), srcB({self.stimuli_B_format.name})"
             )
 
-        StimuliConfig.write_matrix(
-            self.buffer_A,
-            self.tile_count_A,
-            pack_function_A,
-            self.buf_a_addr,
-            self.tile_size_A_bytes,
-            self.num_faces,
-            self.face_r_dim,
-            location,
-            self.write_full_tiles,
-            use_srcs=self._operand_use_srcs("A"),
-            twos_complement=self.twos_complement,
-        )
+        # laneJN bit-exact sweep raw-injection point: when the test set
+        # `lanejn_raw_a` (exact per-tile packed payload bytes for operand A,
+        # concatenated tile 0..N-1), write THOSE bytes to L1 instead of the
+        # packed generated tensor.  This bypasses the host float pack path so
+        # every 16-bit/32-bit input pattern — NaN payloads included — is
+        # deliverable to the kernel exactly as production L1 traffic could
+        # deliver it.  Inert unless the attribute is set.
+        _lanejn_raw_a = getattr(self, "lanejn_raw_a", None)
+        if _lanejn_raw_a is not None:
+            if len(_lanejn_raw_a) % self.tile_count_A != 0:
+                raise ValueError(
+                    f"lanejn_raw_a length {len(_lanejn_raw_a)} not divisible by "
+                    f"tile_count_A {self.tile_count_A}"
+                )
+            _payload = len(_lanejn_raw_a) // self.tile_count_A
+            if _payload > self.tile_size_A_bytes:
+                raise ValueError(
+                    f"lanejn_raw_a per-tile payload {_payload} exceeds "
+                    f"tile_size_A_bytes {self.tile_size_A_bytes}"
+                )
+            for _ind in range(self.tile_count_A):
+                write_to_device(
+                    location,
+                    self.buf_a_addr + _ind * self.tile_size_A_bytes,
+                    _lanejn_raw_a[_ind * _payload : (_ind + 1) * _payload],
+                )
+            self.lanejn_src_a_raw = bytes(_lanejn_raw_a)
+        else:
+            self.lanejn_src_a_raw = StimuliConfig.write_matrix(
+                self.buffer_A,
+                self.tile_count_A,
+                pack_function_A,
+                self.buf_a_addr,
+                self.tile_size_A_bytes,
+                self.num_faces,
+                self.face_r_dim,
+                location,
+                self.write_full_tiles,
+                use_srcs=self._operand_use_srcs("A"),
+                twos_complement=self.twos_complement,
+            )
 
         StimuliConfig.write_matrix(
             self.buffer_B,
@@ -642,7 +677,15 @@ class StimuliConfig:
                 f"Unsupported data formats: srcA({self.stimuli_A_format.name}), srcB({self.stimuli_B_format.name})"
             )
 
-        StimuliConfig.write_matrix_w_tile_dimensions(
+        if getattr(self, "lanejn_raw_a", None) is not None:
+            # laneJN raw injection is only implemented for the
+            # backward-compatible tile layout; fail loudly rather than sweep
+            # the wrong bytes.
+            raise RuntimeError(
+                "lanejn_raw_a injection is unsupported on the dense "
+                "tile-dimensions write path"
+            )
+        self.lanejn_src_a_raw = StimuliConfig.write_matrix_w_tile_dimensions(
             self.buffer_A,
             self.tile_count_A,
             pack_function_A,
@@ -708,6 +751,13 @@ class StimuliConfig:
             )
 
         read_data = read_from_device(location, addr, num_bytes=read_bytes_cnt)
+
+        # laneJN bit-exact sweep instrumentation: stash the raw L1 bytes of
+        # every operand read so sweeps can compare results bit-for-bit without
+        # going through the (payload-canonicalizing) float unpack.
+        if not hasattr(self, "lanejn_raw_reads"):
+            self.lanejn_raw_reads = {}
+        self.lanejn_raw_reads[operand] = bytes(read_data)
 
         # Pass explicit tile_stride_bytes when tiles are densely packed
         # (use_dense_tile_dimensions or use_srcs). For the backward-compatible

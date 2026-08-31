@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from dataclasses import dataclass
 from itertools import chain, product
+from pathlib import Path
 
 import pytest
 import torch
@@ -1006,7 +1008,49 @@ def eltwise_unary_sfpu(
         ),
     )
 
+    # laneJN bit-exact sweep hook (corpus/tools/bitexact_sweep.py), env-gated
+    # and inert otherwise:
+    #   LANEJN_RAW_A=<file>  inject these exact per-tile packed payload bytes
+    #                        as operand A (bypasses the host float pack path so
+    #                        every input bit pattern is deliverable);
+    #   LANEJN_DUMP=<file>   dump the raw L1 input/result bytes + metadata;
+    #   LANEJN_SKIP_ASSERT=1 skip the golden assert (the golden is computed
+    #                        from the generated stimuli, which raw injection
+    #                        deliberately replaces).
+    _lanejn_raw_a = os.environ.get("LANEJN_RAW_A")
+    if _lanejn_raw_a:
+        configuration.variant_stimuli.lanejn_raw_a = Path(_lanejn_raw_a).read_bytes()
+
     res_from_L1 = configuration.run().result
+
+    _lanejn_dump = os.environ.get("LANEJN_DUMP")
+    if _lanejn_dump:
+        import numpy as _np
+
+        _stim = configuration.variant_stimuli
+        _np.savez(
+            _lanejn_dump,
+            src_raw=_np.frombuffer(
+                getattr(_stim, "lanejn_src_a_raw", b""), dtype=_np.uint8
+            ),
+            res_raw=_np.frombuffer(
+                getattr(_stim, "lanejn_raw_reads", {}).get("Res", b""),
+                dtype=_np.uint8,
+            ),
+            meta=_np.array(
+                [
+                    str(mathop),
+                    str(fresh_cpp_impl),
+                    str(formats.input_format.name),
+                    str(formats.output_format.name),
+                    str(input_dimensions),
+                    str(_stim.tile_count_A),
+                    str(_stim.tile_count_res),
+                    str(dest_acc),
+                    str(approx_mode),
+                ]
+            ),
+        )
 
     # res_from_L1 = res_from_L1[:1024]
     # golden_tensor = golden_tensor[:1024]
@@ -1016,6 +1060,9 @@ def eltwise_unary_sfpu(
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+
+    if os.environ.get("LANEJN_SKIP_ASSERT") == "1":
+        return
 
     assert passed_test(
         golden_tensor,
