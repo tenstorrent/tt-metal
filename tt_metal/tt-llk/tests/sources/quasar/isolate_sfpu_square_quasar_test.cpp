@@ -64,7 +64,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.TILE_CNT,
         static_cast<DataFormat>(formats.unpack_S_dst),
         [load_sfpmem, store_sfpmem](const int load_base_addr, const int store_base_addr, const int num_sfpu_iterations)
-        { _calculate_square_srcs_(load_base_addr, store_base_addr, num_sfpu_iterations, load_sfpmem, store_sfpmem); });
+        { _calculate_square_(load_base_addr, store_base_addr, num_sfpu_iterations, load_sfpmem, store_sfpmem); });
 
     wait_sfpu_idle();
     wait_unpack_idle();

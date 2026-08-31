@@ -62,20 +62,21 @@ inline void _add_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
     }
 }
 
-// Calculates ADD for one pair of SrcS rows (Quasar SFPU ops cover 2 rows)
-inline void _calculate_add_srcs_rows_(
+// Calculates ADD for one pair of rows (Quasar SFPU ops cover 2 rows)
+inline void _calculate_add_rows_(
     const int in0_addr, const int in1_addr, const int store_addr, const std::uint32_t load_sfpmem, const std::uint32_t store_sfpmem)
 {
-    TT_SFPLOAD(p_sfpu::LREG0, load_sfpmem, ADDR_MOD_7, 0, in0_addr);                // load from SrcS into lreg[0]
-    TT_SFPLOAD(p_sfpu::LREG1, load_sfpmem, ADDR_MOD_7, 0, in1_addr);                // load from SrcS into lreg[1]
+    TT_SFPLOAD(p_sfpu::LREG0, load_sfpmem, ADDR_MOD_7, 0, in0_addr);                // load in0 into lreg[0]
+    TT_SFPLOAD(p_sfpu::LREG1, load_sfpmem, ADDR_MOD_7, 0, in1_addr);                // load in1 into lreg[1]
     TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0x0); // lreg[2] = lreg[0] + lreg[1]
-    TT_SFPSTORE(p_sfpu::LREG2, store_sfpmem, ADDR_MOD_7, 0, store_addr);            // store from lreg[2] into SrcS
+    TT_SFPSTORE(p_sfpu::LREG2, store_sfpmem, ADDR_MOD_7, 0, store_addr);            // store lreg[2] to store_addr
 }
 
-// Implements element-wise add on SrcS: reads num_sfpu_iterations row pairs starting at
-// in0_base_addr and in1_base_addr and writes the sums starting at store_base_addr.
+// Implements element-wise add: reads num_sfpu_iterations row pairs starting at in0_base_addr and
+// in1_base_addr and writes the sums starting at store_base_addr. The addresses select the register
+// file the SFPU accesses: Dest (address bit 10 = 0) or SrcS (bit 10 = 1).
 // Caller resolves the sfpmem types: Float16 needs an explicit FP16A, sfpmem::DEFAULT never is.
-inline void _calculate_add_srcs_(
+inline void _calculate_add_(
     const int in0_base_addr,
     const int in1_base_addr,
     const int store_base_addr,
@@ -86,7 +87,7 @@ inline void _calculate_add_srcs_(
 #pragma GCC unroll 8
     for (int d = 0; d < num_sfpu_iterations; d++)
     {
-        _calculate_add_srcs_rows_(in0_base_addr + (d << 1), in1_base_addr + (d << 1), store_base_addr + (d << 1), load_sfpmem, store_sfpmem);
+        _calculate_add_rows_(in0_base_addr + (d << 1), in1_base_addr + (d << 1), store_base_addr + (d << 1), load_sfpmem, store_sfpmem);
     }
 }
 
