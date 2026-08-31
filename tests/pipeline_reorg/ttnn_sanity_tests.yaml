@@ -262,8 +262,6 @@
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
 
-# The 98-case reduce helper suite takes about one minute on wh_n300_civ2 with a cold JIT cache.
-# Keep the job timeout above pytest's five-minute per-test timeout to allow for CI setup and teardown.
 - name: "ttnn llk helper library tests"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/kernel_lib -xv -m "not disable_fast_runtime_mode"'
   skus:
