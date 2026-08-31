@@ -2573,11 +2573,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 build_options.hlk_desc.buf_dataformat_arr.begin(),
                 build_options.hlk_desc.buf_dataformat_arr.end(),
                 is_fp8_format)) {
-            const bool has_local_fp32_epoch =
-                build_options.build_env.get_arch() == tt::ARCH::BLACKHOLE &&
-                std::ranges::any_of(build_options.unpack_to_dest_mode, [](UnpackToDestMode mode) {
-                    return mode != UnpackToDestMode::Default;
-                });
+            const bool has_local_fp32_epoch = tt::has_effective_local_fp32_epoch(
+                build_options.hlk_desc.buf_dataformat_arr,
+                build_options.unpack_to_dest_mode,
+                build_options.build_env.get_arch());
             TT_FATAL(
                 build_options.fp32_dest_acc_en || has_local_fp32_epoch,
                 "Fp8_e4m3 / Lf8 require a 32-bit (family-agnostic) DEST mode when any CB on the same core uses "

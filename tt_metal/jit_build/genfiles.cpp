@@ -745,19 +745,15 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
     vector<DataFormat> dst_formats = tt::get_pack_dst_formats(
         desc.buf_dataformat_arr);
 
-    // Fp8_e4m3 is always unpacked to Float16 (A-family) in source/dest registers.
+    // FP8 formats are always unpacked to Float16 (A-family) in source/dest registers.
     // Without fp32_dest_acc, the dest register holds Float16 (A-family) data when
-    // the input is Fp8, so non-Fp8 output CBs need A-family pack_src to match.
+    // the input is FP8, so non-FP8 output CBs need A-family pack_src to match.
     // With fp32_dest_acc, dest holds Float32 and pack_src semantics differ, so skip.
-    // CBs that are themselves Fp8_e4m3 are already handled by get_single_pack_src_format.
+    // CBs that are themselves FP8 are already handled by get_single_pack_src_format.
     if (!fp32_dest_acc_en &&
-        std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), [](DataFormat f) {
-            return f == DataFormat::Fp8_e4m3;
-        })) {
+        std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), tt::is_fp8_format)) {
         const bool has_local_fp32_epoch =
-            arch == tt::ARCH::BLACKHOLE && std::ranges::any_of(unpack_to_dest_mode, [](UnpackToDestMode mode) {
-                return mode != UnpackToDestMode::Default;
-            });
+            tt::has_effective_local_fp32_epoch(desc.buf_dataformat_arr, unpack_to_dest_mode, arch);
         for (size_t i = 0; i < src_formats.size(); i++) {
             const bool local_fp32 = desc.buf_dataformat_arr[i] == DataFormat::Float32 && has_local_fp32_epoch;
             if (local_fp32) {
@@ -768,7 +764,7 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
                 src_formats[i] = DataFormat::Float32;
                 continue;
             }
-            if (desc.buf_dataformat_arr[i] == DataFormat::Fp8_e4m3) {
+            if (tt::is_fp8_format(desc.buf_dataformat_arr[i])) {
                 continue;
             }
             switch (src_formats[i]) {
@@ -839,9 +835,7 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
         (exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
     DataFormat pack_conditional_dst_format = unpack_conditional_dst_format;
     const bool has_local_fp32_epoch =
-        arch == tt::ARCH::BLACKHOLE && std::ranges::any_of(options.unpack_to_dest_mode, [](UnpackToDestMode mode) {
-            return mode != UnpackToDestMode::Default;
-        });
+        tt::has_effective_local_fp32_epoch(desc.buf_dataformat_arr, options.unpack_to_dest_mode, arch);
     if ((options.fp32_dest_acc_en || has_local_fp32_epoch) &&
         (tt::is_all_fp32_formats(desc.buf_dataformat_arr) || (exp_prec == ExpPrecision::B))) {
         unpack_conditional_dst_format = DataFormat::Tf32;

@@ -234,6 +234,23 @@ bool any_unpack_to_dest(const std::vector<tt::tt_metal::UnpackToDestMode>& unpac
     return false;
 }
 
+bool has_effective_local_fp32_epoch(
+    std::span<const DataFormat> data_formats,
+    std::span<const tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode,
+    tt::ARCH arch) {
+    if (arch != tt::ARCH::BLACKHOLE) {
+        return false;
+    }
+
+    for (std::size_t index = 0; index < data_formats.size() && index < unpack_to_dest_mode.size(); ++index) {
+        if (data_formats[index] == DataFormat::Float32 &&
+            unpack_to_dest_mode[index] != tt::tt_metal::UnpackToDestMode::Default) {
+            return true;
+        }
+    }
+    return false;
+}
+
 DataFormat get_single_pack_src_format(
     DataFormat data_format,
     DataFormat unpack_conditional_dst_format,
