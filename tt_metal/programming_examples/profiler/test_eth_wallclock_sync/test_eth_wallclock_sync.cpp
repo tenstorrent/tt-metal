@@ -168,6 +168,7 @@ int main(int argc, char** argv) {
     // (fresh launch, 256 samples) scored against the fit -- the scorer shares no launch and no rounds
     // with the thing it is testing.
     uint32_t resident_rounds = 0;
+    const char* dump_gaps = nullptr;  // raw per-round CSV: analysis thresholds belong offline, not in a constant
     uint32_t resident_hz = 20;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--samples") == 0 && i + 1 < argc) {
@@ -224,6 +225,8 @@ int main(int argc, char** argv) {
             resident_rounds = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
         } else if (std::strcmp(argv[i], "--hz") == 0 && i + 1 < argc) {
             resident_hz = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
+        } else if (std::strcmp(argv[i], "--dump-gaps") == 0 && i + 1 < argc) {
+            dump_gaps = argv[++i];
         }
     }
 
@@ -378,6 +381,17 @@ int main(int argc, char** argv) {
         printf(
             "[resident] link dev %d eth (%zu,%zu) -> dev %d eth (%zu,%zu): %u rounds at %u Hz, %u samples/round\n",
             e.a->id(), e.ac.x, e.ac.y, e.b->id(), e.bc.x, e.bc.y, resident_rounds, resident_hz, rcfg.n_samples);
+        // Optional clock pin for the sweep: does pinning aiclk remove the bursts? Released unconditionally
+        // below -- a forced clock must never outlive this process on a shared box.
+        if (force_aiclk_mhz != 0) {
+            for (IDevice* d : devices) {
+                try { cluster.get_driver()->get_chip(d->id())->arc_msg(0x33, true, {force_aiclk_mhz}); }
+                catch (const std::exception& ex) { printf("[resident] FORCE_AICLK chip %d threw: %s\n", d->id(), ex.what()); }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            printf("[resident] FORCE_AICLK %u -> aiclk now %u / %u MHz\n", force_aiclk_mhz,
+                   (unsigned)cluster.get_device_aiclk(e.a->id()), (unsigned)cluster.get_device_aiclk(e.b->id()));
+        }
         auto L = start_resident_link(e.a, e.ac, e.b, e.bc, rcfg);
         struct Round { double t_host_s; uint64_t ref; int64_t off; int64_t spread; uint64_t rtt; };
         std::vector<Round> rounds;
@@ -402,6 +416,22 @@ int main(int argc, char** argv) {
         stop_resident_link(L);
         printf("[resident] %zu/%u rounds valid in %.2f s (%.1f Hz achieved)\n", rounds.size(), resident_rounds,
                wall_s, rounds.size() / wall_s);
+        // RAW dump. Every threshold and histogram decision is made offline against this, because a
+        // hardcoded in-loop threshold (the 100-cycle one below) passes a different amount of noise at
+        // every sampling rate and clock frequency -- exactly the artifact class this sweep is testing for.
+        if (dump_gaps != nullptr) {
+            FILE* f = std::fopen(dump_gaps, "w");
+            if (f != nullptr) {
+                std::fprintf(f, "idx,t_host_s,ref,off,spread,rtt\n");
+                for (size_t i = 0; i < rounds.size(); i++) {
+                    std::fprintf(f, "%zu,%.6f,%llu,%lld,%lld,%llu\n", i, rounds[i].t_host_s,
+                                 (unsigned long long)rounds[i].ref, (long long)rounds[i].off,
+                                 (long long)rounds[i].spread, (unsigned long long)rounds[i].rtt);
+                }
+                std::fclose(f);
+                printf("[resident] dumped %zu rounds to %s\n", rounds.size(), dump_gaps);
+            }
+        }
         if (rounds.size() >= 4) {
             // Fit offset vs sender-clock ref across rounds: slope = inter-chip rate; residuals = per-round
             // noise + any step that landed between rounds.
@@ -487,6 +517,15 @@ int main(int argc, char** argv) {
             }
         }
         if (bad != 0) { printf("[resident] %u invalid round(s)\n", bad); }
+        if (force_aiclk_mhz != 0) {
+            for (IDevice* d : devices) {
+                try { cluster.get_driver()->get_chip(d->id())->arc_msg(0x33, true, {0}); }
+                catch (const std::exception& ex) { printf("[resident] release chip %d threw: %s\n", d->id(), ex.what()); }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            printf("[resident] FORCE_AICLK released -> aiclk %u / %u MHz\n",
+                   (unsigned)cluster.get_device_aiclk(e.a->id()), (unsigned)cluster.get_device_aiclk(e.b->id()));
+        }
         mesh_device->close();
         return 0;
     }
