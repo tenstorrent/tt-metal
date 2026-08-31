@@ -42,17 +42,31 @@ def _decode_matmul_cfg(device, K, N, fused_activation=None):
     when the shapes cannot express one, leaving ttnn's own heuristic in place. per_core_M=1 makes
     these DECODE ONLY — prefill shares _linear/_mlp and passes nothing.
 
+    The grid search considers every cols x rows sub-rectangle, not just full-width ones: the
+    full grid width divides none of the decode weights' Nt on any Blackhole part (11/13-wide
+    grids are prime, 12/14-wide share no factor with Nt=32 or 96/128), while cols=8
+    sub-rectangles work everywhere. On Wormhole (8x8) the search picks exactly the shapes the
+    full-width rule did, so tuned WH behavior is unchanged. Widest rectangle wins ties: a
+    contiguous mcast row is the shape the WH configs were tuned as.
+
     fused_activation folds an elementwise op into the matmul. Passing `activation=` to ttnn.linear
     alongside an explicit program_config does NOT fuse — it runs a second kernel — so the config
     is where it has to go."""
     Kt, Nt = K // 32, N // 32
     g = device.compute_with_storage_grid_size()
-    rows = next((r for r in range(g.y, 0, -1) if Nt % (g.x * r) == 0), None)
-    if rows is None or Kt % DECODE_IN0_BLOCK_W:
+    if Kt % DECODE_IN0_BLOCK_W:
         return None
-    per_core_N = Nt // (g.x * rows)
+    best = None  # (cols, rows) maximizing cols*rows with cols*rows | Nt; wider cols on ties
+    for cols in range(g.x, 0, -1):
+        rows = next((r for r in range(g.y, 0, -1) if Nt % (cols * r) == 0), None)
+        if rows is not None and (best is None or cols * rows > best[0] * best[1]):
+            best = (cols, rows)
+    if best is None:
+        return None
+    cols, rows = best
+    per_core_N = Nt // (cols * rows)
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(g.x, rows),
+        compute_with_storage_grid_size=(cols, rows),
         in0_block_w=DECODE_IN0_BLOCK_W,
         out_subblock_h=1,
         out_subblock_w=next(w for w in range(min(per_core_N, DECODE_MAX_SUBBLOCK), 0, -1) if per_core_N % w == 0),
