@@ -203,18 +203,17 @@ def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
 
 
 def _chunk_to_host_array(chunk_token_ids):
-    """One chunk's tokens as the un-sharded [SP, 1, chunk_local] uint32 buffer the H2D service expects.
-    Block-cyclic / chip-major layout, matching the runner's prepare_prefill_input_tensor; the connected
-    service resplits it across SP coordinates, so this process needs no MeshDevice."""
+    """One chunk in the selected adapter's global H2D tensor view."""
     sp = GLOBAL_MESH_SHAPE[0]
     chunk_local = CHUNK_SIZE // sp
-    return (
-        torch.tensor(chunk_token_ids, dtype=torch.int64)
-        .reshape(sp, 1, chunk_local)
-        .to(torch.uint32)
-        .contiguous()
-        .numpy()
-    )
+    tokens = torch.tensor(chunk_token_ids, dtype=torch.int64)
+    if ADAPTER.h2d_input_shard_dim == 0:
+        tokens = tokens.reshape(sp, 1, chunk_local)
+    elif ADAPTER.h2d_input_shard_dim == 1:
+        tokens = tokens.reshape(1, CHUNK_SIZE)
+    else:
+        raise ValueError(f"unsupported adapter H2D shard dim {ADAPTER.h2d_input_shard_dim}")
+    return tokens.to(torch.uint32).contiguous().numpy()
 
 
 # ---------------------------------------------------------------------------
@@ -495,6 +494,12 @@ def _config_from_env() -> ProducerConfig:
     interleave = os.environ.get("PREFILL_PRODUCER_INTERLEAVE", "random")
     if interleave not in ("random", "round_robin"):
         raise ValueError(f"PREFILL_PRODUCER_INTERLEAVE must be 'random' or 'round_robin', got {interleave!r}")
+    multi_turn_prob = float(os.environ.get("PREFILL_PRODUCER_MULTI_TURN_PROB", "0.0"))
+    if multi_turn_prob > 0 and not ADAPTER.supports_multi_turn:
+        raise ValueError(
+            f"PREFILL_PRODUCER_MULTI_TURN_PROB={multi_turn_prob} is unsupported by "
+            f"PREFILL_MODEL={ADAPTER.name}; use 0 until its runtime supports 32-token resume offsets"
+        )
 
     return ProducerConfig(
         num_users=int(os.environ.get("PREFILL_NUM_USERS", "1")),
@@ -510,7 +515,7 @@ def _config_from_env() -> ProducerConfig:
         verify=os.environ.get("PREFILL_PRODUCER_CHECK_PCC", "0") == "1",
         pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.93")),
         interleave=interleave,
-        multi_turn_prob=float(os.environ.get("PREFILL_PRODUCER_MULTI_TURN_PROB", "0.0")),
+        multi_turn_prob=multi_turn_prob,
     )
 
 
@@ -692,6 +697,8 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":
         return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
+    if ADAPTER.name == "gemma4_31b":
+        return _read_slot_kv_and_check_pcc_gemma4(table, device_map, slot_id, real_len, trace_dir)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
 
@@ -775,6 +782,45 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
         f"K={mins['k']:.5f} V={mins['v']:.5f} (min {min_pcc:.6f})"
     )
     return min_pcc
+
+
+def _read_slot_kv_and_check_pcc_gemma4(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+    """Validate Gemma 4's four decode-ordered global KV configs."""
+    from pathlib import Path
+
+    from safetensors import safe_open
+
+    from models.demos.gemma4.tt.attention.global_migration import ROW_DIM, TOKENS_PER_CHUNK, pack_global_kv_reference
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    expected_names = tuple(f"kv_h{head}" for head in range(4))
+    actual_names = tuple(table.config_name(i) for i in range(table.num_configs()))
+    if actual_names != expected_names:
+        raise ValueError(f"Gemma 4 migration configs must be {expected_names}, got {actual_names}")
+
+    read_len = ((real_len + TOKENS_PER_CHUNK - 1) // TOKENS_PER_CHUNK) * TOKENS_PER_CHUNK
+    kv_dir = Path(trace_dir) / "kv_cache"
+    minimum = 1.0
+    for layer in range(5, NUM_LAYERS, 6):
+        device = torch.stack(
+            [
+                _read_kv_slice(table, device_map, head, layer, slot_id, read_len, ROW_DIM, _decode_bfp8_chunk)
+                for head in range(4)
+            ],
+            dim=0,
+        )[:, :real_len]
+        with safe_open(str(kv_dir / f"layer_{layer}.safetensors"), framework="pt") as handle:
+            golden_k = handle.get_tensor(f"key_cache_layer_{layer}").float()[0, :, :real_len, :]
+            golden_v = handle.get_tensor(f"value_cache_layer_{layer}").float()[0, :, :real_len, :]
+        golden = pack_global_kv_reference(golden_k, golden_v)
+        pcc = float(comp_pcc(golden, device, 0.0)[1])
+        minimum = min(minimum, pcc)
+        logger.info(f"  layer {layer:>2}: merged_global={pcc:.5f}")
+
+    logger.info(
+        f"[producer] slot {slot_id} Gemma 4 global KV PCC over [0,{real_len}) " f"across 10 layers -> min {minimum:.6f}"
+    )
+    return minimum
 
 
 def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_len: int, trace_dir):

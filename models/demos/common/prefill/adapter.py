@@ -129,8 +129,14 @@ class PrefillModelAdapter(ABC):
     # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
     # Must match the layout the model's decoder layer consumes/produces.
     pipeline_activation_emb_tp_sharded: bool = True
+    # Global tensor dimension sharded over SP rows by the H2D token service. Most runtimes consume
+    # the legacy [SP, 1, local_tokens] view (dim 0). Gemma consumes the equivalent [1, global_tokens]
+    # view used by its embedding path (dim 1). The per-device shard is identical in both cases.
+    h2d_input_shard_dim: int = 0
     # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
     supports_dflash: bool = False
+    # Whether the runtime can resume a recycled slot at an arbitrary 32-token-aligned prefix.
+    supports_multi_turn: bool = True
 
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
@@ -278,6 +284,8 @@ ADAPTER_PATHS = {
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
+    # Gemma 4 31B: CP8/TP4 prefill with a global-layer-only decode-compatible migration cache.
+    "gemma4_31b": "models.demos.gemma4.tt.runners.adapters.gemma4:Gemma4PrefillAdapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}

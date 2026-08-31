@@ -87,14 +87,23 @@ def open_mesh_device(
     )
 
 
-def make_global_spec(mesh_shape: tuple, chunk_size: int) -> ttnn.TensorSpec:
+def make_global_spec(mesh_shape: tuple, chunk_size: int, input_shard_dim: int = 0) -> ttnn.TensorSpec:
     """Per-push input spec used by `build_h2d_service` to set the service's
     global tensor shape (the producer matches it on the host side). One push carries one
-    chunk_size-token chunk. Shape `(sp_factor, 1, chunk_size // sp_factor)` uint32 ROW_MAJOR DRAM."""
+    chunk_size-token chunk. The legacy dim-0 view is
+    `(sp_factor, 1, chunk_size // sp_factor)`; a dim-1 model receives the equivalent
+    `(1, chunk_size)` logical view. Both produce `(1, chunk_size // sp_factor)`
+    per-device shards."""
     sp_factor = mesh_shape[0]
     isl_per_chip = chunk_size // sp_factor
+    if input_shard_dim == 0:
+        shape = [sp_factor, 1, isl_per_chip]
+    elif input_shard_dim == 1:
+        shape = [1, chunk_size]
+    else:
+        raise ValueError(f"H2D input_shard_dim must be 0 or 1, got {input_shard_dim}")
     return ttnn.TensorSpec(
-        shape=ttnn.Shape([sp_factor, 1, isl_per_chip]),
+        shape=ttnn.Shape(shape),
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         buffer_type=ttnn.BufferType.DRAM,
@@ -109,22 +118,24 @@ def build_h2d_service(
     mapper_config: ttnn.MeshMapperConfig,
     worker_cores: ttnn.CoreRange,
     metadata_size_bytes: int,
+    input_shard_dim: int = 0,
 ) -> ttnn.H2DStreamService:
     """Construct an H2DStreamService whose per-shard backing tensor matches
     what `prepare_prefill_input_tensor` would have produced. Each push carries one chunk_size-token
     chunk (chunked prefill streams one chunk per push), not the full sequence.
 
-    Per-shard target: `(1, 1, chunk_size // sp_factor)` uint32 ROW_MAJOR DRAM.
-    Achieved by setting global_spec.shape = `(sp_factor, 1, chunk_size // sp_factor)` and
-    mapping `[Shard(0), Replicate]` on a `(sp, tp)` mesh — first axis of the
-    tensor is sharded across mesh rows (sp), nothing else is split.
+    Per-shard target is `chunk_size // sp_factor` uint32 tokens. Most models use
+    global `(sp_factor, 1, local)` with `[Shard(0), Replicate]`; Gemma uses
+    `(1, chunk_size)` with `[Shard(1), Replicate]` so its embedding path sees
+    the same logical shape as the standalone prefill runtime.
     """
     sp_factor, tp_factor = mesh_shape
     assert chunk_size % sp_factor == 0, f"chunk_size={chunk_size} must be divisible by sp_factor={sp_factor}"
     isl_per_chip = chunk_size // sp_factor
     per_chip_bytes = isl_per_chip * 4  # uint32
 
-    global_spec = make_global_spec(mesh_shape, chunk_size)
+    global_spec = make_global_spec(mesh_shape, chunk_size, input_shard_dim=input_shard_dim)
+    global_shape = (sp_factor, 1, isl_per_chip) if input_shard_dim == 0 else (1, chunk_size)
     mapper = ttnn.create_mesh_mapper(mesh_device, mapper_config)
     # worker_cores set so the service-core kernel multicasts a data-ready inc
     # after each transfer; inbound_socket_service_sync() waits on that on-device, which
@@ -141,7 +152,7 @@ def build_h2d_service(
         metadata_size_bytes=metadata_size_bytes,
     )
     logger.info(
-        f"[h2d] H2DStreamService built: global_shape=({sp_factor},1,{isl_per_chip}) "
+        f"[h2d] H2DStreamService built: global_shape={global_shape} shard_dim={input_shard_dim} "
         f"uint32 ROW_MAJOR DRAM, per_chip_bytes={per_chip_bytes}, worker_cores={worker_cores}"
     )
     return service

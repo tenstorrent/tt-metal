@@ -98,14 +98,16 @@ LAYER_ACK_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_LAYER_ACK_FIFO_BYTES", 4
 # see ADDING_A_PREFILL_MODEL.md.
 SHUTDOWN_METADATA_WORD = -1
 
-# H2D socket service (request mode, rank 0 input): one worker core copies each pushed chunk into a fresh
-# tensor; the producer packs the PrefillMetadata alongside each push.
-H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
-
-D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", 256))
-
 ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
 MODEL_CFG = ADAPTER.model_config
+
+# H2D socket service (request mode, rank 0 input): one worker core copies each pushed chunk into a fresh
+# tensor; the producer packs the PrefillMetadata alongside each push.
+H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(
+    placements=[ttnn.PlacementShard(ADAPTER.h2d_input_shard_dim), ttnn.PlacementReplicate()]
+)
+
+D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", 256))
 
 # D2D socket transport (>1 rank): one sender/receiver pair per rank boundary carries the hidden state
 # over inter-galaxy fabric, sharded seq across SP rows. The emb (TP) axis follows the adapter's residual
@@ -719,6 +721,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             mapper_config=H2D_MAPPER_CONFIG,
             worker_cores=SYNC_WORKER_CORES,
             metadata_size_bytes=METADATA_SIZE_BYTES,
+            input_shard_dim=ADAPTER.h2d_input_shard_dim,
         )
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
         descriptor_path = h2d_service.export_descriptor(service_id)

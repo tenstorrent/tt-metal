@@ -561,6 +561,10 @@ class Gemma4Model:
                 self.tt_kv_cache.append(self.layers[source_idx].self_attn.kv_cache)
             else:
                 self.tt_kv_cache.append(layer.self_attn.kv_cache)
+        self.global_migration_layer_rank = {
+            layer_idx: rank
+            for rank, layer_idx in enumerate(i for i in range(n_layers) if hf_config.layer_types[i] == "full_attention")
+        }
 
         # Last layer index of each attention type — these are the layers whose
         # KV the Gemma4 *it-assistant* drafter cross-attends into (HF
@@ -819,6 +823,10 @@ class Gemma4Model:
         packed=None,
         chunk_start_idx=None,
         chunk_page_table=None,
+        global_migration_cache=None,
+        migration_slot_id=None,
+        migration_actual_end=None,
+        on_layer_complete=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -1026,6 +1034,13 @@ class Gemma4Model:
                 shared_kv = shared_kv_store.get(source_idx)
             elif not is_decode and i in kv_source_indices:
                 keep_kv = True
+            migration_layer = (
+                not is_decode
+                and global_migration_cache is not None
+                and self.hf_config.layer_types[i] == "full_attention"
+            )
+            if migration_layer:
+                keep_kv = True
 
             layer_page_table = page_tables_per_layer[i] if page_tables_per_layer is not None else page_table
 
@@ -1069,8 +1084,40 @@ class Gemma4Model:
 
             # For KV source layers during prefill, capture the K/V from the attention
             # The K/V are kept alive on device (not deallocated) when keep_kv=True
-            if keep_kv and layer.self_attn._last_kv is not None:
+            if i in kv_source_indices and layer.self_attn._last_kv is not None:
                 shared_kv_store[i] = layer.self_attn._last_kv
+
+            if migration_layer:
+                from models.demos.gemma4.tt.attention.global_migration import write_global_kv_chunk
+
+                pair = layer.self_attn._last_kv
+                if pair is None:
+                    raise RuntimeError(f"global layer {i} did not retain K/V for migration staging")
+                write_global_kv_chunk(
+                    global_migration_cache,
+                    pair[0],
+                    pair[1],
+                    slot_idx=int(migration_slot_id if migration_slot_id is not None else user_id),
+                    layer_idx=self.global_migration_layer_rank[i],
+                    kv_actual=int(chunk_start_idx or 0),
+                    valid_global=int(
+                        migration_actual_end
+                        if migration_actual_end is not None
+                        else (chunk_start_idx or 0) + pair[0].shape[-2] * global_migration_cache.sp
+                    ),
+                    sp_axis=self.mesh_config.sp_axis,
+                )
+                if i not in kv_source_indices:
+                    pair[0].deallocate(True)
+                    pair[1].deallocate(True)
+                    layer.self_attn._last_kv = None
+
+            if on_layer_complete is not None:
+                # The host callback is the scheduler's permission to migrate this
+                # layer.  Make every queued cache write, including the compact
+                # global staging write above, visible before publishing it.
+                ttnn.synchronize_device(self.mesh_device)
+                on_layer_complete(i)
 
         # Free the per-layer-type decode RoPE tensors shared across the loop.
         for cos_pos, sin_pos in decode_rope_presliced.values():
@@ -1741,6 +1788,10 @@ class Gemma4Model:
         embeds_torch=None,
         pli_device_tensors=None,
         page_tables_per_layer=None,
+        global_migration_cache=None,
+        migration_slot_id=None,
+        migration_actual_end=None,
+        on_layer_complete=None,
         **kwargs,
     ):
         """Prefill forward — Generator-compatible signature.
@@ -1787,6 +1838,10 @@ class Gemma4Model:
             user_id=user_id,
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
+            global_migration_cache=global_migration_cache,
+            migration_slot_id=migration_slot_id,
+            migration_actual_end=migration_actual_end,
+            on_layer_complete=on_layer_complete,
         )
 
     def process_output_prefill(self, tt_out, last_token_idx):
