@@ -60,10 +60,7 @@ ALWI void situ_glu_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMod
 /**
  * Please refer to documentation for any_init.
  */
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void situ_glu_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(situ_glu, sfpu::situ_glu_init, (is_fp32_dest_acc_en))));
-}
+ALWI void situ_glu_tile_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init))); }
 
 }  // namespace ckernel
 

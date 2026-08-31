@@ -26,10 +26,7 @@ sfpi_inline sfpi::vFloat _sfpu_softcap_(sfpi::vFloat x, sfpi::vFloat beta, sfpi:
     return _sfpu_tanh_polynomial_(x * inv_beta) * beta;
 }
 
-template <bool is_fp32_dest_acc_en>
-inline void softcap_init() {
-    tanh_init</*APPROXIMATION_MODE=*/false, is_fp32_dest_acc_en>();
-}
+inline void softcap_init() { tanh_init</*APPROXIMATION_MODE=*/false, /*is_fp32_dest_acc_en=*/false>(); }
 
 // beta and its reciprocal arrive as fp32 bit patterns.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
