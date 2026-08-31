@@ -461,6 +461,9 @@ class MiniMaxH3Vae(Module):
         in_channels = encoder.conv_in.in_channels
         moments = 2 * self.config.latent_channels
         wave_size = self.mesh_device.get_num_devices()
+        # Same counters `_stream_decoder_units` keeps, and same caveat: without the opt-in
+        # `profile` sync, `device` times the enqueue and the wait lands in `readback`.
+        profile = self._profile
 
         def prepare(unit: torch.Tensor) -> torch.Tensor:
             x = unit.permute(0, 2, 3, 4, 1).contiguous()
@@ -473,19 +476,47 @@ class MiniMaxH3Vae(Module):
             # Prepared per wave, not up front: `units` are cheap views into the source video,
             # but permute().contiguous() materialises 13.4 MB each, so preparing all of them
             # would cost 19 GB of host memory at 1440P/10s. Outputs are latents and tiny.
+            mark = time.perf_counter()
             wave = [prepare(unit) for unit in units[start : start + wave_size]]
             count = len(wave)
             padded = wave + [wave[-1]] * (wave_size - count)
+            batch = torch.cat(padded, dim=0)
+            profile["host_prep"] += time.perf_counter() - mark
+
+            mark = time.perf_counter()
             x_device = ttnn.from_torch(
-                torch.cat(padded, dim=0),
+                batch,
                 dtype=self.dtype,
                 device=self.mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             )
-            out = fast_device_to_host(encoder(x_device), self.mesh_device, [0, 0], ccl_manager=self.ccl_manager).float()
+            profile["upload"] += time.perf_counter() - mark
+            profile["upload_mb"] = profile.get("upload_mb", 0.0) + batch.numel() * batch.element_size() / 1e6
+
+            mark = time.perf_counter()
+            encoded = encoder(x_device)
+            if self.profile:
+                ttnn.synchronize_device(self.mesh_device)
+            elapsed = time.perf_counter() - mark
+            profile["device"] += elapsed
+            profile["device_each"].append(elapsed)
+
+            mark = time.perf_counter()
+            out = fast_device_to_host(encoded, self.mesh_device, [0, 0], ccl_manager=self.ccl_manager).float()
+            elapsed = time.perf_counter() - mark
+            profile["readback"] += elapsed
+            profile["readback_each"].append(elapsed)
+            profile["readback_mb"] += out.numel() * out.element_size() / 1e6
+            profile["shape"] = tuple(encoded.shape)
+            profile["dtype"] = str(encoded.dtype)
+
+            mark = time.perf_counter()
             for index in range(count):
                 results.append(out[index : index + 1, ..., :moments].permute(0, 4, 1, 2, 3).contiguous())
+            profile["unpatchify"] += time.perf_counter() - mark
+            profile["waves"] += 1
+            profile["units"] += count
         return results
 
     def encode_clip(self, x_BCTHW: torch.Tensor, *, temporal_taps: int | None = None) -> torch.Tensor:
@@ -500,9 +531,14 @@ class MiniMaxH3Vae(Module):
         if not self.use_tiling:
             return self._run_encoder(x_BCTHW, temporal_taps)
 
+        mark = time.perf_counter()
         units = self._clip_tiles(x_BCTHW)
+        self._profile["tiling"] += time.perf_counter() - mark
         encoded = self._run_encoder_units(units, temporal_taps)
-        return self._stitch_clip(encoded, x_BCTHW.shape[-2], x_BCTHW.shape[-1])
+        mark = time.perf_counter()
+        stitched = self._stitch_clip(encoded, x_BCTHW.shape[-2], x_BCTHW.shape[-1])
+        self._profile["stitch"] += time.perf_counter() - mark
+        return stitched
 
     def _tile_grid(self, height: int, width: int):
         ratio = self.config.spatial_compression_ratio
@@ -551,10 +587,13 @@ class MiniMaxH3Vae(Module):
         if not self.use_tiling:
             moments = torch.cat(self._run_encoder_units(clips, 3), dim=2)
         else:
+            mark = time.perf_counter()
             per_clip = [self._clip_tiles(clip) for clip in clips]
             tiles_per_clip = len(per_clip[0])
             flat = [unit for clip_units in per_clip for unit in clip_units]
+            self._profile["tiling"] += time.perf_counter() - mark
             encoded = self._run_encoder_units(flat, 3)
+            mark = time.perf_counter()
             moments = torch.cat(
                 [
                     self._stitch_clip(encoded[i * tiles_per_clip : (i + 1) * tiles_per_clip], height, width)
@@ -562,6 +601,7 @@ class MiniMaxH3Vae(Module):
                 ],
                 dim=2,
             )
+            self._profile["stitch"] += time.perf_counter() - mark
         if self.config.token_drop > 0:
             moments = moments[:, :, : -self.config.token_drop]
         return moments
