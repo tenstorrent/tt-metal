@@ -72,6 +72,38 @@ def _argmax_row_major_wide_reduce_last_dim():
     ]
 
 
+def _argmax_dm_split_edge_cases():
+    """ROW_MAJOR last-dim cases that stress the data-movement split boundaries.
+
+    The multicore reader divides the inner (row) loop between both data movement processors
+    once there are at least two rows.
+    """
+    return [
+        # Row count at and around the split threshold.
+        _case([1, 96], RM, -1, False, torch.bfloat16),
+        _case([2, 96], RM, -1, False, torch.bfloat16),
+        _case([3, 96], RM, -1, False, torch.bfloat16),
+        _case([5, 96], RM, -1, False, torch.float32),
+        # Ties are near certain at this width, so the int cases double as tie-break checks.
+        _case([7, 96], RM, -1, False, torch.int32),
+        # Reduction width not a multiple of the per-core alignment unit: short last block.
+        _case([3, 17], RM, -1, False, torch.bfloat16),
+        _case([16, 33], RM, -1, False, torch.bfloat16),
+        _case([3, 1000], RM, -1, False, torch.float32),
+        _case([16, 4095], RM, -1, False, torch.bfloat16),
+        # outer_dim_units > 1: one handoff per output page.
+        _case([8, 2, 65], RM, -1, False, torch.bfloat16),
+        _case([3, 5, 96], RM, -1, False, torch.int32),
+        _case([2, 3, 16, 128], RM, -1, False, torch.bfloat16),
+        _case([4, 7, 33, 64], RM, -1, False, torch.uint8),
+        # Wide reduction dim -> many cores, each contributing a partial to the merge.
+        _case([3, 32768], RM, -1, False, torch.bfloat16),
+        _case([64, 32768], RM, -1, False, torch.bfloat16),
+        # ~776 KB of staging CBs, the closest any shape here comes to the split L1 budget.
+        _case([2048, 1024], RM, -1, False, torch.bfloat16),
+    ]
+
+
 def _argmax_nc_hw_mixed_shapes():
     """Non-last dims on TILE and ROW_MAJOR (padding / rank coverage)."""
     return [
@@ -119,6 +151,7 @@ def argmax_torch_ttnn_cases():
     yield from chain(
         _argmax_misc_and_rank_special(),
         _argmax_row_major_wide_reduce_last_dim(),
+        _argmax_dm_split_edge_cases(),
         _argmax_nc_hw_mixed_shapes(),
         _argmax_nc_nd_rank4(),
         _argmax_nc_nd_rank5(),
@@ -366,3 +399,34 @@ def test_argmax_reduce_all_sub_core_grids_idle_cores(device):
 
     got = int(ttnn.to_torch(ttnn.from_device(result["out"])).item())
     assert got == int(torch.argmax(t.reshape(-1))), f"reduce_all mismatch: got {got}"
+
+
+def test_argmax_dm_split_ties_smallest_index_wins(device):
+    """ROW_MAJOR last-dim ties must return the smallest index.
+
+    One processor reduces a whole row, so what the split reaches is the cross-core merge
+    between partials carrying global indices. The odd row count gives unequal halves.
+    """
+    # w=64 divides into 4 cores of 16. The maxima sit 8 apart and `first` walks 0..32, so
+    # both the within-core and straddling-cores cases occur.
+    h, w = 33, 64
+    t = torch.zeros(h, w, dtype=torch.float32)
+    for row in range(h):
+        first = row % (w - 8)
+        t[row, first] = 5.0
+        t[row, first + 8] = 5.0  # duplicate maximum; the later index must lose
+
+    ttnn_in = ttnn.from_torch(t, device=device, layout=RM)
+    out = ttnn.argmax(ttnn_in, dim=-1, keepdim=False)
+    assert_equal(torch.argmax(t, dim=-1), ttnn.to_torch(ttnn.from_device(out)).to(torch.int32))
+
+
+@pytest.mark.parametrize("shape", ([2, 64], [33, 96], [2, 3, 16, 128]))
+def test_argmax_dm_split_single_core_grid(device, shape):
+    """One core: isolates the on-core handoff from the cross-core merge protocol."""
+    one_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    torch.manual_seed(0)
+    t = torch.randn(*shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(t, device=device, layout=RM)
+    out = ttnn.argmax(ttnn_in, dim=-1, keepdim=False, sub_core_grids=one_core)
+    assert_equal(torch.argmax(t, dim=-1), ttnn.to_torch(ttnn.from_device(out)).to(torch.int32))

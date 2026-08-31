@@ -37,6 +37,9 @@
  * @param red_dim_units_this_core Number of reduction dimension units assigned to this core
  * @param in_vals Pointer to L1 memory containing input values with data type determined by data_format template
  * parameter
+ * @param j_start First inner-dimension index owned by this data movement processor
+ * @param j_end One past the last inner-dimension index owned by this processor
+ * @param src_dfb_offset Byte offset of this processor's half of the input dataflow buffer
  */
 template <bool reduce_all, DataFormat data_format, typename AddrGen, typename SrcDfb>
 inline void find_argmax_for_core(
@@ -54,8 +57,12 @@ inline void find_argmax_for_core(
     uint32_t& max_idx,
     decltype(get_default_value<data_format>())& max_val,
     volatile tt_l1_ptr uint32_t* red_idxs,
-    volatile tt_l1_ptr decltype(get_default_value<data_format>())* red_vals) {
-    for (uint32_t j = 0; j < inner_dim_units; ++j) {
+    volatile tt_l1_ptr decltype(get_default_value<data_format>())* red_vals,
+    const uint32_t j_start,
+    const uint32_t j_end,
+    const uint32_t src_dfb_offset) {
+    // inner_dim_units stays the FULL count: it is the page stride and part of the reduce_all index.
+    for (uint32_t j = j_start; j < j_end; ++j) {
         // Cores that sub_core_grids leaves without work skip the empty NoC read but still publish a default partial.
         if (red_dim_units_this_core > 0) {
             noc.async_read(
@@ -63,7 +70,7 @@ inline void find_argmax_for_core(
                 src_dfb,
                 src_read_size,
                 {.page_id = outer_idx * inner_dim_units + j, .offset_bytes = src_offset},
-                {.offset_bytes = 0});
+                {.offset_bytes = src_dfb_offset});
             noc.async_read_barrier();
         }
 
@@ -287,6 +294,24 @@ void kernel_main() {
     constexpr auto num_cores0 = get_arg(args::num_cores0);  // Number of cores in group 0
     constexpr auto num_cores1 = get_arg(args::num_cores1);  // Number of cores in group 1
 
+    // This processor's half of the inner loop: [j_start, j_end).
+    constexpr auto j_start = get_arg(args::j_start);
+    constexpr auto j_end = get_arg(args::j_end);
+
+    // This processor's private half of src: primary 0, secondary one entry in.
+    constexpr auto src_dfb_offset = get_arg(args::src_dfb_offset);
+
+    // Runs the cross-core protocol and writes the output.
+    constexpr bool owns_reduction = (bool)get_arg(args::owns_reduction);
+
+    // A second data movement processor is active on this core.
+    constexpr bool has_secondary_dm = (bool)get_arg(args::has_secondary_dm);
+
+    static_assert(j_start < j_end, "Empty inner range: this processor would do no work.");
+    static_assert(
+        !(reduce_all && has_secondary_dm), "reduce_all cannot be split: its accumulator spans the whole inner range.");
+    static_assert(owns_reduction || has_secondary_dm, "Secondary launched without a primary.");
+
     //-------------------------------------------------------------------------
     // Flag to identify if this core will collate intermediate outputs
     const bool is_reduce_core = (core_id == reduce_core_id);
@@ -307,7 +332,7 @@ void kernel_main() {
 
     // DFB in L1 memory for storing input
     constexpr DataFormat src_dfb_addr_data_format = get_dataformat(dfb::src);
-    const uint32_t src_dfb_addr = src_dfb.get_write_ptr();
+    const uint32_t src_dfb_addr = src_dfb.get_write_ptr() + src_dfb_offset;
     volatile tt_l1_ptr auto* in_vals = get_tt_l1_ptr_based_on_data_format<src_dfb_addr_data_format>(src_dfb_addr);
 
     // DFB in L1 memory of reducer core for storing output
@@ -338,6 +363,9 @@ void kernel_main() {
     // Semaphores
     Semaphore start_sem(sem::start);
     Semaphore done_sem(sem::done);
+    // Monotonic within a launch; restored after the loop for trace replay. wait_min invalidates the
+    // L1 cache while polling, which is what makes the secondary's stores visible to the primary.
+    Semaphore partial_ready_sem(sem::partial_ready);
 
     uint32_t max_idx = 0;
     auto max_val = get_default_value<src_dfb_addr_data_format>();
@@ -345,7 +373,10 @@ void kernel_main() {
     // -------------------------------------------------------------------------
     // Main loop - run by all cores
     for (uint32_t k = 0; k < outer_dim_units; ++k) {
-        if (is_reduce_core) {
+        // Only the primary drives start_sem: semaphores are per-core, so two processors setting them
+        // would race. It also keeps the multicast on NOC1, which matches the end-before-start corner
+        // order the host passes; from NOC0 the rectangle inverts and only one core is signalled.
+        if (is_reduce_core && owns_reduction) {
             // done_sem is zero-initialized by the dispatcher before the kernel
             // launches (and restored to zero at the end of this kernel so trace
             // replays see the same state), so the k == 0 iteration needs no
@@ -400,9 +431,25 @@ void kernel_main() {
             max_idx,
             max_val,
             red_idxs,
-            red_vals);
+            red_vals,
+            j_start,
+            j_end,
+            src_dfb_offset);
 
         if constexpr (not reduce_all) {
+            // The secondary fills only its [j_start, j_end) entries and hands off. It cannot
+            // overwrite a partial still being shipped: its next iteration blocks on the start_sem
+            // wait above, which advances only after the reduce core merged k.
+            if constexpr (not owns_reduction) {
+                partial_ready_sem.up(1);
+                continue;
+            }
+
+            // Wait for this core's secondary to fill its half before shipping the slot.
+            if constexpr (has_secondary_dm) {
+                partial_ready_sem.wait_min(k + 1);
+            }
+
             // We now write these local values to the equivalent position in the reduction core.
             //
             // A DFB handed to async_write as the source is read at its read pointer. That is the
@@ -500,7 +547,19 @@ void kernel_main() {
     // core's slice on the first outer row). These resets are race-free: the final done_sem.wait
     // above guarantees every worker's increment for the last iteration has landed, and workers
     // never read start_sem again after their final wait.
-    if (is_reduce_core) {
+    //
+    // owns_reduction, not just is_reduce_core: the secondary reaches here as soon as it has handed
+    // off its last half, while the primary may still be inside done_sem.wait and workers inside
+    // start_sem.wait_min. It also has no done_sem.wait of its own, so the race-freedom argument
+    // above does not hold for it, and its multicast would issue from NOC0 with NOC1's corner order.
+    // Same trace-replay reason: on replay this word still holds the previous run's count, every
+    // wait_min passes instantly, and the primary would ship partials before the secondary refilled
+    // its half. Every core owns its own copy, so this is not reduce-core-only.
+    if constexpr (owns_reduction && has_secondary_dm) {
+        partial_ready_sem.set(0);
+    }
+
+    if (is_reduce_core && owns_reduction) {
         done_sem.set(0);
         start_sem.set(0);
         if constexpr (num_cores > 1) {
