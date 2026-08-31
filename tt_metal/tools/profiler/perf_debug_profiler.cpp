@@ -2095,6 +2095,13 @@ struct PerfDebugProfiler::FabricSyncState {
         CoreCoord logical;
         CoreCoord virt;
         uint32_t blk_addr = 0;
+        // NOC0 coords + whether this lane got its OWN Tracy anchor. Contexts are created LAZILY on a
+        // core's first zone, and the only AddCore calls upstream are for DRISC cores -- so without an
+        // explicit anchor here an eth lane is minted against the WORKER anchor, and eth tiles do not
+        // share the Tensix origin. Measured cost of getting this wrong: FSYNC zones landed 10.4 s away
+        // from the workload they ran inside.
+        uint32_t noc0_x = 0, noc0_y = 0;
+        bool tracy_ok = false;
         // Saved Cfg body (flags..peer_blk), so the aggregator can RE-ARM this end. The hook zeroes
         // its own block at kernel start, so every fabric re-init silently unconfigures the hook.
         uint32_t cfg[7] = {};
@@ -2128,6 +2135,11 @@ struct PerfDebugProfiler::FabricSyncState {
         // at t1 (the instant that ping was observed).
         struct Draw {
             uint64_t t0 = 0, t1 = 0, t2 = 0;
+            // The round's solved offset (resp MINUS init). Lets t1 be carried onto the INITIATOR lane,
+            // where both endpoints share one anchor so the anchor error cancels and t1-inside-[t0,t2]
+            // is exact. Cross-lane it is not: per-core anchors are one-shot fits whose ppm error
+            // integrates to tens of us, which is the same trap the eth tracker documents.
+            int64_t off = 0;
         };
         std::vector<Draw> draws;
     };
@@ -2319,6 +2331,59 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
     // both on purpose -- this path then only measures and reports).
     st->publish = (eth_track_hz() == 0);
 
+    // ---- give every sync eth lane its OWN Tracy anchor, BEFORE its first zone ----
+    // Contexts are minted lazily on a core's first zone and bake their anchor in at creation, so this
+    // has to happen now (start), not at the teardown render. An eth lane without its own anchor falls
+    // back to the worker anchor and its zones land seconds away from the workload.
+    if (tracy_ != nullptr) {
+        for (auto& e : st->edges) {
+            for (auto* en : {&e.init, &e.resp}) {
+                double f = 0.0;
+                for (const auto& ctx : devices_) {
+                    if (ctx.chip_id == en->chip) {
+                        f = ctx.freq_ghz;
+                        break;
+                    }
+                }
+                CoreCoord n0;
+                try {
+                    n0 = cluster.get_physical_coordinate_from_logical_coordinates(
+                        en->chip, en->logical, CoreType::ETH, /*no_warn=*/true);
+                } catch (const std::exception&) {
+                    continue;
+                }
+                const PerfDebugSync ds = sync_device_clock(cluster, en->chip, en->virt);
+                if (!ds.valid || f <= 0.0) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[perf-debug profiler] FABRIC SYNC: eth lane chip {} NOC0 ({},{}) got NO clock sync; "
+                        "its FSYNC rows would fall back to the worker anchor, so they are NOT drawn",
+                        en->chip,
+                        n0.x,
+                        n0.y);
+                    continue;
+                }
+                // Own ANCHOR, SHARED slope -- same rule the DRISC contexts follow: relative alignment
+                // makes a common rate error invisible, while per-core rate fits scatter by ~99 ppm.
+                tracy_->AddCore(en->chip, n0.x, n0.y, ds.host_anchor, static_cast<double>(ds.device_at_anchor), f);
+                tracy_->RegisterEthCore(en->chip, n0.x, n0.y);
+                en->noc0_x = static_cast<uint32_t>(n0.x);
+                en->noc0_y = static_cast<uint32_t>(n0.y);
+                en->tracy_ok = true;
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] FABRIC SYNC: eth lane chip {} NOC0 ({},{}) anchored "
+                    "(host_anchor {}, device_at_anchor {} cy, {:.6f} GHz shared)",
+                    en->chip,
+                    n0.x,
+                    n0.y,
+                    ds.host_anchor,
+                    ds.device_at_anchor,
+                    f);
+            }
+        }
+    }
+
     // ---- write configs: responder first, magic last ----
     using namespace tt::tt_fabric::router_sync;
     auto write_cfg = [&](FabricSyncState::End& en, bool initiator, uint64_t interval, uint32_t peer_blk) {
@@ -2461,6 +2526,7 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
                         continue;
                     }
                     std::vector<eth_sync::Trip> trips;
+                    const size_t draws_before = e.draws.size();
                     const uint32_t have = r.got0 & r.got1 & r.got2;
                     for (uint32_t i = 0; i < FabricSyncState::kNSamples; i++) {
                         if ((have & (1u << i)) == 0 || r.t2[i] < r.t0[i]) {
@@ -2472,7 +2538,7 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
                             static_cast<int64_t>(r.t1[i]) - static_cast<int64_t>(mid),
                             r.t2[i] - r.t0[i], mid});
                         if (e.draws.size() < FabricSyncState::kMaxDraws) {
-                            e.draws.push_back({r.t0[i], r.t1[i], r.t2[i]});
+                            e.draws.push_back({r.t0[i], r.t1[i], r.t2[i], 0});
                         }
                     }
                     if (trips.size() < 4) {
@@ -2498,6 +2564,11 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
                     e.off_last = sol.offset;
                     e.ref_last = sol.mid_ref;
                     e.have = true;
+                    // Backfill this round's draws with the offset the round solved to, so the render can
+                    // put the echo on the initiator's clock without reaching for a global average.
+                    for (size_t k = draws_before; k < e.draws.size(); k++) {
+                        e.draws[k].off = sol.offset;
+                    }
                     e.series.emplace_back(sol.mid_ref, sol.offset);
                     if (e.series.size() > 256) {
                         e.series.pop_front();
@@ -2764,88 +2835,115 @@ void PerfDebugProfiler::render_fabric_sync_into_tracy() {
         return;
     }
     static constexpr std::string_view kRtt = "FSYNC_RTT";
-    static constexpr std::string_view kEcho = "FSYNC_ECHO";
-    auto& cluster = MetalContext::instance().get_cluster();
-    uint64_t zones = 0, marks = 0, links = 0;
+    static constexpr std::string_view kEchoOn = "FSYNC_ECHO";       // carried onto the initiator lane
+    static constexpr std::string_view kEchoRaw = "FSYNC_ECHO_RAW";  // responder's own clock, own lane
+    uint64_t zones = 0, marks = 0, links = 0, inside = 0, total = 0;
     bool capped = false;
     for (const auto& e : st->edges) {
-        if (e.draws.empty()) {
+        // No own anchor means the lane would render against the worker anchor, seconds away from the
+        // workload. Drawing that is worse than drawing nothing, so it is skipped (and warned at start).
+        if (e.draws.empty() || !e.init.tracy_ok || !e.resp.tracy_ok) {
             continue;
         }
-        // Tracy lanes are keyed by NOC0 and the sync state carries LOGICAL -- convert, exactly as the
-        // eth tracker does. A bad mapping would silently draw onto some other core's row.
-        CoreCoord in0, rn0;
-        try {
-            in0 = cluster.get_physical_coordinate_from_logical_coordinates(
-                e.init.chip, e.init.logical, CoreType::ETH, /*no_warn=*/true);
-            rn0 = cluster.get_physical_coordinate_from_logical_coordinates(
-                e.resp.chip, e.resp.logical, CoreType::ETH, /*no_warn=*/true);
-        } catch (const std::exception&) {
-            continue;
-        }
-        tracy_->RegisterEthCore(e.init.chip, in0.x, in0.y);
-        tracy_->RegisterEthCore(e.resp.chip, rn0.x, rn0.y);
         capped = capped || e.draws.size() >= FabricSyncState::kMaxDraws;
-        std::vector<FabricSyncState::Edge::Draw> d(e.draws);
 
-        std::sort(d.begin(), d.end(), [](const auto& a, const auto& b) { return a.t2 < b.t2; });
-        for (const auto& dr : d) {
+        // ---- initiator lane: the RTT box + the echo CARRIED ONTO THIS CLOCK ----
+        // t1 lives on the responder's clock; t1 - offset puts it on the initiator's. Both endpoints
+        // then share ONE anchor, so the anchor error cancels and "echo inside the box" is a genuine
+        // causality check instead of an artifact of two independent per-core fits.
+        struct Item {
+            uint64_t ts;
+            uint64_t end;
+            std::string_view name;
+            bool is_zone;
+        };
+        std::vector<Item> items;
+        items.reserve(e.draws.size() * 2);
+        for (const auto& dr : e.draws) {
             if (dr.t2 < dr.t0) {
                 continue;
             }
-            perf_debug::WorkerZonePacket z;
-            z.chip_id = e.init.chip;
-            z.core_virtual_x = static_cast<uint32_t>(in0.x);
-            z.core_virtual_y = static_cast<uint32_t>(in0.y);
-            z.core_noc0_x = static_cast<uint32_t>(in0.x);
-            z.core_noc0_y = static_cast<uint32_t>(in0.y);
-            z.risc = 0;
-            z.timer_id = 0;
-            z.name = kRtt;
-            z.start = dr.t0;
-            z.end = dr.t2;
-            z.color = 0x9B59B6u;  // purple: in-router fabric sync, distinct from the tracker teal
-            tracy_->HandleWorkerZone(z);
-            zones++;
+            items.push_back({dr.t0, dr.t2, kRtt, true});
+            const int64_t t1_on_init = static_cast<int64_t>(dr.t1) - dr.off;
+            if (t1_on_init > 0) {
+                items.push_back({static_cast<uint64_t>(t1_on_init), 0, kEchoOn, false});
+                total++;
+                inside +=
+                    (static_cast<uint64_t>(t1_on_init) >= dr.t0 && static_cast<uint64_t>(t1_on_init) <= dr.t2) ? 1 : 0;
+            }
+        }
+        // Tracy wants non-decreasing arrival per (context, thread); zones and markers share the lane.
+        std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.ts < b.ts; });
+        for (const auto& it : items) {
+            if (it.is_zone) {
+                perf_debug::WorkerZonePacket z;
+                z.chip_id = e.init.chip;
+                z.core_virtual_x = e.init.noc0_x;
+                z.core_virtual_y = e.init.noc0_y;
+                z.core_noc0_x = e.init.noc0_x;
+                z.core_noc0_y = e.init.noc0_y;
+                z.risc = 0;
+                z.timer_id = 0;
+                z.name = kRtt;
+                z.start = it.ts;
+                z.end = it.end;
+                z.color = 0x9B59B6u;  // purple: in-router fabric sync, vs the eth tracker teal
+                tracy_->HandleWorkerZone(z);
+                zones++;
+            } else {
+                perf_debug::WorkerEventPacket pe;
+                pe.chip_id = e.init.chip;
+                pe.core_virtual_x = e.init.noc0_x;
+                pe.core_virtual_y = e.init.noc0_y;
+                pe.core_noc0_x = e.init.noc0_x;
+                pe.core_noc0_y = e.init.noc0_y;
+                pe.risc = 0;
+                pe.id = 0;
+                pe.name = it.name;
+                pe.timestamp = it.ts;
+                pe.num_values = 0;
+                tracy_->HandleWorkerEvent(pe);
+                marks++;
+            }
         }
 
-        std::sort(d.begin(), d.end(), [](const auto& a, const auto& b) { return a.t1 < b.t1; });
-        for (const auto& dr : d) {
+        // ---- responder lane: the raw stamp on its OWN clock ----
+        std::vector<uint64_t> t1s;
+        t1s.reserve(e.draws.size());
+        for (const auto& dr : e.draws) {
+            t1s.push_back(dr.t1);
+        }
+        std::sort(t1s.begin(), t1s.end());
+        for (uint64_t t1 : t1s) {
             perf_debug::WorkerEventPacket pe;
             pe.chip_id = e.resp.chip;
-            pe.core_virtual_x = static_cast<uint32_t>(rn0.x);
-            pe.core_virtual_y = static_cast<uint32_t>(rn0.y);
-            pe.core_noc0_x = static_cast<uint32_t>(rn0.x);
-            pe.core_noc0_y = static_cast<uint32_t>(rn0.y);
+            pe.core_virtual_x = e.resp.noc0_x;
+            pe.core_virtual_y = e.resp.noc0_y;
+            pe.core_noc0_x = e.resp.noc0_x;
+            pe.core_noc0_y = e.resp.noc0_y;
             pe.risc = 0;
             pe.id = 0;
-            pe.name = kEcho;
-            pe.timestamp = dr.t1;
+            pe.name = kEchoRaw;
+            pe.timestamp = t1;
             pe.num_values = 0;
             tracy_->HandleWorkerEvent(pe);
             marks++;
         }
         links++;
-        log_info(
-            tt::LogMetal,
-            "[perf-debug profiler] FABRIC SYNC drawn {} -> {}: {} FSYNC_RTT zone(s) on initiator eth "
-            "NOC0 ({},{}) + {} FSYNC_ECHO marker(s) on responder eth NOC0 ({},{})",
-            e.init.chip,
-            e.resp.chip,
-            d.size(),
-            in0.x,
-            in0.y,
-            d.size(),
-            rn0.x,
-            rn0.y);
     }
     if (links != 0) {
+        // The inside-fraction is the self-check: an echo that does NOT sit inside its own round trip on
+        // the initiator clock means the offset for that round is wrong. It should be ~100%.
         log_info(
             tt::LogMetal,
-            "[perf-debug profiler] FABRIC SYNC: {} zone(s) + {} marker(s) drawn across {} eth link(s){}",
+            "[perf-debug profiler] FABRIC SYNC drawn: {} zone(s) + {} marker(s) across {} eth link(s); "
+            "{}/{} echoes fall INSIDE their own FSYNC_RTT box on the initiator clock ({:.1f}%){}",
             zones,
             marks,
             links,
+            inside,
+            total,
+            total != 0 ? 100.0 * static_cast<double>(inside) / static_cast<double>(total) : 0.0,
             capped ? " -- DRAW CAP HIT, the tail is not drawn" : "");
     }
 }
