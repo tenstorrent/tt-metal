@@ -629,6 +629,23 @@ struct ChipState {
     // the perf and mailbox registers of every core every tick, unthrottled, on remote
     // chips too. At 300 Hz x 64 cores that is the traffic that holds NON_MMIO_<n>_PCIe
     // nearly continuously and starves everything else on the box.
+    // NON-BLOCKING CONGESTION PROBE on this remote chip's tunnel lock.
+    //
+    // UMD's locks have no fairness, no queueing and no backoff: LockManager only ever
+    // hands out a blocking lock, and RobustMutex::lock() falls through to an untimed
+    // pthread_mutex_lock(). So when the workload is driving the tunnel hard, our read does
+    // not "go slower" -- it queues behind it, and worse, UMD's read path spins on a full
+    // ERISC command queue with NO timeout while HOLDING that mutex. That is the live-lock.
+    //
+    // probe_lock(0) is the one primitive that lets us ask "is the tunnel busy right now?"
+    // without committing to wait. If it is, we skip this tick. A skipped sample costs
+    // freshness on one chip; queueing costs the whole machine.
+    //
+    // The answer is a snapshot and inherently racy -- probe_lock ACQUIRES on success, so we
+    // release immediately and UMD re-acquires a moment later, and the workload can win in
+    // between. It is a congestion signal, not a reservation, and that is all it needs to be.
+    std::unique_ptr<tt::umd::RobustMutex> tunnel_probe;
+    uint64_t tunnel_skips = 0;
     size_t samp_rr_cursor = 0;
     double samp_tokens = 0.0;
     std::chrono::steady_clock::time_point samp_last_refill{};
@@ -809,6 +826,29 @@ std::atomic<bool> g_stop{false};
 // those locks for nine minutes and starved a Llama teardown in an unrelated process.
 //
 // On an MMIO chip this is a plain BAR access and the chunking costs nothing measurable.
+// True if this chip's tunnel is busy RIGHT NOW, in which case the caller should skip
+// rather than queue. Cheap: one trylock on a /dev/shm mutex, no device access.
+//
+// On success probe_lock ACQUIRES, so we release straight away -- we want the answer, not
+// the lock. Holding it would be worse than useless: the mutex is not recursive and UMD is
+// about to take it itself.
+inline bool tunnel_is_busy(ChipState& chip) {
+    if (!chip.tunnel_probe) {
+        return false;
+    }
+    try {
+        const auto owner = chip.tunnel_probe->probe_lock(std::chrono::seconds(0));
+        if (owner.has_value()) {
+            ++chip.tunnel_skips;
+            return true;
+        }
+        chip.tunnel_probe->unlock();
+        return false;
+    } catch (const std::exception&) {
+        return false;  // probe is an optimization; never let it block real work
+    }
+}
+
 inline bool read_chunked_stoppable(TTDevice* dev, const tt_xy_pair& core, uint64_t addr, uint8_t* dst, uint32_t bytes) {
     constexpr uint32_t kChunk = 1024;
     for (uint32_t off = 0; off < bytes; off += kChunk) {
@@ -1415,6 +1455,34 @@ int main(int argc, char* argv[]) {
     //
     // Derived, never hardcoded: the channel pair comes from the cluster descriptor.
     if (cli.pin_tunnel) {
+        // Open the congestion probe for every remote chip, named exactly as UMD names the
+        // lock it will contend for: NON_MMIO_<gateway pci id>_PCIe.
+        for (auto& chip : chips) {
+            if (!chip.is_remote || chip.cores.empty()) {
+                continue;
+            }
+            try {
+                const tt::ChipId mmio_id = cluster_desc->get_closest_mmio_capable_chip(chip.chip_id);
+                TTDevice* gw = nullptr;
+                for (auto& c2 : chips) {
+                    if (c2.chip_id == mmio_id && !c2.cores.empty()) {
+                        gw = c2.cores.front().device;
+                        break;
+                    }
+                }
+                if (gw == nullptr || gw->get_pci_device() == nullptr) {
+                    continue;
+                }
+                const std::string nm = "NON_MMIO_" + std::to_string(gw->get_pci_device()->get_device_num()) + "_PCIe";
+                auto m = std::make_unique<tt::umd::RobustMutex>(nm);
+                m->initialize();
+                chip.tunnel_probe = std::move(m);
+            } catch (const std::exception& e) {
+                std::cerr << "ttnvtop-collector: chip " << chip.chip_id << " tunnel probe unavailable (" << e.what()
+                          << ") -- proceeding without congestion backoff.\n";
+            }
+        }
+
         int pinned_chips = 0;
         for (auto& chip : chips) {
             if (!chip.is_remote || chip.cores.empty()) {
@@ -3407,6 +3475,9 @@ int main(int argc, char* argv[]) {
         std::map<uint32_t, uint64_t> jf_ticks, jf_pub, jf_skip_seq, jf_skip_dwall, jf_skip_impossible;
         while (!g_stop.load(std::memory_order_relaxed)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (chip.is_remote && tunnel_is_busy(chip)) {
+                continue;  // workload owns the tunnel this instant -- come back next tick
+            }
             {
                 const uint32_t nc = chip.journal_num_cores;
                 const uint32_t bytes = util_agg_bytes_for(nc);
@@ -3465,13 +3536,14 @@ int main(int argc, char* argv[]) {
                         chip.journal_lost_reported = lost;
                         std::fprintf(
                             stderr,
-                            "[agg-loss] chip=%u %s folded=%u lost=%u loss=%.4f%% sweeps=%u\n",
+                            "[agg-loss] chip=%u %s folded=%u lost=%u loss=%.4f%% sweeps=%u tunnel_backoffs=%lu\n",
                             static_cast<unsigned>(chip.chip_id),
                             chip.is_remote ? "remote" : "mmio",
                             folded,
                             lost,
                             denom > 0.0 ? 100.0 * static_cast<double>(lost) / denom : 0.0,
-                            hdr.sweep_count);
+                            hdr.sweep_count,
+                            static_cast<unsigned long>(chip.tunnel_skips));
                         std::fflush(stderr);
                     }
                 }

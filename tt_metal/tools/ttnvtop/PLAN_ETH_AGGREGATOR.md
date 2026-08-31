@@ -2536,3 +2536,98 @@ The compute+fabric saturation run did NOT meet its bar and is not evidence of an
     tt-mgmt. The loss metric must come from the ALREADY-ATTACHED collector, which tracks
     `journal_lost_reported` and `drain_lost_samples`, not from a second process that has to
     re-discover the topology under exactly the load being tested.
+
+## 5z. Why this is structurally unstable on Wormhole -- the stack has no arbitration -- 2026-08-31
+
+A read of UMD, tt-metal and tt-kmd, prompted by "why can't tt-mgmt and the collector
+interoperate" and "what is the root cause of these hangs". The answer is mostly not our
+code, and it changes which design is worth shipping.
+
+### The fabric EDM and UMD's tunnel are the SAME RISC, and the EDM does not yield under load
+
+A Wormhole active-eth core exposes ONE processor (wh_hal_active_eth.cpp:119-135). The
+fabric EDM kernel and the base routing firmware that services UMD's remote command queue
+run on that same ERISC; L1 is partitioned but the core is not. The handoff is cooperative,
+and the default is WAIT_FOR_IDLE with SWITCH_INTERVAL = 10000
+(fabric/erisc_datamover_builder.hpp:449-450, fabric_erisc_router.cpp:2595-2612).
+
+Under sustained CCL `did_something` never goes false, so the base routing FW never runs.
+Our tunnel commands sit in a queue of CMD_BUF_SIZE = 4 (eth_interface.h:16) that nobody
+drains. Chips 4/6/5 losing 9.5 / 10.5 / 99.7% is a direct measure of how busy each EDM is.
+
+### An upstream bug makes that a live-lock rather than a slowdown
+
+remote_communication_legacy_firmware.cpp:174-183, the read path's queue-full wait:
+
+    while (full) {
+        local_tt_device_->read_from_device(erisc_q_rptr.data(), ...);
+        full = is_non_mmio_cmd_q_full(...);
+    }
+
+There is no `check_timeout` in that loop. The WRITE path has one at :424. And the
+NON_MMIO_<n>_PCIe mutex is held across the whole transfer (acquired :112 / :359, not per
+block). So a read that meets a full ERISC queue spins forever holding an interprocess
+mutex -- exactly the two threads at wchan=0 with 590 s of CPU in 5u. One-line upstream fix.
+
+### The ARC lock is SYSTEM-WIDE on Wormhole
+
+`ARC_MSG` has no device id (lock_manager.hpp:18-67, wormhole_arc_messenger.cpp:80): every
+ARC message from every process to every chip serializes on one mutex, with a 1000 ms
+timeout. Worse, wait_for_non_mmio_flush() is called INSIDE it (:87), so a remote ARC
+message drags the eth tunnel under the global ARC lock. That is the repeated
+"ARC startup error ... Timed out after 300000 ms" that killed three runs today, and it is
+why moving AICLK to sysfs (5y) helped more than it looked like it should.
+
+### What does NOT exist, confirmed by reading the source
+
+  - Any fairness, queueing or backoff in a UMD lock. LockManager only ever returns a
+    blocking lock (lock_manager.cpp:80-85); RobustMutex::lock() falls through to an untimed
+    pthread_mutex_lock (robust_mutex.cpp:468-496).
+  - Any credit or rate mechanism in the tunnel beyond those 4 slots.
+  - Any owner/observer, priority, or arbitration concept in UMD, tt-metal or tt-kmd.
+    CHIP_IN_USE (local_chip.cpp:146) is all-or-nothing. tt-kmd ships LOCK_CTL with ERISC
+    indices reserved (ioctl.h:217-232) but it is purely advisory and UMD never calls it.
+  - Any eth channel, VC or routing plane reserved for host traffic against fabric on WH.
+    Fabric claims every active eth core (tt_cluster.cpp:1287-1299); the only carve-out is
+    channel 15 for "syseng tools" (control_plane.cpp:2255-2272).
+  - Any env var or build option tuning remote-IO rate, retries or block size.
+
+Our token bucket is therefore the ONLY rate limiter anywhere in the stack. That reframes
+`--remote-budget` from a workaround into the correct answer.
+
+### Levers that do exist
+
+  1. Workload-side, highest leverage: set_firmware_context_switch_type(INTERVAL) on the WH
+     fabric routers. tt-metal already does this for the DISPATCH router (interval 16,
+     compute_mesh_router_builder.cpp:840-842) and on Blackhole, but nothing sets it on the
+     WH 1D CCL path, so CCL EDMs run at the WAIT_FOR_IDLE default.
+  2. SetFabricConfig(..., num_routing_planes=N) leaves link-active channels un-owned by an
+     EDM (tt_cluster.cpp:1302-1355); pin our tunnel to those for genuine separation.
+  3. RobustMutex::probe_lock(0) as a non-blocking congestion signal -- now implemented as
+     `tunnel_is_busy()`, so a busy tunnel makes us SKIP a tick instead of queueing behind
+     the workload. Measured `tunnel_backoffs=0` under Llama with aggregators, because the
+     journal path is only ~20 remote transactions/s -- it is installed but UNEXERCISED
+     here, and belongs to the ring-drain configuration (~12,800/s) that lost 99.7%.
+  4. Kernel sysfs/hwmon for every per-chip scalar. Already done for AICLK (5y).
+
+### Verdict
+
+The eth-aggregator design puts a persistent kernel on the very core that fabric saturates,
+and it is the source of the heartbeat hazard, the wedged discoveries and roughly a dozen
+board resets in this session. The direct register path is calibrated (R^2 0.976-0.985 on
+all 8 chips under budget, remote included -- and budgeted-remote slope matches unbudgeted
+MMIO, so throttling costs no accuracy), needs no L1, no kernel residency and no resets.
+
+Ship the register + sysfs path. Keep the aggregator experimental until the two upstream
+items land: the missing check_timeout in the non-MMIO read path, and INTERVAL context
+switching on the WH CCL routers.
+
+### Llama-70B after the clamp fix, with aggregators
+
+    Average speed: 96.95ms @ 10.31 tok/s     1 passed     (baseline 10.35)
+    [agg-loss] all 8 chips  folded=11.3-12.2M  lost=0  loss=0.0000%
+    F never exceeded 0.05% in 3267 samples
+
+The 0% is now CORROBORATION rather than a symptom: the calibrated host register path also
+reads ~0 for Llama, and batch-1 decode is a memory-bound GEMV. Both paths finally agree,
+which is what the clamp fix was for.
