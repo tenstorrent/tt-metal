@@ -37,6 +37,17 @@ ring_params_req_exact_devices = {**ring_params, "require_exact_physical_num_devi
 ring_params_8k_req_exact_devices = {**ring_params_8k, "require_exact_physical_num_devices": True}
 
 
+def is_global_rank_zero():
+    """True when this process should do once-per-run host work (e.g. benchmark reporting).
+
+    In a multi-process (multihost) run only rank 0 qualifies; in a single-process
+    run there is no distributed context and every caller qualifies. Multihost ranks
+    time the same collective pipeline, so per-rank benchmark records are duplicates,
+    and concurrent writes to the shared benchmark output path race with each other.
+    """
+    return not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0
+
+
 def skip_if_unsupported_num_links(mesh_device, num_links):
     """Skip the test if the mesh device does not support the requested number of links."""
     from models.common.modules.tt_ccl import get_num_links

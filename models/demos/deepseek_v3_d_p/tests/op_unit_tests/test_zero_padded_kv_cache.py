@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_y_device_params,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
 # Production chunk_size_global only (chunk_local = 5120/8 = 640). At this csg a 128-pad window never
@@ -312,8 +313,8 @@ def test_zero_padded_kv_cache_layers_users(
     sp = mesh_shape[sp_axis]
     tp = mesh_shape[1]
     kvpe = 64
-    chunk_size_global = 5120
-    seq_len_cache = 5120
+    chunk_size_global = PREFILL_CHUNK_TOKENS
+    seq_len_cache = chunk_size_global
     seq_len_local = seq_len_cache // sp
     num_batches = num_users * num_layers
     target_batch = slot_idx * num_layers + layer_idx
@@ -415,8 +416,8 @@ def test_zero_padded_kv_cache_tensor_matches_scalar(mesh_device, slot_idx, valid
     sp_axis = 0
     sp = mesh_shape[sp_axis]
     kvpe = 64
-    chunk_size_global = 5120
-    seq_len_cache = 5120
+    chunk_size_global = PREFILL_CHUNK_TOKENS
+    seq_len_cache = chunk_size_global
     seq_len_local = seq_len_cache // sp
     num_users, num_layers = 2, 1
 
@@ -476,8 +477,8 @@ def test_zero_padded_kv_cache_tensor_program_reuse(mesh_device):
     tensor path is TILE-only, so this uses a TILE cache.)"""
     sp_axis = 0
     kvpe = 64
-    chunk_size_global = 5120
-    seq_len_cache = 5120
+    chunk_size_global = PREFILL_CHUNK_TOKENS
+    seq_len_cache = chunk_size_global
     num_users, num_layers = 2, 1
 
     cache = _init_cache_filled_with_ones(

@@ -502,7 +502,7 @@ template <
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sdpa_tail_ms_reduce(
     std::uint32_t cb_worker_ms, std::uint32_t cb_prev_ms, std::uint32_t cb_cur_ms, std::uint32_t cb_l_for_init) {
-    copy_tile_to_dst_init_short(cb_worker_ms);
+    copy_init(cb_worker_ms);
     cb_wait_front(cb_worker_ms, 1);
     cb_wait_front(cb_prev_ms, 1);
     constexpr std::uint32_t dst_reg_0 = 0;  // prev_ms
