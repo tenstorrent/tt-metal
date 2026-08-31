@@ -65,6 +65,31 @@ def _runs_root() -> Path:
     return Path(__file__).resolve().parent.parent / "runs"
 
 
+def _latest_belongs_to(latest: Path, model_root) -> bool:
+    """Is the run behind ``runs/latest`` the run for ``model_root``?
+
+    report_path returned the run directory for ANY caller, ignoring the model_root it was handed.
+    That is right for the run itself and wrong for everyone else: the tool's own suite passes a
+    temporary model directory and expects the report there, so every test run overwrote whatever
+    real report `latest` happened to name -- observed replacing a finished 6.2 KB report with a
+    57-byte fixture. A run declares its model in its manifest, so the pointer can be checked rather
+    than assumed.
+
+    Unreadable or silent manifests keep the previous behaviour: a run that has not written one yet
+    still gets its own directory, which is the case this function must not regress.
+    """
+    try:
+        declared = (json.loads((latest / "manifest.json").read_text()).get("config") or {}).get("model_root")
+    except (OSError, ValueError, AttributeError):
+        return True
+    if not str(declared or "").strip():
+        return True
+    try:
+        return Path(declared).resolve() == Path(model_root).resolve()
+    except OSError:
+        return True
+
+
 def report_path(model_root) -> Path:
     """Where RUN_REPORT.md is written: the RUN directory when there is one.
 
@@ -87,7 +112,7 @@ def report_path(model_root) -> Path:
     """
     latest = _runs_root() / "latest"
     try:
-        if latest.is_dir():
+        if latest.is_dir() and _latest_belongs_to(latest, model_root):
             return latest / _REPORT_NAME
     except OSError:  # noqa: BLE001
         pass
@@ -389,9 +414,7 @@ def _siblings():
         return _SIBLINGS[0]
     import importlib.util as _ilu
 
-    _spec = _ilu.spec_from_file_location(
-        "cc_optimize_siblings", str(Path(__file__).resolve().parent / "siblings.py")
-    )
+    _spec = _ilu.spec_from_file_location("cc_optimize_siblings", str(Path(__file__).resolve().parent / "siblings.py"))
     _mod = _ilu.module_from_spec(_spec)
     _spec.loader.exec_module(_mod)
     _SIBLINGS.append(_mod)

@@ -30,6 +30,25 @@ def repo_root(path) -> Path:
     return Path(r.stdout.strip())
 
 
+def main_worktree_root(path) -> Path:
+    """Toplevel of the MAIN working tree, even when `path` is inside a linked worktree.
+
+    A linked worktree shares the main repo's object store, and `--git-common-dir` names it there,
+    so its parent is the checkout an operator actually keeps. `repo_root` deliberately answers a
+    different question -- the tree containing `path` -- and both are needed: run artifacts belong to
+    the worktree that produced them, while the pointer telling an operator where to look belongs in
+    the tree they have open. Falls back to `repo_root` when git cannot say, so a non-worktree
+    checkout behaves exactly as before.
+    """
+    r = _git(["rev-parse", "--path-format=absolute", "--git-common-dir"], path)
+    common = (r.stdout or "").strip()
+    if r.returncode == 0 and common:
+        root = Path(common).parent
+        if root.is_dir():
+            return root
+    return repo_root(path)
+
+
 def head_sha(repo) -> str:
     r = _git(["rev-parse", "HEAD"], repo)
     if r.returncode != 0:

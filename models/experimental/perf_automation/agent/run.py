@@ -40,6 +40,26 @@ class Manifest:
         return json.loads(self.path.read_text())
 
 
+def _point_latest(runs_root, target) -> None:
+    """Repoint ``<runs_root>/latest`` at ``target``. Best-effort; never raises.
+
+    `target` may be a bare run id (the pointer and the run live in one tree, the ordinary case) or
+    an absolute path (the run was produced in a linked worktree and the pointer belongs in the tree
+    the operator has open). Both are symlinks, so nothing downstream has to know which it got.
+    """
+    from pathlib import Path as _P
+
+    try:
+        runs_root = _P(runs_root)
+        runs_root.mkdir(parents=True, exist_ok=True)
+        latest = runs_root / "latest"
+        if latest.is_symlink() or latest.exists():
+            latest.unlink()
+        latest.symlink_to(str(target))
+    except OSError:
+        pass
+
+
 class Run:
     """A single run directory and its referenced artifacts."""
 
@@ -90,10 +110,7 @@ class Run:
         run = cls(runs_root, run_id)
         run.profiles_dir.mkdir(parents=True, exist_ok=True)
 
-        latest = runs_root / "latest"
-        if latest.is_symlink() or latest.exists():
-            latest.unlink()
-        latest.symlink_to(run_id)
+        _point_latest(runs_root, run_id)
 
         if config is not None:
             run.manifest.write(config)

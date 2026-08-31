@@ -40,6 +40,39 @@ from .state_dir import state_dir
 
 
 PKG_ROOT = Path(__file__).parent.parent
+
+
+def _publish_latest_to_main_worktree(run_dir, runs_root) -> None:
+    """Point the MAIN checkout's ``runs/latest`` at this run, when the run lives elsewhere.
+
+    An existing demo is optimized in a throwaway worktree, so the run directory -- and the `latest`
+    pointer beside it -- are created there. The `runs/latest` in the tree the operator actually has
+    open is never touched, so it goes on naming whichever run last happened to be in-place: on this
+    box it advertised a run from three days earlier while a current one was in flight, and every
+    reader who followed it read a stale report and concluded the live one had not been written.
+
+    The pointer is absolute because it crosses trees, and it is only a pointer: the run's own
+    artifacts stay with the run, and the durable copy --persist keeps is unaffected either way.
+    Best-effort; a repo that is not a worktree resolves to itself and this is a no-op.
+    """
+    from . import gitio
+    from .run import _point_latest
+
+    try:
+        run_dir = Path(run_dir).resolve()
+        runs_root = Path(runs_root).resolve()
+        main_root = gitio.main_worktree_root(run_dir)
+        here = gitio.repo_root(run_dir)
+        if main_root == here:
+            return
+        main_runs = main_root / runs_root.relative_to(here)
+        if main_runs.resolve() == runs_root:
+            return
+        _point_latest(main_runs, run_dir)
+    except Exception:  # noqa: BLE001
+        return
+
+
 DEFAULT_PLAYBOOK = PKG_ROOT / "GUIDELINES"
 DEFAULT_RUNS_ROOT = PKG_ROOT / "runs"
 DEFAULT_CACHE = PKG_ROOT / ".cache" / "playbook_index.json"
@@ -394,6 +427,7 @@ def before_loop(
     tt_root = Path(tt_metal_root or os.environ.get("TT_METAL_HOME", PKG_ROOT.parents[2]))
 
     run = Run.create(runs_root, config=None, label=model_root.name)
+    _publish_latest_to_main_worktree(run.dir, runs_root)
     # THE CONSOLE OUTPUT IS AN ARTIFACT TOO. Everything else this run produces is filed in run.dir,
     # which is named for the model and the run; the log that says WHY a run stopped was the one thing
     # left to a shell redirect, and voxtral run 41's reason was lost with it. Installed here because
