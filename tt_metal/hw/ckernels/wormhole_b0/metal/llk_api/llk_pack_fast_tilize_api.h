@@ -13,7 +13,6 @@
 
 inline void llk_pack_fast_tilize_init(
     const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
-    SAN_HOOK(unsupported());
     const std::uint8_t input_id = get_output_id(input_operand);
     const std::uint8_t output_id = get_output_id(pack_output);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
@@ -23,17 +22,32 @@ inline void llk_pack_fast_tilize_init(
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
 
+    SAN_HOOK(init<OperationPackFastTilize>(
+        StateVal<OperationPackFastTilize::UnitDim>(unit_dim),
+        StateVal<OperationPackFastTilize::Use32BitDest>(use_32bit_dest),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateDiscard<std::uint32_t>(input_operand),
+        StateDiscard<std::uint32_t>(pack_output)));
+
     _llk_pack_fast_tilize_init_<DST_SYNC_MODE>(use_32bit_dest, pack_dst_format[output_id], unit_dim, num_faces);
 }
 
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
-    SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
+
+    SAN_HOOK(uninit<OperationPackFastTilize>(
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
+        StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
+        StateDiscard<std::uint32_t>(pack_output)));
 
     _llk_pack_fast_tilize_uninit_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
         pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
@@ -45,7 +59,6 @@ inline void llk_pack_fast_tilize_block(
     const std::uint32_t output_tile_index,
     const std::uint32_t unit_dim,
     const std::uint32_t num_units) {
-    SAN_HOOK(unsupported());
     LLK_ASSERT(
         (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
@@ -56,6 +69,15 @@ inline void llk_pack_fast_tilize_block(
     const std::uint32_t pack_tile_addr = get_output_tile_address<true, PackMode::Default>(output_id, output_tile_index);
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
+
+    SAN_HOOK(execute<OperationPackFastTilize>(
+        StateVal<OperationPackFastTilize::UnitDim>(unit_dim),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateDiscard<std::uint32_t>(tile_index),
+        StateDiscard<std::uint32_t>(output_tile_index),
+        StateDiscard<std::uint32_t>(num_units),
+        StateDiscard<std::uint32_t>(output)));
 
     _llk_pack_fast_tilize_block_(tile_index, pack_tile_addr, unit_dim, num_units, num_faces);
 }

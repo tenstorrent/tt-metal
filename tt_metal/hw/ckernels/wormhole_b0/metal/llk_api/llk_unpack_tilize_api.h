@@ -292,8 +292,11 @@ inline void llk_unpack_tilizeA_B_block(
  * @param full_dim Full row dimension of the input being tilized.
  */
 inline void llk_unpack_fast_tilize_init(const std::uint32_t operand, std::uint32_t full_dim) {
-    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
+
+    SAN_HOOK(init<OperationUnpackFastTilize>(
+        StateVal<OperationUnpackFastTilize::FullDim>(full_dim),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id])));
 
     _llk_unpack_fast_tilize_init_(unpack_dst_format[operand_id], full_dim);
 }
@@ -305,7 +308,10 @@ inline void llk_unpack_fast_tilize_init(const std::uint32_t operand, std::uint32
  */
 template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_fast_tilize_uninit() {
-    SAN_HOOK(unsupported());
+    // Nullary: the unpacker's fast tilize uninit is handed no operand, so there is no operand state
+    // to restate alongside it.
+    SAN_HOOK(uninit<OperationUnpackFastTilize>());
+
     _llk_unpack_fast_tilize_uninit_<is_fp32_dest_acc_en>();
 }
 
@@ -327,10 +333,17 @@ inline void llk_unpack_fast_tilize_block(
     const std::uint32_t unit_dim,
     const std::uint32_t num_units,
     const std::uint32_t full_dim) {
-    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
+
+    SAN_HOOK(execute<OperationUnpackFastTilize>(
+        StateVal<OperationUnpackFastTilize::FullDim>(full_dim),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces),
+        StateDiscard<std::uint32_t>(tile_index),
+        StateDiscard<std::uint32_t>(unit_dim),
+        StateDiscard<std::uint32_t>(num_units)));
 
     _llk_unpack_fast_tilize_block_(
         base_address, tile_index, unpack_src_format[operand_id], unit_dim, num_units, full_dim, num_faces);

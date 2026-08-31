@@ -35,13 +35,24 @@ template <
     std::uint32_t row_num_datums = TILE_C_DIM,
     bool dense = false>
 inline void llk_pack_untilize_init(std::uint32_t output) {
-    SAN_HOOK(unsupported());
     static_assert(diagonal == false, "Diagonal is only supported on WH");
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
+
+    SAN_HOOK(init<OperationPackUntilize>(
+        StateVal<OperationPackUntilize::BlockCtDim>(block_ct_dim),
+        StateVal<OperationPackUntilize::FullCtDim>(full_ct_dim),
+        StateVal<OperationPackUntilize::NarrowRow>(narrow_row),
+        StateVal<OperationPackUntilize::RowNumDatums>(row_num_datums),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateDiscard<bool>(diagonal),
+        StateDiscard<bool>(dense),
+        StateDiscard<std::uint32_t>(output)));
 
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
@@ -91,7 +102,6 @@ inline void llk_pack_untilize(
     std::uint32_t output,
     const std::uint32_t block_c_index = 0,
     const std::uint32_t tile_dst_rt_offset = 0) {
-    SAN_HOOK(unsupported());
     static_assert(diagonal == false, "Diagonal is only supported on WH");
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -104,6 +114,21 @@ inline void llk_pack_untilize(
             16;
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
+
+    SAN_HOOK(execute<OperationPackUntilize>(
+        StateVal<OperationPackUntilize::BlockCtDim>(block_ct_dim),
+        StateVal<OperationPackUntilize::FullCtDim>(full_ct_dim),
+        StateVal<OperationPackUntilize::NarrowRow>(narrow_row),
+        StateVal<OperationPackUntilize::RowNumDatums>(row_num_datums),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateDiscard<bool>(diagonal),
+        StateDiscard<bool>(dense),
+        StateDiscard<std::uint32_t>(block_rt_dim),
+        StateDiscard<std::uint32_t>(block_c_index),
+        StateDiscard<std::uint32_t>(tile_dst_rt_offset),
+        StateDiscard<std::uint32_t>(output)));
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(

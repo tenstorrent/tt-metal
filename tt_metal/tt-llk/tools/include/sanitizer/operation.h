@@ -312,6 +312,30 @@ struct OperationUnpackTilize : Operation<Exu::Unpack, Hoistable::No>
         NarrowTile>;
 };
 
+// ---------------------------------
+// OPERATION - UNPACK FAST TILIZE
+// ---------------------------------
+
+// Hoistable::No: the fast tilize legs are bracketed by a real uninit, so the init cannot be lifted
+// out of the region it configures.
+struct OperationUnpackFastTilize : Operation<Exu::Unpack, Hoistable::No>
+{
+    template <typename T>
+    using Field = StateField<OperationUnpackFastTilize, T>;
+
+    // The unpacker's init is handed full_dim and nothing else; unit_dim reaches only the block, so it
+    // is a per-execute parameter here rather than seated operation state (the math and pack halves do
+    // seat it).
+    struct FullDim : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationUnpackFastTilize,
+        /* Fields */
+        FullDim>;
+};
+
 // -------------------------
 // OPERATION - FPU MATMUL
 // -------------------------
@@ -376,6 +400,25 @@ struct OperationFpuEltwiseUnaryDatacopy : Operation<Exu::Fpu, Hoistable::Yes>
         NumFaces>;
 };
 
+// ---------------------------------
+// OPERATION - FPU FAST TILIZE
+// ---------------------------------
+
+struct OperationFpuFastTilize : Operation<Exu::Fpu, Hoistable::No>
+{
+    template <typename T>
+    using Field = StateField<OperationFpuFastTilize, T>;
+
+    struct UnitDim : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationFpuFastTilize,
+        /* Fields */
+        UnitDim>;
+};
+
 // ------------------
 // OPERATION - PACK
 // ------------------
@@ -423,11 +466,38 @@ struct OperationPackUntilize : Operation<Exu::Pack, Hoistable::No>
         RowNumDatums>;
 };
 
-using UnpackOperations = OperationList<OperationUnpackUnary, OperationUnpackBinary, OperationUnpackMatmul, OperationUnpackTilize>;
+// ---------------------------------
+// OPERATION - PACK FAST TILIZE
+// ---------------------------------
+
+struct OperationPackFastTilize : Operation<Exu::Pack, Hoistable::No>
+{
+    template <typename T>
+    using Field = StateField<OperationPackFastTilize, T>;
+
+    struct UnitDim : Field<std::uint32_t>
+    {
+    };
+
+    // Derived from the input CB's pack_src_format at init and not recomputed by the block, so it is
+    // seated once and left standing.
+    struct Use32BitDest : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationPackFastTilize,
+        /* Fields */
+        UnitDim,
+        Use32BitDest>;
+};
+
+using UnpackOperations = OperationList<OperationUnpackUnary, OperationUnpackBinary, OperationUnpackMatmul, OperationUnpackTilize, OperationUnpackFastTilize>;
 
 using FpuOperations = OperationList<
     OperationFpuMatmul,
-    OperationFpuEltwiseUnaryDatacopy
+    OperationFpuEltwiseUnaryDatacopy,
+    OperationFpuFastTilize
     // sstanisic todo: add FPU ELTWISE BINARY ADD operation state
     // sstanisic todo: add FPU ELTWISE BINARY SUB operation state
     // sstanisic todo: add FPU ELTWISE BINARY MUL operation state
@@ -438,7 +508,7 @@ using FpuOperations = OperationList<
 
 using SfpuOperations = OperationList<>;
 
-using PackOperations = OperationList<OperationPack, OperationPackUntilize>;
+using PackOperations = OperationList<OperationPack, OperationPackUntilize, OperationPackFastTilize>;
 
 template <>
 struct ExuOperations<Exu::Unpack>
