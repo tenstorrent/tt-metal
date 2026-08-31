@@ -114,6 +114,8 @@ jobs:
           prefix: "perf_benchmarks_json_"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
+        # Diagnostic only: a GitHub artifact API reset (ECONNRESET) must not fail the test.
+        continue-on-error: true
         if: ${{ !cancelled() && matrix.test-group.profiler_logs_path }}
         with:
           path: ${{ matrix.test-group.profiler_logs_path }}
