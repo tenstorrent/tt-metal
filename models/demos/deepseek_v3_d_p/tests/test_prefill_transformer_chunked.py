@@ -445,11 +445,17 @@ def _preload_kvpe_prefix_from_trace(
         # declaration the cache actually has: dim 2 sharded across BOTH axes. Ops that validate the
         # distribution (high_bw_all_gather's full-mesh path) otherwise see a 1/8 shard factor, not 1/32.
         _dist = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
-        _coords = [ttnn.MeshCoordinate([c[i] for i in range(c.dims())]) for c in ttnn.MeshCoordinateRange(_dist)]
+        _coords = [
+            ttnn.MeshCoordinate([c[i] for i in range(c.dims())]) for c in ttnn.MeshCoordinateRange(_dist)
+        ]
         tt_kvpe_cache.storage.update_tensor_topology(
             ttnn.TensorTopology(_dist, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], _coords)
         )
 
+
+    from models.demos.deepseek_v3_d_p.tt.mla.mla import _snake_topo as _st2
+
+    _st2("after_preload", tt_kvpe_cache.storage)
 
 def _preload_indexer_k_prefix_from_trace(
     tt_index_kv_cache,
@@ -816,6 +822,9 @@ def run_chunked_transformer(
         num_kvpe_cache_layers=num_layers,
         num_users=1,
     )
+    from models.demos.deepseek_v3_d_p.tt.mla.mla import _snake_topo as _st
+
+    _st("after_create", tt_kvpe_cache.storage)
 
     # Sparse (DSA) layers read a block-cyclic indexer key cache that is caller-owned and passed into
     # forward, exactly like the KVPE cache. It is user-major layer-stacked
@@ -844,6 +853,7 @@ def run_chunked_transformer(
 
     if preload_isl > 0:
         trace_native_len = token_ids_full.numel()
+        _st("before_preload", tt_kvpe_cache.storage)
         _preload_kvpe_prefix_from_trace(
             tt_kvpe_cache,
             trace_dir,
@@ -1423,6 +1433,9 @@ def run_chunked_transformer_updated(
         num_kvpe_cache_layers=num_layers,
         num_users=1,
     )
+    from models.demos.deepseek_v3_d_p.tt.mla.mla import _snake_topo as _st
+
+    _st("after_create", tt_kvpe_cache.storage)
 
     # Sparse (DSA) layers read a block-cyclic indexer key cache that is caller-owned and passed into
     # forward, exactly like the KVPE cache. Strided by the compacted full-indexer count over the built
@@ -1446,6 +1459,7 @@ def run_chunked_transformer_updated(
     # preload_isl > 0: seed the prior [0, preload_isl) KVPE + indexer-K from the golden trace so the measured
     # chunk attends to real KV (representative MoE routing) and the indexer scores a real prefix.
     if preload_isl > 0:
+        _st("before_preload", tt_kvpe_cache.storage)
         _preload_kvpe_prefix_from_trace(
             tt_kvpe_cache,
             trace_dir,

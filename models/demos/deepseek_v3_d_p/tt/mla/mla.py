@@ -23,6 +23,23 @@ from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, ML
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat, MlaKvCacheGeometry
 
+_SNAKE_TOPO_SEEN = set()
+
+
+def _snake_topo(tag, t):
+    """One-shot topology probe: log where a cache's declared distribution changes."""
+    if tag in _SNAKE_TOPO_SEEN:
+        return
+    _SNAKE_TOPO_SEEN.add(tag)
+    try:
+        topo = t.tensor_topology()
+        logger.warning(
+            f"SNAKETOPO {tag}: dist={topo.distribution_shape()} placements={topo.placements()} "
+            f"shape={list(t.shape)}"
+        )
+    except Exception as exc:  # pragma: no cover - diagnostic only
+        logger.warning(f"SNAKETOPO {tag}: probe failed: {exc}")
+
 
 class ttMLA:
     MLA_WEIGHT_NAMES = [
@@ -1189,6 +1206,7 @@ class ttMLA:
         # Metadata (trace-safe) path: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read
         # on-device, each its own 1-element tensor. Scalar path passes host slot/kv_actual_global.
         if metadata is not None:
+            _snake_topo("before_update_A", cache.storage)
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 cache.storage,
                 values,
@@ -1200,6 +1218,7 @@ class ttMLA:
                 tp_axis=tp_axis,
             )
         else:
+            _snake_topo("before_update_B", cache.storage)
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 cache.storage,
                 values,
@@ -1757,6 +1776,8 @@ class ttMLA:
         The cache is already in the op format, so there is no read-back dtype/layout or memory-layout
         conversion. The prefix is rounded to a whole block-cyclic slab; sparse SDPA only dereferences current
         top-k indices, so its unwritten suffix is never consumed."""
+
+        _snake_topo("at_gather_entry", kvpe_cache.storage)
         if self.tp_shard_kv and self.tp_factor > 1:
             # GLM-5.2 KV dedup: the cache is dim-2 sharded across BOTH mesh axes, and row-major over the
             # mesh IS the sp*tp linearization, so ONE full-mesh (snake-ring) gather rebuilds the slab in
