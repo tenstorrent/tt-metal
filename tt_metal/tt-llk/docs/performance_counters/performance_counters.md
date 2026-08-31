@@ -5,7 +5,7 @@
 - Test-helper mock functions: [tests/helpers/include/perf.h](../../tests/helpers/include/perf.h)
 - Profiler zone macros: [tests/helpers/include/profiler.h](../../tests/helpers/include/profiler.h)
 - Cross-thread rendezvous: [tests/helpers/include/barrier.h](../../tests/helpers/include/barrier.h)
-- Report schema (must be updated with any metric rename): [tests/python_tests/helpers/perf_schema.py](../../tests/python_tests/helpers/perf_schema.py)
+- Report schema (must be updated with any metric rename): [tests/python_tests/helpers/perf/schema.py](../../tests/python_tests/helpers/perf/schema.py)
 - Host-side counter readback: [tests/python_tests/helpers/counters.py](../../tests/python_tests/helpers/counters.py)
 - Host-side derived metrics: [tests/python_tests/helpers/metrics.py](../../tests/python_tests/helpers/metrics.py)
 - Test driver: [tests/python_tests/helpers/perf/core.py](../../tests/python_tests/helpers/perf/core.py)
@@ -146,7 +146,7 @@ pytest --compile-consumer --enable-perf-counters -x ./python_tests/perf_eltwise_
 
 Wipe the artefact root (`/tmp/tt-llk-build`, or `$RUNNER_TEMP/tt-llk-build`) when switching between the two builds: the variant hash and the build markers ignore the counter flags, so the ELFs are otherwise reused.
 
-To capture a different L1 mux group, `export LLK_PERF_L1_MUX_GROUP=<0-4>` before **both** phases. It is an environment variable rather than a CLI flag and is compiled into `brisc.elf`, so each group needs its own producer run; the readout detects a disagreement between the group found in L1 and the one requested, but `perf.py` catches it and logs `Error reading counters:` as a warning, so the run still passes with no counter data at all rather than failing.
+To capture a different L1 mux group, `export LLK_PERF_L1_MUX_GROUP=<0-4>` before **both** phases. It is an environment variable rather than a CLI flag and is compiled into `brisc.elf`, so each group needs its own producer run; the readout checks the group found in L1 against the one requested and fails the run if they disagree, so a stale `brisc.elf` cannot return a self-consistently mislabelled dataset.
 
 
 The `--enable-perf-counters` flag triggers two things:
@@ -300,7 +300,7 @@ The mux routes interfaces into the counters while they count and is written once
 
 ## Derived Metrics Reference
 
-The LLK driver computes **16** derived metrics (the `*_pct` keys in `metrics.py` and `perf_schema.py::METRIC_BASES`). The other entries below are upstream formulas that this driver does **not** compute; their raw counters are still in the per-zone CSV, so they can be re-derived by hand. Renaming or adding a `*_pct` key requires updating `perf_schema.py::METRIC_BASES` in the same change, or the report's schema check fails. Derived metrics are computed in `tests/python_tests/helpers/metrics.py` from the raw counter DataFrame. The metric set mirrors the metal-level [PerfCounters tech report](../../../../tech_reports/PerfCounters/perf-counters.md) — the same catalogue applies to **both Wormhole and Blackhole** (architecture differences are confined to a few WH-only or BH-only counters, called out per-metric). The LLK driver operates on per-zone snapshots rather than per-op aggregates, so all derived values appear in the merged CSV and the `--dump-raw-metrics` console output.
+The LLK driver computes **16** derived metrics (the `*_pct` keys in `metrics.py` and `perf/schema.py::METRIC_BASES`). The other entries below are upstream formulas that this driver does **not** compute; their raw counters are still in the per-zone CSV, so they can be re-derived by hand. Renaming or adding a `*_pct` key requires updating `perf/schema.py::METRIC_BASES` in the same change, or the report's schema check fails. Derived metrics are computed in `tests/python_tests/helpers/metrics.py` from the raw counter DataFrame. The metric set mirrors the metal-level [PerfCounters tech report](../../../../tech_reports/PerfCounters/perf-counters.md) — the same catalogue applies to **both Wormhole and Blackhole** (architecture differences are confined to a few WH-only or BH-only counters, called out per-metric). The LLK driver operates on per-zone snapshots rather than per-op aggregates, so all derived values appear in the merged CSV and the `--dump-raw-metrics` console output.
 
 > **Full catalogue.** Metrics #1–#47 in `tech_reports/PerfCounters/perf-counters.md` are the authoritative list. The sections below document the ones the LLK driver surfaces directly; raw counters for every other upstream metric are present in the per-zone CSV, so any upstream formula can be re-evaluated on LLK data without code changes.
 
