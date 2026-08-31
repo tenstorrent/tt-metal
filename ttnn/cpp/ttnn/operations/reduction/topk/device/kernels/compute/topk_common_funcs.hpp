@@ -119,15 +119,13 @@ void process_tile_pair(
     tile_regs_acquire();
 
     if constexpr (fused) {
-        // Packed keys travel alone: one format, no index tiles, no format alternation — but the
-        // unpacker's SrcA format must be re-established explicitly (the plain short init does not
-        // reconfigure it, and the preceding stage leaves it on the 16-bit index format, which
-        // would unpack only the low halves of the 32-bit keys).
+        // With fused keys there are no index tiles.
         reconfig_data_format_srca(input_transposed_dfb_index);
-        copy_tile_to_dst_init_short(input_transposed_dfb_index);
     } else {
-        copy_tile_to_dst_init_short_with_dt(index_transposed_dfb_index, input_transposed_dfb_index);
+        // Without fused keys, the previous iteration left srca configured for index unpacking.
+        reconfig_data_format_srca(index_transposed_dfb_index, input_transposed_dfb_index);
     }
+    copy_init(input_transposed_dfb_index);
     copy_tile(input_transposed_dfb_index, left_ind, input_dest_start);
     if (!target_tiles_is_one) {
         copy_tile(input_transposed_dfb_index, right_ind, input_dest_end);
@@ -135,7 +133,8 @@ void process_tile_pair(
 
     if constexpr (!fused) {
         // unpack indices into dest
-        copy_tile_to_dst_init_short_with_dt(input_transposed_dfb_index, index_transposed_dfb_index);
+        reconfig_data_format_srca(input_transposed_dfb_index, index_transposed_dfb_index);
+        copy_init(index_transposed_dfb_index);
         copy_tile(index_transposed_dfb_index, left_ind, index_dest_start);
         if (!target_tiles_is_one) {
             copy_tile(index_transposed_dfb_index, right_ind, index_dest_end);
@@ -203,21 +202,19 @@ void process_tiles(
             tile_regs_acquire();
 
             if constexpr (fused) {
-                // Packed keys travel alone: one format, no index tiles, no format alternation — but the
-                // unpacker's SrcA format must be re-established explicitly (the plain short init does not
-                // reconfigure it, and the preceding stage leaves it on the 16-bit index format, which
-                // would unpack only the low halves of the 32-bit keys).
+                // With fused keys there are no index tiles.
                 reconfig_data_format_srca(input_transposed_dfb_index);
-                copy_tile_to_dst_init_short(input_transposed_dfb_index);
             } else {
-                copy_tile_to_dst_init_short_with_dt(index_transposed_dfb_index, input_transposed_dfb_index);
+                reconfig_data_format_srca(index_transposed_dfb_index, input_transposed_dfb_index);
             }
+            copy_init(input_transposed_dfb_index);
             copy_tile(input_transposed_dfb_index, left_tile_id, input_dest_start);
             copy_tile(input_transposed_dfb_index, right_tile_id, input_dest_end);
 
             if constexpr (!fused) {
                 // unpack indices into dest
-                copy_tile_to_dst_init_short_with_dt(input_transposed_dfb_index, index_transposed_dfb_index);
+                reconfig_data_format_srca(input_transposed_dfb_index, index_transposed_dfb_index);
+                copy_init(index_transposed_dfb_index);
                 copy_tile(index_transposed_dfb_index, left_tile_id, index_dest_start);
                 copy_tile(index_transposed_dfb_index, right_tile_id, index_dest_end);
             }
@@ -381,7 +378,7 @@ void transpose_and_pack(
     transposed_dfb.pop_front(Wt);
 }
 
-// Fused-key final extraction. The packed key tiles must NOT be transposed as 32-bit words (the
+// Fused-key final extraction. The packed key tiles must not be transposed as 32-bit words (the
 // transpose datapath goes through the 16-bit source registers), so the split happens first:
 // defuse each packed tile in place via a plain raw copy into DEST — values [bf16|0x0000] at DEST 0
 // (the following Float32->bf16 pack is exact), u16 indices at DEST 2 in the packer-visible high
@@ -406,7 +403,7 @@ void defuse_and_pack_outputs(
 
     // Split the top Kt packed key tiles into staged value/index tiles (column layout).
     reconfig_data_format_srca(packed_dfb_index);
-    copy_tile_to_dst_init_short(packed_dfb_index);
+    copy_init(packed_dfb_index);
 
     packed_dfb.wait_front(Kt);
     staging_values_dfb.reserve_back(Kt);

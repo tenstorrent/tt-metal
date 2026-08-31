@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -204,11 +204,7 @@ void kernel_main() {
         // intermediate) while values_dfb is the original bfp8/bfp4 output format. In fused mode
         // both CBs are the packed UInt32 format and the keys move as raw bits.
         reconfig_data_format_srca(input_transposed_dfb_index);
-        if constexpr (fused_keys) {
-            copy_tile_to_dst_init_short(input_transposed_dfb_index);
-        } else {
-            copy_tile_to_dst_init_short_with_dt(index_transposed_dfb_index, input_transposed_dfb_index);
-        }
+        copy_init(input_transposed_dfb_index);
         pack_reconfig_data_format(values_dfb_index);
 
         // Extract local TopK values (first Kt tiles contain best values)
@@ -235,7 +231,7 @@ void kernel_main() {
             // indices ride inside the packed value tiles already sent above; there is no separate
             // index stream (and no index-transposed CB).
             reconfig_data_format_srca(index_transposed_dfb_index);
-            copy_tile_to_dst_init_short_with_dt(input_transposed_dfb_index, index_transposed_dfb_index);
+            copy_init(index_transposed_dfb_index);
             pack_reconfig_data_format(index_transposed_dfb_index);
             index_transposed_dfb.wait_front(Kt);
             for (std::uint32_t i = 0; i < Kt; ++i) {

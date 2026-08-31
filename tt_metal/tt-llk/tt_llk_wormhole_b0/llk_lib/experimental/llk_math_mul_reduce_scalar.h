@@ -186,6 +186,13 @@ inline void _llk_math_mul_reduce_scalar_init_()
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // NOTE: unlike the standard _llk_math_reduce_init_ and the block_max_row reduce, this init does not
+    // re-establish the DEFAULT zero-flag state, so after a copy_init/PRESERVE the GAPOOL/MOVB2A tail here
+    // runs at Zero_Flag_disabled_src=1 (keep) instead of the format-driven DEFAULT (flush). That differs
+    // only on denormals/-0.0 (keep can never corrupt a normal value), and test_sum_reduce_scalar uses
+    // normal inputs so it does not cover that case -- adding the reset like the other reduce inits is
+    // deferred to a directed denormal test. Tracked: tenstorrent/tt-metal#53055.
 }
 
 /**

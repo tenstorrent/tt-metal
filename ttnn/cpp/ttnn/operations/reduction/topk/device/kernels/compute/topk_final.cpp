@@ -82,7 +82,8 @@ void kernel_main() {
     int seq_per_2tiles = std::max((2 * 32) / K, (std::uint32_t)2);
 
     // init pack, compute and unpack
-    init_sfpu(input_dfb_index, values_dfb_index);
+    compute_kernel_hw_startup(input_dfb_index, values_dfb_index);
+    copy_init(input_dfb_index);
     ckernel::topk_tile_init<fused_keys>();
     if constexpr (stable_sort && !fused_keys) {
         // Tie-break polarity is a property of the GLOBAL sort order (largest vs smallest); set once,
@@ -107,18 +108,13 @@ void kernel_main() {
         // operations require separate staging buffers for in-place bitonic operations.
 
         // Re-establish datacopy unpack state for the values gather. At ht==0
-        // init_sfpu covers this, but at ht>=1 the state left by the previous
+        // the kernel prologue's copy_init covers this, but at ht>=1 the state left by the previous
         // iteration's transpose_and_pack(index_transposed...) is TRANSPOSE
         // mode with the INDEX (UInt16/UInt32) SRCA format; the bare copy_tile
         // below would unpack the bf16 gathered values as garbage (silicon:
         // fabricated ~1e38 values in every ht>=1 row).
         reconfig_data_format_srca(input_dfb_index);
-        if constexpr (fused_keys) {
-            // Packed keys travel alone: one (UInt32) format, no index staging below.
-            copy_tile_to_dst_init_short(input_dfb_index);
-        } else {
-            copy_tile_to_dst_init_short_with_dt(index_transposed_dfb_index, input_dfb_index);
-        }
+        copy_init(input_dfb_index);
         pack_reconfig_data_format(input_transposed_dfb_index);
         // Copy all received value tiles from local cores to transposed staging buffer
         for (std::uint32_t wt = 0; wt < Wt; wt++) {
@@ -139,7 +135,8 @@ void kernel_main() {
         if constexpr (!fused_keys) {
             // Copy all received index tiles from local cores to transposed staging buffer.
             // (Fused mode: the indices ride inside the packed value tiles — no index stream.)
-            copy_tile_to_dst_init_short_with_dt(input_dfb_index, index_dfb_index);
+            reconfig_data_format_srca(input_dfb_index, index_dfb_index);
+            copy_init(index_dfb_index);
             pack_reconfig_data_format(index_transposed_dfb_index);
             for (std::uint32_t wt = 0; wt < Wt; wt++) {
                 tile_regs_acquire();

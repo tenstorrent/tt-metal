@@ -227,11 +227,13 @@ void kernel_main() {
                         synchronization_dfb.pop_front(one_tile);
                         synchronization_dfb.reserve_back(one_tile);
 
-                        copy_tile_to_dst_init_short_with_dt(dfb::input_tensor_transposed, dfb::index_tensor_transposed);
+                        reconfig_data_format_srca(dfb::input_tensor_transposed, dfb::index_tensor_transposed);
+                        copy_init(dfb::index_tensor_transposed);
                         copy_tile(dfb::index_tensor_transposed, left_tile_id, index_dest_start);
                         copy_tile(dfb::index_tensor_transposed, right_tile_id, index_dest_end);
 
-                        copy_tile_to_dst_init_short_with_dt(dfb::index_tensor_transposed, dfb::input_tensor_transposed);
+                        reconfig_data_format_srca(dfb::index_tensor_transposed, dfb::input_tensor_transposed);
+                        copy_init(dfb::input_tensor_transposed);
                         copy_tile(dfb::input_tensor_transposed, left_tile_id, input_dest_start);
                         copy_tile(dfb::input_tensor_transposed, right_tile_id, input_dest_end);
 

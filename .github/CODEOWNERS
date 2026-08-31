@@ -30,8 +30,6 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/time_budget.yaml @roseli-TT @tdowdallTT
 .github/time_budgets/ @roseli-TT @tdowdallTT
 .github/workflows/fabric-cpu-only-tests-impl.yaml @Riddy21 @tt-asaigal @aliuTT @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra
-.github/workflows/galaxy-deepseek-tests-impl.yaml @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @yalrawwashTT @tenstorrent/metalium-developers-infra
-.github/workflows/galaxy-deepseek-tests.yaml @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @yalrawwashTT @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra
 .github/workflows/models-t1*.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra
@@ -82,7 +80,7 @@ tests/scripts/t3000/run_t3000_profiler_tests.sh @mo-tenstorrent @akerteszTT @ten
 tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu @tenstorrent/metalium-developers-infra
 
 # Emule software emulation tests
-tests/emule/ @smeydanshahiTT @xanderchin @arminaleTT @sgholamiTT
+tests/emule/ @smeydanshahiTT @xanderchin @arminaleTT @vtangTT @sgholamiTT
 
 # TT-STL
 tt_stl/ @ayerofieiev-tt @akerteszTT @riverwuTT
@@ -121,6 +119,7 @@ tt_metal/distributed/realtime_profiler_manager.* @mo-tenstorrent @yusufbashiTT @
 tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT @tenstorrent/metalium-developers-infra
 tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr
 tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra
+tt_metal/hal.cpp @ruizhangTT
 tt_metal/hostdevcommon/ @tenstorrent/metalium-runtime # this should go away
 tt_metal/hostdevcommon/**/CMakeLists.txt @tenstorrent/metalium-runtime @tenstorrent/metalium-developers-infra # this should go away
 tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT
@@ -153,7 +152,7 @@ tt_metal/impl/dispatch/kernels/*realtime_profiler* @mo-tenstorrent @yusufbashiTT
 tt_metal/impl/dispatch/kernels/REALTIME_PROFILER.md @mo-tenstorrent @yusufbashiTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp @anashTT @mo-tenstorrent @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/impl/dispatch/realtime_profiler_tracy_handler.* @mo-tenstorrent @yusufbashiTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
-tt_metal/impl/emulation/ @smeydanshahiTT @xanderchin @arminaleTT @sgholamiTT
+tt_metal/impl/emulation/ @smeydanshahiTT @xanderchin @arminaleTT @vtangTT @sgholamiTT
 tt_metal/impl/event @jbaumanTT @tt-asaigal @tt-aho
 tt_metal/impl/experimental/disaggregation/ @SeanNijjar @ubcheema # disaggregation experimental impl
 tt_metal/impl/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT
@@ -260,7 +259,7 @@ tests/tt_metal/tt_fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yug
 tests/tt_metal/tt_fabric/physical_discovery/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @p1-0tr
 tests/tt_metal/tt_fabric/test_infra/ @ubcheema @aagarwalTT @SeanNijjar @nnyamagoudar-TT
 tests/tt_metal/tt_fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @p1-0tr @tenstorrent/metalium-developers-infra
-tests/tt_metal/tt_metal/api/emule/ @smeydanshahiTT @xanderchin @arminaleTT @sgholamiTT
+tests/tt_metal/tt_metal/api/emule/ @smeydanshahiTT @xanderchin @arminaleTT @vtangTT @sgholamiTT
 tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT
 tests/tt_metal/tt_metal/debug_tools/ @tenstorrent/metalium-developers-triage
 tests/tt_metal/tt_metal/llk/ @tenstorrent/low-level-team-wh-bh @tenstorrent/low-level-team-quasar

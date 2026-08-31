@@ -150,13 +150,13 @@ void kernel_main() {
                                 // Intermediate step - tiles are already transposed
                                 // Process value tiles
                                 reconfig_data_format_srca(dfb::input_tensor);
-                                copy_tile_to_dst_init_short(dfb::input_tensor);
+                                copy_init(dfb::input_tensor);
                                 copy_tile(dfb::input_tensor, 0, input_dest_start);
                                 copy_tile(dfb::input_tensor, 1, input_dest_end);
 
                                 // Process index tiles
                                 reconfig_data_format_srca(dfb::index_tensor);
-                                copy_tile_to_dst_init_short(dfb::index_tensor);
+                                copy_init(dfb::index_tensor);
                                 copy_tile(dfb::index_tensor, 0, index_dest_start);
                                 copy_tile(dfb::index_tensor, 1, index_dest_end);
                             }
