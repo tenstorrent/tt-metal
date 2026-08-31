@@ -301,9 +301,8 @@ inline void configure_and_arm_from_brisc()
 
 namespace detail
 {
-// Placed last via its own section (see sections.ld) so adding it cannot move other globals.
-__attribute__((section(".perf_counters_bss"))) static std::uint32_t zone_hashes[PERF_COUNTERS_MAX_ZONES];
-__attribute__((section(".perf_counters_bss"))) static std::uint32_t next_zone_id;
+static std::uint32_t zone_hashes[PERF_COUNTERS_MAX_ZONES];
+static std::uint32_t next_zone_id;
 
 #ifndef _LLK_PERF_ZONE_ALLOCATOR_DEFINED_
 #define _LLK_PERF_ZONE_ALLOCATOR_DEFINED_

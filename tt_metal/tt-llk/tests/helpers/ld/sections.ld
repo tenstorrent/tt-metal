@@ -132,10 +132,6 @@ SECTIONS
     *(.bss .bss.* .gnu.linkonce.b.*)
     *(COMMON)
     . = ALIGN(4);
-    /* Last, so that adding the counter build's globals cannot move any other global and change
-       the codegen that the counter-vs-no-counter .text comparison relies on. */
-    *(.perf_counters_bss)
-    . = ALIGN(4);
     __ldm_bss_end = .;
   } > REGION_DATA
 
