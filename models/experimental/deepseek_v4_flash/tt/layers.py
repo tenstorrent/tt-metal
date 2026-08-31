@@ -125,6 +125,36 @@ def decode_weight_layout(
     return num_b_cores, (K, N // num_b_cores), None
 
 
+def fold_partial_width_weight(weight_kn: torch.Tensor, k_blocks: int, n_local: int) -> torch.Tensor:
+    """Fold K-blocks into the width of a ``[K, N]`` decode weight.
+
+    The L1 path width-shards ``[Kc, Nc]`` across a ``k_blocks x n_blocks`` grid, so the
+    host tensor has to be ``[Kc, N * k_blocks]`` with k-block major along the last dim.
+    ``n_local`` is the per-matmul N (already ``N / tp`` under tensor parallelism).
+
+    If ``weight_kn`` still holds the concatenated mesh (``N = tp * n_local``), each rank's
+    N-slice is folded independently and concatenated so ``ShardTensorToMesh(dim=-1)``
+    yields ``[Kc, n_local * k_blocks]`` on every rank. A single K-block-major fold of the
+    concatenated N would interleave ranks inside each k-block and the mesh shard would mix
+    output ranges.
+    """
+    if weight_kn.ndim != 2:
+        raise ValueError(f"expected a [K, N] weight, got shape {tuple(weight_kn.shape)}")
+    k, n = weight_kn.shape
+    if n % n_local:
+        raise ValueError(f"weight N={n} is not a multiple of local N={n_local}")
+    if k % k_blocks:
+        raise ValueError(f"weight K={k} is not divisible by k_blocks={k_blocks}")
+    tp = n // n_local
+    kc = k // k_blocks
+    return (
+        weight_kn.reshape(k_blocks, kc, tp, n_local)
+        .permute(1, 2, 0, 3)
+        .reshape(kc, tp * k_blocks * n_local)
+        .contiguous()
+    )
+
+
 def _slab_tiles(slab_shape):
     """One receiver's weight slab as ``(rows, cols)`` in whole 32x32 tiles."""
     height, width = slab_shape
@@ -350,6 +380,8 @@ class LinearDecode(DeepSeekV4Module):
       ``(K_blocks x N_blocks)`` grid of ``[Kc, Nc]`` blocks maps across
       ``K_blocks * N_blocks`` cores (``Kc = K/K_blocks``, ``Nc = N/N_blocks``), and the
       K-partials are reduced across cores. Requires ``k_blocks`` and ``n_blocks``.
+      A ``mesh_mapper`` that shards N folds each rank's slice independently so the
+      mesh split does not mix output ranges inside a k-block.
 
     ``use_prefetcher=True`` switches how the weight reaches the compute cores. Instead of
     holding it DRAM-interleaved and copying it into L1 width-sharded form before every call,
@@ -406,6 +438,8 @@ class LinearDecode(DeepSeekV4Module):
         mesh_mapper=None,
         packed_weight_tensor: Optional[ttnn.Tensor] = None,
         packed_weight_spec=None,
+        ring_gather: bool = False,
+        tile_height: int = ttnn.TILE_SIZE,
     ):
         self.partial_width_sharded = partial_width_sharded
         self.num_inputA_cores = num_inputA_cores
@@ -415,11 +449,13 @@ class LinearDecode(DeepSeekV4Module):
         self.use_prefetcher = use_prefetcher
         self.keep_weights_in_l1 = keep_weights_in_l1
         self.global_cb = None
+        self.tile_height = tile_height
         self.mesh_mapper = mesh_mapper
         self.gcb_k_blocks = 1
         self.prefetch_queued = False
         self.packed_weight_tensor = packed_weight_tensor
         self.packed_weight_spec = packed_weight_spec
+        self.ring_gather = ring_gather
 
         if keep_weights_in_l1 and use_prefetcher:
             raise ValueError(
@@ -501,8 +537,9 @@ class LinearDecode(DeepSeekV4Module):
         if partial_width_sharded:
             # Fold the K-blocks into the width so a width-sharded [Kc, Nc] block lands on
             # core c = kb * n_blocks + nb (row-major), matching the op's expected geometry.
-            kc = shard_shape[0]
-            w = w.reshape(k_blocks, kc, self.N).permute(1, 0, 2).reshape(kc, self.N * k_blocks)
+            # Under TP the host tensor is still [K, N_global]; fold per rank so the mesh
+            # shard along N does not mix output ranges (see fold_partial_width_weight).
+            w = fold_partial_width_weight(w, k_blocks, self.N)
         self.weight = ttnn.as_tensor(
             w,
             dtype=dtype,
@@ -732,6 +769,7 @@ class LinearDecode(DeepSeekV4Module):
                 output_mem_config=output_memory_config,
                 packed_weight=self.packed_weight_spec,
                 mesh_coords=mesh_coords,
+                ring_gather=self.ring_gather,
             )
         if self.use_prefetcher:
             if not x.is_sharded():
@@ -742,7 +780,7 @@ class LinearDecode(DeepSeekV4Module):
             if not self.prefetch_queued:
                 self._queue_prefetch()
             self.prefetch_queued = False
-            m_padded = ((x.shape[-2] + 31) // 32) * 32
+            m_padded = ((x.shape[-2] + self.tile_height - 1) // self.tile_height) * self.tile_height
             try:
                 return ttnn.experimental.matmul_decode(
                     x,
@@ -752,6 +790,7 @@ class LinearDecode(DeepSeekV4Module):
                     global_cb_k_blocks=self.gcb_k_blocks,
                     output_mem_config=self._prefetch_output_memory_config(m_padded),
                     mesh_coords=mesh_coords,
+                    ring_gather=self.ring_gather,
                 )
             except Exception:
                 # The request is already with the DRISC senders, and matmul_decode does most
@@ -802,6 +841,7 @@ class LinearDecode(DeepSeekV4Module):
             partial_width_sharded=self.partial_width_sharded,
             output_mem_config=output_memory_config,
             mesh_coords=mesh_coords,
+            ring_gather=self.ring_gather,
         )
         if not self.keep_weights_in_l1:
             self.l1_weights.deallocate()
