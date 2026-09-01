@@ -1365,7 +1365,16 @@ class MiniMaxH3Pipeline:
         """
         if self._audio_encoder is None:
             config = self.audio_config
-            self._host_log("building the audio encoder (ref2va reference soundtracks)")
+            # T-shard the DAC trunk across mesh axis 1 (mesh_partition splits a whole axis, so the
+            # factor is the axis length: 8 on a 4x8, 32 on the quad). Each conv halo-exchanges with
+            # its neighbour shard and the trunk output gathers to full T for the causal pre_block.
+            # OFF pending test_audio_encode_t_parallel going green: the sharded trunk currently
+            # hangs after the first sharded op on 4x8 (under bisection); opt in via env once fixed.
+            t_factor = tuple(self.mesh_device.shape)[1]
+            if os.environ.get("MINIMAX_H3_AUDIO_T_SHARD", "0") != "1":
+                t_factor = 1
+            audio_parallel = ParallelFactor(factor=t_factor, mesh_axis=1) if t_factor > 1 else None
+            self._host_log(f"building the audio encoder (ref2va reference soundtracks, t_factor={t_factor})")
             encoder = MiniMaxH3AudioEncoder(
                 encoder_dim=config["encoder_dim"],
                 encoder_rates=tuple(config["encoder_rates"]),
@@ -1376,8 +1385,10 @@ class MiniMaxH3Pipeline:
                 # Stereo L/R as batch data-parallelism across mesh axis 0: CCL-free (no halo, no
                 # gather) and numerically the unsharded computation on different devices. The
                 # encoder no-ops this on multi-host meshes, where its per-row readback cannot
-                # reach remote shards yet.
+                # reach remote shards yet. Composes with the T-shard (batch axis 0, T axis 1).
                 stereo_split_axis=0,
+                parallel_config=audio_parallel,
+                ccl_manager=self.ccl_manager,
                 # One step off the accurate default, measured at the production 5.17 s shape:
                 # full/tap 796 ms @ mean PCC 99.9989% -> weight/tap 565 ms @ 99.9785% -- 20x
                 # inside the encode gate (0.99 / rel RMSE 0.12). Not further: audio condition

@@ -17,6 +17,7 @@ import ttnn
 from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ....models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
+from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
 from .common import (
     CLIP_FRAMES,
@@ -388,7 +389,7 @@ def _encode_stage_state(weights_dir: str) -> dict[str, torch.Tensor]:
     return state
 
 
-def _encode_stage_audio_encoder(mesh_device) -> "MiniMaxH3AudioEncoder":
+def _encode_stage_audio_encoder(mesh_device, ccl_manager) -> "MiniMaxH3AudioEncoder":
     weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_MODEL_PATH")
@@ -407,6 +408,8 @@ def _encode_stage_audio_encoder(mesh_device) -> "MiniMaxH3AudioEncoder":
         mesh_device=mesh_device,
         split_mode="weight",  # the pipeline's production settings; see _prepare_audio_encoder
         stereo_split_axis=0,
+        parallel_config=ParallelFactor(factor=tuple(mesh_device.shape)[1], mesh_axis=1),
+        ccl_manager=ccl_manager,
     )
     # The encoder's four prefixes, which is what keeps the load strict (the converted dict
     # carries both halves' tensors) -- same filter `_prepare_audio_encoder` applies.
@@ -485,7 +488,7 @@ def test_encode_stage(mesh_device, case):
         )
         encode_audio = None
         if reference.has_audio:
-            audio_encoder = _encode_stage_audio_encoder(mesh_device)
+            audio_encoder = _encode_stage_audio_encoder(mesh_device, ccl_manager)
             torch.manual_seed(3)
             reference.waveform = torch.randn(2, ENCODE_STAGE_AUDIO_SAMPLES) * 0.1
 
