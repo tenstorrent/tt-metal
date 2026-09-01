@@ -1328,11 +1328,9 @@ uint8_t detail::ProgramImpl::add_cross_node_dfb(experimental::CrossNodeDFB gdfb)
             "GlobalCircularBuffer and CrossNodeDFB are mutually exclusive within a program.");
     }
 
-    constexpr uint8_t max_cross_node_dfbs = static_cast<uint8_t>(MAX_CROSS_NODE_DFBS);
     TT_FATAL(
-        next_cross_node_dfb_slot_ < max_cross_node_dfbs,
-        "Exceeded maximum number ({}) of CrossNodeDFBs per program",
-        max_cross_node_dfbs);
+        next_cross_node_dfb_slot_ < std::numeric_limits<uint8_t>::max(),
+        "CrossNodeDFB id would wrap uint8_t (ids are [0, 255))");
     const uint8_t remote_dfb_id = next_cross_node_dfb_slot_++;
     const CoreRangeSet& cores = gdfb.all_cores();
 
@@ -1357,9 +1355,7 @@ uint8_t detail::ProgramImpl::add_cross_node_dfb(experimental::CrossNodeDFB gdfb)
 }
 
 uint8_t detail::ProgramImpl::add_persistent_dfb_attachment(
-    experimental::PersistentDFB& persistent_dfb,
-    const CoreRangeSet& cores,
-    std::optional<uint32_t> entry_size_override) {
+    experimental::PersistentDFB& persistent_dfb, const CoreRangeSet& cores, uint32_t entry_size) {
     TT_FATAL(this->compiled_.empty(), "Cannot attach PersistentDFB to an already compiled program {}", this->id);
 
     for (const auto& [core, remote_bits] : per_core_remote_cb_indices_) {
@@ -1369,11 +1365,9 @@ uint8_t detail::ProgramImpl::add_persistent_dfb_attachment(
             "GlobalCircularBuffer and PersistentDFB are mutually exclusive within a program.");
     }
 
-    constexpr uint8_t max_persistent_dfbs = static_cast<uint8_t>(MAX_PERSISTENT_DFBS);
     TT_FATAL(
-        next_persistent_dfb_slot_ < max_persistent_dfbs,
-        "Exceeded maximum number ({}) of PersistentDFBs per program",
-        max_persistent_dfbs);
+        next_persistent_dfb_slot_ < std::numeric_limits<uint8_t>::max(),
+        "PersistentDFB id would wrap uint8_t (ids are [0, 255); 0xFF is NO_PERSISTENT_DFB)");
 
     TT_FATAL(cores.num_cores() > 0, "AttachPersistentDFB requires a non-empty core set");
     const CoreRangeSet& all_cores = persistent_dfb.all_cores();
@@ -1381,9 +1375,36 @@ uint8_t detail::ProgramImpl::add_persistent_dfb_attachment(
         all_cores.intersection(cores).num_cores() == cores.num_cores(),
         "AttachPersistentDFB cores must be a subset of the PersistentDFB mapping cores");
 
+    const CoreRangeSet& sender_cores = persistent_dfb.sender_cores();
+    const uint32_t attached_sender_count = sender_cores.intersection(cores).num_cores();
+    TT_FATAL(
+        attached_sender_count == 0 || attached_sender_count == sender_cores.num_cores(),
+        "AttachPersistentDFB cannot split sender cores across Programs: attached {} of {} senders",
+        attached_sender_count,
+        sender_cores.num_cores());
+
+    const CoreRangeSet& receiver_cores = persistent_dfb.receiver_cores();
+    const uint32_t attached_receiver_count = receiver_cores.intersection(cores).num_cores();
+    TT_FATAL(
+        attached_receiver_count == 0 || attached_receiver_count == receiver_cores.num_cores(),
+        "AttachPersistentDFB cannot split receiver cores across Programs: attached {} of {} receivers",
+        attached_receiver_count,
+        receiver_cores.num_cores());
+
+    const uint32_t l1_alignment = MetalContext::instance(this->get_context_id()).hal().get_alignment(HalMemType::L1);
+    TT_FATAL(entry_size > 0, "PersistentDFB entry_size must be > 0");
+    TT_FATAL(
+        entry_size % l1_alignment == 0,
+        "PersistentDFB entry_size {} must be a multiple of L1_ALIGNMENT {}",
+        entry_size,
+        l1_alignment);
+    TT_FATAL(
+        entry_size <= persistent_dfb.ring_size(),
+        "PersistentDFB entry_size {} must not exceed ring_size {}",
+        entry_size,
+        persistent_dfb.ring_size());
+
     const uint8_t persistent_dfb_id = next_persistent_dfb_slot_++;
-    const uint32_t dense_entry_size = entry_size_override.value_or(persistent_dfb.entry_size());
-    TT_FATAL(dense_entry_size > 0, "PersistentDFB dense entry_size must be > 0");
 
     for (const auto& core_range : cores.ranges()) {
         for (const auto& core : core_range) {
@@ -1396,10 +1417,7 @@ uint8_t detail::ProgramImpl::add_persistent_dfb_attachment(
                     core.str());
             }
             participants.push_back(
-                {persistent_dfb_id,
-                 persistent_dfb.config_address(),
-                 dense_entry_size,
-                 std::numeric_limits<uint8_t>::max()});
+                {persistent_dfb_id, persistent_dfb.config_address(), entry_size, std::numeric_limits<uint8_t>::max()});
         }
     }
     persistent_dfb_attachments_[persistent_dfb_id] = &persistent_dfb;

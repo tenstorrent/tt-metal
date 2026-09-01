@@ -78,7 +78,7 @@ uint32_t run_persistent_sender_push(
 
     Program program = CreateProgram();
     // Attach only sender cores — PersistentDFB is cross-program; this program owns the producer role.
-    EXPECT_EQ(AttachPersistentDFB(program, pdfb, sender_cores), persistent_dfb_id);
+    EXPECT_EQ(AttachPersistentDFB(program, pdfb, sender_cores, entry_size), persistent_dfb_id);
     KernelHandle sender_k = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/persistent_dfb_sender.cpp",
@@ -104,7 +104,7 @@ uint32_t run_persistent_receiver_pop(
     const CoreRangeSet receiver_cores = pdfb.receiver_cores();
     Program program = CreateProgram();
     // Attach only receiver cores — consumer role in a separate program.
-    EXPECT_EQ(AttachPersistentDFB(program, pdfb, receiver_cores), persistent_dfb_id);
+    EXPECT_EQ(AttachPersistentDFB(program, pdfb, receiver_cores, entry_size), persistent_dfb_id);
     CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/persistent_dfb_receiver.cpp",
@@ -142,7 +142,7 @@ uint32_t run_persistent_1toN_cross_program(
         cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, num_entries, num_receivers);
 
     Program sender_program = CreateProgram();
-    EXPECT_EQ(AttachPersistentDFB(sender_program, pdfb, sender_cores), persistent_dfb_id);
+    EXPECT_EQ(AttachPersistentDFB(sender_program, pdfb, sender_cores, entry_size), persistent_dfb_id);
     KernelHandle sender_k = CreateKernel(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/persistent_dfb_sender.cpp",
@@ -156,7 +156,7 @@ uint32_t run_persistent_1toN_cross_program(
     persistent_dfb_test::set_sender_l1_staging_runtime_args(sender_program, sender_k, sender_cores, pdfb, staging_size);
 
     Program receiver_program = CreateProgram();
-    EXPECT_EQ(AttachPersistentDFB(receiver_program, pdfb, receiver_cores), persistent_dfb_id);
+    EXPECT_EQ(AttachPersistentDFB(receiver_program, pdfb, receiver_cores, entry_size), persistent_dfb_id);
     for (uint32_t ri = 0; ri < num_receivers; ++ri) {
         const CoreRangeSet single = CoreRangeSet(CoreRange(receivers[ri]));
         CreateKernel(
@@ -208,20 +208,25 @@ TEST_F(PersistentDFBFixture, CreatePersistentDFB_TopologyRejects) {
 
     {
         std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{CoreCoord(0, 0), cores}};
-        EXPECT_NO_THROW(experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4));
+        EXPECT_NO_THROW(experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024));
+    }
+    {
+        std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
+            {CoreCoord(0, 0), CoreRangeSet(CoreRange({2, 0}))}, {CoreCoord(1, 0), CoreRangeSet(CoreRange({3, 0}))}};
+        EXPECT_NO_THROW(experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024));
     }
     {
         CoreRangeSet overlap_cores(CoreRange({0, 0}, {0, 0}));
         std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{CoreCoord(0, 0), overlap_cores}};
-        EXPECT_THROW(experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4), std::exception);
+        EXPECT_THROW(experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024), std::exception);
     }
     {
         std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{CoreCoord(0, 0), cores}, {CoreCoord(0, 1), cores2}};
-        EXPECT_THROW(experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4), std::exception);
+        EXPECT_THROW(experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024), std::exception);
     }
     {
         std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{CoreCoord(0, 0), CoreRangeSet{}}};
-        EXPECT_THROW(experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4), std::exception);
+        EXPECT_THROW(experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024), std::exception);
     }
 }
 
@@ -230,10 +235,44 @@ TEST_F(PersistentDFBFixture, CreatePersistentDFB_GeometryRejects) {
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
         {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))}};
 
-    EXPECT_THROW(experimental::CreatePersistentDFB(mesh_device.get(), mapping, 0, 4), std::exception);
-    EXPECT_THROW(experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 0), std::exception);
-    EXPECT_THROW(
-        experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4, BufferType::DRAM), std::exception);
+    EXPECT_THROW(experimental::CreatePersistentDFB(mesh_device.get(), mapping, 0), std::exception);
+    EXPECT_THROW(experimental::CreatePersistentDFB(mesh_device.get(), mapping, 33), std::exception);
+    EXPECT_THROW(experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024, BufferType::DRAM), std::exception);
+}
+
+TEST_F(PersistentDFBFixture, AttachPersistentDFB_EntrySizeRejects) {
+    auto mesh_device = devices_[0];
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}))}};
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024);
+
+    for (const uint32_t entry_size : {0u, 33u, 1280u}) {
+        Program program = CreateProgram();
+        EXPECT_THROW(AttachPersistentDFB(program, pdfb, pdfb.all_cores(), entry_size), std::exception);
+    }
+    Program program = CreateProgram();
+    EXPECT_EQ(AttachPersistentDFB(program, pdfb, pdfb.all_cores(), 256), 0u);
+}
+
+TEST_F(PersistentDFBFixture, AttachPersistentDFB_RequiresRoleCompleteProgram) {
+    auto mesh_device = devices_[0];
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
+        {CoreCoord(0, 0), CoreRangeSet(CoreRange({2, 0}))}, {CoreCoord(1, 0), CoreRangeSet(CoreRange({3, 0}))}};
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024);
+
+    {
+        Program program = CreateProgram();
+        EXPECT_THROW(AttachPersistentDFB(program, pdfb, CoreRangeSet(CoreRange(CoreCoord(0, 0))), 256), std::exception);
+    }
+    {
+        Program program = CreateProgram();
+        EXPECT_THROW(AttachPersistentDFB(program, pdfb, CoreRangeSet(CoreRange(CoreCoord(2, 0))), 256), std::exception);
+    }
+    {
+        Program sender_program = CreateProgram();
+        EXPECT_EQ(AttachPersistentDFB(sender_program, pdfb, pdfb.sender_cores(), 256), 0u);
+        Program receiver_program = CreateProgram();
+        EXPECT_EQ(AttachPersistentDFB(receiver_program, pdfb, pdfb.receiver_cores(), 256), 0u);
+    }
 }
 
 TEST_F(PersistentDFBFixture, AttachPersistentDFB_AssignsDistinctSlots) {
@@ -243,8 +282,8 @@ TEST_F(PersistentDFBFixture, AttachPersistentDFB_AssignsDistinctSlots) {
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping1 = {
         {CoreCoord(0, 1), CoreRangeSet(CoreRange({1, 1}, {1, 1}))}};
 
-    auto pdfb0 = experimental::CreatePersistentDFB(mesh_device.get(), mapping0, 256, 4);
-    auto pdfb1 = experimental::CreatePersistentDFB(mesh_device.get(), mapping1, 256, 4);
+    auto pdfb0 = experimental::CreatePersistentDFB(mesh_device.get(), mapping0, 1024);
+    auto pdfb1 = experimental::CreatePersistentDFB(mesh_device.get(), mapping1, 1024);
 
     Program program = CreateProgram();
     CreateKernel(
@@ -253,8 +292,8 @@ TEST_F(PersistentDFBFixture, AttachPersistentDFB_AssignsDistinctSlots) {
         CoreRangeSet({CoreRange({0, 0}, {1, 1})}),
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    EXPECT_EQ(AttachPersistentDFB(program, pdfb0, pdfb0.all_cores()), 0u);
-    EXPECT_EQ(AttachPersistentDFB(program, pdfb1, pdfb1.all_cores()), 1u);
+    EXPECT_EQ(AttachPersistentDFB(program, pdfb0, pdfb0.all_cores(), 256), 0u);
+    EXPECT_EQ(AttachPersistentDFB(program, pdfb1, pdfb1.all_cores(), 256), 1u);
 
     detail::CompileProgram(mesh_device.get(), program);
     program.impl().finalize_offsets(mesh_device.get());
@@ -274,14 +313,14 @@ TEST_F(PersistentDFBFixture, AttachPersistentDFB_SameObjectMultiplePrograms) {
     auto mesh_device = devices_[0];
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
         {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024);
     const uint32_t fifo_start = pdfb.buffer_address();
     const uint32_t config_addr = pdfb.config_address();
 
     Program program_a = CreateProgram();
     Program program_b = CreateProgram();
-    AttachPersistentDFB(program_a, pdfb, pdfb.all_cores());
-    AttachPersistentDFB(program_b, pdfb, pdfb.all_cores());
+    AttachPersistentDFB(program_a, pdfb, pdfb.all_cores(), 256);
+    AttachPersistentDFB(program_b, pdfb, pdfb.all_cores(), 256);
 
     const auto& per_core_a = program_a.impl().get_per_core_persistent_dfbs().at(CoreCoord(0, 0));
     const auto& per_core_b = program_b.impl().get_per_core_persistent_dfbs().at(CoreCoord(0, 0));
@@ -294,19 +333,19 @@ TEST_F(PersistentDFBFixture, AttachPersistentDFB_AddressStableAcrossRebuild) {
     auto mesh_device = devices_[0];
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
         {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024);
     const uint32_t ring_addr = pdfb.buffer_address();
     const uint32_t config_addr = pdfb.config_address();
 
     {
         Program program = CreateProgram();
-        AttachPersistentDFB(program, pdfb, pdfb.all_cores());
+        AttachPersistentDFB(program, pdfb, pdfb.all_cores(), 256);
         detail::CompileProgram(mesh_device.get(), program);
         program.impl().finalize_offsets(mesh_device.get());
     }
     {
         Program program = CreateProgram();
-        AttachPersistentDFB(program, pdfb, pdfb.all_cores());
+        AttachPersistentDFB(program, pdfb, pdfb.all_cores(), 256);
         EXPECT_EQ(pdfb.buffer_address(), ring_addr);
         EXPECT_EQ(pdfb.config_address(), config_addr);
         EXPECT_EQ(program.impl().get_per_core_persistent_dfbs().at(CoreCoord(0, 0))[0].config_page_addr, config_addr);
@@ -317,7 +356,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_CrossProgramPersistence) {
     auto mesh_device = devices_[0];
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
         {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024);
     const uint32_t ring_addr = pdfb.buffer_address();
 
     EXPECT_EQ(run_persistent_sender_push(mesh_device, pdfb, 256, 4, 0u), 1u);
@@ -335,7 +374,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_ProducerRelaunchWithOutstandingCredit
     constexpr uint32_t second_push = 2;
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
         {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, entry_size, ring_depth);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, entry_size * ring_depth);
 
     EXPECT_EQ(run_persistent_sender_push(mesh_device, pdfb, entry_size, first_push, 0u), 1u);
     EXPECT_EQ(run_persistent_sender_push(mesh_device, pdfb, entry_size, second_push, 0u), 1u);
@@ -347,7 +386,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_BackToBackRelaunch) {
     auto mesh_device = devices_[0];
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
         {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024);
 
     EXPECT_EQ(run_persistent_sender_push(mesh_device, pdfb, 256, 4, 0u), 1u);
     EXPECT_EQ(run_persistent_receiver_pop(mesh_device, pdfb, 256, 4, 0u), 1u);
@@ -376,7 +415,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_CrossSubDevicePersistence) {
         constexpr uint32_t entry_size = 256;
         constexpr uint32_t num_entries = 4;
         std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-        auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, entry_size, num_entries);
+        auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, entry_size * num_entries);
         const uint32_t ring_addr = pdfb.buffer_address();
 
         EXPECT_EQ(run_persistent_sender_push(mesh_device, pdfb, entry_size, num_entries, 0u), 1u);
@@ -405,7 +444,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_CrossSubDevice_ABC_ReceiverRelaunch) 
     constexpr uint32_t entry_size = 256;
     constexpr uint32_t num_entries = 4;
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, entry_size, num_entries);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, entry_size * num_entries);
 
     EXPECT_EQ(run_persistent_sender_push(mesh_device, pdfb, entry_size, num_entries, 0u), 1u);
     EXPECT_EQ(run_persistent_receiver_pop(mesh_device, pdfb, entry_size, num_entries, 0u), 1u);
@@ -426,7 +465,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_BasicPushPop_1to1) {
     mesh_device->load_sub_device_manager(sub_device_manager);
 
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024);
     EXPECT_EQ(
         run_persistent_1toN_cross_program(
             mesh_device,
@@ -452,7 +491,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_WriteBroadcast_1to4) {
     mesh_device->load_sub_device_manager(sub_device_manager);
 
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024);
     EXPECT_EQ(
         run_persistent_1toN_cross_program(
             mesh_device,
@@ -478,7 +517,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_WriteStrided_1to4) {
     mesh_device->load_sub_device_manager(sub_device_manager);
 
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024);
     EXPECT_EQ(
         run_persistent_1toN_cross_program(
             mesh_device,
@@ -497,7 +536,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_WriteToReceiver_ReceiverContiguous) {
     auto mesh_device = devices_[0];
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
         {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {4, 0}))}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024);
     EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pdfb, 256, 4, /*write_primitive=*/2), 4u);
 }
 
@@ -505,7 +544,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RoundRobinPushBackToReceiver) {
     auto mesh_device = devices_[0];
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
         {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {4, 0}))}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 1);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256);
     EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pdfb, 256, 1, /*write_primitive=*/3), 4u);
 }
 
@@ -513,7 +552,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_PerReceiverCreditInterleaved_RingDept
     auto mesh_device = devices_[0];
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
         {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {2, 0}))}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024);
     EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pdfb, 256, 4, /*write_primitive=*/5), 2u);
 }
 
@@ -521,18 +560,16 @@ TEST_F(PersistentDFBFixture, PersistentDFB_DecoupledWriteThenCredit) {
     auto mesh_device = devices_[0];
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
         {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {4, 0}))}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024);
     EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pdfb, 256, 4, /*write_primitive=*/4), 4u);
 }
 
 TEST_F(PersistentDFBFixture, GlobalAndCrossNode_SameProgram_DistinctRegions) {
     auto mesh_device = devices_[0];
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> cn_mapping = {
-        {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))}};
     std::vector<std::pair<CoreCoord, CoreRangeSet>> pdfb_mapping = {
         {CoreCoord(2, 0), CoreRangeSet(CoreRange({3, 0}, {3, 0}))}};
 
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), pdfb_mapping, 256, 4);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), pdfb_mapping, 1024);
 
     Program program = CreateProgram();
     const CoreRangeSet all_cores =
@@ -543,8 +580,9 @@ TEST_F(PersistentDFBFixture, GlobalAndCrossNode_SameProgram_DistinctRegions) {
         all_cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    experimental::CreateCrossNodeDFB(program, mesh_device.get(), cn_mapping, 256, 4);
-    AttachPersistentDFB(program, pdfb, pdfb.all_cores());
+    experimental::CreateCrossNodeDFB(
+        program, mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0})), 256, 4);
+    AttachPersistentDFB(program, pdfb, pdfb.all_cores(), 256);
 
     detail::CompileProgram(mesh_device.get(), program);
     program.impl().finalize_offsets(mesh_device.get());
@@ -570,7 +608,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_StaleCommitRejected) {
 
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
         {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, entry_size, num_entries);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, entry_size * num_entries);
     const uint32_t poison_wr_ptr = pdfb.buffer_address() + 2 * entry_size;
 
     const CoreCoord sender_core(0, 0);
@@ -580,7 +618,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_StaleCommitRejected) {
         cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, /*num_entries=*/1, 1);
 
     Program program = CreateProgram();
-    EXPECT_EQ(AttachPersistentDFB(program, pdfb, sender_cores), 0u);
+    EXPECT_EQ(AttachPersistentDFB(program, pdfb, sender_cores, entry_size), 0u);
     KernelHandle sender_k = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/persistent_dfb_stale_commit.cpp",
@@ -621,11 +659,11 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_HostRelationshipValidation) 
     CoreCoord sender_core(0, 0);
     CoreRangeSet receiver_cores(CoreRange({1, 0}, {2, 0}));
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, 1024);
 
     {
         Program program = CreateProgram();
-        EXPECT_EQ(AttachPersistentDFB(program, pdfb, pdfb.all_cores()), 0u);
+        EXPECT_EQ(AttachPersistentDFB(program, pdfb, pdfb.all_cores(), 256), 0u);
         experimental::dfb::DataflowBufferConfig config{.entry_size = 256, .num_entries = 4};
         const uint32_t relay_host_id =
             experimental::CreatePersistentRelayDataflowBuffer(program, receiver_cores, config, /*persistent_dfb_id=*/0);
@@ -676,7 +714,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_HostRelationshipValidation) 
 
     {
         Program program = CreateProgram();
-        AttachPersistentDFB(program, pdfb, pdfb.all_cores());
+        AttachPersistentDFB(program, pdfb, pdfb.all_cores(), 256);
         experimental::dfb::DataflowBufferConfig wrong_size{.entry_size = 128, .num_entries = 4};
         EXPECT_THROW(
             experimental::CreatePersistentRelayDataflowBuffer(program, receiver_cores, wrong_size, 0), std::exception);
@@ -726,7 +764,7 @@ static uint32_t run_persistent_relay_cross_program(
         const uint32_t staging_size =
             cross_node_dfb_test::sender_staging_size_bytes(data_pattern, entry_size, total_entries, 1);
         Program program_a = CreateProgram();
-        EXPECT_EQ(AttachPersistentDFB(program_a, pdfb, sender_cores), 0u);
+        EXPECT_EQ(AttachPersistentDFB(program_a, pdfb, sender_cores, entry_size), 0u);
         KernelHandle sender_k = CreateKernel(
             program_a,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/persistent_dfb_sender.cpp",
@@ -748,7 +786,7 @@ static uint32_t run_persistent_relay_cross_program(
     auto result_buffer = cross_node_dfb_test::make_cross_node_data_buffer(device, receiver_cores, result_page_size, 1);
 
     Program program_b = CreateProgram();
-    EXPECT_EQ(AttachPersistentDFB(program_b, pdfb, receiver_cores, receiver_entry_size_override), 0u);
+    EXPECT_EQ(AttachPersistentDFB(program_b, pdfb, receiver_cores, recv_entry_size), 0u);
     experimental::dfb::DataflowBufferConfig relay_config{
         .entry_size = recv_entry_size,
         .num_entries = recv_num_entries,
@@ -815,7 +853,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_CrossProgram_DMToCompute) {
     constexpr uint32_t total_entries = 4;
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
         {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, entry_size, ring_depth);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, entry_size * ring_depth);
     EXPECT_EQ(
         run_persistent_relay_cross_program(mesh_device, pdfb, entry_size, ring_depth, total_entries, /*batch_size=*/1),
         1u);
@@ -835,7 +873,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_Backpressure_NoOverwrite) {
     const CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
     const CoreRangeSet receiver_cores = CoreRangeSet(CoreRange({1, 0}, {1, 0}));
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, entry_size, ring_depth);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, entry_size * ring_depth);
 
     const uint32_t data_pattern = cross_node_dfb_test::data_pattern_for_write_primitive(0);
     const uint32_t staging_size =
@@ -844,7 +882,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_Backpressure_NoOverwrite) {
     auto result_buffer = cross_node_dfb_test::make_cross_node_data_buffer(device, receiver_cores, result_page_size, 1);
 
     Program program = CreateProgram();
-    EXPECT_EQ(AttachPersistentDFB(program, pdfb, pdfb.all_cores()), 0u);
+    EXPECT_EQ(AttachPersistentDFB(program, pdfb, pdfb.all_cores(), entry_size), 0u);
     experimental::dfb::DataflowBufferConfig relay_config{.entry_size = entry_size, .num_entries = ring_depth};
     const uint32_t relay_host_id =
         experimental::CreatePersistentRelayDataflowBuffer(program, receiver_cores, relay_config, 0);
@@ -902,7 +940,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_CrossProgram_DifferentEntryS
     constexpr uint32_t total_entries_e1 = 2;
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
         {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, e1, ring_depth_e1);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, e1 * ring_depth_e1);
     EXPECT_EQ(
         run_persistent_relay_cross_program(
             mesh_device, pdfb, e1, ring_depth_e1, total_entries_e1, /*batch_size=*/1, e2),
@@ -944,7 +982,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_CrossSubDevice_CoordinatedLivePeerNon
     auto go_sem = CreateGlobalSemaphore(mesh_device.get(), sender_cores, /*initial_value=*/0);
 
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, e1, ring_depth_e1);
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, e1 * ring_depth_e1);
     distributed::Synchronize(*mesh_device, std::nullopt);
 
     const uint32_t staging_size =
@@ -952,7 +990,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_CrossSubDevice_CoordinatedLivePeerNon
 
     // --- Program A (SD0): push E1 → resize without drain → signal → wait go → push E2 ---
     Program program_a = CreateProgram();
-    EXPECT_EQ(AttachPersistentDFB(program_a, pdfb, sender_cores), 0u);
+    EXPECT_EQ(AttachPersistentDFB(program_a, pdfb, sender_cores, e1), 0u);
     const KernelHandle sender_k = CreateKernel(
         program_a,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/persistent_dfb_coordinated_resize_sender.cpp",
@@ -1009,7 +1047,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_CrossSubDevice_CoordinatedLivePeerNon
 
     // --- Program B (SD1): consume E1, then consume resize pad credits at E2 ---
     Program program_b = CreateProgram();
-    EXPECT_EQ(AttachPersistentDFB(program_b, pdfb, receiver_cores), 0u);
+    EXPECT_EQ(AttachPersistentDFB(program_b, pdfb, receiver_cores, e1), 0u);
     CreateKernel(
         program_b,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/persistent_dfb_coordinated_resize_receiver.cpp",

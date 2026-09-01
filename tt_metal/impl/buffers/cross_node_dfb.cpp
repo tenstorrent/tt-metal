@@ -8,16 +8,12 @@
 #include <core_coord.hpp>
 #include <device.hpp>
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
-#include <host_api.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
 #include <tt_align.hpp>
-#include <tt_metal.hpp>
-#include <algorithm>
 #include <cstdint>
-#include <limits>
 #include <variant>
 #include <vector>
 
@@ -32,41 +28,23 @@ namespace {
 
 void initialize_cross_node_dfb(
     IDevice* device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
+    CoreCoord sender_core,
+    const CoreRangeSet& receiver_cores,
     CoreRangeSet& sender_cores_out,
     CoreRangeSet& receiver_cores_out,
     CoreRangeSet& all_cores_out,
-    uint32_t& max_num_receivers_per_sender_out) {
+    uint32_t& num_receivers_out) {
     TT_FATAL(device != nullptr, "Device cannot be null");
+    TT_FATAL(receiver_cores.num_cores() > 0, "Sender core {} must have a non-empty receiver set", sender_core.str());
 
-    const uint32_t num_sender_cores = sender_receiver_mapping.size();
-    TT_FATAL(num_sender_cores > 0, "At least one sender required");
-
-    uint32_t num_receiver_cores = 0;
-    uint32_t max_receivers = 0;
-    std::vector<CoreRange> sender_ranges;
-    sender_ranges.reserve(num_sender_cores);
-
-    for (const auto& [sender_core, receiver_set] : sender_receiver_mapping) {
-        const uint32_t n = receiver_set.num_cores();
-        num_receiver_cores += n;
-        max_receivers = std::max(max_receivers, n);
-        sender_ranges.emplace_back(sender_core);
-        receiver_cores_out = receiver_cores_out.merge(receiver_set);
-    }
-
-    sender_cores_out = CoreRangeSet(sender_ranges);
-    TT_FATAL(num_sender_cores == sender_cores_out.num_cores(), "Duplicate sender cores in sender_receiver_mapping");
-    TT_FATAL(
-        num_receiver_cores == receiver_cores_out.num_cores(),
-        "Duplicate receiver cores detected across sender groups (receiver sets must be disjoint)");
-
+    sender_cores_out = CoreRangeSet(CoreRange(sender_core));
+    receiver_cores_out = receiver_cores;
     all_cores_out = sender_cores_out.merge(receiver_cores_out);
     TT_FATAL(
-        all_cores_out.num_cores() == num_sender_cores + num_receiver_cores,
+        all_cores_out.num_cores() == 1 + receiver_cores_out.num_cores(),
         "Sender and receiver core sets must be disjoint");
 
-    max_num_receivers_per_sender_out = max_receivers;
+    num_receivers_out = receiver_cores_out.num_cores();
 }
 
 void validate_entry_geometry(IDevice* device, uint32_t entry_size, uint32_t num_entries) {
@@ -119,32 +97,28 @@ bool is_compatible_borrowed_device(IDevice* expected, IDevice* buffer_device) {
 
 CrossNodeDFB::CrossNodeDFB(
     IDevice* device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
+    CoreCoord sender_core,
+    const CoreRangeSet& receiver_cores,
     uint32_t entry_size,
     uint32_t num_entries,
     BufferType buffer_type) :
-    device_(device),
-    sender_receiver_mapping_(sender_receiver_mapping),
-    entry_size_(entry_size),
-    num_entries_(num_entries) {
+    device_(device), sender_core_(sender_core), entry_size_(entry_size), num_entries_(num_entries) {
     initialize_cross_node_dfb(
-        device, sender_receiver_mapping, sender_cores_, receiver_cores_, all_cores_, max_num_receivers_per_sender_);
+        device, sender_core, receiver_cores, sender_cores_, receiver_cores_, all_cores_, max_num_receivers_per_sender_);
 
     this->setup_buffers(buffer_type);
 }
 
 CrossNodeDFB::CrossNodeDFB(
     IDevice* device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
+    CoreCoord sender_core,
+    const CoreRangeSet& receiver_cores,
     uint32_t entry_size,
     uint32_t num_entries,
     Buffer& data_buffer) :
-    device_(device),
-    sender_receiver_mapping_(sender_receiver_mapping),
-    entry_size_(entry_size),
-    num_entries_(num_entries) {
+    device_(device), sender_core_(sender_core), entry_size_(entry_size), num_entries_(num_entries) {
     initialize_cross_node_dfb(
-        device, sender_receiver_mapping, sender_cores_, receiver_cores_, all_cores_, max_num_receivers_per_sender_);
+        device, sender_core, receiver_cores, sender_cores_, receiver_cores_, all_cores_, max_num_receivers_per_sender_);
 
     this->setup_buffers_with_borrowed_data(data_buffer);
 }
@@ -194,8 +168,9 @@ void CrossNodeDFB::build_config_pages() {
     const uint32_t words_per_page = config_page_size_ / sizeof(uint32_t);
     config_pages_.clear();
 
-    for (const auto& [sender_core, receiver_set] : sender_receiver_mapping_) {
-        const auto receiver_vec = corerange_to_cores(receiver_set);
+    {
+        const CoreCoord sender_core = sender_core_;
+        const auto receiver_vec = corerange_to_cores(receiver_cores_);
         const uint32_t num_recv = static_cast<uint32_t>(receiver_vec.size());
 
         std::vector<uint32_t> sender_page(words_per_page, 0);
@@ -332,32 +307,31 @@ uint32_t CrossNodeDFB::num_entries() const { return num_entries_; }
 const CoreRangeSet& CrossNodeDFB::sender_cores() const { return sender_cores_; }
 const CoreRangeSet& CrossNodeDFB::receiver_cores() const { return receiver_cores_; }
 const CoreRangeSet& CrossNodeDFB::all_cores() const { return all_cores_; }
-const std::vector<std::pair<CoreCoord, CoreRangeSet>>& CrossNodeDFB::sender_receiver_core_mapping() const {
-    return sender_receiver_mapping_;
-}
 
 // Free functions --------------------------------------------------------------
 
 uint8_t CreateCrossNodeDFB(
     Program& program,
     IDevice* device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
+    CoreCoord sender_core,
+    const CoreRangeSet& receiver_cores,
     uint32_t entry_size,
     uint32_t num_entries,
     BufferType buffer_type) {
     return program.impl().add_cross_node_dfb(
-        CrossNodeDFB(device, sender_receiver_mapping, entry_size, num_entries, buffer_type));
+        CrossNodeDFB(device, sender_core, receiver_cores, entry_size, num_entries, buffer_type));
 }
 
 uint8_t CreateCrossNodeDFB(
     Program& program,
     IDevice* device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
+    CoreCoord sender_core,
+    const CoreRangeSet& receiver_cores,
     uint32_t entry_size,
     uint32_t num_entries,
     Buffer& data_buffer) {
     return program.impl().add_cross_node_dfb(
-        CrossNodeDFB(device, sender_receiver_mapping, entry_size, num_entries, data_buffer));
+        CrossNodeDFB(device, sender_core, receiver_cores, entry_size, num_entries, data_buffer));
 }
 
 uint32_t CreateCrossNodeRelayDataflowBuffer(

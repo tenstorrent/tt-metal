@@ -12,7 +12,7 @@
 //   word[0]  is_sender (1) | is_receiver (0)
 //   word[1]  num_receivers
 //   word[2]  fifo_start_addr
-//   word[3]  fifo_size (entry_size * num_entries at Create)
+//   word[3]  fifo_size (CrossNode: entry_size * num_entries; Persistent: ring bytes)
 //
 // CrossNode:
 //   word[4]  fifo_ptr_checkpoint   // reserved / ignored; ctor resets ptrs to word[2]

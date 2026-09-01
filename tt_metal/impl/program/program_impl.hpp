@@ -364,9 +364,7 @@ public:
     uint8_t num_persistent_dfb_slots() const { return next_persistent_dfb_slot_; }
 
     uint8_t add_persistent_dfb_attachment(
-        experimental::PersistentDFB& persistent_dfb,
-        const CoreRangeSet& cores,
-        std::optional<uint32_t> entry_size_override);
+        experimental::PersistentDFB& persistent_dfb, const CoreRangeSet& cores, uint32_t entry_size);
 
     const experimental::PersistentDFB& get_persistent_dfb_attachment(uint8_t persistent_dfb_id) const;
     std::optional<uint8_t> get_persistent_dfb_id_for_relay(uint32_t relay_dfb_host_id) const;

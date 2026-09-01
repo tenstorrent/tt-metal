@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -36,8 +35,8 @@ public:
      * only destroy (or let it go out of scope) after every peer program has Finished.
      *
      * Host programming model:
-     *   auto pdfb = CreatePersistentDFB(device, mapping, entry_size, num_entries);
-     *   AttachPersistentDFB(program, pdfb, sender_cores);     // or receivers / subset
+     *   auto pdfb = CreatePersistentDFB(device, mapping, ring_size);
+     *   AttachPersistentDFB(program, pdfb, sender_cores, entry_size);  // or all receivers
      *   // optional: CreatePersistentRelayDataflowBuffer(program, receivers, cfg, id);
      *
      * Device kernel flows (sender / receiver / relay) are documented on the device API:
@@ -47,8 +46,7 @@ public:
     PersistentDFB(
         IDevice* device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
-        uint32_t entry_size,
-        uint32_t num_entries,
+        uint32_t ring_size,
         BufferType buffer_type = BufferType::L1);
 
     PersistentDFB(const PersistentDFB&) = delete;
@@ -59,9 +57,7 @@ public:
     uint32_t buffer_address() const;
     const Buffer& config_buffer() const;
     uint32_t config_address() const;
-    uint32_t entry_size() const;
-    uint32_t num_entries() const;
-    uint32_t ring_size() const { return entry_size_ * num_entries_; }
+    uint32_t ring_size() const { return ring_size_; }
 
     uint32_t config_page_size() const { return config_page_size_; }
     uint32_t credit_reset_offset() const { return credit_reset_offset_; }
@@ -88,8 +84,7 @@ private:
     CoreRangeSet sender_cores_;
     CoreRangeSet receiver_cores_;
     CoreRangeSet all_cores_;
-    uint32_t entry_size_ = 0;
-    uint32_t num_entries_ = 0;
+    uint32_t ring_size_ = 0;
     uint32_t config_page_size_ = 0;
     uint32_t credit_reset_offset_ = 0;
     uint32_t credit_reset_size_ = 0;
@@ -107,15 +102,16 @@ private:
 PersistentDFB CreatePersistentDFB(
     IDevice* device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
-    uint32_t entry_size,
-    uint32_t num_entries,
+    uint32_t ring_size,
     BufferType buffer_type = BufferType::L1);
 
 /**
  * @brief Attach a PersistentDFB to `program` on the given cores (non-owning).
  *
- * `cores` must be a non-empty subset of the PersistentDFB's mapping cores.
- * Returns an independent persistent_dfb_id in [0, MAX_PERSISTENT_DFBS).
+ * `cores` must be a non-empty role-complete subset of the PersistentDFB's mapping
+ * cores: if any sender is present, all senders must be present; likewise for
+ * receivers. This prevents one PersistentDFB role from being split across Programs.
+ * Returns an independent persistent_dfb_id in [0, 255).
  *
  * WH/BH: on each sender core, only one DM (BRISC or NCRISC) may own PersistentDFB
  * credit / resize / push for that Attach. Both DMs can run on the same physical
@@ -123,13 +119,10 @@ PersistentDFB CreatePersistentDFB(
  * cursor. Host binding / kernel placement should pin a single sender DM owner
  * until Attach can enforce this.
  *
- * @param entry_size_override When set, overrides the dense-slot entry_size (defaults to object's).
+ * @param entry_size Dense entry size for this Program execution epoch.
  */
 uint8_t AttachPersistentDFB(
-    Program& program,
-    PersistentDFB& persistent_dfb,
-    const CoreRangeSet& cores,
-    std::optional<uint32_t> entry_size_override = std::nullopt);
+    Program& program, PersistentDFB& persistent_dfb, const CoreRangeSet& cores, uint32_t entry_size);
 
 /**
  * @brief Create and register the local DFB used to relay a PersistentDFB to TRISC.

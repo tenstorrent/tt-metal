@@ -68,18 +68,14 @@ void initialize_persistent_dfb(
     max_num_receivers_per_sender_out = max_receivers;
 }
 
-void validate_entry_geometry(IDevice* device, uint32_t entry_size, uint32_t num_entries, BufferType buffer_type) {
+void validate_ring_geometry(IDevice* device, uint32_t ring_size, BufferType buffer_type) {
     const auto context_id = extract_context_id(device);
     const auto& hal = MetalContext::instance(context_id).hal();
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
-    TT_FATAL(entry_size > 0, "entry_size must be > 0");
+    TT_FATAL(ring_size > 0, "ring_size must be > 0");
     TT_FATAL(
-        entry_size % l1_alignment == 0,
-        "entry_size {} must be a multiple of L1_ALIGNMENT {}",
-        entry_size,
-        l1_alignment);
-    TT_FATAL(num_entries > 0, "num_entries must be > 0");
+        ring_size % l1_alignment == 0, "ring_size {} must be a multiple of L1_ALIGNMENT {}", ring_size, l1_alignment);
     TT_FATAL(
         buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL,
         "PersistentDFB can only use L1 buffer types");
@@ -106,13 +102,9 @@ PersistentConfigPageLayout compute_persistent_config_page_layout(
 PersistentDFB::PersistentDFB(
     IDevice* device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
-    uint32_t entry_size,
-    uint32_t num_entries,
+    uint32_t ring_size,
     BufferType buffer_type) :
-    device_(device),
-    sender_receiver_mapping_(sender_receiver_mapping),
-    entry_size_(entry_size),
-    num_entries_(num_entries) {
+    device_(device), sender_receiver_mapping_(sender_receiver_mapping), ring_size_(ring_size) {
     initialize_persistent_dfb(
         device, sender_receiver_mapping, sender_cores_, receiver_cores_, all_cores_, max_num_receivers_per_sender_);
     setup_buffers(buffer_type);
@@ -144,8 +136,6 @@ void PersistentDFB::build_config_pages() {
     const auto context_id = extract_context_id(device_);
     const auto& hal = MetalContext::instance(context_id).hal();
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    const uint32_t ring_size = entry_size_ * num_entries_;
-
     const auto layout = compute_persistent_config_page_layout(max_num_receivers_per_sender_, l1_alignment);
     config_page_size_ = layout.page_size;
     credit_reset_offset_ = layout.counters_offset;
@@ -164,9 +154,9 @@ void PersistentDFB::build_config_pages() {
         sender_page[si++] = 1;
         sender_page[si++] = num_recv;
         sender_page[si++] = data_base_addr;
-        sender_page[si++] = ring_size;
+        sender_page[si++] = ring_size_;
         sender_page[si++] = data_base_addr;  // word[4]: initial fifo_ptr checkpoint
-        sender_page[si++] = entry_size_;     // word[5]: applied_entry_size
+        sender_page[si++] = 0;               // word[5]: applied_entry_size; set by first Attach
         sender_page[si++] = layout.noc_xy_offset;
         sender_page[si++] = layout.counters_offset;
         sender_page[si++] = layout.counters_offset;
@@ -184,9 +174,9 @@ void PersistentDFB::build_config_pages() {
             receiver_page[rci++] = 0;
             receiver_page[rci++] = num_recv;
             receiver_page[rci++] = data_base_addr;
-            receiver_page[rci++] = ring_size;
+            receiver_page[rci++] = ring_size_;
             receiver_page[rci++] = data_base_addr;
-            receiver_page[rci++] = entry_size_;
+            receiver_page[rci++] = 0;
             receiver_page[rci++] = layout.noc_xy_offset;
             receiver_page[rci++] = layout.counters_offset + 2 * ri * l1_alignment;
             receiver_page[rci++] = layout.counters_offset + 2 * ri * l1_alignment + l1_alignment;
@@ -226,16 +216,15 @@ void PersistentDFB::write_config_to_device() {
 }
 
 void PersistentDFB::setup_buffers(BufferType buffer_type) {
-    validate_entry_geometry(device_, entry_size_, num_entries_, buffer_type);
+    validate_ring_geometry(device_, ring_size_, buffer_type);
 
     const uint32_t num_all_cores = all_cores_.num_cores();
-    const uint32_t ring_size = entry_size_ * num_entries_;
     auto shard_params_data =
         ShardSpecBuffer(all_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_all_cores, 1});
     ShardedBufferConfig data_shard_cfg = {
         .device = device_,
-        .size = ring_size * num_all_cores,
-        .page_size = ring_size,
+        .size = ring_size_ * num_all_cores,
+        .page_size = ring_size_,
         .buffer_type = buffer_type,
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(shard_params_data),
@@ -259,10 +248,6 @@ const std::vector<uint32_t>& PersistentDFB::config_page(const CoreCoord& core) c
     return it->second;
 }
 
-uint32_t PersistentDFB::entry_size() const { return entry_size_; }
-
-uint32_t PersistentDFB::num_entries() const { return num_entries_; }
-
 const CoreRangeSet& PersistentDFB::sender_cores() const { return sender_cores_; }
 
 const CoreRangeSet& PersistentDFB::receiver_cores() const { return receiver_cores_; }
@@ -276,18 +261,14 @@ const std::vector<std::pair<CoreCoord, CoreRangeSet>>& PersistentDFB::sender_rec
 PersistentDFB CreatePersistentDFB(
     IDevice* device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
-    uint32_t entry_size,
-    uint32_t num_entries,
+    uint32_t ring_size,
     BufferType buffer_type) {
-    return PersistentDFB(device, sender_receiver_mapping, entry_size, num_entries, buffer_type);
+    return PersistentDFB(device, sender_receiver_mapping, ring_size, buffer_type);
 }
 
 uint8_t AttachPersistentDFB(
-    Program& program,
-    PersistentDFB& persistent_dfb,
-    const CoreRangeSet& cores,
-    std::optional<uint32_t> entry_size_override) {
-    return program.impl().add_persistent_dfb_attachment(persistent_dfb, cores, entry_size_override);
+    Program& program, PersistentDFB& persistent_dfb, const CoreRangeSet& cores, uint32_t entry_size) {
+    return program.impl().add_persistent_dfb_attachment(persistent_dfb, cores, entry_size);
 }
 
 uint32_t CreatePersistentRelayDataflowBuffer(
