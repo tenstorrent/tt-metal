@@ -1065,3 +1065,176 @@ def test_conv1d_depthwise_default_route_long_seq(device):
         packer_l1_acc=True,
         pcc=0.999,
     )
+
+
+def _run_conv1d_route(
+    device,
+    *,
+    C,
+    K,
+    T,
+    pad,
+    groups,
+    slice_config,
+    has_bias,
+    prepared_weights=False,
+):
+    torch.manual_seed(0)
+    torch_input_ncl = torch.randn(1, C, T, dtype=torch.bfloat16).float()
+    torch_weight = torch.randn(groups, C // groups, K, dtype=torch.bfloat16).float()
+    torch_bias = torch.randn(1, 1, 1, groups, dtype=torch.bfloat16).float() if has_bias else None
+    golden = torch.nn.functional.conv1d(
+        torch_input_ncl,
+        torch_weight,
+        bias=None if torch_bias is None else torch_bias.reshape(-1),
+        stride=1,
+        padding=pad,
+        dilation=1,
+        groups=groups,
+    )
+
+    input_tt = ttnn.from_torch(
+        torch_input_ncl.permute(0, 2, 1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    weight_tt = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    bias_tt = (
+        ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) if torch_bias is not None else None
+    )
+    conv_config = ttnn.Conv1dConfig(
+        weights_dtype=ttnn.bfloat16,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        deallocate_activation=True,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    if prepared_weights:
+        # Prepared-device route: prepare the full weight (and bias, when used) once with the same
+        # has_bias the conv call will use, so the prepared tensors land in the depthwise layout
+        # this route exercises.
+        weight_tt = ttnn.prepare_conv_weights(
+            weight_tensor=weight_tt,
+            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            weights_format="OIHW",
+            in_channels=C,
+            out_channels=groups,
+            batch_size=1,
+            input_height=1,
+            input_width=T,
+            kernel_size=(1, K),
+            stride=(1, 1),
+            padding=(0, pad),
+            dilation=(1, 1),
+            has_bias=has_bias,
+            groups=groups,
+            device=device,
+            input_dtype=ttnn.bfloat16,
+            conv_config=conv_config,
+            compute_config=compute_config,
+        )
+        if bias_tt is not None:
+            # prepare_conv_bias tiles + moves the bias to device itself (like prepare_conv_weights),
+            # so both prepared tensors come back as device tensors ready for the chunk path.
+            bias_tt = ttnn.prepare_conv_bias(
+                bias_tensor=bias_tt,
+                input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                input_layout=ttnn.ROW_MAJOR_LAYOUT,
+                in_channels=C,
+                out_channels=groups,
+                batch_size=1,
+                input_height=1,
+                input_width=T,
+                kernel_size=(1, K),
+                stride=(1, 1),
+                padding=(0, pad),
+                dilation=(1, 1),
+                groups=groups,
+                device=device,
+                input_dtype=ttnn.bfloat16,
+                conv_config=conv_config,
+                compute_config=compute_config,
+            )
+    kwargs = dict(
+        input_tensor=input_tt,
+        weight_tensor=weight_tt,
+        device=device,
+        in_channels=C,
+        out_channels=groups,
+        kernel_size=K,
+        stride=1,
+        padding=pad,
+        dilation=1,
+        batch_size=1,
+        input_length=T,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        groups=groups,
+        dtype=ttnn.bfloat16,
+        return_output_dim=True,
+    )
+    if bias_tt is not None:
+        kwargs["bias_tensor"] = bias_tt
+    if slice_config is not None:
+        kwargs["slice_config"] = slice_config
+    tt_out, out_length = ttnn.conv1d(**kwargs)
+    out = ttnn.to_torch(tt_out).reshape(1, out_length, groups).permute(0, 2, 1)
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(out, golden, pcc=0.999)
+    print(pcc_msg)
+    assert passing, pcc_msg
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize(
+    "C,K,T,pad,groups,slice_config,has_bias,prepared_weights",
+    [
+        # GDN host-weight DRAM auto-slice: C=10240 does not fit; TILE_WIDTH-aligned 32x320 chunks.
+        (10240, 4, 12, 3, 10240, None, True, False),
+        # Same shape, forced L1_FULL (qwen36 GDN prefill form). Must reroute, not TT_FATAL.
+        (10240, 4, 12, 3, 10240, ttnn.Conv2dL1FullSliceConfig, True, False),
+        # TILE_WIDTH-aligned smaller depthwise (64/2=32). C=96/4=24 is rejected;
+        # C=96/3=32 is a legal non-power-of-two chunk count the old search missed.
+        (96, 4, 12, 3, 96, None, True, False),
+        (64, 4, 12, 3, 64, None, True, False),
+        # Grouped 1x1 + L1_FULL + DRAM input: mm_conv ignores groups; must stay a matmul, not chunk.
+        (32, 1, 8, 0, 32, ttnn.Conv2dL1FullSliceConfig, True, False),
+        # Prepared 1D-depthwise device weights, no bias: is_1d_depthwise_conv is true, so
+        # the TILE last-dim slice path chunks on device (96/3=32 and 64/2=32 chunks).
+        (96, 4, 12, 3, 96, None, False, True),
+        (64, 4, 12, 3, 64, None, False, True),
+        # Prepared grouped device weights with bias: is_1d_depthwise_conv is now true with bias,
+        # so prepared weights + prepared bias both stay in the depthwise layout and the chunk path
+        # TILE-slices the bias on device like the weights. C=10240 needs the chunks; 96/3 and 64/2
+        # are the TILE_WIDTH-aligned smaller forms.
+        (10240, 4, 12, 3, 10240, None, True, True),
+        (10240, 4, 12, 3, 10240, ttnn.Conv2dL1FullSliceConfig, True, True),
+        (96, 4, 12, 3, 96, None, True, True),
+        (64, 4, 12, 3, 64, None, True, True),
+    ],
+)
+def test_conv1d_grouped_dram_channel_chunk_routes(
+    device, C, K, T, pad, groups, slice_config, has_bias, prepared_weights
+):
+    """Host-weight grouped conv1d routes: channel-chunk when spatial slicing cannot
+    fit, L1_FULL reroute, TILE_WIDTH-aligned chunks, and 1x1 mm_conv must not throw.
+    Prepared-device weights cover both bias forms: no-bias and prepared+bias both take the
+    1D-depthwise TILE-slice chunk path, with the bias TILE-sliced on device alongside the
+    weights. PCC on C=10240 alone is not blast-radius."""
+    _run_conv1d_route(
+        device,
+        C=C,
+        K=K,
+        T=T,
+        pad=pad,
+        groups=groups,
+        slice_config=slice_config,
+        has_bias=has_bias,
+        prepared_weights=prepared_weights,
+    )

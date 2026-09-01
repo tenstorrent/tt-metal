@@ -403,10 +403,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const uint32_t act_matrix_height = act_matrix_height_ntiles * tt::constants::TILE_HEIGHT;
 
     if (has_bias) {
-        if (is_conv_1d_depthwise_conv) {
-            TT_THROW("Bias is not supported for depthwise conv1d");
-        }
-        // Tensor bias is of shape {output_channels}
+        // Tensor bias is of shape {output_channels}. 1D depthwise is supported: the bias CB is
+        // populated by the same sharded writer as for non-depthwise conv, and the depthwise
+        // compute kernel broadcasts it into DST on the last kernel tap.
         TT_FATAL(bias.has_value(), "Bias tensor must be provided when has_bias is true");
         TT_FATAL(bias.value().buffer() != nullptr, "Bias tensor buffer must not be null");
         auto bias_shape_without_padding = bias.value().logical_shape();
@@ -1059,6 +1058,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             filter_w,                                                   // 9: kernel_width
             coalesce_1d_depthwise_kw_reads,                             // 10: coalesced activation block
             dest_reuse_scratch_cb_id,                                   // 11: dest-reuse read-back scratch
+            has_bias,                                                   // 12: fuse_bias
+            get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,         // 13: bias cb (row-replicated tiles)
         };
     } else {
         compute_kernel_args = {

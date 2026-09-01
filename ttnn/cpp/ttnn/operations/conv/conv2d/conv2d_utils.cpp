@@ -541,8 +541,10 @@ bool is_1d_depthwise_conv(
     bool has_bias) {
     bool is_depthwise_conv = groups == input_channels && groups == output_channels;
     // 1D depthwise path supports kernel_height == 1 (and any kernel_width >= 1). The kw>1 case
-    // accumulates across kernel taps via per-tap blocks in the depthwise factory.
-    return is_depthwise_conv && is_1d_conv(kernel_height, image_height) && !has_bias;
+    // accumulates across kernel taps via per-tap blocks in the depthwise factory. has_bias is
+    // accepted: the depthwise factory adds the bias on the last kernel tap (see
+    // compute_depthwise_conv1d.cpp), so bias no longer forces the grouped layout.
+    return is_depthwise_conv && is_1d_conv(kernel_height, image_height);
 }
 
 bool should_coalesce_1d_depthwise_conv_reads(

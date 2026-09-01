@@ -853,7 +853,8 @@ Result conv2d_L1(
         // the device op (line below), so the deferred split-reader reuse optimization stays off.
         conv_config.enable_activation_reuse || force_conv_no_spill,
         coalesce_1d_depthwise_kw_reads,
-        orig_stride);
+        orig_stride,
+        mm_conv);
 
     // Prepare weights and move to device if necessary
     if (!is_device_tensor(weight_tensor)) {
