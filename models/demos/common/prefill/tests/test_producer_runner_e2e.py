@@ -388,9 +388,7 @@ def _running_runner(tag: str, sc: dict, **extra):
     os.makedirs(_REPORT_DIR, exist_ok=True)
     log_path = os.path.join(_REPORT_DIR, f"ci_runner_{tag}.log")
     _cleanup_ipc()  # a stale table/descriptor from a prior scenario would make the readiness poll pass early
-    env = _scenario_env(
-        sc, PREFILL_MOCK_MIGRATION="1", PREFILL_ENABLE_LAYER_ACK="1", PREFILL_LAYER_ACK_D2H="1", **extra
-    )
+    env = _scenario_env(sc, PREFILL_MOCK_MIGRATION="1", PREFILL_LAYER_ACK_D2H="1", **extra)
     ready_timeout_s = int(sc.get("ready_timeout_s", _READY_TIMEOUT_S))
     mode = _launch_mode()
     if mode == "ci":

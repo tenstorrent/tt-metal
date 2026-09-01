@@ -544,14 +544,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
     master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
-    ack_channel = None
     router = None
     d2h_service = None
     layer_ack_service = None
     producer = None
-    enable_layer_ack = (
-        os.environ.get("PREFILL_ENABLE_LAYER_ACK", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")) == "1"
-    )
 
     def _unlink_stale_shm(name: str) -> None:
         path = f"/dev/shm/{name.lstrip('/')}"
@@ -705,70 +701,67 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         )
 
     use_d2h = os.environ.get("PREFILL_LAYER_ACK_D2H", "0") == "1"
-    use_router = (not single_rank) or (use_d2h and enable_layer_ack)
 
-    if use_router:
-        from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionRouter
+    from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionRouter
 
-        ring_base = os.environ.get("PREFILL_LAYER_COMPLETION_RING", "/tt_prefill_layer_completion_ring")
-        ring_shm_name = f"{ring_base}_{rank}"
-        _unlink_stale_shm(ring_shm_name)
-        if rank == master_rank:
-            _unlink_stale_shm(ack_shm_name)
-        router = LayerCompletionRouter(
-            rank=rank,
-            world_size=num_ranks,
-            master_rank=master_rank,
-            ring_shm_name=ring_shm_name,
-            scheduler_channel_shm_name=ack_shm_name if rank == master_rank else "",
-            teardown_timeout_ms=30000,
+    ring_base = os.environ.get("PREFILL_LAYER_COMPLETION_RING", "/tt_prefill_layer_completion_ring")
+    ring_shm_name = f"{ring_base}_{rank}"
+    _unlink_stale_shm(ring_shm_name)
+    if rank == master_rank:
+        _unlink_stale_shm(ack_shm_name)
+    router = LayerCompletionRouter(
+        rank=rank,
+        world_size=num_ranks,
+        master_rank=master_rank,
+        ring_shm_name=ring_shm_name,
+        scheduler_channel_shm_name=ack_shm_name if rank == master_rank else "",
+        teardown_timeout_ms=30000,
+    )
+    if use_d2h:
+        first_layer_idx, num_my_layers = compute_layer_split(
+            NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
+        )[rank]
+        d2h_service = ttnn.D2HStreamService(
+            mesh_device,
+            global_spec=None,
+            fifo_size_bytes=LAYER_ACK_FIFO_SIZE_BYTES,
+            worker_cores=SYNC_WORKER_CORES,
+            metadata_size_bytes=METADATA_SIZE_BYTES,
         )
-        if use_d2h:
-            first_layer_idx, num_my_layers = compute_layer_split(
-                NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
-            )[rank]
-            d2h_service = ttnn.D2HStreamService(
-                mesh_device,
-                global_spec=None,
-                fifo_size_bytes=LAYER_ACK_FIFO_SIZE_BYTES,
-                worker_cores=SYNC_WORKER_CORES,
-                metadata_size_bytes=METADATA_SIZE_BYTES,
+        layer_ack_service = ttnn.LayerAckService(
+            d2h_service,
+            ring_shm_name,
+            source_rank=rank,
+            num_layers=NUM_LAYERS,
+            first_layer_idx=first_layer_idx,
+            local_layers=num_my_layers,
+        )
+        if runtime.config.use_trace:
+            runtime.set_d2h_ack_service(d2h_service)
+        else:
+            layer_ack_service.start()
+        source_desc = "D2H device records"
+    else:
+        if getattr(runtime, "set_layer_completion_sink", None) is None:
+            raise RuntimeError(
+                f"runtime {type(runtime).__name__} does not implement set_layer_completion_sink(sink), "
+                "which the layer-ack path requires at every rank count "
+                "(see docs/ADDING_A_PREFILL_MODEL.md)."
             )
-            layer_ack_service = ttnn.LayerAckService(
-                d2h_service,
-                ring_shm_name,
+        producer = LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
+        runtime.set_layer_completion_sink(
+            build_layer_completion_sink(
+                producer,
                 source_rank=rank,
                 num_layers=NUM_LAYERS,
-                first_layer_idx=first_layer_idx,
-                local_layers=num_my_layers,
             )
-            if runtime.config.use_trace:
-                runtime.set_d2h_ack_service(d2h_service)
-            else:
-                layer_ack_service.start()
-            source_desc = "D2H device records"
-        else:
-            producer = LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
-            runtime.set_layer_completion_sink(
-                build_layer_completion_sink(
-                    producer,
-                    source_rank=rank,
-                    num_layers=NUM_LAYERS,
-                )
-            )
-            source_desc = "host on_layer_complete callback"
-        logger.info(
-            f"[migration] layer-completion routing up: rank={rank}/{num_ranks} master={master_rank} "
-            f"ring={ring_shm_name} source={source_desc} "
-            + (f"(owns scheduler channel {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
         )
-    elif single_rank and enable_layer_ack:
-        _unlink_stale_shm(ack_shm_name)
-        ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
-        runtime.set_layer_ack_channel(ack_channel)
-        logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
-    elif single_rank:
-        logger.info("[migration] LayerAck channel disabled (set PREFILL_ENABLE_LAYER_ACK=1 to enable)")
+        source_desc = "host on_layer_complete callback"
+    logger.info(
+        f"[migration] layer-completion routing up: rank={rank}/{num_ranks} master={master_rank} "
+        f"ring={ring_shm_name} source={source_desc} "
+        + (f"(owns scheduler channel {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
+    )
 
     if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
         runtime.capture_trace(kv_caches)
@@ -806,9 +799,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             producer.shutdown()
         if router is not None:
             router.stop()
-        if ack_channel is not None:
-            ack_channel.shutdown()
-            ack_channel = None
 
 
 if __name__ == "__main__":
