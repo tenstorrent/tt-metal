@@ -37,11 +37,12 @@ template <bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
     // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag): a datum
-    // whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
-    // corrupting the sum. PRESERVE is asserted once by _llk_math_reduce_init_ for this path and held
-    // for the whole op -- flipping it per transpose cost 4 pipe-draining cfg writes per 32x32 tile
-    // (~40 cycles, 41% of the kernel), because the value alternates and the skip-if-set guard never
-    // hits. Do not re-assert it here.
+    // whose low byte is zero (e.g. bf16 0x4400 = 512.0) would be flushed to 0 mid-reduction,
+    // corrupting the sum -- this is what made layernorm drift when the flag was unpack-owned (#46511).
+    // PRESERVE must therefore hold across this whole function; its callers own that (see the guard in
+    // _llk_math_reduce_'s REDUCE_ROW MAX branch). Deliberately not re-asserted per transpose: flipping
+    // it here and restoring DEFAULT after cost 4 pipe-draining cfg writes per 32x32 tile (~40 cycles,
+    // 41% of the kernel), because the value alternated and the skip-if-set guard never hit.
     if constexpr (is_int_fpu_en)
     {
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
@@ -270,6 +271,16 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 
         if constexpr (type == PoolType::MAX)
         {
+            // Assert the mov phase's PRESERVE requirement here, in the EXECUTE path, not only in the
+            // init: #46511 built the tracker around "the op-need is (re)asserted in the EXECUTE path so
+            // it survives an llk_math_hw_configure that runs after the op init", and the same applies to
+            // a reconfig_data_format*, an fp8 copy_tile_to_dst_init_short, or another op's init landing
+            // between reduce_init and this tile. Skipping that would corrupt the reduction silently.
+            // Costs nothing in the steady state: _llk_math_reduce_init_ already left the flag here, so
+            // this is a load, compare and not-taken branch on the math RISC -- no cfg write, no pipe
+            // drain, and measured at 58.1 cycles/tile either way (Blackhole p300a, perf_reduce).
+            math::_configure_preserve_zero_flag_state_();
+
             reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
             reduce_row_perform_transpose<is_int_fpu_en>();
 
@@ -484,17 +495,20 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
-    // Establish the zero-flag state once, for the whole op, so the execute path never writes it.
+    // Establish the zero-flag state up front so the execute path's guard never has to write it.
     //
     // REDUCE_ROW MAX is the only reduce path with a mov phase: reduce_row_perform_transpose moves the
     // pooled row through SrcB (MOVD2B/TRNSPSRCB) and adds it back with ELWADD, and those readers need
     // PRESERVE or a datum whose low byte is zero is flushed mid-reduction (see that function). It runs
     // once per face row, so asserting PRESERVE there and restoring DEFAULT after it alternated the
     // value and defeated the skip-if-set guard: 4 pipe-draining cfg writes per 32x32 tile, measured at
-    // ~40 of the kernel's 98 cycles/tile on Blackhole p300a. Hoisting it here makes the steady state
-    // free. GMPOOL/GAPOOL are not among the flag's readers (see the reader list in cmath_common.h), so
-    // the pool phase is unaffected. _llk_math_reduce_uninit_ returns the flag to DEFAULT, so the value
-    // is paired with this init rather than leaked to whatever op runs next.
+    // ~40 of the kernel's 98 cycles/tile on Blackhole p300a. Setting it here instead makes the steady
+    // state free -- but it is the fast path, NOT the guarantee: _llk_math_reduce_ re-asserts it per
+    // tile (#46511's execute-path rule) so an intervening reconfig cannot corrupt the reduction. It is
+    // still worth setting here: it keeps the per-tile assert a not-taken branch. GMPOOL/GAPOOL are not
+    // among the flag's readers (see the reader list in cmath_common.h), so the pool phase is
+    // unaffected. _llk_math_reduce_uninit_ returns the flag to DEFAULT, so the value is paired with
+    // this init rather than leaked to whatever op runs next.
     //
     // Every other reduce path is pool-only and takes the operand-driven DEFAULT, mirroring
     // _llk_math_matmul_init_ / _llk_math_eltwise_binary_init_. A preceding copy_init that left PRESERVE
