@@ -1129,13 +1129,26 @@ class ModelArgs:
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
             self.ccl_dtype = ttnn.bfloat8_b
 
-            # model specific CCL configs
-            default_ln_ag = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
-            default_agmm = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
+            # model specific CCL configs.
+            # num_workers_per_link=3 / chunks_per_sync=40 measured in-model on wormhole_b0,
+            # 12 combinations swept in one profiled run, 2 decode steps each after discarding
+            # a compile step, medians over 145 collective calls per step on device 0:
+            #   workers=4 is worse by 3.8-3.9% at every chunks_per_sync (10/20/40/80)
+            #   workers=3 beats workers=2 by 1.2-1.4% at chunks_per_sync 20/40/80
+            #   chunks_per_sync is flat once workers=3. 80 measured 0.2% under 40 in that
+            #   sweep, so it was re-tested head-to-head: 14 alternating rounds, 2 decode steps
+            #   each, medians 26.057 vs 26.019 us and 7 paired wins apiece. Indistinguishable,
+            #   so 40 is an arbitrary pick among 20/40/80, matching SAMPLING_AG_CONFIG.
+            # Confirmed in the full 32k model: the per-layer gather 1.770 -> 1.705 ms/token
+            # (-3.7%) and the reduce-scatter 1.998 -> 1.953 (-2.3%); whole model 28.037 ->
+            # 27.942 ms/token, 35.67 -> 35.79 tok/s/u. That 0.095 ms is 5.6x the 0.017 ms
+            # spread between two otherwise identical profiling runs.
+            default_ln_ag = {"num_links": 1, "chunks_per_sync": 40, "num_workers_per_link": 3}
+            default_agmm = {"num_links": 1, "chunks_per_sync": 40, "num_workers_per_link": 3}
             default_mlp_rs = {
                 "num_links": self.num_reduce_scatter_links,
-                "chunks_per_sync": 10,
-                "num_workers_per_link": 2,
+                "chunks_per_sync": 40,
+                "num_workers_per_link": 3,
                 "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             }
             default_sampling_force_argmax = {
