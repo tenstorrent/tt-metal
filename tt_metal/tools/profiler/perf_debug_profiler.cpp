@@ -2868,14 +2868,112 @@ void PerfDebugProfiler::fabric_sync_disable_devices() {
     st->disabled_devices = true;
     auto& cluster = MetalContext::instance().get_cluster();
     const uint32_t zero = 0;
+
+    // PASS 1 -- stop every INITIATOR first, everywhere, before touching a single responder. The
+    // initiator is the only side that STARTS a round, so until all of them are quiet a responder
+    // cleared here can just be re-entered by its peer on the next tick.
     for (const auto& e : st->edges) {
         if (e.init.blk_addr == 0) {
             continue;
         }
-        // initiator first (stops new rounds), then the responder; flags = 0 disables at the next
-        // deadline while the config magic stays valid
         cluster.write_core(&zero, sizeof(zero), tt_cxy_pair(e.init.chip, e.init.virt), e.init.blk_addr + 4);
+    }
+    // PASS 2 -- then the responders. flags = 0 disables at the next deadline; the config magic stays
+    // valid on purpose, so the aggregator's re-arm (which keys on magic) never fights this.
+    for (const auto& e : st->edges) {
+        if (e.init.blk_addr == 0) {
+            continue;
+        }
         cluster.write_core(&zero, sizeof(zero), tt_cxy_pair(e.resp.chip, e.resp.virt), e.resp.blk_addr + 4);
+    }
+
+    // PASS 3 -- DRAIN, and this is the point of the whole function.
+    //
+    // Clearing flags only stops the NEXT round; it does not wait for the one already in flight. The
+    // hook sends on the RAW sender TXQ, so a round caught mid-send leaves that TXQ busy, the eth core
+    // never goes active again, and the NEXT profiler session dies in llrt.cpp with "Timed out while
+    // waiting for active ethernet core ... to become active again" -> terminate -> core dump.
+    // A/B-confirmed as ours on the same 8-group 2D Mesh config: hook at 20 Hz crashed at session 2
+    // (twice); hook not compiled ran 6 sessions / 196 tests with zero eth timeouts.
+    //
+    // Quiesced == the core has run poll() SINCE the flags were cleared and taken the disabled branch,
+    // i.e. published state 1 (unconfigured/disabled) or 2 (interval 0). States 4/5 mean it is INSIDE a
+    // round right now; 6..9 are failure sites published from inside one, so they are not idle either.
+    // Worst case is one round (~7.4 ms = first_wait 1.55 ms + 15 x next_wait 0.39 ms) plus one whole
+    // interval (50 ms at 20 Hz) before it polls again -- so ~60 ms. The bound below is ~8x that.
+    //
+    // ON EXPIRY WE PROCEED ANYWAY, loudly. A hook stuck in-round must never hang teardown: the card
+    // may then need a warm_reset, but a warning the user can act on beats a hang they cannot. We do
+    // NOT try to force the TXQ quiescent from the host -- the only lever is writing eth TXQ registers
+    // out from under a live router, which risks corrupting fabric state on cores that are still fine.
+    uint64_t scratch_addr = 0;
+    try {
+        const auto& hal = MetalContext::instance().hal();
+        scratch_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::FABRIC_ROUTER_SYNC_SCRATCH);
+    } catch (const std::exception&) {
+        return;  // no scratch address means no breadcrumb to wait on; nothing safe to do here
+    }
+
+    struct Pending {
+        uint32_t chip;
+        CoreCoord virt;
+        uint32_t last_state = 0;
+    };
+    std::vector<Pending> pending;
+    for (const auto& e : st->edges) {
+        if (e.init.blk_addr == 0) {
+            continue;
+        }
+        pending.push_back({e.init.chip, e.init.virt, 0});
+        pending.push_back({e.resp.chip, e.resp.virt, 0});
+    }
+    if (pending.empty()) {
+        return;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    size_t still_busy = pending.size();
+    while (still_busy != 0 && std::chrono::steady_clock::now() < deadline) {
+        still_busy = 0;
+        for (auto& pd : pending) {
+            uint32_t dbg = 0;
+            try {
+                cluster.read_core(&dbg, sizeof(dbg), tt_cxy_pair(pd.chip, pd.virt), scratch_addr + 12);
+            } catch (const std::exception&) {
+                continue;  // unreadable core: not something this drain can fix
+            }
+            pd.last_state = dbg >> 28;
+            if (pd.last_state != 1 && pd.last_state != 2) {
+                still_busy++;
+            }
+        }
+        if (still_busy != 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+
+    if (still_busy != 0) {
+        std::string who;
+        for (const auto& pd : pending) {
+            if (pd.last_state != 1 && pd.last_state != 2) {
+                who += fmt::format(" chip{} ({},{}) state={}", pd.chip, pd.virt.x, pd.virt.y, pd.last_state);
+            }
+        }
+        log_warning(
+            tt::LogMetal,
+            "[perf-debug profiler] FABRIC SYNC: {} of {} eth lane(s) did NOT leave their round within 500 ms "
+            "of being disabled -- proceeding with teardown anyway (a hang here would be worse). Their sender "
+            "TXQ may still be busy, which can leave the eth core unable to go active again and take the NEXT "
+            "profiler session down; a warm_reset clears it. Still in-round:{}",
+            still_busy,
+            pending.size(),
+            who);
+    } else {
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] FABRIC SYNC: all {} eth lane(s) left their round before teardown",
+            pending.size());
     }
 }
 
