@@ -127,8 +127,13 @@ def test_spatial_cross_attention_forward(
     tt_camera_features = ttnn.from_torch(
         camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
     )
+    # The TTNN path takes the point axis folded into the last dimension and ROW_MAJOR, which is
+    # what point sampling now produces; spelling out the (D, 2) tail pads it to a whole tile.
     tt_reference_points_cam = ttnn.from_torch(
-        reference_points_cam, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        reference_points_cam.reshape(num_cams, batch_size, num_queries, D * 2),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     tt_bev_mask = ttnn.from_torch(bev_mask, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_level_start_index = ttnn.from_torch(

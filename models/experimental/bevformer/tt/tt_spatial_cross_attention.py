@@ -150,7 +150,8 @@ class TTSpatialCrossAttention:
 
         Args:
             query: BEV queries [B, num_queries, embed_dims].
-            reference_points_cam: Camera projected reference points [num_cams, B, num_queries, D, 2].
+            reference_points_cam: Camera projected reference points, ROW_MAJOR,
+                [num_cams, B, num_queries, D * 2].
             bev_mask: Valid mask for camera projections [num_cams, B, num_queries, D].
             key: Multi-camera features [num_cams, H*W, B, embed_dims].
             value: Same as key.
@@ -167,7 +168,9 @@ class TTSpatialCrossAttention:
         if use_signpost:
             signpost(header="TTNN SCA Forward Start")
 
-        # Clamp reference points between -10 and 10 to avoid NaNs
+        # Clamped here rather than in point sampling, which returns the points as computed. On the
+        # flat form the trailing dims are (num_queries, num_points * 2), so this pays 4x of tile
+        # padding where the spelled-out (num_points, 2) tail paid 128x.
         reference_points_cam = ttnn.clamp(reference_points_cam, -10.0, 10.0)
 
         # Handle input defaults
@@ -190,7 +193,7 @@ class TTSpatialCrossAttention:
         bs, num_queries, _ = query.shape
         # Extract number of depth levels for 3D point sampling
         # Each BEV query samples points at multiple Z-coordinates (depth levels) in 3D space
-        num_depth_levels = reference_points_cam.shape[3]
+        num_depth_levels = reference_points_cam.shape[3] // 2
 
         # Validate sampling points divisibility to prevent runtime errors in deformable attention
         assert self.deformable_attention.num_points % num_depth_levels == 0, (
@@ -279,10 +282,8 @@ class TTSpatialCrossAttention:
 
         # query is [bs, num_queries, ...] but reference_points_cam is camera-major, so its row id
         # folds in the camera as well as the batch item.
-        ref_rows = ttnn.reshape(
-            ttnn.to_layout(reference_points_cam, ttnn.ROW_MAJOR_LAYOUT),
-            (1, 1, self.num_cams * bs * num_queries, num_depth_levels * 2),
-        )
+        # Already ROW_MAJOR and flat, so this only merges leading dimensions.
+        ref_rows = ttnn.reshape(reference_points_cam, (1, 1, self.num_cams * bs * num_queries, num_depth_levels * 2))
         ref_index = _flat_row_index(
             gather_ids
             + _batch_offsets(bs, num_queries)

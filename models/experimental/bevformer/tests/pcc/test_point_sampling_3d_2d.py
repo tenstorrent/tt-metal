@@ -263,8 +263,12 @@ def test_point_sampling_3d_to_2d(
         device=device,
     )
 
-    # Convert TTNN results to torch for comparison
-    ttnn_ref_points_cam_torch = ttnn.to_torch(ttnn_ref_points_cam, dtype=torch.float32)
+    # Convert TTNN results to torch for comparison. The TTNN path returns the point axis folded
+    # into the last dimension — spelling it out is what pads a 4x2 tail to a whole tile — so it is
+    # unfolded here to compare against the reference's 5-D form.
+    ttnn_ref_points_cam_torch = ttnn.to_torch(ttnn_ref_points_cam, dtype=torch.float32).reshape(
+        num_cams, batch_size, bev_h * bev_w, z_cfg["num_points"], 2
+    )
     ttnn_bev_mask_torch = ttnn.to_torch(ttnn_bev_mask, dtype=torch.bool)
 
     # --------------------------------------------------------------------------- #

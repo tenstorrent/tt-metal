@@ -73,6 +73,23 @@ def generate_reference_points_ttnn(
     return ttnn_ref_points
 
 
+_IMAGE_SCALE_ROWS = {}
+
+
+def _image_scale_row(img_h: int, img_w: int, device):
+    """``[1/img_w, 1/img_h]`` as a broadcast row. Depends only on the image size, so it is built
+    once per size rather than per call."""
+    key = (img_h, img_w, id(device))
+    if key not in _IMAGE_SCALE_ROWS:
+        _IMAGE_SCALE_ROWS[key] = ttnn.from_torch(
+            torch.tensor([[1.0 / img_w, 1.0 / img_h]], dtype=torch.float32),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+    return _IMAGE_SCALE_ROWS[key]
+
+
 def point_sampling_3d_to_2d_ttnn(
     reference_points,
     pc_range: List[float],
@@ -103,7 +120,8 @@ def point_sampling_3d_to_2d_ttnn(
 
     Returns:
         Tuple[ttnn.Tensor, ttnn.Tensor]:
-            - reference_points_cam: Projected 2D points [num_cams, bs, num_queries, num_points, 2].
+            - reference_points_cam: Projected 2D points [num_cams, bs, num_queries, num_points * 2],
+              ROW_MAJOR.
             - bev_mask: Validity mask [num_cams, bs, num_queries, num_points] indicating valid projections.
     """
     if use_signpost:
@@ -188,15 +206,14 @@ def point_sampling_3d_to_2d_ttnn(
     else:
         raise ValueError("Either img_metas or img_shape must be provided")
 
-    reference_points_cam_x = ttnn.div(reference_points_cam_xy[..., 0:1], img_w)
-    reference_points_cam_y = ttnn.div(reference_points_cam_xy[..., 1:2], img_h)
-    reference_points_cam = ttnn.concat(
-        [reference_points_cam_x, reference_points_cam_y], dim=-1
-    )  # [D, B, num_cams, Q, 2]
+    # One broadcast multiply rather than a slice, a divide and a concat per axis: a 1-wide slice of
+    # a tiled tensor pads to a whole 32x32 tile, so each of those carried 32x its own data.
+    reference_points_cam = ttnn.mul(reference_points_cam_xy, _image_scale_row(img_h, img_w, device))
 
     if use_signpost:
         signpost(header="Point Sampling Boundary Validation")
-    # Clamp to [-10, 10] and create validity masks
+    # Clamp to [-10, 10] and create validity masks. Only the masks use the clamped form; the
+    # projected points are returned as computed, which is what the reference produces.
     reference_points_cam_clamped = ttnn.clamp(reference_points_cam, -10.0, 10.0)
     valid_x = ttnn.logical_and(
         (reference_points_cam_clamped[..., 0:1] >= 0.0), (reference_points_cam_clamped[..., 0:1] <= 1.0)
@@ -213,8 +230,19 @@ def point_sampling_3d_to_2d_ttnn(
         ttnn.logical_and(nan_mask, ttnn.zeros_like(bev_mask)), ttnn.logical_and(ttnn.logical_not(nan_mask), bev_mask)
     )
 
+    # The permute is what would create the padding: before it the trailing dims are
+    # (num_queries, 2), after them (num_points, 2) — a 4x2 tail pads to a whole 32x32 tile, 128x.
+    # Converting first and permuting in ROW_MAJOR keeps the tensor at its own size, and the
+    # (num_points, 2) tail is folded away because every consumer wants it flat anyway.
+    reference_points_cam = ttnn.to_layout(reference_points_cam, ttnn.ROW_MAJOR_LAYOUT)
     reference_points_cam = ttnn.permute(reference_points_cam, (2, 1, 3, 0, 4))  # [num_cams, B, Q, D, 2]
-    bev_mask = ttnn.squeeze(ttnn.permute(bev_mask, (2, 1, 3, 0, 4)), -1)  # [num_cams, B, Q, D]
+    reference_points_cam = ttnn.reshape(reference_points_cam, (num_cams, batch_size, num_queries, num_points * 2))
+    # Squeezed before the permute, and while still tiled. Dropping the trailing 1 in ROW_MAJOR
+    # would reshape a tensor whose page is a single bf16; permuting before the squeeze turns a
+    # (num_queries, 1) tail into a (num_points, 1) one, which pads to a whole tile. Squeezing
+    # first leaves both sides of the permute at a few times their own size.
+    bev_mask = ttnn.squeeze(bev_mask, -1)  # [D, B, num_cams, Q]
+    bev_mask = ttnn.permute(bev_mask, (2, 1, 3, 0))  # [num_cams, B, Q, D]
 
     if use_signpost:
         signpost(header="TTNN Point Sampling 3D to 2D End")
