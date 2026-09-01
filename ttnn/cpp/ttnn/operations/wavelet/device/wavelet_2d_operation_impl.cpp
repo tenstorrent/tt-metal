@@ -551,7 +551,7 @@ template <typename Scheme>
         wavelet_program_utils::worker_core_count(mesh_device, "2D wavelet transforms require at least one worker core"),
         l1_budget_bytes,
         boundary_mode,
-        architecture_policy.inverse_2d_coordination_penalty_cycles_per_core);
+        architecture_policy.inverse_penalty_per_core);
     return plan;
 }
 
