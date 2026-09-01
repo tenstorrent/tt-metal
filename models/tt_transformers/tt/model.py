@@ -912,8 +912,21 @@ class Transformer(LightweightModule):
                 cluster_axis=cluster_axis,
                 topology=self.args.ccl_topology(),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
+                # The once-per-token gather of the vocabulary scores: 32 x 75968 bfloat8_b,
+                # L1-interleaved, 2.58 MB across the single chip-to-chip link. Swept at that exact
+                # size over chunks {2,5,10,20,40} x workers {1,2,4} x buffers {2,4}, 40 rounds:
+                # 40 / 4 / 2 runs 303.96 us against 416.23 for 10 / 2 / 2, and the full profile
+                # confirms it at -0.070 ms/token.
+                #
+                # Deliberately NOT applied to the per-layer collectives, which want the opposite.
+                # This transfer is ~20x larger, so it is bytes-bound and wants more workers keeping
+                # the link busy; the 131-262 KB per-layer ones are setup-bound. Giving them the
+                # low-worker settings that looked best standalone cost +0.66 ms/token in the model
+                # -- their real cost (24 us) is smaller than the standalone harness's own overhead,
+                # so those sweep results were noise. Only this call is large enough to measure that
+                # way. See perf_report7.txt (before) and perf_report10.txt (after).
+                chunks_per_sync=40,
+                num_workers_per_link=4,
                 num_buffers_per_channel=2,
                 subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
