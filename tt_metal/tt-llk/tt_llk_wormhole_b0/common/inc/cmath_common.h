@@ -103,6 +103,16 @@ inline LLK_ZEROFLAG_DEFAULT_ATTR void _configure_default_zero_flag_state_()
     _apply_src_zero_flag_(value);
 }
 
+// Keep the execute-time invariant check out of templated hot paths. Inlining this
+// predicate into every binary/matmul specialization causes substantial TRISC
+// code growth when LLK assertions are enabled.
+inline __attribute__((noinline, cold)) void _assert_default_zero_flag_state_()
+{
+    LLK_ASSERT(
+        src_zero_flag_hw == (requires_disabled_src_zero_flag(src_zero_flag_srca_fmt, src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "Src zero-substitution flag does not hold the operand-driven default");
+}
+
 // Data-movement ops keep the flag set so values pass through faithfully (bf16 -0.0, 16b/32b ints).
 inline void _configure_preserve_zero_flag_state_()
 {
