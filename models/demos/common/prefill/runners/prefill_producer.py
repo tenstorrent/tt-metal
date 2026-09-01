@@ -893,8 +893,10 @@ def _percentile(sorted_values: list, p: float) -> float:
 
 def _load_token_pool(trace_dir, num_tokens: int) -> list:
     pool = load_trace_token_ids(trace_dir, num_tokens)
+    if not pool:
+        raise ValueError(f"trace {trace_dir} carries no token_ids; cannot build a token pool")
     if len(pool) < num_tokens:
-        pool = pool + [1] * (num_tokens - len(pool))
+        pool = pool * -(-num_tokens // len(pool))
     return pool[:num_tokens]
 
 

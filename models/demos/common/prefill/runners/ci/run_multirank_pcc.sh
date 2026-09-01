@@ -3,7 +3,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 set -euo pipefail
 
-MODEL="${1:?usage: run_multirank_pcc.sh <model-key>}"
+MODEL="${1:?usage: run_multirank_pcc.sh <model-key> [config]}"
+CONFIG="${2:-sc4}"
 
 : "${TT_METAL_HOME:?TT_METAL_HOME must be set}"
 : "${PREFILL_SUMMARIES:?PREFILL_SUMMARIES must be set by the blaze impl (shared /ci scratch for the KV table)}"
@@ -19,18 +20,25 @@ WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 RUNNER_ENV=""
 PRODUCER_ENV=""
+FABRIC_MODE=2d
+
+case "${CONFIG}" in
+  sc1|sc4) ;;
+  *)
+    echo "unknown config '${CONFIG}' (expected sc1 or sc4)" >&2
+    exit 2
+    ;;
+esac
 
 case "${MODEL}" in
   kimi27)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
-    MGD="${MGD_DIR}/kimi27_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; export PREFILL_USE_TRACE=1; export PREFILL_LAYER_ACK_D2H=1;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
     ;;
   glm52)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_prefill_runner_kv}"
-    MGD="${MGD_DIR}/glm52_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/glm52.json"
     RUNNER_ENV="export PREFILL_LAYER_ACK_D2H=1;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
@@ -41,6 +49,9 @@ case "${MODEL}" in
     exit 2
     ;;
 esac
+
+MGD="${MGD_DIR}/${MODEL}_${CONFIG}_mgd.textproto"
+[ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${MODEL}/${CONFIG} at ${MGD}" >&2; exit 2; }
 
 mkdir -p "${PIPELINE_DIR}"
 TTRUN_DIR="${TTRUN_DIR:-/etc/ttop}"
@@ -75,19 +86,21 @@ cleanup() {
     done
     python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
       --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
-      --chunk-size "${CHUNK_SIZE}" --perf-window-chunks "${PERF_WINDOW_CHUNKS:-4}" \
-      --summary-name "${MODEL}" \
+      --chunk-size "${CHUNK_SIZE}" \
+      --summary-name "${MODEL}_${CONFIG}" \
       || echo "summary generation failed (non-fatal)"
-    GANTT_DIR="${PREFILL_SUMMARIES}/plots"
-    mkdir -p "${GANTT_DIR}"
-    python3 -c "import matplotlib" 2>/dev/null \
-      || timeout 90 uv pip install --quiet matplotlib 2>/dev/null \
-      || timeout 90 python3 -m pip install --quiet matplotlib 2>/dev/null \
-      || echo "matplotlib install failed (gantt skipped, non-fatal)"
-    python3 "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
-      --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
-      -o "${GANTT_DIR}/${MODEL}_pipeline_gantt.png" \
-      || echo "gantt render failed (non-fatal)"
+    if [ "$(find "${TIMING_DIR}" -name '*.csv' 2>/dev/null | wc -l)" -ge 2 ]; then
+      GANTT_DIR="${PREFILL_SUMMARIES}/plots"
+      mkdir -p "${GANTT_DIR}"
+      python3 -c "import matplotlib" 2>/dev/null \
+        || timeout 90 uv pip install --quiet matplotlib 2>/dev/null \
+        || timeout 90 python3 -m pip install --quiet matplotlib 2>/dev/null \
+        || echo "matplotlib install failed (gantt skipped, non-fatal)"
+      python3 "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
+        --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
+        -o "${GANTT_DIR}/${MODEL}_pipeline_gantt.png" \
+        || echo "gantt render failed (non-fatal)"
+    fi
   fi
   rm -rf "${MR_DIR}"
 }
@@ -105,7 +118,7 @@ python3 "${TTRUN_PY}" \
     export PYTHONPATH='${TT_METAL_HOME}'; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
-    export PREFILL_FABRIC_MODE=2d; \
+    export PREFILL_FABRIC_MODE=${FABRIC_MODE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     export PREFILL_SYNC_PER_CHUNK=1; \
     export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
