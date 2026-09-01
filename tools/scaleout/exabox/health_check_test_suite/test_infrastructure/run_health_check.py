@@ -39,12 +39,12 @@ from pathlib import Path
 
 from utils.diag_execution import run_diag_subprocess
 from utils.jira_client import (
-    _build_failure_body,
-    _build_recovery_body,
     add_comment_to_jira,
     artifact_upload_name,
     attach_files_to_jira,
     attach_log_to_jira,
+    build_failure_body,
+    build_recovery_body,
     create_jira_ticket,
     find_open_ticket_for_node,
     transition_jira_ticket,
@@ -477,7 +477,7 @@ def main() -> int:
                 comment_body = (
                     f"Fabric System Health Check failed again on node {node} "
                     f"(recurring failure).\n\n"
-                    + _build_failure_body(
+                    + build_failure_body(
                         node=node,
                         slurm_job_id=slurm_job_id,
                         exit_code=exit_code,
@@ -581,7 +581,7 @@ def main() -> int:
                         f"*(/) Fabric System Health Check PASSED on node {node} "
                         f"(Slurm job {slurm_job_id}); the node has recovered. "
                         f"Closing this ticket automatically.*\n\n"
-                        + _build_recovery_body(
+                        + build_recovery_body(
                             node=node,
                             slurm_job_id=slurm_job_id,
                             versions=versions,

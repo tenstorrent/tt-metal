@@ -45,7 +45,7 @@ def _attachment_section(attachment_names: list[str] | None) -> str:
     return f"\n*Attachments:*\n{links}\n"
 
 
-def _build_failure_body(
+def build_failure_body(
     *,
     node: str,
     slurm_job_id: str,
@@ -94,7 +94,7 @@ def _build_failure_body(
     )
 
 
-def _build_recovery_body(
+def build_recovery_body(
     *,
     node: str,
     slurm_job_id: str,
@@ -287,7 +287,7 @@ def create_jira_ticket(
 ) -> str | None:
     """Create a JIRA ticket for a failed health check. Returns ticket key or None."""
 
-    description = f"Fabric System Health Check failed on node {node}.\n\n" + _build_failure_body(
+    description = f"Fabric System Health Check failed on node {node}.\n\n" + build_failure_body(
         node=node,
         slurm_job_id=slurm_job_id,
         exit_code=exit_code,
