@@ -231,8 +231,13 @@ std::atomic<ShmTrackingProcessor*> g_tracker{nullptr};
 }  // namespace
 
 void enable_shm_buffer_tracking(bool verbose) {
-    static ShmTrackingProcessor tracker(verbose);
-    g_tracker.store(&tracker, std::memory_order_release);
+    // Deliberately leaked, not a plain function-local static. A static would be destroyed at
+    // process exit while g_tracker still pointed at it, and any Buffer torn down after that --
+    // one owned by a global, or destroyed later in the same shutdown -- would reach
+    // track_deallocate() and lock a destroyed mutex. Nothing needs reclaiming here: it is two
+    // words that live for the process either way.
+    static auto* tracker = new ShmTrackingProcessor(verbose);  // NOLINT(cppcoreguidelines-owning-memory)
+    g_tracker.store(tracker, std::memory_order_release);
 }
 
 void record_buffer_allocation(const Buffer* buffer) {
