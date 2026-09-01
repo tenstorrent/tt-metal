@@ -29,6 +29,10 @@ namespace tt::tt_metal {
 
 AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
     config_(std::make_unique<AllocatorConfig>(alloc_config)),
+    persistent_l1_(
+        alloc_config.l1_unreserved_base,
+        alloc_config.worker_l1_size - alloc_config.l1_small_size,
+        alloc_config.worker_grid),
     view_(std::make_unique<Allocator>(this)),
     tracking_enabled_(trace_allocation_tracking_enabled()),
     traceback_capture_enabled_(trace_allocation_diagnostics_enabled()),
@@ -179,7 +183,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             break;
         case BufferType::L1: {
             // In HYBRID mode, gather per-bank ranges from device allocators so lockstep avoids occupied regions.
-            std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges;
+            std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges = persistent_l1_.occupied_ranges();
             if (!hybrid_device_allocators_.empty()) {
                 using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
                 uint32_t num_banks = l1_manager_->num_banks();

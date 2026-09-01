@@ -379,7 +379,23 @@ detail::ProgramImpl::ProgramImpl(ContextId context_id) :
 detail::ProgramImpl::~ProgramImpl() noexcept {
     // Deallocate circular buffers and unregister from devices
     deallocate_circular_buffers();
+    for (auto& [arena, cores] : persistent_l1_seals_) {
+        for (const CoreCoord& core : cores) {
+            arena->unseal(CoreRangeSet(CoreRange(core)));
+        }
+    }
     Inspector::program_destroyed(this);
+}
+
+DeviceAddr detail::ProgramImpl::reserve_program_local_l1(const IDevice* device, const CoreRangeSet& cores) {
+    auto& arena = device->allocator_impl()->persistent_l1();
+    auto& sealed_cores = persistent_l1_seals_[&arena];
+    for (const CoreCoord& core : corerange_to_cores(cores)) {
+        if (sealed_cores.insert(core).second) {
+            arena.seal(CoreRangeSet(CoreRange(core)));
+        }
+    }
+    return arena.high_water_mark(cores);
 }
 
 Program::Program() : internal_(std::make_shared<detail::ProgramImpl>()) {
@@ -1417,14 +1433,18 @@ uint8_t detail::ProgramImpl::add_prefetcher_pipe_attachment(
                     core.str());
             }
             participants.push_back(
-                {prefetcher_pipe_id, prefetcher_pipe.config_address(), entry_size, std::numeric_limits<uint8_t>::max()});
+                {prefetcher_pipe_id,
+                 prefetcher_pipe.config_address(),
+                 entry_size,
+                 std::numeric_limits<uint8_t>::max()});
         }
     }
     prefetcher_pipe_attachments_[prefetcher_pipe_id] = &prefetcher_pipe;
     return prefetcher_pipe_id;
 }
 
-const experimental::PrefetcherPipe& detail::ProgramImpl::get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id) const {
+const experimental::PrefetcherPipe& detail::ProgramImpl::get_prefetcher_pipe_attachment(
+    uint8_t prefetcher_pipe_id) const {
     auto it = prefetcher_pipe_attachments_.find(prefetcher_pipe_id);
     TT_FATAL(
         it != prefetcher_pipe_attachments_.end(),
@@ -1733,9 +1753,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
         return;
     }
 
-    const uint64_t base_l1_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
-
     for (auto& kernels_of_core_type : this->kernels_) {
         for (auto& [kernel_handle, kernel] : kernels_of_core_type) {
             auto& scratchpad_handles = kernel->scratchpad_binding_handles();
@@ -1743,6 +1761,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                 continue;
             }
             const CoreRangeSet& kernel_cores = kernel->core_range_set();
+            const DeviceAddr persistent_base = reserve_program_local_l1(device, kernel_cores);
 
             for (auto& handle : scratchpad_handles) {
                 // A scratchpad bumps onto the program-scope L1 region, stacking on top of any DFBs.
@@ -1777,13 +1796,14 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                         }
                     }
                 }
-                uint64_t addr = base_l1_address;
+                uint64_t addr = persistent_base;
                 for (const CircularBufferAllocator* a : touched) {
                     addr = std::max<uint64_t>(addr, a->get_cb_region_end());
                 }
                 addr = align(addr, alignment);
                 for (CircularBufferAllocator* a : touched) {
-                    a->mark_address(addr, handle.size_bytes, base_l1_address);
+                    const uint64_t allocator_base = reserve_program_local_l1(device, CoreRangeSet(a->core_range));
+                    a->mark_address(addr, handle.size_bytes, allocator_base);
                 }
 
                 handle.allocated_address = static_cast<uint32_t>(addr);
@@ -1874,7 +1894,11 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         return;
     }
 
-    uint64_t base_cb_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    for (const auto& circular_buffer : this->circular_buffers_) {
+        if (!circular_buffer->globally_allocated()) {
+            reserve_program_local_l1(device, circular_buffer->core_ranges());
+        }
+    }
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
             // Track globally allocated CBs too (they use L1 memory allocated via the allocator)
@@ -1889,7 +1913,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
             continue;
         }
 
-        uint64_t computed_addr = base_cb_address;
+        uint64_t computed_addr = reserve_program_local_l1(device, circular_buffer->core_ranges());
         for (const CoreRange& core_range : circular_buffer->core_ranges().ranges()) {
             // Need the max available address across all cores circular buffer is placed on
             for (const CircularBufferAllocator& cb_allocator : this->cb_allocators_) {
@@ -1909,7 +1933,9 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
                         // `core_range` but also intersecting `cb_allocator.core_range`
                         continue;
                     }
-                    cb_allocator.mark_address(computed_addr, circular_buffer->size(), base_cb_address);
+                    const uint64_t allocator_base =
+                        reserve_program_local_l1(device, CoreRangeSet(cb_allocator.core_range));
+                    cb_allocator.mark_address(computed_addr, circular_buffer->size(), allocator_base);
                 }
             }
         }
@@ -3150,8 +3176,8 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         uint32_t prev_offset_before_prefetcher_pipe = state.offset;
         state.offset = program_dispatch::finalize_prefetcher_pipes(index, programs, state.offset);
         state.prefetcher_pipe_offset = (state.offset > prev_offset_before_prefetcher_pipe)
-                                          ? (prev_offset_before_prefetcher_pipe - state.config_base_offset)
-                                          : REMOTE_DFB_OFFSET_NONE;
+                                           ? (prev_offset_before_prefetcher_pipe - state.config_base_offset)
+                                           : REMOTE_DFB_OFFSET_NONE;
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 

@@ -10,14 +10,12 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/distributed.hpp>
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 #include <variant>
 
 namespace tt::tt_metal {
 
-class Buffer;
 class IDevice;
 class Program;
 
@@ -28,7 +26,7 @@ public:
     /**
      * Host object for a durable cross-program remote DFB.
      *
-     * Lifetime: Create allocates the data ring + config Buffer and writes initial config
+     * Lifetime: Create allocates the data ring + config page from persistent L1
      * pages once. Keep this object alive for the entire time any program Attaches / uses
      * it, destroying it frees the ring and config. The runtime does not fence peers;
      * only destroy (or let it go out of scope) after every peer program has Finished.
@@ -53,9 +51,9 @@ public:
     PrefetcherPipe& operator=(const PrefetcherPipe&) = delete;
     PrefetcherPipe(PrefetcherPipe&&) = delete;
     PrefetcherPipe& operator=(PrefetcherPipe&&) = delete;
+    ~PrefetcherPipe();
 
     uint32_t buffer_address() const;
-    const Buffer& config_buffer() const;
     uint32_t config_address() const;
     uint32_t ring_size() const { return ring_size_; }
 
@@ -72,13 +70,14 @@ public:
 
 private:
     void setup_buffers(BufferType buffer_type);
-    void allocate_config_buffer(BufferType config_buffer_type);
     void build_config_pages();
     void write_config_to_device();
+    void release_allocations() noexcept;
 
-    distributed::AnyBuffer data_buffer_;
-    distributed::AnyBuffer config_buffer_;
+    uint64_t data_allocation_id_ = 0;
+    uint64_t config_allocation_id_ = 0;
     uint32_t data_address_ = 0;
+    uint32_t config_address_ = 0;
     IDevice* device_ = nullptr;
     CoreCoord sender_core_;
     CoreRangeSet sender_cores_;
@@ -92,7 +91,7 @@ private:
 };
 
 /**
- * @brief Create a PrefetcherPipe host object with internal data ring + config Buffer.
+ * @brief Create a PrefetcherPipe host object with an arena-backed data ring and config page.
  *
  * Config pages are written to device L1 at Create (safe-point initial write).
  * Caller keeps the object alive for cross-program persistence; Attach wires programs

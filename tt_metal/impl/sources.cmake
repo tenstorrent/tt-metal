@@ -24,6 +24,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/device/mock_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/persistent_l1_arena.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/memory_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/mesh_buffer.cpp

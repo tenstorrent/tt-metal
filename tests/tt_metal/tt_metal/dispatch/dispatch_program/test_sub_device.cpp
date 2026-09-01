@@ -45,6 +45,8 @@
 #include <tt-metalium/distributed.hpp>
 
 // Access to internal API: ProgramImpl::validate_circular_buffer_region
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include "tt_metal/impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
@@ -54,7 +56,14 @@ const std::string k_coordinates_kernel_path = "tests/tt_metal/tt_metal/test_kern
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     auto mesh_device = devices_[0];
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "PrefetcherPipe is not supported on Quasar yet";
+    }
     CoreRangeSet sharded_cores_1 = CoreRange({0, 0}, {2, 2});
+    auto pipe = experimental::CreatePrefetcherPipe(
+        mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), /*ring_size=*/1024);
+    const DeviceAddr persistent_end = pipe.config_address() + pipe.config_page_size();
+
     SubDevice sub_device_1(std::array{sharded_cores_1});
     auto sub_device_manager_1 = mesh_device->create_sub_device_manager({sub_device_1}, k_local_l1_size);
     DeviceAddr l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
@@ -84,6 +93,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, sharded_cores_1, cb_src0_config);
 
     program.impl().allocate_circular_buffers(mesh_device.get());
+    EXPECT_GE(program.impl().get_circular_buffer(cb_src0)->address(), persistent_end);
     program.impl().validate_circular_buffer_region(mesh_device.get());
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size * 3);
     program.impl().allocate_circular_buffers(mesh_device.get());

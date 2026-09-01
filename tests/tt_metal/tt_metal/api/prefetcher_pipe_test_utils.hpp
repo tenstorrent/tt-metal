@@ -46,8 +46,11 @@ inline bool verify_receiver_ring(
 }
 
 inline uint32_t sender_l1_staging_address(const experimental::PrefetcherPipe& pipe, uint32_t staging_size_bytes) {
-    const uint32_t pipe_bottom = std::min(pipe.config_address(), pipe.buffer_address());
-    return pipe_bottom - cross_node_dfb_test::align_staging_size_bytes(staging_size_bytes);
+    (void)staging_size_bytes;
+    // The persistent arena grows bottom-up from l1_unreserved_base, so placing
+    // staging below the pipe would enter reserved firmware L1. Tests use the
+    // first address above this pipe's persistent ring + config allocation.
+    return std::max(pipe.buffer_address() + pipe.ring_size(), pipe.config_address() + pipe.config_page_size());
 }
 
 inline void write_sender_l1_staging(

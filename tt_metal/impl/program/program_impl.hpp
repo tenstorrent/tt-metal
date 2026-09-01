@@ -11,11 +11,11 @@
 #include "tt-metalium/circular_buffer_constants.h"
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
-#include "tt-metalium/kernel_types.hpp"  // KernelHandle
-#include "tt-metalium/program.hpp"       // KernelGroup
+#include "tt-metalium/hal_types.hpp"       // HalProgrammableCoreType
+#include "tt-metalium/kernel_types.hpp"    // KernelHandle
+#include "tt-metalium/program.hpp"         // KernelGroup
 #include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
-#include "program_device_map.hpp"        // ProgramTransferInfo
+#include "program_device_map.hpp"          // ProgramTransferInfo
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
@@ -23,7 +23,7 @@
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <impl/context/context_types.hpp>
 
-#include <umd/device/types/core_coordinates.hpp>        // CoreType
+#include <umd/device/types/core_coordinates.hpp>          // CoreType
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 
 #include <atomic>
@@ -46,6 +46,7 @@ namespace tt::tt_metal {
 class CircularBufferConfig;
 class IDevice;
 class JitBuildOptions;
+class PersistentL1Arena;
 
 class HWCommandQueue;
 class EnqueueProgramCommand;
@@ -62,7 +63,7 @@ namespace experimental {
 class GlobalCircularBuffer;
 class CrossNodeDFB;
 class PrefetcherPipe;
-}
+}  // namespace experimental
 
 namespace program_dispatch {
 
@@ -235,7 +236,8 @@ public:
     std::vector<CoreRange> circular_buffers_unique_coreranges() const;
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_on_core(
         const CoreCoord& core) const;
-    std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_on_corerange(const CoreRange& cr) const;
+    std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
+    dataflow_buffers_on_corerange(const CoreRange& cr) const;
     std::vector<CoreRange> dataflow_buffers_unique_coreranges() const;
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;
@@ -252,6 +254,7 @@ public:
     // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
     // and patch the base address into the CRTA buffer
     void allocate_scratchpads(const IDevice* device);
+    DeviceAddr reserve_program_local_l1(const IDevice* device, const CoreRangeSet& cores);
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
@@ -381,7 +384,8 @@ public:
 
     std::shared_ptr<CircularBufferImpl> get_circular_buffer(CBHandle cb_id) const;
 
-    std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl> get_dataflow_buffer(uint32_t dfb_id) const;
+    std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl> get_dataflow_buffer(
+        uint32_t dfb_id) const;
 
     // A single DFB size override request, resolved to a DFB id. Overrides are applied as a batch
     // so an alias group can be validated for agreement before any mutation.
@@ -550,7 +554,7 @@ private:
     ContextId context_id_{DEFAULT_CONTEXT_ID};
     uint32_t programmable_core_count_;
     uint32_t max_cbs_;  // Architecture-specific max CBs
-    uint64_t id;  // Need to make non-const due to move constructor
+    uint64_t id;        // Need to make non-const due to move constructor
     uint64_t runtime_id{0};
     static std::atomic<uint64_t> program_counter;
     // Programmable core type index -> KernelHandle -> Kernel
@@ -592,6 +596,7 @@ private:
     tt::tt_metal::experimental::dfb::detail::TxnIdAllocator txn_id_allocator_;
     std::unordered_map<CoreCoord, uint8_t> per_core_num_dfbs_;
     std::vector<CircularBufferAllocator> dfb_allocators_;
+    std::unordered_map<PersistentL1Arena*, std::unordered_set<CoreCoord>> persistent_l1_seals_;
 
     // Initial Metal 2.0 implementation uses a name registry to map names to handles.
     // This indirection is simple and non-invasive, but less efficient than a direct mapping.

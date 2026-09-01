@@ -239,6 +239,67 @@ TEST_F(PrefetcherPipeFixture, CreatePrefetcherPipe_GeometryRejects) {
         std::exception);
 }
 
+TEST_F(PrefetcherPipeFixture, PersistentArenaSharesAddressesAcrossDisjointCores) {
+    auto mesh_device = devices_[0];
+    auto pipe0 =
+        experimental::CreatePrefetcherPipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), 1024);
+    auto pipe1 =
+        experimental::CreatePrefetcherPipe(mesh_device.get(), CoreCoord(2, 0), CoreRangeSet(CoreRange({3, 0})), 1024);
+
+    EXPECT_EQ(pipe0.buffer_address(), pipe1.buffer_address());
+    EXPECT_EQ(pipe0.config_address(), pipe1.config_address());
+}
+
+TEST_F(PrefetcherPipeFixture, MultipleDisjointOneToNPipesShareL1Address) {
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 256;
+    constexpr uint32_t num_entries = 4;
+    constexpr uint32_t ring_bytes = entry_size * num_entries;
+
+    // M=3 independent 1:N pipes (N=2). Each Create call is one logical pipe.
+    // Their participating core sets are disjoint, so the persistent arena can
+    // place every ring/config at the same per-core L1 addresses.
+    auto pipe0 = experimental::CreatePrefetcherPipe(
+        mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {2, 0})), ring_bytes);
+    auto pipe1 = experimental::CreatePrefetcherPipe(
+        mesh_device.get(), CoreCoord(0, 1), CoreRangeSet(CoreRange({1, 1}, {2, 1})), ring_bytes);
+    auto pipe2 = experimental::CreatePrefetcherPipe(
+        mesh_device.get(), CoreCoord(0, 2), CoreRangeSet(CoreRange({1, 2}, {2, 2})), ring_bytes);
+
+    EXPECT_EQ(pipe1.buffer_address(), pipe0.buffer_address());
+    EXPECT_EQ(pipe2.buffer_address(), pipe0.buffer_address());
+    EXPECT_EQ(pipe1.config_address(), pipe0.config_address());
+    EXPECT_EQ(pipe2.config_address(), pipe0.config_address());
+
+    EXPECT_EQ(
+        run_persistent_1toN_cross_program(mesh_device, pipe0, entry_size, num_entries, /*write_primitive=*/0), 2u);
+    EXPECT_EQ(
+        run_persistent_1toN_cross_program(mesh_device, pipe1, entry_size, num_entries, /*write_primitive=*/0), 2u);
+    EXPECT_EQ(
+        run_persistent_1toN_cross_program(mesh_device, pipe2, entry_size, num_entries, /*write_primitive=*/0), 2u);
+}
+
+TEST_F(PrefetcherPipeFixture, PersistentArenaSerializesOverlappingCoresAndReusesFreedSpace) {
+    auto mesh_device = devices_[0];
+    uint32_t first_ring_address = 0;
+    uint32_t first_config_address = 0;
+    {
+        auto pipe0 = experimental::CreatePrefetcherPipe(
+            mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), 1024);
+        first_ring_address = pipe0.buffer_address();
+        first_config_address = pipe0.config_address();
+
+        auto pipe1 = experimental::CreatePrefetcherPipe(
+            mesh_device.get(), CoreCoord(2, 0), CoreRangeSet(CoreRange({1, 0})), 1024);
+        EXPECT_GE(pipe1.buffer_address(), pipe0.config_address() + pipe0.config_page_size());
+    }
+
+    auto replacement =
+        experimental::CreatePrefetcherPipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), 1024);
+    EXPECT_EQ(replacement.buffer_address(), first_ring_address);
+    EXPECT_EQ(replacement.config_address(), first_config_address);
+}
+
 TEST_F(PrefetcherPipeFixture, AttachPrefetcherPipe_EntrySizeRejects) {
     auto mesh_device = devices_[0];
     const std::pair<CoreCoord, CoreRangeSet> mapping = {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}))};
@@ -970,8 +1031,8 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
         mesh_device->create_sub_device_manager({sender_sub_device, receiver_sub_device}, /*local_l1_size=*/0);
     mesh_device->load_sub_device_manager(sub_device_manager);
 
-    // Semaphores are allocated before the PrefetcherPipe so they sit above it in L1;
-    // the sender staging scratch (placed just below the pipe) must not overlap them.
+    // Semaphores are allocated top-down before the PrefetcherPipe. The test-only
+    // sender staging scratch is placed immediately above the persistent arena.
     auto resized_sem = CreateGlobalSemaphore(mesh_device.get(), sender_cores, /*initial_value=*/0);
     auto go_sem = CreateGlobalSemaphore(mesh_device.get(), sender_cores, /*initial_value=*/0);
 

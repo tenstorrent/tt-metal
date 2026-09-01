@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/assert.hpp>
-#include <buffer.hpp>
 #include <buffer_types.hpp>
 #include <core_coord.hpp>
 #include <device.hpp>
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
+#include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/program/program_impl.hpp"
@@ -19,10 +19,9 @@
 #include <variant>
 #include <vector>
 
-#include "distributed.hpp"
 #include "hostdev/remote_dfb_config_layout.h"
-#include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
+#include "tt_metal/api/tt-metalium/tt_metal.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -54,9 +53,7 @@ void validate_ring_geometry(IDevice* device, uint32_t ring_size, BufferType buff
     TT_FATAL(ring_size > 0, "ring_size must be > 0");
     TT_FATAL(
         ring_size % l1_alignment == 0, "ring_size {} must be a multiple of L1_ALIGNMENT {}", ring_size, l1_alignment);
-    TT_FATAL(
-        buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL,
-        "PrefetcherPipe can only use L1 buffer types");
+    TT_FATAL(buffer_type == BufferType::L1, "PrefetcherPipe persistent-arena allocations require BufferType::L1");
 }
 
 struct PrefetcherPipeConfigPageLayout {
@@ -85,30 +82,16 @@ PrefetcherPipe::PrefetcherPipe(
     BufferType buffer_type) :
     device_(device), sender_core_(sender_core), receiver_cores_(receiver_cores), ring_size_(ring_size) {
     initialize_prefetcher_pipe(device, sender_core, receiver_cores_, sender_cores_, all_cores_);
-    setup_buffers(buffer_type);
-}
-
-void PrefetcherPipe::allocate_config_buffer(BufferType config_buffer_type) {
-    const auto context_id = extract_context_id(device_);
-    const auto& hal = MetalContext::instance(context_id).hal();
-    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    const uint32_t num_all_cores = all_cores_.num_cores();
-    config_page_size_ = compute_prefetcher_pipe_config_page_layout(receiver_cores_.num_cores(), l1_alignment).page_size;
-
-    auto shard_params = ShardSpecBuffer(all_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_all_cores, 1});
-    ShardedBufferConfig config = {
-        .device = device_,
-        .size = config_page_size_ * num_all_cores,
-        .page_size = config_page_size_,
-        .buffer_type = config_buffer_type,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(shard_params),
-    };
-    config_buffer_ = distributed::AnyBuffer::create(config);
+    try {
+        setup_buffers(buffer_type);
+    } catch (...) {
+        release_allocations();
+        throw;
+    }
 }
 
 void PrefetcherPipe::build_config_pages() {
-    TT_FATAL(config_buffer_.get_buffer() != nullptr, "PrefetcherPipe config buffer must exist before building pages");
+    TT_FATAL(config_address_ != 0, "PrefetcherPipe config allocation must exist before building pages");
     TT_FATAL(data_address_ != 0, "PrefetcherPipe data address must be set before building config pages");
 
     const auto context_id = extract_context_id(device_);
@@ -164,59 +147,90 @@ void PrefetcherPipe::build_config_pages() {
 }
 
 void PrefetcherPipe::write_config_to_device() {
-    TT_FATAL(config_buffer_.get_buffer() != nullptr, "PrefetcherPipe config buffer must exist before device write");
-    Buffer* buffer = config_buffer_.get_buffer();
-    const uint32_t config_size = static_cast<uint32_t>(buffer->size());
-    std::vector<uint32_t> host_flat(config_size / sizeof(uint32_t), 0);
-
-    const auto& page_mapping = buffer->get_buffer_page_mapping();
-    TT_FATAL(page_mapping != nullptr, "PrefetcherPipe config buffer must have page mapping");
-
+    const auto* mesh_device = dynamic_cast<const distributed::MeshDevice*>(device_);
     for (const auto& [core, page] : config_pages_) {
-        const auto core_it = page_mapping->core_to_core_id.find(core);
-        TT_FATAL(
-            core_it != page_mapping->core_to_core_id.end(),
-            "PrefetcherPipe missing core {} in config mapping",
-            core.str());
-        const uint32_t dst_idx = core_it->second * (config_page_size_ / sizeof(uint32_t));
-        TT_FATAL(
-            dst_idx + page.size() <= host_flat.size(),
-            "PrefetcherPipe config page for core {} overflows host staging buffer",
-            core.str());
-        std::copy(page.begin(), page.end(), host_flat.begin() + dst_idx);
+        auto write_page = [&](IDevice* target_device) {
+            auto page_copy = page;
+            TT_FATAL(
+                detail::WriteToDeviceL1(target_device, core, config_address_, page_copy),
+                "Failed to write PrefetcherPipe config page to core {} on device {}",
+                core.str(),
+                target_device->id());
+        };
+        if (mesh_device != nullptr) {
+            for (IDevice* target_device : mesh_device->get_devices()) {
+                write_page(target_device);
+            }
+        } else {
+            write_page(device_);
+        }
     }
-
-    auto mesh_buffer = config_buffer_.get_mesh_buffer();
-    distributed::EnqueueWriteMeshBuffer(
-        mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_flat, /*blocking=*/false);
 }
 
 void PrefetcherPipe::setup_buffers(BufferType buffer_type) {
     validate_ring_geometry(device_, ring_size_, buffer_type);
 
-    const uint32_t num_all_cores = all_cores_.num_cores();
-    auto shard_params_data =
-        ShardSpecBuffer(all_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_all_cores, 1});
-    ShardedBufferConfig data_shard_cfg = {
-        .device = device_,
-        .size = ring_size_ * num_all_cores,
-        .page_size = ring_size_,
-        .buffer_type = buffer_type,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(shard_params_data),
-    };
-    data_buffer_ = distributed::AnyBuffer::create(data_shard_cfg);
-    data_address_ = static_cast<uint32_t>(data_buffer_.get_buffer()->address());
-    allocate_config_buffer(buffer_type);
+    const auto context_id = extract_context_id(device_);
+    const auto& hal = MetalContext::instance(context_id).hal();
+    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+    config_page_size_ = compute_prefetcher_pipe_config_page_layout(receiver_cores_.num_cores(), l1_alignment).page_size;
+
+    auto& arena = device_->allocator_impl()->persistent_l1();
+    auto data_allocation = arena.allocate(all_cores_, ring_size_, l1_alignment);
+    data_allocation_id_ = data_allocation.id;
+    TT_FATAL(
+        data_allocation.address <= std::numeric_limits<uint32_t>::max(),
+        "PrefetcherPipe ring address {} exceeds device-address width",
+        data_allocation.address);
+    data_address_ = static_cast<uint32_t>(data_allocation.address);
+
+    auto config_allocation = arena.allocate(all_cores_, config_page_size_, l1_alignment);
+    config_allocation_id_ = config_allocation.id;
+    TT_FATAL(
+        config_allocation.address <= std::numeric_limits<uint32_t>::max(),
+        "PrefetcherPipe config address {} exceeds device-address width",
+        config_allocation.address);
+    config_address_ = static_cast<uint32_t>(config_allocation.address);
+
+    const DeviceAddr persistent_end = config_allocation.address + config_allocation.size;
+    for (const CoreCoord& core : corerange_to_cores(all_cores_)) {
+        const auto& bank_ids = device_->allocator_impl()->get_bank_ids_from_logical_core(BufferType::L1, core);
+        TT_FATAL(bank_ids.size() == 1, "Expected one L1 bank for PrefetcherPipe core {}", core.str());
+        const auto lowest_global_allocation =
+            device_->allocator_impl()->get_lowest_occupied_l1_address(bank_ids.front());
+        TT_FATAL(
+            !lowest_global_allocation.has_value() || persistent_end <= *lowest_global_allocation,
+            "PrefetcherPipe persistent L1 region [{}, {}) overlaps an existing L1 allocation at {} on core {}",
+            data_allocation.address,
+            persistent_end,
+            lowest_global_allocation.value_or(0),
+            core.str());
+    }
     build_config_pages();
     write_config_to_device();
 }
 
-const Buffer& PrefetcherPipe::config_buffer() const { return *config_buffer_.get_buffer(); }
+PrefetcherPipe::~PrefetcherPipe() { release_allocations(); }
+
+void PrefetcherPipe::release_allocations() noexcept {
+    if (device_ == nullptr) {
+        return;
+    }
+    auto& arena = device_->allocator_impl()->persistent_l1();
+    try {
+        arena.deallocate(config_allocation_id_);
+        config_allocation_id_ = 0;
+        arena.deallocate(data_allocation_id_);
+        data_allocation_id_ = 0;
+    } catch (...) {
+        // Destructors must not throw. A missing allocation indicates an internal
+        // lifetime error and will be caught by focused arena tests.
+    }
+}
 
 uint32_t PrefetcherPipe::buffer_address() const { return data_address_; }
 
-uint32_t PrefetcherPipe::config_address() const { return static_cast<uint32_t>(config_buffer().address()); }
+uint32_t PrefetcherPipe::config_address() const { return config_address_; }
 
 const std::vector<uint32_t>& PrefetcherPipe::config_page(const CoreCoord& core) const {
     auto it = config_pages_.find(core);
