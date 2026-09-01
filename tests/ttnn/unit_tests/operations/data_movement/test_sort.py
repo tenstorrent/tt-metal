@@ -994,3 +994,36 @@ def test_sort_row_major_multi_core_correctness(descending, device):
 
     ttnn_gathered = torch.gather(input_t, -1, ttnn.to_torch(ttnn_indices).to(torch.int64))
     assert_equal(torch_values, ttnn_gathered)
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_tied_values_indices_are_a_permutation(descending, device):
+    """
+    Regression test for #54767: cross-core index duplication on tied values.
+
+    Every value is equal, so a compare-exchange network must leave the row
+    untouched and return the identity permutation. The CrossCoreDataExchange
+    factory used to merge a split tile pair redundantly on both cores, each
+    keeping one half; because a tie makes topk_merge a no-op, both cores kept
+    the same physical tile and one tile's indices were duplicated over the
+    other's. Gather-based checks cannot see this — the values are tied, so a
+    duplicated index still gathers the right value — so assert injectivity.
+
+    Wt is taken just past the single-core threshold so the cross-core path is
+    exercised on any grid, and the shape stays small enough to be cheap.
+    """
+    grid = device.compute_with_storage_grid_size()
+    wt = _next_pow2(grid.x * grid.y * 2)
+    n = wt * TILE_WIDTH
+
+    input_tensor = torch.zeros((1, n), dtype=torch.float32)
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+
+    _, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+
+    indices = ttnn.to_torch(ttnn_indices).reshape(-1).to(torch.int64)
+    assert (
+        indices.min() >= 0 and indices.max() < n
+    ), f"indices out of range [0, {n}): min={int(indices.min())}, max={int(indices.max())}"
+    unique_count = indices.unique().numel()
+    assert unique_count == n, f"{n - unique_count} duplicated indices"
