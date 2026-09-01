@@ -182,14 +182,14 @@ namespace ttnn::prim {
 Tensor gelu_bw(
     const Tensor& grad_output,
     const Tensor& input,
-    const std::string& approximate,
+    operations::unary::GeluVariant variant,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& preallocated_output) {
     using OperationType = ttnn::operations::unary_backward::gelu_bw::GeluBwDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        .output_dtype = output_dtype, .output_memory_config = output_memory_config, .approximate = approximate};
+        .output_dtype = output_dtype, .output_memory_config = output_memory_config, .variant = variant};
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output, .input = input, .preallocated_input_grad = preallocated_output};
 

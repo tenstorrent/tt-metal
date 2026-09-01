@@ -178,7 +178,7 @@ ttnn::device_operation::ProgramArtifacts GeluBwProgramFactory::create_program_ar
     };
 
     const char* compute_kernel_path = nullptr;
-    if (args.approximate == "tanh") {
+    if (args.variant == operations::unary::GeluVariant::TANH) {
         // bfloat16 leaves 8 DST tiles available in DstSync::SyncHalf, float32 only 4.
         compute_kernel_path = fp32_dest_acc_en ? "ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/"
                                                  "kernels/compute/eltwise_bw_gelu_tanh_fp32.cpp"

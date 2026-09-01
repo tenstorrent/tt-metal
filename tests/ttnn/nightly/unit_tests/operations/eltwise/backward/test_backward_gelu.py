@@ -12,7 +12,11 @@ from tests.ttnn.utils_for_testing import (
     generate_all_bfloat16_bitpatterns,
 )
 
-GELU_APPROXIMATIONS = ("none", "tanh")
+GELU_VARIANTS = (
+    (ttnn.GeluVariant.Accurate, "none"),
+    (ttnn.GeluVariant.Tanh, "tanh"),
+)
+GELU_VARIANT_PARAMS = [pytest.param(variant, approximate, id=approximate) for variant, approximate in GELU_VARIANTS]
 SHAPE_TEST_CASES = (
     pytest.param(torch.Size([32]), id="rank1-tile-aligned"),
     pytest.param(torch.Size([25, 34]), id="rank2-unaligned"),
@@ -20,20 +24,21 @@ SHAPE_TEST_CASES = (
     pytest.param(torch.Size([1, 3, 323, 389]), id="rank4-unaligned"),
 )
 EXHAUSTIVE_TEST_CASES = (
-    pytest.param("none", torch.bfloat16, ttnn.bfloat16, 2e-2, 9e-3, id="none-bf16"),
+    pytest.param(ttnn.GeluVariant.Accurate, "none", torch.bfloat16, ttnn.bfloat16, 2e-2, 9e-3, id="none-bf16"),
     # The tanh kernel has a 0.0134 absolute error at its BF16 zero crossing.
-    pytest.param("tanh", torch.bfloat16, ttnn.bfloat16, 4.9e-2, 1.5e-2, id="tanh-bf16"),
-    pytest.param("none", torch.float32, ttnn.float32, 1e-2, 9e-3, id="none-fp32"),
-    pytest.param("tanh", torch.float32, ttnn.float32, 1e-4, 1e-4, id="tanh-fp32"),
+    pytest.param(ttnn.GeluVariant.Tanh, "tanh", torch.bfloat16, ttnn.bfloat16, 4.9e-2, 1.5e-2, id="tanh-bf16"),
+    pytest.param(ttnn.GeluVariant.Accurate, "none", torch.float32, ttnn.float32, 1e-2, 9e-3, id="none-fp32"),
+    pytest.param(ttnn.GeluVariant.Tanh, "tanh", torch.float32, ttnn.float32, 1e-4, 1e-4, id="tanh-fp32"),
 )
 SPECIAL_VALUE_DTYPES = (
     pytest.param(torch.bfloat16, ttnn.bfloat16, 4.9e-2, 9e-3, id="bf16"),
     pytest.param(torch.float32, ttnn.float32, 1e-4, 1e-4, id="fp32"),
 )
 SPECIAL_VALUE_CASES = (
-    pytest.param("none", float("inf"), "one", id="none-pos-inf"),
-    pytest.param("none", float("-inf"), "zero", id="none-neg-inf"),
+    pytest.param(ttnn.GeluVariant.Accurate, "none", float("inf"), "one", id="none-pos-inf"),
+    pytest.param(ttnn.GeluVariant.Accurate, "none", float("-inf"), "zero", id="none-neg-inf"),
     pytest.param(
+        ttnn.GeluVariant.Accurate,
         "none",
         float("nan"),
         "nan",
@@ -43,9 +48,9 @@ SPECIAL_VALUE_CASES = (
             strict=True,
         ),
     ),
-    pytest.param("tanh", float("inf"), "one", id="tanh-pos-inf"),
-    pytest.param("tanh", float("-inf"), "zero", id="tanh-neg-inf"),
-    pytest.param("tanh", float("nan"), "nan", id="tanh-nan"),
+    pytest.param(ttnn.GeluVariant.Tanh, "tanh", float("inf"), "one", id="tanh-pos-inf"),
+    pytest.param(ttnn.GeluVariant.Tanh, "tanh", float("-inf"), "zero", id="tanh-neg-inf"),
+    pytest.param(ttnn.GeluVariant.Tanh, "tanh", float("nan"), "nan", id="tanh-nan"),
 )
 
 
@@ -74,8 +79,8 @@ def _bf16_tolerance(approximate):
     return (4.9e-2, 1.5e-2) if approximate == "tanh" else (2e-2, 9e-3)
 
 
-@pytest.mark.parametrize("approximate,torch_dtype,ttnn_dtype,rtol,atol", EXHAUSTIVE_TEST_CASES)
-def test_gelu_bw_exhaustive_allclose(device, approximate, torch_dtype, ttnn_dtype, rtol, atol):
+@pytest.mark.parametrize("variant,approximate,torch_dtype,ttnn_dtype,rtol,atol", EXHAUSTIVE_TEST_CASES)
+def test_gelu_bw_exhaustive_allclose(device, variant, approximate, torch_dtype, ttnn_dtype, rtol, atol):
     input_data, grad_data = _make_exhaustive_inputs(torch_dtype)
     expected = _gelu_bw_reference(input_data, grad_data, approximate)
 
@@ -86,7 +91,7 @@ def test_gelu_bw_exhaustive_allclose(device, approximate, torch_dtype, ttnn_dtyp
 
     input_tensor = ttnn.from_torch(input_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     grad_tensor = ttnn.from_torch(grad_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    actual = ttnn.to_torch(ttnn.gelu_bw(grad_tensor, input_tensor, approximate=approximate)[0])
+    actual = ttnn.to_torch(ttnn.gelu_bw(grad_tensor, input_tensor, variant=variant)[0])
 
     assert torch.isfinite(actual[finite_reference]).all(), "device output is non-finite for a finite reference"
     assert_allclose(expected[finite_reference], actual[finite_reference], rtol=rtol, atol=atol)
@@ -99,27 +104,40 @@ def test_gelu_bw_default_matches_none(device):
     grad_tensor = ttnn.from_torch(grad_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     default_actual = ttnn.to_torch(ttnn.gelu_bw(grad_tensor, input_tensor)[0])
-    none_actual = ttnn.to_torch(ttnn.gelu_bw(grad_tensor, input_tensor, approximate="none")[0])
+    none_actual = ttnn.to_torch(ttnn.gelu_bw(grad_tensor, input_tensor, variant=ttnn.GeluVariant.Accurate)[0])
     assert torch.equal(default_actual, none_actual)
 
 
-@pytest.mark.parametrize("approximate", GELU_APPROXIMATIONS)
+def test_gelu_bw_rejects_fast_lut(device, expect_error):
+    input_data = torch.zeros((32, 32), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    grad_tensor = ttnn.from_torch(
+        torch.ones_like(input_data), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    with expect_error(RuntimeError, "does not support GeluVariant::FAST_LUT"):
+        ttnn.gelu_bw(grad_tensor, input_tensor, variant=ttnn.GeluVariant.FastLut)
+
+
+@pytest.mark.parametrize("variant,approximate", GELU_VARIANT_PARAMS)
 @pytest.mark.parametrize("shape", SHAPE_TEST_CASES)
-def test_gelu_bw_shape_coverage(device, approximate, shape):
+def test_gelu_bw_shape_coverage(device, variant, approximate, shape):
     torch.manual_seed(shape.numel())
     input_data = torch.rand(shape, dtype=torch.bfloat16) * 4 - 2
     grad_data = torch.rand(shape, dtype=torch.bfloat16) * 4 - 2
     input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     grad_tensor = ttnn.from_torch(grad_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    actual = ttnn.to_torch(ttnn.gelu_bw(grad_tensor, input_tensor, approximate=approximate)[0])
+    actual = ttnn.to_torch(ttnn.gelu_bw(grad_tensor, input_tensor, variant=variant)[0])
     rtol, atol = _bf16_tolerance(approximate)
     assert_allclose(_gelu_bw_reference(input_data, grad_data, approximate), actual, rtol=rtol, atol=atol)
 
 
 @pytest.mark.parametrize("torch_dtype,ttnn_dtype,rtol,atol", SPECIAL_VALUE_DTYPES)
-@pytest.mark.parametrize("approximate,input_value,expected", SPECIAL_VALUE_CASES)
-def test_gelu_bw_special_values(device, approximate, input_value, expected, torch_dtype, ttnn_dtype, rtol, atol):
+@pytest.mark.parametrize("variant,approximate,input_value,expected", SPECIAL_VALUE_CASES)
+def test_gelu_bw_special_values(
+    device, variant, approximate, input_value, expected, torch_dtype, ttnn_dtype, rtol, atol
+):
     if approximate == "tanh" and torch.isinf(torch.tensor(input_value)) and ttnn_dtype == ttnn.float32:
         pytest.xfail("FP32 tanh GELU backward overflows for infinite inputs and produces NaN")
     if approximate == "tanh" and torch.isnan(torch.tensor(input_value)) and ttnn_dtype == ttnn.bfloat16:
@@ -131,7 +149,7 @@ def test_gelu_bw_special_values(device, approximate, input_value, expected, torc
         input_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
     )
     grad_tensor = ttnn.from_torch(grad_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    actual = ttnn.to_torch(ttnn.gelu_bw(grad_tensor, input_tensor, approximate=approximate)[0])[0]
+    actual = ttnn.to_torch(ttnn.gelu_bw(grad_tensor, input_tensor, variant=variant)[0])[0]
 
     if expected == "nan":
         assert torch.isnan(actual), "GELU backward must propagate NaN inputs"
@@ -140,8 +158,8 @@ def test_gelu_bw_special_values(device, approximate, input_value, expected, torc
         assert torch.isclose(actual, torch.tensor(expected_value, dtype=torch_dtype), rtol=rtol, atol=atol)
 
 
-@pytest.mark.parametrize("approximate", GELU_APPROXIMATIONS)
-def test_bw_gelu_opt_output(approximate, device):
+@pytest.mark.parametrize("variant,approximate", GELU_VARIANT_PARAMS)
+def test_bw_gelu_opt_output(variant, approximate, device):
     shape = torch.Size([1, 1, 320, 384])
     input_data = torch.linspace(-5.0, 5.0, shape.numel(), dtype=torch.bfloat16).reshape(shape)
     grad_data = torch.linspace(-2.0, 2.0, shape.numel(), dtype=torch.bfloat16).reshape(shape)
@@ -156,7 +174,7 @@ def test_bw_gelu_opt_output(approximate, device):
     )
 
     pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
-    ttnn.gelu_bw(grad_tensor, input_tensor, approximate=approximate, input_grad=input_grad, queue_id=0)
+    ttnn.gelu_bw(grad_tensor, input_tensor, variant=variant, input_grad=input_grad, queue_id=0)
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
     rtol, atol = _bf16_tolerance(approximate)
     assert_allclose(
@@ -208,25 +226,28 @@ def test_bw_gelu_program_cache_regression(device):
         )
 
     try:
-        for expected_entries, approximate in enumerate(GELU_APPROXIMATIONS, start=1):
+        for expected_entries, (variant, approximate) in enumerate(GELU_VARIANTS, start=1):
             input_data, grad_data, input_tensor, grad_tensor = fresh_inputs(expected_entries)
-            actual = ttnn.gelu_bw(grad_tensor, input_tensor, approximate=approximate)[0]
+            actual = ttnn.gelu_bw(grad_tensor, input_tensor, variant=variant)[0]
             rtol, atol = _bf16_tolerance(approximate)
             assert_allclose(
                 _gelu_bw_reference(input_data, grad_data, approximate), ttnn.to_torch(actual), rtol=rtol, atol=atol
             )
             assert device.num_program_cache_entries() == expected_entries
 
-        for seed, approximate in ((42, "none"), (99, "tanh")):
+        for seed, variant, approximate in (
+            (42, ttnn.GeluVariant.Accurate, "none"),
+            (99, ttnn.GeluVariant.Tanh, "tanh"),
+        ):
             input_data, grad_data, input_tensor, grad_tensor = fresh_inputs(seed)
-            actual = ttnn.gelu_bw(grad_tensor, input_tensor, approximate=approximate)[0]
+            actual = ttnn.gelu_bw(grad_tensor, input_tensor, variant=variant)[0]
             rtol, atol = _bf16_tolerance(approximate)
             assert_allclose(
                 _gelu_bw_reference(input_data, grad_data, approximate), ttnn.to_torch(actual), rtol=rtol, atol=atol
             )
             assert device.num_program_cache_entries() == 2
 
-        for approximate in GELU_APPROXIMATIONS:
+        for variant, approximate in GELU_VARIANTS:
             entries_before = None
             for seed in (100, 200):
                 input_data, grad_data, input_tensor, grad_tensor = fresh_inputs(seed)
@@ -238,7 +259,7 @@ def test_bw_gelu_program_cache_regression(device):
                     device=device,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
-                ttnn.gelu_bw(grad_tensor, input_tensor, approximate=approximate, input_grad=input_grad, queue_id=0)
+                ttnn.gelu_bw(grad_tensor, input_tensor, variant=variant, input_grad=input_grad, queue_id=0)
                 assert_allclose(
                     _gelu_bw_reference(input_data, grad_data, approximate),
                     ttnn.to_torch(input_grad),
