@@ -4,12 +4,10 @@
 
 """Top-level MiniMax-H3 visual VAE: spatial tiling, temporal chunking, encode.
 
-MiniMax-H3 ships with **tiling enabled** (``use_tiling = True``,
-``tile_sample_min_{height,width} = 256``, overlap 64). Both ``_encode_clip`` and
-``_decode_clip`` split the frame into 256x256 **pixel** tiles, run the model
-independently per tile, and linearly cross-fade the overlaps. That is not an optional
-memory optimisation -- reproducing the released model requires it -- and it is what
-bounds every work unit:
+MiniMax-H3 ships tiled (256 px tiles, overlap 64). Both encode and decode split the
+frame into 256x256 **pixel** tiles, run the model independently per tile, and
+linearly cross-fade the overlaps. That is not an optional memory optimisation --
+reproducing the released model requires it -- and it is what bounds every work unit:
 
 * the encoder always sees ``(1, 3, 17, 256, 256)`` and emits ``(1, 48, 5, 16, 16)``;
 * the decoder always sees ``(1, 24, 7, 16, 16)``.
@@ -45,7 +43,6 @@ from loguru import logger
 
 import ttnn
 
-from ....layers.module import Module
 from ....utils.tensor import fast_device_to_host, float_to_uint8, local_device_to_torch
 from ....utils.yuv_d2h import fast_device_to_host_yuv
 from .encoder_minimax_h3 import MiniMaxH3Encoder3d
@@ -213,23 +210,106 @@ def stitch_tiles(
     return torch.cat(result_rows, dim=-2)
 
 
-class MiniMaxH3Vae(Module):
-    """Encode path for the H3 visual VAE, tiled and temporally chunked.
+def prepare_encoder_state(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Encoder ``state_dict`` with ``quant_conv`` folded into ``conv_out``.
 
-    Encoders are built lazily and cached per distinct tile shape. Each carries
-    GroupNorms whose core grid is pinned at construction, so one encoder serves every
-    tile of a given ``(T, H, W)`` -- which, with tiling on, is every tile of the frame.
+    The two are adjacent with no nonlinearity between them, so one 1024->48 k3 conv
+    does both and the awkward 48-channel 1x1x1 conv disappears entirely.
+    """
+    encoder_state = {k[len("encoder.") :]: v for k, v in state.items() if k.startswith("encoder.")}
+    if not encoder_state:
+        encoder_state = dict(state)
+    quant_weight = state.get("quant_conv.weight")
+    quant_bias = state.get("quant_conv.bias")
+    encoder_state.pop("quant_conv.weight", None)
+    encoder_state.pop("quant_conv.bias", None)
+    if quant_weight is not None and "conv_out.weight" in encoder_state:
+        # (48,48,1,1,1) composed with (48,1024,3,3,3) -> (48,1024,3,3,3)
+        quant_2d = quant_weight.reshape(quant_weight.shape[0], quant_weight.shape[1])
+        encoder_state["conv_out.weight"] = torch.einsum("oi,ijkmn->ojkmn", quant_2d, encoder_state["conv_out.weight"])
+        encoder_state["conv_out.bias"] = quant_2d @ encoder_state["conv_out.bias"] + quant_bias
+    return encoder_state
+
+
+def _fold_pixel_denorm(
+    decoder_state: dict[str, torch.Tensor],
+    pixel_denorm: tuple[Sequence[float], Sequence[float]],
+    out_channels: int,
+) -> None:
+    """Fold the ImageNet de-normalization into ``proj_out``, landing pixels in ``[-1, 1]``.
+
+    ``proj_out`` emits a patch's pixels flattened as ``(C, pt, p, p)`` with ``C`` outermost --
+    the order :func:`decoder_minimax_h3.unpatchify` reshapes to -- so a per-channel affine is a
+    row scale plus a bias shift, the same move :func:`prepare_decoder_state` already makes for
+    ``post_quant_conv``. The reference's ``x*std + mean`` lands in ``[0, 1]``; the extra
+    ``2x - 1`` is the range ``rgb_to_yuv`` and ``float_to_uint8`` both take.
+
+    Exact, not approximate: the tile cross-fade is a convex combination and this is affine, so
+    it commutes with the blend. The reference's ``clamp`` is *not* affine and therefore stays
+    after the stitch rather than being folded in here.
+    """
+    pixel_mean, pixel_std = pixel_denorm
+    weight = decoder_state["proj_out.weight"]
+    out_features = weight.shape[0]
+    assert out_features % out_channels == 0, f"proj_out emits {out_features}, not a multiple of {out_channels}"
+    per_channel = out_features // out_channels
+
+    mean = torch.tensor(pixel_mean, dtype=weight.dtype)
+    std = torch.tensor(pixel_std, dtype=weight.dtype)
+    assert mean.numel() == out_channels and std.numel() == out_channels, "pixel_denorm must be per output channel"
+    scale = (2.0 * std).repeat_interleave(per_channel)
+    shift = (2.0 * mean - 1.0).repeat_interleave(per_channel)
+
+    decoder_state["proj_out.weight"] = weight * scale.view(-1, 1)
+    decoder_state["proj_out.bias"] = decoder_state["proj_out.bias"] * scale + shift
+
+
+def prepare_decoder_state(
+    state: dict[str, torch.Tensor],
+    pixel_denorm: tuple[Sequence[float], Sequence[float]] | None = None,
+    out_channels: int = 3,
+) -> dict[str, torch.Tensor]:
+    """Decoder ``state_dict`` with ``post_quant_conv`` folded into ``proj_in``.
+
+    The two are adjacent with no nonlinearity, so ``proj_in(post_quant_conv(z))`` is one
+    24->2048 linear and the awkward 24-channel 1x1x1 conv disappears. ``pixel_denorm``,
+    when set, is then folded into ``proj_out``.
+    """
+    decoder_state = {k[len("decoder.") :]: v for k, v in state.items() if k.startswith("decoder.")}
+    if not decoder_state:
+        decoder_state = dict(state)
+    post_weight = state.get("post_quant_conv.weight")
+    post_bias = state.get("post_quant_conv.bias")
+    decoder_state.pop("post_quant_conv.weight", None)
+    decoder_state.pop("post_quant_conv.bias", None)
+    if post_weight is not None and "proj_in.weight" in decoder_state:
+        post_2d = post_weight.reshape(post_weight.shape[0], post_weight.shape[1])
+        decoder_state["proj_in.bias"] = decoder_state["proj_in.weight"] @ post_bias + decoder_state["proj_in.bias"]
+        decoder_state["proj_in.weight"] = decoder_state["proj_in.weight"] @ post_2d
+    if pixel_denorm is not None:
+        _fold_pixel_denorm(decoder_state, pixel_denorm, out_channels)
+    return decoder_state
+
+
+class MiniMaxH3Vae:
+    """Orchestrator for the H3 visual VAE: tiling, waves, stitch; owns the leaf modules.
+
+    Constructs a fixed set of sub-models from config + task (decoder, image encoder,
+    and a video encoder on ref2va). Each is a named ``Module`` loaded on first use.
+    Production shapes are the tile: decoder ``(chunk+overlap, tile/ratio, tile/ratio)``,
+    image encoder ``(1, tile, tile)`` taps=1, video encoder ``(clip_length, tile, tile)``
+    taps=3.
     """
 
     def __init__(
         self,
         config: MiniMaxH3VaeConfig,
         *,
+        task: str,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.float32,
         tile_size: int = DEFAULT_TILE_SIZE,
         tile_overlap: int = DEFAULT_TILE_OVERLAP,
-        use_tiling: bool = True,
         weight_loader=None,
         device_stitch: bool = False,
         profile: bool = False,
@@ -239,8 +319,10 @@ class MiniMaxH3Vae(Module):
         readback_uint8: bool = False,
         waves_per_device: int = 1,
     ) -> None:
-        super().__init__()
+        if task not in ("t2va", "ref2va"):
+            raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
         self.config = config
+        self.task = task
         self.mesh_device = mesh_device
         # Used only to read a wave back (`_read_wave_units`); this VAE has no tensor parallelism and
         # runs no collectives in its forward. Optional because the standalone numerics tests build the
@@ -249,13 +331,10 @@ class MiniMaxH3Vae(Module):
         self.dtype = dtype
         self.tile_size = tile_size
         self.tile_overlap = tile_overlap
-        self.use_tiling = use_tiling
         # Hook for a caller that wants weights loaded through `utils.cache` rather than straight off
-        # the host state dict. Called as `weight_loader(module, subfolder, state)` once per distinct
-        # (T, H, W) sub-model, since each one holds its own shape-specialised conv3d weight layout.
+        # the host state dict. Called as `weight_loader(module, subfolder, state)` once per sub-model.
         # Defaults to a plain strict load, which is what every existing test does.
         self._weight_loader = weight_loader
-        self._encoders: dict[tuple[int, int, int, int], MiniMaxH3Encoder3d] = {}
         self._stitcher = None
         # Blend the tile grid on device and read back the assembled canvas, instead of reading
         # overlapping tiles and blending them on host.
@@ -265,10 +344,10 @@ class MiniMaxH3Vae(Module):
         # caller keeps no copy of the constants. Left unset the decoder emits reference-space values,
         # which is what the numerics tests compare against.
         self.pixel_denorm = pixel_denorm
-        # The encode-side mirror: set it and `(x/255 - mean)/std` folds into each per-shape
-        # encoder's conv_in, so `encode` / `encode_clip` take the decoder's raw **uint8** pixels
-        # (1 byte across PCIe instead of 4) and the host never runs a normalize pass. Left unset
-        # they take reference-space normalized fp32, which the numerics tests feed directly.
+        # The encode-side mirror: set it and `(x/255 - mean)/std` folds into each encoder's conv_in,
+        # so `encode` / `encode_clip` take the decoder's raw **uint8** pixels (1 byte across PCIe
+        # instead of 4) and the host never runs a normalize pass. Left unset they take
+        # reference-space normalized fp32, which the numerics tests feed directly.
         self.pixel_norm = pixel_norm
         # Cast decoded tiles to uint8 before the DMA, halving what crosses PCIe. Applies to the
         # host path only: `device_stitch` reads back a canvas and never calls `_read_wave_units`,
@@ -285,13 +364,107 @@ class MiniMaxH3Vae(Module):
         # Pipeline warmup turns this off so the compile-pass decode does not dump a profile.
         self.log_profile = True
         self._encoder_state: dict[str, torch.Tensor] | None = None
-        self._decoders: dict[tuple[int, int, int], object] = {}
         self._decoder_state: dict[str, torch.Tensor] | None = None
         # Per-decode breakdown, reset at the top of `decode`. Always collected: it is a handful of
         # `perf_counter` calls against a multi-second stage, and without it "VAE decode: 6.0 s" is a
         # number with nowhere to go.
         self._profile = self._empty_profile()
         self.last_decode_profile: dict[str, float] = {}
+
+        # Geometry pinned to config; leaf ctors keep explicit shape args for tests.
+        self.decoder = self._make_decoder()
+        self.image_encoder = self._make_encoder(num_frames=1, temporal_taps=1)
+        self.video_encoder = (
+            self._make_encoder(num_frames=config.clip_length, temporal_taps=3) if task == "ref2va" else None
+        )
+        self.modules = tuple(m for m in (self.decoder, self.image_encoder, self.video_encoder) if m is not None)
+
+    def decode_unit_shape(self) -> tuple[int, int, int]:
+        """The ``(T, H, W)`` of one decoder work unit: one temporal chunk of one spatial tile."""
+        ratio = self.config.spatial_compression_ratio
+        return (
+            self.config.tokens_chunk_size + self.config.token_overlap,
+            self.tile_size // ratio,
+            self.tile_size // ratio,
+        )
+
+    def _make_encoder(self, *, num_frames: int, temporal_taps: int) -> MiniMaxH3Encoder3d:
+        config = self.config
+        return MiniMaxH3Encoder3d(
+            num_frames=num_frames,
+            height=self.tile_size,
+            width=self.tile_size,
+            in_channels=config.in_channels,
+            out_channels=2 * config.latent_channels,
+            block_out_channels=config.block_out_channels,
+            layers_per_block=config.layers_per_block,
+            spatial_downsample_factors=config.spatial_downsample_factors,
+            temporal_downsample_factors=config.temporal_downsample_factors,
+            temporal_taps=temporal_taps,
+            mesh_device=self.mesh_device,
+            dtype=self.dtype,
+            pixel_norm=self.pixel_norm,
+        )
+
+    def _make_decoder(self):
+        from .decoder_minimax_h3 import MiniMaxH3ViTDecoder3d
+
+        num_frames, height, width = self.decode_unit_shape()
+        return MiniMaxH3ViTDecoder3d(
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            in_channels=self.config.latent_channels,
+            out_channels=self.config.out_channels,
+            patch_size=self.config.spatial_compression_ratio,
+            patch_size_t=self.config.temporal_compression_ratio,
+            num_layers=self.config.decoder_num_layers,
+            num_heads=self.config.decoder_num_attention_heads,
+            head_dim=self.config.decoder_attention_head_dim,
+            num_register_tokens=self.config.decoder_num_register_tokens,
+            ffn_mult=self.config.decoder_ffn_mult,
+            rope_theta=self.config.decoder_rope_theta,
+            rope_dim_ratio=self.config.decoder_rope_dim_ratio,
+            eps=self.config.decoder_norm_eps,
+            mesh_device=self.mesh_device,
+        )
+
+    def _encoder_subfolder(self, encoder: MiniMaxH3Encoder3d) -> str:
+        num_frames, height, width = encoder.input_shape
+        # `_pxnorm` keys the cache: the fold rewrites conv_in's weight and bias, so cached
+        # bytes from a fold-less build must never load into a folded encoder or vice versa.
+        # The dtype tag does the same for the prepared-weight bytes, which are dtype-specific.
+        variant = "_pxnorm" if self.pixel_norm is not None else ""
+        if self.dtype != ttnn.float32:
+            variant += f"_{str(self.dtype).rsplit('.', 1)[-1].lower()}"
+        return f"vae_encoder_t{num_frames}_h{height}_w{width}_taps{encoder.temporal_taps}{variant}"
+
+    def _decoder_subfolder(self) -> str:
+        num_frames, height, width = self.decoder.latent_shape
+        return f"vae_decoder_t{num_frames}_h{height}_w{width}"
+
+    def _state_for(self, module) -> dict[str, torch.Tensor]:
+        state = self._decoder_state if module is self.decoder else self._encoder_state
+        if state is None:
+            which = "decoder" if module is self.decoder else "encoder"
+            raise RuntimeError(f"call load_state() before {which} use")
+        return state
+
+    def _ensure_loaded(self, module, subfolder: str) -> None:
+        if module.is_loaded():
+            return
+        state = dict(self._state_for(module))
+        if self._weight_loader is not None:
+            self._weight_loader(module, subfolder, state)
+        else:
+            module.load_torch_state_dict(state)
+
+    def load_state(self, state: dict[str, torch.Tensor]) -> None:
+        """Prepare and retain both halves of the checkpoint for cache-miss reloads."""
+        self._encoder_state = prepare_encoder_state(state)
+        self._decoder_state = prepare_decoder_state(
+            state, pixel_denorm=self.pixel_denorm, out_channels=self.config.out_channels
+        )
 
     @staticmethod
     def _empty_profile() -> dict[str, float]:
@@ -382,79 +555,7 @@ class MiniMaxH3Vae(Module):
             logger.info(f"    {name:<12} {p[name]:6.2f} s  ({share:4.1f} %){per_wave}")
         logger.info(f"    readback volume {p['readback_mb'] / 1000:.2f} GB")
 
-    def _load_submodel(self, module, subfolder: str, state: dict[str, torch.Tensor]) -> None:
-        if self._weight_loader is not None:
-            self._weight_loader(module, subfolder, state)
-        else:
-            module.load_torch_state_dict(state)
-
-    def forward(self, *args, **kwargs):
-        """Unused: ``Module`` declares ``forward`` abstract, but this class has two entry points."""
-        raise RuntimeError("use encode() or encode_clip(); MiniMaxH3Vae has no single forward")
-
-    def load_encoder_state(self, state: dict[str, torch.Tensor]) -> None:
-        """Hold the encoder ``state_dict`` so lazily-built per-shape encoders can load it.
-
-        ``quant_conv`` is folded into ``conv_out`` here. The two are adjacent with no
-        nonlinearity between them, so one 1024->48 k3 conv does both and the awkward
-        48-channel 1x1x1 conv disappears entirely.
-        """
-        encoder_state = {k[len("encoder.") :]: v for k, v in state.items() if k.startswith("encoder.")}
-        if not encoder_state:
-            encoder_state = dict(state)
-        quant_weight = state.get("quant_conv.weight")
-        quant_bias = state.get("quant_conv.bias")
-        encoder_state.pop("quant_conv.weight", None)
-        encoder_state.pop("quant_conv.bias", None)
-        if quant_weight is not None and "conv_out.weight" in encoder_state:
-            # (48,48,1,1,1) composed with (48,1024,3,3,3) -> (48,1024,3,3,3)
-            quant_2d = quant_weight.reshape(quant_weight.shape[0], quant_weight.shape[1])
-            encoder_state["conv_out.weight"] = torch.einsum(
-                "oi,ijkmn->ojkmn", quant_2d, encoder_state["conv_out.weight"]
-            )
-            encoder_state["conv_out.bias"] = quant_2d @ encoder_state["conv_out.bias"] + quant_bias
-        self._encoder_state = encoder_state
-        self._is_loaded = True
-
-    def _encoder_for(self, num_frames: int, height: int, width: int, temporal_taps: int) -> MiniMaxH3Encoder3d:
-        key = (num_frames, height, width, temporal_taps)
-        if key not in self._encoders:
-            if self._encoder_state is None:
-                raise RuntimeError("call load_encoder_state() before encoding")
-            config = self.config
-            encoder = MiniMaxH3Encoder3d(
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                in_channels=config.in_channels,
-                out_channels=2 * config.latent_channels,
-                block_out_channels=config.block_out_channels,
-                layers_per_block=config.layers_per_block,
-                spatial_downsample_factors=config.spatial_downsample_factors,
-                temporal_downsample_factors=config.temporal_downsample_factors,
-                temporal_taps=temporal_taps,
-                mesh_device=self.mesh_device,
-                dtype=self.dtype,
-                pixel_norm=self.pixel_norm,
-            )
-            # `_pxnorm` keys the cache: the fold rewrites conv_in's weight and bias, so cached
-            # bytes from a fold-less build must never load into a folded encoder or vice versa.
-            # The dtype tag does the same for the prepared-weight bytes, which are dtype-specific.
-            variant = "_pxnorm" if self.pixel_norm is not None else ""
-            if self.dtype != ttnn.float32:
-                variant += f"_{str(self.dtype).rsplit('.', 1)[-1].lower()}"
-            self._load_submodel(
-                encoder,
-                f"vae_encoder_t{num_frames}_h{height}_w{width}_taps{temporal_taps}{variant}",
-                dict(self._encoder_state),
-            )
-            self._encoders[key] = encoder
-        return self._encoders[key]
-
-    def _run_encoder(self, tile_BCTHW: torch.Tensor, temporal_taps: int) -> torch.Tensor:
-        return self._run_encoder_units([tile_BCTHW], temporal_taps)[0]
-
-    def _run_encoder_units(self, units: list[torch.Tensor], temporal_taps: int) -> list[torch.Tensor]:
+    def _run_encoder_units(self, units: list[torch.Tensor]) -> list[torch.Tensor]:
         """Encode independent ``(clip, tile)`` units, one per device, in mesh-sized waves.
 
         Every unit is the same shape and fully independent of the others -- that is what
@@ -472,7 +573,14 @@ class MiniMaxH3Vae(Module):
         odd = [tuple(u.shape) for u in units if u.shape != units[0].shape]
         assert not odd, f"units must share a shape; {units[0].shape} vs {odd[0]}"
         _, _, num_frames, height, width = units[0].shape
-        encoder = self._encoder_for(num_frames, height, width, temporal_taps)
+        encoder = self.image_encoder if num_frames == 1 else self.video_encoder
+        if encoder is None:
+            raise RuntimeError("video encode reached a non-ref2va VAE; construct with task='ref2va'")
+        assert encoder.input_shape == (
+            num_frames,
+            height,
+            width,
+        ), f"unit shape {(num_frames, height, width)} != encoder {encoder.input_shape}"
         in_channels = encoder.conv_in.in_channels
         moments = 2 * self.config.latent_channels
         wave_size = self.mesh_device.get_num_devices()
@@ -574,22 +682,21 @@ class MiniMaxH3Vae(Module):
             results.extend(read_wave(*pending))
         return results
 
-    def encode_clip(self, x_BCTHW: torch.Tensor, *, temporal_taps: int | None = None) -> torch.Tensor:
-        """Encode one temporal clip, spatially tiled -- the reference ``_encode_clip``.
+    def encode_clip(self, x_BCTHW: torch.Tensor) -> torch.Tensor:
+        """Encode one keyframe, spatially tiled -- the reference ``_encode_clip`` at T=1.
 
         A keyframe goes through here rather than :meth:`encode`, because a single frame
         must not be put through the temporal chunking.
         """
-        if temporal_taps is None:
-            temporal_taps = 1 if x_BCTHW.shape[2] == 1 else 3
-
-        if not self.use_tiling:
-            return self._run_encoder(x_BCTHW, temporal_taps)
+        assert (
+            x_BCTHW.shape[2] == 1
+        ), f"encode_clip is the keyframe path (T=1); got T={x_BCTHW.shape[2]}, use encode() for video"
+        self._ensure_loaded(self.image_encoder, self._encoder_subfolder(self.image_encoder))
 
         mark = time.perf_counter()
         units = self._clip_tiles(x_BCTHW)
         self._profile["tiling"] += time.perf_counter() - mark
-        encoded = self._run_encoder_units(units, temporal_taps)
+        encoded = self._run_encoder_units(units)
         mark = time.perf_counter()
         stitched = self._stitch_clip(encoded, x_BCTHW.shape[-2], x_BCTHW.shape[-1])
         self._profile["stitch"] += time.perf_counter() - mark
@@ -633,120 +740,35 @@ class MiniMaxH3Vae(Module):
         """
         clip_length = self.config.clip_length
         num_frames = x_BCTHW.shape[2]
+        if self.video_encoder is None:
+            raise RuntimeError("video encode reached a non-ref2va VAE; construct with task='ref2va'")
+        self._ensure_loaded(self.video_encoder, self._encoder_subfolder(self.video_encoder))
         if num_frames % clip_length != 0:
             pad = x_BCTHW[:, :, -1:].repeat(1, 1, (-num_frames) % clip_length, 1, 1)
             x_BCTHW = torch.cat([x_BCTHW, pad], dim=2)
 
         height, width = x_BCTHW.shape[-2], x_BCTHW.shape[-1]
         clips = [x_BCTHW[:, :, i * clip_length : (i + 1) * clip_length] for i in range(x_BCTHW.shape[2] // clip_length)]
-        if not self.use_tiling:
-            moments = torch.cat(self._run_encoder_units(clips, 3), dim=2)
-        else:
-            mark = time.perf_counter()
-            per_clip = [self._clip_tiles(clip) for clip in clips]
-            tiles_per_clip = len(per_clip[0])
-            flat = [unit for clip_units in per_clip for unit in clip_units]
-            self._profile["tiling"] += time.perf_counter() - mark
-            encoded = self._run_encoder_units(flat, 3)
-            mark = time.perf_counter()
-            moments = torch.cat(
-                [
-                    self._stitch_clip(encoded[i * tiles_per_clip : (i + 1) * tiles_per_clip], height, width)
-                    for i in range(len(clips))
-                ],
-                dim=2,
-            )
-            self._profile["stitch"] += time.perf_counter() - mark
+        mark = time.perf_counter()
+        per_clip = [self._clip_tiles(clip) for clip in clips]
+        tiles_per_clip = len(per_clip[0])
+        flat = [unit for clip_units in per_clip for unit in clip_units]
+        self._profile["tiling"] += time.perf_counter() - mark
+        encoded = self._run_encoder_units(flat)
+        mark = time.perf_counter()
+        moments = torch.cat(
+            [
+                self._stitch_clip(encoded[i * tiles_per_clip : (i + 1) * tiles_per_clip], height, width)
+                for i in range(len(clips))
+            ],
+            dim=2,
+        )
+        self._profile["stitch"] += time.perf_counter() - mark
         if self.config.token_drop > 0:
             moments = moments[:, :, : -self.config.token_drop]
         return moments
 
     # ---------------------------------------------------------------- decode
-
-    def load_decoder_state(self, state: dict[str, torch.Tensor]) -> None:
-        """Hold the decoder ``state_dict``, folding ``post_quant_conv`` into ``proj_in``.
-
-        The two are adjacent with no nonlinearity, so ``proj_in(post_quant_conv(z))`` is one
-        24->2048 linear and the awkward 24-channel 1x1x1 conv disappears.
-        """
-        decoder_state = {k[len("decoder.") :]: v for k, v in state.items() if k.startswith("decoder.")}
-        if not decoder_state:
-            decoder_state = dict(state)
-        post_weight = state.get("post_quant_conv.weight")
-        post_bias = state.get("post_quant_conv.bias")
-        decoder_state.pop("post_quant_conv.weight", None)
-        decoder_state.pop("post_quant_conv.bias", None)
-        if post_weight is not None and "proj_in.weight" in decoder_state:
-            post_2d = post_weight.reshape(post_weight.shape[0], post_weight.shape[1])
-            decoder_state["proj_in.bias"] = decoder_state["proj_in.weight"] @ post_bias + decoder_state["proj_in.bias"]
-            decoder_state["proj_in.weight"] = decoder_state["proj_in.weight"] @ post_2d
-        if self.pixel_denorm is not None:
-            self._fold_pixel_denorm(decoder_state)
-        self._decoder_state = decoder_state
-
-    def _fold_pixel_denorm(self, decoder_state: dict[str, torch.Tensor]) -> None:
-        """Fold the ImageNet de-normalization into ``proj_out``, landing pixels in ``[-1, 1]``.
-
-        ``proj_out`` emits a patch's pixels flattened as ``(C, pt, p, p)`` with ``C`` outermost --
-        the order :func:`decoder_minimax_h3.unpatchify` reshapes to -- so a per-channel affine is a
-        row scale plus a bias shift, the same move this class already makes for ``post_quant_conv``.
-        The reference's ``x*std + mean`` lands in ``[0, 1]``; the extra ``2x - 1`` is the range
-        ``rgb_to_yuv`` and ``float_to_uint8`` both take.
-
-        Exact, not approximate: the tile cross-fade is a convex combination and this is affine, so
-        it commutes with the blend. The reference's ``clamp`` is *not* affine and therefore stays
-        after the stitch rather than being folded in here.
-        """
-        pixel_mean, pixel_std = self.pixel_denorm
-        weight = decoder_state["proj_out.weight"]
-        out_features = weight.shape[0]
-        channels = self.config.out_channels
-        assert out_features % channels == 0, f"proj_out emits {out_features}, not a multiple of {channels}"
-        per_channel = out_features // channels
-
-        mean = torch.tensor(pixel_mean, dtype=weight.dtype)
-        std = torch.tensor(pixel_std, dtype=weight.dtype)
-        assert mean.numel() == channels and std.numel() == channels, "pixel_denorm must be per output channel"
-        scale = (2.0 * std).repeat_interleave(per_channel)
-        shift = (2.0 * mean - 1.0).repeat_interleave(per_channel)
-
-        decoder_state["proj_out.weight"] = weight * scale.view(-1, 1)
-        decoder_state["proj_out.bias"] = decoder_state["proj_out.bias"] * scale + shift
-
-    def _decoder_for(self, num_frames: int, height: int, width: int):
-        from .decoder_minimax_h3 import MiniMaxH3ViTDecoder3d
-
-        key = (num_frames, height, width)
-        if key not in self._decoders:
-            if self._decoder_state is None:
-                raise RuntimeError("call load_decoder_state() before decoding")
-            decoder = MiniMaxH3ViTDecoder3d(
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                in_channels=self.config.latent_channels,
-                out_channels=self.config.out_channels,
-                patch_size=self.config.spatial_compression_ratio,
-                patch_size_t=self.config.temporal_compression_ratio,
-                num_layers=self.config.decoder_num_layers,
-                num_heads=self.config.decoder_num_attention_heads,
-                head_dim=self.config.decoder_attention_head_dim,
-                num_register_tokens=self.config.decoder_num_register_tokens,
-                ffn_mult=self.config.decoder_ffn_mult,
-                rope_theta=self.config.decoder_rope_theta,
-                rope_dim_ratio=self.config.decoder_rope_dim_ratio,
-                eps=self.config.decoder_norm_eps,
-                mesh_device=self.mesh_device,
-            )
-            self._load_submodel(decoder, f"vae_decoder_t{num_frames}_h{height}_w{width}", dict(self._decoder_state))
-            self._decoders[key] = decoder
-        return self._decoders[key]
-
-    def _run_decoder(self, latent_BCTHW: torch.Tensor) -> torch.Tensor:
-        return self._run_decoder_units([latent_BCTHW])[0]
-
-    def _run_decoder_units(self, units: list[torch.Tensor]) -> list[torch.Tensor]:
-        return list(self._stream_decoder_units(units))
 
     def _stream_decoder_units(self, units: list[torch.Tensor]):
         """Yield decoded pixel tiles in ``units`` order, running the mesh a wave at a time.
@@ -769,7 +791,12 @@ class MiniMaxH3Vae(Module):
         odd = [tuple(u.shape) for u in units if u.shape != units[0].shape]
         assert not odd, f"units must share a shape; {units[0].shape} vs {odd[0]}"
         _, _, num_frames, height, width = units[0].shape
-        decoder = self._decoder_for(num_frames, height, width)
+        decoder = self.decoder
+        assert decoder.latent_shape == (
+            num_frames,
+            height,
+            width,
+        ), f"unit shape {(num_frames, height, width)} != decoder {decoder.latent_shape}"
         # A wave spans every device, each running a `waves_per_device`-sized batch (dim-0 shard).
         wave_size = self.mesh_device.get_num_devices() * self.waves_per_device
 
@@ -892,7 +919,12 @@ class MiniMaxH3Vae(Module):
             f"mesh, got {grid_rows}x{grid_cols} on {mesh_rows}x{mesh_cols}"
         )
         _, _, num_frames, height, width = units[0].shape
-        decoder = self._decoder_for(num_frames, height, width)
+        decoder = self.decoder
+        assert decoder.latent_shape == (
+            num_frames,
+            height,
+            width,
+        ), f"unit shape {(num_frames, height, width)} != decoder {decoder.latent_shape}"
         profile = self._profile
 
         mark = time.perf_counter()
@@ -1007,16 +1039,14 @@ class MiniMaxH3Vae(Module):
         Tiles are laid out in *pixel* space and mapped back onto the latent grid, so the
         blend extents are pixel-space too (unlike encode, where they are divided down).
         """
-        if not self.use_tiling:
-            return self._run_decoder(z_BCTHW)
-
+        self._ensure_loaded(self.decoder, self._decoder_subfolder())
         if self.device_stitch:
             return self._decode_clip_device_stitched(z_BCTHW)
 
         mark = time.perf_counter()
         units = self._latent_tiles(z_BCTHW)
         self._profile["tiling"] += time.perf_counter() - mark
-        decoded = self._run_decoder_units(units)
+        decoded = list(self._stream_decoder_units(units))
         mark = time.perf_counter()
         out = self._stitch_decoded(decoded, z_BCTHW.shape[-2], z_BCTHW.shape[-1])
         self._profile["stitch"] += time.perf_counter() - mark
@@ -1096,6 +1126,7 @@ class MiniMaxH3Vae(Module):
             torch.set_num_threads(previous_threads)
 
     def _decode(self, z_BCTHW: torch.Tensor, output_type: str = "float"):
+        self._ensure_loaded(self.decoder, self._decoder_subfolder())
         self._profile = self._empty_profile()
         decode_started = time.perf_counter()
         config = self.config
@@ -1116,13 +1147,13 @@ class MiniMaxH3Vae(Module):
             z_BCTHW[:, :, i * chunk_size : i * chunk_size + chunk_size + config.token_overlap]
             for i in range(num_chunks)
         ]
-        if self.use_tiling and self.device_stitch and chunk_latents:
+        if self.device_stitch and chunk_latents:
             # Each chunk's tile grid is decoded, unpatchified, all-gathered and blended on device,
             # and only the assembled canvas is read back. One chunk at a time, and serial on
             # purpose: deferring a chunk's readback until the next is enqueued does not help,
             # because the stage is device-bound and holding two canvases live only adds allocation.
             clips = [self._decode_clip_device_stitched(latents, output_type) for latents in chunk_latents]
-        elif self.use_tiling and chunk_latents:
+        elif chunk_latents:
             latent_height, latent_width = chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
             mark = time.perf_counter()
             # Every (chunk, tile) unit in one stream. One chunk at a time would give the wave loop
@@ -1145,7 +1176,7 @@ class MiniMaxH3Vae(Module):
                     del buffered[:tiles_per_chunk]
             assert not buffered, f"{len(buffered)} tiles left over for a {tiles_per_chunk}-tile chunk grid"
         else:
-            clips = self._run_decoder_units(chunk_latents) if chunk_latents else []
+            clips = []
 
         assemble_mark = time.perf_counter()
         decoded, overlap = [], None

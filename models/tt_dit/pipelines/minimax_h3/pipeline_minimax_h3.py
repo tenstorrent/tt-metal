@@ -32,11 +32,14 @@ Residency
 ---------
 The three big components do not fit at once: the DiT is ~16.6 GB/device at TP=4 (its adaLN
 projections are resident --- this transformer computes modulation on device) and the video VAE
-replicates ~9.8 GB of fp32 weights per device for its data-parallel fan-out. They are therefore
-paged: each stage loads what it needs and releases the previous stage's weights first. The text
+replicates ~9.8 GB of fp32 weights per device for its data-parallel fan-out. They are
+registered as ``Module`` coresident exclusions: loading one stage evicts the others. The text
 encoder is the cheap one --- FSDP over the non-TP axis puts it at ~1.6 GB/device --- but its 50 GB
 disk read is not, which is why it is kept co-resident by default: every request pays the encode
-itself (~2.8 s), never the reload.
+itself (~2.8 s), never the reload. Co-residency measurements on a 4x8 Blackhole: prompt-encode
+row 23.9 s → 2.8 s (the 50 GB reload disappears); DiT+VAE decode row 6.0 s vs 17.6 s, warm
+total 69.1 s vs 81.1 s. `coresident=False` evicts each stage for a mesh where they do not fit.
+Tracing is disabled when `coresident=False`: a reload moves weight addresses a capture baked.
 """
 
 from __future__ import annotations
@@ -59,6 +62,7 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
     MINIMAX_H3_TEXT_ENCODER_LAYER,
     build_minimax_h3_text_encoder,
     build_minimax_h3_vision_tower,
+    load_minimax_h3_text_encoder_weights,
 )
 from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
 from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp, vision_cu_seqlens
@@ -68,7 +72,7 @@ from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3Aud
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
-from ...models.vae.minimax_h3.vae_minimax_h3 import DEFAULT_TILE_SIZE, MiniMaxH3Vae, MiniMaxH3VaeConfig
+from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache
@@ -278,6 +282,10 @@ class MiniMaxH3Pipeline:
         # Preset default (quad-only), overridable so the traced resident path is testable on a
         # single 4x8 Galaxy too rather than only where the preset turns it on.
         self.trace_denoise = preset.get("trace_denoise", False) if trace_denoise is None else trace_denoise
+        # Tracing requires co-residency: a reload moves weight addresses a capture baked, and
+        # recapture would swamp replay anyway. Co-residency measurements live in the class docstring.
+        self.coresident = coresident
+        self.trace_denoise = self.trace_denoise and self.coresident
         # False during `warmup`: generation logs (stage times, per-step, VAE profile) are the
         # measured-call report, not the compile pass. Construction logs still go through `_host_log`.
         self._log_generation = True
@@ -322,8 +330,6 @@ class MiniMaxH3Pipeline:
             msg = f"tp_axis and sp_axis must differ, both are {tp_axis}"
             raise ValueError(msg)
         self.tp_factor, self.sp_factor = shape[tp_axis], shape[sp_axis]
-        # The only residency control; see `_make_resident` for the measurements behind the default.
-        self.coresident = coresident
 
         self.ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         self.dit_parallel_config = DiTParallelConfig(
@@ -349,22 +355,18 @@ class MiniMaxH3Pipeline:
         self.rope_freq_dim = self.transformer_config["rope_freq_dim"]
         self.rope_theta = self.transformer_config["rope_theta"]
 
-        # Nothing is built until the stage that needs it; see the class docstring on residency.
+        # Tokenizer, host debug twins, vision tower and audio stay lazy -- they are not part of
+        # the residency scheme.
         self._tokenizer = None
-        self._text_encoder = None
-        self._text_config = None
         # The released Qwen3-VL conditioner on the host, for `encode_prompt_host` -- a debug twin of
         # the device encode, lazily loaded because it is a large read only wanted when comparing.
         self._host_text_encoder = None
-        self._transformer = None
-        self._vae = None
         # The released video VAE on the host, for `_encode_keyframes_host` / `_decode_video_host` --
         # debug twins of the device keyframe encode and video decode. Lazily built and loaded per half
         # (encoder / decoder) because it is a large read only wanted when comparing against the device.
         self._host_vae = None
         self._host_vae_encoder_loaded = False
         self._host_vae_decoder_loaded = False
-        self._encoder_state_loaded = False
         self._image_processor = None
         # `"yuv420"` builds the VAE for the device-stitched path: the canvas is blended, clamped and
         # colour-converted on device, and `_decode_video` returns planar `(T, H*3//2, W)` uint8 for
@@ -372,7 +374,7 @@ class MiniMaxH3Pipeline:
         # it changes this method's return type, and every quality gate reads the float one.
         self.vae_output_type = "float"  # "float" | "uint8" | "yuv420"
         # Decode tiles per device per wave (batch dim). >1 cuts wave count at the cost of activation
-        # memory; set before the first decode. 1 is the original one-tile-per-device schedule.
+        # memory. 1 is the original one-tile-per-device schedule.
         self.vae_waves_per_device = 2
         self._video_processor = None
         self._vision_tower = None
@@ -382,11 +384,63 @@ class MiniMaxH3Pipeline:
         # `dit_fsdp=True` shards the DiT's SP-replicated weights over the SP axis (all-gathered per
         # use) to relieve memory pressure.
         self.dit_fsdp = dit_fsdp
-        self._resident: str | None = None
         # The last call's padded packed length. Exposed so a perf test can assert that `warmup` and the
         # measured call agree on it -- every program in the 50-block stack is keyed on this, so a
         # mismatch means the "warm" number was cold and nothing else would say so.
         self.last_padded_len: int | None = None
+
+        # Construct host-side (device-free Parameters); weights load below / on first VAE use.
+        self._host_log("building the Qwen3-VL text encoder")
+        self._text_encoder, self._text_config = build_minimax_h3_text_encoder(
+            self.weights_dir / "text_encoder",
+            mesh_device=self.mesh_device,
+            parallel_config=self.encoder_parallel_config,
+            ccl_manager=self.ccl_manager,
+            is_fsdp=True,
+            load_weights=False,
+        )
+        self._transformer = self._build_transformer()
+        yuv = self.vae_output_type == "yuv420"
+        unit_pixels = self.vae_output_type in ("uint8", "yuv420")
+        self._host_log("building the video VAE")
+        self._vae = MiniMaxH3Vae(
+            self.vae_config,
+            task=self.task,
+            mesh_device=self.mesh_device,
+            weight_loader=self._cache_submodel,
+            ccl_manager=self.ccl_manager,
+            # Encoder compute dtype (the ViT decoder ignores it). bf16 runs the taps=3 wave
+            # 4.2x faster than fp32 (427 vs 1800 ms) and measures PCC 99.998% against the
+            # reference on the real checkpoint -- within 0.0003% of the fp32 encoder --
+            # before the rows are noise-augmented to t = 0.999 anyway.
+            dtype=ttnn.bfloat16,
+            device_stitch=yuv,
+            # Folded into `proj_out`, so the decoder emits the `[-1, 1]` both the colour kernel
+            # and the uint8 cast take, and `_decode_video` is left with at most a range shift.
+            pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD) if unit_pixels else None,
+            # The encode mirror: the normalize folds into each encoder's conv_in, so the
+            # keyframe/reference pixels cross PCIe as raw uint8 (`raw_pixels=True` at both
+            # encode call sites, which is a contract -- `_run_encoder_units` asserts it).
+            pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
+            readback_uint8=self.vae_output_type == "uint8",
+            waves_per_device=self.vae_waves_per_device,
+        )
+        self._vae.load_state(self._read_safetensors("vae"))
+
+        if not self.coresident:
+            self._text_encoder.register_coresident_exclusions(self._transformer, *self._vae.modules)
+            self._transformer.register_coresident_exclusions(self._text_encoder, *self._vae.modules)
+            # VAE sub-models exclude the other stages but not each other: one ref2va
+            # request uses the image encoder, the video encoder, and the decoder.
+            for module in self._vae.modules:
+                module.register_coresident_exclusions(self._text_encoder, self._transformer)
+
+        # Prime in reverse order of use. Under coresident=False the text-encoder load would
+        # immediately evict the DiT, so skip that upload; it loads on first denoise. VAE
+        # sub-models load on first use, so warmup decides what uploads.
+        if self.coresident:
+            self._prepare_transformer()
+        self._prepare_text_encoder()
 
     # ------------------------------------------------------------------ construction
 
@@ -475,46 +529,6 @@ class MiniMaxH3Pipeline:
             yield
         finally:
             self._log_generation = previous
-
-    def _make_resident(self, stage: str) -> None:
-        """Release whatever the previous stage held before the next one allocates.
-
-        `MiniMaxH3Vae` keeps its lazily-built per-shape encoders and decoders in a plain dict rather
-        than as registered child `Module`s, so `deallocate_weights()` does not reach them; they are
-        dropped explicitly. It still holds its host state dict, so rebuilding is a re-upload rather
-        than a re-read from disk.
-
-        **The text encoder is kept co-resident too.** Measured on a 4x8 Blackhole mesh:
-        encoder, DiT and VAE fit together, and a prompt's Encoder row
-        drops from **23.9 s to 2.8 s** because the 50 GB reload disappears. Every request runs the
-        conditioner encode, so this is on the critical path of essentially every served request.
-        `coresident=False` evicts each stage for a mesh where they do not fit.
-
-        **The DiT and the video VAE are kept co-resident**, which is measured, not assumed: on a 4x8
-        Blackhole mesh they fit together with no allocation failure. Eviction costs a per-shape decoder
-        rebuild per generation plus a ~50 s DiT reload on the next one; co-resident measures the VAE
-        decode row at **6.0 s against 17.6 s** and the fully-warm total at **69.1 s against 81.1 s**.
-        `coresident=False` evicts each stage for a mesh where they do not fit.
-        """
-        if self._resident == stage:
-            return
-        # One `elif` chain, and the branches are mutually exclusive by construction: each tests
-        # `self._resident`, which holds exactly one value. It reads like a fallthrough of independent
-        # release actions and is not one.
-        coresident = self.coresident
-        if self._resident == "text" and self._text_encoder is not None and not coresident:
-            self._host_log("releasing the text encoder")
-            self._text_encoder.deallocate_weights()
-            self._text_encoder = None
-        elif self._resident == "dit" and self._transformer is not None and not coresident:
-            self._host_log("releasing the transformer")
-            self._transformer.deallocate_weights()
-            self._transformer = None
-        elif self._resident == "vae" and self._vae is not None and not coresident:
-            self._host_log("releasing the video VAE")
-            self._vae._encoders.clear()
-            self._vae._decoders.clear()
-        self._resident = stage
 
     # ------------------------------------------------------------------ text
 
@@ -702,17 +716,14 @@ class MiniMaxH3Pipeline:
         )
 
     def _prepare_text_encoder(self):
-        """The on-device Qwen3-VL conditioner, loaded once and kept co-resident by default."""
-        self._make_resident("text")
-        if self._text_encoder is None:
-            self._host_log("building the Qwen3-VL text encoder")
-            self._text_encoder, self._text_config = build_minimax_h3_text_encoder(
-                self.weights_dir / "text_encoder",
-                mesh_device=self.mesh_device,
-                parallel_config=self.encoder_parallel_config,
-                ccl_manager=self.ccl_manager,
-                is_fsdp=True,
-            )
+        """Load the on-device Qwen3-VL conditioner. ``cache.load_model`` no-ops if already resident."""
+        load_minimax_h3_text_encoder_weights(
+            self._text_encoder,
+            self.weights_dir / "text_encoder",
+            parallel_config=self.encoder_parallel_config,
+            mesh_device=self.mesh_device,
+            is_fsdp=True,
+        )
         return self._text_encoder
 
     def _prepare_vision_tower(self):
@@ -1006,23 +1017,21 @@ class MiniMaxH3Pipeline:
 
     # ------------------------------------------------------------------ denoiser
 
-    def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
-        self._make_resident("dit")
-        if self._transformer is not None:
-            return self._transformer
-
-        config = {k: v for k, v in self.transformer_config.items() if k not in ("rope_freq_dim", "rope_theta")}
-        config["patch_size"] = tuple(config["patch_size"])
-
+    def _dit_weight_mode(self) -> str:
         # AdaLN projections stay resident and `temb` is projected on device each step.
         # `dit_fsdp=True` additionally shards the DiT over SP. The cache key keeps the historical
         # `resident_adaln` token so existing weight-cache entries still hit.
-        weight_mode = "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
+        return "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
+
+    def _build_transformer(self) -> MiniMaxH3Transformer3DModel:
+        config = {k: v for k, v in self.transformer_config.items() if k not in ("rope_freq_dim", "rope_theta")}
+        config["patch_size"] = tuple(config["patch_size"])
+        weight_mode = self._dit_weight_mode()
         self._host_log(
             f"building the {config['num_layers']}-layer transformer from {self.transformer_subfolder}/, "
             f"TP={self.tp_factor}/SP={self.sp_factor} ({weight_mode})"
         )
-        model = MiniMaxH3Transformer3DModel(
+        return MiniMaxH3Transformer3DModel(
             **config,
             mesh_device=self.mesh_device,
             ccl_manager=self.ccl_manager,
@@ -1031,23 +1040,24 @@ class MiniMaxH3Pipeline:
             cache_padding=self.trace_denoise,
         )
 
+    def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
         # Cache-aware: on a hit this reads pre-sharded device tensors instead of 62 GB of
-        # safetensors plus every `_prepare_torch_state` fixup. With TT_DIT_CACHE_DIR unset it falls
-        # through to the direct load and logs that it did. The load underneath is strict, so a
-        # single unmapped key is a real bug.
+        # safetensors plus every `_prepare_torch_state` fixup. With TT_DIT_CACHE_DIR unset it
+        # falls through to the direct load and logs that it did. The load underneath is
+        # strict, so a single unmapped key is a real bug. ``cache.load_model`` no-ops if
+        # already resident.
         cache.load_model(
-            model,
+            self._transformer,
             model_name=MODEL_NAME,
-            # The partition term keeps the two partitions -- which share a repository and a config --
-            # from hashing to one entry; FSDP vs full replication is a distinct layout.
-            subfolder=f"{self.transformer_subfolder}_{weight_mode}",
+            # The partition term keeps the two partitions -- which share a repository and a
+            # config -- from hashing to one entry; FSDP vs full replication is a distinct layout.
+            subfolder=f"{self.transformer_subfolder}_{self._dit_weight_mode()}",
             parallel_config=self.dit_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
             get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
         )
-        self._transformer = model
-        return model
+        return self._transformer
 
     @property
     def patch_size(self) -> tuple[int, int, int]:
@@ -1116,82 +1126,7 @@ class MiniMaxH3Pipeline:
 
     @property
     def vae(self) -> MiniMaxH3Vae:
-        """The video VAE, built and loaded on first access."""
-        return self._prepare_vae()
-
-    def _prepare_vae(
-        self,
-        *,
-        decode_shape: tuple[int, int, int] | None = None,
-        encode_shape: tuple[int, int, int] | None = None,
-        encode_taps: int = 1,
-    ) -> MiniMaxH3Vae:
-        """Build the VAE and, given `decode_shape` / `encode_shape`, its per-shape sub-models too.
-
-        These arguments are about measurement, not convenience. `MiniMaxH3Vae` builds a decoder **per
-        distinct (T, H, W)** and uploads that decoder's ~4.6 GB of weights at construction. Without
-        them that upload happens lazily inside `vae.decode()`, landing *inside* the timed VAE-decode
-        row -- and weight upload is one-time construction cost the measurement contract does not
-        count. `encode_shape` does the same for the keyframe encoder, smaller at 0.72 GB against the
-        decoder's 9.7 but on the same principle.
-
-        `load_encoder_state` is called whenever the encoder state is needed at all, and eagerly rather
-        than lazily: `encode_clip` raises `RuntimeError("call load_encoder_state() before encoding")`,
-        which is the right error but fires at encode time --- after the DiT has been built and inside a
-        timed row. One `_read_safetensors("vae")` feeds both loaders; reading the 10.4 GB twice would be
-        pure waste.
-        """
-        self._make_resident("vae")
-        want_encoder = encode_shape is not None
-        if self._vae is None:
-            self._host_log("building the video VAE")
-            # Used only for the wave readback, which keeps the decode off the MPI path; the VAE's
-            # forward runs no collectives.
-            yuv = self.vae_output_type == "yuv420"
-            unit_pixels = self.vae_output_type in ("uint8", "yuv420")
-            self._vae = MiniMaxH3Vae(
-                self.vae_config,
-                mesh_device=self.mesh_device,
-                weight_loader=self._cache_submodel,
-                ccl_manager=self.ccl_manager,
-                # Encoder compute dtype (the ViT decoder ignores it). bf16 runs the taps=3 wave
-                # 4.2x faster than fp32 (427 vs 1800 ms) and measures PCC 99.998% against the
-                # reference on the real checkpoint -- within 0.0003% of the fp32 encoder --
-                # before the rows are noise-augmented to t = 0.999 anyway.
-                dtype=ttnn.bfloat16,
-                device_stitch=yuv,
-                # Folded into `proj_out`, so the decoder emits the `[-1, 1]` both the colour kernel
-                # and the uint8 cast take, and `_decode_video` is left with at most a range shift.
-                pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD) if unit_pixels else None,
-                # The encode mirror: the normalize folds into each encoder's conv_in, so the
-                # keyframe/reference pixels cross PCIe as raw uint8 (`raw_pixels=True` at both
-                # encode call sites, which is a contract -- `_run_encoder_units` asserts it).
-                pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
-                readback_uint8=self.vae_output_type == "uint8",
-                waves_per_device=self.vae_waves_per_device,
-            )
-            state = self._read_safetensors("vae")
-            self._vae.load_decoder_state(state)
-            if want_encoder:
-                self._vae.load_encoder_state(state)
-                self._encoder_state_loaded = True
-        elif want_encoder and not self._encoder_state_loaded:
-            self._vae.load_encoder_state(self._read_safetensors("vae"))
-            self._encoder_state_loaded = True
-        if decode_shape is not None and decode_shape not in self._vae._decoders:
-            t0 = time.time()
-            self._vae._decoder_for(*decode_shape)
-            self._host_log(f"per-shape decoder {decode_shape} built in {time.time() - t0:.1f}s")
-        if encode_shape is not None:
-            # taps=1 for a single frame: the causal front-pad is zeros, so a 3-tap temporal conv
-            # collapses to `weight[:, :, -1]` exactly, not approximately. A ref2va
-            # video reference goes through `vae.encode` at taps=3 and needs its own per-shape
-            # encoder, built here so the weight upload stays outside the timed encode row.
-            key = (*encode_shape, encode_taps)
-            if key not in self._vae._encoders:
-                t0 = time.time()
-                self._vae._encoder_for(*key)
-                self._host_log(f"per-shape encoder {encode_shape} taps={encode_taps} built in {time.time() - t0:.1f}s")
+        """The video VAE orchestrator, constructed at init; sub-models load on first use."""
         return self._vae
 
     def _prepare_audio_encoder(self) -> MiniMaxH3AudioEncoder:
@@ -1249,9 +1184,7 @@ class MiniMaxH3Pipeline:
         """Prepared keyframes to packed conditioning rows, via the device VAE encoder.
 
         `encode_keyframes` takes the encoder as an injected callable, so the device VAE plugs straight
-        in. `temporal_taps` is not passed: `encode_clip` auto-selects 1 for `T == 1`, and
-        leaving that as the single decision point means the keyframe path cannot disagree with the
-        VAE's own view of what a keyframe is.
+        in. `encode_clip` is the keyframe entry point (T=1, taps=1).
         """
         return encode_keyframes(
             keyframes,
@@ -1268,9 +1201,9 @@ class MiniMaxH3Pipeline:
 
         The reference diffusers `AutoencoderKLMiniMaxH3` in its native fp32. Its two halves load
         separately -- `encoder.*`/`quant_conv.*` for the keyframe encode, `decoder.*`/
-        `post_quant_conv.*` for the video decode -- mirroring the device `_prepare_vae`, so a run that
-        only encodes (or only decodes) on the host never pays for the other half's weights. Its
-        default tiling is the geometry the device build matches (gated by `test_encode_clip_tiled` /
+        `post_quant_conv.*` for the video decode -- so a run that only encodes (or only
+        decodes) on the host never pays for the other half's weights. Its default tiling is
+        the geometry the device build matches (gated by `test_encode_clip_tiled` /
         `test_decode_clip_tiled`), so nothing about the tiling is configured here. Large read, so it
         is lazy: only a comparison against the device VAE wants it.
         """
@@ -1329,25 +1262,6 @@ class MiniMaxH3Pipeline:
                 self.vae_config.latents_std,
                 self.patch_size,
             )
-
-    def decode_unit_shape(self) -> tuple[int, int, int]:
-        """The `(T, H, W)` of one decoder work unit: one temporal chunk of one spatial tile.
-
-        Takes no arguments: the unit is fixed by the VAE's tiling *independently of resolution and
-        duration*, which is what lets one per-shape decoder serve the whole video and what the cache
-        key records.
-
-        `tile_size` is read off the VAE when one exists and falls back to the module default otherwise.
-        The fallback is the branch t2va actually takes, because nothing has built the VAE at the point
-        the caller evaluates this argument --- so it must be the real default, not a literal.
-        """
-        config = self.vae_config
-        tile_size = self._vae.tile_size if self._vae is not None else DEFAULT_TILE_SIZE
-        return (
-            config.tokens_chunk_size + config.token_overlap,
-            tile_size // config.spatial_compression_ratio,
-            tile_size // config.spatial_compression_ratio,
-        )
 
     def _prepare_audio_decoder(self) -> MiniMaxH3AudioDecoder:
         if self._audio_decoder is None:
@@ -1439,10 +1353,9 @@ class MiniMaxH3Pipeline:
         order.
         """
         # Stages fire `SectionStart` / `SectionEnd` for the caller to time, matching Wan.
-        # Weight upload is one-time construction cost, so every `_prepare_*` happens outside a
-        # section. The one exception: the first encoder section of a fresh pipeline loads the text
-        # encoder inside the section; after that the encoder stays resident and the section measures
-        # the encode alone.
+        # Text encoder and DiT are primed at init; VAE sub-models load on first use (normally
+        # during warmup). Under `coresident=False` a reload lands inside the timed row that
+        # triggered it.
         on_event = on_event if on_event is not None else null_callback
 
         if references is not None:
@@ -1489,9 +1402,9 @@ class MiniMaxH3Pipeline:
         # follow it. So a lone `last_image` is stretched. That is the reference's behaviour and it looks
         # like a bug until you see the `last`-only case pass.
         keyframes = [prepare_keyframe_image(k, height, width, stretch=(i == 0)) for i, k in enumerate(sources)]
-        task = "t2va" if not keyframes else ("fl2va" if image is not None else "fl2va_last_frame")
+        flavor = "t2va" if not keyframes else ("fl2va" if image is not None else "fl2va_last_frame")
         self._log(
-            f"{task} {width}x{height}, {num_frames} frames ({num_frames / MINIMAX_H3_FPS:.2f} s), "
+            f"{flavor} {width}x{height}, {num_frames} frames ({num_frames / MINIMAX_H3_FPS:.2f} s), "
             f"{num_latent_frames} latent frames, {num_audio_latents} audio latents, "
             f"{num_inference_steps} steps, anchors={keyframe_anchors or '()'}"
         )
@@ -1531,15 +1444,13 @@ class MiniMaxH3Pipeline:
         # encoder gets its residency window uncontended.
         condition_rows = None
         if keyframes:
-            # The 0.72 GB encoder upload is a prepare and stays outside the timed row, same rule as the
-            # DiT and the per-shape decoder.
             # Every keyframe tile is exactly `tile_size` square: `split_tiles` returns `[tile_size] * n`
             # lengths unless one tile already covers the axis, and at 1344x768 neither does. So one
             # `(1, 256, 256)` encoder serves all 28 tiles, which is one wave on a 32-device mesh.
-            vae = self._prepare_vae()
-            vae = self._prepare_vae(encode_shape=(1, vae.tile_size, vae.tile_size))
+            # The image encoder loads on first use inside the timed row (honest for exclusive-memory
+            # deployments; warmup is what uploads it for a served path).
             with event_section(on_event, "vae_encode"):
-                condition_rows = self._encode_keyframes(vae, keyframes)
+                condition_rows = self._encode_keyframes(self._vae, keyframes)
                 # `scheduler.scale_noise`, never a local copy: a reimplementation computing `1 - t` in
                 # Python double instead of the sample dtype drifts 2.4e-7 (see `conditioning.py`), and a
                 # test asserts no second implementation exists.
@@ -1635,18 +1546,11 @@ class MiniMaxH3Pipeline:
         audio_scheduler.set_timesteps(num_inference_steps)
 
         # 3. Reference VAE encode. Before the layout, because it is what resolves the geometry the
-        # layout is built from -- and before the DiT exists, so the encoders get an uncontended
-        # residency window. Both weight uploads are prepares and stay outside the timed row.
+        # layout is built from. Sub-models load on first use inside the timed row.
         has_visual = any(reference.kind != "audio" for reference in prepared)
         has_video = any(reference.kind == "video" for reference in prepared)
         has_audio = any(reference.has_audio for reference in prepared)
-        vae = self._prepare_vae() if has_visual else None
-        if has_visual:
-            vae = self._prepare_vae(encode_shape=(1, vae.tile_size, vae.tile_size), encode_taps=1)
-        if has_video:
-            vae = self._prepare_vae(
-                encode_shape=(self.vae_config.clip_length, vae.tile_size, vae.tile_size), encode_taps=3
-            )
+        vae = self._vae if has_visual else None
         audio_encoder = self._prepare_audio_encoder() if has_audio else None
 
         with event_section(on_event, "vae_encode"):
@@ -1769,12 +1673,11 @@ class MiniMaxH3Pipeline:
                 on_event=on_event,
             )
 
-        # Same rule: `_prepare_*` before the section, never inside it -- and for the VAE that includes
-        # the per-shape decoder, whose weight upload would otherwise be timed.
-        vae = self._prepare_vae(decode_shape=self.decode_unit_shape())
+        # VAE sub-models load on first use inside the section (warmup is what uploads them
+        # for a served path; under coresident=False the reload is honest accounting).
         with event_section(on_event, "vae"):
             video = self._decode_video(
-                vae, video_rows, num_latent_frames, latent_height, latent_width, layout.num_condition_video_rows
+                self._vae, video_rows, num_latent_frames, latent_height, latent_width, layout.num_condition_video_rows
             )
 
         audio_decoder = self._prepare_audio_decoder()
