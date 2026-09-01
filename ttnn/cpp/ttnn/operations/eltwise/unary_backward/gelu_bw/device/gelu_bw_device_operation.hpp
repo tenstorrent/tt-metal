@@ -35,7 +35,7 @@ namespace ttnn::prim {
 Tensor gelu_bw(
     const Tensor& grad_output,
     const Tensor& input,
-    const std::string& approximate,
+    operations::unary::GeluVariant variant,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& preallocated_output);

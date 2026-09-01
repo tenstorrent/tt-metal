@@ -62,5 +62,12 @@ def test_gelu_variant_forward_backward(variant, approximate, bw_atol):
     np.testing.assert_allclose(grad, expected_grad, rtol=RTOL, atol=bw_atol)
 
 
+def test_gelu_fast_lut_is_rejected_for_training(expect_error):
+    tensor = ttml.autograd.Tensor.from_numpy(np.zeros(SHAPE, dtype=np.float32), layout=ttnn.Layout.TILE)
+
+    with expect_error(ValueError, "FAST_LUT is not supported for training"):
+        ttml.ops.unary.gelu(tensor, variant=ttnn.GeluVariant.FastLut)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

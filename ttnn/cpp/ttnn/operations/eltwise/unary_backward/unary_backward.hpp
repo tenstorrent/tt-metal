@@ -7,6 +7,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn {
 
@@ -428,7 +429,7 @@ std::vector<ComplexTensor> abs_bw(
 std::vector<std::optional<ttnn::Tensor>> gelu_bw(
     const Tensor& grad_tensor_arg,
     const Tensor& input_tensor_arg,
-    const std::string& approximate,
+    operations::unary::GeluVariant variant = operations::unary::GeluVariant::ACCURATE,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     std::optional<Tensor> input_grad = std::nullopt);
 
