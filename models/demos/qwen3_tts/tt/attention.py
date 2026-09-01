@@ -37,7 +37,9 @@ class Attention(LightweightModule):
     - Grouped Query Attention (GQA) with 16 Q heads and 8 KV heads
     - QK-normalization (q_norm, k_norm) for stable training
     - RoPE positional embeddings
-    - Float32 attention computation (required — bfloat16 SDPA loses precision)
+    - Attention: N150 uses fused SDPA on every path (bf16, HiFi4 + fp32 dest acc).
+      Other cards keep fused causal prefill and the manual fp32 BMM chain for
+      decode / custom masks.
     """
 
     def __init__(
@@ -61,9 +63,10 @@ class Attention(LightweightModule):
         self.rms_norm_eps = rms_norm_eps
 
         is_mesh_device_flag = device.__class__.__name__ == "MeshDevice"
-        from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size
+        from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size, is_n150
 
         self.tp_size = get_tp_size(device) if is_mesh_device_flag else 1
+        self._n150 = is_n150(device)
         if self.tp_size > 1:
             assert num_heads % self.tp_size == 0
             assert num_kv_heads % self.tp_size == 0
@@ -269,23 +272,19 @@ class Attention(LightweightModule):
             packer_l1_acc=True,
         )
 
-        # Keep fp32 accumulation for attention matmuls. HiFi2 is the current
-        # quality/speed tradeoff for this path.
-        self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        # Manual fp32 BMM chain (decode + masked prefill on non-N150).
+        if not self._n150:
+            self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
 
-        # Prefill SDPA via the fused ttnn.transformer.scaled_dot_product_attention.
-        # Bumped to HiFi4 (vs the manual chain's HiFi2) because the fused op runs
-        # on bf16 Q/K/V — the K-amplification from k_norm (gain ≈ 68 → values
-        # ≈ ±260) needs full bf16 multiply mantissa to preserve attention scores
-        # well enough for the AR sampling trajectory. fp32_dest_acc_en keeps the
-        # softmax + matmul accumulation in fp32. Together this gives parity-ish
-        # numerics with the manual fp32 path while avoiding the
-        # repeat_interleave→DRAM bounce + 4 typecasts that cost ~5.5 ms/prefill.
+        # Fused SDPA. HiFi4 on bf16 Q/K/V: k_norm gain ≈ 68 amplifies K to ~±260,
+        # so the multiply needs the full bf16 mantissa. fp32_dest_acc_en keeps
+        # softmax + matmul accumulation in fp32. N150 uses this for every path;
+        # other cards keep it for causal prefill only.
         self.sdpa_prefill_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
@@ -628,6 +627,8 @@ class Attention(LightweightModule):
                 xqkv_padded = ttnn.to_memory_config(xqkv_sharded, ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(xqkv_sharded)
                 if self._decode_wqkv_n_padded != self._fused_qkv:
+                    # N150: slice padded N into the nlp_create shard spec (skips I→S).
+                    # Other cards slice to L1 interleaved; the split path reshard below.
                     xqkv = ttnn.slice(
                         xqkv_padded,
                         [0, 0, 0, 0],
@@ -637,12 +638,13 @@ class Attention(LightweightModule):
                             xqkv_padded.shape[2],
                             self._fused_qkv,
                         ],
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                        memory_config=(self._decode_qkv_split_in_memcfg if self._n150 else ttnn.L1_MEMORY_CONFIG),
                     )
                     ttnn.deallocate(xqkv_padded)
+                    xqkv_already_sharded_for_split = self._n150
                 else:
                     xqkv = xqkv_padded
-                xqkv_already_sharded_for_split = False
+                    xqkv_already_sharded_for_split = False
         else:
             xqkv = ttnn.linear(
                 x,
@@ -658,11 +660,9 @@ class Attention(LightweightModule):
             # xqkv may already be in the 8-core split layout (no extra reshard needed).
             if xqkv_already_sharded_for_split:
                 xqkv_for_split = xqkv
-                _own_xqkv_for_split = False
             else:
                 xqkv_for_split = ttnn.to_memory_config(xqkv, self._decode_qkv_split_in_memcfg)
                 ttnn.deallocate(xqkv)
-                _own_xqkv_for_split = True
             q_sharded, k_sharded, v_sharded = ttnn.experimental.nlp_create_qkv_heads(
                 xqkv_for_split,
                 num_heads=self.num_heads,
@@ -670,11 +670,9 @@ class Attention(LightweightModule):
                 transpose_k_heads=False,
                 memory_config=self._decode_qkv_split_q_out_memcfg,
             )
-            if _own_xqkv_for_split:
-                ttnn.deallocate(xqkv_for_split)
-            else:
-                ttnn.deallocate(xqkv_for_split)
-            # q_norm / k_norm / rotary_embedding_llama expect L1_INTERLEAVED.
+            ttnn.deallocate(xqkv_for_split)
+            # q_norm / k_norm / rotary_embedding_llama expect L1_INTERLEAVED
+            # (rms_norm rejects HEIGHT_SHARDED).
             q = ttnn.to_memory_config(q_sharded, ttnn.L1_MEMORY_CONFIG)
             k = ttnn.to_memory_config(k_sharded, ttnn.L1_MEMORY_CONFIG)
             v = ttnn.to_memory_config(v_sharded, ttnn.L1_MEMORY_CONFIG)
@@ -691,7 +689,6 @@ class Attention(LightweightModule):
             )
             ttnn.deallocate(xqkv)
 
-        # QK-norm (per-head RMSNorm to stabilize attention with large logit scales)
         q = ttnn.rms_norm(
             q,
             epsilon=self.rms_norm_eps,
@@ -731,16 +728,14 @@ class Attention(LightweightModule):
         )
         # Keep Q/K in interleaved layout after RoPE.
 
-        k_seq = k.shape[2]
-
-        # Default: k/v are temporary tensors owned by this call, safe to free after typecast.
+        # Default: k/v are temporary tensors owned by this call.
         # The trace-compatible decode path overrides k_for_attn/v_for_attn to alias k_cache
         # and sets k_is_cache_alias=True to prevent accidental deallocation.
         k_for_attn = k
         v_for_attn = v
         k_is_cache_alias = False
 
-        # KV cache: store bfloat16, read for attention (then typecast to float32 below)
+        # KV cache: store bfloat16; fused SDPA reads bf16 K/V directly.
         updated_kv_cache = None
         if kv_cache is not None:
             k_cache, v_cache = kv_cache
@@ -783,7 +778,6 @@ class Attention(LightweightModule):
                     k_for_attn = k_cache  # [batch, kv_heads, max_seq, dim]
                     v_for_attn = v_cache
                     k_is_cache_alias = True
-                    k_seq = k_cache.shape[2]  # max_seq (constant)
                 else:
                     # update_cache with Python scalar position (baked into trace as constant).
                     # Use this path when start_pos is a fixed int (e.g. 13 separate CP decode
@@ -794,11 +788,10 @@ class Attention(LightweightModule):
                     ttnn.deallocate(v)
                     if decode_attn_mask is not None:
                         # Trace-compatible full-cache attention: decode_attn_mask masks future
-                        # positions.  k_seq = max_seq is a constant — trace-safe.
+                        # positions. Cache length is a constant — trace-safe.
                         k_for_attn = k_cache
                         v_for_attn = v_cache
                         k_is_cache_alias = True
-                        k_seq = k_cache.shape[2]
                     else:
                         # Non-trace path: slice cache to the valid prefix only.
                         cache_len = start_pos + 1
@@ -809,7 +802,6 @@ class Attention(LightweightModule):
                             v_cache, [0, 0, 0, 0], [batch_size, self.num_kv_heads, cache_len, self.head_dim]
                         )
                         k_is_cache_alias = False
-                        k_seq = cache_len
             elif prefill_attn_mask is not None:
                 # Trace-compatible Talker prefill: write full padded K/V sequence to
                 # cache at position 0. update_cache with update_idx=0 is a Python
@@ -825,7 +817,6 @@ class Attention(LightweightModule):
                 k_for_attn = k_cache
                 v_for_attn = v_cache
                 k_is_cache_alias = True
-                k_seq = k_cache.shape[2]
             elif cp_prefill_mask is not None:
                 # Trace-compatible CP prefill: write 2 K/V positions to cache at batch=0.
                 # ttnn.fill_cache(cache, input, batch_idx) writes input.shape[2] positions
@@ -841,7 +832,6 @@ class Attention(LightweightModule):
                 k_for_attn = k_cache
                 v_for_attn = v_cache
                 k_is_cache_alias = True
-                k_seq = k_cache.shape[2]
             else:
                 # Standard prefill: write the fresh K/V into the persistent KV cache
                 # in-place via ttnn.fill_cache (matches tt_transformers prefill). The
@@ -862,31 +852,38 @@ class Attention(LightweightModule):
 
             updated_kv_cache = (k_cache, v_cache)
 
-        # ─── Fused prefill SDPA path ──────────────────────────────────────────
-        # ttnn.transformer.scaled_dot_product_attention handles GQA natively
-        # (k/v keep num_kv_heads, no repeat_interleave) and fuses scale + mask +
-        # softmax + matmul. Replaces the ~30-line manual fp32 chain below for
-        # standard causal prefill (Talker prefill). bf16 inputs + fp32 dest acc
-        # + HiFi4 multiply preserves enough precision through k_norm's K
-        # amplification.
-        # Falls back to manual chain for: decode, cp_prefill_mask, custom
-        # prefill_attn_mask — those need explicit handling.
+        # N150: fused SDPA on every path (GQA-native, no repeat_interleave).
+        # Other cards: fused causal prefill only; decode / custom masks stay on
+        # the manual fp32 BMM chain.
         _q_seq = int(q.shape[2])
         _k_seq_inner = int(k_for_attn.shape[2])
-        _use_fused_prefill_sdpa = (
-            not is_decode
-            and decode_attn_mask is None
-            and cp_prefill_mask is None
-            and prefill_attn_mask is None
-            and _q_seq == _k_seq_inner
-            and _q_seq > 1
-        )
-        if _use_fused_prefill_sdpa:
+        if self._n150:
+            _explicit_mask = (
+                decode_attn_mask
+                if decode_attn_mask is not None
+                else cp_prefill_mask
+                if cp_prefill_mask is not None
+                else prefill_attn_mask
+            )
+            _use_causal = _explicit_mask is None and _q_seq == _k_seq_inner and _q_seq > 1
+            _own_sdpa_mask = False
+            if _explicit_mask is not None:
+                # Fused SDPA rejects fp32 masks (talker/CP padding masks are fp32).
+                if _explicit_mask.dtype not in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b):
+                    _explicit_mask = ttnn.typecast(_explicit_mask, dtype=ttnn.bfloat16)
+                    _own_sdpa_mask = True
+                if _explicit_mask.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                    _moved = ttnn.to_memory_config(_explicit_mask, ttnn.DRAM_MEMORY_CONFIG)
+                    if _own_sdpa_mask:
+                        ttnn.deallocate(_explicit_mask)
+                    _explicit_mask = _moved
+                    _own_sdpa_mask = True
             attn_output = ttnn.transformer.scaled_dot_product_attention(
                 q,
                 k_for_attn,
                 v_for_attn,
-                is_causal=True,
+                attn_mask=_explicit_mask,
+                is_causal=_use_causal,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_config,
                 program_config=self.sdpa_prefill_program_config,
@@ -896,88 +893,92 @@ class Attention(LightweightModule):
             if not k_is_cache_alias:
                 ttnn.deallocate(k_for_attn)
                 ttnn.deallocate(v_for_attn)
-            # Skip the manual fp32 SDPA chain below; jump to o_proj path.
-            attn_output_pre_oproj = attn_output  # already bf16, [B, num_heads, S, D]
-
-        # ─── Manual fp32 SDPA path (decode + special-mask prefill) ────────────
-        # Typecast Q/K/V to float32 for precise attention.
-        # k_norm gamma up to 68 amplifies K to ~260; bfloat16 SDPA loses enough
-        # precision to cause completely wrong token predictions (no EOS, model loops).
-        if not _use_fused_prefill_sdpa:
-            q_f32 = ttnn.typecast(q, dtype=ttnn.float32)
-            ttnn.deallocate(q)
-
-            # GQA expansion: replicate each KV head num_kv_groups times.
-            # Order: repeat_interleave on bf16 first (half the bandwidth of fp32),
-            # then typecast the expanded tensor. Same math as cast-then-expand but
-            # the layout-bound repeat_interleave moves 2-byte bf16 instead of
-            # 4-byte fp32 elements.
-            if self.num_kv_groups > 1:
-                k_exp_bf16 = ttnn.repeat_interleave(k_for_attn, self.num_kv_groups, dim=1)
-                v_exp_bf16 = ttnn.repeat_interleave(v_for_attn, self.num_kv_groups, dim=1)
-                if not k_is_cache_alias:
-                    ttnn.deallocate(k_for_attn)
-                    ttnn.deallocate(v_for_attn)
-                k_exp = ttnn.typecast(k_exp_bf16, dtype=ttnn.float32)
-                v_exp = ttnn.typecast(v_exp_bf16, dtype=ttnn.float32)
-                ttnn.deallocate(k_exp_bf16)
-                ttnn.deallocate(v_exp_bf16)
-            else:
-                k_exp = ttnn.typecast(k_for_attn, dtype=ttnn.float32)
-                v_exp = ttnn.typecast(v_for_attn, dtype=ttnn.float32)
-                if not k_is_cache_alias:
-                    ttnn.deallocate(k_for_attn)
-                    ttnn.deallocate(v_for_attn)
-
-        if not _use_fused_prefill_sdpa:
-            # Float32 scaled dot-product attention via ttnn.matmul + ttnn.softmax
-            q_seq = q_f32.shape[2]
-            scores = ttnn.matmul(
-                q_f32,
-                k_exp,
-                transpose_b=True,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+            if _own_sdpa_mask:
+                ttnn.deallocate(_explicit_mask)
+        else:
+            _use_fused_prefill_sdpa = (
+                not is_decode
+                and decode_attn_mask is None
+                and cp_prefill_mask is None
+                and prefill_attn_mask is None
+                and _q_seq == _k_seq_inner
+                and _q_seq > 1
             )
-            ttnn.deallocate(q_f32)
-            scores = ttnn.mul(scores, self.scale, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-            if decode_attn_mask is not None:
-                scores = ttnn.add(scores, decode_attn_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
-            elif cp_prefill_mask is not None:
-                scores = ttnn.add(scores, cp_prefill_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
-            elif prefill_attn_mask is not None:
-                scores = ttnn.add(scores, prefill_attn_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
-            elif q_seq == k_seq and q_seq > 1:
-                mask_cpu = torch.triu(
-                    torch.full((q_seq, k_seq), float("-inf"), dtype=torch.float32),
-                    diagonal=1,
-                ).reshape(1, 1, q_seq, k_seq)
-                mask_tt = ttnn.from_torch(
-                    mask_cpu,
-                    dtype=ttnn.float32,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
+            if _use_fused_prefill_sdpa:
+                attn_output = ttnn.transformer.scaled_dot_product_attention(
+                    q,
+                    k_for_attn,
+                    v_for_attn,
+                    is_causal=True,
+                    scale=self.scale,
+                    compute_kernel_config=self.sdpa_prefill_compute_kernel_config,
+                    program_config=self.sdpa_prefill_program_config,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
-                scores = ttnn.add(scores, mask_tt, memory_config=ttnn.L1_MEMORY_CONFIG)
-                ttnn.deallocate(mask_tt)
-
-            attn_weights = ttnn.softmax(scores, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(scores)
-
-            attn_output_f32 = ttnn.matmul(
-                attn_weights,
-                v_exp,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            ttnn.deallocate(attn_weights)
-            ttnn.deallocate(v_exp)
-
-            # Cast back to bfloat16 for output projection.
-            attn_output = ttnn.typecast(attn_output_f32, dtype=ttnn.bfloat16)
-            ttnn.deallocate(attn_output_f32)
+                ttnn.deallocate(q)
+                if not k_is_cache_alias:
+                    ttnn.deallocate(k_for_attn)
+                    ttnn.deallocate(v_for_attn)
+            else:
+                q_f32 = ttnn.typecast(q, dtype=ttnn.float32)
+                ttnn.deallocate(q)
+                if self.num_kv_groups > 1:
+                    k_exp_bf16 = ttnn.repeat_interleave(k_for_attn, self.num_kv_groups, dim=1)
+                    v_exp_bf16 = ttnn.repeat_interleave(v_for_attn, self.num_kv_groups, dim=1)
+                    if not k_is_cache_alias:
+                        ttnn.deallocate(k_for_attn)
+                        ttnn.deallocate(v_for_attn)
+                    k_exp = ttnn.typecast(k_exp_bf16, dtype=ttnn.float32)
+                    v_exp = ttnn.typecast(v_exp_bf16, dtype=ttnn.float32)
+                    ttnn.deallocate(k_exp_bf16)
+                    ttnn.deallocate(v_exp_bf16)
+                else:
+                    k_exp = ttnn.typecast(k_for_attn, dtype=ttnn.float32)
+                    v_exp = ttnn.typecast(v_for_attn, dtype=ttnn.float32)
+                    if not k_is_cache_alias:
+                        ttnn.deallocate(k_for_attn)
+                        ttnn.deallocate(v_for_attn)
+                scores = ttnn.matmul(
+                    q_f32,
+                    k_exp,
+                    transpose_b=True,
+                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(q_f32)
+                scores = ttnn.mul(scores, self.scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+                if decode_attn_mask is not None:
+                    scores = ttnn.add(scores, decode_attn_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+                elif cp_prefill_mask is not None:
+                    scores = ttnn.add(scores, cp_prefill_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+                elif prefill_attn_mask is not None:
+                    scores = ttnn.add(scores, prefill_attn_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+                elif _q_seq == _k_seq_inner and _q_seq > 1:
+                    mask_cpu = torch.triu(
+                        torch.full((_q_seq, _k_seq_inner), float("-inf"), dtype=torch.float32),
+                        diagonal=1,
+                    ).reshape(1, 1, _q_seq, _k_seq_inner)
+                    mask_tt = ttnn.from_torch(
+                        mask_cpu,
+                        dtype=ttnn.float32,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.device,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                    )
+                    scores = ttnn.add(scores, mask_tt, memory_config=ttnn.L1_MEMORY_CONFIG)
+                    ttnn.deallocate(mask_tt)
+                attn_weights = ttnn.softmax(scores, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(scores)
+                attn_output_f32 = ttnn.matmul(
+                    attn_weights,
+                    v_exp,
+                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(attn_weights)
+                ttnn.deallocate(v_exp)
+                attn_output = ttnn.typecast(attn_output_f32, dtype=ttnn.bfloat16)
+                ttnn.deallocate(attn_output_f32)
 
         # Hoist use_dram_shard_o so it can also gate the direct concat→wo reshard below.
         use_dram_shard_o = is_decode and seq_len == 1
@@ -1003,10 +1004,9 @@ class Attention(LightweightModule):
             attn_concat_sharded = ttnn.experimental.nlp_concat_heads(attn_sharded, memory_config=concat_out_memcfg)
             if _own_attn_sharded_pre:
                 ttnn.deallocate(attn_sharded)
-            # Direct sharded→sharded reshard 16c → 64c into wo's expected in0 layout,
-            # skipping the L1_INTERLEAVED intermediate (saves S→I + I→S = 2 ops).
-            # Only applicable in decode where wo is DRAM-sharded; prefill goes back to L1.
-            if sharded_concat_decode and use_dram_shard_o and self._decode_wo_n_padded == self.hidden_size:
+            # Direct sharded→sharded reshard into wo's in0 layout (K-width shard).
+            # Independent of N-padding: pad is on the wo *output*, not this in0.
+            if sharded_concat_decode and use_dram_shard_o:
                 attn_output = ttnn.to_memory_config(attn_concat_sharded, self._decode_wo_in0_memcfg)
                 ttnn.deallocate(attn_concat_sharded)
                 _attn_already_in_wo_in0 = True
