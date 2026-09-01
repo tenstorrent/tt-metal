@@ -185,7 +185,7 @@ class PrefillModelAdapter(ABC):
         is stateless w.r.t. the KV cache — it receives the engine-owned ``KvCaches`` as an
         argument on each call. The engine then calls ``.compile(kv_caches)`` and drives
         it (make_chunk_input, prefill_chunk, and — when enabled — build_kv_chunk_table /
-        set_layer_ack_channel). ``params`` carries the per-rank knobs."""
+        set_layer_completion_sink). ``params`` carries the per-rank knobs."""
 
     # =====================================================================
     # Test-only metadata (HF download coordinates + reference modeling).

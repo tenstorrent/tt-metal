@@ -161,9 +161,19 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         `build_kv_chunk_table`. Implement it instead of `kv_migration_base_address` when your model
         migrates SEVERAL caches, or one whose layer numbering is not the model's global numbering."""
 
-    def set_layer_ack_channel(self, channel) -> None:
-        """Register the per-layer LayerAck channel (the engine creates and owns it); the
-        runtime bumps it once per layer so the scheduler can drive migration."""
+    def set_layer_completion_sink(self, sink) -> None:
+        """Register the per-layer completion sink. Required at any rank count, unless the runner runs
+        with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead.
+
+        Call `sink(layer_idx, request_id)` once per layer, where `request_id` is the one
+        `prefill_chunk` was given -- bind it per call rather than reading mutable state, since the
+        callback fires synchronously mid-forward.
+
+        `layer_idx` MUST be the layer's GLOBAL index. The sink keys on
+        seq = request_id * num_layers + layer_idx, so a rank-local index makes every rank's local
+        layer k collide on one seq and all but one completion is dropped -- silently, since the
+        router just sees a duplicate. If your model enumerates only its own slice, add
+        `config.first_layer_idx`; if it numbers its blocks globally at build time, pass it through."""
 ```
 
 ---

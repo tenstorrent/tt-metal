@@ -31,9 +31,6 @@ global_env:
   PREFILL_MOCK_MIGRATION: "1"
   PREFILL_MIGRATION_TABLE_PATH: "/tmp/m3_kv_chunk_table.pb"
   PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/m3_kv_device_map.json"
-  # The producer's only barrier before it reads the KV back; without it the read races the device.
-  # Defaults on only when PREFILL_ENABLE_MIGRATION=1, which the mock path does not set.
-  PREFILL_ENABLE_LAYER_ACK: "1"
   # Selects the host-callback ack transport, the only one this runtime implements — it enables no
   # tracing, since the runtime has no capture_trace.
   PREFILL_USE_TRACE: "1"
