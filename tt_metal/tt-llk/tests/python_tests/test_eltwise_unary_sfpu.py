@@ -129,8 +129,11 @@ STANDARD_SWEEP_OPS = sorted(
 # per-format default in passed_test.
 CUSTOM_TOLERANCES = {
     # Coarse 3-segment LUT: good PCC but abs error peaks ~0.12 near the knees.
-    MathOperation.SigmoidAppx: (0.13, 0.05),
     MathOperation.GeluAppx: (0.13, 0.05),
+    # SigmoidAppx no longer needs a loosened atol: its kernel moved from the 3-segment
+    # SFPLUT table (peak abs error 0.1192, hence the old 0.13) to a 6-segment SFPLUTFP32
+    # table whose peak is 0.0177, comfortably inside the default 0.05 atol. Left out of
+    # this dict deliberately so a regression in that table fails instead of being absorbed.
 }
 
 BROAD_FORMATS = input_output_formats(
