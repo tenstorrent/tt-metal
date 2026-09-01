@@ -96,15 +96,19 @@ inline void llk_math_eltwise_unary_datacopy_uninit() {
  *************************************************************************/
 
 inline void llk_math_fast_tilize_init(const std::uint32_t operand, const std::uint32_t unit_dim) {
-    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
+    SAN_HOOK(init<OperationFpuFastTilize>(
+        StateVal<OperationFpuFastTilize::UnitDim>(unit_dim),
+        StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[operand_id])));
+
     _llk_math_fast_tilize_init_(unpack_dst_format[operand_id], unit_dim);
 }
 
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_fast_tilize_uninit(const std::uint32_t operand) {
-    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
+    SAN_HOOK(uninit<OperationFpuFastTilize>(StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[operand_id])));
+
     _llk_math_fast_tilize_uninit_<is_fp32_dest_acc_en>(unpack_dst_format[operand_id]);
 }
 
@@ -113,11 +117,16 @@ inline void llk_math_fast_tilize_block_(
     const std::uint32_t operand,
     const std::uint32_t unit_dim,
     const std::uint32_t num_units) {
-    SAN_HOOK(unsupported());
     LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+
+    SAN_HOOK(execute<OperationFpuFastTilize>(
+        StateVal<OperationFpuFastTilize::UnitDim>(unit_dim),
+        StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[operand_id]),
+        StateDiscard<std::uint32_t>(dst_index),
+        StateDiscard<std::uint32_t>(num_units)));
 
     _llk_math_fast_tilize_block_(dst_index, unpack_dst_format[operand_id], unit_dim, num_units, num_faces);
 }
