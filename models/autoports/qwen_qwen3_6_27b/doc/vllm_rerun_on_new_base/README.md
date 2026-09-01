@@ -70,54 +70,81 @@ Without `QWEN_AUTOPORT_MODEL_REVISION` the loader looks for 3.6's revision and
 fails with `No local snapshot ... Tried hf_config._name_or_path=...`. The mesh
 label is `P300x2`, lowercase x.
 
-## What was measured, and what was not
+## What was measured
 
 **Serving works.** The model loads in ~3 minutes and answers requests.
 
-**Concurrency 1, ISL/OSL 128/128: 138.5 s per request**, steady across the five
-requests that completed before the run was stopped
+### Full model, non-vLLM, batch 1 (`tests/full_model_perf_warm.py`)
+
+| | ms |
+|---|---:|
+| Cold TTFT, S=128 | 7517.2 |
+| Warm TTFT, S=128 (median of 3) | **3612.3** (3611.8 / 3612.3 / 3612.6) |
+| Cold overhead | 3904.9 |
+
+So the model's own 128-token prefill is 3.6 s, and it is stable to a millisecond.
+That is in line with the TTFT the stage 09/10 vLLM benchmarks recorded
+(4139 ms and 3784 ms), so nothing about the model's prefill regressed.
+
+### Stacked TP4 decoder, batch 32 (`tests/multichip_stacked_traced_decode.py`)
+
+Trace replay median **5.032 ms** over six steps (5.029-5.041), replicated
+residual. Batch 32 is healthy on the real TP4 decoder stack.
+
+### Under vLLM
+
+Concurrency 1, ISL/OSL 128/128: **138.5 s per request**, steady
 (`4/32 [09:16<1:04:38, 138.53s/it]`, `5/32 [11:34<1:02:14, 138.31s/it]`).
 
-**Concurrency 32 did not complete.** Two attempts, 100 and 104 minutes, neither
-finishing a single wave. Not hung — `py-spy` showed it inside
+Concurrency 32 did not complete: two attempts, 100 and 104 minutes, neither
+finishing a wave. Not hung -- `py-spy` showed it inside
 `_linear_attention_prefill_chunk` throughout, and EngineCore accumulated CPU
-time 1:1 with wall clock (`01:26:35 -> 01:36:27` over one 10-minute window).
+time 1:1 with wall clock.
 
-## Why: prefill runs at the full slot width, once per request
+## Why: prefill scales with the slot count, not the active rows
 
-At concurrency 1 a request costs 138.5 s while its decode is only 128 tokens.
-At the recorded batch-1 rate of 17.9 tok/s/user that decode is ~7 s, so **~130 s
-of every request is prefill**.
+Measured directly on one linear-attention layer, S=128, single chip
+(`linear_attention_synthetic_pcc.py --mode prefill --iterations 3`):
 
-That is the fixed-slot cost: `prefill_forward` runs at the generator's full
-`batch` width — 32 with `--max-num-seqs 32` — no matter how many rows are
-actually active. And `platform.py` disables chunked prefill for `model_type=qwen3_5`
+| slot count | prefill |
+|---|---:|
+| batch 1 | 274.16 ms |
+| batch 32 | 8577.07 ms |
+
+**31.3x for 32x the slots**, i.e. linear in the fixed slot count regardless of
+how many rows carry a real prompt. The affine scan runs over
+`batch * value_heads` groups, so a batch-32 generator pays 32 sequences' worth of
+scan to prefill one.
+
+That closes the chain:
+
+| step | value |
+|---|---:|
+| full model, batch-1 slot width, warm | 3612 ms (measured) |
+| x 31.3 slot-width factor | ~113 s (predicted) |
+| observed under vLLM at `--max-num-seqs 32` | ~130 s/request (measured) |
+
+And it explains the recorded evidence rather than contradicting it: a ~4 s TTFT
+is what a **batch-1-slot** server pays, so the recorded stage 09/10 runs were not
+paying the 32-slot cost. The discrepancy noted in the first version of this file
+was mine, not theirs.
+
+`platform.py` also disables chunked prefill for `model_type=qwen3_5`
 (`Chunked prefill is not validated for model_type=qwen3_5; disabling it`), so
-vLLM prefills **one request per scheduler step**. Thirty-two requests therefore
-pay thirty-two full-width prefills, ~69 minutes before the first token of the
-last one.
+vLLM prefills one request per scheduler step. Thirty-two requests at
+`--max-num-seqs 32` therefore pay thirty-two 32-slot prefills, ~70 minutes
+before the last one's first token.
 
-This is consistent with the single-chip measurement in `doc/kda_conv_swap`: a
-128-token linear-attention prefill is 272 ms per layer at batch 1, and the
-affine scan scales with `batch * value_heads`, so batch-32 slots cost ~32x that
-across 48 linear layers.
-
-It also explains the shape of the recorded evidence: the headline
-`vllm_benchmark.json` is **concurrency 1**, and `vllm_ci_serving_benchmark.json`
-is 32 requests at 100/100 in 187 s — a rate that is not reachable if each of
-those requests pays a full-width prefill, so that run cannot have been paying
-one. Reconciling the 187 s recorded against ~130 s per prefill measured here is
-open, and is the first thing to check before trusting either number.
-
-**Do not pass `--benchmark-concurrency` expecting it to help.** Omitting it
-makes the harness default to concurrency 1, which completes; setting it to 32
+**Do not pass `--benchmark-concurrency` expecting it to help.** Omitting it makes
+the harness default to concurrency 1, which completes; setting it to 32
 serialises 32 full-width prefills.
 
 ## Open
 
-1. Reconcile the recorded 187 s / 32-request CI-serving figure with the ~130 s
-   per-request prefill measured here. One of them is not what it looks like.
-2. Make prefill cost track active rows rather than slot count. That is the
-   difference between a batch-32 serving benchmark taking ~70 minutes and taking
-   ~2, and it is worth more than any decode-side win measured so far.
-3. Then re-run this configuration for the TSU number.
+1. **Make prefill cost track active rows rather than slot count.** This is the
+   one that matters: it is the difference between a batch-32 serving benchmark
+   taking ~70 minutes and taking ~2, and it is worth more than any decode-side
+   win measured on this branch. The fused KDA conv cut the decode layer nearly
+   in half; this is a 31x factor sitting in prefill.
+2. Then re-run this configuration for the batch-32 TSU number. Until (1), a
+   batch-32 TSU costs ~90 minutes of prefill to obtain.

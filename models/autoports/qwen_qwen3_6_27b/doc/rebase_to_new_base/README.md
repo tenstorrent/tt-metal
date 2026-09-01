@@ -228,18 +228,28 @@ than under B because no cause was identified — unlike B, I did not chase it.
 It blocks op-level attribution on the TP4 path; wall-clock trace-replay medians,
 which is what the autoport's multichip evidence uses, are unaffected.
 
-### C6. Eager batch-32 decode fails in the shared synthetic harness — not diagnosed
+### C6. Eager batch-32 decode failed in the shared synthetic harness — FIXED
 
 ```
 linear_attention_synthetic_pcc.py --mode decode --optimized --batch 32
 TT_FATAL: Shard height 32 must match physical height 1024 for width sharded
 ```
 
-Fails for `default`, `linear_final`, `linear_packed_dram`, `linear_state_fp32`,
-and is pre-existing relative to the KDA work (confirmed by reverting those
-files). The traced harness runs batch-32 decode fine and is what the autoport's
-own batch-32 evidence used, so this combination may simply never have been
-exercised. Recorded, not diagnosed.
+Diagnosed: a harness bug, not a model or rebase problem. The eager harness builds
+one `hidden` of shape `[batch, sequence, hidden]` for both modes and then
+`unsqueeze(0)`s it, which is the **prefill** contract
+`[1, batch, sequence, hidden]`. Decode's contract is `[1, 1, batch, hidden]` --
+which is what `traced_synthetic_pcc.py` uses, and why that harness was fine at
+batch 32.
+
+At batch 1 the two shapes coincide, so this was invisible. At batch 32 the decode
+tensor became `[1, 32, 1, hidden]`, whose tile-padded height is 32x32 = 1024,
+and the width-sharded decode memory config rejected it -- which is exactly the
+number in the error.
+
+Fixed by reshaping to `(1, 1, batch, -1)` in decode mode. Batch-32 eager decode
+now passes at PCC 0.9999974 (`linear_final`) and 0.9999973 (`linear_kda_conv`),
+and batch-1 and prefill are bit-identical to before.
 
 ---
 
@@ -256,7 +266,6 @@ alone is 347 MB per arm.
 
 1. Report the semaphore fallback upstream (see B).
 2. Diagnose C5 — it blocks op-level perf work on the TP4 path.
-3. Diagnose or dismiss C6.
 
 ## Note for anyone triaging the MLP down projection
 

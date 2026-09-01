@@ -107,7 +107,17 @@ def run(
             page_size=64,
             **({"candidate": candidate} if optimized else {}),
         )
-        hidden_tt = _to_device(hidden.unsqueeze(0), mesh_device=mesh)
+        # Decode's contract is [1, 1, batch, hidden]; prefill's is
+        # [1, batch, sequence, hidden]. `hidden` is [batch, sequence, hidden],
+        # so unsqueeze(0) is only right for prefill. At batch 1 the two shapes
+        # coincide, which is why this went unnoticed; at batch 32 the decode
+        # tensor became [1, 32, 1, hidden], whose tile-padded height is 1024,
+        # and the width-sharded decode memory config rejected it with
+        # "Shard height 32 must match physical height 1024".
+        if mode == "decode":
+            hidden_tt = _to_device(hidden.reshape(1, 1, batch, -1), mesh_device=mesh)
+        else:
+            hidden_tt = _to_device(hidden.unsqueeze(0), mesh_device=mesh)
         unused_page_table = _to_device(
             torch.arange(batch, dtype=torch.int32).reshape(batch, 1),
             mesh_device=mesh,
