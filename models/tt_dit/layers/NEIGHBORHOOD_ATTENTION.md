@@ -405,7 +405,6 @@ Helpers worth knowing:
 
 | helper                                  | does                                                                                                                                                                                        |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `configured_stride()`                   | `DIFFVAE_S5_GNA_STRIDE` then `DIFFVAE_GNA_STRIDE`. The stage-5 knob exists because the global one is read by `na3d` for **every** stage, and the deterministic stages have smaller kernels. |
 | `_query_chunk_bricks(stride, brick)`    | `stride // brick` per axis where it divides, else 1. **Derived, never tuned.**                                                                                                              |
 | `halo_sites(window, brick)`             | `ceil(window/2 / brick) * brick` — the halo, in whole bricks                                                                                                                                |
 | `_tiles_per_kv_chunk(gather)`           | largest chunk that fits DST and divides the gather                                                                                                                                          |
@@ -586,7 +585,7 @@ stride larger than its kernel, reported in **op-order axes**.
 
 | variable                    | does                                                                                          |
 | --------------------------- | --------------------------------------------------------------------------------------------- |
-| `DIFFVAE_S5_GNA_STRIDE`     | stage-5 stride, physical `(t,h,w)`. **Prefer this** — the global one leaks into other stages. |
+| `DIFFVAE_S5_GNA_STRIDE`     | stage-5 stride, physical `(t,h,w)`; read only by `DiffVAEStage5Config.resolved_gna_stride`, which feeds every stage-5 backend. An explicit `gna_stride=` on the config wins over it. |
 | `DIFFVAE_GNA_STRIDE`        | global stride; read by `na3d` for every stage                                                 |
 | `DIFFVAE_NA_WINDOW`         | overrides the architectural context window                                                    |
 | `DIFFVAE_NA_BRICK`          | overrides the derived brick                                                                   |

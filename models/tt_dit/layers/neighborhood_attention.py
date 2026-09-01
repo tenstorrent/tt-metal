@@ -172,25 +172,6 @@ def _build_regime_masks(volume, context_window, stride, brick, chunk_bricks, pla
     return masks
 
 
-def configured_stride() -> tuple[int, int, int]:
-    """The GNA stride for stage 5, in PHYSICAL (time, height, width) sites.
-
-    ``DIFFVAE_S5_GNA_STRIDE`` first, because ``DIFFVAE_GNA_STRIDE`` is read by na3d for EVERY
-    stage, and the deterministic stages have smaller kernels: a stride legal for stage 5's 11^3
-    window is rejected by a stage whose kernel is 7 ("neighborhood_stride t=8 must not exceed the
-    effective kernel t=7"). That check reports OP-order axes, so a width stride surfaces as `t`,
-    which makes the message doubly confusing. Setting the stage-5 knob leaves the other stages at
-    whatever they were.
-
-    (1,1,1) is the shipped architecture: every query centred on its own window.
-    """
-    for name in ("DIFFVAE_S5_GNA_STRIDE", "DIFFVAE_GNA_STRIDE"):
-        value = os.environ.get(name)
-        if value:
-            return tuple(int(part) for part in value.split(","))
-    return (1, 1, 1)
-
-
 def relative_mask_span(window_extent: int, brick_extent: int) -> tuple[int, int]:
     """Inclusive range of ``key_brick - query_brick`` a window can reach, on one axis.
 
@@ -431,11 +412,12 @@ def neighborhood_attention_3d_bricked(
     batch, time_extent, height_extent, width_extent, head_count, head_dim = tuple(query.shape)
     assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
 
-    # PHYSICAL (t, h, w), same convention as DIFFVAE_GNA_STRIDE elsewhere. (1,1,1) is the shipped
-    # architecture: every query centred on its own window. Larger shares one window across each
-    # group, which is what removes the per-query mask -- see the module docstring.
+    # PHYSICAL (t, h, w), NOT the op's axis order: it is passed to the op unpermuted below, while
+    # na3d permutes its own gna_stride. (1,1,1) is the shipped architecture: every query centred on
+    # its own window. Larger shares one window across each group, which is what removes the
+    # per-query mask -- see the module docstring. Callers own the knob; this module reads no env.
     if stride is None:
-        stride = configured_stride()
+        stride = (1, 1, 1)
 
     # DIFFVAE_NA_WINDOW overrides the architectural window. Enlarging it to a whole number of
     # bricks is what lets every gathered brick be classified wholly in or wholly out, so the
@@ -716,6 +698,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
     heads_presharded: bool = False,
     already_bricked: bool = False,
     brick: tuple[int, int, int] | None = None,
+    stride: tuple[int, int, int] | None = None,
 ) -> ttnn.Tensor:
     """Spatial-W sharded NA3D. ``q``/``k``/``v`` are this chip's W-shard; ``dims`` is the FULL grid.
 
@@ -736,9 +719,14 @@ def neighborhood_attention_3d_bricked_w_sharded(
     ``(batch, heads, sites, head_dim)`` sequence rather than the 6-D volume -- both shapes are
     accepted below, because refusing the flat one refuses the whole fast path.
 
-    ``already_bricked``: sites are already in bricked order (stage-5 hoist). Q/K/V are
+    ``already_bricked``: sites are already in bricked order (a caller-side hoist). Q/K/V are
     ``(batch, heads, bricked_sites, head_dim)``; the W halo is ``neighbor_pad`` on ``W_br``, and
-    the return stays bricked. ``brick`` is then required so the stage and the op cannot disagree.
+    the return stays bricked. ``brick`` is then required so the caller and the op cannot disagree.
+
+    ``stride`` is the GNA query-group stride in PHYSICAL (t, h, w) sites, defaulting to (1,1,1) --
+    the shipped architecture, every query centred on its own window. It is the caller's knob: this
+    module reads no environment for it, and a caller that also derives its own brick must pass the
+    same stride here or the two brick choices can disagree.
     """
     shard_count = int(list(query.device().shape)[sp_axis])
     time_extent, height_extent = dims[0], dims[1]
@@ -763,7 +751,8 @@ def neighborhood_attention_3d_bricked_w_sharded(
     ), f"W {volume[2]} does not split into {shard_count} shards of {width_local}"
 
     context_window = tuple(min(window, extent) for window, extent in zip(kernel_size, volume))
-    stride = configured_stride()
+    if stride is None:
+        stride = (1, 1, 1)
     brick_env = os.environ.get("DIFFVAE_NA_BRICK")
     if brick is None:
         brick = (

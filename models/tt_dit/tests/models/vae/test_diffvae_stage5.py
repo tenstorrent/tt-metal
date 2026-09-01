@@ -500,6 +500,31 @@ def test_stage5_parity_sharded(mesh_device: ttnn.MeshDevice, device_params, subm
     assert_quality(ref_pixels, tt_pixels, pcc=pcc)
 
 
+def test_resolved_gna_stride(monkeypatch):
+    """The one place stage 5 resolves its stride. No device: it is config arithmetic.
+
+    Every stage-5 backend reads this, so the precedence is what decides which attention a run
+    computes. It used to live in ``neighborhood_attention.configured_stride()``, where it was
+    reachable only by the bricked executor and invisible to the config object.
+    """
+    monkeypatch.delenv("DIFFVAE_S5_GNA_STRIDE", raising=False)
+    assert DiffVAEStage5Config().resolved_gna_stride == (1, 1, 1)
+
+    monkeypatch.setenv("DIFFVAE_S5_GNA_STRIDE", "2,4,4")
+    assert DiffVAEStage5Config().resolved_gna_stride == (2, 4, 4)
+    # An explicitly configured stride is a deliberate choice by the caller and outranks the knob.
+    assert DiffVAEStage5Config(gna_stride=(1, 2, 2)).resolved_gna_stride == (1, 2, 2)
+
+    # Empty is "unset": `DIFFVAE_S5_GNA_STRIDE=` in a script must not crash on int("").
+    monkeypatch.setenv("DIFFVAE_S5_GNA_STRIDE", "")
+    assert DiffVAEStage5Config().resolved_gna_stride == (1, 1, 1)
+
+    # The global knob is na3d's, for every stage. It is deliberately NOT a stage-5 fallback any more.
+    monkeypatch.delenv("DIFFVAE_S5_GNA_STRIDE", raising=False)
+    monkeypatch.setenv("DIFFVAE_GNA_STRIDE", "2,4,4")
+    assert DiffVAEStage5Config().resolved_gna_stride == (1, 1, 1)
+
+
 @torch.no_grad()
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]

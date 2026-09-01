@@ -1037,6 +1037,14 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     # explicit gna_stride (or DIFFVAE_GNA_STRIDE="st,sh,sw") is PHYSICAL (t,h,w) and permutes the same way
     # the kernel does; DIFFVAE_GNA=1 instead takes the stride straight from the block, already op-order.
     _stride_env = os.environ.get("DIFFVAE_GNA_STRIDE")
+
+    # (1,1,1) is NOT a choice -- it is the shipped architecture, i.e. no stride at all. Normalizing
+    # it to None here is what lets a caller pass its resolved stride unconditionally: DIFFVAE_GNA
+    # and DIFFVAE_GNA_STRIDE still apply underneath a trivial one, exactly as they do when the
+    # argument is omitted. Without this, a caller that always passes a value silently turns the
+    # DIFFVAE_GNA block stride off, and nothing fails to say so. TODO: REMOVE THIS HACK!
+    if gna_stride == (1, 1, 1):
+        gna_stride = None
     if gna_stride is None and _stride_env:
         gna_stride = tuple(int(v) for v in _stride_env.split(","))
     if gna_stride is not None:
@@ -1381,6 +1389,7 @@ def neighborhood_attention_3d(
     ccl_manager=None,
     backend: str = "gather",
     sp_axis: int | None = None,
+    gna_stride: tuple[int, int, int] | None = None,
 ) -> ttnn.Tensor:
     """3D neighborhood attention on device.
 
@@ -1407,12 +1416,22 @@ def neighborhood_attention_3d(
     to :func:`neighborhood_attention_3d_op_sp`, the same op path with the attention split over T
     across ``sp_axis`` (needs ``ccl_manager`` and ``sp_axis``). The gather-only arguments
     (``device_plan``, ``chunk_budget``) do not apply to the op backends.
+
+    ``gna_stride`` is the GNA query-group stride in PHYSICAL (t, h, w) sites; the trivial (1,1,1)
+    means the shipped architecture, so callers may pass it to any backend. Only ``"bricked"``
+    honours a real stride here -- the others have no stride parameter, so one aimed at them is
+    REFUSED rather than dropped: silently ignoring it is how a caller ends up measuring standard NA
+    and reporting it as GNA.
     """
     if backend == "bricked":
         # Our op: tokens in bricked site order, one tile row per 3D brick.
         from .neighborhood_attention import neighborhood_attention_3d_bricked
 
-        return neighborhood_attention_3d_bricked(q, k, v, kernel_size=kernel_size, scale=scale)
+        return neighborhood_attention_3d_bricked(q, k, v, kernel_size=kernel_size, scale=scale, stride=gna_stride)
+    assert gna_stride in (None, (1, 1, 1)), (
+        f"backend {backend!r} has no stride parameter, so gna_stride={gna_stride} would be ignored; "
+        f'use backend="bricked" (or the sharded executors, which take it directly)'
+    )
     if backend == "op":
         return neighborhood_attention_3d_op(q, k, v, kernel_size=kernel_size, scale=scale)
     if backend == "fused":

@@ -473,3 +473,101 @@ def test_interior_table_matches_generated_masks(mesh_device, owned_width, brick)
         expected_owned = expected[:, :, :, shard_index * owned : shard_index * owned + owned]
         correlation = pearson(actual_owned, expected_owned)
         assert correlation > 0.99, f"shard {shard_index} at origin {origin_width}: PCC {correlation:.5f}"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "volume, context_window, width_local, shard_count, expected_brick, expected_gather",
+    [
+        # 1080p decode: (8,2,2) and (2,8,2) both gather 147 bricks with the same halo; the
+        # deeper time brick measured 11% faster per query brick, and the -brick_time tiebreak
+        # in the scoring tuple picks it.
+        ((84, 272, 480), (11, 11, 11), 60, 8, (8, 2, 2), 147),
+    ],
+    ids=["1080p_decode"],
+)
+def test_choose_sharded_brick_regression(
+    mesh_device, volume, context_window, width_local, shard_count, expected_brick, expected_gather
+):
+    """Pin the brick choice and gather count for known production geometries.
+
+    ``_choose_sharded_brick`` searches all valid 32-site bricks and picks the one that minimises
+    the gather brick count as measured by the real planner.  A change to the search, the scoring,
+    or the planner's alignment handling can silently shift the choice and the downstream gather
+    size -- which changes kernel runtime without any code in the kernel itself changing.
+    """
+    from models.tt_dit.layers.neighborhood_attention import (
+        _BRICK_CHOICE_CACHE,
+        _choose_sharded_brick,
+        _query_chunk_bricks,
+        halo_sites,
+    )
+
+    _BRICK_CHOICE_CACHE.clear()
+
+    stride = (1, 1, 1)
+    brick = _choose_sharded_brick(volume, context_window, stride, width_local, shard_count)
+    assert brick == expected_brick, (
+        f"expected brick {expected_brick} for volume={volume} window={context_window} "
+        f"width_local={width_local} shard_count={shard_count}, got {brick}"
+    )
+
+    # Verify the gather count -- the metric the function optimises. A planner change that
+    # increases it (even with the same brick) is a perf regression worth catching.
+    halo = halo_sites(min(context_window[2], volume[2]), brick[2])
+    resident = (volume[0], volume[1], width_local + 2 * halo)
+    plan = ttnn.transformer.neighborhood_plan(
+        volume,
+        context_window,
+        stride,
+        brick,
+        query_chunk_bricks=_query_chunk_bricks(stride, brick),
+        shard_extent=resident,
+        shard_origin=(0, 0, -halo),
+    )
+    assert (
+        plan["gather_brick_count"] == expected_gather
+    ), f"expected gather_brick_count={expected_gather} for brick {brick}, got {plan['gather_brick_count']}"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+def test_choose_sharded_brick_delegates_at_stride_gt_one(mesh_device):
+    """stride > (1,1,1) delegates to ``neighborhood_choose_brick`` unconditionally."""
+    from models.tt_dit.layers.neighborhood_attention import _choose_sharded_brick
+
+    brick = _choose_sharded_brick(
+        volume=(8, 16, 16),
+        context_window=(3, 5, 5),
+        stride=(2, 4, 4),
+        width_local=8,
+        shard_count=2,
+    )
+    expected = tuple(ttnn.transformer.neighborhood_choose_brick((3, 5, 5)))
+    assert brick == expected, f"stride > 1 should return {expected}, got {brick}"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+def test_choose_sharded_brick_rejects_oversized_bricks(mesh_device):
+    """A volume with few time frames must not select a brick deeper than the volume.
+
+    Without the ``brick > volume`` filter, a 12-frame volume picks (16, 1, 2) -- a brick that
+    exceeds the time axis.  That scores excellently (77 gathered bricks against the 147 a real
+    brick needs) because the degenerate axis contributes a single slot to the gather, but the op
+    wedges on the resulting ghost-heavy grid.
+    """
+    from models.tt_dit.layers.neighborhood_attention import _BRICK_CHOICE_CACHE, _choose_sharded_brick
+
+    _BRICK_CHOICE_CACHE.clear()
+
+    # 12 time frames: small enough that (16, 1, 2) exceeds it on the time axis.
+    volume = (12, 272, 480)
+    context_window = (11, 11, 11)
+    stride = (1, 1, 1)
+    width_local = 60
+    shard_count = 8
+
+    brick = _choose_sharded_brick(volume, context_window, stride, width_local, shard_count)
+
+    assert all(b <= v for b, v in zip(brick, volume)), (
+        f"brick {brick} exceeds volume {volume} on at least one axis -- " f"the oversized-brick filter is not working"
+    )

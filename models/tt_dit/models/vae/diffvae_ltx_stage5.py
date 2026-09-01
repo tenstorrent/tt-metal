@@ -193,6 +193,30 @@ class DiffVAEStage5Config:
         return self.out_channels * self.patch_size**2
 
     @property
+    def resolved_gna_stride(self) -> tuple[int, int, int]:
+        """``gna_stride``, or ``DIFFVAE_S5_GNA_STRIDE`` when the config is left at the default.
+
+        The single place stage 5 resolves its stride, so every backend below reads the same value
+        and the attention executors take it as an argument rather than reading the environment
+        themselves.
+
+        The knob is stage-5 scoped rather than the global ``DIFFVAE_GNA_STRIDE`` (which na3d reads
+        for EVERY stage) because the deterministic stages have smaller kernels: a stride legal for
+        stage 5's 11^3 window is rejected by a stage whose kernel is 7 ("neighborhood_stride t=8
+        must not exceed the effective kernel t=7"). That check reports OP-order axes, so a width
+        stride surfaces as `t`, which makes the message doubly confusing.
+
+        An explicitly configured stride wins over the environment; (1,1,1) is the shipped
+        architecture, so it is indistinguishable from "not configured".
+        """
+        if self.gna_stride != (1, 1, 1):
+            return self.gna_stride
+        value = os.environ.get("DIFFVAE_S5_GNA_STRIDE")
+        if value:
+            return tuple(int(part) for part in value.split(","))
+        return (1, 1, 1)
+
+    @property
     def resolved_rope_dim_split(self) -> tuple[int, int, int]:
         if self.rope_dim_split is not None:
             split = self.rope_dim_split
@@ -279,6 +303,7 @@ def neighborhood_attention_3d(
     scale: float = 1.0,
     ccl_manager=None,
     backend: str = "gather",
+    gna_stride: tuple[int, int, int] | None = None,
 ) -> ttnn.Tensor:
     """3D neighborhood attention over ``(B, T, H, W, num_heads, head_dim)`` tensors.
 
@@ -299,7 +324,9 @@ def neighborhood_attention_3d(
     ``except ImportError`` would move attention to the host silently, and every parity test
     here would still pass — slower, and no longer measuring the device.
     """
-    return na3d_on_device(q, k, v, kernel_size=kernel_size, scale=scale, ccl_manager=ccl_manager, backend=backend)
+    return na3d_on_device(
+        q, k, v, kernel_size=kernel_size, scale=scale, ccl_manager=ccl_manager, backend=backend, gna_stride=gna_stride
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1158,6 +1185,7 @@ class _NeighborhoodAttention3D(Module):
                     heads_presharded=self.tp_proj,
                     already_bricked=brick is not None,
                     brick=brick,
+                    stride=cfg.resolved_gna_stride,
                 )
             case "op_sp_w_sharded":
                 out = neighborhood_attention_3d_op_sp_w_sharded(
@@ -1172,7 +1200,7 @@ class _NeighborhoodAttention3D(Module):
                     tp_axis=self.tp_axis,
                     heads_presharded=self.tp_proj,
                     flat_seq=flat_seq,
-                    gna_stride=None if cfg.gna_stride == (1, 1, 1) else cfg.gna_stride,
+                    gna_stride=cfg.resolved_gna_stride,
                 )
             case _:
                 # Replicated: the whole volume on every chip. na3d's own dispatcher picks the
@@ -1185,6 +1213,7 @@ class _NeighborhoodAttention3D(Module):
                     scale=1.0,
                     ccl_manager=self.ccl_manager,
                     backend=self.kernel.name,
+                    gna_stride=cfg.resolved_gna_stride,
                 )
         for tensor in (q, k, v):
             ttnn.deallocate(tensor)
@@ -1536,7 +1565,7 @@ class DiffVAEStage5(Module):
         """The brick the whole stage converts with -- same choice the attention op would make."""
         if self._brick is not None:
             return self._brick
-        from ...layers.neighborhood_attention import _choose_sharded_brick, configured_stride
+        from ...layers.neighborhood_attention import _choose_sharded_brick
 
         sp = int(list(self.mesh_device.shape)[self.sp_axis]) if self._w_sharded else 1
         w_local = grid.w // sp
@@ -1546,7 +1575,7 @@ class DiffVAEStage5(Module):
         self._brick = (
             tuple(int(part) for part in brick_env.split(","))
             if brick_env
-            else _choose_sharded_brick(volume, context_window, configured_stride(), w_local, sp)
+            else _choose_sharded_brick(volume, context_window, self.config.resolved_gna_stride, w_local, sp)
         )
         return self._brick
 
