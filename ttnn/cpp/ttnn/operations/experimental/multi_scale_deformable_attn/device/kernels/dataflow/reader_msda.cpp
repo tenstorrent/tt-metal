@@ -22,16 +22,17 @@
 //   BL face: offset 1024..1535  (rows 16..31, cols  0..15)
 //   BR face: offset 1536..2047  (rows 16..31, cols 16..31)
 // Row r spans a low half (cols 0..15) and a high half (cols 16..31) at
-// non-contiguous offsets; both are 32-byte aligned, so the NoC writes value
-// sticks into them directly.
+// non-contiguous offsets. Only the grid/attn column-0 tiles are written that way
+// here; a value stick goes down row-major and the unpacker's tilize places it.
 //
 // Per-tile runtime args (3 per tile): (n, q_start, v_rows). 1 <= v_rows <= 32.
 // Zero-fill contract:
 //   * grid/attn tiles: column 0 is written for all 32 rows, zero past v_rows, so
 //     a tail row's weight comes out zero.
-//   * input tile: only valid rows (r < v_rows AND corner in bounds) are written;
-//     tail and out-of-bounds rows keep whatever the CB slot held. Safe because
-//     the matching scalar lane is zero.
+//   * input block: every row is written — a gathered stick for a valid corner,
+//     zeros otherwise. The scalar lane is zero for those rows too, so the zeroing
+//     is belt-and-braces, but the block is row-major and a stale row would tilize
+//     into a live lane.
 
 #include <cstdint>
 #include <cstring>
@@ -69,7 +70,7 @@ inline int32_t bf16_to_int(uint16_t bf16) {
 
 constexpr uint32_t grid_cb_index = get_compile_time_arg_val(0);
 constexpr uint32_t attn_cb_index = get_compile_time_arg_val(1);
-constexpr uint32_t input_tile_cb_index = get_compile_time_arg_val(2);
+constexpr uint32_t input_rm_cb_index = get_compile_time_arg_val(2);
 constexpr uint32_t grid_x_cb_index = get_compile_time_arg_val(3);
 constexpr uint32_t grid_y_cb_index = get_compile_time_arg_val(4);
 constexpr uint32_t attn_tile_cb_index = get_compile_time_arg_val(5);
@@ -105,8 +106,7 @@ constexpr uint32_t grid_head_stride_pts = get_compile_time_arg_val(24);
 constexpr uint32_t grid_point_offset = get_compile_time_arg_val(25);
 // DRAM-side NoC alignment, from the host's hal: 32 on Wormhole, 64 on Blackhole.
 constexpr uint32_t NOC_OFF_ALIGN = get_compile_time_arg_val(26);
-constexpr uint32_t value_row_cb_index = get_compile_time_arg_val(27);
-constexpr auto value_args = TensorAccessorArgs<28>();
+constexpr auto value_args = TensorAccessorArgs<27>();
 constexpr auto grid_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
 constexpr auto attn_args = TensorAccessorArgs<grid_args.next_compile_time_args_offset()>();
 
@@ -128,12 +128,11 @@ constexpr uint32_t WORDS_PER_TILE_ROW = 2 * HALF_WORDS;
 constexpr uint32_t N_D_TILES = (STICK_WORDS + WORDS_PER_TILE_ROW - 1) / WORDS_PER_TILE_ROW;
 constexpr uint32_t STICK_NBYTES = D * 2;  // one head's slice, before alignment padding
 constexpr uint32_t HEAD_STRIDE_NBYTES = STICK_NBYTES;
-constexpr uint32_t TILE_ROW_NBYTES = 2 * HALF_STICK_NBYTES;  // 32 bf16 = one tile row
-// Whether the NoC can place a tile row's two face halves straight from DRAM. The high half sits
-// HALF_STICK_NBYTES into the row, and that offset has to clear the arch's DRAM read alignment —
-// it does at 32 bytes, it does not at Blackhole's 64. Where it does not, the row is fetched once
-// into a scratch and split in L1.
-constexpr bool HALF_READ_ALIGNED = HALF_STICK_NBYTES % NOC_OFF_ALIGN == 0;
+// A row of the staged block is as wide as the tiles the unpacker will make from it, so a D that is
+// not a whole number of tiles leaves a tail. It is zeroed: the writer never reads those lanes back,
+// but tilize would carry whatever was there into a live tile.
+constexpr uint32_t BLOCK_ROW_NBYTES = N_D_TILES * 32 * 2;
+constexpr uint32_t BLOCK_TAIL_NBYTES = BLOCK_ROW_NBYTES - STICK_NBYTES;
 static_assert(D % 16 == 0 && D > 0, "D must be a positive multiple of 16");
 // x0/y0 cross from the compute kernel as bf16, which is exact for integers up to
 // 256. Past that the decoded corner would silently be wrong, not out of bounds.
@@ -152,13 +151,12 @@ void kernel_main() {
     Noc noc;
     CircularBuffer grid_cb(grid_cb_index);
     CircularBuffer attn_cb(attn_cb_index);
-    CircularBuffer input_tile_cb(input_tile_cb_index);
+    CircularBuffer input_rm_cb(input_rm_cb_index);
     CircularBuffer grid_x_cb(grid_x_cb_index);
     CircularBuffer grid_y_cb(grid_y_cb_index);
     CircularBuffer attn_tile_cb(attn_tile_cb_index);
     CircularBuffer x0_cb(x0_cb_index);
     CircularBuffer y0_cb(y0_cb_index);
-    CircularBuffer value_row_cb(value_row_cb_index);
 
     constexpr int32_t h_in_i = static_cast<int32_t>(h_in);
     constexpr int32_t w_in_i = static_cast<int32_t>(w_in);
@@ -168,8 +166,6 @@ void kernel_main() {
     const uint32_t grid_scratch_l1 = grid_cb.get_write_ptr();
     attn_cb.reserve_back(TILE_MAX_ROWS);
     const uint32_t attn_scratch_l1 = attn_cb.get_write_ptr();
-    value_row_cb.reserve_back(HALF_READ_ALIGNED ? 1 : TILE_MAX_ROWS * N_D_TILES);
-    const uint32_t value_row_l1 = value_row_cb.get_write_ptr();
 
     // Per-(p, corner) precompute scratch (one entry per row in the current tile).
     int32_t x0_arr[TILE_MAX_ROWS];
@@ -221,7 +217,7 @@ void kernel_main() {
 
         // Hand the geometry to the compute kernel: one column-0 tile per point for
         // gx, gy and attn. All P points go out before any corner comes back — a
-        // reader that interleaved the two would block on a full input_tile_cb while
+        // reader that interleaved the two would block on a full input_rm_cb while
         // compute waited on the next point's grid.
         for (uint32_t p = 0; p < P; ++p) {
             grid_x_cb.reserve_back(1);
@@ -317,109 +313,43 @@ void kernel_main() {
                 const bool* yv_arr = (c < 2) ? y0v_arr : y1v_arr;
                 const bool* xv_arr = (c & 1) ? x1v_arr : x0v_arr;
 
-                // ---- INPUT TILES (N_D_TILES per (p, corner)) ----
-                input_tile_cb.reserve_back(N_D_TILES);
-                const uint32_t tile_l1 = input_tile_cb.get_write_ptr();
+                // ---- INPUT BLOCK (N_D_TILES tiles' worth, row-major) ----
+                //
+                // The sticks go down contiguously, one per query row, and the compute kernel
+                // hands the block to the unpacker's tilize. Placing them into tile face halves
+                // here would be a scalar core doing the unpacker's job, and on Blackhole it is
+                // not even expressible: a DRAM transfer there is 64-byte granular in both
+                // address and size, while a face half is 32.
+                input_rm_cb.reserve_back(N_D_TILES);
+                const uint32_t block_l1 = input_rm_cb.get_write_ptr();
 
-                // Read each valid row's stick straight into its face-row halves.
-                //
-                // A tile row is two 32-byte halves at non-contiguous L1 offsets, so a 64-byte
-                // stick cannot land in one transfer — but both halves are 32-byte aligned on
-                // either side, so the NoC can place them directly. Staging into a scratch stick
-                // and copying word by word costs more than the gather it serves.
-                //
-                // Only the logical D*2 bytes are requested, never value_stick_nbytes: the padded
-                // tail would spill past the row into the next one.
                 for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
+                    const uint32_t row_l1 = block_l1 + r * BLOCK_ROW_NBYTES;
                     if (r >= v_rows || !(yv_arr[r] && xv_arr[r])) {
-                        // No corner to gather: zero the row. The reduction weights
-                        // come from the compute kernel, which does not know which
-                        // corners fell outside the feature map, so a stale row here
-                        // would be multiplied by a live weight.
-                        const auto off = msda_tile_layout::tile_row_offsets(r);
-                        for (uint32_t k = 0; k < N_D_TILES; ++k) {
-                            const uint32_t ktile_l1 = tile_l1 + k * TILE_NBYTES;
-                            CoreLocalMem<volatile uint32_t> zlo(ktile_l1 + off.lo);
-                            CoreLocalMem<volatile uint32_t> zhi(ktile_l1 + off.hi);
-                            for (uint32_t i = 0; i < HALF_WORDS; ++i) {
-                                zlo[i] = 0;
-                                zhi[i] = 0;
-                            }
+                        // No corner to gather: zero the row. The reduction weights come from the
+                        // compute kernel, which does not know which corners fell outside the
+                        // feature map, so a stale row here would be multiplied by a live weight.
+                        CoreLocalMem<volatile uint32_t> z(row_l1);
+                        for (uint32_t i = 0; i < BLOCK_ROW_NBYTES / sizeof(uint32_t); ++i) {
+                            z[i] = 0;
                         }
                         continue;
                     }
                     const uint32_t cy = static_cast<uint32_t>(y0_arr[r] + dy_off);
                     const uint32_t cx = static_cast<uint32_t>(x0_arr[r] + dx_off);
                     const uint32_t stick_idx = n_off + cy * w_in_i + cx;
-                    const auto off = msda_tile_layout::tile_row_offsets(r);
-                    for (uint32_t k = 0; k < N_D_TILES; ++k) {
-                        // Length is measured inside this head's slice; head_off only moves
-                        // the address, so it must not enter the remaining-bytes maths.
-                        const uint32_t tile_off = k * TILE_ROW_NBYTES;
-                        const uint32_t src_off = head_off + tile_off;
-                        const uint32_t bytes_k =
-                            (STICK_NBYTES - tile_off < TILE_ROW_NBYTES) ? (STICK_NBYTES - tile_off) : TILE_ROW_NBYTES;
-                        const uint32_t lo_bytes = bytes_k < HALF_STICK_NBYTES ? bytes_k : HALF_STICK_NBYTES;
-                        const uint32_t ktile_l1 = tile_l1 + k * TILE_NBYTES;
-                        if constexpr (HALF_READ_ALIGNED) {
-                            CoreLocalMem<uint32_t> dl(ktile_l1 + off.lo);
-                            noc.async_read(
-                                value_acc, dl, lo_bytes, {.page_id = stick_idx, .offset_bytes = src_off}, {});
-                            if (bytes_k > lo_bytes) {
-                                CoreLocalMem<uint32_t> dh(ktile_l1 + off.hi);
-                                noc.async_read(
-                                    value_acc,
-                                    dh,
-                                    bytes_k - lo_bytes,
-                                    {.page_id = stick_idx, .offset_bytes = src_off + HALF_STICK_NBYTES},
-                                    {});
-                            }
-                        } else {
-                            // Whole rows only: a DRAM transfer here is 64-byte granular in both
-                            // address and size, so a 32-byte face half cannot be fetched on its
-                            // own however its offset lands. Both halves are placed from L1 below.
-                            CoreLocalMem<uint32_t> dst(value_row_l1 + (r * N_D_TILES + k) * TILE_ROW_NBYTES);
-                            noc.async_read(
-                                value_acc, dst, bytes_k, {.page_id = stick_idx, .offset_bytes = src_off}, {});
+                    // One transfer per row: the head's slice starts on a tile-row boundary and
+                    // runs D*2 bytes, so it is whole-row aligned on either arch.
+                    CoreLocalMem<uint32_t> dst(row_l1);
+                    noc.async_read(value_acc, dst, STICK_NBYTES, {.page_id = stick_idx, .offset_bytes = head_off}, {});
+                    if constexpr (BLOCK_TAIL_NBYTES > 0) {
+                        CoreLocalMem<volatile uint32_t> tail(row_l1 + STICK_NBYTES);
+                        for (uint32_t i = 0; i < BLOCK_TAIL_NBYTES / sizeof(uint32_t); ++i) {
+                            tail[i] = 0;
                         }
                     }
                 }
                 noc.async_read_barrier();
-
-                if constexpr (!HALF_READ_ALIGNED) {
-                    // The rows arrived whole; place each one's two halves now that the transfers
-                    // have landed. The NoC does the move: an L1-to-L1 transfer needs only 16-byte
-                    // alignment on either arch, and a word loop here is the dataflow core doing
-                    // work it has no unit for. Same skip rule as the gather above.
-                    for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
-                        if (r >= v_rows || !(yv_arr[r] && xv_arr[r])) {
-                            continue;
-                        }
-                        const auto off = msda_tile_layout::tile_row_offsets(r);
-                        for (uint32_t k = 0; k < N_D_TILES; ++k) {
-                            const uint32_t tile_off = k * TILE_ROW_NBYTES;
-                            const uint32_t bytes_k = (STICK_NBYTES - tile_off < TILE_ROW_NBYTES)
-                                                         ? (STICK_NBYTES - tile_off)
-                                                         : TILE_ROW_NBYTES;
-                            const uint32_t lo_bytes = bytes_k < HALF_STICK_NBYTES ? bytes_k : HALF_STICK_NBYTES;
-                            const uint32_t ktile_l1 = tile_l1 + k * TILE_NBYTES;
-                            // Not volatile: the barrier has landed these bytes and nothing else
-                            // writes them, so the compiler is free to widen and unroll.
-                            CoreLocalMem<uint32_t> src(value_row_l1 + (r * N_D_TILES + k) * TILE_ROW_NBYTES);
-                            CoreLocalMem<uint32_t> dl(ktile_l1 + off.lo);
-                            for (uint32_t i = 0; i < lo_bytes / sizeof(uint32_t); ++i) {
-                                dl[i] = src[i];
-                            }
-                            if (bytes_k > lo_bytes) {
-                                CoreLocalMem<uint32_t> dh(ktile_l1 + off.hi);
-                                const uint32_t hi_words = (bytes_k - lo_bytes) / sizeof(uint32_t);
-                                for (uint32_t i = 0; i < hi_words; ++i) {
-                                    dh[i] = src[HALF_WORDS + i];
-                                }
-                            }
-                        }
-                    }
-                }
 
                 // Tail rows (r ≥ v_rows) and OOB-corner rows are left untouched:
                 // their scalar entry is zero (see scalar tile below), so any stale
@@ -428,8 +358,7 @@ void kernel_main() {
                 // tiles entirely. The same contract covers the unused hi halves of
                 // a trailing half-filled d-tile (D % 32 == 16): the writer never
                 // reads those lanes back.
-                input_tile_cb.push_back(N_D_TILES);
-
+                input_rm_cb.push_back(N_D_TILES);
             }
         }
     }

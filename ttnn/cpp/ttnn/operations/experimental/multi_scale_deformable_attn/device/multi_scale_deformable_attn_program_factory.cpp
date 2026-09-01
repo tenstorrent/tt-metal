@@ -129,8 +129,6 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     // Tile size (bf16): 32 * 32 * 2 = 2048 bytes.
     const auto data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
     const uint32_t tile_nbytes = tt::tile_size(data_format);
-    // 32 bf16 — one tile row, spanning a face's low and high halves.
-    constexpr uint32_t tile_row_nbytes = 2u * 32u;
 
     // Work split across cores in tile units.
     auto [num_cores, all_cores, core_group_1, core_group_2, tiles_per_core_group_1, tiles_per_core_group_2] =
@@ -146,7 +144,8 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     // conversion (forbidden in brace-init).
     constexpr uint8_t grid_cb = tt::CBIndex::c_1;            // grid scratch (reader-only)
     constexpr uint8_t attn_cb = tt::CBIndex::c_2;            // attn scratch (reader-only)
-    constexpr uint8_t input_tile_cb = tt::CBIndex::c_3;      // reader -> compute (tile)
+    constexpr uint8_t input_tile_cb = tt::CBIndex::c_3;      // compute -> compute (tile)
+    constexpr uint8_t input_rm_cb = tt::CBIndex::c_14;       // reader -> compute (row-major block)
     constexpr uint8_t scalar_tile_cb = tt::CBIndex::c_4;     // compute -> compute (tile)
     constexpr uint8_t grid_x_cb = tt::CBIndex::c_6;          // reader -> compute (tile)
     constexpr uint8_t grid_y_cb = tt::CBIndex::c_7;          // reader -> compute (tile)
@@ -157,7 +156,6 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     constexpr uint8_t frac_y_cb = tt::CBIndex::c_12;         // compute -> compute (tile)
     constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;    // compute -> writer (tile)
     constexpr uint8_t output_scratch_cb = tt::CBIndex::c_5;  // writer-only stick scratch
-    constexpr uint8_t value_row_cb = tt::CBIndex::c_13;      // reader-only value-row scratch
 
     auto push_cb = [&](uint8_t idx, uint32_t pages, uint32_t page_size, tt::DataFormat fmt) {
         descriptor.cbs.push_back(CBDescriptor{
@@ -175,13 +173,13 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     // once at startup and treats each as a linear L1 arena.
     push_cb(grid_cb, TILE_MAX_ROWS * (P / grid_pts_per_stick), grid_stick_aligned, grid_fmt);
     push_cb(attn_cb, TILE_MAX_ROWS, attn_stick_aligned, attn_fmt);
-    // A tile row is two 32-byte halves at non-contiguous L1 offsets, so a value stick cannot land
-    // in one transfer. Where the high half's 32-byte source offset clears the arch's DRAM read
-    // alignment the NoC places both halves directly; where it does not — Blackhole reads on a
-    // 64-byte boundary — the whole row is fetched once and split in L1, and this holds it.
-    const bool half_read_aligned = (tile_row_nbytes / 2) % dram_align == 0;
-    push_cb(value_row_cb, half_read_aligned ? 1u : TILE_MAX_ROWS * n_d_tiles, tile_row_nbytes, data_format);
     // Reader -> compute pipes: double-buffered blocks of n_d_tiles tiles.
+    // The reader lays a corner's 32 sticks down contiguously and the unpacker tilizes them, so
+    // this staging block is row-major while input_tile_cb holds the tilized result. Rearranging in
+    // the reader instead would put a scalar core on work the unpacker does for free — and on
+    // Blackhole it cannot even be read that way, since a DRAM transfer there is 64-byte granular
+    // in both address and size while a tile face half is 32.
+    push_cb(input_rm_cb, 2 * n_d_tiles, tile_nbytes, data_format);
     push_cb(input_tile_cb, 2 * n_d_tiles, tile_nbytes, data_format);
     // The geometry phase solves every point of a block before the reduction
     // starts, so all reduction_size scalar tiles are live at once. The grid and
@@ -205,7 +203,7 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     KernelDescriptor::CompileTimeArgs reader_ct{
         grid_cb,
         attn_cb,
-        input_tile_cb,
+        input_rm_cb,
         grid_x_cb,
         grid_y_cb,
         attn_tile_cb,
@@ -230,7 +228,6 @@ ProgramDescriptor MSDAOperation::create_descriptor(
         grid_head_stride_pts,
         grid_packed ? operation_attributes.point_offset : 0u,
         dram_align,
-        value_row_cb,
     };
     TensorAccessorArgs(*value.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*grid.buffer()).append_to(reader_ct);
@@ -266,6 +263,7 @@ ProgramDescriptor MSDAOperation::create_descriptor(
 
     compute_desc.compile_time_args = {
         input_tile_cb,
+        input_rm_cb,
         scalar_tile_cb,
         output_tile_cb,
         reduction_size,

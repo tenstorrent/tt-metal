@@ -31,32 +31,34 @@
 #include "api/compute/bcast.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 
 #include "ttnn/cpp/ttnn/operations/experimental/multi_scale_deformable_attn/device/kernels/compute/msda_geometry.hpp"
 
 constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
-constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(1);
-constexpr uint32_t output_cb_index = get_compile_time_arg_val(2);
-constexpr uint32_t reduction_size = get_compile_time_arg_val(3);  // = 4 * P
-constexpr uint32_t n_d_tiles = get_compile_time_arg_val(4);       // = ceil(D / 32)
+constexpr uint32_t input_rm_cb_index = get_compile_time_arg_val(1);
+constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(2);
+constexpr uint32_t output_cb_index = get_compile_time_arg_val(3);
+constexpr uint32_t reduction_size = get_compile_time_arg_val(4);  // = 4 * P
+constexpr uint32_t n_d_tiles = get_compile_time_arg_val(5);       // = ceil(D / 32)
 
 // Geometry phase: the reader stages gx/gy/attn as column-0 tiles here, and takes
 // back the floored corner per axis. Scale and shift carry the align_corners
 // variant as fp32 bit patterns, so this kernel has no branch on it.
-constexpr uint32_t grid_x_cb_index = get_compile_time_arg_val(5);
-constexpr uint32_t grid_y_cb_index = get_compile_time_arg_val(6);
-constexpr uint32_t attn_tile_cb_index = get_compile_time_arg_val(7);
-constexpr uint32_t x0_cb_index = get_compile_time_arg_val(8);
-constexpr uint32_t y0_cb_index = get_compile_time_arg_val(9);
-constexpr uint32_t frac_x_cb_index = get_compile_time_arg_val(10);
-constexpr uint32_t frac_y_cb_index = get_compile_time_arg_val(11);
-constexpr uint32_t P = get_compile_time_arg_val(12);
-constexpr uint32_t x_scale_bits = get_compile_time_arg_val(13);
-constexpr uint32_t x_shift_bits = get_compile_time_arg_val(14);
-constexpr uint32_t y_scale_bits = get_compile_time_arg_val(15);
-constexpr uint32_t y_shift_bits = get_compile_time_arg_val(16);
+constexpr uint32_t grid_x_cb_index = get_compile_time_arg_val(6);
+constexpr uint32_t grid_y_cb_index = get_compile_time_arg_val(7);
+constexpr uint32_t attn_tile_cb_index = get_compile_time_arg_val(8);
+constexpr uint32_t x0_cb_index = get_compile_time_arg_val(9);
+constexpr uint32_t y0_cb_index = get_compile_time_arg_val(10);
+constexpr uint32_t frac_x_cb_index = get_compile_time_arg_val(11);
+constexpr uint32_t frac_y_cb_index = get_compile_time_arg_val(12);
+constexpr uint32_t P = get_compile_time_arg_val(13);
+constexpr uint32_t x_scale_bits = get_compile_time_arg_val(14);
+constexpr uint32_t x_shift_bits = get_compile_time_arg_val(15);
+constexpr uint32_t y_scale_bits = get_compile_time_arg_val(16);
+constexpr uint32_t y_shift_bits = get_compile_time_arg_val(17);
 
 void kernel_main() {
     const uint32_t num_output_tiles = get_arg_val<uint32_t>(0);
@@ -92,18 +94,28 @@ void kernel_main() {
         }
 
         // ---- REDUCTION ----
-        bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(input_cb_index, scalar_cb_index);
-
+        // Both inits run per group: the unpacker alternates between tilize and the broadcast
+        // multiply, so neither configuration survives the other.
         // Reserve the block's output tiles; we accumulate into them via L1 acc.
         output_cb.reserve_back(n_d_tiles);
 
         for (uint32_t i = 0; i < reduction_size; ++i) {
-            if (i == 0) {
-                pack_reconfig_l1_acc(0);  // first group: overwrite L1
-            } else if (i == 1) {
-                pack_reconfig_l1_acc(1);  // subsequent: accumulate into L1
-            }
+            // Accumulation is off for the tilize below: it packs into input_cb, and with L1 acc
+            // still armed from the previous group it would add to that buffer instead of
+            // replacing it. Re-armed once the tilize has packed, for the reduction's own pack.
+            pack_reconfig_l1_acc(0);
 
+            // The reader stages the corner's sticks row-major; the unpacker tilizes them here.
+            // Doing that placement on the reader's core would be a scalar loop against hardware
+            // built for it, and on Blackhole a 32-byte face half is not even a legal DRAM read.
+            // One block: 32 query rows is exactly one tile tall, n_d_tiles wide. The helper owns
+            // the buffer handshake and the register reconfiguration either side of it.
+            compute_kernel_lib::tilize<n_d_tiles, input_rm_cb_index, input_cb_index>(1);
+
+            if (i > 0) {
+                pack_reconfig_l1_acc(1);  // groups after the first accumulate into the output
+            }
+            bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(input_cb_index, scalar_cb_index);
             input_cb.wait_front(n_d_tiles);
             scalar_cb.wait_front(1);
 
