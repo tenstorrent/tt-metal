@@ -23,7 +23,7 @@ namespace {
 using tt::tt_fabric::FabricNodeId;
 using tt::tt_fabric::MeshId;
 
-FabricNodeId make_fnid(uint32_t mesh, uint32_t chip) { return FabricNodeId(MeshId{mesh}, chip); }
+FabricNodeId make_proto_fnid(uint32_t mesh, uint32_t chip) { return FabricNodeId(MeshId{mesh}, chip); }
 
 // Simple deterministic hash to produce pseudo-random but reproducible data from indices.
 uint64_t pseudo_rand(uint32_t a, uint32_t b, uint32_t c) {
@@ -53,24 +53,24 @@ KvChunkAddressTable make_test_table() {
     KvChunkAddressTable table(cfg);
 
     // 6 device groups with varying sizes across 3 meshes.
-    auto grp0 = table.add_device_group({make_fnid(0, 0)});
-    auto grp1 = table.add_device_group({make_fnid(0, 0), make_fnid(0, 1)});
-    auto grp2 = table.add_device_group({make_fnid(0, 2), make_fnid(0, 3), make_fnid(0, 4)});
-    auto grp3 = table.add_device_group({make_fnid(1, 0), make_fnid(1, 1), make_fnid(1, 2), make_fnid(1, 3)});
-    auto grp4 = table.add_device_group({make_fnid(2, 0), make_fnid(2, 1)});
+    auto grp0 = table.add_device_group({make_proto_fnid(0, 0)});
+    auto grp1 = table.add_device_group({make_proto_fnid(0, 0), make_proto_fnid(0, 1)});
+    auto grp2 = table.add_device_group({make_proto_fnid(0, 2), make_proto_fnid(0, 3), make_proto_fnid(0, 4)});
+    auto grp3 = table.add_device_group({make_proto_fnid(1, 0), make_proto_fnid(1, 1), make_proto_fnid(1, 2), make_proto_fnid(1, 3)});
+    auto grp4 = table.add_device_group({make_proto_fnid(2, 0), make_proto_fnid(2, 1)});
     auto grp5 =
-        table.add_device_group({make_fnid(0, 0), make_fnid(1, 0), make_fnid(2, 0), make_fnid(2, 1), make_fnid(2, 2)});
+        table.add_device_group({make_proto_fnid(0, 0), make_proto_fnid(1, 0), make_proto_fnid(2, 0), make_proto_fnid(2, 1), make_proto_fnid(2, 2)});
     std::array<DeviceGroupIndex, 6> groups = {grp0, grp1, grp2, grp3, grp4, grp5};
 
     // Host mappings across 3 hosts.
     for (uint32_t chip = 0; chip < 5; chip++) {
-        table.set_fabric_node_host(make_fnid(0, chip), "alpha-host");
+        table.set_fabric_node_host(make_proto_fnid(0, chip), "alpha-host");
     }
     for (uint32_t chip = 0; chip < 4; chip++) {
-        table.set_fabric_node_host(make_fnid(1, chip), "beta-host");
+        table.set_fabric_node_host(make_proto_fnid(1, chip), "beta-host");
     }
     for (uint32_t chip = 0; chip < 3; chip++) {
-        table.set_fabric_node_host(make_fnid(2, chip), "gamma-host");
+        table.set_fabric_node_host(make_proto_fnid(2, chip), "gamma-host");
     }
 
     // Populate every entry with pseudo-random data.
@@ -166,7 +166,7 @@ TEST(KvChunkAddressTableProtobuf, RoundTripViaFile) {
 TEST(KvChunkAddressTableProtobuf, LargeAddressPreserved) {
     KvChunkAddressTableConfig cfg{.num_layers = 1, .max_sequence_length = 32, .num_slots = 1, .chunk_n_tokens = 32};
     KvChunkAddressTable table(cfg);
-    table.add_device_group({make_fnid(0, 0)});
+    table.add_device_group({make_proto_fnid(0, 0)});
     table.set(
         0,
         0,
@@ -196,7 +196,7 @@ TEST(KvChunkAddressTableProtobuf, EmptyTableRoundTrip) {
 TEST(KvChunkAddressTableProtobuf, SparseTableRoundTrip) {
     KvChunkAddressTableConfig cfg{.num_layers = 4, .max_sequence_length = 256, .num_slots = 2, .chunk_n_tokens = 32};
     KvChunkAddressTable table(cfg);
-    auto grp = table.add_device_group({make_fnid(0, 0)});
+    auto grp = table.add_device_group({make_proto_fnid(0, 0)});
 
     table.set(2, 64, 0, KvCacheLocation{.noc_addr = 0xAAAA, .size_bytes = 100, .device_group_index = grp});
     table.set(2, 128, 0, KvCacheLocation{.noc_addr = 0xBBBB, .size_bytes = 200, .device_group_index = grp});
@@ -281,15 +281,15 @@ KvChunkAddressTable make_multi_config_table() {
     };
     KvChunkAddressTable table(configs);
 
-    auto grp0 = table.add_device_group({make_fnid(0, 0)});
-    auto grp1 = table.add_device_group({make_fnid(0, 0), make_fnid(0, 1)});
-    auto grp2 = table.add_device_group({make_fnid(1, 0), make_fnid(1, 1), make_fnid(1, 2)});
+    auto grp0 = table.add_device_group({make_proto_fnid(0, 0)});
+    auto grp1 = table.add_device_group({make_proto_fnid(0, 0), make_proto_fnid(0, 1)});
+    auto grp2 = table.add_device_group({make_proto_fnid(1, 0), make_proto_fnid(1, 1), make_proto_fnid(1, 2)});
     std::array<DeviceGroupIndex, 3> groups = {grp0, grp1, grp2};
-    table.set_fabric_node_host(make_fnid(0, 0), "alpha-host");
-    table.set_fabric_node_host(make_fnid(0, 1), "alpha-host");
-    table.set_fabric_node_host(make_fnid(1, 0), "beta-host");
-    table.set_fabric_node_host(make_fnid(1, 1), "beta-host");
-    table.set_fabric_node_host(make_fnid(1, 2), "beta-host");
+    table.set_fabric_node_host(make_proto_fnid(0, 0), "alpha-host");
+    table.set_fabric_node_host(make_proto_fnid(0, 1), "alpha-host");
+    table.set_fabric_node_host(make_proto_fnid(1, 0), "beta-host");
+    table.set_fabric_node_host(make_proto_fnid(1, 1), "beta-host");
+    table.set_fabric_node_host(make_proto_fnid(1, 2), "beta-host");
 
     for (uint32_t c = 0; c < table.num_configs(); c++) {
         const auto& cfg = table.config(c);
@@ -352,7 +352,7 @@ TEST(KvChunkAddressTableProtobuf, MultiConfigRoundTripViaString) {
 
     // Device groups + hosts round-trip (shared side table).
     ASSERT_EQ(restored.num_device_groups(), original.num_device_groups());
-    EXPECT_EQ(restored.get_host(make_fnid(1, 2)), "beta-host");
+    EXPECT_EQ(restored.get_host(make_proto_fnid(1, 2)), "beta-host");
 }
 
 TEST(KvChunkAddressTableProtobuf, MultiConfigRoundTripViaFile) {
@@ -379,7 +379,7 @@ for (uint32_t i = 0; i < 12; i++) {
         cfgs.push_back({.num_layers = 1, .max_sequence_length = 64, .num_slots = 1, .chunk_n_tokens = 32});
     }
     KvChunkAddressTable original(std::span<const KvChunkAddressTableConfig>{cfgs});
-    auto grp = original.add_device_group({make_fnid(0, 0)});
+    auto grp = original.add_device_group({make_proto_fnid(0, 0)});
     for (uint32_t i = 0; i < 12; i++) {
         original.set(0, 0, 0, KvCacheLocation{.noc_addr = 0x1000 + i, .size_bytes = 10, .device_group_index = grp}, i);
     }
@@ -450,7 +450,7 @@ private:
 KvChunkAddressTable make_strided_table() {
     KvChunkAddressTableConfig cfg{.num_layers = 2, .max_sequence_length = 96 * 32, .num_slots = 2, .chunk_n_tokens = 32};
     KvChunkAddressTable table(cfg);
-    auto grp = table.add_device_group({make_fnid(0, 0)});
+    auto grp = table.add_device_group({make_proto_fnid(0, 0)});
     for (uint32_t slot = 0; slot < 2; slot++) {
         for (uint32_t layer = 0; layer < 2; layer++) {
             const uint64_t base = 0x1'0000'0000ULL + (slot * 2 + layer) * 0x1000'0000ULL;
@@ -491,7 +491,7 @@ TEST(KvChunkAddressTableProtobuf, BlockCyclicRunsRoundTrip) {
     KvChunkAddressTableConfig cfg{
         .num_layers = 2, .max_sequence_length = kChunks * 32, .num_slots = 2, .chunk_n_tokens = 32};
     KvChunkAddressTable original(cfg);
-    auto grp = original.add_device_group({make_fnid(0, 0)});
+    auto grp = original.add_device_group({make_proto_fnid(0, 0)});
     for (uint32_t slot = 0; slot < 2; slot++) {
         for (uint32_t layer = 0; layer < 2; layer++) {
             const uint64_t row_base = 0x1'0000'0000ULL + (slot * 2 + layer) * 0x1000'0000ULL;
@@ -531,7 +531,7 @@ TEST(KvChunkAddressTableProtobuf, MixedCompressionPerConfigRoundTrip) {
         {"rnd", {.num_layers = 1, .max_sequence_length = 64 * 32, .num_slots = 1, .chunk_n_tokens = 32}},
     };
     KvChunkAddressTable original(configs);
-    auto grp = original.add_device_group({make_fnid(0, 0)});
+    auto grp = original.add_device_group({make_proto_fnid(0, 0)});
     for (uint32_t i = 0; i < 64; i++) {
         original.set(
             0,
@@ -598,7 +598,13 @@ TEST(KvChunkAddressTableProtobuf, GoldenV1ArtifactReads) {
     // 2 layers x 2 slots x 96 chunks, affine rows, stride 0x10000 from per-row bases).
     // Freezes the v1 wire contract — any drift in how we read old files fails here.
     namespace fs = std::filesystem;
-    const fs::path path = fs::path(__FILE__).parent_path() / "kv_chunk_table_v1_golden.pb";
+    // __FILE__ may carry a build-container prefix (/work); resolve via TT_METAL_HOME first.
+    const char* home = std::getenv("TT_METAL_HOME");
+    fs::path path = home ? fs::path(home) / "tests/tt_metal/tt_metal/api/disaggregation/kv_chunk_table_v1_golden.pb"
+                         : fs::path(__FILE__).parent_path() / "kv_chunk_table_v1_golden.pb";
+    if (!fs::exists(path) && home) {  // local (non-container) build: __FILE__ is the real path
+        path = fs::path(__FILE__).parent_path() / "kv_chunk_table_v1_golden.pb";
+    }
     auto restored = import_from_protobuf_file(path.string());
 
     ASSERT_EQ(restored.num_configs(), 1u);
@@ -607,7 +613,7 @@ TEST(KvChunkAddressTableProtobuf, GoldenV1ArtifactReads) {
     EXPECT_EQ(cfg.num_slots, 2u);
     EXPECT_EQ(cfg.max_sequence_length, 96 * 32u);
     EXPECT_EQ(restored.compression(0), ChunkCompression::kUnrolled);  // legacy = unrolled
-    EXPECT_EQ(restored.get_host(make_fnid(0, 0)), "legacy-host");
+    EXPECT_EQ(restored.get_host(make_proto_fnid(0, 0)), "legacy-host");
     for (uint32_t slot = 0; slot < 2; slot++) {
         for (uint32_t layer = 0; layer < 2; layer++) {
             const uint64_t base = 0x1'0000'0000ULL + (slot * 2 + layer) * 0x1000'0000ULL;
@@ -649,6 +655,149 @@ TEST(KvChunkAddressTableProtobuf, DualWriteMirrorsEntriesBelowThreshold) {
 
     auto restored = import_from_protobuf(pb.SerializeAsString());
     expect_tables_equal(original, restored);
+}
+
+TEST(KvChunkAddressTableProtobuf, NegativeStrideRoundTrip) {
+    // Address-decreasing layout: exercises the sint64/zigzag stride path (addr_stride < 0).
+    DualWriteEnvGuard guard("0");
+    KvChunkAddressTableConfig cfg{.num_layers = 1, .max_sequence_length = 64 * 32, .num_slots = 1, .chunk_n_tokens = 32};
+    KvChunkAddressTable original(cfg);
+    auto grp = original.add_device_group({make_proto_fnid(0, 0)});
+    const uint64_t base = 0x1'0000'0000ULL + 64 * 0x8000ULL;
+    for (uint32_t i = 0; i < 64; i++) {
+        original.set(
+            0,
+            i * 32,
+            0,
+            KvCacheLocation{.noc_addr = base - i * 0x8000ULL, .size_bytes = 512, .device_group_index = grp});
+    }
+
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(original)));
+    ASSERT_EQ(pb.runs_size(), 1);
+    EXPECT_EQ(pb.runs(0).addr_stride(), -0x8000);
+
+    auto restored = import_from_protobuf(pb.SerializeAsString());
+    expect_tables_equal(original, restored);
+}
+
+TEST(KvChunkAddressTableProtobuf, PartiallyPopulatedCompressibleRoundTrip) {
+    // Some rows fully populated + compressible, some never set. Detection tolerates all-unset
+    // rows; after the runs round trip those rows must read back zeroed (unset-cell semantics).
+    DualWriteEnvGuard guard("0");
+    KvChunkAddressTableConfig cfg{.num_layers = 2, .max_sequence_length = 64 * 32, .num_slots = 2, .chunk_n_tokens = 32};
+    KvChunkAddressTable original(cfg);
+    auto grp = original.add_device_group({make_proto_fnid(0, 0)});
+    // Populate only (slot 0, layer 0) and (slot 1, layer 1); leave the other two rows unset.
+    for (auto [slot, layer] : {std::pair{0u, 0u}, {1u, 1u}}) {
+        const uint64_t base = 0x1'0000'0000ULL + (slot * 2 + layer) * 0x1000'0000ULL;
+        for (uint32_t i = 0; i < 64; i++) {
+            original.set(
+                layer,
+                i * 32,
+                slot,
+                KvCacheLocation{.noc_addr = base + i * 0x8000ULL, .size_bytes = 512, .device_group_index = grp});
+        }
+    }
+
+    auto restored = import_from_protobuf(export_to_protobuf(original));
+    ASSERT_EQ(restored.compression(0), ChunkCompression::kStridedRows);
+    expect_tables_equal(original, restored);
+    // Unset rows come back zeroed.
+    EXPECT_EQ(restored.lookup(1, 0, 0).noc_addr, 0u);
+    EXPECT_EQ(restored.lookup(0, 0, 1).noc_addr, 0u);
+}
+
+TEST(KvChunkAddressTableProtobuf, StridedVisitRangeBlockCyclicSubRange) {
+    // visit_range sub-range on a step>1 (block-cyclic) map: exercises the view's
+    // cross-residue first_+i_ arithmetic, which step-1 rows never do.
+    DualWriteEnvGuard guard("0");
+    constexpr uint32_t kBanks = 4;
+    constexpr uint32_t kChunks = 32;  // 8 periods
+    KvChunkAddressTableConfig cfg{
+        .num_layers = 1, .max_sequence_length = kChunks * 32, .num_slots = 1, .chunk_n_tokens = 32};
+    KvChunkAddressTable original(cfg);
+    auto grp = original.add_device_group({make_proto_fnid(0, 0)});
+    for (uint32_t i = 0; i < kChunks; i++) {
+        original.set(
+            0,
+            i * 32,
+            0,
+            KvCacheLocation{
+                .noc_addr = 0x1'0000'0000ULL + (i % kBanks) * 0x2000ULL + (i / kBanks) * 0x10000ULL,
+                .size_bytes = 512,
+                .device_group_index = grp});
+    }
+    auto table = import_from_protobuf(export_to_protobuf(original));
+    ASSERT_EQ(table.compression(0), ChunkCompression::kStridedRows);
+    ASSERT_EQ(table.num_position_chunks(), kChunks);
+
+    table.visit_range(0, 0, kChunks * 32, 0, 0, [&](auto range) {
+        ASSERT_EQ(range.size(), kChunks);
+        for (uint32_t i = 0; i < kChunks; i++) {
+            EXPECT_EQ(range[i].noc_addr, original.lookup(0, i * 32, 0).noc_addr) << "chunk " << i;
+        }
+    });
+    // Sub-range crossing residue classes: chunks [3, 11).
+    table.visit_range(0, 3 * 32, 11 * 32, 0, 0, [&](auto range) {
+        ASSERT_EQ(range.size(), 8u);
+        for (uint32_t k = 0; k < 8; k++) {
+            EXPECT_EQ(range[k].noc_addr, original.lookup(0, (3 + k) * 32, 0).noc_addr) << "subrange chunk " << k;
+        }
+    });
+}
+
+TEST(KvChunkAddressTableProtobuf, RunValidationThrowsMoreNegatives) {
+    // Companion to RunValidationThrows: duplicate residue, incomplete residue coverage,
+    // count==0, and step > npc. Fixture rows have 2 chunks (64/32) and are step 1.
+    auto make_pb = [] {
+        ::tt::disaggregation::proto::KvChunkAddressTable pb;
+        auto* c = pb.add_configs();
+        c->set_name("0");
+        c->set_num_layers(1);
+        c->set_max_sequence_length(64);
+        c->set_num_slots(1);
+        c->set_chunk_n_tokens(32);
+        c->set_compression(::tt::disaggregation::proto::STRIDED_ROWS);
+        auto* g = pb.add_device_groups();
+        g->add_fabric_node_ids()->set_mesh_id(0);
+        return pb;
+    };
+    auto add_run = [](::tt::disaggregation::proto::KvChunkAddressTable& pb, uint32_t start, uint32_t step, uint32_t count) {
+        auto* r = pb.add_runs();
+        r->set_config_idx(0);
+        r->set_start_chunk(start);
+        r->set_chunk_step(step);
+        r->set_count(count);
+        r->set_base_noc_addr(0x1'0000'0000ULL);
+        r->set_size_bytes(512);
+    };
+
+    {  // duplicate residue (two runs with start_chunk 0)
+        auto pb = make_pb();
+        add_run(pb, 0, 1, 2);
+        add_run(pb, 0, 1, 2);
+        EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
+    }
+    {  // step 2 covers residues {0,1} but only residue 0 present -> incomplete coverage
+        auto pb = make_pb();
+        add_run(pb, 0, 2, 1);
+        EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
+    }
+    {  // count == 0
+        auto pb = make_pb();
+        add_run(pb, 0, 1, 0);
+        EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
+    }
+    {  // chunk_step > npc (2 chunks exist)
+        auto pb = make_pb();
+        add_run(pb, 0, 4, 1);
+        EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
+    }
+    {  // STRIDED_ROWS config with zero runs at all
+        auto pb = make_pb();
+        EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
+    }
 }
 
 TEST(KvChunkAddressTableProtobuf, StridedVisitRangeRoundTrip) {

@@ -27,9 +27,6 @@ echo "Running fabric unit tests now...";
 # Host side tests that require a card: Topology Mapping in Control Plane
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MeshGraphValidation*"
 
-# Host-only: KV chunk address table serialization (disaggregated prefill chunk map wire format)
-./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="KvChunkAddressTableProtobuf*"
-
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*FabricMuxV2Smoke*Fixture.*"

@@ -59,6 +59,18 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
+# --- Disaggregation: KV chunk address table (in-memory map + protobuf wire format) ---
+# Host-only suites (no device I/O); both live in unit_tests_api.
+- name: runtime_sanity_kv_chunk_address_table
+  cmd: ./build/test/tt_metal/unit_tests_api --gtest_filter='KvChunkAddressTable*'
+  skus:
+    wh_n150_civ2:
+      timeout: 3
+    bh_p150b_civ2:
+      timeout: 3
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
 # --- BH Multi-Card: System Health ---
 - name: bh_multicard_system_health
   cmd: ./build/test/tt_metal/tt_fabric/test_system_health

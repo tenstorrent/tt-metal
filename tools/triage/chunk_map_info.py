@@ -29,6 +29,8 @@ def _read_varint(buf, pos):
     result = 0
     shift = 0
     while True:
+        if pos >= len(buf):
+            raise ValueError(f"truncated varint at offset {pos}")
         b = buf[pos]
         pos += 1
         result |= (b & 0x7F) << shift
@@ -37,9 +39,8 @@ def _read_varint(buf, pos):
         shift += 7
 
 
-def _read_zigzag(buf, pos):
-    v, pos = _read_varint(buf, pos)
-    return (v >> 1) ^ -(v & 1), pos  # sint64
+def _unzigzag(v):
+    return (v >> 1) ^ -(v & 1)  # sint64
 
 
 def _fields(buf):
@@ -55,9 +56,13 @@ def _fields(buf):
             pos += 8
         elif wt == 2:
             n, pos = _read_varint(buf, pos)
+            if pos + n > len(buf):
+                raise ValueError(f"truncated length-delimited field at offset {pos} (want {n} B, {len(buf) - pos} left)")
             val = buf[pos : pos + n]
             pos += n
         elif wt == 5:
+            if pos + 4 > len(buf):
+                raise ValueError(f"truncated fixed32 at offset {pos}")
             val = struct.unpack_from("<I", buf, pos)[0]
             pos += 4
         else:
@@ -157,7 +162,10 @@ def inspect(path, show_entries=False, show_runs=False):
         elif num == 11:
             out["runs"] += 1
             if show_runs:
-                runs.append({f: v for f, _wt2, v in _fields(val)})
+                rec = {f: v for f, _wt2, v in _fields(val)}
+                if 8 in rec:  # addr_stride is sint64 (zigzag on the wire)
+                    rec[8] = _unzigzag(rec[8])
+                runs.append(rec)
         elif num == 12:
             out["format_version"] = val
         elif num == 13:

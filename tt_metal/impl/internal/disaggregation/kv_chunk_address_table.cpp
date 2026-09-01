@@ -53,13 +53,15 @@ void KvChunkAddressTable::init_configs(
         const uint32_t npc = (cfg.max_sequence_length + cfg.chunk_n_tokens - 1) / cfg.chunk_n_tokens;
         num_position_chunks_[c] = npc;
         if (!compressions.empty() && compressions[c] == ChunkCompression::kStridedRows) {
-            // Strided from birth (import path): an empty map, rows installed by
-            // install_strided_map(). No unrolled grid is allocated — the point of the
-            // compressed form is that a runs-only import never pays the grid's memory.
+            // Strided from birth (import path): rows pre-sized (all step=0) so lookup/view
+            // are safe before install_strided_map() fills them. No unrolled grid is
+            // allocated — the point of the compressed form is that a runs-only import never
+            // pays the grid's memory.
             StridedRowMap map;
             map.num_layers = cfg.num_layers;
             map.num_position_chunks = npc;
             map.num_slots = cfg.num_slots;
+            map.rows.resize(static_cast<size_t>(cfg.num_slots) * cfg.num_layers);
             maps_[c] = std::move(map);
         } else {
             UnrolledGrid grid;
@@ -284,6 +286,20 @@ void KvChunkAddressTable::install_strided_map(uint32_t config_id, StridedRowMap 
             map.num_position_chunks == num_position_chunks_[config_id],
         "strided map dims do not match config {}",
         config_id);
+    TT_FATAL(
+        map.rows.size() == static_cast<size_t>(map.num_slots) * map.num_layers,
+        "strided map rows {} != slots*layers {} for config {}",
+        map.rows.size(),
+        static_cast<size_t>(map.num_slots) * map.num_layers,
+        config_id);
+    for (const auto& row : map.rows) {
+        TT_FATAL(
+            row.step == 0 || (row.bases.size() == row.step && row.strides.size() == row.step),
+            "strided row has step {} but bases {} / strides {}",
+            row.step,
+            row.bases.size(),
+            row.strides.size());
+    }
     maps_[config_id] = std::move(map);
 }
 

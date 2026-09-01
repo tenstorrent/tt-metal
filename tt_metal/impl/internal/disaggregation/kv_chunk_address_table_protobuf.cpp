@@ -30,15 +30,16 @@ namespace {
 // sequence within a (slot, layer) row. Covers block-cyclic layouts up to 64 banks.
 constexpr uint32_t kMaxRunStep = 64;
 
-// Dual-write threshold: while the estimated unrolled `entries` payload stays below this,
+// Dual-write threshold: while the estimated payload (entries mirror + runs) stays below this,
 // STRIDED_ROWS configs also mirror every chunk into `entries` so pre-runs readers keep
 // working (they ignore `runs` and the compression tag). The threshold sits just under
-// protobuf's 2 GiB (2^31) message cap with headroom for the runs + metadata payload, using a
-// conservative 48 B/entry wire estimate — so the mirror is dropped only when the unrolled
-// payload itself could not be serialized, i.e. when no entries-only reader could have
-// consumed the table anyway. Override for tests/canary.
+// protobuf's 2 GiB (2^31) message cap, using conservative wire estimates of 48 B/entry and
+// 72 B/run — so the mirror is dropped only when the dual-written message itself could not be
+// serialized, i.e. when no entries-only reader could have consumed the table anyway.
+// Override for tests/canary.
 constexpr uint64_t kDefaultDualWriteMaxBytes = (2ull << 30) - (64ull << 20);  // 2 GiB − 64 MiB
 constexpr uint64_t kEntryWireEstimate = 48;
+constexpr uint64_t kRunWireEstimate = 72;
 
 // Read per call on purpose: this is a test/canary override (tests re-point it between
 // exports via DualWriteEnvGuard), not a production runtime setting — export is cold-path,
@@ -322,10 +323,17 @@ void emit_config_payload(
         pb.set_origin_host(hostname);
     }
 
-    // Dual-write decision needs the total unrolled size up front (grid-equivalent count).
+    // Dual-write decision needs the total size up front: entries mirror plus the runs payload.
+    // Worst case each populated row emits kMaxRunStep runs (one per residue class), so bound
+    // runs by rows * kMaxRunStep.
     const uint64_t total_chunks = table.total_entries();
+    uint64_t total_rows = 0;
+    for (uint32_t c = 0; c < table.num_configs(); c++) {
+        const auto& cfg = table.config(c);
+        total_rows += static_cast<uint64_t>(cfg.num_slots) * cfg.num_layers;
+    }
     const bool dual_write =
-        total_chunks * kEntryWireEstimate <= dual_write_max_bytes();  // conservative per-entry wire estimate
+        total_chunks * kEntryWireEstimate + total_rows * kMaxRunStep * kRunWireEstimate <= dual_write_max_bytes();
 
     for (uint32_t c = 0; c < table.num_configs(); c++) {
         const auto& cfg = table.config(c);
