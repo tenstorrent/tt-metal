@@ -22,7 +22,7 @@ Priorities are stated per plan and do not follow the numbering: plan 2 is delibe
 1. **Plan 1** — self-contained, no solver changes, immediate reduction in retry churn. Ship first.
 2. **Plan 3, §5(h)** — keep every PGD variant in the candidate pool (the dedup key currently discards
    `4x4_SplitHost` in favour of `4x4_Mesh`), and delete the placement caps. Independent of the rest of
-   plan 3, and it repairs the single-shape fast path on its own.
+   plan 3, and it is the one fix here with a known concrete failure behind it.
 3. **Plan 3** — the adjacency-guided search, behind a fallback to the existing path.
 4. **Plan 2** — needs the session-tightening fix in the solver bridge; its payoff shrinks once plans 1
    and 3 have removed most retries. Do it for the encode-once win, not for correctness.
