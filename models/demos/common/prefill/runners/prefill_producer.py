@@ -724,6 +724,9 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
     The MODEL's own caches only. Under DFlash the drafter's context caches ride in the same table under
     further `dflash_*` configs, checked as a sibling gate from _verify_resident_slots (see
     dflash_kv_table_pcc_check in the deepseek dflash_prefill module)."""
+    golden_cap = int(os.environ.get("PREFILL_PCC_GOLDEN_LEN", "0"))
+    if golden_cap:
+        real_len = min(real_len, golden_cap)
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":
@@ -1467,6 +1470,16 @@ def main() -> None:
         push_start = time.perf_counter()
         service.forward_to_tensor_bytes(chunk_bytes, metadata=_pack_metadata(slot_id, actual_start, actual_end))
         return (time.perf_counter() - push_start) * 1000.0
+
+    warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))
+    if warmup_chunks > 0:
+        logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
+        for cidx in range(warmup_chunks):
+            push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE)
+        service.barrier()
+        if ack_channel is not None:
+            _drain_layer_acks(ack_channel, NUM_LAYERS * warmup_chunks)
+        logger.info("[producer] warmup complete; starting the measured request")
 
     stats = run_schedule(cfg, push_fn=push_chunk)
     service.barrier()

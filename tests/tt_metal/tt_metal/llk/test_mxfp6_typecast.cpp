@@ -62,14 +62,14 @@ static vector<uint32_t> run_mxfp6_typecast(
     InterleavedBufferConfig src_config{
         .device = dev,
         .size = num_tiles * input_tile_size,
-        .page_size = input_tile_size,
+        .page_size = num_tiles * input_tile_size,
         .buffer_type = BufferType::DRAM};
     auto src_buffer = CreateBuffer(src_config);
 
     InterleavedBufferConfig dst_config{
         .device = dev,
         .size = num_tiles * output_tile_size,
-        .page_size = output_tile_size,
+        .page_size = num_tiles * output_tile_size,
         .buffer_type = BufferType::DRAM};
     auto dst_buffer = CreateBuffer(dst_config);
 
@@ -160,8 +160,12 @@ static vector<uint32_t> run_mxfp6_typecast(
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     detail::WriteToBuffer(src_buffer, src_vec);
-    uint32_t src_dram_stride = static_cast<uint32_t>(src_buffer->aligned_page_size());
-    uint32_t dst_dram_stride = static_cast<uint32_t>(dst_buffer->aligned_page_size());
+    // The direct reader/writer kernels address a single DRAM bank
+    // (bank_id 0). Use page_size = whole buffer so the allocator places the
+    // buffer in one bank, and advance the DRAM pointer by the native tile
+    // size, matching the host-side vector layout.
+    uint32_t src_dram_stride = input_tile_size;
+    uint32_t dst_dram_stride = output_tile_size;
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
