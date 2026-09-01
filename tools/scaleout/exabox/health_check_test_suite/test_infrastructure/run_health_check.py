@@ -265,6 +265,16 @@ def _clean_version(value: str | None) -> str:
     return "" if value in (None, "", "N/A") else value
 
 
+def collect_run_artifacts(artifacts_dir: Path | None, *, node: str, slurm_job_id: str) -> tuple[list[Path], list[str]]:
+    """A run's result files plus the ``[^name]`` attachment names JIRA renders
+    inline, so the failure and recovery paths attach and name the same set."""
+    result_files: list[Path] = []
+    if artifacts_dir and artifacts_dir.is_dir():
+        result_files = sorted(p for p in artifacts_dir.rglob("*") if p.is_file())
+    attachment_names = [f"{node}-{slurm_job_id}.log"] + [artifact_upload_name(p, slurm_job_id) for p in result_files]
+    return result_files, attachment_names
+
+
 # ---------------------------------------------------------------------------
 # Main orchestration
 # ---------------------------------------------------------------------------
@@ -457,12 +467,7 @@ def main() -> int:
         else:
             # Files this run will reference with [^name] so JIRA renders them
             # inline with the comment/description.
-            result_files = []
-            if artifacts_dir and artifacts_dir.is_dir():
-                result_files = sorted(p for p in artifacts_dir.rglob("*") if p.is_file())
-            attachment_names = [f"{node}-{slurm_job_id}.log"] + [
-                artifact_upload_name(p, slurm_job_id) for p in result_files
-            ]
+            result_files, attachment_names = collect_run_artifacts(artifacts_dir, node=node, slurm_job_id=slurm_job_id)
 
             existing_key = find_open_ticket_for_node(
                 node=node,
@@ -569,12 +574,9 @@ def main() -> int:
                 )
                 # Attach this passing run's artifacts so the closed ticket carries
                 # the recovery evidence (telemetry, Grafana, CSVs) next to the logs.
-                result_files = []
-                if artifacts_dir and artifacts_dir.is_dir():
-                    result_files = sorted(p for p in artifacts_dir.rglob("*") if p.is_file())
-                attachment_names = [f"{node}-{slurm_job_id}.log"] + [
-                    artifact_upload_name(p, slurm_job_id) for p in result_files
-                ]
+                result_files, attachment_names = collect_run_artifacts(
+                    artifacts_dir, node=node, slurm_job_id=slurm_job_id
+                )
                 add_comment_to_jira(
                     ticket_key=recovered_key,
                     body=(

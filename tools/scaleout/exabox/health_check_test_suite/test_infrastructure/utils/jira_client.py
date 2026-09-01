@@ -117,7 +117,7 @@ def build_recovery_body(
 
     recovery_line = ""
     if restart_count > 0:
-        recovery_line = f"*Recovered after:* {restart_count} reboot(s)\n"
+        recovery_line = f"*Slurm requeues before recovery:* {restart_count}\n"
 
     return (
         f"*Node:* {node}\n"
