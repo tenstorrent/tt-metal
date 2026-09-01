@@ -14,7 +14,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.tt.kda.weight_schema import normalize_kda_state_dict
+from models.demos.deepseek_v3_d_p.reference.kda.weights import normalize_kda_state_dict
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
 
 _CACHE_SCHEMA_VERSION = 2
