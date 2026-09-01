@@ -405,6 +405,7 @@ def _encode_stage_audio_encoder(mesh_device) -> "MiniMaxH3AudioEncoder":
         latent_channels=config["latent_channels"],
         num_attention_heads=config["num_attention_heads"],
         mesh_device=mesh_device,
+        split_mode="weight",  # the pipeline's production setting; see _prepare_audio_encoder
     )
     # The encoder's four prefixes, which is what keeps the load strict (the converted dict
     # carries both halves' tensors) -- same filter `_prepare_audio_encoder` applies.
