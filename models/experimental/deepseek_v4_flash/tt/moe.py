@@ -5,8 +5,13 @@ import torch
 
 from .common import DeepSeekV4Module, _profile, _region
 from .decode_prefetch import (
+    HC_FN_GCB,
+    HC_FN_GCB_PAGES,
     check_decode_layout,
     decode_prefetch_page_bytes,
+    ensure_named_gcb,
+    hc_fn_page_bytes,
+    hc_fn_ring_specs,
     make_decode_prefetch_buffers,
     tp_gate_up_layout,
 )
@@ -233,6 +238,61 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         return out
 
 
+def _make_router_gate(
+    weights: dict,
+    device: ttnn.MeshDevice,
+    cache: WeightCache,
+    config,
+    packed_weights=None,
+    use_prefetcher: bool = False,
+    prefetch_buffers: Optional[dict] = None,
+    weight_dtype: ttnn.DataType = ttnn.bfloat16,
+):
+    """The learned ``[H, E]`` router projection, as :class:`Linear` or :class:`LinearDecode`.
+
+    Prefill keeps ``ttnn.linear``. Decode streams the weight through :data:`HC_FN_GCB`:
+    a 64-core partial-K cut of ``[4096, 256]`` is 16-tile slabs, which have no 32-tile
+    page in common with the shared decode ring. Packed L1 weights take precedence over
+    both.
+    """
+    if packed_weights is not None:
+        tensor, layout, slot = packed_weights
+        spec = packed_weight_spec(layout, slot, "router_gate")
+        return LinearDecode(
+            weights["gate.weight"],
+            device,
+            cache.file("gate"),
+            dtype=ttnn.bfloat4_b,
+            K=spec.K,
+            N=spec.N,
+            n_blocks=spec.n_blocks,
+            packed_weight_tensor=tensor,
+            packed_weight_spec=spec,
+        )
+    if not use_prefetcher:
+        return Linear(weights["gate.weight"], device, cache.file("gate"))
+    layout = dict(check_decode_layout("router_gate", config.hidden_size, config.num_local_experts))
+    if prefetch_buffers is None:
+        prefetch_buffers = {}
+    return LinearDecode(
+        weights["gate.weight"],
+        device,
+        cache.file("gate.decode"),
+        dtype=weight_dtype,
+        use_prefetcher=True,
+        global_cb=ensure_named_gcb(
+            prefetch_buffers,
+            HC_FN_GCB,
+            device,
+            hc_fn_ring_specs(),
+            weight_dtype,
+            num_pages=HC_FN_GCB_PAGES,
+        ),
+        global_cb_page_bytes=hc_fn_page_bytes(weight_dtype),
+        **layout,
+    )
+
+
 class DeepSeekV4TopKRouter(DeepSeekV4Module):
     """ttnn port of ``DeepseekV4TopKRouter``.
 
@@ -247,29 +307,31 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
     """
 
     def __init__(
-        self, config, weights: dict, device: ttnn.MeshDevice, cache: Optional[WeightCache] = None, packed_weights=None
+        self,
+        config,
+        weights: dict,
+        device: ttnn.MeshDevice,
+        cache: Optional[WeightCache] = None,
+        packed_weights=None,
+        use_prefetcher: bool = False,
+        prefetch_buffers: Optional[dict] = None,
+        weight_dtype: ttnn.DataType = ttnn.bfloat16,
     ):
         self.device = device
         self.num_experts = config.num_local_experts
         self.top_k = config.num_experts_per_tok
         self.routed_scaling_factor = config.routed_scaling_factor
         cache = _as_cache(cache)
-        if packed_weights is None:
-            self.gate = Linear(weights["gate.weight"], device, cache.file("gate"))
-        else:
-            tensor, layout, slot = packed_weights
-            spec = packed_weight_spec(layout, slot, "router_gate")
-            self.gate = LinearDecode(
-                weights["gate.weight"],
-                device,
-                cache.file("gate"),
-                dtype=ttnn.bfloat4_b,
-                K=spec.K,
-                N=spec.N,
-                n_blocks=spec.n_blocks,
-                packed_weight_tensor=tensor,
-                packed_weight_spec=spec,
-            )
+        self.gate = _make_router_gate(
+            weights,
+            device,
+            cache,
+            config,
+            packed_weights=packed_weights,
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
+            weight_dtype=weight_dtype,
+        )
         bias = _materialize(
             weights["gate.e_score_correction_bias"], cache.file("gate.e_score_correction_bias"), ttnn.bfloat16
         )
@@ -278,6 +340,11 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
             device,
             cache_file_name=cache.file("gate.e_score_correction_bias"),
         )
+
+    def prefetch_weights(self):
+        """Queue the gate weight when it is streamed through :data:`HC_FN_GCB`."""
+        if isinstance(self.gate, LinearDecode):
+            self.gate.fetch_weights()
 
     def _scores(self, x_flat: ttnn.Tensor) -> ttnn.Tensor:
         """Per-expert ``sqrtsoftplus`` gate scores ``[1,1,T,E]``."""
@@ -322,29 +389,31 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
     """
 
     def __init__(
-        self, config, weights: dict, device: ttnn.MeshDevice, cache: Optional[WeightCache] = None, packed_weights=None
+        self,
+        config,
+        weights: dict,
+        device: ttnn.MeshDevice,
+        cache: Optional[WeightCache] = None,
+        packed_weights=None,
+        use_prefetcher: bool = False,
+        prefetch_buffers: Optional[dict] = None,
+        weight_dtype: ttnn.DataType = ttnn.bfloat16,
     ):
         self.device = device
         self.num_experts = config.num_local_experts
         self.top_k = config.num_experts_per_tok
         self.routed_scaling_factor = config.routed_scaling_factor
         cache = _as_cache(cache)
-        if packed_weights is None:
-            self.gate = Linear(weights["gate.weight"], device, cache.file("gate"))
-        else:
-            tensor, layout, slot = packed_weights
-            spec = packed_weight_spec(layout, slot, "router_gate")
-            self.gate = LinearDecode(
-                weights["gate.weight"],
-                device,
-                cache.file("gate"),
-                dtype=ttnn.bfloat4_b,
-                K=spec.K,
-                N=spec.N,
-                n_blocks=spec.n_blocks,
-                packed_weight_tensor=tensor,
-                packed_weight_spec=spec,
-            )
+        self.gate = _make_router_gate(
+            weights,
+            device,
+            cache,
+            config,
+            packed_weights=packed_weights,
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
+            weight_dtype=weight_dtype,
+        )
         # tid2eid [vocab, top_k]: frozen token-id -> expert-id table (host-side,
         # no tile cache) -- always materialise.
         tid = weights["gate.tid2eid"]
@@ -357,6 +426,11 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
         self.eid_table = ttnn.from_torch(
             self.tid2eid.float(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
+
+    def prefetch_weights(self):
+        """Queue the gate weight when it is streamed through :data:`HC_FN_GCB`."""
+        if isinstance(self.gate, LinearDecode):
+            self.gate.fetch_weights()
 
     def _scores(self, x_flat: ttnn.Tensor) -> ttnn.Tensor:
         """Per-expert ``sqrtsoftplus`` gate scores (shared head of both routing paths)."""
@@ -786,7 +860,16 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         self.gate = (
             gate
             if gate is not None
-            else DeepSeekV4TopKRouter(config, weights, device, cache=cache, packed_weights=packed_weights)
+            else DeepSeekV4TopKRouter(
+                config,
+                weights,
+                device,
+                cache=cache,
+                packed_weights=packed_weights,
+                use_prefetcher=use_prefetcher,
+                prefetch_buffers=prefetch_buffers,
+                weight_dtype=weight_dtype,
+            )
         )
         self.is_hash = isinstance(self.gate, DeepSeekV4HashRouter)
         # The routed-expert compute (a :class:`DeepSeekV4PreloadedExperts` keeping
@@ -807,7 +890,13 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         )
 
     def prefetch_weights(self):
-        """Stage the shared expert's weights ahead of the decode that uses them."""
+        """Stage the router gate then the shared expert ahead of the decode that uses them.
+
+        The gate streams through :data:`HC_FN_GCB` after the FFN hyper-connection (same
+        FIFO, independent of the shared-expert decode GCB). Queue order on each ring has
+        to match consume order.
+        """
+        self.gate.prefetch_weights()
         self.shared_experts.prefetch_weights()
 
     def forward(self, hidden: ttnn.Tensor, input_ids: Optional[torch.Tensor] = None) -> ttnn.Tensor:
