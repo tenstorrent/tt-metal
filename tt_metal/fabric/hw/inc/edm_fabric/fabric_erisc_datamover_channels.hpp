@@ -43,6 +43,26 @@ FORCE_INLINE auto wrap_increment(T val, size_t max) {
     return (val == max - 1) ? 0 : val + 1;
 }
 
+// Upper bound on how many slot addresses a channel tabulates. The table is a channel member and the
+// channels are locals of the router kernel, so this caps their contribution to its stack frame.
+constexpr uint8_t MAX_TABULATED_SLOTS = 16;
+
+template <uint8_t NUM_BUFFERS>
+inline constexpr uint8_t tabulated_slot_count = NUM_BUFFERS < MAX_TABULATED_SLOTS ? NUM_BUFFERS : MAX_TABULATED_SLOTS;
+
+// Slot stride, stored only by channels deeper than the table. Empty otherwise, so that with
+// [[no_unique_address]] fully tabulated channels keep their original layout.
+template <bool Needed>
+struct SlotStride {
+    FORCE_INLINE void set(size_t) {}
+};
+
+template <>
+struct SlotStride<true> {
+    size_t value;
+    FORCE_INLINE void set(size_t stride) { this->value = stride; }
+};
+
 // This class implements the interface for static sized sender channels.
 // Static sized sender channels have a fixed number of buffer slots, defined
 // at router initialization, and persistent for the lifetime of the router.
@@ -57,12 +77,28 @@ public:
     FORCE_INLINE void init_impl(
         size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
         this->next_packet_buffer_index = BufferIndex{0};
-        for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
-            this->buffer_addresses[i] = channel_base_address + i * max_eth_payload_size_in_bytes;
+        this->slot_stride.set(max_eth_payload_size_in_bytes);
+        if constexpr (NUM_BUFFERS <= MAX_TABULATED_SLOTS) {
+            for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
+                this->buffer_addresses[i] = channel_base_address + i * max_eth_payload_size_in_bytes;
 // need to avoid unrolling to keep code size within limits
 #pragma GCC unroll 1
-            for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
-                reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
+                for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
+                    reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
+                }
+            }
+        } else {
+            // Slots past the table have no stored address, so walk a cursor instead.
+            size_t slot_addr = channel_base_address;
+            for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
+                if (i < TABULATED_SLOTS) {
+                    this->buffer_addresses[i] = slot_addr;
+                }
+#pragma GCC unroll 1
+                for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
+                    reinterpret_cast<volatile uint32_t*>(slot_addr)[j] = 0;
+                }
+                slot_addr += max_eth_payload_size_in_bytes;
             }
         }
         if constexpr (NUM_BUFFERS) {
@@ -77,20 +113,32 @@ public:
 
     // For sender channel, only need a get_next_packet style
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address_impl() const {
-        return this->buffer_addresses[next_packet_buffer_index.get()];
+        return address_of_slot(next_packet_buffer_index.get());
     }
 
     FORCE_INLINE size_t get_cached_next_buffer_slot_addr_impl() const { return this->cached_next_buffer_slot_addr; }
 
     FORCE_INLINE void advance_to_next_cached_buffer_slot_addr_impl() {
         next_packet_buffer_index = BufferIndex{wrap_increment<NUM_BUFFERS>(next_packet_buffer_index.get())};
-        this->cached_next_buffer_slot_addr = this->buffer_addresses[next_packet_buffer_index.get()];
+        this->cached_next_buffer_slot_addr = address_of_slot(next_packet_buffer_index.get());
     }
 
 private:
-    std::array<size_t, NUM_BUFFERS> buffer_addresses;
+    static constexpr uint8_t TABULATED_SLOTS = tabulated_slot_count<NUM_BUFFERS>;
+
+    [[nodiscard]] FORCE_INLINE size_t address_of_slot(uint8_t slot) const {
+        if constexpr (NUM_BUFFERS <= MAX_TABULATED_SLOTS) {
+            return this->buffer_addresses[slot];
+        } else {
+            return slot < TABULATED_SLOTS ? this->buffer_addresses[slot]
+                                          : this->buffer_addresses[0] + slot * this->slot_stride.value;
+        }
+    }
+
+    std::array<size_t, TABULATED_SLOTS> buffer_addresses;
     std::size_t cached_next_buffer_slot_addr;
     BufferIndex next_packet_buffer_index;
+    [[no_unique_address]] SlotStride<(NUM_BUFFERS > MAX_TABULATED_SLOTS)> slot_stride;
 };
 
 // A base Ethernet channel buffer interface class that will be specialized for different
@@ -100,8 +148,10 @@ class EthChannelBufferInterface {
 public:
     explicit EthChannelBufferInterface() = default;
 
-    FORCE_INLINE void init(size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
-        static_cast<DERIVED_T*>(this)->init_impl(channel_base_address, max_eth_payload_size_in_bytes, header_size_bytes);
+    FORCE_INLINE void init(
+        size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
+        static_cast<DERIVED_T*>(this)->init_impl(
+            channel_base_address, max_eth_payload_size_in_bytes, header_size_bytes);
     }
 
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address(const BufferIndex& buffer_index) const {
@@ -164,12 +214,27 @@ public:
     FORCE_INLINE void init_impl(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
         buffer_size_in_bytes = buffer_size_bytes;
         max_eth_payload_size_in_bytes = buffer_size_in_bytes;
-        for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
-            this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
-            // need to avoid unrolling to keep code size within limits
-            #pragma GCC unroll 1
-            for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
-                reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
+        if constexpr (NUM_BUFFERS <= MAX_TABULATED_SLOTS) {
+            for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
+                this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
+// need to avoid unrolling to keep code size within limits
+#pragma GCC unroll 1
+                for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
+                    reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
+                }
+            }
+        } else {
+            // Slots past the table have no stored address, so walk a cursor instead.
+            size_t slot_addr = channel_base_address;
+            for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
+                if (i < TABULATED_SLOTS) {
+                    this->buffer_addresses[i] = slot_addr;
+                }
+#pragma GCC unroll 1
+                for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
+                    reinterpret_cast<volatile uint32_t*>(slot_addr)[j] = 0;
+                }
+                slot_addr += this->max_eth_payload_size_in_bytes;
             }
         }
 
@@ -183,12 +248,12 @@ public:
     }
 
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address_impl(const BufferIndex& buffer_index) const {
-        return this->buffer_addresses[buffer_index];
+        return address_of_slot(buffer_index.get());
     }
 
     template <typename T>
     [[nodiscard]] FORCE_INLINE volatile T* get_packet_header_impl(const BufferIndex& buffer_index) const {
-        return reinterpret_cast<volatile T*>(this->buffer_addresses[buffer_index]);
+        return reinterpret_cast<volatile T*>(address_of_slot(buffer_index.get()));
     }
 
     template <typename T>
@@ -200,7 +265,9 @@ public:
     }
 
     // Doesn't return the message size, only the maximum eth payload size
-    [[nodiscard]] FORCE_INLINE size_t get_max_eth_payload_size_impl() const { return this->max_eth_payload_size_in_bytes; }
+    [[nodiscard]] FORCE_INLINE size_t get_max_eth_payload_size_impl() const {
+        return this->max_eth_payload_size_in_bytes;
+    }
 
 #if defined(COMPILE_FOR_ERISC)
     [[nodiscard]] FORCE_INLINE bool eth_is_acked_or_completed_impl(const BufferIndex& buffer_index) const {
@@ -214,12 +281,22 @@ public:
         this->cached_next_buffer_slot_addr = next_buffer_slot_addr;
     }
 
-    FORCE_INLINE uint32_t channel_base_address() const {
-        return static_cast<uint32_t>(this->buffer_addresses[0]);
-    }
+    FORCE_INLINE uint32_t channel_base_address() const { return static_cast<uint32_t>(this->buffer_addresses[0]); }
 
 private:
-    std::array<size_t, NUM_BUFFERS> buffer_addresses;
+    static constexpr uint8_t TABULATED_SLOTS = tabulated_slot_count<NUM_BUFFERS>;
+
+    // Reuses max_eth_payload_size_in_bytes as the stride, so needs no SlotStride member.
+    [[nodiscard]] FORCE_INLINE size_t address_of_slot(uint8_t slot) const {
+        if constexpr (NUM_BUFFERS <= MAX_TABULATED_SLOTS) {
+            return this->buffer_addresses[slot];
+        } else {
+            return slot < TABULATED_SLOTS ? this->buffer_addresses[slot]
+                                          : this->buffer_addresses[0] + slot * this->max_eth_payload_size_in_bytes;
+        }
+    }
+
+    std::array<size_t, TABULATED_SLOTS> buffer_addresses;
     std::size_t buffer_size_in_bytes;
     // Includes header + payload + channel_sync
     std::size_t max_eth_payload_size_in_bytes;
