@@ -172,9 +172,6 @@ void kernel_main() {
     uint32_t last_tile_height =
         num_out_sticks_this_cluster % TILE_HEIGHT == 0 ? TILE_HEIGHT : num_out_sticks_this_cluster % TILE_HEIGHT;
 
-    // Live thread-count probe for the perf harness A/B guard (inert unless TT_METAL_DPRINT_CORES set).
-    DPRINT("qpool num_threads: {}\n", get_num_threads());
-
     uint32_t tilize_stick_counter = 0;
     uint32_t tilize_stick_total = 0;
     for (uint32_t n = 0; n < num_out_sticks_per_thread; ++n) {

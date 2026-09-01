@@ -10,9 +10,11 @@
 #                               num_threads (test_qpool_span.py + qpool_span_report.py)
 #   ./run_qpool.sh span-ab      full threads A/B: measure at num_threads=4, rebuild at 1,
 #                               measure, restore 4, rebuild, report marginal/span gains + T*.
-#                               Each leg DPRINT-verifies its live thread count and the
-#                               num_threads toggle aborts loudly on a pattern miss.
-#                               Do NOT commit pool_utils.cpp while span-ab runs.
+#                               Each leg DPRINT-verifies its live thread count (via a probe
+#                               sed-inserted into the compute kernel for the run and removed
+#                               after) and the num_threads toggle aborts loudly on a pattern
+#                               miss. Do NOT commit pool_utils.cpp or compute_pool_2d.cpp
+#                               while span-ab runs.
 #
 # Extra args after the mode are passed to pytest.
 set -euo pipefail
@@ -32,6 +34,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR" && git rev-parse --show-toplevel)
 OUT_DIR="${OUT_DIR:-$REPO_ROOT/generated/qpool_span}"
 PU="$REPO_ROOT/ttnn/cpp/ttnn/operations/pool/pool_utils.cpp"
+CK="$REPO_ROOT/ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/compute/compute_pool_2d.cpp"
 
 if [[ ! -f "$SIM_SO" ]]; then
     echo "run_qpool: no sim library at $SIM_SO — build craq-sim branch wransom/qsr-csr-timeout-count:" >&2
@@ -88,6 +91,18 @@ set_threads() {  # $1 = from, $2 = to — with loud verification (sed exits 0 on
     grep -q "? $2 : 1;" "$PU" || { echo "run_qpool: FATAL — thread toggle $1->$2 did not match in $PU" >&2; exit 1; }
 }
 
+# Temporary DPRINT thread-count probe for span-ab leg verification. Kept OUT of the committed
+# kernel (test-only); sed-inserted for the run, removed by probe_off / the restore trap. The
+# JIT (TT_METAL_FORCE_JIT_COMPILE=1 in sim_env) picks up the edit without a host rebuild.
+probe_on() {
+    grep -q 'qpool num_threads' "$CK" && return 0
+    sed -i '/uint32_t tilize_stick_counter = 0;/i\DPRINT("qpool num_threads: {}\\n", get_num_threads());' "$CK"
+    grep -q 'qpool num_threads' "$CK" || { echo "run_qpool: FATAL — probe insert did not match in $CK" >&2; exit 1; }
+}
+probe_off() {
+    sed -i '/qpool num_threads/d' "$CK"
+}
+
 cd "$REPO_ROOT"
 case "$MODE" in
 debug)
@@ -131,8 +146,9 @@ span)
     ;;
 span-ab)
     mkdir -p "$OUT_DIR"
-    restore() { sed -i 's/? 1 : 1;/? 4 : 1;/' "$PU"; }
+    restore() { sed -i 's/? 1 : 1;/? 4 : 1;/' "$PU"; probe_off; }
     trap restore EXIT
+    probe_on
     echo "run_qpool: span-ab leg 1/2 — num_threads=4"
     ./build_metal.sh > "$OUT_DIR/build_T4.log" 2>&1
     span_leg span_T4.tsv 4
