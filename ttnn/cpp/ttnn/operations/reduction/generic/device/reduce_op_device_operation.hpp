@@ -73,6 +73,7 @@ ttnn::Tensor reduce(
     bool row_major_h_dense_path = false,
     bool use_sfpu_reduce = false,
     uint32_t num_h_slices = 1,
-    tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE);
+    tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE,
+    uint32_t reduce_batch_size = 1);
 
 }  // namespace ttnn::prim

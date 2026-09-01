@@ -29,7 +29,11 @@ Tensor reduce(
     bool fast_and_approximate_mode = false,
     // Requested layout of the result; std::nullopt means "whatever the selected path emits":
     // ROW_MAJOR on the dense RM paths, TILE on the tilized ones.
-    const std::optional<tt::tt_metal::Layout>& output_layout = std::nullopt);
+    const std::optional<tt::tt_metal::Layout>& output_layout = std::nullopt,
+    // Adjacent dim-1 slices folded into one output row (RM-H dense path only; 1 = no folding).
+    // Collapses dim 1 together with the reduce axis in one launch, for buffers whose padding sits
+    // between the two and so cannot be presented as a single axis.
+    uint32_t reduce_batch_size = 1);
 
 }  // namespace ttnn::operations::reduction::generic::detail
 

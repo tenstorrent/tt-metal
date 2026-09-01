@@ -767,3 +767,33 @@ def test_rm_reduce_row_major_output_rejected_for_block_float(device, reduce_op, 
 
     with expect_error(RuntimeError, "block-float formats only exist in TILE layout"):
         ttnn_op(tt_input, dim=dim, output_layout=ttnn.ROW_MAJOR_LAYOUT)
+
+
+# A row-major tensor whose H is padded stores each dim-1 slice H_padded rows apart, not H_logical.
+# pad_to_tile builds that layout, and filling its pad with NaN turns any read of a pad row into a
+# NaN in the result rather than an error that hides in the numerics.
+@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("dim", [-1, -2])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 7, 7, 2048),  # resnet50 global pool: H 7 -> 32, 7 slices
+        (1, 3, 3, 45),  # partial channel tile as well: W 45 -> 64
+        (2, 5, 5, 128),  # batch > 1
+        (1, 4, 40, 64),  # H_logical > tile_height: 40 -> 64
+    ],
+)
+def test_rm_reduce_padded_h_slices(device, reduce_op, dim, shape):
+    torch.manual_seed(0)
+    # Zero-mean: summing 2048 uniform-positive values lands every result near 1024 with a spread of
+    # only ~13, which is the same order as bf16's quantization step there, so PCC reads ~0.97 even
+    # for bit-identical output. randn keeps the spread large enough for PCC to mean something.
+    torch_input = torch.randn(shape, dtype=torch.bfloat16).float()
+    torch_ref = _golden(torch_input, reduce_op, dim=dim, keepdim=True)
+
+    tt_input = ttnn.Tensor(torch_input, ttnn.bfloat16).pad_to_tile(float("nan")).to(device)
+    assert list(tt_input.padded_shape)[-2] != list(tt_input.shape)[-2], "shape has no padded-H coverage"
+
+    output = ttnn.to_torch(_OPS[reduce_op][1](tt_input, dim=dim, keepdim=True))
+    assert not output.isnan().any(), "result contains NaN, so a padding row was read"
+    assert_numeric_metrics(torch_ref, output, **_metrics(ttnn.bfloat16, reduce_op))

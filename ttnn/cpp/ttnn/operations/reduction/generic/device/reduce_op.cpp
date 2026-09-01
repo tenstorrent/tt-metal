@@ -97,7 +97,12 @@ Tensor reduce(
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
     bool negate,
     bool fast_and_approximate_mode,
-    const std::optional<tt::tt_metal::Layout>& output_layout) {
+    const std::optional<tt::tt_metal::Layout>& output_layout,
+    uint32_t reduce_batch_size) {
+    TT_FATAL(
+        reduce_batch_size == 1 || reduce_dim == tt::tt_metal::ReduceOpDim::H,
+        "reduce_batch_size {} (NC grouping) is only defined for an H reduce",
+        reduce_batch_size);
     // Only ttnn::sum / ttnn::mean expose output_layout and convert when the device path can't emit it.
     // Checked before the MIN branch, which would drop the request silently.
     TT_FATAL(
@@ -333,7 +338,9 @@ Tensor reduce(
         // Splitting an Ht_rm below this costs more (extra dispatch + rounding) than it gains.
         constexpr uint32_t k_min_ht_for_split = 16;  // ~H >= 512 rows
         uint32_t num_h_slices = 1;
-        if (col_groups > 0 && col_groups < grid_cores && Ht_rm >= k_min_ht_for_split) {
+        // A grouped reduce has nowhere to put per-slice partials — its output row already stands for
+        // reduce_batch_size dim-1 slices — so the two are mutually exclusive.
+        if (reduce_batch_size == 1 && col_groups > 0 && col_groups < grid_cores && Ht_rm >= k_min_ht_for_split) {
             const uint32_t slices_to_fill_grid = grid_cores / col_groups;  // slices that keep the grid filled
             num_h_slices =
                 (slices_to_fill_grid < Ht_rm) ? slices_to_fill_grid : Ht_rm;  // never more slices than H tiles
@@ -392,7 +399,8 @@ Tensor reduce(
         /*row_major_h_dense_path=*/use_rm_dense_h,
         /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
         /*num_h_slices=*/1,
-        /*output_layout=*/use_rm_dense ? rm_dense_out_layout : tt::tt_metal::Layout::TILE);
+        /*output_layout=*/use_rm_dense ? rm_dense_out_layout : tt::tt_metal::Layout::TILE,
+        reduce_batch_size);
 }
 
 }  // namespace ttnn::operations::reduction::generic::detail

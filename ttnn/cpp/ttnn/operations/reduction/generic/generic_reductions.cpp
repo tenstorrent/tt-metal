@@ -667,6 +667,53 @@ Tensor pool_sum(
         output_layout);
 }
 
+Tensor pool_sum_dims_1_2(
+    const Tensor& input_tensor_arg,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    const std::optional<Layout>& output_layout) {
+    const auto& lg = input_tensor_arg.logical_shape();
+    const auto& pd = input_tensor_arg.padded_shape();
+    TT_FATAL(lg.rank() == 4, "pool_sum_dims_1_2 requires a 4D input, got rank {}", lg.rank());
+
+    // Prefer folding the two axes into one: a longer reduce axis is what lets the H-axis split fan
+    // out across the grid, so folding is both simpler and faster wherever the buffer allows it. A
+    // ROW_MAJOR input whose dim 2 is padded cannot be folded — its pad rows sit between the dim-1
+    // slices, so the real rows are not contiguous under any single-axis shape.
+    //
+    // ttnn::reshape, not view: it is free for the row-major case (same last dim), and for a tiled
+    // input whose dim 2 is not tile-aligned it compacts the padding away instead of leaving the
+    // reduce to span it.
+    const bool can_fold = input_tensor_arg.layout() != Layout::ROW_MAJOR || pd[2] == lg[2];
+    if (can_fold) {
+        const Tensor folded = ttnn::reshape(
+            input_tensor_arg,
+            ttnn::Shape({lg[0], 1, lg[1] * lg[2], lg[3]}),
+            ttnn::Shape({pd[0], 1, pd[1] * pd[2], pd[3]}));
+        return pool_sum(folded, 2, memory_config_arg, compute_kernel_config, scalar, output_layout);
+    }
+
+    // Grouped: one launch reduces dim 2 and folds all dim-1 slices into the single output row.
+    // reduce_impl is bypassed because its keepdim shape fix-up would re-expand dim 1 back to lg[1].
+    const auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
+    return convert_output_layout(
+        generic::detail::reduce(
+            input_tensor_arg,
+            tt::tt_metal::ReduceOpMath::SUM,
+            tt::tt_metal::ReduceOpDim::H,
+            scalar,
+            memory_config,
+            /*output_dtype=*/std::nullopt,
+            compute_kernel_config,
+            /*sub_core_grids=*/std::nullopt,
+            /*negate=*/false,
+            /*fast_and_approximate_mode=*/false,
+            output_layout,
+            /*reduce_batch_size=*/lg[1]),
+        output_layout);
+}
+
 }  // namespace ttnn::operations::reduction
 
 namespace ttnn {

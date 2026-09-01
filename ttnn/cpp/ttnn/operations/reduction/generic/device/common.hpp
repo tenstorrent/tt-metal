@@ -90,7 +90,9 @@ inline bool requires_post_mul(
 struct RmPlan {
     uint32_t H_logical;
     uint32_t W_logical;
-    uint32_t Ht_rm;                  // ceil_div(H_logical, rm_rows_per_tile)
+    uint32_t H_padded;               // pages per dim-1 slice; > H_logical when H carries padding
+    uint32_t Ht_rm;                  // W: ceil_div(H_logical, rm_rows_per_tile)
+                                     // H: ceil_div(reduce_batch_size * H_logical, rm_rows_per_tile)
     uint32_t Wt;                     // ceil_div(W_padded,   tile_width)
     uint32_t rm_rows_per_tile;       // == tile_height
     uint32_t wt_tiles_per_chunk;     // W-reduce: min(8, max(1, Wt)); H-reduce: 1
@@ -104,7 +106,8 @@ struct RmPlan {
 
 // Populate an RmPlan from the input's padded + logical shapes, tile geometry, data formats
 // and the dim being reduced. Dim picks which of {wt,ht}_tiles_per_chunk is the variable
-// chunk size and which is pinned to 1.
+// chunk size and which is pinned to 1. `reduce_batch_size` is the H path's NC grouping
+// (dim-1 slices folded into one output row), which sets how many rows a work unit reduces.
 RmPlan make_rm_plan(
     const tt::tt_metal::Shape& padded_shape,
     const tt::tt_metal::Shape& logical_shape,
@@ -113,7 +116,8 @@ RmPlan make_rm_plan(
     tt::DataFormat src_cb_data_format,
     tt::DataFormat dst_cb_data_format,
     tt::tt_metal::ReduceOpMath math_op,
-    tt::tt_metal::ReduceOpDim dim);
+    tt::tt_metal::ReduceOpDim dim,
+    uint32_t reduce_batch_size = 1);
 
 // The factory-level RM preconditions: interleaved I/O, SUM only, no negate, dim is H or W.
 // `dim_label` is "Reduce W" / "Reduce H" for the fatal messages.
@@ -127,15 +131,16 @@ void validate_rm_preconditions(
 
 // Build the reader compile-time args vector for the RM path (slots match
 // reader_unary_reduce_rm.cpp). Returns scalar slots followed by TensorAccessorArgs(src).
-// `num_h_slices` / `slice_Ht` are H-axis-split geometry (H path only; 1 / full Ht_rm = normal
-// reduce).
+// `num_h_slices` / `slice_Ht` are H-axis-split geometry and `reduce_batch_size` is the NC
+// grouping (H path only; 1 / full Ht_rm / 1 = normal reduce).
 std::vector<uint32_t> build_rm_reader_ct_args(
     const RmPlan& plan,
     uint32_t scaler_bits,
     const tt::tt_metal::MeshTensor& src,
     tt::tt_metal::ReduceOpDim dim,
     uint32_t num_h_slices = 1,
-    uint32_t slice_Ht = 0);
+    uint32_t slice_Ht = 0,
+    uint32_t reduce_batch_size = 1);
 
 // Build the writer compile-time args vector for the RM path (slots match
 // writer_reduce_rm_scalar.cpp): scalar slots followed by TensorAccessorArgs(dst). `tile_output`

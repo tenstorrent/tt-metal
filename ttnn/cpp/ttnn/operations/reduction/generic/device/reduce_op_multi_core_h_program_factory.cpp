@@ -73,8 +73,18 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             src0_cb_data_format,
             dst_cb_data_format,
             operation_attributes.math_op,
-            ReduceOpDim::H);
+            ReduceOpDim::H,
+            operation_attributes.reduce_batch_size);
     }
+
+    // NC grouping: reduce_batch_size adjacent dim-1 slices share one output row, so the grid is
+    // split over groups rather than raw NC slices.
+    TT_FATAL(
+        !rm_path || NC % operation_attributes.reduce_batch_size == 0,
+        "Reduce H (dense RM): NC {} must be divisible by reduce_batch_size {}",
+        NC,
+        operation_attributes.reduce_batch_size);
+    const uint32_t num_groups = rm_path ? NC / operation_attributes.reduce_batch_size : NC;
 
     // H-axis split geometry: every slice reduces a uniform `slice_Ht` tiles, the last one's overhang
     // past Ht_rm identity-padded by the reader. Clamped to Ht_rm so no slice is empty.
@@ -101,8 +111,9 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    // One output tile column per (nc, slice, wt) of the (N, C, num_h_slices, W) result.
-    auto num_cols = NC * num_h_slices * Wt;
+    // One output tile column per (group, slice, wt) of the
+    // (N, C / reduce_batch_size, num_h_slices, W) result.
+    auto num_cols = num_groups * num_h_slices * Wt;
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_cols_per_core_group_1, num_cols_per_core_group_2;
@@ -392,8 +403,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     reader_desc.config = ReaderConfigDescriptor{};
 
     if (rm_path) {
-        std::vector<uint32_t> reader_compile_time_args =
-            build_rm_reader_ct_args(plan, scaler_bits, a, ReduceOpDim::H, num_h_slices, slice_Ht);
+        std::vector<uint32_t> reader_compile_time_args = build_rm_reader_ct_args(
+            plan, scaler_bits, a, ReduceOpDim::H, num_h_slices, slice_Ht, operation_attributes.reduce_batch_size);
 
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
