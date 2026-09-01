@@ -25,6 +25,25 @@
 #include "api/dataflow/circular_buffer.h"
 #include <tt-metalium/constants.hpp>
 
+// Stamp a mask tile (L1-acc add of 0/-inf columns) onto absolute qk tile indices; the shared
+// apply_partial_mask_lightweight wants a row base in row-tile units, which a ping-pong region
+// base that is not a multiple of the runtime row width cannot express.
+ALWI void vsa_stamp_mask(uint32_t mask_cb, uint32_t mask_idx, uint32_t out_cb, uint32_t tile0, uint32_t stride, uint32_t rows) {
+    reconfig_data_format_srca(mask_cb);
+    pack_reconfig_data_format(out_cb);
+    copy_init(mask_cb);
+    PACK((llk_pack_reconfig_l1_acc(1)));
+    for (uint32_t row = 0; row < rows; ++row) {
+        tile_regs_acquire();
+        copy_tile(mask_cb, mask_idx, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile<true>(0, out_cb, tile0 + row * stride);
+        tile_regs_release();
+    }
+    PACK((llk_pack_reconfig_l1_acc(0)));
+}
+
 ALWI void stream_pack_to_unpack_sync() {
     PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
     UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
@@ -102,6 +121,61 @@ void kernel_main() {
     CircularBuffer(cb_neginf).wait_front(1);
 
 
+    // Lag-1 PV pipeline: each visit's PV is deferred to the start of the next visit (or to the
+    // next flush/window/pass boundary), so a visit's pack-thread exp overlaps the next visit's
+    // QK and reduce math instead of serializing against them. qk scratch ping-pongs between two
+    // regions so the deferred probs survive the next visit's QK packs.
+    struct PendingPV {
+        bool valid = false;
+        uint32_t row_slot = 0;
+        bool is_first = false;
+        uint32_t qk_base = 0;   // tile offset of the probs region
+        uint32_t qk_cols = 0;
+        uint32_t n_blocks = 0;
+        uint32_t slots[8];
+    };
+    PendingPV pend;
+    uint32_t qk_region = 0;  // ping-pong: 0 or 1
+
+    const auto drain_pending_pv = [&]() {
+        if (!pend.valid) {
+            return;
+        }
+        stream_pack_to_unpack_sync();  // probs of the pending visit must be visible (usually free)
+        reconfig_data_format(cb_v_stream, cb_qk);
+        mm_no_mop_init_short(cb_qk, cb_v_stream, /*transpose=*/false, 1, Sqt, pend.qk_cols);
+        tile_regs_acquire();
+        for (uint32_t vd = 0; vd < vDHt; ++vd) {
+            for (uint32_t b = 0; b < pend.n_blocks; ++b) {
+                for (uint32_t inner = 0; inner < Skt; ++inner) {
+                    matmul_block_no_mop(
+                        cb_qk,
+                        cb_v_stream,
+                        /*in0=*/pend.qk_base + b * Skt + inner,
+                        /*in1=*/pend.slots[b] * v_tiles_per_block + inner * vDHt + vd,
+                        /*dst=*/vd * Sqt,
+                        /*transpose=*/false,
+                        /*w=*/1,
+                        /*h=*/Sqt,
+                        /*stride=*/pend.qk_cols);
+                }
+            }
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        const uint32_t o_base_p = pend.row_slot * Sqt * vDHt;
+        configure_row_pack_width(cb_o_res, 1);
+        PACK((llk_pack_reconfig_l1_acc(pend.is_first ? 0 : 1)));
+        for (uint32_t vd = 0; vd < vDHt; ++vd) {
+            for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                pack_tile<true>(vd * Sqt + sr, cb_o_res, o_base_p + sr * vDHt + vd);
+            }
+        }
+        PACK((llk_pack_reconfig_l1_acc(0)));
+        tile_regs_release();
+        pend.valid = false;
+    };
+
     uint32_t rows_done = 0;
     while (rows_done < row_count) {
         const uint32_t pass_rows = (row_count - rows_done < R_MAX) ? (row_count - rows_done) : R_MAX;
@@ -115,6 +189,7 @@ void kernel_main() {
             const uint32_t type = w0 & 0xff;
 
             if (type == MSG_FLUSH) {
+                drain_pending_pv();
                 const uint32_t row_slot = ckernel::read_tile_value(cb_ctrl, 0, 1);
                 const uint32_t parity = ckernel::read_tile_value(cb_ctrl, 0, 2);
                 ctrl_cb.pop_front(1);
@@ -169,6 +244,7 @@ void kernel_main() {
             }
 
             if (type == MSG_WINDOW) {
+                drain_pending_pv();  // the pending visit still reads this window's V slots
                 const uint32_t n_slots = ckernel::read_tile_value(cb_ctrl, 0, 1);
                 ctrl_cb.pop_front(1);
                 free_cb.reserve_back(n_slots);
@@ -192,6 +268,11 @@ void kernel_main() {
             const uint32_t old_st = (row_slot * 2 + (parity ^ 1u)) * Sqt;
             const uint32_t o_base = row_slot * Sqt * vDHt;
             const uint32_t qk_cols = n_blocks * Skt;
+            if (pend.valid && pend.row_slot == row_slot) {
+                drain_pending_pv();  // same row back-to-back: its O and probs must land first
+            }
+            const uint32_t qk_half_tiles = (stream_depth / 2) * Skt * Sqt;  // tiles per qk region
+            const uint32_t qk_base = qk_region * qk_half_tiles;
 
             // Phase 1: QK per block into the row's qk scratch (+ ragged masks), then sync.
             reconfig_data_format(cb_k_stream, cb_q_res);
@@ -215,7 +296,7 @@ void kernel_main() {
                 PACK((llk_pack_reconfig_l1_acc(0)));
                 for (uint32_t sr = 0; sr < Sqt; ++sr) {
                     for (uint32_t c = 0; c < Skt; ++c) {
-                        pack_tile<true>(c * Sqt + sr, cb_qk, sr * qk_cols + b * Skt + c);
+                        pack_tile<true>(c * Sqt + sr, cb_qk, qk_base + sr * qk_cols + b * Skt + c);
                     }
                 }
                 tile_regs_release();
@@ -231,11 +312,11 @@ void kernel_main() {
                 const uint32_t bcol = count % keys_per_tile;
                 uint32_t first_full = btile;
                 if (bcol != 0) {
-                    apply_partial_mask_lightweight(cb_vmask, slot, cb_qk, b * Skt + btile, qk_cols, Sqt, 0);
+                    vsa_stamp_mask(cb_vmask, slot, cb_qk, qk_base + b * Skt + btile, qk_cols, Sqt);
                     first_full = btile + 1;
                 }
                 for (uint32_t kt = first_full; kt < Skt; ++kt) {
-                    apply_partial_mask_lightweight(cb_neginf, 0, cb_qk, b * Skt + kt, qk_cols, Sqt, 0);
+                    vsa_stamp_mask(cb_neginf, 0, cb_qk, qk_base + b * Skt + kt, qk_cols, Sqt);
                 }
                 any_mask = true;
             }
@@ -254,7 +335,7 @@ void kernel_main() {
                 }
                 reduce_block_max_row_init_runtime(cb_max_res, qk_cols, cb_qk, cb_scale, false);
                 for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    reduce_block_max_row_runtime(cb_qk, cb_scale, sr * qk_cols, sr, false, false);
+                    reduce_block_max_row_runtime(cb_qk, cb_scale, qk_base + sr * qk_cols, sr, false, false);
                 }
                 reduce_block_max_row_uninit_runtime(cb_qk, false, false);
                 tile_regs_commit();
@@ -311,6 +392,8 @@ void kernel_main() {
                 }
             }
 
+            drain_pending_pv();  // previous visit's PV: its exp overlapped our math phases above
+
             // Phase 5: probs = exp((qk - new_max) * scale) in place, in DEST-sized column batches;
             // row sums L1-acc onto the NEW sum slot (overwrite on a first visit's first batch).
             exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
@@ -320,7 +403,7 @@ void kernel_main() {
                 reconfig_data_format(cb_qk, cb_max_res);
                 tile_regs_acquire();
                 for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    sub_tiles_bcast_cols_custom(cb_qk, cb_max_res, sr * qk_cols + kc, new_st + sr, sr * w, w);
+                    sub_tiles_bcast_cols_custom(cb_qk, cb_max_res, qk_base + sr * qk_cols + kc, new_st + sr, sr * w, w);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -333,7 +416,7 @@ void kernel_main() {
                 PACK((llk_pack_reconfig_l1_acc(0)));
                 for (uint32_t sr = 0; sr < Sqt; ++sr) {
                     for (uint32_t c = 0; c < w; ++c) {
-                        pack_tile<true>(sr * w + c, cb_qk, sr * qk_cols + kc + c);
+                        pack_tile<true>(sr * w + c, cb_qk, qk_base + sr * qk_cols + kc + c);
                     }
                 }
                 configure_single_tile_pack(cb_sum_res);
@@ -348,43 +431,19 @@ void kernel_main() {
                 PACK((llk_pack_relu_config(ReluConfig::none())));
                 tile_regs_release();
             }
-            stream_pack_to_unpack_sync();  // s4: probs visible
-
-            // Phase 6: O += probs @ V across all n blocks in ONE acquire (per-column no-MOP chains
-            // accumulate over blocks in DEST; packer L1-acc onto O, overwrite on the first visit).
-            reconfig_data_format(cb_v_stream, cb_qk);
-            // kt must equal the per-DEST accumulation chain length (n_blocks * Skt steps here).
-            mm_no_mop_init_short(cb_qk, cb_v_stream, /*transpose=*/false, 1, Sqt, qk_cols);
-            tile_regs_acquire();
-            for (uint32_t vd = 0; vd < vDHt; ++vd) {
-                for (uint32_t b = 0; b < n_blocks; ++b) {
-                    const uint32_t slot = entries[b] & 0xff;
-                    for (uint32_t inner = 0; inner < Skt; ++inner) {
-                        matmul_block_no_mop(
-                            cb_qk,
-                            cb_v_stream,
-                            /*in0=*/b * Skt + inner,
-                            /*in1=*/slot * v_tiles_per_block + inner * vDHt + vd,
-                            /*dst=*/vd * Sqt,
-                            /*transpose=*/false,
-                            /*w=*/1,
-                            /*h=*/Sqt,
-                            /*stride=*/qk_cols);
-                    }
-                }
+            // No s4/s5 here: the PV of this visit is deferred to the next visit (or the next
+            // flush/window boundary), so this visit's pack-thread exp overlaps the next visit's
+            // QK and reduce math. drain_pending_pv() carries the probs-visibility sync.
+            pend.valid = true;
+            pend.row_slot = row_slot;
+            pend.is_first = is_first;
+            pend.qk_base = qk_base;
+            pend.qk_cols = qk_cols;
+            pend.n_blocks = n_blocks;
+            for (uint32_t b = 0; b < n_blocks; ++b) {
+                pend.slots[b] = entries[b] & 0xff;
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            configure_row_pack_width(cb_o_res, 1);
-            PACK((llk_pack_reconfig_l1_acc(is_first ? 0 : 1)));
-            for (uint32_t vd = 0; vd < vDHt; ++vd) {
-                for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    pack_tile<true>(vd * Sqt + sr, cb_o_res, o_base + sr * vDHt + vd);
-                }
-            }
-            PACK((llk_pack_reconfig_l1_acc(0)));
-            tile_regs_release();
-            stream_pack_to_unpack_sync();  // s5: O visible to the next visit's rescale
+            qk_region ^= 1u;
         }
         rows_done += pass_rows;
     }

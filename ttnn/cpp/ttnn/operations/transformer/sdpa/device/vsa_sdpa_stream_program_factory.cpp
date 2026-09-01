@@ -176,7 +176,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     cb(tile_bytes, kRMax * 2 * Sqt, bf);                       // cb_max_res
     cb(tile_bytes, kRMax * 2 * Sqt, bf);                       // cb_sum_res
     cb(tile_bytes, kRowGroup * Sqt, bf);                       // cb_corr
-    cb(tile_bytes, kRowGroup * Sqt * Skt, bf);                 // cb_qk
+    cb(tile_bytes, kStreamDepth * Skt * Sqt, bf);              // cb_qk (two ping-pong window regions)
     cb(tile_bytes, 1, bf);                                     // cb_scale
     cb(tile_bytes, 1, bf);                                     // cb_col_identity
     cb(tile_bytes, 1, bf);                                     // cb_recip_scratch
