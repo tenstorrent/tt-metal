@@ -135,30 +135,57 @@ void kernel_main() {
     uint32_t drained = 0;
     uint32_t pass_base = 0;
 
-    // K pulls accumulate on a trid ring; a window-end marker kreq (0xFFFFFFFF) drains the ring
-    // and sends ONE ack for the whole window, removing the per-arrival barrier round trip.
-    sparse_sdpa_msa::TridRing kring{noc};
+    // K pulls are tagged with per-half trid groups (half h -> trids 4h+1..4h+4). A window-end
+    // marker kreq {0xFFFFFFFF, half} queues a LAZY ack: it is pushed, in marker order, once a
+    // non-blocking check says that half's pulls landed -- never a blocking drain (the reader's
+    // symmetric V-side blocking drain measured 60% of its wall time).
+    uint32_t pull_idx[2] = {0, 0};       // pulls issued in the open window of each half
+    uint32_t ack_pending[4];             // FIFO of marker halves awaiting their lazy ack
+    uint32_t ack_head = 0, ack_tail = 0;
+    const auto khalf_landed = [&](uint32_t h) {
+        for (uint32_t t = 0; t < 4; ++t) {
+            if (!ncrisc_noc_read_with_transaction_id_flushed(noc.get_noc_id(), h * 4 + 1 + t)) {
+                return false;
+            }
+        }
+        return true;
+    };
     auto serve_kreq_if_any = [&]() {
+        while (ack_head != ack_tail && khalf_landed(ack_pending[ack_head & 3])) {
+            kack_cb.reserve_back(1);
+            kack_cb.push_back(1);
+            ++ack_head;
+        }
         while (cb_pages_available_at_front(cb_kreq, 1)) {
             kreq_cb.wait_front(1);
-            uint32_t leader_slot, slot;
+            uint32_t leader_slot, slot, khalf;
             {
                 volatile tt_l1_ptr uint32_t* rq =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
                 leader_slot = rq[0];
                 slot = rq[1];
+                khalf = rq[2];
             }
             kreq_cb.pop_front(1);
-            if (leader_slot == 0xFFFFFFFFu) {  // window end: drain and ack once
-                kring.drain();
-                kack_cb.reserve_back(1);
-                kack_cb.push_back(1);
+            if (leader_slot == 0xFFFFFFFFu) {  // window end: queue the lazy ack
+                ack_pending[ack_tail & 3] = khalf;
+                ++ack_tail;
+                pull_idx[khalf] = 0;
                 continue;
             }
-            const uint64_t src = get_noc_addr(
-                leader_x, leader_y, k_l1_base + leader_slot * k_tiles_per_block * k_tile_bytes, noc.get_noc_id());
-            kring.read_addr(src, k_l1_base + slot * k_tiles_per_block * k_tile_bytes,
-                            k_tiles_per_block * k_tile_bytes);
+            const uint32_t trid = khalf * 4 + 1 + (pull_idx[khalf] & 3);
+            if (pull_idx[khalf] >= 4) {
+                experimental::async_read_barrier_with_trid(noc, trid);  // reuse within this window
+            }
+            ++pull_idx[khalf];
+            experimental::set_read_trid(noc, trid);
+            noc_async_read(
+                get_noc_addr(
+                    leader_x, leader_y, k_l1_base + leader_slot * k_tiles_per_block * k_tile_bytes,
+                    noc.get_noc_id()),
+                k_l1_base + slot * k_tiles_per_block * k_tile_bytes, k_tiles_per_block * k_tile_bytes,
+                noc.get_noc_id());
+            experimental::set_read_trid(noc, 0);
         }
     };
 

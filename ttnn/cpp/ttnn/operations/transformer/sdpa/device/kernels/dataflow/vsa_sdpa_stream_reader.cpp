@@ -25,6 +25,10 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
+#if defined(VSA_PROBE) && VSA_PROBE == 9
+#include "api/debug/dprint.h"
+#define VSA_TICK() (*reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L))
+#endif
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "sparse_sdpa_msa_gather.hpp"
 #include "dataflow_common.hpp"
@@ -278,124 +282,162 @@ void kernel_main() {
     arrivals_sem.up(noc, leader_x, leader_y, 1);
 
     // Per-row running state parity (bit) and first-visit flag, tracked across a pass, plus the
-    // window-pending block list per row: the blocks pulled within one window are freed together
+    // per-half window-pending block lists: blocks pulled within one window are freed together
     // after the window's batched visits, so a row folds every block it lists in the window into
-    // ONE visit (real top-k sets cluster in runs of adjacent ids, so multi-block batches are
-    // common). The slot space is split into two window halves, double-buffered: the reader pulls
-    // window N+1 into the other half while compute chews window N, and waits for a half's credits
-    // only when coming back around to it.
+    // ONE visit. The slot space is split into two window halves, double-buffered.
+    //
+    // Windows are emitted LAZILY: closing a window sends the writer its K marker and leaves the
+    // window pending; its visits are emitted only once a NON-BLOCKING trid check says the half's
+    // V pulls landed and the writer's (equally lazy) kack arrived. The reader keeps consuming
+    // arrivals into the other half meanwhile -- the blocking window drain this replaces was 60%
+    // of the reader's wall time (measured), stalled on leader-NIU congestion.
     uint32_t row_parity_bits = 0;
     uint32_t row_seen_bits = 0;
     constexpr uint32_t half_slots = stream_depth / 2;
-    uint32_t pending[32][half_slots > 0 ? half_slots : 1];
-    uint32_t n_pending[32];
+    uint32_t pending[2][32][half_slots > 0 ? half_slots : 1];
+    uint32_t n_pending[2][32];
     uint32_t half_outstanding[2] = {0, 0};  // credits still owed by compute for each half
 
     // Progress mailbox: this worker's consumed-arrival count, staged locally (own ackbox word) and
-    // posted to the leader's ackbox word for this worker. Monotonic single-writer, so unbarriered
-    // posted writes are safe; one barrier before exit flushes the tail. The local staging word sits
-    // at the SAME offset as the remote target: NoC L1->L1 transfers require src and dst to share
-    // their 16-byte phase.
+    // posted to the leader's ackbox word for this worker (same word offset both sides: L1-to-L1
+    // NoC transfers must share their 16-byte phase). Posts are bounded by `post_limit`, the index
+    // of the oldest listed arrival whose pull has NOT been confirmed landed -- the leader recycles
+    // its slot on the strength of the post, and an in-flight read would then fetch the wrong block.
     uint32_t consumed = 0;
     uint32_t posted = 0;
+    uint32_t post_limit = 0xFFFFFFFFu;
     const uint32_t my_box_local = ackbox_l1 + worker_index * 4;
     const uint64_t my_box_remote = get_noc_addr(leader_x, leader_y, ackbox_l1 + worker_index * 4, noc.get_noc_id());
     const auto post_progress_now = [&]() {
-        if (posted == consumed) {
+        const uint32_t target = (consumed < post_limit) ? consumed : post_limit;
+        if (posted == target) {
             return;
         }
-        posted = consumed;
-        ackbox[worker_index] = consumed;
+        posted = target;
+        ackbox[worker_index] = target;
         noc_async_write(my_box_local, my_box_remote, 4, noc.get_noc_id());
     };
-    // Progress may only be posted for arrivals whose pulls have LANDED (the leader recycles its
-    // slot on the strength of the post, and an in-flight read would then fetch the wrong block),
-    // so pulls advance `consumed` but the post itself happens at window flush, after the drains.
-    // Skip-only stretches with no pending pulls may post immediately.
-    uint32_t window_pulls_pending = 0;
-    const auto note_consumed = [&]() {
-        ++consumed;
-        if (window_pulls_pending == 0 && consumed - posted >= 4) {
-            post_progress_now();
+
+    // Per-half V-pull trid groups (half h -> trids 4h+1 .. 4h+4): a half's landing is checked
+    // with four non-blocking outstanding-count reads instead of a blocking drain.
+    const uint32_t v_l1_base = v_cb.get_write_ptr();
+    const auto issue_pull = [&](uint32_t half, uint32_t idx, uint32_t leader_slot, uint32_t slot) {
+        const uint32_t trid = half * 4 + 1 + (idx & 3);
+        if (idx >= 4) {
+            experimental::async_read_barrier_with_trid(noc, trid);  // reuse within this window
         }
+        experimental::set_read_trid(noc, trid);
+        noc_async_read(
+            get_noc_addr(leader_x, leader_y, v_l1_base + leader_slot * v_tiles_per_block * v_tile_bytes,
+                         noc.get_noc_id()),
+            v_l1_base + slot * v_tiles_per_block * v_tile_bytes, v_tiles_per_block * v_tile_bytes,
+            noc.get_noc_id());
+        experimental::set_read_trid(noc, 0);
+    };
+    const auto half_landed = [&](uint32_t half) {
+        for (uint32_t t = 0; t < 4; ++t) {
+            if (!ncrisc_noc_read_with_transaction_id_flushed(noc.get_noc_id(), half * 4 + 1 + t)) {
+                return false;
+            }
+        }
+        return true;
     };
 
-    // Slot credits flow per window: compute returns a window's slots after consuming its visits.
-    uint32_t log_n = 0;
-    // Window/credit state persists ACROSS passes: the final window of a pass leaves its slot
-    // credits outstanding, and resetting the bookkeeping per pass would leak them until free_cb
-    // fills and compute wedges pushing credits (observed as a multi-pass-only hang).
-    uint32_t half = 0;          // which slot half the open window fills
-    uint32_t window_slots = 0;  // pulled blocks in the open window
+    // Pending (closed, not yet emitted) windows, oldest first; at most both halves.
+    struct PendingWin {
+        uint32_t half;
+        uint32_t n_slots;
+        uint32_t first_listed;  // arrival index of its first listed block (post_limit source)
+    };
+    PendingWin pendq[2];
+    uint32_t pend_head = 0, pend_tail = 0;
+    uint32_t half = 0;              // the half the OPEN window fills
+    uint32_t window_slots = 0;      // pulled blocks in the open window
+    uint32_t window_first_listed = 0xFFFFFFFFu;
     uint32_t cur_pass_rows = 0;
-        // Emit one batched visit per pending row, then a WINDOW message; compute returns the
-        // window's slot credits when it has consumed every visit. The window's V pulls are still
-        // in flight on the trid ring and its K pulls on the writer: drain both exactly once here,
-        // then post the progress that lets the leader recycle its slots.
-    sparse_sdpa_msa::TridRing vring{noc};
-        const auto flush_window = [&]() {
-            if (window_slots == 0) {
-                post_progress_now();
-                return;
+
+    // Close the open window: K marker to the writer (it acks lazily, in order), queue for
+    // emission. No waiting of any kind here.
+    const auto close_window = [&]() {
+        if (window_slots == 0) {
+            return;
+        }
+        kreq_cb.reserve_back(1);
+        {
+            volatile tt_l1_ptr uint32_t* rq = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
+            rq[0] = 0xFFFFFFFFu;
+            rq[1] = half;
+        }
+        kreq_cb.push_back(1);
+        pendq[pend_tail & 1] = {half, window_slots, window_first_listed};
+        ++pend_tail;
+        window_slots = 0;
+        window_first_listed = 0xFFFFFFFFu;
+        half ^= 1;
+    };
+
+    // Emit the oldest pending window if its V pulls landed and its kack arrived. Returns true
+    // if it emitted (so callers can re-poll).
+    const auto try_emit = [&]() {
+        if (pend_head == pend_tail) {
+            return false;
+        }
+        const PendingWin& w = pendq[pend_head & 1];
+        if (!half_landed(w.half) || !cb_pages_available_at_front(cb_kack, 1)) {
+            return false;
+        }
+        kack_cb.wait_front(1);
+        kack_cb.pop_front(1);
+        for (uint32_t r = 0; r < cur_pass_rows; ++r) {
+            if (n_pending[w.half][r] == 0) {
+                continue;
             }
-#if !(defined(VSA_PROBE) && VSA_PROBE == 3)
-            vring.drain();  // this window's V tiles are local
-            // window-end marker: the writer barriers its K pulls and acks once
-            kreq_cb.reserve_back(1);
-            {
-                volatile tt_l1_ptr uint32_t* rq =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
-                rq[0] = 0xFFFFFFFFu;
-                rq[1] = 0;
-            }
-            kreq_cb.push_back(1);
-            kack_cb.wait_front(1);
-            kack_cb.pop_front(1);
-#endif
-            window_pulls_pending = 0;
-            post_progress_now();
-            for (uint32_t r = 0; r < cur_pass_rows; ++r) {
-                if (n_pending[r] == 0) {
-                    continue;
+            const uint32_t rbit = 1u << r;
+            uint32_t info = r;
+            if (!(row_seen_bits & rbit)) {
+                info |= ROW_IS_FIRST;
+                row_seen_bits |= rbit;
+            } else {
+                row_parity_bits ^= rbit;
+                if (row_parity_bits & rbit) {
+                    info |= ROW_PARITY;
                 }
-                const uint32_t rbit = 1u << r;
-                uint32_t info = r;
-                if (!(row_seen_bits & rbit)) {
-                    info |= ROW_IS_FIRST;
-                    row_seen_bits |= rbit;
-                } else {
-                    row_parity_bits ^= rbit;
-                    if (row_parity_bits & rbit) {
-                        info |= ROW_PARITY;
-                    }
-                }
-                ctrl_cb.reserve_back(1);
-                {
-                    volatile tt_l1_ptr uint32_t* cp =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
-                    cp[0] = MSG_VISIT | (n_pending[r] << 16);
-                    cp[1] = info;
-                    for (uint32_t j = 0; j < n_pending[r]; ++j) {
-                        cp[2 + j] = pending[r][j];
-                    }
-                }
-                ctrl_cb.push_back(1);
-                n_pending[r] = 0;
             }
             ctrl_cb.reserve_back(1);
             {
                 volatile tt_l1_ptr uint32_t* cp =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
-                cp[0] = MSG_WINDOW;
-                cp[1] = window_slots;
+                cp[0] = MSG_VISIT | (n_pending[w.half][r] << 16);
+                cp[1] = info;
+                for (uint32_t j = 0; j < n_pending[w.half][r]; ++j) {
+                    cp[2 + j] = pending[w.half][r][j];
+                }
             }
             ctrl_cb.push_back(1);
-            half_outstanding[half] = window_slots;
-            window_slots = 0;
-            half ^= 1;
-        };
+            n_pending[w.half][r] = 0;
+        }
+        ctrl_cb.reserve_back(1);
+        {
+            volatile tt_l1_ptr uint32_t* cp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
+            cp[0] = MSG_WINDOW;
+            cp[1] = w.n_slots;
+        }
+        ctrl_cb.push_back(1);
+        half_outstanding[w.half] = w.n_slots;
+        ++pend_head;
+        // The safe-post bound moves to the next un-landed window's first listed arrival.
+        if (pend_head != pend_tail) {
+            post_limit = pendq[pend_head & 1].first_listed;
+        } else if (window_first_listed != 0xFFFFFFFFu) {
+            post_limit = window_first_listed;
+        } else {
+            post_limit = 0xFFFFFFFFu;
+        }
+        post_progress_now();
+        return true;
+    };
 
-
+    uint32_t log_n = 0;
     for (uint32_t pass = 0; pass < n_passes; ++pass) {
         const uint32_t pass_row_base = pass * R_MAX;
         const uint32_t pass_rows =
@@ -423,23 +465,25 @@ void kernel_main() {
         }
         row_parity_bits = 0;
         row_seen_bits = 0;
-        for (uint32_t r = 0; r < pass_rows; ++r) {
-            n_pending[r] = 0;
+        for (uint32_t h = 0; h < 2; ++h) {
+            for (uint32_t r = 0; r < pass_rows; ++r) {
+                n_pending[h][r] = 0;
+            }
         }
         cur_pass_rows = pass_rows;
 
         while (true) {
-            // Spin on the next entry's seq word. Before blocking, any progress still unposted
-            // (lazy batching, or pulls of a partial window not yet drained) must be flushed FIRST
-            // -- the leader's next publish can be gated on this worker's posted count (slot
-            // recycling), so spinning while owing progress deadlocks the group.
+            // Poll pending emissions every iteration; when about to block on the next arrival,
+            // close the open window first (the leader's next publish can be gated on our posted
+            // progress, which is bounded by un-emitted windows) and keep polling in the spin.
+            try_emit();
             const uint32_t entry_off = (log_n % log_depth) * log_entry_words;
             invalidate_l1_cache();
             if (log_ptr[entry_off + 2] != log_n + 1) {
-                if (consumed != posted) {
-                    flush_window();
-                }
+                close_window();
                 do {
+                    try_emit();
+                    post_progress_now();
                     invalidate_l1_cache();
                 } while (log_ptr[entry_off + 2] != log_n + 1);
             }
@@ -447,13 +491,12 @@ void kernel_main() {
             const uint32_t leader_slot = log_ptr[entry_off + 1];
             ++log_n;
             if (b == sentinel) {
-                flush_window();
+                close_window();
                 break;
             }
 
             uint32_t listing[32];
             uint32_t n_listing = 0;
-#if !(defined(VSA_PROBE) && VSA_PROBE == 5)
             const uint32_t wd = b >> 5;
             const uint32_t bit = 1u << (b & 31);
             for (uint32_t r = 0; r < pass_rows; ++r) {
@@ -461,53 +504,61 @@ void kernel_main() {
                     listing[n_listing++] = r;
                 }
             }
-#endif
-#if defined(VSA_PROBE) && VSA_PROBE == 6
-            n_listing = 0;  // probe 6: bitmap loop runs, visits suppressed
-#endif
             if (n_listing == 0) {
-                note_consumed();
-                if (window_pulls_pending > 0 && consumed - posted >= 8) {
-                    flush_window();  // a long skip-run must not starve the leader behind a partial window
+                ++consumed;
+                if (consumed - posted >= 4) {
+                    post_progress_now();
                 }
                 continue;
             }
 
-            // Claim a slot in the open window half, flushing first if the half is full and
+            // Claim a slot in the open window half, closing first if the half is full and
             // reclaiming the half's previous credits before its first reuse.
             if (window_slots == half_slots) {
-                flush_window();
+                close_window();
             }
-            if (window_slots == 0 && half_outstanding[half] > 0) {
-                free_cb.wait_front(half_outstanding[half]);
-                free_cb.pop_front(half_outstanding[half]);
-                half_outstanding[half] = 0;
+            if (window_slots == 0) {
+                // A still-pending window on this half owns its slots AND its pending visit
+                // lists: it must emit before the half refills, even when the half has never
+                // been emitted before (half_outstanding == 0 -- guard on the QUEUE, not credits).
+                while (pend_head != pend_tail && pendq[pend_head & 1].half == half) {
+                    try_emit();
+                    post_progress_now();
+                }
+                if (half_outstanding[half] > 0) {
+                    while (!cb_pages_available_at_front(cb_free, half_outstanding[half])) {
+                        try_emit();
+                        post_progress_now();
+                    }
+                    free_cb.wait_front(half_outstanding[half]);
+                    free_cb.pop_front(half_outstanding[half]);
+                    half_outstanding[half] = 0;
+                }
             }
             const uint32_t slot = half * half_slots + window_slots;
 
-            // K rides the local writer (other NoC): send it the leader slot to pull from. Both
-            // pulls are issue-only; the single window-end drain/kack covers them, and progress
-            // posts lazily -- the leader slot is only reused stream_depth arrivals later, and the
-            // pull ISSUE (source read) happens now, so a deferred post cannot race the reuse.
-#if !(defined(VSA_PROBE) && VSA_PROBE == 3)
+            // K rides the local writer (other NoC): send it the leader slot to pull from, tagged
+            // with the open half so its lazy per-half ack can barrier only this window's trids.
             kreq_cb.reserve_back(1);
             {
                 volatile tt_l1_ptr uint32_t* rq =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
                 rq[0] = leader_slot;
                 rq[1] = slot;
+                rq[2] = half;
             }
             kreq_cb.push_back(1);
-            {
-                const uint32_t v_l1_base = v_cb.get_write_ptr();
-                const uint64_t src = get_noc_addr(
-                    leader_x, leader_y, v_l1_base + leader_slot * v_tiles_per_block * v_tile_bytes, noc.get_noc_id());
-                vring.read_addr(src, v_l1_base + slot * v_tiles_per_block * v_tile_bytes,
-                                v_tiles_per_block * v_tile_bytes);
+            issue_pull(half, window_slots, leader_slot, slot);
+            if (window_first_listed == 0xFFFFFFFFu) {
+                window_first_listed = consumed;
+                if (pend_head == pend_tail) {
+                    post_limit = consumed;  // first unconfirmed pull: posts stop here until landed
+                }
             }
-            ++window_pulls_pending;
-#endif
-            note_consumed();
+            ++consumed;
+            if (consumed - posted >= 4) {
+                post_progress_now();
+            }
 
             const uint32_t count = counts_ptr[b];
             const bool ragged = count < block_size;
@@ -521,16 +572,20 @@ void kernel_main() {
 
             const uint32_t entry = slot | (count << 8) | (needs_vmask ? (1u << 15) : 0);
             for (uint32_t i = 0; i < n_listing; ++i) {
-                pending[listing[i]][n_pending[listing[i]]++] = entry;
+                pending[half][listing[i]][n_pending[half][listing[i]]++] = entry;
             }
             ++window_slots;
         }
 
+        // Drain every pending window (the pass's FLUSH messages must follow all its visits).
+        while (pend_head != pend_tail) {
+            try_emit();
+        }
+        post_progress_now();
+
         // FLUSH each pass row with its final state parity.
         for (uint32_t r = 0; r < pass_rows; ++r) {
-#if !(defined(VSA_PROBE) && (VSA_PROBE == 5 || VSA_PROBE == 6))
             ASSERT(row_seen_bits & (1u << r));  // every row lists at least one block
-#endif
             ctrl_cb.reserve_back(1);
             {
                 volatile tt_l1_ptr uint32_t* cp =
@@ -547,4 +602,8 @@ void kernel_main() {
     // writes would otherwise land on the next program's memory (watcher-detected race otherwise).
     noc.async_write_barrier();
     noc_async_atomic_barrier(noc.get_noc_id());
+#if defined(VSA_PROBE) && VSA_PROBE == 9
+    const uint32_t t_total = VSA_TICK() - t_start;
+    DPRINT("VSAT w{} total={} spin={} drain={} ctrl={} pull={}\n", worker_index, t_total, t_spin, t_drain, t_ctrl, t_pull);
+#endif
 }
