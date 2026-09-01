@@ -124,6 +124,7 @@ TT_ALWAYS_INLINE void device_setup()
     ckernel::t6_semaphore_init(ckernel::semaphore::UNPACK_TO_DEST, 0, 1);
     ckernel::t6_semaphore_init(ckernel::semaphore::MATH_DONE, 0, 1);
     ckernel::t6_semaphore_init(ckernel::semaphore::PACK_DONE, 0, 1);
+    ckernel::t6_semaphore_init(ckernel::semaphore::UNPACK_OPERAND_SYNC, 0, 1); // llk_barrier release
 #endif
 }
 
