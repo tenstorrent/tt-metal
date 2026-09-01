@@ -372,8 +372,7 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
             plan.fused_pre_add_replay = true;
         }
     }
-    const bool affine_mcast_core_set_safe =
-        requested_cores == default_core_range(device) || all_cores.bounding_box().size() == num_cores;
+    const bool affine_mcast_core_set_safe = all_cores.bounding_box().size() == num_cores;
     plan.affine_mcast =
         plan.fused_pre_add_replay && num_cores >= 20 && num_tile_rows % num_cores == 0 && affine_mcast_core_set_safe;
 
@@ -1217,6 +1216,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     const CoreRangeSet affine_mcast_sender_cores{CoreRange{affine_mcast_sender_core}};
     const CoreRangeSet affine_mcast_receiver_cores = all_cores.subtract(affine_mcast_sender_cores);
     const CoreRange affine_mcast_bbox = all_cores.bounding_box();
+    TT_FATAL(
+        !affine_mcast || affine_mcast_bbox.size() == num_cores,
+        "LayerNorm affine multicast requires the participating cores to fill their bounding box");
     const CoreCoord affine_mcast_start = device->worker_core_from_logical_core(affine_mcast_bbox.start_coord);
     const CoreCoord affine_mcast_end = device->worker_core_from_logical_core(affine_mcast_bbox.end_coord);
     const CoreCoord affine_mcast_sender_noc = device->worker_core_from_logical_core(affine_mcast_sender_core);
