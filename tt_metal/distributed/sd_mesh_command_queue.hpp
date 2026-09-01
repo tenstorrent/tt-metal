@@ -76,6 +76,13 @@ public:
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
 
     void enable_asynchronous_slow_dispatch();
+
+    // Configure-without-launch mode. While set, enqueue_program writes each program's binaries,
+    // CB configs, runtime args and launch message to L1 but never sends the go signal, so nothing
+    // runs. Lets a reloadable image be captured off L1 without executing it -- and therefore
+    // without the pipeline teardown that capturing via a real run would require.
+    void set_configure_only(bool enable) { configure_only_ = enable; }
+    bool is_configure_only() const { return configure_only_; }
     void disable_asynchronous_slow_dispatch();
     bool is_asynchronous_slow_dispatch_enabled() const { return asynchronous_slow_dispatch_enabled_; }
 
@@ -85,6 +92,7 @@ private:
     std::unordered_map<ChipId, std::vector<std::vector<CoreCoord>>> logical_cores_for_previous_workload_;
 
     bool asynchronous_slow_dispatch_enabled_ = false;
+    bool configure_only_ = false;
 
     std::shared_ptr<ThreadPool> launch_thread_pool_;
     void dispatch_program(const MeshCoordinateRange& coord_range, Program& program, bool blocking);

@@ -174,6 +174,7 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 }
 
 void SDMeshCommandQueue::wait_for_cores_idle() {
+    log_warning(tt::LogMetal, "WAITIDLE map={}", logical_cores_for_previous_workload_.size());
     if (!logical_cores_for_previous_workload_.empty()) {
         // In emulated mode this map is always empty (LaunchProgram is synchronous),
         // so this block is effectively a no-op for emulated devices.
@@ -231,6 +232,18 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
     // workload, not here per-program, so cross-chip sender/receiver programs co-run in one scheduler
     // generation. LaunchProgram / DispatchCompiledProgramToDevice below only register (defer flag set
     // by the outer begin_mesh_dispatch). See tt-emule docs/fiber-engine.md.
+
+    log_warning(tt::LogMetal, "DISPATCH_PROGRAM cfg_only={}", configure_only_);
+    if (configure_only_) {
+        // Configure every device and stop: no go signal, so nothing runs and there is nothing to
+        // wait for. Deliberately does NOT register these cores in
+        // logical_cores_for_previous_workload_ -- a parked program never becomes busy, so a later
+        // dispatch must not wait on it.
+        for (auto* device : local_devices) {
+            tt_metal::experimental::ConfigureProgramWithoutLaunch(device, program);
+        }
+        return;
+    }
 
     // First device: full LaunchProgram (compiles, finalizes, allocates CBs, dispatches)
     tt_metal::detail::LaunchProgram(local_devices[0], program, false);

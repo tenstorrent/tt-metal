@@ -449,6 +449,52 @@ std::map<ChipId, IDevice*> CreateDevices(
     return ret_devices;
 }
 
+void ConfigureProgramWithoutLaunch(IDevice* device, Program& program) {
+    ZoneScoped;
+    // Step logs: this path is only taken while capturing an image, and a hang inside it is
+    // otherwise invisible (the caller is a python-level generic_op with no frames below it).
+    log_warning(tt::LogMetal, "CFGONLY[{}] enter", device->id());
+
+    // Same prologue as LaunchProgram: compile, finalize offsets, write configs/binaries, then
+    // runtime args (configure first -- it allocates the ephemeral scratchpads whose addresses go
+    // out as implicit CRTAs).
+    detail::CompileProgram(device, program);
+    log_warning(tt::LogMetal, "CFGONLY[{}] compiled", device->id());
+    program.impl().finalize_dataflow_buffer_configs();
+    if (!program.impl().is_finalized()) {
+        program.impl().finalize_offsets(device);
+    }
+    log_warning(tt::LogMetal, "CFGONLY[{}] finalized", device->id());
+    detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
+    log_warning(tt::LogMetal, "CFGONLY[{}] configured", device->id());
+    detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
+    log_warning(tt::LogMetal, "CFGONLY[{}] rtargs written", device->id());
+
+    auto device_id = device->id();
+    MetalContext::instance().get_cluster().dram_barrier(device_id);
+    MetalContext::instance().get_cluster().l1_barrier(device_id);
+    log_warning(tt::LogMetal, "CFGONLY[{}] barriers done", device->id());
+
+    // The launch message, and ONLY the launch message: it is what names kernel_config_base and the
+    // per-processor text offsets, so a reader can find the block. send_go=false leaves the go
+    // mailbox untouched, so firmware stays parked and the program never runs.
+    const auto& hal = MetalContext::instance().hal();
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
+         programmable_core_type_index++) {
+        CoreType core_type = hal.get_core_type(programmable_core_type_index);
+        for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+            auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
+            dev_msgs::launch_msg_t local_launch_msg = kg->launch_msg;
+            local_launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
+            auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
+            tt::llrt::write_launch_msg_to_core(
+                device_id, physical_core, local_launch_msg.view(), kg->go_msg.view(), /*send_go=*/false);
+        }
+    }
+    log_warning(tt::LogMetal, "CFGONLY[{}] launch msgs written, done", device_id);
+}
+
 void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
     ZoneScoped;
 
