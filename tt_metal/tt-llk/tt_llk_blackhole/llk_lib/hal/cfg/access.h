@@ -94,9 +94,9 @@ inline __attribute__((always_inline)) std::uint32_t read()
     static_assert(B == Access::MMIO, "value-returning cfg::read() requires Access::MMIO");
     static_assert(F.width <= 32, "field wider than 32b cannot be read through a single value");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
-    static_assert(F.shamt(S) + F.width <= F.wbits, "field crosses a CFG word boundary");
+    static_assert(F.shamt(S) + F.width <= F.word_size, "field crosses a CFG word boundary");
 
-    if constexpr (F.file == RegisterFile::Thread)
+    if constexpr (F.scope == RegisterScope::Thread)
     {
         return (detail::read_thread_word_mmio<Target, F.addr32(S)>() & F.mask(S)) >> F.shamt(S);
     }
@@ -120,7 +120,7 @@ inline __attribute__((always_inline)) std::uint32_t read_word()
     static_assert(B == Access::MMIO, "value-returning cfg::read_word() requires Access::MMIO");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
 
-    if constexpr (F.file == RegisterFile::Thread)
+    if constexpr (F.scope == RegisterScope::Thread)
     {
         static_assert(F.addr32(S) + WordOffset < detail::ThreadCfgWordCount, "thread CFG word offset crosses the selected thread bank");
         return detail::read_thread_word_mmio<Target, F.addr32(S) + WordOffset>() & 0xffffu;
@@ -142,7 +142,7 @@ template <Access B, const Field& F, Sec S, std::uint32_t WordOffset = 0>
 inline __attribute__((always_inline)) std::uint32_t read_word(const volatile std::uint32_t* tt_reg_ptr cfg)
 {
     static_assert(B == Access::MMIO, "an already-resolved CFG pointer is valid only for the Access::MMIO backend");
-    static_assert(F.file == RegisterFile::State, "Access::MMIO targets the state CFG");
+    static_assert(F.scope == RegisterScope::State, "Access::MMIO targets the state CFG");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
 
     return cfg[F.addr32(S) + WordOffset];
@@ -165,7 +165,7 @@ inline __attribute__((always_inline)) void read(detail::GprOperand<GprIndex, Siz
     static_assert(A == Access::TensixCfgUnit, "RDCFG requires Access::TensixCfgUnit");
     static_assert(GprIndex != detail::DynamicGprIndex, "RDCFG requires a compile-time GPR index: use gpr<Index>()");
     static_assert(Size == GprTransferSize::Bits32, "RDCFG supports 32-bit reads only");
-    static_assert(F.file == RegisterFile::State, "RDCFG cannot read thread CFG (SETC16) fields");
+    static_assert(F.scope == RegisterScope::State, "RDCFG cannot read thread CFG (SETC16) fields");
     static_assert(F.width <= 32, "field wider than 32b cannot be selected through a single CFG word");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
     static_assert(F.shamt(S) + F.width <= 32, "field crosses a CFG word boundary");
@@ -265,7 +265,7 @@ template <Access A, const Field& Anchor, Sec S, std::uint32_t WordOffset = 0>
 inline __attribute__((always_inline)) void write(volatile std::uint32_t* tt_reg_ptr cfg, const std::uint32_t value)
 {
     static_assert(A == Access::MMIO, "an already-resolved CFG pointer requires Access::MMIO");
-    static_assert(Anchor.file == RegisterFile::State, "Access::MMIO targets the state CFG");
+    static_assert(Anchor.scope == RegisterScope::State, "Access::MMIO targets the state CFG");
     static_assert(static_cast<std::uint32_t>(S) < Anchor.count, "section index out of range for this register");
 
     cfg[Anchor.addr32(S) + WordOffset] = value;
@@ -400,7 +400,7 @@ inline __attribute__((always_inline)) void write(const std::uint32_t (&values)[A
 /**
  * @brief Group and write field assignments by physical CFG word.
  *
- * Assignments with the same register file and resolved address are composed
+ * Assignments with the same register scope and resolved address are composed
  * even when they are not adjacent. Distinct words are emitted in the order
  * their addresses first appear. A Tensix group made entirely from constant
  * assignments uses TTI instructions; a group containing a runtime value uses
@@ -464,7 +464,7 @@ inline __attribute__((always_inline)) void write(const First& first, const Rest&
  * @tparam F  reference to a generated `static constexpr Field` (e.g. Reg::Field).
  * @tparam S: Section (@ref Sec); compilation fails when it is outside F.count.
  *
- * @note SETC16 (Access::TensixCfgUnit on the Thread file) writes a whole 16-bit thread
+ * @note SETC16 (Access::TensixCfgUnit on the Thread scope) writes a whole 16-bit thread
  *       word and has no per-field RMW; for a word packing several fields,
  *       compose the value and write it whole (as addr_mod_t does).
  */
@@ -481,7 +481,7 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
 
     if constexpr (A == Access::MMIO)
     {
-        static_assert(F.file == RegisterFile::State, "RISC writes target state CFG; use Access::TensixCfgUnit for thread CFG");
+        static_assert(F.scope == RegisterScope::State, "RISC writes target state CFG; use Access::TensixCfgUnit for thread CFG");
         if constexpr (F.width >= 32)
         {
             ckernel::get_cfg_pointer()[a] = value; // whole 32-bit word
@@ -493,7 +493,7 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
     }
     else // Access::TensixCfgUnit
     {
-        if constexpr (F.file == RegisterFile::Thread)
+        if constexpr (F.scope == RegisterScope::Thread)
         {
             TT_SETC16(a, value << F.shamt(S));
         }
@@ -525,7 +525,7 @@ inline __attribute__((always_inline)) void write()
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
     static_assert(Value <= ((std::uint64_t {1} << F.width) - 1u), "value exceeds field width");
 
-    if constexpr (F.file == RegisterFile::Thread)
+    if constexpr (F.scope == RegisterScope::Thread)
     {
         TTI_SETC16(F.addr32(S), (Value << F.shamt(S)) & 0xffffu);
     }
@@ -533,7 +533,7 @@ inline __attribute__((always_inline)) void write()
     {
         constexpr std::uint32_t wr = Value << F.shamt(S);
         constexpr std::uint32_t m  = F.mask(S);
-        detail::write_constant_word<F.file, F.addr32(S), m, wr>();
+        detail::write_constant_word<F.scope, F.addr32(S), m, wr>();
     }
 }
 
