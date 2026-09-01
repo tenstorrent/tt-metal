@@ -141,6 +141,13 @@ def _gather_kv(tt: ttnn.Tensor, mesh_device) -> torch.Tensor:
     return full[:, :1][0, 0]  # TP replica 0 -> [chunk_size_global, D]
 
 
+def _ci_unsupported_param_combos_gate_mode(**params):
+    """host_all is a local diagnostic aid; CI validates the production device gate only."""
+    if not (params["is_ci_env"] or params["is_ci_v2_env"]):
+        return False
+    return params["gate_fallback_mode"] != GateComputeMode.DEVICE_FP32
+
+
 def run_chunked_block(
     variant, config, mesh_device, weight_cache_path, n_chunks, layer_idx, gate_fallback_mode, num_links, topology
 ):
@@ -357,7 +364,7 @@ def run_chunked_block(
 @pytest.mark.parametrize("n_chunks", [1, 2, 5, 10, 11], ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks11"])
 @pytest.mark.parametrize(
     "layer_idx, gate_fallback_mode",
-    [(2, None), (3, GateComputeMode.DEVICE)],
+    [(2, None), (3, GateComputeMode.DEVICE_FP32)],
     ids=["dense", "moe-gate_device"],
 )
 @pytest.mark.parametrize(
@@ -814,7 +821,7 @@ def run_chunked_block_padded(
 @pytest.mark.parametrize("splits", [[1024, 4096], _PADDED_FULL_55K], ids=["1k+4k", "full55k"])
 @pytest.mark.parametrize(
     "layer_idx, gate_fallback_mode",
-    [(2, None), (3, GateComputeMode.DEVICE)],
+    [(2, None), (3, GateComputeMode.DEVICE_FP32)],
     ids=["dense", "moe-gate_device"],
 )
 @pytest.mark.parametrize(
@@ -861,6 +868,7 @@ def test_ds_prefill_block_chunked_padded(
 # These skip until the Kimi golden trace lands (set PREFILL_TRACE_DIR; see tt/runners/adapters/).
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_gate_mode)
 @pytest.mark.parametrize("n_chunks", [1, 2, 5, 10, 11], ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks11"])
 @pytest.mark.parametrize(
     "layer_idx, gate_fallback_mode",
@@ -908,6 +916,7 @@ def test_kimi_prefill_block_chunked(
     )
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_gate_mode)
 @pytest.mark.parametrize("splits", [[1024, 4096], _PADDED_FULL_55K], ids=["1k+4k", "full55k"])
 @pytest.mark.parametrize(
     "layer_idx, gate_fallback_mode",

@@ -28,21 +28,19 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 
 
 class GateComputeMode(Enum):
-    """Controls which parts of the gate computation fall back to host (torch).
+    """Which implementation of the gate to run.
 
-    The gate has two stages: matmul (x @ W_gate) and grouped_gate (topk routing).
-    Each can independently run on device (TTNN) or host (torch).
-    The device gate has two precision variants: bf16 (default) and fp32.
+    The gate has two stages: matmul (x @ W_gate) and grouped_gate (topk routing). DEVICE_FP32 runs
+    both on device and is the only mode production uses. HOST_ALL runs both in torch: it is a local
+    diagnostic reference (exact top-k) for bisecting a device-gate failure, and CI does not collect
+    it -- see the uncollect_if predicates in the deepseek_v3_d_p tests.
 
     The device gate routing rule is selected from the model config: the grouped-topk
     op handles both cases, collapsing to a plain top-k when there is a single expert
     group (n_expert_groups == 1, e.g. Kimi) and using grouped routing otherwise.
     """
 
-    DEVICE = "device"  # matmul device, gate device (bf16)
     DEVICE_FP32 = "device_fp32"  # matmul device, gate device (fp32)
-    HOST_GROUPED_GATE = "host_grouped_gate"  # matmul device, grouped gate host
-    HOST_MATMUL = "host_matmul"  # matmul host, grouped gate device (bf16)
     HOST_ALL = "host_all"  # matmul host, grouped gate host
     # DeepSeek-V4 hash routing: expert indices come from a static tid2eid[input_ids] table
     # (not top-k); weights are still score_func(x@W) gathered at those indices, normalized, scaled.
@@ -51,9 +49,6 @@ class GateComputeMode(Enum):
     # DeepSeek-V4 hash routing fully on device: matmul device, moe_hash_gate device. The tid2eid[input_ids]
     # lookup is fused into the op's reader kernel; weights reuse the shared activation/normalize/scale path.
     HASH_DEVICE = "hash_device"
-    # GPT-OSS routing: top-k on (x@W + bias) raw logits, then softmax over the selected top-k.
-    GPT_HOST = "gpt_host"  # matmul device, topk+softmax on host
-    GPT_DEVICE = "gpt_device"  # matmul device, ttnn.topk + ttnn.softmax on device
 
 
 # Per-chip prefill sequence the production deployment runs at, and the depth the MoE/gate tests
@@ -441,7 +436,7 @@ class TtMoEGatePrefill(LightweightModule):
 
         Bias handling: Cache stores unbroadcasted (n_experts,) format. On load,
         returns unbroadcasted bias for caller to broadcast to (sp_dim, n_experts).
-        This is required by ttnn.experimental.deepseek_grouped_gate kernel.
+        This is required by the ttnn.experimental.deepseek_prefill.moe_grouped_topk kernel.
 
         Returns:
             If device=None (cache mode): None
@@ -481,7 +476,7 @@ class TtMoEGatePrefill(LightweightModule):
             cache_file_name=_cache_name("weight"),
         )
 
-        # Cache bias unbroadcasted (required by deepseek_grouped_gate)
+        # Cache bias unbroadcasted (required by moe_grouped_topk)
         bias_tt = ttnn.as_tensor(
             torch_bias,
             device=None,  # Always load to host first
@@ -543,7 +538,7 @@ class TtMoEGatePrefill(LightweightModule):
         mesh_device,
         weight: torch.Tensor = None,
         bias: torch.Tensor = None,
-        fallback_mode: GateComputeMode = GateComputeMode.DEVICE,
+        fallback_mode: GateComputeMode = GateComputeMode.DEVICE_FP32,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
         is_balanced: bool = False,
@@ -600,7 +595,7 @@ class TtMoEGatePrefill(LightweightModule):
         torch_weight_fallback = weights["torch_weight"]
         torch_bias_fallback = weights["torch_bias"]
 
-        # Broadcast bias for deepseek_grouped_gate kernel
+        # Broadcast bias for the moe_grouped_topk kernel
         bias_torch = ttnn.to_torch(bias_tt)
         del bias_tt
         bias_broadcasted = bias_torch.repeat(config.sp_dim).view(config.sp_dim, -1)
@@ -613,12 +608,12 @@ class TtMoEGatePrefill(LightweightModule):
         )
 
         # Torch copies for host fallback paths — keep in HF convention (n_experts, dim)
-        if fallback_mode not in (GateComputeMode.DEVICE, GateComputeMode.DEVICE_FP32):
+        if fallback_mode != GateComputeMode.DEVICE_FP32:
             self.torch_weight = torch_weight_fallback  # (n_experts, dim) - HF format
             self.torch_bias = torch_bias_fallback  # (n_experts,)
 
-        # Reference model for host grouped-gate paths
-        if fallback_mode in (GateComputeMode.HOST_GROUPED_GATE, GateComputeMode.HOST_ALL):
+        # Reference model for the host gate path
+        if fallback_mode == GateComputeMode.HOST_ALL:
             from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 
             self.ref_config = SimpleNamespace(
@@ -676,22 +671,6 @@ class TtMoEGatePrefill(LightweightModule):
                 self.mesh_device,
                 config=ttnn.MeshComposerConfig(
                     dims=(0, -1),  # SP on axis 0, TP on axis 1
-                ),
-            ),
-        )
-
-    def _compose_logits_to_host(self, logits: ttnn.Tensor) -> torch.Tensor:
-        """Compose SP-sharded logits (TP-replicated after all_reduce) to host."""
-        return ttnn.to_torch(
-            logits,
-            mesh_composer=ttnn.create_mesh_composer(
-                self.mesh_device,
-                config=ttnn.MeshComposerConfig(
-                    dims=(0, -1),
-                    mesh_shape_override=ttnn.MeshShape(
-                        self.mesh_device.shape[0],  # concat SP shards
-                        1,  # collapse TP replicas
-                    ),
                 ),
             ),
         )
@@ -835,20 +814,6 @@ class TtMoEGatePrefill(LightweightModule):
         """Compose x to host, run gate matmul in torch, return host logits."""
         host_x = self._compose_x_to_host(x)
         return F.linear(host_x.float(), self.torch_weight.float())
-
-    def _device_grouped_gate(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Run deepseek_grouped_gate on device."""
-        logger.debug(f"[MoeGate] _device_grouped_gate: logits.shape={logits.shape}, bias.shape={self.bias.shape}")
-        return ttnn.experimental.deepseek_grouped_gate(
-            logits,
-            self.bias,
-            n_groups=self.config.n_expert_groups,
-            summed_experts_per_group=self.config.n_expert_groups // self.config.n_limited_groups,
-            topk_groups=self.config.n_limited_groups,
-            n_activated_experts=self.config.n_activated_experts,
-            route_scale=self.config.route_scale,
-            epsilon=1e-20,
-        )
 
     def build_padding_config(self, actual_isl: int, padding_side: str = "right", actual_start: int = 0) -> ttnn.Tensor:
         """Create the per-SP-shard [local_num_real_tokens, pad_side] config for moe_grouped_topk.
@@ -1118,35 +1083,6 @@ class TtMoEGatePrefill(LightweightModule):
             self.config.n_activated_experts,
         )
 
-    def _device_gpt_gate(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """GPT-OSS routing on device: top-k on (logits + bias), softmax over the selected top-k.
-
-        Unlike the DeepSeek grouped gate, the bias is folded into the logits before selection and the
-        weights are a softmax over just the chosen experts (no per-expert activation / sum-normalize).
-        ttnn.topk expects a tiled, interleaved input, so the L1 all-reduce output is normalized first.
-        """
-        logits_tiled = ttnn.to_memory_config(logits, ttnn.DRAM_MEMORY_CONFIG)
-        biased = ttnn.add(logits_tiled, self.bias)
-        # sorted=True so the top-k order matches torch.topk (descending) in the golden, keeping the
-        # element-wise scores PCC aligned.
-        values, indices = ttnn.topk(biased, k=self.config.n_activated_experts, dim=-1, sorted=True)
-        scores = ttnn.softmax(values, dim=-1, numeric_stable=True)
-        ttnn.deallocate(biased)
-        ttnn.deallocate(values)
-        ttnn.deallocate(logits_tiled)
-        return scores, indices
-
-    def _host_gpt_gate(self, host_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """GPT-OSS routing on host. Returns (indices, scores).
-
-        Mirrors the reference GptOssTopKRouter: top-k on (logits + bias) raw logits, then softmax over
-        the selected top-k values.
-        """
-        biased = host_logits.float() + self.torch_bias.float()
-        top_vals, top_idx = torch.topk(biased, self.config.n_activated_experts, dim=-1)
-        scores = torch.softmax(top_vals, dim=-1)
-        return top_idx, scores
-
     # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
@@ -1164,32 +1100,17 @@ class TtMoEGatePrefill(LightweightModule):
         logger.debug(f"[MoeGate] fallback_mode={mode.value}")
 
         # ---- Phase 1: Logits (matmul) ----
-        if mode in (
-            GateComputeMode.DEVICE,
-            GateComputeMode.DEVICE_FP32,
-            GateComputeMode.HOST_GROUPED_GATE,
-            GateComputeMode.HASH_DEVICE,
-            GateComputeMode.GPT_HOST,
-            GateComputeMode.GPT_DEVICE,
-        ):
+        if mode in (GateComputeMode.DEVICE_FP32, GateComputeMode.HASH_DEVICE):
             logits = self._device_matmul(x)
         elif mode == GateComputeMode.HASH_HOST:
             pass  # the reference HashRouter computes logits from composed host x in Phase 2
-        else:  # HOST_MATMUL, HOST_ALL
+        else:  # HOST_ALL
             host_logits = self._host_matmul(x)
 
         # ---- Phase 2: Grouped gate ----
         # The device gate kernels select the routing rule from n_expert_groups: with a single expert
         # group (n_expert_groups == 1, e.g. Kimi) the grouped-topk op collapses to a plain top-k.
-        single_group = self.config.n_expert_groups == 1
-        if mode == GateComputeMode.DEVICE:
-            # The bf16 grouped gate (deepseek_grouped_gate) only supports the multi-group DeepSeek
-            # shape; single-group models route through moe_grouped_topk (fp32), which handles n_groups == 1.
-            ttnn_scores, ttnn_top_k_experts_indices = (
-                self._device_grouped_gate_fp32(logits) if single_group else self._device_grouped_gate(logits)
-            )
-
-        elif mode == GateComputeMode.DEVICE_FP32:
+        if mode == GateComputeMode.DEVICE_FP32:
             ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate_fp32(
                 logits,
                 actual_isl=actual_isl,
@@ -1197,16 +1118,6 @@ class TtMoEGatePrefill(LightweightModule):
                 padding_config=padding_config,
                 actual_start=actual_start,
             )
-
-        elif mode == GateComputeMode.HOST_GROUPED_GATE:
-            host_logits = self._compose_logits_to_host(logits)
-            host_indices, host_scores = self._host_grouped_gate(host_logits)
-            ttnn_scores = self._host_scores_to_device(host_scores)
-            ttnn_top_k_experts_indices = self._host_indices_to_device(host_indices)
-
-        elif mode == GateComputeMode.HOST_MATMUL:
-            logits = self._host_logits_to_device(host_logits)
-            ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate(logits)
 
         elif mode == GateComputeMode.HOST_ALL:
             host_indices, host_scores = self._host_grouped_gate(host_logits)
@@ -1233,15 +1144,6 @@ class TtMoEGatePrefill(LightweightModule):
                 padding_config=padding_config,
                 actual_start=actual_start,
             )
-
-        elif mode == GateComputeMode.GPT_DEVICE:
-            ttnn_scores, ttnn_top_k_experts_indices = self._device_gpt_gate(logits)
-
-        elif mode == GateComputeMode.GPT_HOST:
-            host_logits = self._compose_logits_to_host(logits)
-            host_indices, host_scores = self._host_gpt_gate(host_logits)
-            ttnn_scores = self._host_scores_to_device(host_scores)
-            ttnn_top_k_experts_indices = self._host_indices_to_device(host_indices)
 
         return (
             ttnn_scores,

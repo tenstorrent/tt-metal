@@ -465,7 +465,7 @@ def run_model(
         if layer_type == "dense":
             pcc_threshold = thresholds.dense
         else:
-            if gate_fallback_mode == GateComputeMode.DEVICE:
+            if gate_fallback_mode == GateComputeMode.DEVICE_FP32:
                 pcc_threshold = thresholds.moe_gate_device
             else:
                 pcc_threshold = thresholds.moe_gate_host
@@ -529,7 +529,7 @@ def _ci_unsupported_param_combos(**params):
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
-    [("dense", None), ("moe", GateComputeMode.DEVICE), ("moe", GateComputeMode.HOST_ALL)],
+    [("dense", None), ("moe", GateComputeMode.DEVICE_FP32), ("moe", GateComputeMode.HOST_ALL)],
     # The host-gate id omits the `moe` token on purpose: CI selects the device gate via count-guarded
     # `-k "... and moe and ..."`, so a host id carrying `moe` would be collected too
     # and break the count. It is a local sub-256-expert aid (CI-skipped by enum); select via `-k host_gate`.
@@ -611,7 +611,7 @@ def test_ds_prefill_block(
         pcc_validation
         and not determinism_check
         and layer_type == "moe"
-        and gate_fallback_mode == GateComputeMode.DEVICE
+        and gate_fallback_mode == GateComputeMode.DEVICE_FP32
         and is_balanced
         and device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D
         and tuple(mesh_device.shape) == (2, 4)

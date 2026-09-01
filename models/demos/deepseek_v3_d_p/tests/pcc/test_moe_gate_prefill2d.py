@@ -18,8 +18,6 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
-from models.demos.deepseek_v3_d_p.reference.gpt_oss.modeling_gpt_oss import GptOssTopKRouter
-from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7.modeling_minimax_m2 import MiniMaxM2SparseMoeBlock
@@ -63,7 +61,6 @@ GATE_MODELS = {
     "kimi_k3": KimiK3Config,
     "glm_5_2": GLM52Config,
     "minimax_m2_7": MiniMaxM27Config,
-    "gpt_oss_120b": GptOss120BConfig,
     "dsv4_pro": DeepSeekV4ProConfig,
     "dsv4_flash": DeepSeekV4FlashConfig,
 }
@@ -99,11 +96,12 @@ class _RealGateSource(NamedTuple):
     """Where a model's real router weights live, and under which HF key layout.
 
     The correction bias is loaded at the weight dtype (bf16) for every source, and there is no knob to
-    widen it: the device gate op requires a bf16 bias, TtMoEGatePrefill caches it as bf16 and rebuilds
-    its host-fallback torch_bias from that cache, and this test's golden downcasts the whole reference
-    router to bf16. A wider host bias would therefore not reach the device at all, and under HOST_ALL
-    it would only desynchronize the two sides at exactly the top-k tie-break the recall thresholds
-    were calibrated against.
+    widen it: TtMoEGatePrefill builds its device bias as bf16 unconditionally and rebuilds its
+    host-fallback torch_bias from that cache, and this test's golden downcasts the whole reference
+    router to bf16. (moe_grouped_topk itself would take an fp32 bias -- the gate does not offer it.)
+    A wider host bias would therefore not reach the device at all, and under HOST_ALL it would only
+    desynchronize the two sides at exactly the top-k tie-break the recall thresholds were calibrated
+    against.
     """
 
     env_var: str
@@ -239,6 +237,7 @@ GALAXY_TP4_MESH_CONFIG = pytest.param(
 
 # (gate_model id, gate compute mode). Sigmoid models (V3/Kimi) exercise both the host and on-device
 # gates; V4 (sqrtsoftplus) runs the regular gate on device, where the kernel applies the activation.
+# HOST_ALL is a local diagnostic only -- _ci_unsupported_param_combos_forward_pass prunes it on CI.
 REGULAR_GATE_CASES = [
     pytest.param("dsv3", GateComputeMode.HOST_ALL, id="dsv3-host_all"),
     pytest.param("dsv3", GateComputeMode.DEVICE_FP32, id="dsv3-device_fp32"),
@@ -250,8 +249,6 @@ REGULAR_GATE_CASES = [
     pytest.param("glm_5_2", GateComputeMode.DEVICE_FP32, id="glm_5_2-device_fp32"),
     pytest.param("minimax_m2_7", GateComputeMode.HOST_ALL, id="minimax_m2_7-host_all"),
     pytest.param("minimax_m2_7", GateComputeMode.DEVICE_FP32, id="minimax_m2_7-device_fp32"),
-    pytest.param("gpt_oss_120b", GateComputeMode.GPT_HOST, id="gpt_oss_120b-gpt_host"),
-    pytest.param("gpt_oss_120b", GateComputeMode.GPT_DEVICE, id="gpt_oss_120b-gpt_device"),
     pytest.param("dsv4_pro", GateComputeMode.DEVICE_FP32, id="dsv4_pro-device_fp32"),
     pytest.param("dsv4_flash", GateComputeMode.DEVICE_FP32, id="dsv4_flash-device_fp32"),
 ]
@@ -396,30 +393,21 @@ def _ci_unsupported_param_combos_forward_pass(**params):
     return False
 
 
-def _reference_topk(config, gate_model, gate_fallback_mode, gate_w, torch_input):
+def _ci_unsupported_param_combos_hash_gate(**params):
+    """HASH_HOST is a local diagnostic; CI covers the on-device hash gate only."""
+    if not (params["is_ci_env"] or params["is_ci_v2_env"]):
+        return False
+    return params["gate_compute_mode"] != GateComputeMode.HASH_DEVICE
+
+
+def _reference_topk(config, gate_model, gate_w, torch_input):
     """Golden top-k indices and scores from each model's own reference router.
 
-    The routing rule is not uniform across these models -- GPT-OSS takes top-k on biased logits
-    then softmaxes the selection, MiniMax sum-normalizes unbiased sigmoid, V4 uses sqrtsoftplus,
-    and V3/Kimi use the grouped noaux_tc gate -- so each dispatches to the upstream implementation
-    rather than to a reimplementation here.
+    The routing rule is not uniform across these models -- MiniMax sum-normalizes unbiased sigmoid,
+    V4 uses sqrtsoftplus, and V3/Kimi use the grouped noaux_tc gate -- so each dispatches to the
+    upstream implementation rather than to a reimplementation here.
     """
-    if gate_fallback_mode in (GateComputeMode.GPT_HOST, GateComputeMode.GPT_DEVICE):
-        # GPT-OSS golden from the actual reference router: top-k on (x@W + bias), then softmax over the
-        # selected top-k values. torch.topk (sorted=True, descending) matches _device_gpt_gate's order,
-        # so no reordering is needed for the position-wise scores PCC.
-        ref_config = SimpleNamespace(
-            num_experts_per_tok=config.n_activated_experts,
-            num_local_experts=config.n_routed_experts,
-            hidden_size=config.dim,
-        )
-        router = GptOssTopKRouter(ref_config)
-        router.weight.data = gate_w["weight"].float()  # (n_experts, dim), HF layout
-        router.bias.data = gate_w["e_score_correction_bias"].float()
-        router.eval()
-        with torch.no_grad():
-            _, reference_topk_scores, reference_topk_indices = router(torch_input.float())
-    elif gate_model == "minimax_m2_7":
+    if gate_model == "minimax_m2_7":
         # MiniMax golden from the actual reference routing (route_tokens_to_experts): sigmoid, add
         # correction bias for selection, top-k, gather unbiased sigmoid, sum-normalize (no route scale).
         # Called unbound with a duck-typed self so the 256-expert block is never constructed.
@@ -516,9 +504,7 @@ def test_forward_pass(
     # Reference forward pass: V4 (sqrtsoftplus) routes through the activation-parametrized grouped
     # gate (single group -> plain top-k, matching the V4 reference router); V3/Kimi use the V3 gate.
     reference_logits = torch_input @ gate_w["weight"].T
-    reference_topk_indices, reference_topk_scores = _reference_topk(
-        config, gate_model, gate_fallback_mode, gate_w, torch_input
-    )
+    reference_topk_indices, reference_topk_scores = _reference_topk(config, gate_model, gate_w, torch_input)
     tt_input = _shard_gate_input(config, mesh_device, torch_input)
 
     tt_model = TtMoEGatePrefill(
@@ -534,13 +520,6 @@ def test_forward_pass(
     # set; on-device modes are looser because bf16 matmul shifts near-tie top-k selection and weights.
     if gate_fallback_mode == GateComputeMode.HOST_ALL:
         recall_threshold = 0.997
-        logits_pcc_threshold = 0.997
-        scores_pcc_threshold = 0.99
-    elif gate_fallback_mode == GateComputeMode.GPT_HOST:
-        # GPT_HOST runs the matmul on device (bf16) and only the top-k/softmax on host, so top-k
-        # selection recall is bf16-limited like the on-device modes, while the softmax weights (given
-        # the selection) stay exact and keep the tight scores threshold.
-        recall_threshold = 0.95
         logits_pcc_threshold = 0.997
         scores_pcc_threshold = 0.99
     else:
@@ -567,12 +546,14 @@ def test_forward_pass(
 
 # Hash gate compute modes: HASH_HOST reuses the reference HashRouter on host and ships results to
 # device; HASH_DEVICE runs the fully on-device moe_hash_gate (fused tid2eid[input_ids] lookup).
+# Only HASH_DEVICE runs in CI -- HASH_HOST is the local diagnostic half of the pair.
 HASH_GATE_MODES = [
     pytest.param(GateComputeMode.HASH_HOST, id="hash_host"),
     pytest.param(GateComputeMode.HASH_DEVICE, id="hash_device"),
 ]
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_hash_gate)
 @pytest.mark.parametrize("gate_model", ["dsv4_pro", "dsv4_flash"])
 @pytest.mark.parametrize("gate_compute_mode", HASH_GATE_MODES)
 @pytest.mark.parametrize(
@@ -654,11 +635,9 @@ def test_hash_gate_forward_pass(
     )
 
 
-# Only the device modes run the gate matmul on device, and covering that program config is the
+# Only the device mode runs the gate matmul on device, and covering that program config is the
 # entire point of the interleaved TP=1 sweep, so the host-side cases are filtered out.
-DEVICE_GATE_CASES = [
-    case for case in REGULAR_GATE_CASES if case.values[1] in (GateComputeMode.DEVICE_FP32, GateComputeMode.GPT_DEVICE)
-]
+DEVICE_GATE_CASES = [case for case in REGULAR_GATE_CASES if case.values[1] == GateComputeMode.DEVICE_FP32]
 
 
 @pytest.mark.parametrize("gate_model, gate_fallback_mode", DEVICE_GATE_CASES)
@@ -680,10 +659,11 @@ def test_forward_pass_interleaved(mesh_device, num_links, topology, gate_model, 
     K == in0_block_w and a single-column shard grid), so the sharded cases cannot cover the config the
     deployment runs.
 
-    The width is also held un-rounded (tile_align_width=False), which only GPT-OSS notices: its
-    2880 / 4 = 720 is 22.5 tiles, and the other cases here round it to 736 so an L1 shard width stays
-    whole tiles. An interleaved input has no such constraint, so this case runs the raw deployed 720
-    and gate_mm_config_key resolves it to the tuned 23-K-tile entry the same way production does.
+    The width is also held un-rounded (tile_align_width=False). That is inert for every model here
+    today -- each one's EMB_SIZE / 4 is already a whole number of tiles -- and is kept for the case a
+    height-sharded run cannot express: an L1 shard width must be whole tiles, so those cases round up,
+    while an interleaved input has no such constraint and can run a per-device width that is not a
+    tile multiple, which is what gate_mm_config_key would then have to resolve.
     """
     random.seed(42)
     torch.manual_seed(42)
@@ -704,9 +684,7 @@ def test_forward_pass_interleaved(mesh_device, num_links, topology, gate_model, 
     gate_w = create_gate_weights(config.n_routed_experts, config.dim)
     torch_input = _make_gate_input(config, config.sp_dim * n_sp_devices, allow_real_input=False)
     reference_logits = torch_input @ gate_w["weight"].T
-    reference_topk_indices, reference_topk_scores = _reference_topk(
-        config, gate_model, gate_fallback_mode, gate_w, torch_input
-    )
+    reference_topk_indices, reference_topk_scores = _reference_topk(config, gate_model, gate_w, torch_input)
 
     tt_model = TtMoEGatePrefill(
         config,
