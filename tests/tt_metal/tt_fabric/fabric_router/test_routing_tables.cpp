@@ -8,8 +8,10 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
 #include <algorithm>
+#include <cstdlib>
 #include <optional>
 #include <set>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <yaml-cpp/yaml.h>
@@ -2268,6 +2270,14 @@ TEST_F(ControlPlaneFixture, TestBlitzDecodePipelineBuilder) {
 //    the same direction as extra planes instead of being split across opposite directions,
 //  - the inter-mesh ring closes, including the mesh 3 -> mesh 0 loopback.
 TEST_F(ControlPlaneFixture, Test2x2StageRingPipelineOnSingleGalaxy) {
+    // Only meaningful with the 4-stage 2x2 pipeline-ring MGD; broad fixture filters (e.g.
+    // ControlPlaneFixture.*SingleGalaxy*) also run this against unrelated mocks.
+    const char* mgd_path_env = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    if (mgd_path_env == nullptr ||
+        std::string_view(mgd_path_env).find("2x2_ring_4stage_ring") == std::string_view::npos) {
+        GTEST_SKIP() << "Requires the single_galaxy_2x2_ring_4stage_ring MGD via --mesh-graph-descriptor";
+    }
+
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
@@ -2330,6 +2340,14 @@ TEST_F(ControlPlaneFixture, Test2x2StageRingPipelineOnSingleGalaxy) {
 // routers (Z pairs only with Z, and a Z label reads identically on both ends of a cable, so the
 // deadlock-avoidance setting can never mismatch across it).
 TEST_F(ControlPlaneFixture, Test2x2StageRingForcedOntoZByConfigTorus) {
+    // Only meaningful with the LINE,LINE 4-stage 2x2 pipeline-ring MGD; guard against broad
+    // fixture filters running this with unrelated mocks (where TORUS_XY may not even be valid).
+    const char* mgd_path_env = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    if (mgd_path_env == nullptr ||
+        std::string_view(mgd_path_env).find("2x2_line_4stage_ring") == std::string_view::npos) {
+        GTEST_SKIP() << "Requires the single_galaxy_2x2_line_4stage_ring MGD via --mesh-graph-descriptor";
+    }
+
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
