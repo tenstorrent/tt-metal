@@ -1368,6 +1368,14 @@ class MiniMaxH3Pipeline:
                 latent_channels=config["latent_channels"],
                 num_attention_heads=config["num_attention_heads"],
                 mesh_device=self.mesh_device,
+                # One step off the accurate default, measured at the production 5.17 s shape:
+                # full/tap 796 ms @ mean PCC 99.9989% -> weight/tap 565 ms @ 99.9785% -- 20x
+                # inside the encode gate (0.99 / rel RMSE 0.12). Not further: audio condition
+                # rows run clean at t = 1.0 with no fp16 round trip, so encoder error feeds the
+                # DiT directly, and the cheaper settings (off/tap 438 ms @ 99.92%) stay unproven
+                # until the ref2va e2e audio bars can run. The device-weight cache key carries
+                # `weights_variant(split_mode, ...)`, so this cannot cross-load with "full" bytes.
+                split_mode="weight",
             )
 
             def read_state() -> dict[str, torch.Tensor]:
