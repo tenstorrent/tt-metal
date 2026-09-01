@@ -65,9 +65,9 @@
   cmd: ./build/test/tt_metal/unit_tests_api --gtest_filter='KvChunkAddressTable*'
   skus:
     wh_n150_civ2:
-      timeout: 3
+      timeout: 2
     bh_p150b_civ2:
-      timeout: 3
+      timeout: 2
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
