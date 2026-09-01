@@ -1522,6 +1522,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         block_size = self._paged_prefill_block_size(kv_cache[0])
         aligned = []
         for i, (num_cached, seq_len) in enumerate(zip(num_cached_per_user, prompt_lens)):
+            if int(num_cached) == 0:
+                # Not a resume. Callers pass a zero-filled start_pos for an
+                # ordinary prefill, so this is the common path and must not
+                # require the model to describe an alignment it never uses.
+                aligned.append(0)
+                continue
             floored = (int(num_cached) // block_size) * block_size
             # The alignment depends on the padded suffix length, which depends on
             # the offset, so it has to settle: flooring lengthens the suffix, a
