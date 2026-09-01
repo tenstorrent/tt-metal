@@ -345,7 +345,7 @@ struct FusedRingGate {
     uint32_t shard_dir[max_ring_size];  // shard -> direction semaphore index
     uint32_t shard_val[max_ring_size];  // shard -> wait threshold
 
-    // recv has already consumed the 6-arg fused block (waiting for the op signal) and advanced argidx; take the
+    // recv has already consumed the fused block (waiting for the op signal) and advanced argidx; take the
     // k_local addr from the next slot and leave argidx at the band-perm base.
     FusedRingGate(const RingSDPAOpReceiver& recv, uint32_t& argidx) :
         ring_index(recv.seq.ring_index),
@@ -514,21 +514,35 @@ void kernel_main() {
                 if constexpr (fused_ring_enabled) {
                     const uint32_t band = gate->band(band_i);
                     span.set(group, band0 + band);
+                    // q/w were multicasted before this loop. Every row of this K-mcast column has
+                    // the same band list, so skipping an empty runtime-prefix band preserves both
+                    // the fabric gate and the local CB protocol.
+                    if (span.k_tiles() == 0) {
+                        continue;
+                    }
                     gate->read_k(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
                 } else {
                     const uint32_t band = band_i;
                     const bool real_band = band < num_bands;
                     if (real_band) {
                         span.set(group, band0 + band);
-                        if constexpr (fuse_single && fused_stream_k) {
-                            read_k_chunk_streaming(
-                                noc, k_acc, span.k_tile_start(), span.k_tiles(), k_batch_page_offset);
-                        } else {
-                            read_k_chunk(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
-                        }
+                        // Resident q/w are multicasted once at each core's first band. This must
+                        // happen even if that core's band falls past kv_len, since another column
+                        // may still be waiting at the shared row rendezvous.
                         if (band == 0 && !stream_heads && !fuse_single) {
                             read_q_rows(noc, q_acc, q_row_start, q_dir);
                             read_w_group(noc, w_acc, q_row_start, q_dir);
+                        }
+                        // Head streaming emits the q blocks below even for an empty K band; the
+                        // compute kernel drains them before moving to the next band.
+                        if (span.k_tiles() != 0) {
+                            if constexpr (fuse_single && fused_stream_k) {
+                                read_k_chunk_streaming(
+                                    noc, k_acc, span.k_tile_start(), span.k_tiles(), k_batch_page_offset);
+                            } else {
+                                read_k_chunk(
+                                    noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
+                            }
                         }
                     }
                     if constexpr (stream_heads) {
@@ -544,8 +558,9 @@ void kernel_main() {
     };
 
     if constexpr (fused_ring_enabled) {
-        // The receiver consumes the six fused args at slot 27 and waits for the producer signal. The gate then
-        // consumes k_local and records the following band-permutation base.
+        // The receiver consumes the fused-arg block at slot 27 (ring/dir/sems plus the split-forwarding
+        // triple — this op runs with split forwarding disabled) and waits for the producer signal. The
+        // gate then consumes k_local and records the following band-permutation base.
         uint32_t fused_argidx = 27;
         RingSDPAOpReceiver fused_recv(/*wait_for_op_signal=*/true, fused_argidx);
         const FusedRingGate gate(fused_recv, fused_argidx);

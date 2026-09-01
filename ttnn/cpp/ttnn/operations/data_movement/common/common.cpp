@@ -11,6 +11,7 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 #include <numeric>
+#include <tt-metalium/tt_align.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -437,14 +438,70 @@ uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
     return max_l1_space;
 }
 
+uint32_t get_pending_l1_output_reservation(
+    const Tensor& input_tensor_a,
+    const ttnn::Shape& output_padded_shape,
+    const MemoryConfig& output_memory_config,
+    DataType output_dtype,
+    Layout output_layout,
+    bool require_constructible) {
+    if (output_memory_config.buffer_type() != tt::tt_metal::BufferType::L1) {
+        return 0;
+    }
+
+    // Sharded outputs already place exactly one shard per core, and their ops bind CBs to
+    // those buffers rather than allocating a separate static region, so no reservation is
+    // needed (and shard shapes are validated elsewhere).
+    if (output_memory_config.is_sharded()) {
+        return 0;
+    }
+
+    const uint32_t num_banks = input_tensor_a.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+    if (num_banks == 0) {
+        return 0;
+    }
+
+    size_t total_bytes = 0;
+    size_t page_bytes = 0;
+    try {
+        const tt::tt_metal::TensorSpec output_spec(
+            output_padded_shape,
+            tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(output_layout), output_memory_config));
+        total_bytes = output_spec.compute_packed_buffer_size_bytes();
+        page_bytes = output_spec.compute_page_size_bytes();
+    } catch (...) {
+        if (require_constructible) {
+            throw;
+        }
+        // If the spec cannot be constructed (unsupported dtype/layout combination), fall back
+        // to reserving nothing.
+        return 0;
+    }
+    if (page_bytes == 0) {
+        return static_cast<uint32_t>(tt::div_up(static_cast<uint64_t>(total_bytes), static_cast<uint64_t>(num_banks)));
+    }
+
+    // Interleaved pages are distributed round-robin as whole, alignment-padded pages, so the
+    // busiest bank holds ceil(num_pages / num_banks) of them. Reserving the average
+    // (total_bytes / num_banks) underestimates whenever num_pages is not a multiple of
+    // num_banks, which can still leave the CBs overlapping the output on the fullest bank.
+    const uint64_t alignment = input_tensor_a.device()->allocator()->get_alignment(tt::tt_metal::BufferType::L1);
+    const uint64_t aligned_page_bytes = tt::align(static_cast<uint64_t>(page_bytes), alignment);
+    const uint64_t num_pages = tt::div_up(static_cast<uint64_t>(total_bytes), static_cast<uint64_t>(page_bytes));
+    const uint64_t pages_on_fullest_bank = tt::div_up(num_pages, static_cast<uint64_t>(num_banks));
+    return static_cast<uint32_t>(pages_on_fullest_bank * aligned_page_bytes);
+}
+
 bool is_enough_space(
     const Tensor& input_tensor_a,
     const uint32_t input_single_tile_size,
     const uint32_t output_single_tile_size,
     const uint32_t num_tiles_per_row,
     const uint32_t staging_bytes_per_tile,
-    const uint32_t fixed_staging_bytes) {
+    const uint32_t fixed_staging_bytes,
+    const uint32_t reserved_l1_bytes_per_core) {
     uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
+    max_l1_space = max_l1_space > reserved_l1_bytes_per_core ? max_l1_space - reserved_l1_bytes_per_core : 0;
     uint32_t estimated_size_of_cbs = get_estimated_size_of_cbs(
         input_tensor_a,
         input_single_tile_size,

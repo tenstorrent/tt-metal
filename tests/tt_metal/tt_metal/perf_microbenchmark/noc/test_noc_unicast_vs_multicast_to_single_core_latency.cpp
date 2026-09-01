@@ -6,8 +6,10 @@
 #include <cstdint>
 #include <cstdlib>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <map>
 #include <string>
 #include <variant>
@@ -25,7 +27,8 @@ using namespace tt;
 
 void measure_latency(const std::string& kernel_name) {
     const int device_id = 0;
-    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+    auto mesh_device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+    tt_metal::IDevice* device = mesh_device->get_devices()[0];
 
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
@@ -58,9 +61,7 @@ void measure_latency(const std::string& kernel_name) {
 
     tt::tt_metal::detail::SetDeviceProfilerDir(kernel_name + "_microbenchmark");
     tt::tt_metal::detail::FreshProfilerDeviceLog();
-    tt::tt_metal::detail::CompileProgram(device, program);
-    tt_metal::detail::LaunchProgram(device, program);
-    tt_metal::CloseDevice(device);
+    tt_metal::LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 }
 
 int main() {

@@ -18,9 +18,8 @@ from PIL import Image
 
 from ....pipelines.minimax_h3.packing import align_num_frames, prepare_keyframe_image
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
-from ....utils.test import ring_params_req_exact_devices
 from ..wan2_2.common import check_output_sanity
-from .common import create_fractal_image
+from .common import GALAXY_MESHES, create_fractal_image
 from .common_av import (
     CALIBRATED_FOX_PROMPT,
     artifact_dir,
@@ -45,13 +44,7 @@ SEED = 0
 PROMPT = CALIBRATED_FOX_PROMPT  # the tier-6 bars are calibrated against this exact prompt
 
 # Ring collectives require FABRIC_1D_RING.
-MESH_4X8 = [
-    pytest.param(
-        (4, 8),
-        {**ring_params_req_exact_devices, "l1_small_size": 65536},
-        id="4x8",
-    )
-]
+MESHES = GALAXY_MESHES
 
 ANCHOR_PCC_FLOOR = 0.95  # measured 0.9943-0.9971 across the three anchor cases
 
@@ -145,7 +138,7 @@ def _first_frame(path: Path) -> Image.Image:
 
 
 @pytest.mark.timeout(10800)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 def test_fl2va_end_to_end(mesh_device, reset_seeds):
     """The `first_and_last` case: both preparation paths and a two-run vision scatter; perf + quality."""
     case = "first_and_last"
@@ -264,7 +257,7 @@ def test_lone_last_keyframe_is_stretched_not_cover_cropped():
 
 
 @pytest.mark.timeout(7200)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 def test_fl2va_follows_the_keyframe(mesh_device, reset_seeds):
     """Discriminating gate: a fractal keyframe the model would never produce must drive frame 0."""
     fractal = create_fractal_image(WIDTH, HEIGHT)

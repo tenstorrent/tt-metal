@@ -16,6 +16,14 @@
 
 namespace noc_event_profiler {
 
+constexpr bool shouldRecordEvent([[maybe_unused]] KernelProfilerNocEventMetadata::NocEventType event_type) {
+#if defined(DEVICE_DEBUG_DUMP)
+    return true;
+#else
+    return !KernelProfilerNocEventMetadata::isDebugOnlyEventType(event_type);
+#endif
+}
+
 template <bool DRAM = false>
 FORCE_INLINE std::pair<uint32_t, uint32_t> decode_noc_coord_reg_to_coord(uint16_t noc_xy_bits) {
     constexpr uint32_t NOC_COORD_MASK = 0x3F;
@@ -59,11 +67,17 @@ FORCE_INLINE KernelProfilerNocEventMetadata createNocEventDstTrailer(uint32_t sr
     ev_md.data.local_event_dst_trailer.setDstAddr(dst_addr);
     if constexpr (
         noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_ ||
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_WITH_TRID ||
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_WITH_STATE ||
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_WITH_TRID_WITH_STATE ||
         noc_event_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_MULTICAST ||
         noc_event_type == KernelProfilerNocEventMetadata::NocEventType::SEMAPHORE_SET_REMOTE ||
         noc_event_type == KernelProfilerNocEventMetadata::NocEventType::SEMAPHORE_SET_MULTICAST) {
         ev_md.data.local_event_dst_trailer.counter_value = get_noc_counter_for_debug<true, posted>(noc_index);
-    } else if constexpr (noc_event_type == KernelProfilerNocEventMetadata::NocEventType::READ) {
+    } else if constexpr (
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::READ ||
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::READ_WITH_STATE ||
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::READ_WITH_STATE_AND_TRID) {
         ev_md.data.local_event_dst_trailer.counter_value = get_noc_counter_for_debug<false, posted>(noc_index);
     } else {
         ev_md.data.local_event_dst_trailer.counter_value = 0;
@@ -113,6 +127,7 @@ FORCE_INLINE void recordNocEvent(
 
 template <
     KernelProfilerNocEventMetadata::NocEventType noc_event_type,
+    bool posted = false,
     uint32_t STATIC_ID = kernel_profiler::NOC_TRACING_STATIC_ID>
 FORCE_INLINE void recordMulticastNocEvent(
     int32_t mcast_dst_start_x,
@@ -132,7 +147,7 @@ FORCE_INLINE void recordMulticastNocEvent(
     local_noc_event.dst_y = mcast_dst_start_y;
     local_noc_event.mcast_end_dst_x = mcast_dst_end_x;
     local_noc_event.mcast_end_dst_y = mcast_dst_end_y;
-    local_noc_event.setAttributes(num_bytes, /*posted=*/false);
+    local_noc_event.setAttributes(num_bytes, posted);
     local_noc_event.noc_vc = vc;
     local_noc_event.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
@@ -140,7 +155,7 @@ FORCE_INLINE void recordMulticastNocEvent(
     if constexpr (kernel_profiler::NON_DROPPING) {
         uint32_t dst_local_addr = decode_noc_addr_to_local_addr(dst_noc_addr);
         KernelProfilerNocEventMetadata dst_data =
-            createNocEventDstTrailer<noc_event_type, /*posted=*/false>(local_addr, dst_local_addr);
+            createNocEventDstTrailer<noc_event_type, posted>(local_addr, dst_local_addr);
 
         kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
             kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3);
@@ -192,16 +207,16 @@ FORCE_INLINE void recordNocEventWithAddr(
 }
 }  // namespace noc_event_profiler
 
-#define RECORD_NOC_EVENT_WITH_ADDR(event_type, local_addr, noc_addr, num_bytes, vc, posted, noc)                      \
+#define RECORD_NOC_EVENT_WITH_ADDR_IMPL_(event_type, local_addr, noc_addr, num_bytes, vc, posted, noc)                \
     {                                                                                                                 \
-        using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                                            \
         if constexpr (                                                                                                \
-            event_type != NocEventType::WRITE_MULTICAST && event_type != NocEventType::SEMAPHORE_SET_MULTICAST) {     \
+            event_type != NocEventType::WRITE_MULTICAST && event_type != NocEventType::SEMAPHORE_SET_MULTICAST &&     \
+            event_type != NocEventType::SEMAPHORE_INC_MULTICAST) {                                                    \
             noc_event_profiler::recordNocEventWithAddr<event_type, posted>(local_addr, noc_addr, num_bytes, vc, noc); \
         } else {                                                                                                      \
             auto [mcast_dst_start_x, mcast_dst_start_y, mcast_dst_end_x, mcast_dst_end_y] =                           \
                 noc_event_profiler::decode_noc_addr_to_multicast_coord(noc_addr);                                     \
-            noc_event_profiler::recordMulticastNocEvent<event_type>(                                                  \
+            noc_event_profiler::recordMulticastNocEvent<event_type, posted>(                                          \
                 mcast_dst_start_x,                                                                                    \
                 mcast_dst_start_y,                                                                                    \
                 mcast_dst_end_x,                                                                                      \
@@ -214,24 +229,41 @@ FORCE_INLINE void recordNocEventWithAddr(
         }                                                                                                             \
     }
 
+#define RECORD_NOC_EVENT_WITH_ADDR(event_type, local_addr, noc_addr, num_bytes, vc, posted, noc)           \
+    {                                                                                                      \
+        using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                                 \
+        if constexpr (noc_event_profiler::shouldRecordEvent(event_type)) {                                 \
+            RECORD_NOC_EVENT_WITH_ADDR_IMPL_(event_type, local_addr, noc_addr, num_bytes, vc, posted, noc) \
+        }                                                                                                  \
+    }
+
 #define RECORD_NOC_EVENT_WITH_ID(event_type, local_addr, noc_id, addrgen, offset, num_bytes, vc, posted, noc) \
     {                                                                                                         \
         using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                                    \
-        noc_event_profiler::recordNocEventWithID<event_type, posted>(                                         \
-            local_addr, noc_id, addrgen, offset, num_bytes, vc, noc);                                         \
+        if constexpr (noc_event_profiler::shouldRecordEvent(event_type)) {                                    \
+            noc_event_profiler::recordNocEventWithID<event_type, posted>(                                     \
+                local_addr, noc_id, addrgen, offset, num_bytes, vc, noc);                                     \
+        }                                                                                                     \
+    }
+
+#define RECORD_NOC_EVENT_IMPL_(event_type, posted, noc)         \
+    {                                                           \
+        noc_event_profiler::recordNocEvent<event_type, posted>( \
+            /*dst_x=*/-1,                                       \
+            /*dst_y=*/-1,                                       \
+            /*num_bytes=*/0,                                    \
+            /*vc=*/-1,                                          \
+            /*noc=*/noc,                                        \
+            /*local_addr=*/0,                                   \
+            /*dst_local_addr=*/0);                              \
     }
 
 #define RECORD_NOC_EVENT(event_type, posted, noc)                          \
     {                                                                      \
         using NocEventType = KernelProfilerNocEventMetadata::NocEventType; \
-        noc_event_profiler::recordNocEvent<event_type, posted>(            \
-            /*dst_x=*/-1,                                                  \
-            /*dst_y=*/-1,                                                  \
-            /*num_bytes=*/0,                                               \
-            /*vc=*/-1,                                                     \
-            /*noc=*/noc,                                                   \
-            /*local_addr=*/0,                                              \
-            /*dst_local_addr=*/0);                                         \
+        if constexpr (noc_event_profiler::shouldRecordEvent(event_type)) { \
+            RECORD_NOC_EVENT_IMPL_(event_type, posted, noc)                \
+        }                                                                  \
     }
 
 // preemptive quick push if transitioning from unlinked state to linked state

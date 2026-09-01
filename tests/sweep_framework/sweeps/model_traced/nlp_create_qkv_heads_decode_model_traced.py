@@ -222,9 +222,17 @@ def run(
     )
     # nlp_create_qkv_heads_decode returns a tuple of tensors (q_heads, k_heads, v_heads)
     if isinstance(output_result, tuple):
-        output_tensor = mesh_tensor_to_torch(output_result[0], device if is_mesh_device else None)
+        output_tensor = mesh_tensor_to_torch(
+            output_result[0],
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
     else:
-        output_tensor = mesh_tensor_to_torch(output_result, device if is_mesh_device else None)
+        output_tensor = mesh_tensor_to_torch(
+            output_result,
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC - using proper torch reference from unit test

@@ -161,13 +161,12 @@ def fit_width_sharded_cores(width_elems, desired_cores, device):
 # INTERLEAVED DRAM -> the add/next-conv falls to the unported legacy ProgramFactory ->
 # "DataMovementKernel not supported on Quasar"). Flip any entry to host-bypass a single conv for debug.
 _CONV_ON_DEVICE = {"stem": True, "conv1": True, "conv2": True, "conv3": True, "downsample": True}
-# [#48552] The Quasar stem max_pool2d DEADLOCKS at the real stem size (112x112=12544) in compute_pool_2d
-# (pool-reduce dest-sync; smsg G semaphore-wait) -- a pre-existing LLK item (repro: test_stem_maxpool.py
-# -k 112x112). _MAXPOOL_ON_DEVICE=False computes the 3x3/s2/p1 maxpool on HOST from the device input and
-# re-uploads height-sharded ROW_MAJOR (same style as the stem conv1 host fallback), so maxpool doesn't block
-# layer1..4 from running on device (lets us validate the layer3 height split end-to-end). Flip back to True
-# once the LLK pool-reduce dest-sync hang is fixed.
-_MAXPOOL_ON_DEVICE = False
+# [#48552] Quasar stem max_pool2d now runs ON DEVICE. The earlier deadlock at the real stem size
+# (112x112=12544) in compute_pool_2d was the unpack_tilizeA_B operandB(scaler) buffer-descriptor bug (main
+# dropped the operandB BD reprogramming in llk_unpack_tilize_api.h; the reduce-scaler read a stale/OOB L1
+# addr and also tripped the z_dim=4/y_dim!=16 assert). Fixed: operandB BD reprogram re-added + line-146
+# assert disabled. Verified by test_max_pool2d.py::test_max_pool2d_resnet50_stem. Set False to host-fallback.
+_MAXPOOL_ON_DEVICE = True
 
 
 def _host_conv2d(
@@ -456,12 +455,13 @@ class resnet50Bottleneck:
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                     shard_layout=(
                         ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                        # [#48552] Quasar: the layer3_module1 downsample (512->1024 s2 @28x28) STAYS block-sharded.
-                        # HEIGHT_SHARDED N-HALVES it (device out = 512 ch, not 1024) -- the stride-2 1x1 downsample
-                        # N-halving bug, NOT a DFB-ring overflow (ring is uint32; 512->1024 weights are only ~1MB).
-                        # So it cannot go HS; block-sharded is the only fit here (its correctness/hang on the fused
-                        # path is tracked separately).
-                        if height_sharding and input_height != 28
+                        # [#48552] Quasar: route the layer3_module1 downsample (512->1024 s2 @28x28) HEIGHT_SHARDED
+                        # so force_1x1_nonmm_split takes the SPLIT plain-matmul path (Program B does the full GEMM),
+                        # which does NOT N-halve the stride-2 1x1 channel expansion -- the reason @28 was forced
+                        # block-sharded. Validated by test_conv2d_layer3_downsample_split.py::..._hs_split. BLOCK is a
+                        # dead end on the 2-core grid (grid splits K -> nbw2 -> fused conv_bmm multi-K hang). WH/BH
+                        # keep @28 block-sharded (no force_1x1_nonmm_split there, so HS would N-halve).
+                        if height_sharding and (input_height != 28 or is_quasar())
                         else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                     ),
                     deallocate_activation=True,

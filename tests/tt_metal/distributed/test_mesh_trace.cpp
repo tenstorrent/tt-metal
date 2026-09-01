@@ -377,7 +377,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
 
     // Create global semaphore for syncing between programs
     auto all_cores = syncer_core.merge(datacopy_core).merge(add_core);
-    auto global_sem = CreateGlobalSemaphore(mesh_device_.get(), all_cores, 0);
+    auto global_sem = GlobalSemaphore(*mesh_device_, all_cores, 0);
 
     // Program syncs with host and notifies downstream datacopy or addition program
     Program sync_and_incr_program = CreateProgram();

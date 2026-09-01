@@ -15,9 +15,11 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
+#include "tt_metal/impl/context/context_types.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include "tt_metal/impl/host_api/temp_quasar_api.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/program/program_impl.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
 
 /*
@@ -136,17 +138,18 @@ namespace CommandBuilder {
 //  Builds a multi-transaction packed-large command
 //  payload spans map 1:1 with the sub-command list
 HostMemDeviceCommand build_packed_large_write_command(
+    MetalContext& metal_ctx,
     const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
     const std::vector<std::vector<uint32_t>>& payloads,
     uint32_t cumulative_payload_bytes,
     uint32_t l1_alignment) {
     // Calculate the command size
-    DeviceCommandCalculator cmd_calc;
+    DeviceCommandCalculator cmd_calc(metal_ctx);
     cmd_calc.add_dispatch_write_packed_large(sub_cmds.size(), cumulative_payload_bytes);
     const uint32_t command_size_bytes = cmd_calc.write_offset_bytes();
 
     // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(command_size_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, command_size_bytes);
 
     // Build data spans pointing to the generated payloads
     std::vector<ttsl::Span<const uint8_t>> data_spans;
@@ -171,17 +174,18 @@ HostMemDeviceCommand build_packed_large_write_command(
 //  Builds a multi-transaction packed-large unicast command
 //  payload spans map 1:1 with the sub-command list
 HostMemDeviceCommand build_packed_large_unicast_write_command(
+    MetalContext& metal_ctx,
     const std::vector<CQDispatchWritePackedLargeUnicastSubCmd>& sub_cmds,
     const std::vector<std::vector<uint32_t>>& payloads,
     uint32_t cumulative_payload_bytes,
     uint32_t l1_alignment) {
     // Calculate the command size
-    DeviceCommandCalculator cmd_calc;
+    DeviceCommandCalculator cmd_calc(metal_ctx);
     cmd_calc.add_dispatch_write_packed_large_unicast(sub_cmds.size(), cumulative_payload_bytes);
     const uint32_t command_size_bytes = cmd_calc.write_offset_bytes();
 
     // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(command_size_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, command_size_bytes);
 
     // Build data spans pointing to the generated payloads
     std::vector<ttsl::Span<const uint8_t>> data_spans;
@@ -253,6 +257,7 @@ protected:
         uint32_t budget_bytes,
         Common::DeviceData& device_data) {
         const CoreCoord first_worker = worker_range.start_coord;
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         for (uint32_t remaining_bytes = budget_bytes; remaining_bytes > 0;) {
             uint32_t xfer_size_bytes =
                 payload_generator_->get_random_size(MAX_XFER_SIZE_16B, bytes_per_16B_unit, remaining_bytes);
@@ -261,7 +266,7 @@ protected:
             std::vector<uint32_t> payload = payload_generator_->generate_payload(xfer_size_bytes);
             Common::DeviceDataUpdater::update_linear_write(payload, device_data, worker_range, is_mcast_);
             commands.push_back(Common::CommandBuilder::build_linear_write_command<flush_prefetch_, inline_data_>(
-                payload, worker_range, is_mcast_, noc_xy, addr, xfer_size_bytes));
+                metal_ctx, payload, worker_range, is_mcast_, noc_xy, addr, xfer_size_bytes));
             remaining_bytes -= xfer_size_bytes;
         }
     }
@@ -299,7 +304,8 @@ public:
         Common::DeviceData device_data(
             device_, worker_range, l1_base, dram_base, nullptr, false, /*dram_data_size_words=*/0, cfg_);
 
-        DeviceCommandCalculator cmd_calc;
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+        DeviceCommandCalculator cmd_calc(metal_ctx);
         cmd_calc.add_dispatch_write_linear<flush_prefetch_, inline_data_>(0);
         const uint32_t max_payload_per_cmd_bytes = max_fetch_bytes_ - cmd_calc.write_offset_bytes();
         const uint32_t noc_xy = linear_write_noc_encoding(worker_range);
@@ -395,6 +401,7 @@ public:
         uint32_t remaining_pages = num_pages_;
         uint32_t absolute_start_page = 0;
 
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         // This loop generates commands, payloads, and updates expectations all at once
         // Each iteration represents one "chunk" that fits in max_payload_per_cmd_bytes
         while (remaining_pages > 0) {
@@ -439,7 +446,7 @@ public:
 
             // Create the HostMemDeviceCommand
             HostMemDeviceCommand cmd = Common::CommandBuilder::build_paged_write_command<inline_data_>(
-                chunk_payload, base_addr, page_size_bytes, pages_in_chunk, start_page_cmd, is_dram_);
+                metal_ctx, chunk_payload, base_addr, page_size_bytes, pages_in_chunk, start_page_cmd, is_dram_);
 
             commands_per_iteration.push_back(std::move(cmd));
 
@@ -482,7 +489,8 @@ public:
         const tt::CoreType core_type = is_dram ? tt::CoreType::DRAM : tt::CoreType::WORKER;
         const uint32_t page_size_bytes = paged_write_page_size_bytes(get_page_size());
 
-        DeviceCommandCalculator cmd_calc;
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+        DeviceCommandCalculator cmd_calc(metal_ctx);
         cmd_calc.add_dispatch_write_paged<inline_data_>(page_size_bytes, 0);
         const uint32_t max_payload_per_cmd_bytes = max_fetch_bytes_ - cmd_calc.write_offset_bytes();
 
@@ -519,7 +527,9 @@ class DispatchPackedWriteTestFixture : public BaseDispatchTestFixture,
         uint32_t packed_write_max_unicast_sub_cmds,
         bool no_stride,
         uint32_t l1_alignment) {
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         return Common::PackedWriteUtils::clamp_to_max_fetch(
+            metal_ctx,
             max_fetch_bytes_,
             xfer_size_bytes,
             num_sub_cmds,
@@ -568,6 +578,7 @@ public:
         // Relevel once before generating commands
         device_data.relevel(tt::CoreType::WORKER);
         constexpr uint32_t payload_unit = sizeof(uint32_t);
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
 
         // Generate random-sized packed write commands until transfer_size_bytes_ is consumed
         // Each command is constrained by:
@@ -617,7 +628,7 @@ public:
             Common::DeviceDataUpdater::update_packed_write(payload, device_data, worker_cores, l1_alignment);
 
             HostMemDeviceCommand cmd = Common::CommandBuilder::build_packed_write_command(
-                payload, sub_cmds, common_addr, l1_alignment, packed_write_max_unicast_sub_cmds, no_stride);
+                metal_ctx, payload, sub_cmds, common_addr, l1_alignment, packed_write_max_unicast_sub_cmds, no_stride);
 
             // Add command to batch
             commands_per_iteration.push_back(std::move(cmd));
@@ -702,6 +713,7 @@ class DispatchPackedWriteLargeTestFixture : public DispatchPackedWriteTestFixtur
         // Track payload size for this command
         uint32_t cumulative_payload_bytes = 0;
 
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         for (int i = 0; i < max_transactions && remaining_bytes > 0; i++) {
             // Generate a random transfer size
             // We're first converting the max payload allowed by the packed large format into alignment units
@@ -717,7 +729,7 @@ class DispatchPackedWriteLargeTestFixture : public DispatchPackedWriteTestFixtur
             // Verify adding this transaction won't exceed max_fetch_bytes_
             // Use a projected command size to see if we would exceed the max_fetch_bytes_
             // We speculatively calculate the command size to ensure we don't overflow
-            DeviceCommandCalculator cmd_calc;
+            DeviceCommandCalculator cmd_calc(metal_ctx);
             cmd_calc.add_dispatch_write_packed_large(
                 transaction_sizes.size() + 1, cumulative_payload_bytes + xfer_size_bytes);
             const uint32_t projected_cmd_size = cmd_calc.write_offset_bytes();
@@ -778,6 +790,7 @@ protected:
         // Relevel once at start (all transactions target same fixed range)
         device_data.relevel(worker_range);
 
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         // This loop generates random-sized packed-large commands until remaining_bytes is exhausted
         while (remaining_bytes > 0) {
             const int max_transactions =
@@ -818,7 +831,7 @@ protected:
 
             // Create the HostMemDeviceCommand
             HostMemDeviceCommand cmd = CommandBuilder::build_packed_large_write_command(
-                sub_cmds, payloads, transaction_batch.total_payload_bytes, l1_alignment);
+                metal_ctx, sub_cmds, payloads, transaction_batch.total_payload_bytes, l1_alignment);
 
             log_info(
                 tt::LogTest,
@@ -878,6 +891,7 @@ class DispatchPackedWriteLargeUnicastTestFixture : public DispatchPackedWriteTes
 
         uint32_t cumulative_payload_bytes = 0;
 
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         for (int i = 0; i < max_transactions && remaining_bytes > 0; i++) {
             uint32_t max_allowed = dispatch_buffer_page_size_ * max_pages_per_transaction / l1_alignment;
             if (get_target_sub_cmds() != 0) {
@@ -888,7 +902,7 @@ class DispatchPackedWriteLargeUnicastTestFixture : public DispatchPackedWriteTes
                 payload_generator_->get_random_size(max_allowed, bytes_per_16B_unit, remaining_bytes);
 
             // Verify adding this transaction won't exceed max_fetch_bytes_
-            DeviceCommandCalculator cmd_calc;
+            DeviceCommandCalculator cmd_calc(metal_ctx);
             cmd_calc.add_dispatch_write_packed_large_unicast(
                 transaction_sizes.size() + 1, cumulative_payload_bytes + xfer_size_bytes);
             const uint32_t projected_cmd_size = cmd_calc.write_offset_bytes();
@@ -941,6 +955,7 @@ protected:
         std::vector<HostMemDeviceCommand> commands_per_iteration;
         uint32_t remaining_bytes = get_transfer_size_bytes();
 
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         // This loop generates random-sized packed-large unicast commands until remaining_bytes is exhausted
         while (remaining_bytes > 0) {
             const int max_transactions =
@@ -992,7 +1007,7 @@ protected:
 
             // Create the HostMemDeviceCommand
             HostMemDeviceCommand cmd = CommandBuilder::build_packed_large_unicast_write_command(
-                sub_cmds, payloads, transaction_batch.total_payload_bytes, l1_alignment);
+                metal_ctx, sub_cmds, payloads, transaction_batch.total_payload_bytes, l1_alignment);
 
             log_info(
                 tt::LogTest,
@@ -1054,7 +1069,8 @@ public:
         if (tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
         }
-        this->device_ = tt_metal::CreateDevice(0);
+        this->mesh_device_ = tt_metal::distributed::MeshDevice::create_unit_mesh(0);
+        this->device_ = this->mesh_device_->get_devices()[0];
         if (tt::tt_metal::detail::sd_cq_kernel_tests_should_skip(this->device_)) {
             GTEST_SKIP() << "Quasar SD cq-kernel tests require dispatch-engine cores in the soc descriptor";
         }
@@ -1074,10 +1090,8 @@ public:
     }
 
     void TearDown() override {
-        if (this->device_) {
-            tt_metal::CloseDevice(this->device_);
-            this->device_ = nullptr;
-        }
+        this->device_ = nullptr;
+        this->mesh_device_.reset();
     }
 
     // Executes pre-built dispatch commands via the spoof_prefetch kernel in SD mode.
@@ -1120,9 +1134,10 @@ public:
 
         // Append terminate command as its own page
         {
-            DeviceCommandCalculator calc;
+            auto& metal_ctx = MetalContext::instance(extract_context_id(this->device_));
+            DeviceCommandCalculator calc(metal_ctx);
             calc.add_dispatch_terminate();
-            HostMemDeviceCommand term_cmd(calc.write_offset_bytes());
+            HostMemDeviceCommand term_cmd(metal_ctx, calc.write_offset_bytes());
             term_cmd.add_dispatch_terminate();
             append_dispatch_payload(raw, term_cmd);
         }
@@ -1166,8 +1181,7 @@ public:
                 "SD cmd CB + dispatch CB too large for L1");
         } else {
             TT_FATAL(raw.size() + l1_buf_base <= dispatch_l1_size, "SD command buffer too large for L1");
-            TT_FATAL(
-                dispatch_buffer_size + l1_buf_base <= dispatch_l1_size, "SD dispatch buffer too large for L1");
+            TT_FATAL(dispatch_buffer_size + l1_buf_base <= dispatch_l1_size, "SD dispatch buffer too large for L1");
         }
 
         tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -1175,8 +1189,8 @@ public:
 
         tt_metal::Program program = tt_metal::CreateProgram();
 
-        const uint32_t spoof_prefetch_sem_id = tt_metal::CreateSemaphore(
-            program, {spoof_logical}, dispatch_buffer_pages, cq_core_type);
+        const uint32_t spoof_prefetch_sem_id =
+            tt_metal::CreateSemaphore(program, {spoof_logical}, dispatch_buffer_pages, cq_core_type);
         const uint32_t dispatch_core_sem_id = tt_metal::CreateSemaphore(program, {disp_logical}, 0, cq_core_type);
         const uint32_t prefetch_sync_sem = tt_metal::CreateSemaphore(program, {spoof_logical}, 0, cq_core_type);
 
@@ -1226,7 +1240,7 @@ public:
         tt_metal::SetRuntimeArgs(program, dispatch_kernel, disp_logical, {0u, 0u, 0u});
 
         device_data.overflow_check(this->device_);
-        tt_metal::detail::LaunchProgram(this->device_, program);
+        tt_metal::LaunchProgram(*this->mesh_device_, std::move(program), /*wait_until_cores_done=*/true);
         const bool pass = device_data.validate(this->device_);
         EXPECT_TRUE(pass) << "SD Dispatcher test failed validation";
     }
@@ -1271,9 +1285,16 @@ protected:
         // stress stream overwrites before validation.
         constexpr uint32_t filler_page_size = 16;
         const std::vector<uint32_t> filler_payload(filler_page_size / sizeof(uint32_t), 0xA5A5A5A5);
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         for (uint32_t page = 1; page < dispatch_cb_pages; ++page) {
             HostMemDeviceCommand prefix_cmd = Common::CommandBuilder::build_paged_write_command<inline_data_>(
-                filler_payload, base_addr, filler_page_size, /*pages_in_chunk=*/1, /*start_page_cmd=*/0, is_dram);
+                metal_ctx,
+                filler_payload,
+                base_addr,
+                filler_page_size,
+                /*pages_in_chunk=*/1,
+                /*start_page_cmd=*/0,
+                is_dram);
             const auto* prefetch_cmd = reinterpret_cast<const CQPrefetchCmd*>(prefix_cmd.data());
             TT_FATAL(
                 tt::align(prefetch_cmd->relay_inline.length, dispatch_cb_page_size) == dispatch_cb_page_size,
@@ -1288,7 +1309,13 @@ protected:
         const uint32_t crossing_page_size = dispatch_cb_page_size;
         const std::vector<uint32_t> crossing_payload(crossing_page_size / sizeof(uint32_t), 0x5A5A5A5A);
         HostMemDeviceCommand crossing_cmd = Common::CommandBuilder::build_paged_write_command<inline_data_>(
-            crossing_payload, base_addr, crossing_page_size, /*pages_in_chunk=*/1, /*start_page_cmd=*/0, is_dram);
+            metal_ctx,
+            crossing_payload,
+            base_addr,
+            crossing_page_size,
+            /*pages_in_chunk=*/1,
+            /*start_page_cmd=*/0,
+            is_dram);
         const auto* crossing_prefetch_cmd = reinterpret_cast<const CQPrefetchCmd*>(crossing_cmd.data());
         const uint32_t crossing_dispatch_payload_bytes = crossing_prefetch_cmd->relay_inline.length;
         TT_FATAL(
@@ -1325,10 +1352,11 @@ protected:
         // target the normal stream's initial destination but are not added to DeviceData.
         constexpr uint32_t filler_payload_size = 16;
         const std::vector<uint32_t> filler_payload(filler_payload_size / sizeof(uint32_t), 0xA5A5A5A5);
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         for (uint32_t page = 1; page < dispatch_cb_pages; ++page) {
             HostMemDeviceCommand filler_cmd =
                 Common::CommandBuilder::build_linear_write_command<flush_prefetch_, inline_data_>(
-                    filler_payload, worker_range, is_mcast, noc_xy, addr, filler_payload_size);
+                    metal_ctx, filler_payload, worker_range, is_mcast, noc_xy, addr, filler_payload_size);
             const auto* prefetch_cmd = reinterpret_cast<const CQPrefetchCmd*>(filler_cmd.data());
             TT_FATAL(
                 tt::align(prefetch_cmd->relay_inline.length, dispatch_cb_page_size) == dispatch_cb_page_size,
@@ -1342,7 +1370,7 @@ protected:
         std::vector<uint32_t> crossing_payload = payload_generator_->generate_payload(crossing_payload_size);
         HostMemDeviceCommand crossing_cmd =
             Common::CommandBuilder::build_linear_write_command<flush_prefetch_, inline_data_>(
-                crossing_payload, worker_range, is_mcast, noc_xy, addr, crossing_payload_size);
+                metal_ctx, crossing_payload, worker_range, is_mcast, noc_xy, addr, crossing_payload_size);
         const auto* crossing_prefetch_cmd = reinterpret_cast<const CQPrefetchCmd*>(crossing_cmd.data());
         TT_FATAL(
             dispatch_cb_prefix_bytes + crossing_prefetch_cmd->relay_inline.length > dispatch_cb_size,

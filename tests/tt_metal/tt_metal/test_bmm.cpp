@@ -12,6 +12,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tilize_utils.hpp>
@@ -201,10 +202,9 @@ bool validate_bmm_result(
 
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
     auto& mesh_device = *devices_[0];
-    IDevice* dev = mesh_device.get_devices()[0];
 
     BmmParams p;
-    if (dev->arch() != ARCH::QUASAR) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
         p.Mt = 4; p.Kt = 2; p.Nt = 3;
         p.B_total = 2; p.B_per_core = 2;
         p.num_input_tiles = 2; p.num_output_tiles = 2;
@@ -220,7 +220,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
     const uint32_t bytesB = p.single_tile_size * p.Kt * p.Nt * p.B_total;
 
     const experimental::NodeCoord node{0, 0};
-    const bool use_implicit_sync = (dev->arch() == ARCH::QUASAR);
+    const bool use_implicit_sync = (mesh_device.arch() == ARCH::QUASAR);
     auto spec = build_bmm_program_spec(p, tensors, node, use_implicit_sync);
     auto workload = experimental::MakeMeshWorkloadFromSpec(mesh_device, spec);
     Program& program = workload.get_programs().begin()->second;
@@ -279,8 +279,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
         GTEST_SKIP() << "This test requires at least 2 worker nodes.";
     }
 
-    IDevice* dev = mesh_device.get_devices()[0];
-
     BmmParams p;
     p.Mt = 2; p.Kt = 2; p.Nt = 2;
     p.B_total = 2;      // total batches across both cores
@@ -336,7 +334,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     detail::WriteToBuffer(*tensors.src0.mesh_buffer().get_reference_buffer(), src0_vec);
     detail::WriteToBuffer(*tensors.src1.mesh_buffer().get_reference_buffer(), src1_vec);
 
-    detail::LaunchProgram(dev, program, true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
     detail::ReadFromBuffer(*tensors.dst.mesh_buffer().get_reference_buffer(), result_vec);

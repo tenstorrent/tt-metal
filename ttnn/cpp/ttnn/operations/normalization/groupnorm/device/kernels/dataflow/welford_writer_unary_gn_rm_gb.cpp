@@ -13,6 +13,9 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#if defined(MASK_SYNTHESIZE)
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/groupnorm_mask_synthesize.hpp"
+#endif
 
 // Queue the DRAM read of a gamma/beta row (TILE_WIDTH datums) into face 0; byte offsets scale with
 // datum size (2B bf16 / 4B fp32). Full row goes to face 0 (Blackhole DRAM reads need 64B granularity).
@@ -114,6 +117,14 @@ void kernel_main() {
 
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
+#if defined(MASK_SYNTHESIZE)
+    // Full group size, distinct from num_cols_per_group above, which is that value
+    // mod tile width. The row_offset recurrence mirrors groupnorm_input_mask.cpp:60-72.
+    constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
+    constexpr uint32_t MASK_TILE_W = tt::constants::TILE_WIDTH;
+    constexpr uint32_t MASK_GROUP_SIZE_MOD_TILE_W = num_channels_per_group % MASK_TILE_W;
+#endif
+
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t num_out_blocks_padded = num_out_blocks;
     uint32_t extra_out_block = false;
@@ -131,7 +142,28 @@ void kernel_main() {
     dfb_input_mask.reserve_back(block_w * num_groups_per_core);
     uint32_t l1_write_addr_input_mask = dfb_input_mask.get_write_ptr();
     uint32_t input_mask_tile_id = input_mask_tile_start_id;
+#if defined(MASK_SYNTHESIZE)
+    // start_stride for the first group on this core is 0. Subsequent groups
+    // advance row_offset by group_size_mod_tile_w with wrapping.
+    uint32_t mask_row_offset = 0;
+#endif
     for (uint32_t i = 0; i < num_groups_per_core; ++i) {
+#if defined(MASK_SYNTHESIZE)
+        // Write face 0 row 0 + face 1 row 0 of each of the block_w mask tiles
+        // for this group directly — no DRAM read.
+        tt::tt_metal::groupnorm::synthesize_group_mask_tiles_bf16(
+            l1_write_addr_input_mask,
+            mask_row_offset,
+            num_channels_per_group,
+            block_w,
+            input_mask_single_tile_size_bytes,
+            MASK_TILE_W,
+            tt::tt_metal::groupnorm::BF16_ONE,
+            tt::tt_metal::groupnorm::BF16_ZERO);
+        mask_row_offset =
+            tt::tt_metal::groupnorm::advance_row_offset(mask_row_offset, MASK_GROUP_SIZE_MOD_TILE_W, MASK_TILE_W);
+        l1_write_addr_input_mask += block_w * input_mask_single_tile_size_bytes;
+#else
         for (uint32_t j = 0; j < block_w; ++j) {
             noc.async_read(
                 mask,
@@ -143,6 +175,7 @@ void kernel_main() {
             noc.async_read_barrier();
             l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
         }
+#endif  // MASK_SYNTHESIZE
     }
     dfb_input_mask.push_back(block_w * num_groups_per_core);
 

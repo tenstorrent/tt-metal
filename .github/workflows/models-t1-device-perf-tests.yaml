@@ -14,6 +14,7 @@ on:
         options:
           - all
           - llama3.1-8b
+          - deepseek-v3-tg
           - sdxl
           - resnet50
       sku:
@@ -85,6 +86,7 @@ jobs:
           fi
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -99,6 +101,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   models-device-perf-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/models-device-perf-tests-impl.yaml
     with:
