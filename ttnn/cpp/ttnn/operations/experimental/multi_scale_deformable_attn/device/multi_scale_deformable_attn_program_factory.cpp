@@ -179,7 +179,11 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     // the reader instead would put a scalar core on work the unpacker does for free — and on
     // Blackhole it cannot even be read that way, since a DRAM transfer there is 64-byte granular
     // in both address and size while a tile face half is 32.
-    push_cb(input_rm_cb, 2 * n_d_tiles, tile_nbytes, data_format);
+    // Eight blocks: the reader stages a point's four corners as one group and barriers once for
+    // all of them, so a DRAM round trip is paid per point rather than per corner. Two such groups
+    // keep the reader a point ahead, and the depth being a multiple of four means a reservation
+    // never wraps inside a group.
+    push_cb(input_rm_cb, 8 * n_d_tiles, tile_nbytes, data_format);
     push_cb(input_tile_cb, 2 * n_d_tiles, tile_nbytes, data_format);
     // The geometry phase solves every point of a block before the reduction
     // starts, so all reduction_size scalar tiles are live at once. The grid and

@@ -304,6 +304,14 @@ void kernel_main() {
             x0_cb.pop_front(1);
             y0_cb.pop_front(1);
 
+            // One barrier for all four corners of the point. DRAM read latency here scales with
+            // the core's distance along the DRAM columns — nearly fivefold between the nearest and
+            // furthest worker row — so it is worth paying once per point rather than once per
+            // corner. The reservation covers the whole group; input_rm_cb is a multiple of four
+            // blocks deep so it never wraps inside one.
+            input_rm_cb.reserve_back(4 * N_D_TILES);
+            const uint32_t group_l1 = input_rm_cb.get_write_ptr();
+
             for (uint32_t c = 0; c < 4; ++c) {
                 // Hoist all c-invariant selectors out of the per-r loops below:
                 // c picks which y/x validity array, which corner-weight array,
@@ -320,8 +328,7 @@ void kernel_main() {
                 // here would be a scalar core doing the unpacker's job, and on Blackhole it is
                 // not even expressible: a DRAM transfer there is 64-byte granular in both
                 // address and size, while a face half is 32.
-                input_rm_cb.reserve_back(N_D_TILES);
-                const uint32_t block_l1 = input_rm_cb.get_write_ptr();
+                const uint32_t block_l1 = group_l1 + c * N_D_TILES * TILE_NBYTES;
 
                 for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
                     const uint32_t row_l1 = block_l1 + r * BLOCK_ROW_NBYTES;
@@ -349,17 +356,9 @@ void kernel_main() {
                         }
                     }
                 }
-                noc.async_read_barrier();
-
-                // Tail rows (r ≥ v_rows) and OOB-corner rows are left untouched:
-                // their scalar entry is zero (see scalar tile below), so any stale
-                // bytes in input row r contribute 0 to L1 accumulation. Saves a
-                // 16-row × 64-byte memset for tail tiles and skips work on full
-                // tiles entirely. The same contract covers the unused hi halves of
-                // a trailing half-filled d-tile (D % 32 == 16): the writer never
-                // reads those lanes back.
-                input_rm_cb.push_back(N_D_TILES);
             }
+            noc.async_read_barrier();
+            input_rm_cb.push_back(4 * N_D_TILES);
         }
     }
 }

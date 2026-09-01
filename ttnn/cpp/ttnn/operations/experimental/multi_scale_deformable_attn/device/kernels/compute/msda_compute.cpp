@@ -14,15 +14,13 @@
 // (attn * bilinear) weight is per query row, independent of D.
 //
 // Reader contract:
-//   * input_tile: only rows that are both in-range (r < v_rows) AND have an
-//     in-bounds corner are written. Tail / OOB rows are left untouched
-//     (stale CB bytes).
-//   * scalar_tile: col 0 of TL/BL is explicitly written for all 32 rows,
-//     with bf16 0 for tail / OOB-corner rows. Non-col-0 lanes are not
-//     written.
-// We rely on mul_tiles_bcast<COL>'s clear_fp32_dst_acc=true to zero DST so
-// that only col-0 broadcasts contribute, and on scalar=0 to zero out the
-// contribution of any stale input row.
+//   * input_rm: every row of the block is defined — a gathered stick, or zeros
+//     for a tail row (r >= v_rows) or a corner outside the feature map. The
+//     tilize below has no way to skip rows, so a stale row would reach DST.
+//   * scalar_tile: col 0 of TL/BL is written for all 32 rows, bf16 0 for tail /
+//     OOB-corner rows. Non-col-0 lanes are not written.
+// mul_tiles_bcast<COL>'s clear_fp32_dst_acc=true zeroes DST, so only the col-0
+// broadcast contributes.
 
 #include <cstdint>
 
