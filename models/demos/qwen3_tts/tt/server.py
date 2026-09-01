@@ -47,6 +47,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
+from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS
 
 
 def _user_path_no_dotdot(path: str) -> Path:
@@ -799,7 +800,7 @@ def sample_from_tt_vocab_logits(
     return out
 
 
-SUPPORTED_PREFILL_LENS = [32, 64, 96, 128, 192, 256, 384, 512, 1024]
+SUPPORTED_PREFILL_LENS = list(PREFILL_SEQS)
 
 
 def get_padded_prefill_len(seq_len: int) -> int:

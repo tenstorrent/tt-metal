@@ -13,10 +13,8 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.attention import Attention
 from models.demos.qwen3_tts.tt.mlp import MLP
+from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS, SHORT_SEQ_LIMIT
 from models.demos.qwen3_tts.tt.rmsnorm import RMSNorm
-
-# Prefill buckets that get a width-sharded RMSNorm piped into QKV / MLP.
-_PREFILL_SEQS = (32, 64, 96, 128, 192, 256)
 
 
 def _build_sharded_rmsnorm_configs(device, dim: int, num_cores: int, m: int = 32):
@@ -140,15 +138,15 @@ class DecoderLayer(LightweightModule):
 
         # Width-sharded RMSNorm: decode (m=32) and each prefill bucket.
         # Talker (hidden=2048): 64 cores (1 tile/core). CodePredictor: 32 cores.
-        # Same core count as the QKV / MLP-gate in0 grid so the consumer can
-        # read the LN output without an S2I.
+        # MLP gate/up consume this layout in place. Prefill QKV (M>1 tile)
+        # is S2I'd to L1 interleaved after the pre-attn LN.
         dim_tiles = hidden_size // 32
         ln_num_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if dim_tiles % c == 0)
         self._decode_ln_in_memcfg, self._decode_ln_progcfg = _build_sharded_rmsnorm_configs(
             device, hidden_size, ln_num_cores, m=32
         )
         self._prefill_ln_configs = {
-            m: _build_sharded_rmsnorm_configs(device, hidden_size, ln_num_cores, m=m) for m in _PREFILL_SEQS
+            m: _build_sharded_rmsnorm_configs(device, hidden_size, ln_num_cores, m=m) for m in PREFILL_SEQS
         }
 
     def forward(
@@ -224,7 +222,7 @@ class DecoderLayer(LightweightModule):
                 memory_config=ln_in_memcfg,
             )
             ttnn.deallocate(x_sharded)
-            if seq_len_at_entry > 32:
+            if seq_len_at_entry > SHORT_SEQ_LIMIT:
                 x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(x)
                 x = x_il

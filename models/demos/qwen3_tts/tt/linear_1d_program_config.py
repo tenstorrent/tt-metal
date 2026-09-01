@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """
-Shared MatmulMultiCoreReuseMultiCast1DProgramConfig builder for decode (m=1) and
-short-sequence prefill linears in Qwen3-TTS MLP and attention projections.
+Shared 1D / 2D matmul program-config builders for Qwen3-TTS.
 
-Keeping one implementation avoids drift between gate/up/down and wqkv/wo tuning.
+Talker/CP linears use 1D mcast. Speaker TDNNs (M>1 tile) use 2D mcast.
 """
 
 from __future__ import annotations
@@ -117,20 +116,6 @@ def make_linear_2d_program_config(
         fused_activation=fused_activation,
         fuse_batch=True,
     )
-
-
-def make_prefill_program_config(
-    m: int,
-    k: int,
-    n: int,
-    grid_x: int,
-    grid_y: int,
-    fp32_dest_acc_en: bool,
-    fused_activation=None,
-) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
-    """2D-mcast prefill linear: pick a grid that divides M/K/N tiles, then size blocks."""
-    gx, gy = find_2d_mcast_grid(m, k, n, grid_x, grid_y)
-    return make_linear_2d_program_config(m, k, n, gx, gy, fp32_dest_acc_en, fused_activation)
 
 
 def make_linear_1d_program_config(
