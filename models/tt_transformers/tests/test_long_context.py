@@ -40,21 +40,38 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 BATCH_SIZE = 1  # concurrent users
 MAX_GENERATED_TOKENS = 256  # hard cap on the decode loop
 INSTRUCT = True  # wrap the prompt in the model's chat template
-PAGE_BLOCK_SIZE = 32  # KV-cache tokens per block
+# KV-cache tokens per block. Attention reads one tile row (32 positions x 128 head dims,
+# 4 tiles, 4352 bytes) then consults the page table for the next block's physical address,
+# so at 32 -- one tile row per block -- every single read is followed by a random jump.
+# Measured in-model at 32k context, attention device time per 2 decode steps:
+#   32 -> 15511 us    128 -> 15321 us    256 -> 15206/15214 us    384 -> 15324    512 -> 15307
+# 256 was run twice and reproduced to 7.7 us (0.05%), while its neighbours cluster 105 us
+# above it, so the dip is real. Why 256 specifically is not understood: run length alone
+# predicts 512 should win, and it does not; matching the block size to sdpa_decode_k_chunk_size
+# was tested at 512/512 and was the worst configuration measured. Whole model 28.195 -> 28.03
+# ms/token (0.59%); the paged cache write improves 3.1% on the same mechanism.
+# Trade-off: a block is the allocation unit, so a short sequence still occupies a whole
+# block. Fine for this long-context benchmark, wasteful for many concurrent short chats.
+# Scope: block size is a serving parameter, not a model one -- ModelArgs only accepts it
+# (PagedAttentionConfig defaults to 32) and never chooses it, and under vLLM it arrives as
+# cache_config.block_size. So this speeds up THIS benchmark; a deployment gets it only by
+# setting its own block size to match. Worth passing to whoever owns serving config for
+# long-context workloads on this hardware; it is not a change we can make on their behalf.
+PAGE_BLOCK_SIZE = 256
 
 # (label, max_seq_len, page_max_num_blocks)
 #
 # max_seq_len - MAX_GENERATED_TOKENS is the prompt budget: preprocess_inputs_prefill
 # left-clips any longer prompt to exactly that (tt/common.py:283).
 # page_max_num_blocks * PAGE_BLOCK_SIZE must cover prompt + generated:
-#   32 * 1032 = 33024   and   32 * 2056 = 65792
+#   256 * 129 = 33024   and   256 * 257 = 65792
 #
 # A length beyond the model's NATIVE window (Qwen3-8B: max_position_embeddings=40960)
 # is not skipped -- `_extend_context_with_yarn` below stretches the RoPE frequencies with
 # YaRN so it runs. The summary's `rope` column records which rows were extended.
 CONTEXT_CONFIGS = [
-    ("32k", 33024, 1032),  # 33024 - 256 = 32768 prompt tokens
-    ("64k", 65792, 2056),  # 65792 - 256 = 65536 prompt tokens
+    ("32k", 33024, 129),  # 33024 - 256 = 32768 prompt tokens
+    ("64k", 65792, 257),  # 65792 - 256 = 65536 prompt tokens
 ]
 
 # Each parametrization appends a dict here and fills it in as it progresses, so a run
