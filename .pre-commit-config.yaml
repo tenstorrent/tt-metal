@@ -61,6 +61,12 @@ repos:
       entry: python3 scripts/check_file_size.py
       language: system
       types: [file]
+      # Generated matmul tuning table: a constexpr array compiled into libttnn,
+      # so it must be present at build time on every machine that builds
+      # tt-metal (wheels, air-gapped, external). It cannot be fetched at build
+      # time or mounted like model weights without adding a network dependency
+      # to the build itself.
+      exclude: ^ttnn/cpp/ttnn/operations/matmul/device/config/registry/checked_in/
     - id: check-agent-prompt-lengths
       name: check .agents/prompts goal objective lengths (<=4000 chars substituted)
       entry: python3 scripts/check_agent_prompt_lengths.py

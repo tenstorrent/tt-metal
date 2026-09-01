@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <iosfwd>
 #include <optional>
@@ -13,11 +14,27 @@
 #include <tuple>
 #include <vector>
 
-#include <fmt/base.h>
+#include <fmt/format.h>
 
 namespace ttnn {
 
+enum class MatmulRegistryMode : std::uint8_t { Off, Shadow, On };
+
+constexpr std::string_view to_string(const MatmulRegistryMode mode) noexcept {
+    switch (mode) {
+        case MatmulRegistryMode::Off: return "off";
+        case MatmulRegistryMode::Shadow: return "shadow";
+        case MatmulRegistryMode::On: return "on";
+    }
+    return "invalid";
+}
+
 namespace core {
+
+// Process-global storage keeps the public Config layout stable. The registry
+// snapshots this control on first dispatch.
+MatmulRegistryMode get_matmul_registry_mode() noexcept;
+void set_matmul_registry_mode(MatmulRegistryMode mode) noexcept;
 
 struct Config {
     struct attributes_t {
@@ -65,6 +82,12 @@ public:
     }
 
     template <reflect::fixed_string name>
+        requires(std::string_view{name} == "matmul_registry_mode")
+    MatmulRegistryMode get() const noexcept {
+        return get_matmul_registry_mode();
+    }
+
+    template <reflect::fixed_string name>
         requires(name == reflect::fixed_string{"report_path"})
     std::optional<std::filesystem::path> get() const {
         return get_report_path_impl();
@@ -82,6 +105,12 @@ public:
     void set(const T& value) {
         reflect::get<index>(this->attributes) = value;
         this->validate(reflect::member_name<index>(this->attributes));
+    }
+
+    template <reflect::fixed_string name>
+        requires(std::string_view{name} == "matmul_registry_mode")
+    void set(const MatmulRegistryMode mode) noexcept {
+        set_matmul_registry_mode(mode);
     }
 
     // Defined in config.cpp (uses tt-logger).
@@ -109,4 +138,11 @@ struct fmt::formatter<ttnn::Config> {
 
     // Defined in config.cpp.
     auto format(const ttnn::Config& config, format_context& ctx) const -> format_context::iterator;
+};
+
+template <>
+struct fmt::formatter<ttnn::MatmulRegistryMode> : fmt::formatter<std::string_view> {
+    auto format(const ttnn::MatmulRegistryMode mode, format_context& ctx) const -> format_context::iterator {
+        return fmt::formatter<std::string_view>::format(ttnn::to_string(mode), ctx);
+    }
 };

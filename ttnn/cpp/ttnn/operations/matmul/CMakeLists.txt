@@ -3,6 +3,36 @@ include(sources.cmake)
 add_library(ttnn_op_matmul ${LIB_TYPE})
 add_library(TTNN::Ops::Matmul ALIAS ttnn_op_matmul)
 
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+set(MATMUL_REGISTRY_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/device/config/registry)
+set(MATMUL_REGISTRY_GENERATED_DIR ${MATMUL_REGISTRY_SOURCE_DIR}/checked_in)
+set(MATMUL_REGISTRY_GENERATED_SOURCE ${MATMUL_REGISTRY_GENERATED_DIR}/matmul_registry_data.cpp)
+set(MATMUL_REGISTRY_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/matmul_registry)
+
+# Registry promotion remains an offline release step. Normal TTNN builds never
+# regenerate or parse the reviewed table; they only emit private running-build
+# digests from the closed semantic manifest and build facts above.
+#
+# The four static_asserts in the generated table walk every entry at compile
+# time, which exceeds the stock constexpr step budget at this table size. The
+# flag is a ceiling, not an allocation: it costs nothing when it is not reached.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(MATMUL_REGISTRY_CONSTEXPR_BUDGET -fconstexpr-steps=200000000)
+else()
+    set(MATMUL_REGISTRY_CONSTEXPR_BUDGET -fconstexpr-ops-limit=200000000)
+endif()
+set_source_files_properties(
+    ${MATMUL_REGISTRY_GENERATED_SOURCE}
+    PROPERTIES
+        SKIP_LINTING
+            TRUE
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
+        COMPILE_OPTIONS
+            "${MATMUL_REGISTRY_CONSTEXPR_BUDGET}"
+)
+
 tt_reuse_precompile_headers(ttnn_op_matmul TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_matmul)
 set_target_properties(
@@ -33,7 +63,17 @@ target_sources(
         ${TTNN_OP_MATMUL_SRCS}
 )
 
-target_include_directories(ttnn_op_matmul PRIVATE ${FixmeOpIncDirs})
+target_include_directories(
+    ttnn_op_matmul
+    PRIVATE
+        ${FixmeOpIncDirs}
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
+        ${PROJECT_SOURCE_DIR}/tt_metal/common
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
+        ${MATMUL_REGISTRY_BUILD_DIR}
+        ${MATMUL_REGISTRY_GENERATED_DIR}
+)
 target_link_libraries(ttnn_op_matmul PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
