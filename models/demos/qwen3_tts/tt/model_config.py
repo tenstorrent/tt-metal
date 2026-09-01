@@ -13,6 +13,12 @@ import ttnn
 HF_ID_1_7B = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 HF_ID_0_6B = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
 
+# Talker prefill buckets (must match server.SUPPORTED_PREFILL_LENS).
+# seq<=SHORT_SEQ_LIMIT uses DRAM-sharded QKV (M is one tile); larger buckets
+# get width-sharded RMSNorm + 1D-mcast QKV/O/MLP configs.
+SHORT_SEQ_LIMIT = 32
+PREFILL_SEQS = (32, 64, 96, 128, 192, 256, 384, 512, 1024)
+
 
 def is_0_6b(hf_id: str) -> bool:
     h = (hf_id or "").lower()

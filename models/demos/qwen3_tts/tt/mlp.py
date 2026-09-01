@@ -22,9 +22,7 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     width_sharded_l1_memcfg,
 )
 from models.demos.qwen3_tts.tt.linear_1d_program_config import find_1d_mcast_grid, make_linear_1d_program_config
-
-# Prefill buckets that get a 1D-mcast program config (M > 1 tile).
-_PREFILL_SEQS = (32, 64, 96, 128, 192, 256)
+from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS, SHORT_SEQ_LIMIT
 
 
 class MLP(LightweightModule):
@@ -139,7 +137,7 @@ class MLP(LightweightModule):
             packer_l1_acc=True,
         )
         grid = device.compute_with_storage_grid_size()
-        self.short_seq_limit = 32
+        self.short_seq_limit = SHORT_SEQ_LIMIT
         _fp32 = self.compute_kernel_config.fp32_dest_acc_en
         # 1D program configs: gate/up output = local_intermediate per chip; down input = local_intermediate.
         self._decode_gate_up_progcfg = make_linear_1d_program_config(
@@ -169,12 +167,12 @@ class MLP(LightweightModule):
         _down_gx, _down_gy = find_1d_mcast_grid(self.local_intermediate, hidden_size, grid.x, grid.y)
         self._prefill_gate_up_progcfg = {
             m: make_linear_1d_program_config(m, hidden_size, self.local_intermediate, grid.x, grid.y, _fp32)
-            for m in _PREFILL_SEQS
+            for m in PREFILL_SEQS
             if m > self.short_seq_limit
         }
         self._prefill_down_progcfg = {
             m: make_linear_1d_program_config(m, self.local_intermediate, hidden_size, _down_gx, _down_gy, _fp32)
-            for m in _PREFILL_SEQS
+            for m in PREFILL_SEQS
             if m > self.short_seq_limit
         }
 
