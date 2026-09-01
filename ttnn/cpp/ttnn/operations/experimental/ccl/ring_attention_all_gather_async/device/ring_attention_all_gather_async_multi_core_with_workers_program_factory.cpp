@@ -428,6 +428,7 @@ void ring_attention_neighbor_halo_exchange_helper(
             reader_args.push_back(input_tile_start);
             reader_args.push_back(input_tile_end);
             reader_args.push_back(input_batch_base);
+            reader_args.push_back(input_shape[kBatchDimension]);
 
             writer_args.push_back(output_Ht * output_Wt);
             writer_args.push_back(batch_head_count);
@@ -1048,6 +1049,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                                             : single_batch_head_num_pages;
             tensor_descriptor_args.push_back(valid_pages_per_batch_head);  // 6 == valid_pages_per_batch_head
             tensor_descriptor_args.push_back(placement.link);              // 7 == worker_link
+            tensor_descriptor_args.push_back(input_tensor_shape[kBatchDimension]);  // 8 == input_cache_batch_extent
         }
         return tensor_descriptor_args;
     };

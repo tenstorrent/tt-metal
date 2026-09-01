@@ -101,8 +101,8 @@ constexpr uint32_t kReaderReadySemaphoreFieldOffset = 2;
 constexpr uint32_t kWriterRuntimeArgHeaderCount = 5;
 constexpr uint32_t kWriterReadySemaphoreFieldOffset = 4;
 // Per-input fields: Wt, Ht, out_Wt, out_Ht, batch_head_size, input_batch_base,
-// valid_pages_per_batch_head, and worker link.
-constexpr uint32_t kTensorDescriptorFieldCount = 8;
+// valid_pages_per_batch_head, worker link, and input cache batch extent.
+constexpr uint32_t kTensorDescriptorFieldCount = 9;
 constexpr uint32_t kInputBatchBaseFieldOffset = 5;
 // Per-(batch,head) page count each worker is allowed to gather. Defaults to the full input
 // (input_Ht * input_Wt); the fused ring_joint_sdpa path patches it down to the logical_n-valid
