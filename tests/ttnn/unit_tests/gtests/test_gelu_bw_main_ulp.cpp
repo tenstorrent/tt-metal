@@ -1731,4 +1731,32 @@ TEST_F(GeluBwMainPolyTest, SaturationThresholdResearch) {
     EXPECT_EQ(neg_violations, 0) << neg_violations << " negative-saturation values (x <= -13.375) did not produce 0.0";
 }
 
+// Correctness guard: verifies IEEE special values (+inf, -inf, NaN) per nmauriceTT review.
+// +inf → 1.0, -inf → 0.0, NaN → 1.0 (via v_if comparison treating NaN bit pattern as
+// large positive). Ref: tt-llk#675, tech_reports/Handling_Special_Value/special_values.md.
+TEST_F(GeluBwMainPolyTest, SpecialValues) {
+    float pos_inf = std::numeric_limits<float>::infinity();
+    float neg_inf = -std::numeric_limits<float>::infinity();
+    float nan_val = std::numeric_limits<float>::quiet_NaN();
+
+    // +inf: treated as large positive, saturates to 1.0
+    // (also the correct mathematical limit: lim x->+inf GELU'(x) = 1)
+    float result_pos_inf = run_gelu_bw_main_single(*device_, pos_inf);
+    std::cout << "GELU_BW(+inf) = " << result_pos_inf << "\n";
+    EXPECT_EQ(result_pos_inf, 1.0f) << "+inf should saturate to 1.0";
+
+    // -inf: treated as large negative, falls through to default 0.0
+    // (also the correct mathematical limit: lim x->-inf GELU'(x) = 0)
+    float result_neg_inf = run_gelu_bw_main_single(*device_, neg_inf);
+    std::cout << "GELU_BW(-inf) = " << result_neg_inf << "\n";
+    EXPECT_EQ(result_neg_inf, 0.0f) << "-inf should saturate to 0.0";
+
+    // NaN: bit pattern 0x7FFF treated as large positive, saturates to 1.0
+    // Ideally should return NaN, but TT hardware treats NaN as ordinary number
+    // in comparisons (see special_values.md). This is acceptable per tt-llk#675.
+    float result_nan = run_gelu_bw_main_single(*device_, nan_val);
+    std::cout << "GELU_BW(NaN) = " << result_nan << "\n";
+    EXPECT_EQ(result_nan, 1.0f) << "NaN treated as large positive by SFPU, saturates to 1.0";
+}
+
 }  // namespace ttnn::test
