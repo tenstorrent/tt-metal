@@ -42,6 +42,22 @@ except ModuleNotFoundError:
 
 mcp = FastMCP("e2e-mcp")
 
+# THE CLIENT MUST BE ABLE TO TELL WORK FROM A WEDGE. These gates hold the device for a full pytest
+# run while emitting nothing, and a client aborts a call that "sent no response or progress" for its
+# silence window -- a window this server's own per-gate timeout sits right on top of. Installed once
+# at registration, so no gate signature changes and a new one cannot forget.
+try:
+    from .mcp_progress import install as _install_progress
+
+    _install_progress(mcp)
+except Exception:  # noqa: BLE001 -- a server that cannot report progress must still serve
+    try:
+        from scripts.tt_hw_planner.mcp_progress import install as _install_progress
+
+        _install_progress(mcp)
+    except Exception:  # noqa: BLE001
+        pass
+
 _DEMO_DIR = os.environ.get("E2E_MCP_DEMO_DIR", "")
 _PCC = float(os.environ.get("E2E_MCP_PCC", "0.99"))
 _TIMEOUT = int(os.environ.get("E2E_MCP_TIMEOUT", "1800"))

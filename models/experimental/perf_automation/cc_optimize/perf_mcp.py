@@ -58,6 +58,20 @@ except ModuleNotFoundError:  # mcp >= 2.0 renamed FastMCP -> MCPServer
 
 mcp = FastMCP("perf-mcp")
 
+
+# THE CLIENT MUST BE ABLE TO TELL WORK FROM A WEDGE. Every tool here goes silent for the whole of a
+# device step, and a client aborts a call that "sent no response or progress" for its silence window
+# -- so profile_model was aborted mid-run, and because it persists the roofline snapshot on its LAST
+# statement the snapshot was never written and the report silently lost its per-stage roofline and
+# fidelity ladder. Installed once at registration; judging a wedge stays with the run's own
+# forward-progress watchdog. Shared with the other MCP servers, which go quiet the same way.
+try:
+    from scripts.tt_hw_planner.mcp_progress import install as _install_progress
+
+    _install_progress(mcp)
+except Exception:  # noqa: BLE001 -- a server that cannot report progress must still serve
+    pass
+
 _MANIFEST_PATH = os.environ.get("PERF_MCP_MANIFEST", "")
 _MANIFEST = json.load(open(_MANIFEST_PATH)) if _MANIFEST_PATH else {}
 
