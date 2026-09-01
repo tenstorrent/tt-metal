@@ -193,10 +193,9 @@ struct NocReleasePolicy {
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
 #ifdef ARCH_QUASAR
-        // get_semaphore() resolves sem_id against THIS core's sem_l1_base, so a local store reaches upstream
-        // only while prefetcher and dispatcher are co-resident DMs sharing that base. Split across tiles it
-        // would silently write local L1 at upstream's offset and upstream would never see credits -- use the
-        // #else path, and move the reader to the uncached view with it.
+        // get_semaphore() returns an offset into this core's L1, so this local store
+        // works only because prefetcher and dispatcher are on same dispatch engines sharing one L1.
+        // A split _h/_d build must go over the NoC instead. See the checklist at the top of cq_prefetch.cpp.
         // Non-atomic RMW, so exactly one agent may ever increment this semaphore.
         auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<programmable_core_type>(sem_id));
         *sem_addr += pages;
@@ -340,7 +339,7 @@ void completion_queue_push_back(uint32_t num_pages) {
 }
 
 void process_write_host_h() {
-    volatile tt_l1_ptr CQDispatchCmd* cmd = reinterpret_cast<volatile tt_l1_ptr CQDispatchCmd*>((cmd_ptr));
+    volatile tt_l1_ptr CQDispatchCmd* cmd = reinterpret_cast<volatile tt_l1_ptr CQDispatchCmd*>(cmd_ptr);
 
     // We will send the cmd back in the first X bytes, this makes the logic of reserving/pushing completion queue
     // pages much simpler since we are always sending writing full pages (except for last page)
@@ -356,7 +355,7 @@ void process_write_host_h() {
 #endif
     constexpr uint32_t max_batch_size = ~(dispatch_cb_page_size - 1);
     if (is_event) {
-        last_event = reinterpret_cast<volatile uint32_t tt_l1_ptr*>((data_ptr + sizeof(CQDispatchCmd)))[0];
+        last_event = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(data_ptr + sizeof(CQDispatchCmd))[0];
     }
     while (wlength != 0) {
         uint32_t length = (wlength > max_batch_size) ? max_batch_size : static_cast<uint32_t>(wlength);
@@ -514,7 +513,7 @@ void relay_to_next_cb(uintptr_t data_ptr, uint64_t wlength) {
 }
 
 void process_write_host_d() {
-    volatile tt_l1_ptr CQDispatchCmd* cmd = reinterpret_cast<volatile tt_l1_ptr CQDispatchCmd*>((cmd_ptr));
+    volatile tt_l1_ptr CQDispatchCmd* cmd = reinterpret_cast<volatile tt_l1_ptr CQDispatchCmd*>(cmd_ptr);
     // Remember: host transfer command includes the command in the payload, don't add it here
     uint64_t length = load_aligned<uint64_t>(&cmd->write_linear_host.length);
     uintptr_t data_ptr = cmd_ptr;
@@ -1287,7 +1286,7 @@ void set_go_signal_noc_data() {
 static inline bool process_cmd_d(uintptr_t& cmd_ptr, uint32_t* l1_cache) {
     bool done = false;
 re_run_command:
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM) && !FD_QSR_RELAY_SNOOP
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     // Upstream relays this command by NoC write, which does not snoop, so the header must be dropped before
     // it is read cached. Sized to CQDispatchCmdLarge because the variant is unknown until cmd_id is read.
     // Sub-command arrays past the header are covered by careful_copy's own invalidate.
