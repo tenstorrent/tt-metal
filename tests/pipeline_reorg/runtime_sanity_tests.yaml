@@ -59,11 +59,6 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
-# --- Disaggregation: KV chunk address table (in-memory map + protobuf wire format) ---
-# Covered by runtime_sim_cpp_unit_tests below: its unit_tests_api invocation uses a negative
-# filter (everything but a few Quasar fixtures), which already includes KvChunkAddressTable*.
-# No separate entry — the sanity budget on the civ2 SKUs is fully allocated.
-
 # --- BH Multi-Card: System Health ---
 - name: bh_multicard_system_health
   cmd: ./build/test/tt_metal/tt_fabric/test_system_health
