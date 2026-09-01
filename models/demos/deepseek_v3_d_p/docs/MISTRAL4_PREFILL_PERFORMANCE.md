@@ -554,3 +554,47 @@ All rows `PASSED`, traced, `PP_HANDOFF=none`, single-shot windows via `test_mist
 **At long context, both configs beat the stale `FABRIC_1D` baseline** (§1, 8 kW, pre-rebase): single-rank 13,407 here vs 10,888 there at 261,120; PP=4 steady 17,907 here vs 12,408 there. The `FABRIC_1D` numbers were never valid on current `main` anyway (§0b), so this is not a "fabric migration helped" claim — it is the first honest long-context number on the fabric that actually ships.
 
 **Standing recommendation still holds and is now on firmer ground**: PP=4×(8,1) wins every window measured, by a wider margin at long context (1.34–1.40x steady) than the short-context-only data previously supported.
+
+---
+
+## 10. Real device-to-device PP=4 — every `PP_HANDOFF` number in §9 replaced by a measurement
+
+> **Superseded in part by `MISTRAL4_PP4_VS_SINGLE_RANK.md` (2026-08-31).** §10's *conclusion* stands —
+> `PP_HANDOFF=none` is not a bound on real PP=4 — but its **ratios** compare this section's runner
+> numbers against §9's pytest single-rank figure, and those two harnesses differ: single-rank measures
+> **35,597 tok/s** through the runner vs §9's **29,767** at window 5,120, ~20% apart. The newer document
+> re-measures BOTH configurations through the same harness and is the one to quote.
+
+Measured 2026-08-31 on `bh-glx-b03u02` at `779a4af546b` (`kmabee/mistral4-prefill-full-rebased.aug27`), in `/data/kmabee/tt-metal-2`.
+
+**Every PP=4 number in §9 (and §0b, §1) came from `test_prefill_pipeline_concurrent.py` with `PP_HANDOFF=none`, which does not move the activation between stages at all.** Mistral4 has now been run through the real pipeline-parallel prefill runner (`models/demos/common/prefill/runners/prefill_runner.py`, 4 processes under `tt-run`, activation carried stage-to-stage by a `ttnn` `MeshSocket` over fabric), so the bracket can be replaced by measurements. New topology config, in-tree:
+
+- `tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_4x8x1_z_chain_graph_descriptor.textproto` (SP axis LINE) and `..._4x8x1_z_chain_torus_y_graph_descriptor.textproto` (SP axis RING) — one 8x4 galaxy as 4 Z-chained `[8,1]` **column** meshes.
+- `models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_intragalaxy_4rank_8x1.yaml` and `..._8x1_torus_y.yaml` — the matching rank bindings.
+
+Use the **`torus_y`** pair for any comparison against §9: §9's submeshes are carved from an 8x4 mesh opened `FABRIC_2D_TORUS_XY`, so their SP-axis ring-attention collectives run Ring. Plain `2d` (LINE) measures 1.27x slower at 5,120 and is not a like-for-like configuration.
+
+**Full sweep, traced, 36 layers, `PP=4 x (8,1)`** (ms/chunk in brackets):
+
+| window | shape | single-rank (§9) | PP=4 `PP_HANDOFF=none` (§9) | **PP=4 REAL D2D** | real / none | real / single-rank |
+|---:|---|---:|---:|---:|---:|---:|
+| 5,120 | single-shot | 29,767 | 34,583 med [148.0] | **46,269 / 46,182** [110.7] | **1.34x** | **1.55x** |
+| 25,600 | single-shot | 25,754 | 45,541 med [562.1] | **48,832** [524.2] | **1.07x** | **1.90x** |
+| 102,400 | 20 x 5,120 | 19,814 | 24,157 total / 27,791 steady [184.2] | **24,382 total** / 24,276–25,542 steady [210.9] | 1.01x total / 0.87–0.92x steady | **1.23x** |
+| 261,120 | 51 x 5,120 | 13,407 | 16,794 total / 17,907 steady [285.9] | **17,052 total** / 16,958 steady [301.9] | 1.02x total / 0.95x steady | **1.27x** |
+
+Throughput is the **last rank's** chunk-to-chunk interval (the producer's own tok/s includes pipeline fill and a ~6.3 s first-push compile). Single-shot rows are the median steady interval; chunked rows reproduce §9's two metrics exactly (`total = CONTEXT/wall`, `steady = CHUNK/median(interval[PP-1:])`). Reproducible to 0.2% (two independent runs at 5,120). All four stages within 1.5% of each other.
+
+**Two caveats on the `total` column, and one on the whole table.** `total` is a single-prefill latency only when the run drove ONE request: with several requests back to back, request N+1's pipeline fill hides inside request N's drain and `tokens/wall` becomes a stream throughput. The 102,400 row is measured from a 2-request run and is quoted above as the correctly isolated single-prefill figure (24,382 tok/s = 4.200 s for 102,400 tokens); the 261,120 row was a 1-request run and needed no correction. The gap between the two windows is fill/drain: PP=4 loses ~3 chunks to fill and ~3 to drain, 6 of 51 chunks at 261,120 (~12%) but 6 of 20 at 102,400 (~30%). And across the whole table, **no first token is produced** — `PREFILL_KV_ONLY_LAST_LAYER` defaults to 1, so the last rank runs its final layer kv-only and skips the final norm and LM head. These are prefill-completion latencies, **not TTFT**; a true TTFT needs `PREFILL_KV_ONLY_LAST_LAYER=0`, which adds a norm plus an LM-head matmul over the vocab on the last rank and a kernel-compile cost no run here has paid. Expect PP=4 to look *worse* than single-rank for a single-chunk request, where there is nothing to pipeline and the chunk traverses all four stages serially.
+
+**§9's conclusion survives; its numbers do not.** PP=4×(8,1) still wins every window, by 1.27–1.90x over single-rank. But a `PP_HANDOFF` number is not a bound on the real thing, and the error has two unrelated causes pulling opposite ways:
+
+- **At single-shot windows `none` UNDERSTATES real PP=4 by a fixed ~37.5 ms/chunk** — 37.3 ms at 5,120 and 37.9 ms at 25,600, the same number at two windows whose per-chunk work differs 3.5x. That is not transport; it is `test_mistral4_pp4_concurrent_throughput`'s own per-iteration host cost, since one Python thread copies metadata for 4 stages, issues 4 trace replays and calls `synchronize_device` 4 times every iteration. The real runner gives each rank its own process and dispatch thread and that cost disappears. Being a fixed offset, it is 34% of the answer at 5,120 and ~0% by 261,120.
+- **At the chunked long-context windows real D2D gives up 16–27 ms/chunk on the *steady* metric**, and this part *is* the transport. With `HANDOFF=none` the longctx loop's downstream stages replay against a fixed seeded input, so stage r's chunk carries no dependency on stage r-1; the real pipeline has both the dependency and the transfer. A direct microbenchmark of the transport (4 ranks, no weights, the runner's own `_d2d_send`/`_d2d_recv`) puts one hop of the 42 MB `[1,1,5120,4096]` bf16 activation at **~11 ms end-to-end** (0.47–0.59 ms host push; 2.25–2.33 ms enqueue + grant + device sync), and `_lease_reclaim` blocks on `wait_for_fabric_links()` at the top of every chunk — so **the transport looks serialised with compute rather than overlapped**. Hypothesis, not measurement, but the right magnitude, and the clearest optimisation lead here: ~5–10% at 102,400+.
+
+**Correctness (single-rank, PCC-gated).** Mistral4 also now passes through the real runner + producer with the per-slot KV read-back gate (`test_producer_runner_e2e.py`, unmodified, via its `PREFILL_PROMPT_FILE` scenario with `PREFILL_REUSE_TRACE_DIR` pointed at a pre-built golden). At 36 layers the deep-KV PCC bottoms at **0.9034**; the per-layer profile runs 0.99992 at layer 0 down to a 0.90–0.95 plateau from layer 15, with the rope half at 0.988–0.9999 throughout. An 8-layer control run reproduces layers 0–7 to all five printed digits and bottoms at 0.9931, which is what establishes this as depth accumulation rather than miswiring. **The producer's default `PREFILL_STANDALONE_CHUNKED_PCC=0.93` is Kimi-calibrated and wrong for a 36-layer Mistral4 read-back — use 0.88**, consistent with `test_prefill_transformer_chunked.py`'s own `KV_CACHE_PCC_THRESHOLD = 0.85` for this quantity (set at GLM-5.2's observed ~0.86 over 78 layers). There is no PCC gate for the PP runs: `prefill_runner` rejects `PREFILL_MOCK_MIGRATION` for `num_ranks>1`.
+
+**Two traps worth knowing before reproducing this** (full list in `~/debug-docs/mistral4_prefill_planning-noissue/perf/RESULTS_PP4_REAL_D2D.md`):
+
+- The weight cache's device-count component is **namespacing only** — `32dev/8x1` and `8dev/8x1` files are byte-identical, so the existing 36-layer `8x1` cache can be hardlinked into the `8dev` namespace each PP rank resolves, with no rebuild. Cache keys are *global* layer indices, so all four ranks share one directory and it must hold layers 0–35.
+- A logical `[8,1]` column **spans two trays**, so its device set cannot come from tray/slice discovery; the per-rank `TT_VISIBLE_DEVICES` in the bindings were read off a live 8x4 mesh via `create_submeshes(MeshShape(8,1))`.
