@@ -296,9 +296,10 @@ inline void _llk_pack_mop_config_(
  * @param pack_src_format: Source (dest register) data format.
  * @param pack_dst_format: Destination (L1) data format.
  * @param tile_size: Size of one output tile in bytes.
- * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums). Unused on Wormhole; kept for `_llk_*` slot parity with Blackhole.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param face_r_dim: Number of rows per face.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
  */
 template <bool is_fp32_dest_acc_en>
@@ -306,16 +307,17 @@ inline void _llk_pack_reconfig_data_format_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t face_r_dim          = FACE_R_DIM,
+    const std::uint32_t tile_c_dim          = TILE_C_DIM,
     const std::uint32_t num_faces           = 4,
     const bool partial_face                 = false,
+    const std::uint32_t face_r_dim          = FACE_R_DIM,
     [[maybe_unused]] const bool narrow_tile = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     llk::san::pack_operand_configure<true>(
         is_fp32_dest_acc_en, pack_src_format, pack_dst_format, face_r_dim, llk::san::IGNORE, num_faces, partial_face, narrow_tile);
 
-    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face);
+    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, face_r_dim, partial_face);
 }
 
 /**

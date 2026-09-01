@@ -452,7 +452,7 @@ inline void _llk_pack_reconfig_data_format_(
     llk::san::pack_operand_configure<true>(
         is_fp32_dest_acc_en, pack_src_format, pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, llk::san::IGNORE);
 
-    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face, face_r_dim);
+    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, face_r_dim);
 }
 
 /**
