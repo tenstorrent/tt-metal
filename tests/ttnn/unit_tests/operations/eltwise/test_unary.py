@@ -2694,3 +2694,49 @@ def test_softcap_zero_beta_guard(device, expect_error):
     # 1/beta is precomputed host-side, so a zero beta would reach the SFPU as inf.
     with expect_error(RuntimeError, "SOFTCAP requires a non-zero beta"):
         ttnn.softcap(input_tensor, 0.0)
+
+
+@pytest.mark.parametrize(
+    "op_name, values, ttnn_op",
+    [
+        (
+            "deg2rad",
+            [0.0, 1.0, 45.0, 90.0, 180.0, 360.0, -45.0, -180.0, 1e4, -1e4],
+            ttnn.deg2rad,
+        ),
+        (
+            "rad2deg",
+            [
+                0.0,
+                3.141592653589793 / 2,
+                3.141592653589793,
+                2 * 3.141592653589793,
+                -3.141592653589793 / 2,
+                -3.141592653589793,
+                100.0,
+                -100.0,
+            ],
+            ttnn.rad2deg,
+        ),
+    ],
+)
+@pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 256, 256], [1, 4, 512, 512]])
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)])
+def test_angle_conversion_values_and_dtypes(
+    device, op_name, values, ttnn_op, shape, torch_dtype, ttnn_dtype
+):
+    num_elements = 1
+    for dim in shape:
+        num_elements *= dim
+
+    repeated_values = (values * (num_elements // len(values) + 1))[:num_elements]
+    torch_input_tensor = torch.tensor(repeated_values, dtype=torch_dtype).reshape(shape)
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden_output = golden_function(torch_input_tensor, device=device)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn_op(input_tensor)
+    torch_output = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(golden_output, torch_output, pcc=0.99)

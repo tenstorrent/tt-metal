@@ -670,8 +670,7 @@ std::vector<Tensor> atan_bw(
 std::vector<Tensor> rad2deg_bw(
     const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    float M_180_PI = 180 / M_PI;
-    Tensor grad_result = ttnn::multiply(grad, M_180_PI, std::nullopt, output_mem_config);
+    Tensor grad_result = ttnn::rad2deg(grad, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
@@ -1553,8 +1552,7 @@ std::vector<Tensor> erf_bw(
 std::vector<Tensor> deg2rad_bw(
     const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    float M_PI_180 = M_PI / 180;
-    Tensor grad_result = ttnn::multiply(grad, M_PI_180, std::nullopt, output_mem_config);
+    Tensor grad_result = ttnn::deg2rad(grad, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
