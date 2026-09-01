@@ -58,6 +58,16 @@
 #include "internal/ethernet/tunneling.h"
 #include "eth_l1_address_map.h"
 
+// FABRIC_ROUTER_SYNC_NO_SEND (JIT define, host env TT_METAL_PERF_DEBUG_FABRIC_SYNC_NO_SEND):
+// DIAGNOSTIC ONLY. The hook ticks on schedule and does everything it normally does -- deadline
+// arithmetic, L1 config reads, state publication, timestamp reads, ring writes, the teardown drain --
+// except it never puts a packet on the wire. Rounds then fail on the echo wait, which is expected and
+// bounded. This exists to split "the hook's tick path" from "the hook's eth traffic" as the cause of
+// the eth core failing to go active again for the NEXT profiler session.
+// FABRIC_ROUTER_SYNC_NO_ECHO (host env TT_METAL_PERF_DEBUG_FABRIC_SYNC_NO_ECHO): DIAGNOSTIC ONLY.
+// The INITIATOR still transmits -- so the TXQ is still used and the peer's L1 is still written -- but
+// the RESPONDER only ever reads and never replies. Halves the traffic and makes it one-directional,
+// to test whether one direction alone is enough to leave the eth core unable to go active again.
 namespace fabric_router_sync {
 
 using namespace tt::tt_fabric::router_sync;
@@ -181,8 +191,10 @@ __attribute__((noinline)) void initiator_round(uint32_t n) {
         }
         uint32_t hi, lo;
         kernel_profiler::read_wall_clock(hi, lo);  // t0: immediately before the send command
+#if !defined(FABRIC_ROUTER_SYNC_NO_SEND)
         internal_::eth_send_packet_bytes_unsafe(
             TXQ, BLK + kTxOff, peer + kPingOff, sizeof(Msg));
+#endif
         emit_sample(kernel_profiler::SPSC_SYNC_T0, round, i, hi, lo);
         const uint64_t dl = now64() + (i == 0 ? first_wait : nw);
         if (!wait_tag(&b->echo.tag, tag(kTagEcho, round, i), dl)) {
@@ -240,8 +252,10 @@ __attribute__((noinline)) void responder_service(uint32_t n) {
             ok = false;
             break;
         }
+#if !defined(FABRIC_ROUTER_SYNC_NO_SEND) && !defined(FABRIC_ROUTER_SYNC_NO_ECHO)
         internal_::eth_send_packet_bytes_unsafe(
             TXQ, BLK + kTxOff, peer + kEchoOff, sizeof(Msg));
+#endif
     }
     ok ? g_ok++ : g_fail++;
     publish_stat();
