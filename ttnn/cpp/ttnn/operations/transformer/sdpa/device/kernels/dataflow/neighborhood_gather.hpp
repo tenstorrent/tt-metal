@@ -8,7 +8,7 @@
 // (B, NH, S, D) K/V table into the SDPA compute's cb_k / cb_v, so the flash compute runs dense over
 // only real window tokens (no scattered active-tile streaming, no per-row tile padding).
 //
-// BUILD-OUT IN PROGRESS (B2.2). See ltx25_fused_na3d/HANDOFF.md §6 B2.2.
+// BUILD-OUT IN PROGRESS.
 //
 // Packing order (matches na3d _flat_indices / the host twin): the box [t0,t1)x[h_lo,h_hi)x[w_lo,w_hi)
 // is enumerated T-outer / H-mid / W-inner, giving each in-window key a dense index j in [0, n_box).

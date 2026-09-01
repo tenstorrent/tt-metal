@@ -49,6 +49,23 @@ and that is the single biggest obstacle to reading them together.
 | **band / slab**       | reference | A range of frames processed together to bound peak memory. `DIFFVAE_SLAB_FRAMES`.                                                                                             |
 | **halo**              | both      | The border sites a shard or band needs from its neighbour because windows reach across the boundary.                                                                          |
 | **shard**             | both      | One device's portion of the volume. Here always split along **W**.                                                                                                            |
+| **gather / box**      | ours      | The union of the windows of **every** query in the chunk, rounded out to brick boundaries. What actually gets fetched. `gather_brick_count` in the plan, `gather=N tiles` in the log. |
+| **slot**              | ours      | One key brick within the gather. The kernel's unit of K/V and of mask: it walks slots, not sites.                                                                             |
+| **in-window slots**   | ours      | The slots one query **brick** can actually see — the window union of its own 32 queries. The remaining slots of the gather are `-inf` for that brick and still cost a mask tile and a matmul. |
+| **narrowing**         | both      | Iterating a query brick over its in-window slots instead of the whole gather. The reference does it with `windowed_k_chunk_range()`; we do not.                               |
+
+Two traps in the above, both of which have already cost a wrong estimate:
+
+* **A query's window is not a brick's.** One query sees ~54 bricks; a brick of 32 queries sees the
+  union of all 32, which for `brick=(2,8,2)` at window 11 is `7x3x7 = 147`. Sizing narrowing off
+  the single-query figure overstates it by ~3x.
+* **In-window slots do not shrink with the chunk.** 147 is a property of the brick and the window,
+  not of the chunk it sits in. The *gather* grows with the chunk (147 at chunk `(1,1,1)`, 192 at
+  `(2,1,2)`); the in-window count does not. Narrowing's headroom is the difference between them.
+
+Note that **`sub-box` in the plan code means something else** — `neighborhood_plan.hpp` uses it for
+the owned query region within the resident region, a sharding concept. Do not use it for the window
+sense above.
 
 
 
@@ -60,7 +77,7 @@ and that is the single biggest obstacle to reading them together.
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **gather**      | The keys one query chunk must read: the union of its queries' context windows, rounded out to whole bricks.                                                                                                 |
 | **box**         | Reference's name for the same thing.                                                                                                                                                                        |
-| `box / vol`     | Keys gathered per query. Governs **gather traffic**. Ours logs it as `keys/query`.                                                                                                                          |
+| `box / vol`     | Keys gathered per query. Governs **gather traffic** only. Ours logs it as `keys/query`. It is **not** the score-tile count: with per-brick masks each query brick is scored against every gathered slot, so score tiles per query brick are `gather_brick_count` itself. A wider chunk lowers `keys/query` while *raising* score tiles. |
 | **box** (alone) | Governs **score compute** — every query scores against the whole box.                                                                                                                                       |
 | **regime**      | Where a chunk sits against a volume boundary on one axis: `Low` (clamps to 0), `Interior` (centred), `High` (clamps to the far edge). 3 per axis → **27 distinct mask geometries** in a volume of any size. |
 | **coverage**    | How much of a gathered key brick a query chunk can see: `AllVisible`, `NoneVisible`, or `Mixed`. Uniform bricks are constant-filled; only `Mixed` needs per-site evaluation.                                |
@@ -313,6 +330,57 @@ for (work_item ...)                                     // one query chunk, one 
 `fill_mask_tile` in one loop body puts a large function (nested loops, divisions) next to a
 memset in the same instruction cache and measured **worse than either alone** — 7498 ms against
 2761 ms for generating everywhere.
+
+**How a mask tile reaches `cb_mask`.** There are four routes, and which one runs is decided per
+chunk, not per slot — resolving it per slot put a branch to `fill_mask_tile` next to a DRAM read in
+the same loop body, which is the instruction-cache mix the three-pass split above exists to avoid.
+
+1. **Nothing written.** At stride 1 with a canonical gather, `cb_mask` is sized to a whole work
+   item (`persistent_mask` in the program factory), so its pages cycle back to the same addresses
+   every item. Once those pages hold the relative table, the next unclamped brick needs no writes
+   at all — `mask_pages_hold_table` tracks this. Only an edge brick dirties them.
+2. **One DMA per slot from the relative table.** The tile for a (query brick, key brick) pair
+   depends only on their difference, so `relative_table_index()` indexes a table that is
+   independent of both the gather origin and the shard origin — one upload serves every shard.
+3. **One DMA per slot from the regime table.** The GNA path, keyed on the chunk's window clamping
+   class rather than on a relative offset.
+4. **Generated.** `fill_mask_tile` walks the window arithmetic per element. Reached when no table
+   describes the brick — at stride 1 that means its window clamps at a volume edge.
+
+Uniform slots — every pair visible, or none — skip all of the above and take a constant fill.
+
+The per-brick path (a query chunk wider than one brick) runs 2 or 4 for **every (query row, slot)
+pair** rather than every slot, because each brick centres its own window. That is the cost
+difference between a broadcast mask and a correct one at stride 1.
+
+##### To explore: `cb_resident_mask` looks write-only
+
+`cb_resident_mask` is allocated by the program factory on the regime path
+(`interior_mask.has_value() && !per_brick_mask && !relative_mask_table`) at `gather_brick_count`
+tiles. The reader takes its write pointer, fills every tile by DMA from DRAM, and blocks on an
+`async_read_barrier()` — and then `resident_mask_pointer` is **never read**. No copy out of it, no
+`push_back`, no `pop_front`. Route 3 above issues its own fresh DRAM read instead.
+
+If that reading is right it is vestigial: the pre-relative-table design copied *out* of this buffer
+into `cb_mask`, that copy was replaced by a direct DRAM read, and the population was left behind.
+The cost would be a redundant DMA of the whole regime set per regime change plus a blocking
+barrier, into L1 nothing consumes, on the GNA path — which is the path that ships for video.
+
+Not yet confirmed on device. Removing the fill and running a GNA decode would settle it.
+
+##### Unverified: why the per-slot fill could not be an L1 copy
+
+Recorded because it shaped the current design, and flagged because it has no source. The claim is
+that staging the table in L1 and copying a tile per slot forces a per-word loop rather than a
+NOC transfer, **because the NOC will not accept a local source and a local destination** — so the
+staging defeats itself and reading from DRAM each time is faster. Earlier notes attribute this to a
+comment in this file; no such comment exists anywhere in the dataflow kernels, and it has not been
+confirmed against the NOC API or a microbenchmark.
+
+It matters because it decides whether "keep the relative table resident in L1 and copy the right
+tile into place" is viable — the obvious way to make a wider query chunk affordable. If the claim
+is false that option is open; if true, a resident table has to be **indexed in place** by the
+compute kernel rather than copied from. Settle it before designing around either answer.
 
 **K and V are laid out differently in their CBs, and it matters.** `matmul_blocks` walks `in1` as
 `in1_index += N`, so `in1` is always a `[K, N]` grid of tiles — the `transpose` flag transposes
@@ -585,11 +653,35 @@ stride larger than its kernel, reported in **op-order axes**.
 
 | variable                    | does                                                                                          |
 | --------------------------- | --------------------------------------------------------------------------------------------- |
+| `DIFFVAE_STAGE5_BACKEND`    | selects the stage-5 executor. `bricked_sp_w_sharded` is ours; unset gives the reference `op_sp_w_sharded` |
+| `DIFFVAE_DET_NA3D_BACKEND`  | same choice for the deterministic stages 1–4 only — **separate knob**, does not reach stage 5  |
 | `DIFFVAE_S5_GNA_STRIDE`     | stage-5 stride, physical `(t,h,w)`; read only by `DiffVAEStage5Config.resolved_gna_stride`, which feeds every stage-5 backend. An explicit `gna_stride=` on the config wins over it. |
 | `DIFFVAE_GNA_STRIDE`        | global stride; read by `na3d` for every stage                                                 |
 | `DIFFVAE_NA_WINDOW`         | overrides the architectural context window                                                    |
 | `DIFFVAE_NA_BRICK`          | overrides the derived brick                                                                   |
 | `DIFFVAE_NA_KV_CHUNK_TILES` | tiles per flash step; 8 = 256 tokens                                                          |
+
+Note that `DIFFVAE_GNA` (theirs, below) and `DIFFVAE_S5_GNA_STRIDE` (ours) are different knobs
+reaching different executors, so one command line can put the two backends at different strides.
+To put the **reference** at stride 1 for a like-for-like comparison, use `DIFFVAE_GNA=0`.
+
+### Ours — diagnostics
+
+All default off. The ones marked WRONG OUTPUT exist to separate one cost from another and must
+never render a shipped frame.
+
+| variable                       | does                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------ |
+| `DIFFVAE_NA_SKIP_KV`           | issue no K/V reads at all. **WRONG OUTPUT** — isolates gather cost from compute |
+| `DIFFVAE_NA_MASK_MEMSET_ONLY`  | fill every mask tile with a constant. **WRONG OUTPUT** — separates deciding tile content from writing it. Only reachable when `per_brick_mask` is on, i.e. a chunk wider than one brick |
+| `DIFFVAE_NA_TABLE_ALWAYS`      | skip the per-brick clamping gate. **WRONG at volume edges** — shows what the gate costs |
+| `DIFFVAE_NA_CHUNK_BRICKS`      | force the query chunk, in BRICKS (`t,h,w`)                               |
+| `DIFFVAE_NA_UNSAFE_CHUNK`      | lift the plan's `chunk == stride` check, needed with the above at stride 1. **WRONG OUTPUT unless paired with `PER_BRICK_MASK=1`** — see `neighborhood_plan.cpp` |
+| `DIFFVAE_NA_PER_BRICK_MASK`    | force the mask mode; defaults on when the chunk exceeds the stride       |
+| `DIFFVAE_NA_HALO_TOPOLOGY`     | `ring` retries the halo on ring — see the deadlock note in `_halo_exchange` |
+| `DIFFVAE_NA_HALO_LINKS`        | halo link count only                                                     |
+| `DIFFVAE_NA_HALO_PERSISTENT`   | halo without the persistent buffer                                       |
+| `DIFFVAE_EXCLUSIVE`            | restore the DiffVAE's evict-the-DiT residency behaviour                  |
 
 
 
@@ -608,6 +700,17 @@ stride larger than its kernel, reported in **op-order axes**.
 | `DIFFVAE_SLAB_FRAMES`                        | frame banding. **Off by default**; required at 6 s 1080p |
 | `DIFFVAE_STAGE_TIMING`, `DIFFVAE_BLOCK_PROF` | the decode tree                                          |
 | `DIFFVAE_NUM_LINKS`                          | CCL links                                                |
+
+
+
+### Known constraints
+
+* `neighbor_pad_async` deadlocks on `Topology.Ring`. `_halo_exchange` pins that one call to Linear
+  while everything else still runs ring; its docstring records what was ruled out (channel width,
+  link count, persistent buffer). The reference never hits this — it uses `all_gather`.
+* Exact NA at 6 s 1080p does not fit co-resident with the DiT. Either band harder
+  (`DIFFVAE_SLAB_FRAMES=48`) or fall back to exclusive residency (`DIFFVAE_EXCLUSIVE=1`). The
+  decode-only timing test runs fine at the default banding because nothing else is resident.
 
 
 ---

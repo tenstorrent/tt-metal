@@ -323,10 +323,6 @@ void kernel_main() {
     // no writes at all. Only leaving an edge shell dirties them, which at 1080p happens a few
     // dozen times per core against 458 work items.
     //
-    // Worth 15.2 s against 15.6 s at 145 frames. Less than the 350 KB per work item it saves
-    // would suggest, because what the op is actually bound by is the number of SCORE TILES the
-    // compute kernel walks -- see FINDINGS section 10 -- but it is free and it is real.
-    //
     // This predicate is ALSO what the program factory sizes cb_mask by, so the two cannot drift:
     // there is no compile arg for the mode. Adding one is not free either -- the reader's five
     // TensorAccessorArgs chain off reader_arg::COUNT, and moving it by one ran the last accessor

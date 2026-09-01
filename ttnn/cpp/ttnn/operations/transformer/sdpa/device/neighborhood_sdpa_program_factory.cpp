@@ -68,9 +68,7 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     // The relative mask table makes every unclamped query brick want the SAME tiles in the same
     // order, so sizing cb_mask to a whole work item (rather than double-buffering one kv chunk)
     // makes its pages cycle back to the same addresses every item -- and the reader can then skip
-    // writing them entirely for a run of unclamped bricks -- worth 15.2 s against 15.6 s at 145
-    // frames. (Less than the traffic it removes would suggest: what the op is actually bound by is
-    // the number of score tiles the compute kernel walks. See FINDINGS section 10.)
+    // writing them entirely for a run of unclamped bricks.
     const bool relative_mask_table = config.stride.time() == 1 && config.stride.height() == 1 &&
                                      config.stride.width() == 1 && tensors.interior_mask.has_value();
     // Must match `interior_table_supported` in neighborhood_reader.cpp exactly: the reader skips

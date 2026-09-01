@@ -12,16 +12,22 @@
 #include "compute_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_args.hpp"
 
-// Flash attention over one query brick at a time.
+// Flash attention over one query CHUNK at a time.
 //
 // READABILITY INVARIANT: this file contains no neighborhood concepts. No context window, no
-// stride, no brick geometry, no volume. It receives a tile row of queries, a stream of key
+// stride, no brick geometry, no volume. It receives tile rows of queries, a stream of key
 // and value tiles, and an additive mask, and runs online softmax over them. Everything that
 // decides WHICH tiles arrive lives in the reader.
 //
-// The shape is simpler than the general SDPA kernel because a query chunk here is always
-// exactly one tile row -- one brick is 32 sites is one tile. So there is no query
-// sub-blocking, and the running statistics are one tile each.
+// The shape is simpler than the general SDPA kernel because a query chunk is a whole number of
+// TILE ROWS -- one brick is 32 sites is one tile row -- so `query_tile_rows` is both the matmul's
+// M and its in0 subblock count, and subblock_h is always 1. There is no sub-blocking WITHIN a
+// query row; the running statistics are query_tile_rows tiles each, one per row.
+//
+// query_tile_rows is 1 only when the query chunk is a single brick, which is what stride (1,1,1)
+// plans today. Do not assume it: reduce_c, sub_exp_block_bcast_cols_inplace and the statistic CBs
+// are all parameterised on it, and a chunk wider than the stride additionally makes the mask
+// per-row rather than broadcast (see mask_subblock_stride below).
 
 namespace kernel_args = ttnn::transformer::neighborhood::kernel_args;
 

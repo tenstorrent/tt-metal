@@ -579,13 +579,12 @@ def _choose_sharded_brick(volume, context_window, stride, width_local, shard_cou
             if any(plan["gather_brick_count"] != plans[0]["gather_brick_count"] for plan in plans):
                 continue  # one program cannot serve shards that gather differently
             gather = plans[0]["gather_brick_count"]
-            # Tie-breaks. A smaller halo is less to exchange, brick-permute and drop, and that one
-            # is reasoned. The last is MEASURED and not explained: (2,8,2) and (8,2,2) both gather
-            # 147 at 1080p with the same halo, and the deeper TIME brick runs the kernel at 824 ms
-            # per block against 893 -- 11% better per query brick -- even though it pads time 78 up
-            # to 80 and so carries 2.6% MORE bricks. Guessing a rule from one pair is how the
-            # earlier conclusions in FINDINGS went wrong, so this stays labelled as what it is: a
-            # preference to re-measure if the volume, window or shard count changes.
+            # Tie-breaks, in order: fewest gathered bricks, then smallest halo, then the deepest
+            # brick in TIME. A smaller halo is less to exchange, brick-permute and drop, and that
+            # one is reasoned. Preferring depth in time is MEASURED and not explained -- shapes
+            # that gather identically and carry the same halo do not run at the same speed, and
+            # the deeper time extent won. It is a preference, not a rule: re-measure it if the
+            # volume, window or shard count changes.
             score = (gather, halo, -brick_time)
             if best_gather is None or score < best_gather:
                 best, best_gather = brick, score

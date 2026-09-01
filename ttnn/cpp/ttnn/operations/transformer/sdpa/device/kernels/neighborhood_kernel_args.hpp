@@ -107,7 +107,7 @@ enum : uint32_t {
     table_always,
 
     // DIFFVAE_NA_SKIP_KV: issue no K/V reads at all. Diagnostic with WRONG output; it separates
-    // the gather's cost from the compute kernel's, which is 80 ms of 947 -- see FINDINGS 10.
+    // the gather's cost from the compute kernel's.
     skip_kv,
 
     // The volume and the gather span, measured in bricks -- one brick is one tile row, so
