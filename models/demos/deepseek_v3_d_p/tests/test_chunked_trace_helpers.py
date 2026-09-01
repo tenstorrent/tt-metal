@@ -20,7 +20,6 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 KVPE_DIM = 576  # kv_lora_rank (512) + qk_rope_head_dim (64)
 
 
-# kimi_k2_6 is still needed here: https://github.com/tenstorrent/tt-metal/issues/54971
 def _trace_or_skip(variant_name):
     trace = get_adapter(variant_name).prefill_trace_default
     if not Path(trace).exists():
@@ -62,7 +61,7 @@ def test_golden_row_shard_concat_is_contiguous():
     extends the shorter one row-for-row."""
     import torch
 
-    trace = _trace_or_skip("kimi_k2_6")  # https://github.com/tenstorrent/tt-metal/issues/54971
+    trace = _trace_or_skip("kimi_k2_6")
     short = _load_golden_kv_post(trace, 0, 4096)
     long = _load_golden_kv_post(trace, 0, 8192)
     assert torch.equal(short, long[:4096])
