@@ -127,12 +127,19 @@ ALWI void tilize_block(
 /**
  * Id-free tilize uninit. Restores the SrcA/tile config so a subsequent op can reprogram the unpacker, and
  * resets the packer to Default mode. Blackhole only.
+ *
+ * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode | bool | | False |
  */
 // clang-format on
-template <DataFormat InFormat, TensorShape InShape, DataFormat OutFormat, TensorShape OutShape>
+template <
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat InFormat,
+    TensorShape InShape,
+    DataFormat OutFormat,
+    TensorShape OutShape>
 ALWI void tilize_uninit(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<OutFormat, OutShape> /*out*/) {
-    UNPACK((llk_unpack_tilize_uninit<LLKOperand<InFormat, InShape>::descriptor, DST_ACCUM_MODE>()));
-    PACK((llk_pack_init<LLKOperand<OutFormat, OutShape>::descriptor, DST_ACCUM_MODE, PackMode::Default>()));
+    UNPACK((llk_unpack_tilize_uninit<LLKOperand<InFormat, InShape>::descriptor, is_fp32_dest_acc_en>()));
+    PACK((llk_pack_init<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en, PackMode::Default>()));
 }
 
 }  // namespace experimental

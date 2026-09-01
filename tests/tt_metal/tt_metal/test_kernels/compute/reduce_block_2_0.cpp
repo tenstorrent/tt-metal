@@ -50,7 +50,7 @@ void kernel_main() {
 
     tile_regs_wait();
     for (std::uint32_t i = 0; i < num_tiles; ++i) {
-        experimental::pack_tile(OutOp(out_cb.write_address(i)), i);
+        experimental::pack_tile(OutOp(out_cb.write_address()), i, i);
     }
     tile_regs_release();
 

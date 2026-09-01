@@ -40,12 +40,12 @@ void kernel_main() {
 
         cb0.wait_front(1);
         cb16.reserve_back(1);
-        experimental::copy_tile(InOp(in_cb.read_address()), 0);
+        experimental::copy_tile(InOp(in_cb.read_address()), 0, 0);
 
         tile_regs_commit();
         tile_regs_wait();
 
-        experimental::pack_tile(OutOp(out_cb.write_address()), 0);
+        experimental::pack_tile(OutOp(out_cb.write_address()), 0, 0);
         cb0.pop_front(1);
         cb16.push_back(1);
 

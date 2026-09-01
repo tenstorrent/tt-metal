@@ -74,7 +74,8 @@ ALWI void copy_init(
 
 // clang-format off
 /**
- * Id-free datacopy. Copies one tile from the L1 region described by the LLKOperand into DST. Blackhole only.
+ * Id-free datacopy. Copies tile `itile` from the L1 buffer described by the LLKOperand into DST.
+ * `src.l1_address` is the buffer base; the unpack address is `tile_address(src, itile)`. Blackhole only.
  *
  * Requires copy_init to have run, and the DST register to be acquired (tile_regs_acquire) before this call.
  * Sub-32-row (partial-height) block-float tiles are not supported (compile-time rejected).
@@ -82,12 +83,13 @@ ALWI void copy_init(
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                          | bool        |         | False |
  * | Template | Format         | Buffer L1 data format (deduced from LLKOperand)   | DataFormat  |         | True |
  * | Template | Shape          | Tile geometry (deduced from LLKOperand)           | TensorShape |         | True |
- * | Function | src            | The source L1 operand (format+shape+address)      | LLKOperand  |         | True |
+ * | Function | src            | The source L1 operand (format+shape+buffer base)  | LLKOperand  |         | True |
+ * | Function | itile          | Index of the tile within `src`, relative to its base | uint32_t | N/A     | True |
  * | Function | dst_tile_index | Tile index in the DST register                    | uint32_t    | 0 to 15 | True |
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
-ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_index) {
+ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std::uint32_t dst_tile_index) {
     static_assert(
         is_legal_tile_shape(Shape),
         "copy_tile: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
@@ -101,7 +103,7 @@ ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_index)
             BroadcastType::NONE,
             false,
             EltwiseBinaryReuseDestType::NONE,
-            UnpackToDestEn>(src.l1_address)));
+            UnpackToDestEn>(detail::tile_address(src, itile))));
     MATH((llk_math_eltwise_unary_datacopy<
           LLKOperand<Format, Shape>::descriptor,
           DataCopyType::A2D,
@@ -112,10 +114,9 @@ ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_index)
 
 // clang-format off
 /**
- * Id-free block datacopy. Copies `ntiles` consecutive tiles from the L1 region described by the LLKOperand
+ * Id-free block datacopy. Copies `ntiles` consecutive tiles from the L1 buffer described by the LLKOperand
  * into consecutive DST register slots (tile start_in_tile_index+i lands in DST slot start_dst_tile_index+i).
- * Loop form of copy_tile; each tile's source address is offset by (start_in_tile_index + i) tile strides
- * (folds to a compile-time constant). Blackhole only.
+ * Loop form of copy_tile. Blackhole only.
  *
  * Requires the same init as copy_tile (copy_init). Sub-32-row (partial-height) block-float tiles are not
  * supported (compile-time rejected).
@@ -143,8 +144,7 @@ ALWI void copy_block(
         "copy: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath "
         "(they produce garbage even at tile 0); use a full 32-row tile.");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        copy_tile<is_fp32_dest_acc_en>(
-            LLKOperand<Format, Shape>(detail::tile_address(src, start_in_tile_index + i)), start_dst_tile_index + i);
+        copy_tile<is_fp32_dest_acc_en>(src, start_in_tile_index + i, start_dst_tile_index + i);
     }
 }
 

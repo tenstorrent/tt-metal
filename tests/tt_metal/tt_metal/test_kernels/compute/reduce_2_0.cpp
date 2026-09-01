@@ -55,7 +55,7 @@ void kernel_main() {
     tile_regs_commit();
 
     tile_regs_wait();
-    experimental::pack_tile(OutOp(out_cb.write_address()), 0);
+    experimental::pack_tile(OutOp(out_cb.write_address()), 0, 0);
     tile_regs_release();
 
     cb0.pop_front(num_tiles);

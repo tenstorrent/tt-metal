@@ -14,10 +14,9 @@
 // Id-free (2.0) pack_block kernel: process the input in blocks of 4 tiles. IDENTICAL to pack_block_legacy.cpp
 // except the block pack uses experimental::pack_block, built from an output LLKOperand (data format + tile
 // geometry as NTTPs, absolute L1 address the only runtime state). compute_kernel_hw_startup and the input
-// copy_tile stay the legacy CB-id API so the differential isolates pack_block. pack_block loops over the 2.0
-// pack_tile, deriving each tile's output address from the compile-time output tile stride
-// (out.l1_address + i * tile_stride_words) -- the same consecutive L1 tiles the legacy in-order pack loop
-// writes. Compile-time arg 0 = total tile count (assumed a multiple of 4). Output must be bit-for-bit identical
+// copy_tile stay the legacy CB-id API so the differential isolates pack_block. pack_block loops pack_tile
+// with (out, start_out_tile + i, ifrom_dst + i) -- the same consecutive L1 tiles the legacy in-order pack
+// loop writes. Compile-time arg 0 = total tile count (assumed a multiple of 4). Output must be bit-for-bit identical
 // to the legacy kernel.
 void kernel_main() {
     std::uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);

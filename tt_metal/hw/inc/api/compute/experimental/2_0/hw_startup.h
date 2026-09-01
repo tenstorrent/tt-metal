@@ -48,7 +48,8 @@ namespace ckernel {
  *
  * | Param Type | Name             | Description                                      | Type                   | Valid Range | Required |
  * |------------|------------------|--------------------------------------------------|------------------------|-------------|----------|
- * | Template   | src_order        | (in0,in1) -> SrcA/SrcB mapping (Reverse=matmul)  | SrcOrder               | N/A         | False    |
+ * | Template   | src_order           | (in0,in1) -> SrcA/SrcB mapping (Reverse=matmul)  | SrcOrder               | N/A         | False    |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                         | bool                   |             | False    |
  * | Template   | FA/SA, FB/SB, FO/SO | in0 / in1 / out L1 format + geometry (deduced) | DataFormat/TensorShape | N/A         | True     |
  * | Function   | in0 / in1        | Input operands (natural order)                   | LLKOperand             | N/A         | True     |
  * | Function   | out              | Output operand                                   | LLKOperand             | N/A         | True     |
@@ -56,6 +57,7 @@ namespace ckernel {
 // clang-format on
 template <
     SrcOrder src_order = SrcOrder::Regular,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     DataFormat FA,
     TensorShape SA,
     DataFormat FB,
@@ -79,14 +81,14 @@ ALWI void compute_kernel_hw_startup(
         reverse ? experimental::LLKOperand<FA, SA>::descriptor : experimental::LLKOperand<FB, SB>::descriptor;
     constexpr experimental::LLKMemDescriptor OUT = experimental::LLKOperand<FO, SO>::descriptor;
 
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, SRCA, SRCB>()));
+    UNPACK((llk_unpack_hw_configure<is_fp32_dest_acc_en, SRCA, SRCB>()));
 
-    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE, SRCA, SRCB>()));
+    MATH((llk_math_pack_sync_init<is_fp32_dest_acc_en>()));
+    MATH((llk_math_hw_configure<is_fp32_dest_acc_en, SRCA, SRCB>()));
 
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE, OUT>()));
-    PACK((llk_pack_init<OUT, DST_ACCUM_MODE, PackMode::Default>()));
-    PACK((_llk_pack_dest_init_<DST_SYNC_MODE, DST_ACCUM_MODE>()));
+    PACK((llk_pack_hw_configure<is_fp32_dest_acc_en, OUT>()));
+    PACK((llk_pack_init<OUT, is_fp32_dest_acc_en, PackMode::Default>()));
+    PACK((_llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>()));
 }
 
 // clang-format off
@@ -97,15 +99,22 @@ ALWI void compute_kernel_hw_startup(
  *
  * | Param Type | Name       | Description                              | Type                   | Valid Range | Required |
  * |------------|------------|------------------------------------------|------------------------|-------------|----------|
- * | Template   | src_order  | (in,in) -> SrcA/SrcB mapping             | SrcOrder               | N/A         | False    |
- * | Template   | F/S, FO/SO | in / out L1 format + geometry (deduced)  | DataFormat/TensorShape | N/A         | True     |
+ * | Template   | src_order           | (in,in) -> SrcA/SrcB mapping             | SrcOrder               | N/A         | False    |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                | bool                   |             | False    |
+ * | Template   | F/S, FO/SO          | in / out L1 format + geometry (deduced)  | DataFormat/TensorShape | N/A         | True     |
  * | Function   | in         | The single input operand                 | LLKOperand             | N/A         | True     |
  * | Function   | out        | Output operand                           | LLKOperand             | N/A         | True     |
  */
 // clang-format on
-template <SrcOrder src_order = SrcOrder::Regular, DataFormat F, TensorShape S, DataFormat FO, TensorShape SO>
+template <
+    SrcOrder src_order = SrcOrder::Regular,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat F,
+    TensorShape S,
+    DataFormat FO,
+    TensorShape SO>
 ALWI void compute_kernel_hw_startup(experimental::LLKOperand<F, S> in, experimental::LLKOperand<FO, SO> out) {
-    compute_kernel_hw_startup<src_order>(in, in, out);
+    compute_kernel_hw_startup<src_order, is_fp32_dest_acc_en>(in, in, out);
 }
 
 }  // namespace ckernel

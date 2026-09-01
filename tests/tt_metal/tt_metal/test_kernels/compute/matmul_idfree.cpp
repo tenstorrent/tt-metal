@@ -74,7 +74,7 @@ void kernel_main() {
 
     cb16.reserve_back(out_block_tile_cnt);
     for (std::uint32_t i = 0; i < out_block_tile_cnt; ++i) {
-        experimental::pack_tile(OutOp(out_cb.write_address(i)), i);
+        experimental::pack_tile(OutOp(out_cb.write_address()), i, i);
     }
     cb16.push_back(out_block_tile_cnt);
 

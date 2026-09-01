@@ -22,61 +22,57 @@ namespace experimental {
  *
  * Sub-32-row (partial-height) block-float tiles are not supported (compile-time rejected).
  *
- * | Template | Format | Output buffer L1 data format (deduced from LLKOperand) | DataFormat  |  | True |
- * | Template | Shape  | Output tile geometry (deduced from LLKOperand)         | TensorShape |  | True |
+ * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                         | bool        |  | False |
+ * | Template | Format              | Output buffer L1 data format (deduced from LLKOperand) | DataFormat  |  | True |
+ * | Template | Shape               | Output tile geometry (deduced from LLKOperand)         | TensorShape |  | True |
  */
 // clang-format on
-template <DataFormat Format, TensorShape Shape>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void pack_init(LLKOperand<Format, Shape> /*out*/) {
     static_assert(is_legal_tile_shape(Shape), "pack_init: illegal output tile shape.");
     static_assert(
         !(is_block_float_format(Format) && is_partial_height(Shape)),
         "pack: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath; "
         "use a full 32-row tile.");
-    PACK((llk_pack_init<LLKOperand<Format, Shape>::descriptor, DST_ACCUM_MODE>()));
+    PACK((llk_pack_init<LLKOperand<Format, Shape>::descriptor, is_fp32_dest_acc_en>()));
 }
 
 // clang-format off
 /**
- * Id-free pack. Copies one tile from DST to the absolute L1 address in the output LLKOperand. Formats and
- * geometry were programmed at pack_init; only the runtime write address (out.l1_address) is needed. Blackhole
- * only.
+ * Id-free pack. Copies one tile from DST to L1. `out.l1_address` is the buffer base; the pack address is
+ * `tile_address(out, itile)`. Formats and geometry were programmed at pack_init. Blackhole only.
  *
  * Uses out-of-order (absolute) addressing and does not auto-advance an internal fifo pointer like legacy
- * pack_tile does -- the caller must supply the correct per-tile L1 address on every call. Sub-32-row
- * (partial-height) block-float tiles are not supported (compile-time rejected).
+ * pack_tile does. Sub-32-row (partial-height) block-float tiles are not supported (compile-time rejected).
  *
  * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                          | bool        |         | False |
  * | Template | Format    | Output buffer L1 data format (deduced from LLKOperand) | DataFormat  |         | True |
  * | Template | Shape     | Output tile geometry (deduced from LLKOperand)         | TensorShape |         | True |
- * | Function | out       | The output L1 operand (format+shape+write address)    | LLKOperand  |         | True |
+ * | Function | out       | The output L1 operand (format+shape+buffer base)      | LLKOperand  |         | True |
+ * | Function | itile     | Index of the output tile within `out`, relative to its base | uint32_t | N/A   | True |
  * | Function | ifrom_dst | Tile index in the DST register                         | uint32_t   | 0 to 15 | True |
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
-ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst) {
+ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t itile, std::uint32_t ifrom_dst) {
     static_assert(is_legal_tile_shape(Shape), "pack_tile: illegal output tile shape.");
     static_assert(
         !(is_block_float_format(Format) && is_partial_height(Shape)),
         "pack: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath; "
         "use a full 32-row tile.");
-    // out_of_order_output=true: pack to the absolute address in the LLKOperand (no fifo_wr_tile_ptr bump).
+    // out_of_order_output=true: pack to the absolute address (no fifo_wr_tile_ptr bump).
     PACK((llk_pack<
           LLKOperand<Format, Shape>::descriptor,
           is_fp32_dest_acc_en,
           /*out_of_order_output=*/true,
-          PackMode::Default>(ifrom_dst, out.l1_address)));
+          PackMode::Default>(ifrom_dst, detail::tile_address(out, itile))));
 }
 
 // clang-format off
 /**
- * Id-free block pack. Packs `ntiles` consecutive tiles from DST to consecutive L1 addresses in the output
+ * Id-free block pack. Packs `ntiles` consecutive tiles from DST to consecutive L1 tiles in the output
  * operand (block/loop form of pack_tile). Tile i is read from DST[ifrom_dst + i] and written to
- * out.l1_address + (start_out_tile + i) * <one-tile stride>, derived at compile time from the output
- * descriptor's format/geometry. Blackhole only.
- *
- * Uses out-of-order addressing per tile (see pack_tile); with start_out_tile = 0 this reproduces the same L1
- * layout a legacy in-order pack_tile loop would write. Sub-32-row (partial-height) block-float tiles are not
+ * output tile (start_out_tile + i). Blackhole only. Sub-32-row (partial-height) block-float tiles are not
  * supported (compile-time rejected).
  *
  * | Param Type | Name          | Description                                                | Type        | Valid Range                          | Required |
@@ -99,11 +95,7 @@ ALWI void pack_block(
         "pack: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath; "
         "use a full 32-row tile.");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        // pack_tile is itself PACK()-wrapped, so the engine calls stay on the packer thread. Per-tile output
-        // slot via the shared tile_address helper (stride folds to a compile-time constant; matches the CB
-        // one-tile page).
-        experimental::pack_tile<is_fp32_dest_acc_en>(
-            LLKOperand<Format, Shape>(detail::tile_address(out, start_out_tile + i)), ifrom_dst + i);
+        experimental::pack_tile<is_fp32_dest_acc_en>(out, start_out_tile + i, ifrom_dst + i);
     }
 }
 

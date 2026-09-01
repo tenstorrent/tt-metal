@@ -144,15 +144,16 @@ ALWI void reduce_block(
  * Geometry comes from num_faces (row-major face layout). Pair with reduce_init. DST must be acquired. For a
  * non-default face layout, use the TensorShape overload below.
  *
- * | Template | reduce_type | SUM / AVG / MAX                          | PoolType  | | True |
- * | Template | reduce_dim  | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR | ReduceDim | | True |
- * | Function | idst        | DST register index for the result       | uint32_t  | | True |
- * | Function | num_faces   | Number of faces to reduce (default 4)   | uint32_t  | 1 / 2 / 4 | False |
+ * | Template | reduce_type         | SUM / AVG / MAX                          | PoolType  | | True |
+ * | Template | reduce_dim          | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR | ReduceDim | | True |
+ * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                | bool      | | False |
+ * | Function | idst                | DST register index for the result       | uint32_t  | | True |
+ * | Function | num_faces           | Number of faces to reduce (default 4)   | uint32_t  | 1 / 2 / 4 | False |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim>
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = MAX_NUM_FACES) {
-    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(
+    MATH((llk_math_reduce<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(
         idst, tensor_shape_from_num_faces(MAX_FACE_R_DIM, num_faces))));
 }
 
@@ -161,15 +162,16 @@ ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = MAX_NUM
  * Math-only reduction into DST[idst] with an explicit tile geometry. As above, source tiles must already be
  * in the source registers; takes no LLKOperand. Pair with reduce_init. DST must be acquired.
  *
- * | Template | reduce_type  | SUM / AVG / MAX                          | PoolType             | | True |
- * | Template | reduce_dim   | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR | ReduceDim            | | True |
- * | Function | idst         | DST register index for the result       | uint32_t             | | True |
- * | Function | tensor_shape | Tile geometry to reduce                  | ckernel::TensorShape | | True |
+ * | Template | reduce_type         | SUM / AVG / MAX                          | PoolType             | | True |
+ * | Template | reduce_dim          | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR | ReduceDim            | | True |
+ * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                | bool                 | | False |
+ * | Function | idst                | DST register index for the result       | uint32_t             | | True |
+ * | Function | tensor_shape        | Tile geometry to reduce                  | ckernel::TensorShape | | True |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim>
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_tile_math(std::uint32_t idst, const ckernel::TensorShape& tensor_shape) {
-    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, tensor_shape)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(idst, tensor_shape)));
 }
 
 // clang-format off

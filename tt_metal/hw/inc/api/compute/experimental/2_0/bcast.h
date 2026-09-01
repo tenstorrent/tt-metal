@@ -127,15 +127,16 @@ ALWI void unary_bcast(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_inde
  *
  * | Param Type | Name      | Description                                                  | Type          | Valid Range | Required |
  * |------------|-----------|--------------------------------------------------------------|---------------|-------------|----------|
- * | Template   | bcast_type| Broadcast mode (must match the paired unary_bcast_init)      | BroadcastType | N/A         | True     |
- * | Template   | Format    | Buffer L1 data format (deduced from the LLKOperand argument)  | DataFormat    | N/A         | True     |
+ * | Template   | bcast_type          | Broadcast mode (must match the paired unary_bcast_init)      | BroadcastType | N/A         | True     |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                                    | bool          | N/A         | False    |
+ * | Template   | Format              | Buffer L1 data format (deduced from the LLKOperand argument)  | DataFormat    | N/A         | True     |
  * | Template   | Shape     | Tile geometry (deduced from the LLKOperand argument)         | TensorShape   | N/A         | True     |
  * | Function   | src       | The source L1 operand (format + shape; address unused here)  | LLKOperand    | N/A         | True     |
  */
 // clang-format on
-template <BroadcastType bcast_type, DataFormat Format, TensorShape Shape>
+template <BroadcastType bcast_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void unary_bcast_uninit(LLKOperand<Format, Shape> /*src*/) {
-    constexpr bool enable_unpack_to_dest = is_unpack_to_dest<Format, DST_ACCUM_MODE>();
+    constexpr bool enable_unpack_to_dest = is_unpack_to_dest<Format, is_fp32_dest_acc_en>();
     UNPACK((llk_unpack_A_uninit<bcast_type>()));
     MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, enable_unpack_to_dest>()));
 }

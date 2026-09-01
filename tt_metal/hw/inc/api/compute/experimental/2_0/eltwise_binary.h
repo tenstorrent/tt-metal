@@ -339,6 +339,7 @@ namespace detail {
 template <
     EltwiseBinaryType eltwise_binary_type,
     EltwiseBinaryReuseDestType reuse_dest,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     DataFormat Format,
     TensorShape Shape>
 ALWI void binary_reuse_dest_init(LLKOperand<Format, Shape> /*in*/) {
@@ -346,7 +347,7 @@ ALWI void binary_reuse_dest_init(LLKOperand<Format, Shape> /*in*/) {
     // BH: accumulate the unpacked operand into DST at the unpacker (acc_to_dest = true).
     UNPACK((llk_unpack_A_init<
             LLKOperand<Format, Shape>::descriptor,
-            DST_ACCUM_MODE,
+            is_fp32_dest_acc_en,
             BroadcastType::NONE,
             true /*acc_to_dest*/,
             reuse_dest>()));
@@ -363,6 +364,7 @@ ALWI void binary_reuse_dest_init(LLKOperand<Format, Shape> /*in*/) {
 template <
     EltwiseBinaryType eltwise_binary_type,
     EltwiseBinaryReuseDestType reuse_dest,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     DataFormat Format,
     TensorShape Shape>
 ALWI void binary_reuse_dest_tiles(
@@ -370,7 +372,7 @@ ALWI void binary_reuse_dest_tiles(
     static_assert(is_legal_tile_shape(Shape), "binary_reuse_dest_tiles: illegal tile shape for the L1 operand.");
     UNPACK((llk_unpack_A<
             LLKOperand<Format, Shape>::descriptor,
-            DST_ACCUM_MODE,
+            is_fp32_dest_acc_en,
             BroadcastType::NONE,
             true /*acc_to_dest*/,
             reuse_dest>(tile_address(in, in_tile_index))));
@@ -378,7 +380,7 @@ ALWI void binary_reuse_dest_tiles(
           LLKOperand<Format, Shape>::descriptor,
           eltwise_binary_type,
           BroadcastType::NONE,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           MATH_FIDELITY,
           reuse_dest>(dst_tile_index, true /*clear_fp32_dst_acc*/)));
 }
@@ -395,16 +397,21 @@ ALWI void binary_reuse_dest_tiles(
  *
  * | Param Type | Name       | Description                                                       | Type                       | Valid Range | Required |
  * |------------|------------|-------------------------------------------------------------------|----------------------------|-------------|----------|
- * | Template   | reuse_dest | Which source register the DST operand is loaded into (non-NONE)   | EltwiseBinaryReuseDestType | N/A         | True     |
- * | Function   | in         | L1 operand unpacked into the source register not fed by DST        | LLKOperand                 | N/A         | True     |
+ * | Template   | reuse_dest          | Which source register the DST operand is loaded into (non-NONE)   | EltwiseBinaryReuseDestType | N/A         | True     |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                                         | bool                       |             | False    |
+ * | Function   | in                  | L1 operand unpacked into the source register not fed by DST        | LLKOperand                 | N/A         | True     |
  */
 // clang-format on
-template <EltwiseBinaryReuseDestType reuse_dest, DataFormat Format, TensorShape Shape>
+template <
+    EltwiseBinaryReuseDestType reuse_dest,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat Format,
+    TensorShape Shape>
 ALWI void add_reuse_dest_init(LLKOperand<Format, Shape> in) {
     static_assert(
         reuse_dest != EltwiseBinaryReuseDestType::NONE,
         "reuse_dest must be DEST_TO_SRCA or DEST_TO_SRCB; for the two-operand op call add_init(a).");
-    detail::binary_reuse_dest_init<EltwiseBinaryType::ELWADD, reuse_dest>(in);
+    detail::binary_reuse_dest_init<EltwiseBinaryType::ELWADD, reuse_dest, is_fp32_dest_acc_en>(in);
 }
 
 // clang-format off
@@ -418,12 +425,16 @@ ALWI void add_reuse_dest_init(LLKOperand<Format, Shape> in) {
  * | Function   | in         | L1 operand unpacked into the source register not fed by DST        | LLKOperand                 | N/A         | True     |
  */
 // clang-format on
-template <EltwiseBinaryReuseDestType reuse_dest, DataFormat Format, TensorShape Shape>
+template <
+    EltwiseBinaryReuseDestType reuse_dest,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat Format,
+    TensorShape Shape>
 ALWI void sub_reuse_dest_init(LLKOperand<Format, Shape> in) {
     static_assert(
         reuse_dest != EltwiseBinaryReuseDestType::NONE,
         "reuse_dest must be DEST_TO_SRCA or DEST_TO_SRCB; for the two-operand op call sub_init(a).");
-    detail::binary_reuse_dest_init<EltwiseBinaryType::ELWSUB, reuse_dest>(in);
+    detail::binary_reuse_dest_init<EltwiseBinaryType::ELWSUB, reuse_dest, is_fp32_dest_acc_en>(in);
 }
 
 // clang-format off
@@ -437,12 +448,16 @@ ALWI void sub_reuse_dest_init(LLKOperand<Format, Shape> in) {
  * | Function   | in         | L1 operand unpacked into the source register not fed by DST        | LLKOperand                 | N/A         | True     |
  */
 // clang-format on
-template <EltwiseBinaryReuseDestType reuse_dest, DataFormat Format, TensorShape Shape>
+template <
+    EltwiseBinaryReuseDestType reuse_dest,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat Format,
+    TensorShape Shape>
 ALWI void mul_reuse_dest_init(LLKOperand<Format, Shape> in) {
     static_assert(
         reuse_dest != EltwiseBinaryReuseDestType::NONE,
         "reuse_dest must be DEST_TO_SRCA or DEST_TO_SRCB; for the two-operand op call mul_init(a).");
-    detail::binary_reuse_dest_init<EltwiseBinaryType::ELWMUL, reuse_dest>(in);
+    detail::binary_reuse_dest_init<EltwiseBinaryType::ELWMUL, reuse_dest, is_fp32_dest_acc_en>(in);
 }
 
 // clang-format off
@@ -461,10 +476,15 @@ ALWI void mul_reuse_dest_init(LLKOperand<Format, Shape> in) {
  * | Function   | dst_tile_index | DST tile used as the other operand and as the result               | uint32_t                   | < DST size  | True     |
  */
 // clang-format on
-template <EltwiseBinaryReuseDestType reuse_dest, DataFormat Format, TensorShape Shape>
+template <
+    EltwiseBinaryReuseDestType reuse_dest,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat Format,
+    TensorShape Shape>
 ALWI void add_reuse_dest_tiles(
     LLKOperand<Format, Shape> in, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
-    detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWADD, reuse_dest>(in, in_tile_index, dst_tile_index);
+    detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWADD, reuse_dest, is_fp32_dest_acc_en>(
+        in, in_tile_index, dst_tile_index);
 }
 
 // clang-format off
@@ -480,10 +500,15 @@ ALWI void add_reuse_dest_tiles(
  * | Function   | dst_tile_index | DST tile used as the other operand and as the result               | uint32_t                   | < DST size  | True     |
  */
 // clang-format on
-template <EltwiseBinaryReuseDestType reuse_dest, DataFormat Format, TensorShape Shape>
+template <
+    EltwiseBinaryReuseDestType reuse_dest,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat Format,
+    TensorShape Shape>
 ALWI void sub_reuse_dest_tiles(
     LLKOperand<Format, Shape> in, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
-    detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWSUB, reuse_dest>(in, in_tile_index, dst_tile_index);
+    detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWSUB, reuse_dest, is_fp32_dest_acc_en>(
+        in, in_tile_index, dst_tile_index);
 }
 
 // clang-format off
@@ -499,10 +524,15 @@ ALWI void sub_reuse_dest_tiles(
  * | Function   | dst_tile_index | DST tile used as the other operand and as the result               | uint32_t                   | < DST size  | True     |
  */
 // clang-format on
-template <EltwiseBinaryReuseDestType reuse_dest, DataFormat Format, TensorShape Shape>
+template <
+    EltwiseBinaryReuseDestType reuse_dest,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat Format,
+    TensorShape Shape>
 ALWI void mul_reuse_dest_tiles(
     LLKOperand<Format, Shape> in, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
-    detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWMUL, reuse_dest>(in, in_tile_index, dst_tile_index);
+    detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWMUL, reuse_dest, is_fp32_dest_acc_en>(
+        in, in_tile_index, dst_tile_index);
 }
 
 }  // namespace experimental

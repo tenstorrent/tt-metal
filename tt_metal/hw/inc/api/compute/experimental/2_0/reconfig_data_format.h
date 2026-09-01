@@ -56,21 +56,23 @@ namespace experimental {
  *
  * | Param Type | Name  | Description                                   | Type       | Valid Range | Required |
  * |------------|-------|------------------------------------------------|------------|-------------|----------|
- * | Function   | new_a | New SrcA operand (format+shape are NTTPs)     | LLKOperand | N/A         | True     |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode               | bool       |             | False    |
+ * | Function   | new_a               | New SrcA operand (format+shape are NTTPs) | LLKOperand | N/A         | True     |
  */
 // clang-format on
-template <DataFormat Format, TensorShape Shape>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void reconfig_data_format_srca(LLKOperand<Format, Shape> /*new_a*/) {
     static_assert(is_legal_tile_shape(Shape), "reconfig_data_format_srca: illegal tile shape.");
-    constexpr std::uint8_t RegFmt = static_cast<std::uint8_t>(ckernel::infer_unpack_dst_format(Format, DST_ACCUM_MODE));
+    constexpr std::uint8_t RegFmt =
+        static_cast<std::uint8_t>(ckernel::infer_unpack_dst_format(Format, is_fp32_dest_acc_en));
     constexpr std::uint32_t tile_size = tile_stride_words(Format, Shape);
-    UNPACK((_llk_unpack_reconfig_data_format_srca_impl_<DST_ACCUM_MODE, p_dim_stride_target::IGNORE, false>(
+    UNPACK((_llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
         static_cast<std::uint32_t>(Format),
         static_cast<std::uint32_t>(RegFmt),
         tile_size,
         Shape.face_r_dim,
         Shape.total_num_faces())));
-    MATH((_llk_math_reconfig_data_format_srca_<DST_ACCUM_MODE, false>(static_cast<std::uint32_t>(RegFmt))));
+    MATH((_llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false>(static_cast<std::uint32_t>(RegFmt))));
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -84,21 +86,23 @@ ALWI void reconfig_data_format_srca(LLKOperand<Format, Shape> /*new_a*/) {
  *
  * | Param Type | Name  | Description                                   | Type       | Valid Range | Required |
  * |------------|-------|------------------------------------------------|------------|-------------|----------|
- * | Function   | new_b | New SrcB operand (format+shape are NTTPs)     | LLKOperand | N/A         | True     |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode               | bool       |             | False    |
+ * | Function   | new_b               | New SrcB operand (format+shape are NTTPs) | LLKOperand | N/A         | True     |
  */
 // clang-format on
-template <DataFormat Format, TensorShape Shape>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void reconfig_data_format_srcb(LLKOperand<Format, Shape> /*new_b*/) {
     static_assert(is_legal_tile_shape(Shape), "reconfig_data_format_srcb: illegal tile shape.");
-    constexpr std::uint8_t RegFmt = static_cast<std::uint8_t>(ckernel::infer_unpack_dst_format(Format, DST_ACCUM_MODE));
+    constexpr std::uint8_t RegFmt =
+        static_cast<std::uint8_t>(ckernel::infer_unpack_dst_format(Format, is_fp32_dest_acc_en));
     constexpr std::uint32_t tile_size = tile_stride_words(Format, Shape);
-    UNPACK((_llk_unpack_reconfig_data_format_srcb_impl_<DST_ACCUM_MODE, p_dim_stride_target::IGNORE, false>(
+    UNPACK((_llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
         static_cast<std::uint32_t>(Format),
         static_cast<std::uint32_t>(RegFmt),
         tile_size,
         Shape.face_r_dim,
         Shape.total_num_faces())));
-    MATH((_llk_math_reconfig_data_format_srcb_<DST_ACCUM_MODE, false>(static_cast<std::uint32_t>(RegFmt))));
+    MATH((_llk_math_reconfig_data_format_srcb_<is_fp32_dest_acc_en, false>(static_cast<std::uint32_t>(RegFmt))));
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -114,13 +118,14 @@ ALWI void reconfig_data_format_srcb(LLKOperand<Format, Shape> /*new_b*/) {
  *
  * | Param Type | Name    | Description                                    | Type       | Valid Range | Required |
  * |------------|---------|-------------------------------------------------|------------|-------------|----------|
- * | Function   | new_out | New output operand (format+shape are NTTPs)   | LLKOperand | N/A         | True     |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                    | bool       |             | False    |
+ * | Function   | new_out             | New output operand (format+shape are NTTPs)   | LLKOperand | N/A         | True     |
  */
 // clang-format on
-template <DataFormat Format, TensorShape Shape>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void pack_reconfig_data_format(LLKOperand<Format, Shape> /*new_out*/) {
     static_assert(is_legal_tile_shape(Shape), "pack_reconfig_data_format: illegal output tile shape.");
-    PACK((llk_pack_reconfig_data_format<LLKOperand<Format, Shape>::descriptor, DST_ACCUM_MODE>()));
+    PACK((llk_pack_reconfig_data_format<LLKOperand<Format, Shape>::descriptor, is_fp32_dest_acc_en>()));
 }
 
 }  // namespace experimental

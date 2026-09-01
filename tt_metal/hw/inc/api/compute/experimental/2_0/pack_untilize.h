@@ -217,6 +217,7 @@ ALWI void pack_untilize_dest_init(LLKOperand<OutFormat, OutShape> /*out*/) {
  * | Template   | row_num_datums     | Number of datums per row                                        | uint32_t   | >= 1                                    | False                 |
  * | Template   | tile_dst_ct_offset | Compile-time offset of the tile index in DEST from which to pack | uint32_t | 0 to 7 (0 to 3 if fp32 dest enabled)    | False (default = 0)   |
  * | Template   | dense              | Packs two 2-face tiles in a single 4-face region               | bool       | true/false                              | False (default false) |
+ * | Template   | is_fp32_dest_acc_en | Whether DEST is in fp32 accumulation mode                     | bool       |                                         | False                 |
  * | Function   | out                | Output operand (first row-major output tile address)          | LLKOperand |                                         | True                  |
  * | Function   | block_rt_dim       | Height of the block in tiles (rows to pack)                    | uint32_t   | >= 1                                    | False (default = 1)   |
  * | Function   | block_c_index      | Block column index (used when full_ct_dim > block_ct_dim)      | uint32_t   | >= 0                                    | False (default = 0)   |
@@ -231,6 +232,7 @@ template <
     std::uint32_t row_num_datums = TILE_C_DIM,
     std::uint32_t tile_dst_ct_offset = 0,
     bool dense = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     DataFormat OutFormat,
     TensorShape OutShape>
 ALWI void pack_untilize_dest(
@@ -245,7 +247,7 @@ ALWI void pack_untilize_dest(
         "pack_untilize_dest: full_ct_dim must be a positive multiple of block_ct_dim.");
     PACK((llk_pack_untilize<
           LLKOperand<OutFormat, OutShape>::descriptor,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           block_ct_dim,
           full_ct_dim,
           narrow_row,
