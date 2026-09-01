@@ -471,6 +471,31 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
 
     # Capture chunk prefill trace (warmup; also warms masked-bucket programs)
+    #
+    # KNOWN BUG, NOT FIXED HERE (2026-08-31, T3K/Wormhole, real Qwen3.6-27B checkpoint):
+    # _forward_prefill_chunk_tp (what this trace replays) unconditionally passes valid_len=None to
+    # every GDN layer -- "no GDN mask; trace-safe static conv capture (matches valid_len==chunk_size)"
+    # per its own comment. That comment states an INVARIANT this fixed CHUNK=2048 silently violates
+    # for any prompt shorter than one chunk: token_ids gets zero-padded out to 2048 before replay,
+    # and with no masking those ~(2048-T) padding positions run through the GDN recurrence as if
+    # they were real tokens -- extra decay/update steps that corrupt the recurrent state handed off
+    # to decode. Symptom: position-0 logits are correct (PCC~0.995 -- the row-select for the OUTPUT
+    # picks the real T-1 row regardless), but decode gets garbled starting at the very next token
+    # (layer-0 GDN decode PCC ~0.87, compounding to ~0.09-0.35 by layer 63). Confirmed independent
+    # of the QWEN_GDN_FUSED_CHUNK fix in fused_chunk.py (that's a real, separate bug in the fused
+    # kernel's final_state for the reassignment/non-carry branch; this one hits the in-place carry
+    # branch regardless of which kernel computes it -- the corruption is in what gets FED to either
+    # kernel, not how the kernel computes it).
+    #
+    # Tried capping CHUNK to the prompt's own (128-aligned) length instead of always 2048 -- that
+    # keeps the GDN chunk itself fully real, but chunk_size here ALSO sizes buffers
+    # capture_prefill_trace_chunked_tp shares with its masked-bucket warmup path
+    # (warmup_prefill_masked_buckets -> ... -> _apply_vision_merge), which expects a larger/fixed
+    # size; shrinking it traded this bug for a slice-out-of-bounds TT_FATAL there instead. A correct
+    # fix needs _forward_prefill_chunk_tp itself to pass a real, trace-safe valid_len (the
+    # valid_masks device-buffer pattern used elsewhere in this codebase for exactly this reason,
+    # e.g. fused_chunk.py's valid_masks arg) instead of hardcoding None, not a caller-side chunk_size
+    # change -- left as a real, reproducible, precisely-diagnosed bug for that deeper fix.
     CHUNK = 2048
     t_cap = time.time()
     signpost("compile_prefill")

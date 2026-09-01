@@ -92,12 +92,19 @@ def causal_conv1d_fir_dispatch(
     bias_dev=None,
     valid_len=None,
     model_args=None,
+    valid_sel=None,
 ):
     """Drop-in for the shared ``_causal_conv1d_fir``; upstream on Blackhole, ROW_MAJOR fork on WH.
 
     model_args: the caller's ModelArgs (gdn/tp.py passes self.args), used to scope the fork to
     wh_9b_n300. None (default, for any caller that hasn't been updated) falls back to the previous
     is_blackhole()-only decision.
+
+    valid_sel: masked-bucket verify-chunk one-hot selector (MTP spec-decode's traced verify path;
+    see the shared ``_causal_conv1d_fir``'s docstring). The WH ROW_MAJOR fork below was never built
+    to support it -- it only implements ``valid_len`` masking -- so a non-None valid_sel forces the
+    shared/upstream path even on wh_9b_n300. That's a pure perf regression on that one scope (the
+    fork is "a pure perf optimization" per the note below), not a correctness concession.
 
     DELIBERATE narrowing (Wormhole gating audit, item 1): this used to be is_blackhole()-gated
     (Wormhole-wide), so T3K and N150 got the ROW_MAJOR fork too. Narrowed to wh_9b_n300 on purpose
@@ -107,7 +114,7 @@ def causal_conv1d_fir_dispatch(
     Accepted per explicit instruction -- don't revert this to is_blackhole() without re-measuring
     on T3K/N150.
     """
-    _use_wh = tpc.wh_9b_n300(model_args) if model_args is not None else (not is_blackhole())
+    _use_wh = (tpc.wh_9b_n300(model_args) if model_args is not None else (not is_blackhole())) and valid_sel is None
     if not _use_wh:
         return _shared._causal_conv1d_fir(
             x,
@@ -120,6 +127,7 @@ def causal_conv1d_fir_dispatch(
             weight_taps=weight_taps,
             bias_dev=bias_dev,
             valid_len=valid_len,
+            valid_sel=valid_sel,
         )
     _check_fork_is_current()
     return _causal_conv1d_fir_wh(

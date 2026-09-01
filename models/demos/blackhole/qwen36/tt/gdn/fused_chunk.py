@@ -25,6 +25,8 @@ Notes:
 * GVA (Nk<Nv) head expansion is done inside the fused op; we pass q/k with Nk heads.
 """
 
+import os
+
 import torch
 from loguru import logger
 
@@ -37,8 +39,29 @@ _FUSED_CHUNK_SIZE = 32
 
 def fused_chunk_enabled():
     """Route GDN prefill through the fused ttnn.transformer.chunk_gated_delta_rule op (fast path).
-    Always on; the seq adapter is used only for decode (valid_len set), selected in tp.py."""
-    return True
+    On by default; the seq adapter is otherwise used only for decode (valid_len set), selected in tp.py.
+
+    QWEN_GDN_FUSED_CHUNK=0 forces the seq adapter for ALL GDN prefill instead -- a correctness
+    escape hatch, not a default change, since this hasn't been re-measured for perf.
+
+    KNOWN BUG (2026-08-31, T3K/Wormhole, real Qwen3.6-27B checkpoint, no MTP involved): the
+    fused/phased kernel's returned final_state -- what forward_prefill hands to Qwen36Model.decode_tp
+    to continue generation -- does not match a torch/HF reference after a real 128-token prefill.
+    Layer-by-layer bisection: embedding and layer 0's INPUT are bit-identical to the real model, but
+    layer 0's GDN decode OUTPUT already drops to PCC~0.87, compounding through all 64 layers to
+    ~0.09-0.35 by layer 63 -- garbled generation from the second generated token onward. Forcing this
+    function to False fixes it: every layer clears PCC>0.99 and the decode token exactly matches the
+    real model. The fused kernel's OUTPUT sequence is fine on its own
+    (test_gdn_tp_fused_chunk_prefill already validates that against the seq adapter and step-by-step
+    decode) -- only the state HANDOFF for continuing into a NEW decode step afterward is wrong, and
+    no existing test in this suite checks that specifically (existing GDN decode tests either supply
+    an already-correct synthetic initial_state, or never inspect the state forward_prefill returns).
+    Root cause not isolated past this: chunk_gated_delta_rule_fused_adapter's returned final_state
+    comes straight from the ttnn.transformer.chunk_gated_delta_rule device op; the chunk-counting
+    logic that selects it in the compute kernel (chunk_gdn_scan.cpp) looks correct on inspection, so
+    the actual defect is somewhere in that kernel's tile-level math, not in this Python orchestration.
+    """
+    return os.environ.get("QWEN_GDN_FUSED_CHUNK", "1") != "0"
 
 
 def phased_enabled():
