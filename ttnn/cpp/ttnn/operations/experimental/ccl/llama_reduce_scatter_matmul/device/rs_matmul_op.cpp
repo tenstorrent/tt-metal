@@ -142,6 +142,17 @@ ttsl::hash::hash_t Matmul_RS::compute_program_hash(
         operation_attributes.rs_op.topology,
         operation_attributes.rs_op.use_noc1_only,
         operation_attributes.matmul,
+        // MatmulParams reaches global_cb through reflection, which covers the GCB's structure (core
+        // mapping, size, buffer type) but not which allocation it is. The matmul's remote CB is created
+        // against the GCB and bakes both addresses at build time, and UpdateDynamicCircularBufferAddress
+        // refuses to re-point a GCB-backed CB, so two same-shaped GCBs at different allocations must not
+        // share a program. Same reasoning as dram_prefetcher_validator.
+        static_cast<uint64_t>(
+            operation_attributes.matmul.global_cb.has_value() ? operation_attributes.matmul.global_cb->buffer_address()
+                                                              : 0),
+        static_cast<uint64_t>(
+            operation_attributes.matmul.global_cb.has_value() ? operation_attributes.matmul.global_cb->config_address()
+                                                              : 0),
         // output_mem_config supplies the output shard grid behind the OUTPUT_CORE_XY define and the
         // output/accumulator CB sizes; subdevice_id selects the matmul core pool and mcast origin.
         operation_attributes.rs_op.output_mem_config,

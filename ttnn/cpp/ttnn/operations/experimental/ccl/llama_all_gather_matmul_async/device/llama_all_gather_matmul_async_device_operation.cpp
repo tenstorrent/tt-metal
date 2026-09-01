@@ -156,6 +156,15 @@ ttsl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_has
         // so the disengaged optional cannot collide with a real sub-device id.
         args.sub_device_id.has_value() ? static_cast<uint32_t>(args.sub_device_id->get()) : 0xFFFFFFFFu,
         args.matmul_struct,
+        // MatmulParams reaches global_cb through reflection, which covers the GCB's structure (core
+        // mapping, size, buffer type) but not which allocation it is. The matmul's remote CB is created
+        // against the GCB and bakes both addresses at build time, and UpdateDynamicCircularBufferAddress
+        // refuses to re-point a GCB-backed CB, so two same-shaped GCBs at different allocations must not
+        // share a program. Same reasoning as dram_prefetcher_validator.
+        static_cast<uint64_t>(
+            args.matmul_struct.global_cb.has_value() ? args.matmul_struct.global_cb->buffer_address() : 0),
+        static_cast<uint64_t>(
+            args.matmul_struct.global_cb.has_value() ? args.matmul_struct.global_cb->config_address() : 0),
         input0_shape,
         input0_memory_layout,
         input0_dtype,
