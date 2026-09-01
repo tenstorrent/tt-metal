@@ -61,6 +61,7 @@ APPROX_CAPABLE_OPS = [
     MathOperation.Sin,
     MathOperation.Cos,
     MathOperation.Gelu,
+    MathOperation.Tanh,
 ]
 
 FORMATS = input_output_formats(
@@ -105,9 +106,6 @@ def _skip_if_unsupported(
     formats: InputOutputFormat,
 ) -> None:
     """Skip variants the hardware / metal stack does not support."""
-    if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
-        pytest.skip(reason="Metal tanh does not support approximation mode")
-
     if (
         dest_acc == DestAccumulation.No
         and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
