@@ -83,6 +83,12 @@ If you nonetheless hit a host-computed `base + offset` folded into an address ar
 - **Cross-op kernel files** — some ops share dataflow kernels that live in another op's directory (e.g., `eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` reused by many ops). The legacy inventory step flags these. The normal path is *not* to modify them: reuse the `_metal2` fork if one already exists beside the original, otherwise create it there — per [Caution: Porting a shared kernel](../shared/port_patterns.md#caution-porting-a-shared-kernel). These are *peer ops*, not framework callees. Record which rung you took in the `METAL2_PORT_REPORT.md`.
 - **Framework primitives the porter uses directly** — `noc.async_read(...)`, `dfb.wait_front(...)` on a `DataflowBuffer` the porter constructs locally from `dfb::name`, the `TensorAccessor(tensor::name)` constructor, etc. These are *consumed by* the porter's kernel code (named handles flow in via the documented constructors); they are not handoffs to out-of-op code.
 
+### What this procedure covers
+
+This recipe ports a factory to **`ProgramSpecFactoryConcept`** or **`CustomProgramSpecFactoryConcept`** — the two single-program Metal 2.0 concepts, one spec stamped across the mesh. The audit names which one ([selector](../shared/ttnn_factory.md#the-two-metal-20-factory-concepts)); you inherit it.
+
+**A brief naming any other target concept is outside this procedure — stop and report** ([§When the discipline doesn't fit](#when-the-discipline-doesnt-fit)). The case to expect is a mesh-workload concept for a genuine multi-program op: the audit can clear one the day TTNN support lands, but no port procedure exists for it until someone writes it. Stopping is the correct outcome; improvising a multi-program port out of this recipe is not.
+
 ### Generated docs in the op directory
 
 Four `METAL2_*.md` files live in the op's directory alongside the program factory `.cpp` files — two written by the audit (your inputs), two you write during the port:
