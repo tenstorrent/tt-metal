@@ -156,7 +156,7 @@ def test_grouped_scan_rejects_unequal_key_value_dims_at_forward_boundary(device:
     layer = ttKDA(device, config, random_weights(config), program_config=program_config)
     hidden = torch.randn(1, 32, config.hidden_size, dtype=torch.bfloat16)
 
-    with expect_error(ValueError, "grouped KDA currently requires K == V"):
+    with expect_error(ValueError, "grouped KDA affine prefix currently requires K == V"):
         _forward(layer, hidden, layer.allocate_state())
 
 
