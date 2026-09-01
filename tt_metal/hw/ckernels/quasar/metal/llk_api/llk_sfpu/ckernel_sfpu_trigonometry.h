@@ -257,7 +257,7 @@ inline void calculate_cosine() {
 
     sfpi::vFloat C2, C1, C0;
     float C3;  // Cannot keep this in a register in 7.73.0, which
-               // removes -1,0f constant. After sfpi 7.73.0
+               // removes -1.0f constant. After sfpi 7.73.0
                // lands we'll have vConstFloatPrgm3 to hold this value
 
     if constexpr (is_fp32_dest_acc_en) {
