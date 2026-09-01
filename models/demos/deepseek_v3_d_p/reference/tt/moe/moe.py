@@ -246,13 +246,16 @@ class TorchMoe(nn.Module):
                 norm_topk_prob=True,
                 hidden_size=emb_dim,
             )
+            gate_weight = gate_weights["weight"]
+            gate_bias = gate_weights.get("e_score_correction_bias")
+            if gate_bias is None:
+                # Must follow the weight, not the parameter's init dtype: F.linear rejects a float32
+                # bias against a bfloat16 weight.
+                gate_bias = torch.zeros(num_routed_experts, dtype=gate_weight.dtype, device=gate_weight.device)
             if topk_method == "noaux_tc":
                 self.gate = ReferenceMoEGate(ref_config, use_bitonic_sort=False)
-                self.gate.weight.data = gate_weights["weight"]
-                bias = gate_weights.get("e_score_correction_bias")
-                self.gate.e_score_correction_bias.data = (
-                    bias if bias is not None else torch.zeros_like(self.gate.e_score_correction_bias.data)
-                )
+                self.gate.weight.data = gate_weight
+                self.gate.e_score_correction_bias.data = gate_bias
             elif topk_method == "gpt_softmax":
                 # top-k on the raw logits, then softmax over the selection. For a bias-free router
                 # that is identically softmax -> top-k -> renormalize, which is what Mistral does.
@@ -269,9 +272,8 @@ class TorchMoe(nn.Module):
                 # this router ignores grouping and scaling, so a mismatch is a silently wrong golden.
                 assert route_scale in (None, 1.0), f"gpt_softmax needs route_scale 1.0, got {route_scale}"
                 assert (n_expert_groups or 1) == 1 and (n_limited_groups or 1) == 1, "gpt_softmax needs no grouping"
-                self.gate.weight.data = gate_weights["weight"]
-                bias = gate_weights.get("e_score_correction_bias")
-                self.gate.bias.data = bias if bias is not None else torch.zeros_like(self.gate.bias.data)
+                self.gate.weight.data = gate_weight
+                self.gate.bias.data = gate_bias
             else:
                 raise ValueError(f"unknown topk_method {topk_method!r}")
             self._gate_returns_logits = topk_method == "gpt_softmax"
