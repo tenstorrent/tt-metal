@@ -202,6 +202,40 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
 TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
+# GLM-5.2 per-chunk baseline medians (seconds), same (num_layers, n_chunks, num_iters) keying and same
+# traced/untraced split as the Kimi tables above.
+#
+# UNCALIBRATED PLACEHOLDERS: every entry is 0.0. An all-zero row is treated as "no baseline yet" by
+# glm_chunked_perf_gate, so the gated config stays RECORD-ONLY -- print_duration_table prints the
+# measured per-chunk median/stddev table and asserts nothing. Fill these in from the table CI prints,
+# and the gate arms itself with no further code change.
+#
+# Do NOT expect a Kimi-shaped ramp. Kimi's traced baseline climbs 0.519 -> 0.855 s because chunk c
+# attends to KV[0:c*CHUNK]. GLM's DSA indexer selects a FIXED top-k capacity regardless of prefix
+# length, so both GLM curves are flat with depth and tracing shows up as a uniform shift, not a change
+# of shape. Local L78/11-chunk measurements (single galaxy, single run each, NOT a CI baseline):
+# untraced 1.713-1.758 s/chunk, traced 0.738-0.759 s/chunk.
+#
+# Recalibrate from the per-chunk median across several independent green Galaxy runs, not from one run.
+GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
+    # test_glm_prefill_transformer_chunked_no_pcc[...-L78-preload0-chunks_eleven-ten_iters-traced]
+    (78, 11, 10): [0.0] * 11,
+}
+GLM_UNTRACED_BASELINE_CHUNK_TIMES_S = {
+    # test_glm_prefill_transformer_chunked_no_pcc[...-L78-preload0-chunks_eleven-ten_iters-notrace]
+    (78, 11, 10): [0.0] * 11,
+}
+# Provisional bands, carried over from the Kimi defaults until the GLM baselines are cut. GLM's measured
+# spread is much tighter than Kimi's (traced per-chunk stddev 0.000-0.002 s, untraced 0.009-0.026 s at
+# ten_iters, vs Kimi's untraced ~0.33 s), so these can likely be tightened -- decide that WITH the
+# calibration data, not before it.
+GLM_TRACED_PERF_MARGIN = TRACED_PERF_MARGIN
+GLM_UNTRACED_PERF_MARGIN = UNTRACED_PERF_MARGIN
+# The ONLY variant these baselines describe. glm_5_1 shares the perf test's parametrization and its 78
+# layers, so without this it would match the same table key and be gated against GLM-5.2's numbers --
+# a different model, different weights, different golden trace. It stays record-only.
+GLM_PERF_GATED_VARIANT = "glm_5_2"
+
 # Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
 # accumulation headroom is pinned.
 GATED_LAYER_DEPTH = 10
@@ -1855,6 +1889,51 @@ def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_i
     return baseline, (default_margin if perf_margin is None else perf_margin)
 
 
+def glm_chunked_perf_gate(
+    variant, use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin=None
+):
+    """GLM counterpart of kimi_chunked_perf_gate: returns ``(baseline_chunk_times_s, margin)``.
+
+    Same two conditions as the Kimi gate -- use_trace picks WHICH table and WHICH default band (a traced
+    baseline can never arm an untraced run, or the reverse), and only preload_isl == 0 is gated, since the
+    recorded runs start from an empty cache.
+
+    Two extra conditions:
+
+      variant  -- the baselines were measured on GLM_PERF_GATED_VARIANT only. glm_5_1 shares this test's
+                  parametrization AND its layer count, so it would match the same (num_layers, n_chunks,
+                  num_iters) key and get silently gated against another model's numbers. It is a
+                  different model (different weights, its own golden trace), so any agreement would be
+                  luck; it stays record-only until it has a table of its own.
+      all-zero -- an uncalibrated placeholder row returns None so the run stays record-only. Without
+                  this, the zero-filled tables would arm a band of zero width around a zero baseline and
+                  fail every chunk of every gated run -- turning a not-yet-calibrated config into a red
+                  CI job that reports nothing useful. Replace the zeros with real medians and the gate
+                  arms itself. (To make an uncalibrated config fail loudly instead, drop `any(baseline)`.)
+    """
+    variant_name = getattr(variant, "name", None)
+    if variant_name != GLM_PERF_GATED_VARIANT:
+        logger.info(
+            f"[perf gate] variant {variant_name!r} has no calibrated GLM baseline "
+            f"(only {GLM_PERF_GATED_VARIANT!r} does) — run stays record-only"
+        )
+        return None, perf_margin
+    table, default_margin = (
+        (GLM_TRACED_BASELINE_CHUNK_TIMES_S, GLM_TRACED_PERF_MARGIN)
+        if use_trace
+        else (GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, GLM_UNTRACED_PERF_MARGIN)
+    )
+    baseline = table.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
+    if baseline is not None and not any(baseline):
+        logger.info(
+            f"[perf gate] GLM baseline for (L{num_layers}, {n_chunks} chunks, {num_iters} iters, "
+            f"{'traced' if use_trace else 'notrace'}) is an uncalibrated placeholder (all zeros) — "
+            "run stays record-only; fill the table from the printed per-chunk medians to arm the gate"
+        )
+        baseline = None
+    return baseline, (default_margin if perf_margin is None else perf_margin)
+
+
 # No-PCC perf/smoke variant: runs the full n_chunks-chunk prefill `num_iters` times with no golden
 # trace dependency, no intermediate readback, and no PCC. Requires only the Kimi TTNN weight cache (set
 # TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_6_HF_MODEL); the golden trace is optional.
@@ -2174,6 +2253,11 @@ def test_glm_prefill_transformer_chunked_no_pcc(
     topology = per_axis_topology(device_params["fabric_config"])
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
+    # Both modes are gated, each against its own table and its own band -- see glm_chunked_perf_gate.
+    # While the tables hold the zero placeholders this resolves to None (record-only) and only prints.
+    baseline_chunk_times_s, resolved_perf_margin = glm_chunked_perf_gate(
+        variant, use_trace, num_layers, n_chunks, num_iters, preload_isl
+    )
     run_chunked_transformer_updated(
         variant,
         config_only,
@@ -2186,6 +2270,8 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         topology,
         num_iters,
         routing_use_l1_small_for_semaphores=True,
+        baseline_chunk_times_s=baseline_chunk_times_s,
+        perf_margin=resolved_perf_margin,
         preload_isl=preload_isl,
         use_trace=use_trace,
     )

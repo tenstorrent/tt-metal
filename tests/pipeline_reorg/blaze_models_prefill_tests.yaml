@@ -563,9 +563,39 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       # "and notrace" pins the use_trace axis: without a mode term this selector matches BOTH notrace and
-      # traced, doubling a ~13-min job. notrace is the arm that also asserts per-layer PCC (impossible
-      # under capture). Adding a traced arm here needs a models/demo time-budget bump.
+      # traced, doubling this job. notrace is the arm that also asserts per-layer PCC (impossible under
+      # capture); the traced arm is its own job below.
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache and notrace" -xvs
+    '
+  test_type: glm_chunked_accuracy
+  test_tags: [glm_5_2, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 36
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  sp_config: sc1
+
+
+# TRACED twin of the accuracy job above. It asserts FEWER checks than its untraced twin, by construction:
+# both modes assert the KVPE and DSA indexer-K CACHE PCCs (read back after the run), but the per-layer
+# decoder-output PCC needs return_intermediates=True -- a host readback in the middle of forward() -- and
+# a read inside begin_trace_capture() is a hard TT_FATAL. So per-layer PCC rides the notrace arm only,
+# and this job is what proves the captured/replayed forward produces the same caches as the eager one.
+# Locally traced and untraced agree to 6 digits on both caches (KVPE 0.861766, indexer-K 0.979451 @ L78).
+- name: "(GLM-5.2-744B) chunked prefill accuracy code_debug 55k@5k, traced"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
+    export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      # "and traced" pins the use_trace axis: without a mode term the selector matches BOTH arms.
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache and traced" -xvs
     '
   test_type: glm_chunked_accuracy
   test_tags: [glm_5_2, transformer]
@@ -596,6 +626,33 @@
   skus:
     bh_sc1_high_power:
       timeout: 45
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+
+
+# TRACED twin of the perf job above: identical config except the use_trace axis, so the two are directly
+# comparable and each is gated against its own baseline table / band (glm_chunked_perf_gate). Traced
+# replays one captured chunk forward instead of re-dispatching every op from host, so it needs less wall
+# time than its untraced twin (replay is ~2.3x faster per chunk locally) -- hence 40 min, not 45.
+# "and traced" pins the use_trace axis: without a mode term the selector matches BOTH arms.
+- name: "(GLM-5.2-744B) chunked prefill perf code_debug 55k@5k, traced"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
+    export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and traced" -xvs
+    '
+  test_type: glm_chunked
+  test_tags: [glm_5_2, transformer]
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      timeout: 40
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1

@@ -26,13 +26,13 @@ from loguru import logger
 
 import ttnn
 
-from tests.ttnn.nightly.unit_tests.operations.experimental.test_indexer_score import (
+from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score import (
     glx_config,
     _global_inputs,
     _to_slab,
     QB_SQ,
 )
-from tests.ttnn.nightly.unit_tests.operations.experimental.ring4_ccl_helpers import (
+from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.ring_indexer_score_test_utils import (
     _open_ring4_ccl,
     _close_ring4_ccl,
     _persistent_buffer,
