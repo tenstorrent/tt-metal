@@ -36,12 +36,12 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape);
 template <bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
-    // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag).
-    // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
-    // corrupting the sum. Disable the flag (via the math state tracker) around the transpose+add, then
-    // return it to the operand driven baseline. WH does the same in its fp32 transpose.
-    math::_configure_preserve_zero_flag_state_();
-
+    // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag): a datum
+    // whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
+    // corrupting the sum. PRESERVE is asserted once by _llk_math_reduce_init_ for this path and held
+    // for the whole op -- flipping it per transpose cost 4 pipe-draining cfg writes per 32x32 tile
+    // (~40 cycles, 41% of the kernel), because the value alternates and the skip-if-set guard never
+    // hits. Do not re-assert it here.
     if constexpr (is_int_fpu_en)
     {
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
@@ -70,9 +70,6 @@ inline void reduce_row_perform_transpose()
     TTI_ZEROSRC(0, 1, 0, 1);
     TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
     TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
-
-    // Restore the operand-driven baseline for the currently configured formats.
-    math::_configure_default_zero_flag_state_();
 }
 
 /**
@@ -487,18 +484,41 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
-    // Establish the operand-driven DEFAULT zero-flag state before the reduce's GMPOOLs, mirroring
-    // _llk_math_matmul_init_ / _llk_math_eltwise_binary_init_. A preceding copy_init that left
-    // PRESERVE (keep denormals) would otherwise leak "keep" into the pool GMPOOL — harmless on HW
-    // when fp32 DEST accumulation is enabled (the flag is ignored), but a real invariant violation.
-    math::_configure_default_zero_flag_state_();
+    // Establish the zero-flag state once, for the whole op, so the execute path never writes it.
+    //
+    // REDUCE_ROW MAX is the only reduce path with a mov phase: reduce_row_perform_transpose moves the
+    // pooled row through SrcB (MOVD2B/TRNSPSRCB) and adds it back with ELWADD, and those readers need
+    // PRESERVE or a datum whose low byte is zero is flushed mid-reduction (see that function). It runs
+    // once per face row, so asserting PRESERVE there and restoring DEFAULT after it alternated the
+    // value and defeated the skip-if-set guard: 4 pipe-draining cfg writes per 32x32 tile, measured at
+    // ~40 of the kernel's 98 cycles/tile on Blackhole p300a. Hoisting it here makes the steady state
+    // free. GMPOOL/GAPOOL are not among the flag's readers (see the reader list in cmath_common.h), so
+    // the pool phase is unaffected. _llk_math_reduce_uninit_ returns the flag to DEFAULT, so the value
+    // is paired with this init rather than leaked to whatever op runs next.
+    //
+    // Every other reduce path is pool-only and takes the operand-driven DEFAULT, mirroring
+    // _llk_math_matmul_init_ / _llk_math_eltwise_binary_init_. A preceding copy_init that left PRESERVE
+    // would otherwise leak "keep" into the pool GMPOOL.
+    if constexpr (dim == ReduceDim::REDUCE_ROW && type == PoolType::MAX)
+    {
+        math::_configure_preserve_zero_flag_state_();
+    }
+    else
+    {
+        math::_configure_default_zero_flag_state_();
+    }
 }
 
 /**
  * @brief Uninitialize after a reduce operation, undoing any init/execute-time workarounds.
  *
+ * Returns the Src zero-substitution flag to the operand-driven baseline, since
+ * @ref _llk_math_reduce_init_ leaves REDUCE_ROW MAX holding PRESERVE for the whole op. Costs one cfg
+ * write per op (not per tile) and is a no-op for every other reduce path, which never left DEFAULT.
+ *
  * @note Reverses @ref _llk_math_reduce_init_
  */
 inline void _llk_math_reduce_uninit_()
 {
+    math::_configure_default_zero_flag_state_();
 }
