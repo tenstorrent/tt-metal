@@ -98,11 +98,27 @@ pytest tests/ttnn/unit_tests/operations/<op>/ --collect-only -q
 ### Run them (requires HW)
 
 ```bash
+export TT_METAL_WATCHER=10                                     # Watcher on — see below
+
 ./build/test/ttnn/unit_tests_ttnn --gtest_filter='*<Op>*'      # fast, ~op-scoped
 pytest tests/ttnn/unit_tests/operations/<op>/ -x               # broader coverage
 ```
 
 **Recommended order:** run the gtest filter first — it's faster and exercises the C++ op directly, so it fails fast on a broken port. Run pytests after gtests are green to cover the Python-API surface, dtype/layout sweeps, and program-cache behavior. Nightly pytests are heavy; skip unless you suspect a regression they'd catch.
+
+### Watcher — on for every test run
+
+Watcher is the runtime's device-side assertion layer. Without it, an invalid NoC address or a transfer overrunning a buffer just hangs the card; with it, you get a message naming the faulting core and transaction. Run every test of your port with it on.
+
+```bash
+export TT_METAL_WATCHER=10   # polling interval in seconds; append `ms` for milliseconds
+```
+
+- `TT_METAL_WATCHER=0` **enables** Watcher, with a zero-length interval — `unset` is the only way off.
+- Flipping it invalidates the JIT kernel cache, costing a full kernel recompile. Export once and leave it. No host rebuild — this is purely a runtime control.
+- Unset it before taking any timing measurement; the checks are deliberately expensive.
+
+Per-feature disables and log format: [`tools/watcher.rst`](../../../../../../tools/watcher.rst).
 
 ### Worked example: `reduction`
 
