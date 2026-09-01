@@ -53,6 +53,9 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_zeroacc_absolute_tile_mode_RMW>(0);
     std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
+    // Written directly (batched under the STALLWAIT above) rather than via _configure_int8_math_enabled_,
+    // so seed the tracker the reconfig sites read.
+    _seed_int8_math_enabled_state_(int8_math_enabled);
 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
@@ -185,12 +188,10 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
         LLK_ASSERT(
             is_fp32_dest_acc_en || !is_int8_or_int32_format(srca_data_format),
             "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
-        // Only INT8_math_enabled is written here; it is FPU-only (the SFPU never reads it, and on Blackhole SrcB
-        // format is inferred rather than rewritten here), so draining the FPU (MATH) suffices -- no WAIT_SFPU.
-        // (Wormhole's twin uses WAIT_SFPU because there the reconfig also rewrites the SFPU-read SrcB format.)
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
-        std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
+        // Only INT8_math_enabled is written here. The setter tracks the physical value and skips the
+        // pipe-draining write when the bit does not actually move, which is the common case: callers
+        // reconfig on any format change, but the bit only moves across an Int8/UInt8/Int32 boundary.
+        _configure_int8_math_enabled_(is_int8_or_int32_format(srca_data_format));
     }
 
     // Re-establish the operand-driven baseline for the new SrcA format. This reconfig is the only place the
@@ -221,12 +222,10 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
         LLK_ASSERT(
             is_fp32_dest_acc_en || !is_int8_or_int32_format(srcb_data_format),
             "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
-        // Only INT8_math_enabled is written here; it is FPU-only (the SFPU never reads it, and on Blackhole SrcB
-        // format is inferred rather than rewritten here), so draining the FPU (MATH) suffices -- no WAIT_SFPU.
-        // (Wormhole's twin uses WAIT_SFPU because there the reconfig also rewrites the SFPU-read SrcB format.)
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
-        std::uint32_t int8_math_enabled = is_int8_or_int32_format(srcb_data_format);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
+        // Only INT8_math_enabled is written here. The setter tracks the physical value and skips the
+        // pipe-draining write when the bit does not actually move, which is the common case: callers
+        // reconfig on any format change, but the bit only moves across an Int8/UInt8/Int32 boundary.
+        _configure_int8_math_enabled_(is_int8_or_int32_format(srcb_data_format));
     }
 
     // Re-establish the operand-driven baseline for the new SrcB format. This reconfig is the only place the
@@ -258,12 +257,10 @@ inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format
         LLK_ASSERT(
             is_fp32_dest_acc_en || !(is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format)),
             "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
-        // Only INT8_math_enabled is written here; it is FPU-only (the SFPU never reads it, and on Blackhole SrcB
-        // format is inferred rather than rewritten here), so draining the FPU (MATH) suffices -- no WAIT_SFPU.
-        // (Wormhole's twin uses WAIT_SFPU because there the reconfig also rewrites the SFPU-read SrcB format.)
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
-        std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
+        // Only INT8_math_enabled is written here. The setter tracks the physical value and skips the
+        // pipe-draining write when the bit does not actually move, which is the common case: callers
+        // reconfig on any format change, but the bit only moves across an Int8/UInt8/Int32 boundary.
+        _configure_int8_math_enabled_(is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format));
     }
 
     // Re-establish the operand-driven baseline for the new formats. This reconfig changes both SrcA and
