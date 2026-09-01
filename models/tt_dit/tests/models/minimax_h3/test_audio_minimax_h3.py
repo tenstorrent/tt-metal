@@ -667,3 +667,60 @@ def test_audio_decode_t_parallel(mesh_device):
         if seconds is None or (factor, axis) in KNOWN_BROKEN:
             continue
         assert psnr_db > 40.0, f"t_factor={factor} axis={axis} diverges from 1-device: PSNR {psnr_db:.1f} dB"
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
+def test_audio_encode_stereo_split(mesh_device):
+    """Stereo L/R batch split vs the unsharded baseline: same computation, different devices.
+
+    CCL-free by construction (batch items are independent through the whole encoder), so the
+    bar is tight: the split result must match the baseline to fp32 kernel reproducibility,
+    not merely to a PSNR floor."""
+    weights_dir = weights_subdir("audio_vae")
+    if weights_dir is None:
+        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_MODEL_PATH")
+    from loguru import logger
+    from safetensors.torch import load_file
+
+    from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
+    from ....models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
+
+    config = load_config(weights_dir)
+    converted = convert_minimax_h3_audio_state_dict(
+        load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors"))
+    )
+    encoder_state = {
+        k: v for k, v in converted.items() if k.startswith(("encoder.", "pre_block.", "mean_proj.", "logs_proj."))
+    }
+
+    torch.manual_seed(2)
+    waveform = torch.randn(2, 1, NUM_LATENT_FRAMES * HOP_LENGTH) * 0.1
+
+    results = {}
+    for name, split_axis in (("baseline", None), ("stereo_split", 0)):
+        encoder = MiniMaxH3AudioEncoder(
+            encoder_dim=config["encoder_dim"],
+            encoder_rates=tuple(config["encoder_rates"]),
+            latent_dim=config["latent_dim"],
+            latent_channels=config["latent_channels"],
+            num_attention_heads=config["num_attention_heads"],
+            mesh_device=mesh_device,
+            stereo_split_axis=split_axis,
+        )
+        encoder.load_torch_state_dict(dict(encoder_state))
+        mean, logs = encoder(waveform)
+        seconds = _best(lambda: encoder(waveform))
+        results[name] = (mean, logs, seconds)
+        logger.info(f"PERF audio_encode {name}: {seconds:.4f} s mean={tuple(mean.shape)}")
+        del encoder
+
+    (b_mean, b_logs, b_s), (s_mean, s_logs, s_s) = results["baseline"], results["stereo_split"]
+    assert s_mean.shape == b_mean.shape
+    mean_psnr, logs_psnr = psnr(b_mean, s_mean), psnr(b_logs, s_logs)
+    logger.info(
+        f"PERF audio_encode stereo_split: {s_s:.4f} s ({b_s / s_s:.2f}x) "
+        f"mean PSNR {mean_psnr:.1f} dB, logs PSNR {logs_psnr:.1f} dB"
+    )
+    assert mean_psnr >= 60.0, f"stereo split diverges from baseline: mean {mean_psnr:.1f} dB"
+    assert logs_psnr >= 60.0, f"stereo split diverges from baseline: logs {logs_psnr:.1f} dB"
