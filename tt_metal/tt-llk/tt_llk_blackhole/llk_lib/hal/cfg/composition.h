@@ -39,7 +39,7 @@ public:
     static_assert(F.width <= 32, "field wider than 32b cannot be assigned through a single value");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
 
-    static constexpr RegisterFile file   = F.file;
+    static constexpr RegisterScope scope = F.scope;
     static constexpr std::uint32_t addr  = F.addr32(S);
     static constexpr std::uint32_t shift = F.shamt(S);
     static constexpr std::uint32_t mask  = F.mask(S);
@@ -62,7 +62,7 @@ public:
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
     static_assert(Value <= ((std::uint64_t {1} << F.width) - 1u), "value exceeds field width");
 
-    static constexpr RegisterFile file   = F.file;
+    static constexpr RegisterScope scope = F.scope;
     static constexpr std::uint32_t addr  = F.addr32(S);
     static constexpr std::uint32_t shift = F.shamt(S);
     static constexpr std::uint32_t mask  = F.mask(S);
@@ -80,11 +80,11 @@ template <const Field& F, Sec S, typename Source>
 class GprWrite
 {
 public:
-    static_assert(F.file == RegisterFile::State, "GPR-backed CFG writes require a state-CFG destination");
+    static_assert(F.scope == RegisterScope::State, "GPR-backed CFG writes require a state-CFG destination");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
     static_assert(F.shamt(S) == 0, "GPR-backed CFG writes must start at the beginning of a CFG word");
 
-    static constexpr RegisterFile file   = F.file;
+    static constexpr RegisterScope scope = F.scope;
     static constexpr std::uint32_t addr  = F.addr32(S);
     static constexpr std::uint32_t words = Source::size == GprTransferSize::Bits128 ? 4u : 1u;
 
@@ -118,11 +118,11 @@ namespace detail
  * @p Mask is part of the type, allowing the Tensix backend to prune unused
  * RMWCIB byte writes at compile time.
  */
-template <RegisterFile File, std::uint32_t Addr, std::uint32_t Mask>
+template <RegisterScope Scope, std::uint32_t Addr, std::uint32_t Mask>
 class ConfigWord
 {
 public:
-    static constexpr RegisterFile file  = File;
+    static constexpr RegisterScope scope = Scope;
     static constexpr std::uint32_t addr = Addr;
     static constexpr std::uint32_t mask = Mask;
 
@@ -140,7 +140,7 @@ template <typename Assignment>
 class SingleFieldWord
 {
 public:
-    static constexpr RegisterFile file  = Assignment::file;
+    static constexpr RegisterScope scope = Assignment::scope;
     static constexpr std::uint32_t addr = Assignment::addr;
     static constexpr std::uint32_t mask = Assignment::mask;
 
