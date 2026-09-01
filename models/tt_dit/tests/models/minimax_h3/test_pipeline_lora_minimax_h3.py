@@ -123,7 +123,7 @@ def test_t2va_lora_end_to_end(mesh_device, reset_seeds):
     )
 
     expected_frames = align_num_frames(num_frames)
-    frames = to_uint8_frames(output.frames)
+    frames = to_uint8_frames(output)
     check_output_sanity(frames, num_frames=expected_frames, height=height, width=width)
     check_audio_sanity(output.audio, sampling_rate=output.sampling_rate, expected_seconds=output.video_seconds)
     check_av_sync(frames, output.audio, sampling_rate=output.sampling_rate, fps=MINIMAX_H3_FPS)
