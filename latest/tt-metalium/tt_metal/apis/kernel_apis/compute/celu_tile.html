@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>celu_tile &mdash; TT-Metalium&amp;trade;  documentation</title>
+  <title>celu_tile &mdash; TT-Metalium™  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
@@ -217,7 +217,7 @@
 </a>
 
 <a href="../../../../index.html">
-    TT-Metalium&trade;
+    TT-Metalium™
 </a>
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
@@ -261,7 +261,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../../../../index.html">TT-Metalium&trade;</a>
+          <a href="../../../../index.html">TT-Metalium™</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -318,8 +318,8 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel9celu_tileE8uint32_t8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1a6ccc948998624b04006206dadd8a8c04"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">celu_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">alpha</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">alpha_recip</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel9celu_tileE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_bEN7ckernel9celu_tileEv8uint32_t8uint32_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">is_fp32_dest_acc_en</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">DST_ACCUM_MODE</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a0ea24f4bd863c71f364b6b591b326744"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">celu_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">alpha</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">alpha_recip</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel9celu_tileEv8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Performs element-wise celu operation. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>

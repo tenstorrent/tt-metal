@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Device Debug Print &mdash; TT-Metalium&amp;trade;  documentation</title>
+  <title>Device Debug Print &mdash; TT-Metalium™  documentation</title>
       <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
@@ -217,7 +217,7 @@
 </a>
 
 <a href="../index.html">
-    TT-Metalium&trade;
+    TT-Metalium™
 </a>
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
@@ -239,6 +239,7 @@
 <li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#enabling">Enabling</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#strings">Strings</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#type-names">Type names</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#enums">Enums</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#circular-buffers">Circular Buffers</a></li>
 </ul>
@@ -268,7 +269,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../index.html">TT-Metalium&trade;</a>
+          <a href="../index.html">TT-Metalium™</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -396,6 +397,20 @@ so the host can resolve it:</p>
 <div class="highlight"><pre><span></span><span class="k">const</span><span class="w"> </span><span class="kt">char</span><span class="o">*</span><span class="w"> </span><span class="n">s</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"Hello world!"</span><span class="p">;</span>
 <span class="n">DPRINT</span><span class="p">(</span><span class="s">"Pointer: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">s</span><span class="p">);</span><span class="w">               </span><span class="c1">// prints: Pointer: 0x12345678</span>
 <span class="n">DPRINT</span><span class="p">(</span><span class="s">"String: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">CTSTR</span><span class="p">(</span><span class="s">"Hello!"</span><span class="p">));</span><span class="w">  </span><span class="c1">// prints: String: Hello!</span>
+</pre></div>
+</div>
+</section>
+<section id="type-names">
+<h3>Type names<a class="headerlink" href="#type-names" title="Permalink to this heading"></a>
+</h3>
+<p><code class="docutils literal notranslate"><span class="pre">dp_type_name_t&lt;T&gt;()</span></code> prints the fully-qualified name of <code class="docutils literal notranslate"><span class="pre">T</span></code>. The name is resolved at compile time
+and stored in the ELF like <code class="docutils literal notranslate"><span class="pre">CTSTR()</span></code>, so the argument costs one pointer in the print buffer:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="k">namespace</span><span class="w"> </span><span class="nn">ns</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">MyStruct</span><span class="w"> </span><span class="p">{};</span><span class="w"> </span><span class="p">}</span>
+
+<span class="n">ns</span><span class="o">::</span><span class="n">MyStruct</span><span class="w"> </span><span class="n">x</span><span class="p">;</span>
+<span class="n">DPRINT</span><span class="p">(</span><span class="s">"type: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">dp_type_name_t</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="p">());</span><span class="w">          </span><span class="c1">// prints: type: int</span>
+<span class="n">DPRINT</span><span class="p">(</span><span class="s">"type: {}</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">dp_type_name_t</span><span class="o">&lt;</span><span class="k">decltype</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="o">&gt;</span><span class="p">());</span><span class="w">  </span><span class="c1">// prints: type: ns::MyStruct</span>
 </pre></div>
 </div>
 </section>

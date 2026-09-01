@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.to_device &mdash; TT-NN&amp;trade;  documentation</title>
+  <title>ttnn.to_device &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
@@ -217,7 +217,7 @@
 </a>
 
 <a href="../../index.html">
-    TT-NN&trade;
+    TT-NN™
 </a>
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
@@ -300,7 +300,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../../index.html">TT-NN&trade;</a>
+          <a href="../../index.html">TT-NN™</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -347,15 +347,31 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.to_device">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">to_device</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.to_device" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">to_device</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Device</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ttnn.MeshDevice</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">queue_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.QueueId</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.to_device" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Copies the <cite>ttnn.Tensor</cite> <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code> to the <cite>tt_lib.device.MeshDevice</cite>.</p>
-<p>The tensor may be placed in DRAM or L1 memory.</p>
-<p>Currently memory_config must be of an Interleaved tensor (not sharded)</p>
-<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code>: the ttnn.Tensor
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">device</span></code>: the ttnn.MeshDevice
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: the optional MemoryConfig (DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG). Defaults to DRAM_MEMORY_CONFIG.</p>
+<p>Copy tensor from host to device.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<ul class="simple">
+<li><p><strong>tensor</strong> (<em>ttnn.Tensor</em>) – The tensor to be copied from host to device.</p></li>
+<li><p><strong>device</strong> (<em>ttnn.Device</em><em> | </em><em>ttnn.MeshDevice</em>) – The target device where the tensor will be copied.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – The memory configuration to use. Defaults to <cite>None</cite>, DRAM_MEMORY_CONFIG will be used.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<p><strong>queue_id</strong> (<em>ttnn.QueueId</em><em>, </em><em>optional</em>) – The queue id to use. Defaults to <cite>None</cite>.</p>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><em>ttnn.Tensor</em> – The device tensor copy.</p>
+</dd>
+</dl>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">
@@ -367,7 +383,7 @@
 <span class="n">tensor_on_host</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">10</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">)),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
 <span class="n">ttnn_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">tensor_on_host</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"TT-NN tensor shape after moving to device"</span><span class="p">,</span> <span class="n">ttnn_tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"TT-NN tensor shape after moving to device: </span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>

@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig &mdash; TT-NN&amp;trade;  documentation</title>
+  <title>ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
@@ -217,7 +217,7 @@
 </a>
 
 <a href="../../index.html">
-    TT-NN&trade;
+    TT-NN™
 </a>
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
@@ -290,7 +290,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../../index.html">TT-NN&trade;</a>
+          <a href="../../index.html">TT-NN™</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -371,6 +371,19 @@ additional memory round-trips in DRAM-based operations.</p>
 along the inner dimension for both input_tensor_a and input_tensor_b in DRAM-sharded
 operations. This parameter must be chosen to align with the DRAM sharding
 strategy and optimize memory bandwidth utilization for both tensors.</p>
+</dd>
+</dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.num_workers_per_dram_bank">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">num_workers_per_dram_bank</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.num_workers_per_dram_bank" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Number of Tensix reader/compute workers assigned to each DRAM bank.</p>
+<p>The default of 1 preserves the established cross-architecture path. Values of 2 or 3
+split each bank’s width shard evenly across multiple workers on Blackhole. All readers
+for one bank use NOC0 and the same allocator-selected DRAM endpoint. The per-bank shard
+width in tiles must equal this value times the reader width.</p>
 </dd>
 </dl>
 

@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Watcher &mdash; TT-Metalium&amp;trade;  documentation</title>
+  <title>Watcher &mdash; TT-Metalium™  documentation</title>
       <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
@@ -217,7 +217,7 @@
 </a>
 
 <a href="../index.html">
-    TT-Metalium&trade;
+    TT-Metalium™
 </a>
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
@@ -274,7 +274,7 @@
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../index.html">TT-Metalium&trade;</a>
+          <a href="../index.html">TT-Metalium™</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -506,13 +506,21 @@ shown below:</p>
 <h2>Ring Buffer<a class="headerlink" href="#ring-buffer" title="Permalink to this heading"></a>
 </h2>
 <p>A small ring buffer is available on each core, accessible via the <cite>WATCHER_RING_BUFFER_PUSH()</cite> macro.
-This ring buffer has 31 <cite>uint32_t</cite> elements, and when more than the max amounts of elements
-are pushed into the buffer, the oldest are overwritten. When the watcher is disabled, the ring
-buffer is still present, but any writes to it are compiled out. An example of pushing data to the
-ring buffer, and the resulting log is shown below.</p>
-<p>Important: the ring buffer does not have any synchronization for writes between difference RISCs on
-the same core. Calling <cite>WATCHER_RING_BUFFER_PUSH()</cite> from different RISCs in the same core at the same time
-is undefined behaviour.</p>
+Each entry holds one <cite>uint32_t</cite>, and once the buffer is full the oldest entries are overwritten. When
+the watcher is disabled, the ring buffer is still present, but any writes to it are compiled out. An
+example of pushing data to the ring buffer, and the resulting log is shown below.</p>
+<p>The implementation and capacity depend on the architecture:</p>
+<ul class="simple">
+<li><p><strong>Wormhole (SPSC), 32 entries</strong>: a single-producer ring buffer with no synchronization between
+RISCs. Calling <cite>WATCHER_RING_BUFFER_PUSH()</cite> from different RISCs on the same core at the same time
+is undefined behaviour.</p></li>
+<li><p><strong>Blackhole (MPSC), 32 entries</strong>: lock-free, using a RISC-V atomic on the head counter.</p></li>
+<li><p><strong>Quasar (MPSC), 128 entries</strong>: lock-free, using NEO cluster semaphore 31, which is reserved for
+the watcher and must not be used by kernels.</p></li>
+</ul>
+<p>Both MPSC variants are safe to call concurrently from every RISC on the same core, and tag each
+entry with the pushing processor’s name as a prefix in the log; the naming itself differs by
+architecture (see below).</p>
 <div class="highlight-default notranslate">
 <div class="highlight"><pre><span></span><span class="c1">#include "debug/ring_buffer.h"</span>
 
@@ -524,16 +532,32 @@ is undefined behaviour.</p>
 </pre></div>
 </div>
 <p>The contents of the ring buffer for each core (if values have been written) will be shown in the
-watcher log:</p>
+watcher log. On Wormhole (SPSC), writing 40 entries drops the oldest 8, printed newest-first:</p>
 <div class="highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="c1"># The ring buffer has a size of 32 elements, therefore writing 40 entries into the buffer will</span>
-<span class="c1"># result in the oldest 8 entries being dropped. Entries are printed starting with the most recent.</span>
-<span class="n">Core</span> <span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span><span class="n">y</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>    <span class="n">R</span><span class="p">,</span><span class="n">R</span><span class="p">,</span><span class="n">R</span><span class="p">,</span><span class="n">R</span><span class="p">,</span><span class="n">R</span> <span class="n">rmsg</span><span class="p">:</span><span class="n">D0G</span><span class="o">|</span><span class="n">BNT</span> <span class="n">smsg</span><span class="p">:</span><span class="n">GGGG</span> <span class="n">k_ids</span><span class="p">:</span><span class="mi">1</span><span class="o">|</span><span class="mi">0</span><span class="o">|</span><span class="mi">0</span>
-    <span class="n">debug_ring_buffer</span><span class="p">(</span><span class="n">latest_written_idx</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span><span class="o">=</span>
+<div class="highlight"><pre><span></span><span class="n">Core</span> <span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span><span class="n">y</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+    <span class="n">debug_ring_buffer</span><span class="o">=</span>
     <span class="p">[</span><span class="mh">0x00000028</span><span class="p">,</span><span class="mh">0x00000027</span><span class="p">,</span><span class="mh">0x00000026</span><span class="p">,</span><span class="mh">0x00000025</span><span class="p">,</span><span class="mh">0x00000024</span><span class="p">,</span><span class="mh">0x00000023</span><span class="p">,</span><span class="mh">0x00000022</span><span class="p">,</span><span class="mh">0x00000021</span><span class="p">,</span>
      <span class="mh">0x00000020</span><span class="p">,</span><span class="mh">0x0000001f</span><span class="p">,</span><span class="mh">0x0000001e</span><span class="p">,</span><span class="mh">0x0000001d</span><span class="p">,</span><span class="mh">0x0000001c</span><span class="p">,</span><span class="mh">0x0000001b</span><span class="p">,</span><span class="mh">0x0000001a</span><span class="p">,</span><span class="mh">0x00000019</span><span class="p">,</span>
      <span class="mh">0x00000018</span><span class="p">,</span><span class="mh">0x00000017</span><span class="p">,</span><span class="mh">0x00000016</span><span class="p">,</span><span class="mh">0x00000015</span><span class="p">,</span><span class="mh">0x00000014</span><span class="p">,</span><span class="mh">0x00000013</span><span class="p">,</span><span class="mh">0x00000012</span><span class="p">,</span><span class="mh">0x00000011</span><span class="p">,</span>
      <span class="mh">0x00000010</span><span class="p">,</span><span class="mh">0x0000000f</span><span class="p">,</span><span class="mh">0x0000000e</span><span class="p">,</span><span class="mh">0x0000000d</span><span class="p">,</span><span class="mh">0x0000000c</span><span class="p">,</span><span class="mh">0x0000000b</span><span class="p">,</span><span class="mh">0x0000000a</span><span class="p">,</span><span class="mh">0x00000009</span><span class="p">]</span>
+</pre></div>
+</div>
+<p>On Blackhole and Quasar (MPSC), each entry carries the pushing processor’s name. The naming differs by
+architecture: Blackhole uses <cite>BRISC</cite>/<cite>NCRISC</cite>/<cite>TRISC0-2</cite>, while Quasar’s 8 data-movement processors are
+named <cite>DM0</cite>-<cite>DM7</cite> and its 16 compute processors are named <cite>Neo0TRISC0</cite>-<cite>Neo3TRISC3</cite> (cluster-qualified).
+On Quasar, <cite>DM0</cite> and <cite>DM1</cite> are reserved for the runtime, so user kernels only ever appear as <cite>DM2</cite>-<cite>DM7</cite>.</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Blackhole</span>
+<span class="n">Core</span> <span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span><span class="n">y</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+    <span class="n">debug_ring_buffer</span><span class="o">=</span>
+    <span class="p">[[</span><span class="n">BRISC</span><span class="p">]</span><span class="mh">0x00000028</span><span class="p">,[</span><span class="n">TRISC0</span><span class="p">]</span><span class="mh">0x00000027</span><span class="p">,[</span><span class="n">BRISC</span><span class="p">]</span><span class="mh">0x00000026</span><span class="p">,[</span><span class="n">NCRISC</span><span class="p">]</span><span class="mh">0x00000025</span><span class="p">,[</span><span class="n">TRISC1</span><span class="p">]</span><span class="mh">0x00000024</span><span class="p">,</span>
+     <span class="o">...</span><span class="p">]</span>
+
+<span class="c1"># Quasar</span>
+<span class="n">Core</span> <span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span><span class="n">y</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+    <span class="n">debug_ring_buffer</span><span class="o">=</span>
+    <span class="p">[[</span><span class="n">DM2</span><span class="p">]</span><span class="mh">0x00000028</span><span class="p">,[</span><span class="n">Neo0TRISC0</span><span class="p">]</span><span class="mh">0x00000027</span><span class="p">,[</span><span class="n">DM5</span><span class="p">]</span><span class="mh">0x00000026</span><span class="p">,[</span><span class="n">DM3</span><span class="p">]</span><span class="mh">0x00000025</span><span class="p">,[</span><span class="n">Neo2TRISC1</span><span class="p">]</span><span class="mh">0x00000024</span><span class="p">,</span>
+     <span class="o">...</span><span class="p">]</span>
 </pre></div>
 </div>
 </section>
