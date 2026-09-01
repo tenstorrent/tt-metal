@@ -7,7 +7,6 @@
 
 // clang-format off
 #include "api/compute/common.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/wavelet/device/protocol/lwt_2d_config.hpp"
@@ -149,7 +148,7 @@ __attribute__((noinline)) void run_scale(
     for (uint32_t tile = 0; tile < tile_count; ++tile) {
         tile_regs_acquire();
         source0_buffer.wait_front(1);
-        copy_tile_to_dst_init_short(cb_source0);
+        copy_init(cb_source0);
         copy_tile(cb_source0, 0, 0);
         source0_buffer.pop_front(1);
         scale_tile(0, coefficient);
@@ -212,17 +211,17 @@ WAVELET_2D_STENCIL_ATTRIBUTES void run_stencil(
     for (uint32_t tile = 0; tile < tile_count; ++tile) {
         tile_regs_acquire();
         source0_buffer.wait_front(1);
-        copy_tile_to_dst_init_short(cb_source0);
+        copy_init(cb_source0);
         copy_tile(cb_source0, 0, 0);
         source0_buffer.pop_front(1);
 
         source1_buffer.wait_front(1);
-        copy_tile_to_dst_init_short(cb_source1);
+        copy_init(cb_source1);
         copy_tile(cb_source1, 0, 1);
         source1_buffer.pop_front(1);
 
         base_buffer.wait_front(1);
-        copy_tile_to_dst_init_short(cb_base);
+        copy_init(cb_base);
         copy_tile(cb_base, 0, 2);
         base_buffer.pop_front(1);
 
@@ -362,7 +361,7 @@ void kernel_main() {
     constexpr uint32_t cb_base = get_compile_time_arg_val(2);
     constexpr uint32_t cb_output = get_compile_time_arg_val(3);
     compute_kernel_hw_startup(cb_base, cb_output);
-    init_sfpu(cb_base, cb_output);
+    copy_init(cb_base);
     const uint32_t chunk_count = get_arg_val<uint32_t>(0);
     constexpr uint32_t routes_per_axis = Scheme::num_steps;
     constexpr uint32_t routes_per_chunk = 4 * routes_per_axis;
