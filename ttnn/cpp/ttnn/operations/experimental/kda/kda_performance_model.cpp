@@ -7,7 +7,6 @@
 #include <cmath>
 #include <limits>
 #include <string_view>
-#include <unordered_set>
 
 #include <tt_stl/assert.hpp>
 
@@ -76,14 +75,10 @@ KdaProfilerModel make_profiler_model(
     result.outputs_bytes.assign(outputs.size(), 0);
 
     double mandatory_dram_bytes = 0.0;
-    std::unordered_set<const void*> input_buffers;
     for (std::size_t index = 0; index < inputs.size(); ++index) {
         TT_FATAL(inputs[index] != nullptr, "KDA performance model received a null input tensor");
         const Tensor& input = *inputs[index];
         validate_tensor(input, device, "input");
-        TT_FATAL(
-            input_buffers.insert(static_cast<const void*>(input.buffer())).second,
-            "KDA performance model does not support aliased inputs");
         if (input.memory_config().is_dram()) {
             const double bytes = physical_bytes(input);
             result.inputs_bytes[index] = narrow_profiler_int("input bytes", bytes);

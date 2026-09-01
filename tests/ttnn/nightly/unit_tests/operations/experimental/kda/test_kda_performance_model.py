@@ -79,18 +79,22 @@ def test_tensor_volume_includes_tile_padding() -> None:
 
 
 def test_shared_roofline_golden() -> None:
-    output_address = 0xCAFE
+    aliased_input_address = 0xCAFE
+    aliased_input_a = _FakeTensor((2, 2, 2), buffer_type=ttnn.BufferType.DRAM, address=aliased_input_address)
+    aliased_input_b = _FakeTensor((2, 2, 1), buffer_type=ttnn.BufferType.DRAM, address=aliased_input_address)
+    assert aliased_input_a.buffer_address() == aliased_input_b.buffer_address()
+
     fpu = perf_model.FpuOps(matrix_flops=8, add_ops=2)
     sfpu = perf_model.SfpuOps(exp_ops=3)
     result = perf_model.performance(
         fpu=fpu,
         sfpu=sfpu,
         inputs=(
-            _FakeTensor((2, 2, 2), buffer_type=ttnn.BufferType.DRAM),
-            _FakeTensor((2, 2, 1), buffer_type=ttnn.BufferType.DRAM, address=output_address),
+            aliased_input_a,
+            aliased_input_b,
             _FakeTensor((1, 2, 1), buffer_type=ttnn.BufferType.DRAM),
         ),
-        outputs=(_FakeTensor((2, 2, 1), buffer_type=ttnn.BufferType.DRAM, address=output_address),),
+        outputs=(_FakeTensor((2, 2, 1), buffer_type=ttnn.BufferType.DRAM),),
         **_measurement(),
     )
 
@@ -104,15 +108,6 @@ def test_shared_roofline_golden() -> None:
 
 
 def test_invalid_public_inputs_raise(expect_error: Callable) -> None:
-    with expect_error(ValueError, "aliased inputs"):
-        perf_model.performance(
-            fpu=perf_model.FpuOps(),
-            sfpu=perf_model.SfpuOps(),
-            inputs=(_FakeTensor((1,), address=0xBAD), _FakeTensor((1,), address=0xBAD)),
-            outputs=(_FakeTensor((1,)),),
-            **_measurement(),
-        )
-
     with expect_error(ValueError, "operation counts"):
         perf_model.performance(
             fpu=perf_model.FpuOps(add_ops=-1),

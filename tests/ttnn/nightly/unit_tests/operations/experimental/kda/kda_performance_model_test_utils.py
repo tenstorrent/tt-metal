@@ -84,10 +84,6 @@ def _dram_bytes_and_core_count(inputs: Sequence[ttnn.Tensor], outputs: Sequence[
     if any(tensor.device() != device for tensor in tensors):
         raise ValueError("KDA performance model requires all tensors on the same device")
 
-    input_addresses = tuple(int(tensor.buffer_address()) for tensor in inputs)
-    if len(input_addresses) != len(set(input_addresses)):
-        raise ValueError("KDA performance model does not support aliased inputs")
-
     dram_bytes = sum(
         int(tensor.volume()) * int(tensor.element_size())
         for tensor in tensors
