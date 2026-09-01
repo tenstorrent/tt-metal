@@ -72,9 +72,7 @@ def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
             "from the total either way, but the run will take far longer than the reported compute."
         )
 
-    pipeline = MiniMaxH3Pipeline.create_pipeline(
-        mesh_device=mesh_device, weights_dir=weights, precomputed_adaln=False, dit_fsdp=False
-    )
+    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights, dit_fsdp=False)
 
     benchmark_profiler = BenchmarkProfiler()
     output = run_warm_generation(
