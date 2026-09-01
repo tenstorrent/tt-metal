@@ -1046,25 +1046,8 @@ MeshGraph MeshGraph::generate_mesh_graph_of_shape(
     // config (there is no MGD declaring them), so their edge ports are reserved for the torus on
     // the bare flag, whatever the extent — on a genuine axis the wrap cables consume them anyway,
     // and on a smaller extent leaving them open would let inter-mesh links land on a direction
-    // whose deadlock-avoidance label can mismatch the peer mesh (issue #54650). log_debug rather
-    // than warning: auto-discovery calls this once per candidate.
+    // whose deadlock-avoidance label can mismatch the peer mesh (issue #54650).
     std::uint32_t chan_id = 0;
-    if (has_flag(fabric_type, torus_flag_for_axis(0)) && !is_genuine_torus_dim(mesh_shape[0])) {
-        log_debug(
-            tt::LogFabric,
-            "MeshGraph: generated graph reserves the N/S edge ports of a {}x{} mesh for the {} torus axis",
-            mesh_shape[0],
-            mesh_shape[1],
-            enchantum::to_string(fabric_type));
-    }
-    if (has_flag(fabric_type, torus_flag_for_axis(1)) && !is_genuine_torus_dim(mesh_shape[1])) {
-        log_debug(
-            tt::LogFabric,
-            "MeshGraph: generated graph reserves the E/W edge ports of a {}x{} mesh for the {} torus axis",
-            mesh_shape[0],
-            mesh_shape[1],
-            enchantum::to_string(fabric_type));
-    }
     if (!has_flag(fabric_type, torus_flag_for_axis(0))) {
         // North, start from NW corner
         for (std::uint32_t chip_id = 0; chip_id < mesh_shape[1]; chip_id++) {
