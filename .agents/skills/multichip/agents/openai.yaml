@@ -1,7 +1,0 @@
-interface:
-  display_name: "Multichip"
-  short_description: "Parallelize TTNN code across a device mesh"
-  default_prompt: "Use $multichip to parallelize runnable TTNN code across the available multi-chip hardware, choose and justify the mesh strategy, compare against the single-chip TTNN baseline, optimize the multi-chip path, and leave correctness plus performance evidence."
-
-policy:
-  allow_implicit_invocation: true
