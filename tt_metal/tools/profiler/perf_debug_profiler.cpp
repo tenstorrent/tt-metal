@@ -6503,11 +6503,28 @@ void PerfDebugProfiler::verify_completeness(DeviceCtx& ctx, uint32_t device_inde
     const size_t n_stall_cores = ctx.n_worker_cores != 0 ? ctx.n_worker_cores : ctx.core_virt.size();
     for (size_t ci = 0; ci < n_stall_cores; ci++) {
         const auto [vx, vy] = ctx.core_virt[ci];
+        // ADDRESS PER CORE CLASS. Eth cores are appended after the workers in this poll list and their
+        // profiler_msg_t lives at a DIFFERENT L1 base (ctx.eth_prof_l1); reading them at the TENSIX
+        // address lands in an unrelated region and returns whatever happens to be there.
+        //
+        // That is not hypothetical: with eth coverage on, this function reported
+        //   "30183953311 producer stalls across 2 of 118 cores"  and
+        //   "580/590 lanes fully drained; 10 lanes stranded 19118519543 words (worst lane 552)"
+        // on a capture that was independently EXACTLY lossless (samples == rounds x links x 16 x 3).
+        // 118 = 110 workers + 8 eth, and lane 552 is in the eth range (110 workers x 5 riscs = 550),
+        // so every bogus lane was an eth lane read at the wrong base. A completeness checker that
+        // calls a perfect capture broken is worse than no checker: it trains people to ignore it.
+        const bool is_eth =
+            ctx.n_eth_cores != 0 && ci >= ctx.eth_start && ci < static_cast<size_t>(ctx.eth_start) + ctx.n_eth_cores;
+        if (is_eth && ctx.eth_prof_l1 == 0) {
+            continue;  // eth coverage without a resolved base: nothing safe to read
+        }
+        const uint64_t core_prof_l1 = is_eth ? static_cast<uint64_t>(ctx.eth_prof_l1) : prof_l1;
         cluster.read_core(
             cv.data(),
             kernel_profiler::SPSC_CONTROL_END * sizeof(uint32_t),
             tt_cxy_pair(ctx.chip_id, CoreCoord{vx, vy}),
-            prof_l1);
+            core_prof_l1);
         uint64_t core_total = 0;
         for (uint32_t r = 0; r < kernel_profiler::SPSC_STALL_COUNT_MAX; r++) {
             core_total += cv[kernel_profiler::SPSC_STALL_COUNT_0 + r];
