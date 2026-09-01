@@ -683,6 +683,30 @@ KNOBS = {
     # the pass's corpus domain is straight-line single-BB SFPU
     # functions, so the expected honest verdict on loop-shaped LLK
     # kernels is refusal-by-cfg with byte-identical legs).
+    # KL (FABLE_GOES_BURR R2 / item-#14 stage B): the CC-region-tree
+    # licensed CC-dance admissions.  One Init(0) flag opens FIVE
+    # tree-keyed admissions the stage-A consumers refused: the ccmask
+    # EQ/NE keep-mask compositions (tt/proofs/ccmask-eqne-zero/ EQUAL
+    # over 2^32 per direction -- bit-exact, proof-cited, no licensed
+    # token), the ccmask any-block-layout matcher, the crossloop
+    # placement-walk CC admissions (balanced-frame loop fact + the
+    # all-lanes-entry kill proof; the crossloop-cc-unproven census
+    # class), the invariant containment-fact narrowing-set widening
+    # (tt/proofs/cc-narrowing-writers/), and the reassoc balanced
+    # child-frame window transparency (FP license keys unchanged).
+    # MEASURED (laneKL-evidence-20260831): ON + flag moves 15 corpus
+    # rows -- exactly the 20 new EQ/NE folds (unary
+    # remainder/asinh/acosh/sign/fmod, binary FMOD/REMAINDER/ATAN2
+    # format variants) plus 4 new in-region invariant hoists (all four
+    # corpus sfpiadd_i narrowing refusals); every standing
+    # ccmask-compare-direction-unsupported refusal corpus-wide is
+    # discharged.  Fail-closed refusals:
+    # crossloop-cc-ambient-unproven, ccmask-region-layout-unproven,
+    # plus every standing name unchanged with the flag off
+    # (byte-identical corpus at OFF/TD/ON/LIC).  Acts on the ON-set
+    # consumers (ccmask/invariant/crossloop walks), so a solo leg is
+    # structurally weaker -- on-plus.
+    "cc-region-general": "-mtt-tensix-optimize-cc-region-general",
     "milp": "-mtt-tensix-optimize-pressure-schedule "
     "-mtt-tensix-pressure-schedule-use-milp",
     # ---- pin-16 NEW default-off flags (lane EN ceremony): knob legs
@@ -1656,6 +1680,11 @@ KNOB_MODES = {
     # every arbitrated decision point ungated, so the booking A/B is
     # (ON + flag) vs plain ON.
     "priced-placement": "on-plus",
+    # cc-region-general opens admissions inside ON-set consumers
+    # (ccmask, the invariant containment fact, the crossloop placement
+    # walks): a solo leg is structurally weaker, so the booking A/B is
+    # (ON + flag) vs plain ON.
+    "cc-region-general": "on-plus",
     "milp": "on-plus",
     # pin-16 booking flags (lane EN): same on-plus reasoning as the
     # pin-15 seeds — the shapes materialize on the reviewed-ON
