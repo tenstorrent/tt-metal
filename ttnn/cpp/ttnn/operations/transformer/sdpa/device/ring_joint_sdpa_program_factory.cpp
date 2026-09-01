@@ -673,7 +673,8 @@ void apply_ring_joint_scalar_runtime_args(
             args.sliding_window_size.value(),
             tt::constants::TILE_HEIGHT,
             runtime_ring_size,
-            runtime_plan.logical_nt);
+            runtime_plan.logical_nt,
+            args.bounded_kv_slab_count.value_or(0));
         TT_FATAL(runtime_chunked_sliding_layout.uses_neighbor_halo(), "Sliding attention requires a neighbor halo");
         // logical_n/kv_actual_isl are runtime-patched and excluded from the program hash. For
         // compact chunked sliding they also choose which cache-group tail the one-hop gather reads.
@@ -979,6 +980,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t global_padded_N = kv_local_padded_N * ring_size;
     const uint32_t sliding_window_size = args.sliding_window_size.value_or(0);
     const bool has_sliding_window = sliding_window_size > 0;
+    // Bounded circular sliding KV cache slab count (0 = unbounded). Wraps the local-slab derivation
+    // in sliding_window_work_plan.hpp for the host halo layout, the reader, and the compute kernel.
+    const uint32_t bounded_kv_slab_count = args.bounded_kv_slab_count.value_or(0);
     const bool enable_kv_chains = !has_sliding_window;
     // The supported sliding specialization always uses a compact neighbor-halo buffer.
     const uint32_t padded_N = has_sliding_window ? global_padded_N : gathered_padded_N;
@@ -1041,7 +1045,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     ring_joint::ChunkedSlidingHaloLayout chunked_sliding_halo_layout;
     if (has_sliding_window) {
         chunked_sliding_halo_layout = ring_joint::build_chunked_sliding_halo_layout(
-            q_local_padded_Nt, Sk_chunk_t, sliding_window_size, tt::constants::TILE_HEIGHT, ring_size, logical_nt);
+            q_local_padded_Nt,
+            Sk_chunk_t,
+            sliding_window_size,
+            tt::constants::TILE_HEIGHT,
+            ring_size,
+            logical_nt,
+            bounded_kv_slab_count);
         TT_FATAL(
             kernel_chunked && chunked_sliding_halo_layout.uses_neighbor_halo(),
             "Sliding K/V requires neighbor-halo geometry; gathered rows={}, global rows={}",
@@ -1450,8 +1460,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<uint32_t>(joint_is_sharded),
         // Slot 39: true (unpadded) joint length in tiles (twins spatial logical_nt). The reader uses it
         // to skip joint K chunks that lie entirely beyond the real joint tail (padding).
-        // Tensor accessors start at slot 40.
         logical_lt,
+        // Slot 40: bounded circular sliding KV slab count (0 = unbounded). Feeds the reader's
+        // build_sliding_q_work_plan so local slab addressing wraps identically to the host halo
+        // layout and the compute kernel. Tensor accessors start at slot 41.
+        bounded_kv_slab_count,
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -1682,8 +1695,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Slot 52: sharded-joint flag. When true, one shard per ring iteration; do_joint_kv fires every iter.
         static_cast<uint32_t>(joint_is_sharded),
         // Slot 53: true (unpadded) joint length in tiles (twins spatial logical_nt). Drives the
-        // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip. CB block starts at 54.
-        logical_lt};
+        // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
+        logical_lt,
+        // Slot 54: bounded circular sliding KV slab count (0 = unbounded). Feeds the compute-side
+        // build_sliding_q_work_plan so it stays in lockstep with the reader. CB block starts at 55.
+        bounded_kv_slab_count};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);

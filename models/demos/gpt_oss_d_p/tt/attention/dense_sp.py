@@ -58,6 +58,7 @@ def dense_sp_attention(
     cluster_axis,
     attention_sink=None,
     sliding_window_size=None,
+    bounded_kv_slab_count=None,
     slot_idx=0,
     layer_idx=0,
     num_layers=1,
@@ -72,8 +73,16 @@ def dense_sp_attention(
     kv_actual         valid prefix length already in the cache before this chunk (drives on-device rotation)
     logical_n         total valid prefix length (q attends causally over [0:logical_n])
     attention_sink    per-query-head sink (weights.sinks, bf16); sliding_window_size None on full layers
+    bounded_kv_slab_count  bounded circular sliding cache (PR2): the cache holds only this many chunk
+                      slabs and the ring read wraps its local slab addressing (chunk group g in slab
+                      g mod n_slabs). None on full layers / unbounded caches. kv_actual and logical_n
+                      stay TRUE ABSOLUTE lengths either way — the op derives the wrap on-device.
     -> out            [1, n_q_local, chunk_local, head_dim]  block-cyclic over the chunk
     """
+    assert bounded_kv_slab_count is None or sliding_window_size is not None, (
+        "bounded_kv_slab_count is only meaningful for sliding-window layers "
+        f"(got bounded_kv_slab_count={bounded_kv_slab_count}, sliding_window_size=None)"
+    )
     assert cache_k.dtype == ttnn.bfloat8_b and cache_v.dtype == ttnn.bfloat8_b, (
         f"chunked ring cache-read requires a bf8 KV cache; got k={cache_k.dtype}, v={cache_v.dtype}. "
         "KV_CACHE_DTYPE=bf16 is not supported for chunked prefill (the sliding RingJointSDPA path "
@@ -143,5 +152,7 @@ def dense_sp_attention(
         # GPT-OSS additions (Pavle's sinks+sliding branch):
         attention_sink=attention_sink,
         sliding_window_size=sliding_window_size,
+        # Bounded circular sliding KV cache (PR2). None => unbounded, byte-identical behavior.
+        bounded_kv_slab_count=bounded_kv_slab_count,
     )
     return out
