@@ -192,7 +192,7 @@ PASS 2  map_multi_mesh_to_physical + intra-mesh solve
 
 Pass 2 is near-identity work in the common case, because pass 1 already guaranteed the seams. It exists
 to permute when intra-mesh rejects something, and to check the constraints the DFS deliberately cannot
-see. §6(c) proposes — but does not adopt — a feedback edge back into pass 1.
+see. §6(d) proposes — but does not adopt — a feedback edge back into pass 1.
 
 ### (b) The rule that decides scope
 
@@ -442,9 +442,22 @@ Least-constraining-value, so the DFS keeps its options open:
 
 ### (f) Backtracking, budget, fallback
 
-Chronological backtracking to start. Wall-clock budget in the style of `kSetPackingBudget` (5s). On
-timeout or exhaustion, **fall back to the existing Phase 5/6 path** rather than throwing — this plan
-should not be able to regress an MGD that maps today.
+Chronological backtracking to start. On budget expiry or exhaustion, **fall back to the existing Phase
+5/6 path** rather than throwing — this plan should not be able to regress an MGD that maps today.
+
+**Budget on search nodes expanded, not wall-clock**, with a generous wall-clock value kept only as a
+coarse backstop against a pathology the node count fails to catch. The reason is reproducibility rather
+than correctness: a wall-clock cutoff makes the search's outcome depend on machine load, so a CI job
+that maps under load and fails when idle becomes flaky in a way that is painful to diagnose. A node
+count makes a failure reproducible from the MGD and PSD alone. `kSetPackingBudget` (5s) is the existing
+precedent for the wall-clock form and is why it is worth stating the departure explicitly.
+
+**The budget can be generous.** The solve is not replicated across ranks. `TopologyMapper::build_mapping`
+guards it with `if (generate_mapping_locally_ || my_rank == control_host_rank)`
+(`tt_metal/fabric/topology_mapper.cpp:443`); rank 0 solves alone and broadcasts the result
+(`571–580`), while every other rank waits in `receive_chip_info_from_host` (`583`). So search cost is
+paid once per job on one host, not once per rank, and there is no cross-rank divergence hazard from a
+non-deterministic cutoff — the constraint is purely about reproducible debugging.
 
 Keep the deepest partial assignment reached. That is the diagnostic payload, and it is much better than
 a SAT unsat core:
@@ -610,18 +623,37 @@ exists so that when a symptom appears the response is already thought through.
 
 | # | Optimization | Symptom it answers | Cost / risk |
 | --- | --- | --- | --- |
-| 1 | **Shared seam cache** — memoize the region-pair link set (§4(f)) lazily, keyed by candidate pair | Seam evaluation is the DFS inner loop | Bounded by `touches` size; almost certainly worth doing in v1 |
-| 2 | **State memoization** — hash on `(placed mesh set, occupied chip bitset)`, skip states already refuted | The same partial state is reached by different assignment orders | Hashing a bitset per node; memory grows with search |
+| 1 | **State memoization** — hash on `(placed mesh set, occupied chip bitset)`, skip states already refuted | The same partial state is reached by different assignment orders | Likely dead weight; see (c) |
+| 2 | **Capacity counting bounds** — free-chip popcount, and per-shape remaining-demand vs supply | Search continues below a state that provably has no room left | Near-free with incrementally maintained counts; strictly weaker than Hall |
 | 3 | **Anchored enumeration** (§5(i)) — generate candidates next to the frontier instead of filtering a global pool | Pools large enough that global filtering dominates | Per-node solver calls; already documented as a contingency |
-| 4 | **Conflict-directed backjumping** — jump to the deepest assignment implicated in the failure | Chronological backtracking thrashes on a long pipeline | Requires conflict provenance tracking through propagation |
+| 4 | **Conflict-directed backjumping + nogood learning on minimal conflict subsets** | Chronological backtracking thrashes on a long pipeline | One decision, not two — both need the same conflict-provenance tracking |
 | 5 | **Full Hall matching** instead of the §5(d) union bound | Union bound admits states that die a few levels deeper | Bipartite matching per node; §5(d) says explicitly to wait for evidence |
 | 6 | **Bidirectional growth** — seed both ends of a pipeline and meet in the middle | Long path MGDs walk far before finding a dead end | Two frontiers to merge; already raised in §12 |
-| 7 | **Signature-class seed ordering → pruning** (§5(g)) | Symmetric dead ends rediscovered per image | Pruning risks losing solutions; needs an isomorphism proof first |
-| 8 | **Randomized restarts** | Heavy-tailed runtime; one bad early choice dominates | Loses determinism unless seeded; needs a reproducibility story |
+| 7 | **Seed-class budget rotation** — give each signature class (§5(g)) a node budget, rotate on exhaustion | Symmetric dead ends rediscovered per image on unpinned MGDs | Completeness survives: a class is abandoned temporarily, not pruned |
+| 8 | **Incremental domain maintenance** with an undo trail, instead of recomputing domains per node | Profiling shows constant factor, not search shape, is the cost | Standard CSP technique; trail bookkeeping |
+| 9 | **Randomized restarts** | Heavy-tailed runtime; one bad early choice dominates | Non-reproducible failures unless the seed is fixed; see §5(f) |
 
-Two candidates are cheap enough to be near-default (1 and, plausibly, 2). The rest are escalations.
+**Not on this list, deliberately.** A shared seam cache is not an optimization — `touches` is a static
+property of the pool and the PSD, independent of search state, so §5(a) already precomputes it in full.
+The only lazily computed piece is the exit-domain *set* handed to pass 2 (§4(f)), needed for the region
+pairs actually chosen and therefore O(seams). There is nothing left to cache.
 
-### (c) Proposed, not adopted: pass-2 → pass-1 loopback
+### (c) Why state memoization is probably dead
+
+Memoization pays when the same subproblem is reachable along many paths. It is not, here. The variable
+order in §5(b) is a deterministic function of the current state, so any given partial assignment can be
+built in exactly one order and the search is a tree rather than a DAG — the table would cost a bitset
+hash per node and never hit.
+
+The version that does pay is different in kind: record nogoods on a **minimal conflict subset** rather
+than the full state. A subset like "these three regions together strand mesh L7" recurs under many
+completions of everything else, so it prunes broadly. That is candidate 4, and it is why backjumping
+and nogood learning are listed as one decision.
+
+Recorded rather than deleted, because the argument depends on the variable order staying deterministic.
+If ordering ever acquires a tie-break that is not a pure function of state, this needs revisiting.
+
+### (d) Proposed, not adopted: pass-2 → pass-1 loopback
 
 Recorded as a possibility. **Not part of the current design.**
 
@@ -724,7 +756,7 @@ correctness fix.
   rather than only `TestGalaxyLayoutCheck`.
 - **Counters, shipped with v1** (§6(a)): search nodes expanded, wall-clock, deepest depth reached, and
   how often pass 2 rejects a DFS region set for a labelling-property reason. These are the evidence
-  gates for every §6(b) optimization and for the §6(c) loopback; without them each is a guess.
+  gates for every §6(b) optimization and for the §6(d) loopback; without them each is a guess.
 - **Pinned vs unpinned pairing.** Run `llama_8b_4galaxy_unpinned_mesh_graph_descriptor.textproto`
   against its pinned sibling and compare node counts. The pinned MGD exercises the §4(d) seed path and
   should be dramatically cheaper; if it is not, the pinning projection is not being applied.
@@ -733,13 +765,14 @@ correctness fix.
 
 | Risk | Mitigation |
 | --- | --- |
-| DFS thrashes on a hard instance; no completeness guarantee within budget | Wall-clock budget plus fallback to the existing Phase 5/6 path (§5(f)) |
+| DFS thrashes on a hard instance; no completeness guarantee within budget | Node-count budget plus fallback to the existing Phase 5/6 path (§5(f)) |
+| A budget expiry is not reproducible, making a CI failure flaky | Budget on nodes expanded, not wall-clock, so the outcome depends only on the MGD and PSD (§5(f)) |
 | Pool truncation makes a satisfiable MGD report failure | Delete the cap (§5(h)); trait constraints keep real pools far below it anyway |
 | A future PGD leaves slot labels unspecified, so pools are large | Anchored placement via existing constraints (§5(i)) |
 | Symmetry multiplies dead ends on unpinned MGDs | Signature-ordered seeds (§5(g)); pinned MGDs are unaffected |
 | Loss of an explicit objective — the search returns *a* solution, not a good one | Host-locality as value-ordering bias (§5(e)). Max coverage was the wrong objective anyway |
 | `touches` build or memory blows up at SC36 scale | Edge-list-driven construction, not pairwise (§5(a)); measure before assuming |
-| Pass 2 rejects a region set the DFS considers valid, and there is no recovery | Accepted for v1: fail with the §5(f) diagnostic. §6(c) records the loopback as the escalation, gated on the §10 counter |
+| Pass 2 rejects a region set the DFS considers valid, and there is no recovery | Accepted for v1: fail with the §5(f) diagnostic. §6(d) records the loopback as the escalation, gated on the §10 counter |
 | Scope creep pulls labelling properties into the DFS one at a time | §4(b) is the single test to apply; §4(e) records each exclusion with its reason so the argument does not have to be re-litigated |
 
 ## 12. Open questions
