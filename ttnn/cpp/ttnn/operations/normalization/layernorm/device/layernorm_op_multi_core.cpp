@@ -294,6 +294,8 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
 
     const bool tile_fits = footprint(false).fits(usable_l1);
     const bool two_pass_fits = tensor_args.recip_tensor.has_value() && footprint(true).fits(usable_l1);
+    const bool row_major_affine = (gamma.has_value() && gamma->layout() == Layout::ROW_MAJOR) ||
+                                  (beta.has_value() && beta->layout() == Layout::ROW_MAJOR);
     plan.use_welford =
         layernorm::select_interleaved_statistics_backend(
             requested_use_welford,
@@ -313,11 +315,10 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
                                      output_format == tt::DataFormat::Float32 &&
                                      !operation_attributes.fused_activation.has_value();
     const bool selected_fits = plan.use_welford ? two_pass_fits : tile_fits;
-    const bool row_major_affine = (gamma.has_value() && gamma->layout() == Layout::ROW_MAJOR) ||
-                                  (beta.has_value() && beta->layout() == Layout::ROW_MAJOR);
+    const bool large_tensor_kernel_allowed = !row_major_affine || input_is_row_major;
     const std::uint32_t with_weights_max = 56 * bfloat16_tile_size / intermediate_tile_size;
     const std::uint32_t without_weights_max = 112 * bfloat16_tile_size / intermediate_tile_size;
-    if (!row_major_affine || input_is_row_major) {
+    if (large_tensor_kernel_allowed) {
         if ((gamma.has_value() || beta.has_value() || input_format == tt::DataFormat::Float32) && !selected_fits) {
             plan.large_tensor = true;
             plan.width_block_tiles = std::min(plan.width_block_tiles, with_weights_max);
@@ -327,7 +328,7 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
         }
     }
     plan.compact_fp32_finalizer = fp32_sfpu_finalizer && !residual.has_value() && !plan.large_tensor;
-    if (fp32_sfpu_finalizer && !plan.compact_fp32_finalizer) {
+    if (large_tensor_kernel_allowed && fp32_sfpu_finalizer && !plan.compact_fp32_finalizer) {
         plan.large_tensor = true;
     }
     const auto configure_large_buffers = [&]() {
@@ -558,6 +559,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     const bool large_tensor_needed = selected_plan.large_tensor;
     const bool compact_fp32_finalizer = selected_plan.compact_fp32_finalizer;
+    TT_FATAL(
+        !large_tensor_needed || !use_row_major_kernel || input_is_row_major,
+        "The LayerNorm large-tensor reader and compute kernel do not support row-major affine tensors with tiled "
+        "input");
 
     // When the input is ROW_MAJOR and float32, the in-flight tilize_block path requires
     // fp32_dest_acc_en=True. Without it, UNPACK's SRCA register file is 16-bit and
@@ -981,17 +986,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     //                      Compute kernel
     ////////////////////////////////////////////////////////////////////////////
     // Select compute kernel path.
-    // For input_is_row_major: TILIZE_IN define handles in-flight tilization; large_tensor kernel allowed.
-    // use_row_major_kernel (row-major gamma/beta only) still prevents large_tensor as before.
     const auto* compute_kernel_path =
-        (large_tensor_needed && (!use_row_major_kernel || input_is_row_major))
-            ? (use_welford_and_not_rms_norm ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
-                                              "layernorm_large_tensor_welford.cpp"
-                                            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
-                                              "layernorm_large_tensor.cpp")
-            : (use_welford_and_not_rms_norm
-                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_welford.cpp"
-                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp");
+        large_tensor_needed
+            ? (use_welford_and_not_rms_norm ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
+                                              "compute/layernorm_large_tensor_welford.cpp"
+                                            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
+                                              "compute/layernorm_large_tensor.cpp")
+            : (use_welford_and_not_rms_norm ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
+                                              "compute/layernorm_welford.cpp"
+                                            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
+                                              "compute/layernorm.cpp");
 
     auto compute_hw = to_compute_hardware_config(device->arch(), compute_kernel_config);
 
