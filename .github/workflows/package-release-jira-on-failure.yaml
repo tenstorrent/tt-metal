@@ -138,6 +138,7 @@ jobs:
 
           # Owner per failed job, from tests/pipeline_reorg (best-effort:
           # an unmapped job, or the script breaking, just drops the note).
+          python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
           declare -A owners=()
           while IFS=$'\t' read -r jname jowner jteam; do
             owners["$jname"]="$jowner ($jteam)"
@@ -189,6 +190,8 @@ jobs:
           RUN_ID: ${{ github.event.workflow_run.id || inputs.run-id }}
         run: |
           set -euo pipefail
+          # job_owners (imported for the owner notes) reads YAML.
+          python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
           {
             echo "section<<EOF"
             python3 .github/actions/scripts/ai_failure_section.py "$REPO" "$RUN_ID"
