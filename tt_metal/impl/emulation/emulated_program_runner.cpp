@@ -3161,6 +3161,11 @@ static void setup_core_state(
     std::map<CoreCoord, std::vector<KernelInfo>>& core_kernels,
     uint32_t emule_sem_base,
     std::vector<CoreSetup>& core_setups) {
+    const auto fabric_node = MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
+        device->id());
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t routing_table_base = static_cast<uint32_t>(
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::ROUTING_TABLE));
     for (auto& [logical_core, ki_list] : core_kernels) {
         if (!sw_emu) {
             continue;
@@ -3170,6 +3175,12 @@ static void setup_core_state(
         if (!core) {
             continue;
         }
+        // Fabric initialization writes this routing-table identity on silicon. Mirror it here because
+        // SWEmule's launch-owned worker L1 does not retain the earlier control-plane broadcast.
+        auto* mesh_id = reinterpret_cast<uint16_t*>(core->l1_ptr(routing_table_base + 32));
+        auto* chip_id = reinterpret_cast<uint16_t*>(core->l1_ptr(routing_table_base + 34));
+        *mesh_id = static_cast<uint16_t>(*fabric_node.mesh_id);
+        *chip_id = static_cast<uint16_t>(fabric_node.chip_id);
         uint8_t phys_x = static_cast<uint8_t>(phys.x);
         uint8_t phys_y = static_cast<uint8_t>(phys.y);
 
