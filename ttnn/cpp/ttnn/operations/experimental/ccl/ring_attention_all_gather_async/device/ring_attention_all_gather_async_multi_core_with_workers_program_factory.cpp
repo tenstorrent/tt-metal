@@ -370,7 +370,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     std::optional<Tensor> kv_actual_isl,
     uint32_t chunk_local_tiles,
     uint32_t kv_cache_num_layers,
-    uint32_t kv_cache_layer_idx) {
+    uint32_t kv_cache_layer_idx,
+    uint32_t window_radius) {
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
     using tt::tt_metal::KernelDescriptor;
@@ -411,6 +412,13 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         ttnn::ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
     if (topology == ttnn::ccl::Topology::Ring && ring_index % 2 == 0) {
         std::swap(num_targets_forward, num_targets_backward);
+    }
+    // Windowed gather: clamp the per-direction relay radius so each device only gathers its
+    // +-window_radius neighbour shards (frame-block sparse attention). 0 = full ring (unchanged).
+    // The matching reader-side expectation is set in build_ring_write_plan; the two must agree.
+    if (window_radius > 0) {
+        num_targets_forward = std::min<uint32_t>(num_targets_forward, window_radius);
+        num_targets_backward = std::min<uint32_t>(num_targets_backward, window_radius);
     }
     // Get worker cores
     const uint32_t num_senders_per_link = 2;
