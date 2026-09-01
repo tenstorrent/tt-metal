@@ -256,6 +256,7 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
+        audio_split_mode: str = "full",
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
@@ -292,6 +293,13 @@ class MiniMaxH3Pipeline:
         self.tp_factor, self.sp_factor = shape[tp_axis], shape[sp_axis]
         # The only residency control; see `_make_resident` for the measurements behind the default.
         self.coresident = coresident
+        # Audio fidelity/latency trade: "full" (default) splits the dense-conv operands for the
+        # fp32-exact kernels' best accuracy (~67 dB vs CPU); "off" skips the split for a faster,
+        # lower-fidelity decode (~5.5 s vs 7.3 s decode at ~42 dB on the 15 s clip). Same weights
+        # on disk; the device-weight cache keys on it via `weights_variant`.
+        if audio_split_mode not in ("off", "weight", "full"):
+            raise ValueError(f"audio_split_mode must be 'off', 'weight', or 'full', got {audio_split_mode!r}")
+        self.audio_split_mode = audio_split_mode
 
         self.ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         self.dit_parallel_config = DiTParallelConfig(
@@ -359,6 +367,7 @@ class MiniMaxH3Pipeline:
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
+        audio_split_mode: str = "full",
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -379,6 +388,7 @@ class MiniMaxH3Pipeline:
             num_links=num_links,
             topology=topology,
             task=task,
+            audio_split_mode=audio_split_mode,
         )
 
     @staticmethod
@@ -1193,9 +1203,6 @@ class MiniMaxH3Pipeline:
         if self._audio_decoder is None:
             config = self.audio_config
             logger.info("building the audio decoder")
-            audio_levers = {
-                k: v for k, v in (("split_mode", os.environ.get("MINIMAX_H3_PIPELINE_SPLIT_MODE")),) if v is not None
-            }
             decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
                 latent_dim=config["latent_dim"],
@@ -1206,7 +1213,7 @@ class MiniMaxH3Pipeline:
                 resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
                 mesh_device=self.mesh_device,
                 ccl_manager=self.ccl_manager,
-                **audio_levers,
+                split_mode=self.audio_split_mode,
             )
 
             def read_state() -> dict[str, torch.Tensor]:
