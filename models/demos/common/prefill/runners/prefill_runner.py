@@ -286,7 +286,7 @@ def _make_socket_metadata_buffer(mesh_device) -> ttnn.Tensor:
     )
 
 
-def _socket_next(h2d_service, metadata_buf) -> tuple:
+def _socket_next(h2d_service, metadata_buf, tokens_out=None) -> tuple:
     """Block on the next producer push: returns (tt_tokens, meta, metadata_msg). The device metadata
     tensor is returned (not discarded) so it can be propagated into the model's per-layer ack send.
     Used only by the unbounded request loop (rank 0 input).
@@ -294,7 +294,10 @@ def _socket_next(h2d_service, metadata_buf) -> tuple:
     The metadata is always read to host: the scalars are tiny and the read is what lets the loop see the
     in-band shutdown sentinel, which is the runner's graceful teardown path under trace and eager alike."""
     tt_tokens, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        h2d_service, metadata_size_bytes=METADATA_SIZE_BYTES, metadata_out=metadata_buf
+        h2d_service,
+        metadata_size_bytes=METADATA_SIZE_BYTES,
+        metadata_out=metadata_buf,
+        tokens_out=tokens_out,
     )
     return tt_tokens, _decode_metadata(metadata_msg), metadata_msg
 
@@ -346,13 +349,13 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
     return inbound, outbound
 
 
-def _d2d_recv(inbound, metadata_buf) -> tuple:
+def _d2d_recv(inbound, metadata_buf, tokens_out=None) -> tuple:
     """Drain the next chunk that landed in the inbound receiver backing into a fresh device tensor. The
     returned tensor already has the embedding-output sharding, so it feeds runtime.prefill with no
     reshard. Pairs with the upstream rank's _d2d_send."""
     t0 = time.perf_counter()
     act, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        inbound, metadata_size_bytes=METADATA_SIZE_BYTES, metadata_out=metadata_buf
+        inbound, metadata_size_bytes=METADATA_SIZE_BYTES, metadata_out=metadata_buf, tokens_out=tokens_out
     )
     meta = _decode_metadata(metadata_msg)
     where = f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}"
@@ -553,20 +556,24 @@ def run_request_loop(
         f"[pp rank {rank}/{num_ranks}] request (unbounded) loop start "
         f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
     )
+    persistent_in = runtime.claim_persistent_input() if hasattr(runtime, "claim_persistent_input") else None
+    dest = "runtime traced input (persistent, no per-chunk copy)" if persistent_in is not None else "per-chunk alloc"
+    logger.info(f"[pp rank {rank}] input destination = {dest}")
     t0 = time.perf_counter()
     c = 0
     first = None
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
-            inp, meta, metadata_msg = _socket_next(h2d_service, metadata_buf)
+            inp, meta, metadata_msg = _socket_next(h2d_service, metadata_buf, persistent_in)
         else:
-            inp, meta, metadata_msg = _d2d_recv(d2d_in, metadata_buf)
+            inp, meta, metadata_msg = _d2d_recv(d2d_in, metadata_buf, persistent_in)
         if _is_shutdown_sentinel(meta):
             # End of stream: drop the throwaway payload + its metadata tensor, hand the sentinel to the
             # next rank so it too unblocks and exits, then fall through to the graceful drain below.
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
-            ttnn.deallocate(inp)
+            if persistent_in is None:
+                ttnn.deallocate(inp)
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
