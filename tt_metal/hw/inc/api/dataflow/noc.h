@@ -721,7 +721,6 @@ public:
      */
     void async_full_barrier() const { noc_async_full_barrier(noc_id_); }
 
-#if !defined(ARCH_QUASAR) || defined(NOC_API_V2)
     /**
      * @brief Zeroes a local-L1 destination buffer (overload 1).
      *
@@ -819,7 +818,6 @@ public:
      * @see async_write_zeros (overload 2).
      */
     void write_zeros_dram_barrier() const;
-#endif
 
 #ifdef ARCH_QUASAR
     /**
