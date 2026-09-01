@@ -6320,3 +6320,63 @@ be reported as a crash.
    asymmetry, and/or decouple the correction republish from its 40 ms timer.
 3. 500 Hz remains useful as a *diagnostic* arm — it proved the drain is lossless at 351k samples.
    It is not a production setting.
+
+---
+
+## The 500 Hz golden failure is a LINK-SATURATION cliff, not a drain cost
+
+Follow-up to the rate sweep. Same short config (`fabric_1grp.yaml`, MeshMulticast, 72 cases),
+`tt-smi -r` before every arm, `bandwidth_diff_blackhole.csv` preserved per arm (it is OVERWRITTEN
+each run and `bandwidth_comparison_statistics_*.csv` only retains the last run — copy them out or
+the evidence is gone).
+
+### What the golden check actually is
+Measured fabric BW vs a checked-in per-config golden table; each row FAILs outside ~±10%. The
+`Number of test results (24) does not match number of golden entries (268)` warning is config
+subsetting, NOT the failure. rc=134 is SIGABRT from `TT_THROW` at test_tt_fabric.cpp:429 *after*
+all 72 tests ran — a perf failure, never a wedge.
+
+At 500 Hz exactly 4 of 72 rows failed, and **all four are `num_links=4`**:
+
+| ntype | pkt | links 1/2/3 | links 4 |
+|---------------------------|------|-------------|-------------------|
+| NOC_UNICAST_WRITE         | 2048 | +4.7% PASS  | **-10.4% FAIL**   |
+| NOC_UNICAST_SCATTER_WRITE | 2048 | -0.4% PASS  | **-19.6% FAIL**   |
+| NOC_UNICAST_WRITE         | 4096 | +5.2% PASS  | **-12.7% FAIL**   |
+| NOC_UNICAST_SCATTER_WRITE | 4096 | +0.1% PASS  | **-14.1% FAIL**   |
+
+### Controls: the drain is exonerated, the rate is not
+4-link NOC_UNICAST_SCATTER_WRITE @2048, and overall geomean:
+
+| arm                      | overall geomean | 1 link  | 4 links     |
+|--------------------------|-----------------|---------|-------------|
+| stock (no profiler)      | 1.0161          | -0.29%  | -0.31%      |
+| profiler on, SYNC_HZ=0   | 1.0152          | -0.29%  | -0.32%      |
+| 20 Hz                    | 1.0122          | -0.35%  | -0.36%      |
+| 100 Hz                   | 1.0055          | -0.35%  | **-3.20%**  |
+| 500 Hz                   | 0.9777          | -0.35%  | **-19.64%** |
+
+Two things fall out, both counter to the earlier working assumption:
+
+1. **`SYNC_HZ=0` reproduces stock to two decimals** (1.0152 vs 1.0161, 4-link -0.32 vs -0.31). The
+   profiler drain costs nothing at 2K/4K packets — consistent with the large-packet section above,
+   where the drain only bites past ~5 KB. So this regression is NOT the drain.
+2. **The 1-link column never moves — -0.35% at 20, 100 AND 500 Hz.** Per-link bandwidth is
+   untouched by the hook at any rate tested. The entire penalty is confined to `links=4`, and
+   there it is monotone in rate: -0.36 -> -3.20 -> -19.64%.
+
+### Mechanism — PLAUSIBLE, NOT DEMONSTRATED
+A cliff at links=4 with 1/2/3 flat (even at 500 Hz) is not "cost scales with load". The natural
+reading: at 1-3 links the sync hook is running inside routers the test is not driving, so its cost
+lands on idle silicon and is invisible; at links=4 every router carries live traffic and the hook
+competes directly in the measured path. If that is right the governing variable is *link
+saturation*, not link count, and a 1-link test with the hook on that same link would show the full
+penalty. UNTESTED — do not quote as fact.
+
+### Consequences
+1. **100 Hz remains the operating point but is NOT free.** Against a proper stock control it costs
+   ~1% overall and -3.2% on the worst 4-link case. An earlier claim of "no measurable bandwidth
+   cost" was made by comparing 100 Hz to 20 Hz instead of to stock, and is WITHDRAWN.
+2. **Always run a stock arm.** `SYNC_HZ=20` is not a control; it already carries hook cost.
+3. Any future rate change must be validated at `num_links=4`. A 1-link or 2-link harness will show
+   a clean bill of health at rates that fail the golden check outright.
