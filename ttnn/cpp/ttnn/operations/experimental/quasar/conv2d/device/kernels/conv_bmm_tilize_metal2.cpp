@@ -34,6 +34,12 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+// [block-sharded 0x19 A/B discriminator] MATH-thread markers around the matmul subblock loop and the
+// partials reload, to tell whether the ERROR_TRISC1 0x0119 is the pre-existing MATH<->PACK DEST bank-recycle
+// deadlock (stalls in the matmul at the first bank0 reuse, subblock 2, on the FIRST K-block with rl=0) or the
+// option-2 dedicated-partials reload read (stalls at RLOAD_RD on a later K-block with rl=1). Remove once
+// localized.
+#include "api/debug/dprint.h"
 
 // In-place matmul-partials accumulate: re-accumulate each inner-K block into the SAME L1 region by
 // "rewinding" the partials buffer's producer/consumer position back to the start of the output block.
@@ -665,6 +671,12 @@ void kernel_main() {
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
+                        MATH((DPRINT(
+                                  "SUB k={} i0={} i1={} rl={}\n",
+                                  in0_block_w_i,
+                                  in0_subblock_i,
+                                  in1_subblock_i,
+                                  (uint32_t)enable_reload);));
                         if (enable_reload) {
                             reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
                             copy_init(matmul_partials_cb);
@@ -673,9 +685,11 @@ void kernel_main() {
 
                             uint32_t start_dst_index = 0;
                             uint32_t start_tile_index = 0;
+                            MATH((DPRINT("RLOAD_RD\n");));
                             copy_block(matmul_partials_cb, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
                             cb_matmul_partials.pop_front(out_subblock_num_tiles);
+                            MATH((DPRINT("RLOAD_OK\n");));
                             reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
                             matmul_block_init(
                                 mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
