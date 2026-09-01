@@ -824,11 +824,10 @@ def _make_input_mean_bf16(device, dim, Ht, Wt, NC, seed=13):
 
 
 def test_reduce_block_accumulate_mean(device):
-    """Cross-chunk MEAN via reduce_mean — the motivating case for the interface change. Accumulate `num_chunks`
-    copies of the SAME block (SUM fold), then divide by the GRAND total (num_chunks * per-block element count)
-    on the last chunk. Because every chunk is the same block, sum = num_chunks*block_sum and the mean =
-    block_mean, INDEPENDENT of num_chunks. The divisor MUST span all chunks: a per-chunk 1/N (the old internal
-    derivation) would give ~num_chunks x the mean. This asserts we get exactly the single-block mean."""
+    """Cross-chunk MEAN via reduce<AVG> with a compile-time factor spanning the GRAND total. Accumulate
+    `num_chunks` copies of the SAME block as raw sums, then normalize only on the last chunk. Because every
+    chunk is the same block, the result is the single-block mean, independent of num_chunks. A per-chunk
+    factor would instead produce approximately num_chunks times the mean."""
     cases = [
         # (dim, Ht, Wt, NC, num_chunks)
         ("row", 2, 3, 1, 3),
@@ -925,15 +924,14 @@ def test_reduce_block_policy_parity(device):
                     )
 
 
-def test_reduce_block_avg_direct(device):
-    """reduce<AVG, ..., AccumulateViaAdd> derives 1/N from tile geometry and must be BIT-IDENTICAL to reduce_mean
-    (same sfpu_reduce -> mul_unary_tile with the same 1/N bits) and correct vs the fp64 golden. This is the AVG
-    API-parity lever (so a future Auto can route AVG to the fast path for the standalone full-block case)."""
+def test_reduce_block_avg_post_op(device):
+    """An AccumulateViaAdd AVG applies its compile-time normalization before an independent caller post op.
+    The post op multiplies the completed average by two, exercising both stages in the same reduce() call."""
     for dim in DIMS:
         for Ht, Wt, NC in _SHAPES[dim]:
             x, golden = _make_input(device, dim, Ht, Wt, NC)
             for accum in ("fp32", "bf16"):
-                direct = run_op(
+                out = run_op(
                     x,
                     variant="accumulate_via_add",
                     dim=dim,
@@ -942,23 +940,11 @@ def test_reduce_block_avg_direct(device):
                     NC=NC,
                     accum=accum,
                     kernel_iters=2,
-                    avg_direct=True,
-                )
-                mean = run_op(  # reduce_mean (explicit caller N)
-                    x,
-                    variant="accumulate_via_add",
-                    dim=dim,
-                    Ht=Ht,
-                    Wt=Wt,
-                    NC=NC,
-                    accum=accum,
-                    kernel_iters=2,
+                    avg_post_op=True,
                 )
                 lbl = f"{dim}/{accum} {Ht}x{Wt}x{NC}"
-                _check(direct, golden, dim, accum, "avg_direct " + lbl)
-                d = (_readout(direct, dim) - _readout(mean, dim)).abs().max().item()
-                logger.info(f"avg_direct {lbl:24s} vs reduce_mean d={d}")
-                assert d == 0.0, f"avg_direct != reduce_mean for {lbl}: {d} (expected bit-identical)"
+                ma, _, _ = _check(out, golden * 2.0, dim, accum, "avg_post_op " + lbl)
+                logger.info(f"avg_post_op {lbl:24s} max_abs={ma:.5f}")
 
 
 def test_reduce_block_partial_stream(device):
@@ -1249,8 +1235,8 @@ def test_reduce_block_within_tile_skip(device):
     """ReduceWithinTile::Skip — the cross-core combine. Every input tile is ALREADY collapsed on the reduce
     axis (only lane 0 carries data; the other 31 lanes hold GARBAGE), so the combine is a pure cross-tile sum
     and the SFPU finalize must be dropped. Two things are proven at once: the collapse really is skipped (a
-    Collapse run on the same input folds the garbage in and is wildly wrong), and reduce_mean's caller 1/N
-    still lands on the raw sum (it has to arm the SFPU itself, since Skip never touches it).
+    Collapse run on the same input folds the garbage in and is wildly wrong), and reduce<AVG>'s compile-time
+    factor still lands on the raw sum (it has to arm the SFPU itself, since Skip never runs sfpu_reduce).
 
     ROW: lane 0 = column 0 of each tile. COL: lane 0 = row 0 of each tile."""
     GARBAGE = 999.0
