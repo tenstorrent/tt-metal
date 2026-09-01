@@ -253,8 +253,9 @@ def run_model(
             shared_expert_weights = None
         gate_weights = create_gate_weights(num_routed_experts, emb_dim, seed=9012)
         if bias_free_router:
-            # Zero is this bias's exact identity in every consumer -- top-k on (logits + bias) and
-            # the sigmoid affinity alike -- so the golden matches a router that has no bias at all.
+            # For the DEVICE side only: TtMoe indexes this key directly, and TtMoEGatePrefill
+            # substitutes torch.empty (uninitialized, not zeros) for a None bias and then persists it
+            # to the weight cache. TorchMoe gets the key removed instead -- see torch_gate_weights.
             gate_weights["e_score_correction_bias"] = torch.zeros_like(gate_weights["e_score_correction_bias"])
         # Fixed seed for the same reason as above: a perf-built cache must match the PCC reference.
         latent_weights = create_latent_weights(emb_dim, routed_emb, seed=3456) if use_latent else None
@@ -350,6 +351,13 @@ def run_model(
     # ========================================
     if run_pcc_check:
         profiler.start("torch_moe_creation")
+        # Drop the key rather than passing the zeroed tensor, so the reference builds its own
+        # bias-free gate -- the behaviour a model with no correction bias actually has.
+        torch_gate_weights = (
+            {k: v for k, v in gate_weights.items() if k != "e_score_correction_bias"}
+            if bias_free_router
+            else gate_weights
+        )
         torch_moe = TorchMoe(
             topk_method=(
                 "gpt_softmax"
@@ -370,7 +378,7 @@ def run_model(
             num_dispatch_groups=num_dispatch_groups,
             routed_expert_weights=all_routed_weights,
             shared_expert_weights=shared_expert_weights,
-            gate_weights=gate_weights,
+            gate_weights=torch_gate_weights,
             n_expert_groups=config.n_group,
             n_limited_groups=config.topk_group,
             route_scale=config.routed_scaling_factor,

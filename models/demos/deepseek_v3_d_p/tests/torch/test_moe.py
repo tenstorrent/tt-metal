@@ -304,9 +304,10 @@ def test_moe(
 # random bias instead of zero.
 @pytest.mark.parametrize("topk_method", ["noaux_tc", "gpt_softmax"])
 @pytest.mark.parametrize("omit_key", [True, False], ids=["missing_key", "none_value"])
-def test_torch_moe_gate_bias_defaults_to_zero_when_absent(topk_method, omit_key):
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16], ids=["fp32", "bf16"])
+def test_torch_moe_gate_bias_defaults_to_zero_when_absent(topk_method, omit_key, dtype):
     num_routed_experts, emb_dim = 8, 16
-    gate_weights = create_gate_weights(num_routed_experts, emb_dim, dtype=torch.float32, seed=1)
+    gate_weights = create_gate_weights(num_routed_experts, emb_dim, dtype=dtype, seed=1)
     zero_bias = torch.zeros_like(gate_weights["e_score_correction_bias"])
 
     no_bias_weights = {"weight": gate_weights["weight"]}
@@ -343,6 +344,9 @@ def test_torch_moe_gate_bias_defaults_to_zero_when_absent(topk_method, omit_key)
 
     assert torch.equal(bias_of(moe_no_bias), zero_bias)
     assert torch.equal(bias_of(moe_no_bias), bias_of(moe_explicit_zero))
+    # The router matmuls weight against bias, so a fallback that keeps the parameter's init dtype
+    # instead of the weight's raises "self and mat2 must have the same dtype" at forward.
+    assert bias_of(moe_no_bias).dtype == gate_weights["weight"].dtype
 
 
 def test_torch_moe_gate_bias_preserved_when_present():
