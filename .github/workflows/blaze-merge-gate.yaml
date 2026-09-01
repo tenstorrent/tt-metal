@@ -126,6 +126,18 @@ jobs:
             exit 1
           fi
 
+          # Newest tt-blaze workflow_dispatch run whose title contains $1.
+          # `displayTitle` is where a computed `run-name` lands; `name` is the
+          # workflow's own name. Both are searched so this keeps working if gh
+          # ever changes which one carries it.
+          find_blaze_run() {
+            gh run list --repo "$BLAZE_REPO" --workflow "$BLAZE_WORKFLOW" \
+              --event workflow_dispatch --limit 100 \
+              --json databaseId,displayTitle,name \
+              --jq "[.[] | select(((.displayTitle // \"\") + \" \" + (.name // \"\")) | contains(\"$1\"))] | .[0].databaseId // empty" \
+              2>/dev/null || echo ""
+          }
+
           # Unique per run AND per re-run of that run, so a re-run never latches
           # onto the blaze run its previous attempt started.
           DISPATCH_ID="metal-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -192,14 +204,28 @@ jobs:
               # "newest dispatch" instead would be wrong: several tt-metal
               # merge-gate runs dispatch onto the same ref at once.
               #
-              # `displayTitle` is where a computed `run-name` lands; `name` is the
-              # workflow's own name. Both are searched so this keeps working if gh
-              # ever changes which one carries it.
-              run_id=$(gh run list --repo "$BLAZE_REPO" --workflow "$BLAZE_WORKFLOW" \
-                         --event workflow_dispatch --limit 100 \
-                         --json databaseId,displayTitle,name \
-                         --jq "[.[] | select(((.displayTitle // \"\") + \" \" + (.name // \"\")) | contains(\"${DISPATCH_ID}\"))] | .[0].databaseId // empty" \
-                       2>/dev/null || echo "")
+              # Matched ANCHORED, as "(<dispatch-id>)". tt-blaze's run-name is
+              #   [tt-metal gate] <metal-ref> (<dispatch-id>)
+              # so the parentheses are already there -- anchoring needs nothing
+              # on that side. A bare substring test is not quite safe: two
+              # DIFFERENT run ids cannot collide (the '-' after the id blocks a
+              # prefix match), but the same run id with one attempt number a
+              # prefix of another does -- 'metal-X-1' is a substring of
+              # 'metal-X-12'. Attempts are strictly sequential so that pair
+              # cannot be in flight at once, but the parens cost nothing and
+              # remove the class entirely.
+              run_id=$(find_blaze_run "(${DISPATCH_ID})")
+
+              # Fall back to the bare token if the anchored form finds nothing,
+              # so a future run-name change on the tt-blaze side degrades to the
+              # old behaviour instead of hanging this gate until GRACE_SECONDS
+              # and failing. Warn, because that drift needs fixing.
+              if [ -z "$run_id" ]; then
+                run_id=$(find_blaze_run "${DISPATCH_ID}")
+                if [ -n "$run_id" ]; then
+                  echo "::warning::Matched tt-blaze run ${run_id} on the bare dispatch-id: its run-name no longer wraps the token as '(${DISPATCH_ID})'. Correlation is unanchored until the two sides agree again."
+                fi
+              fi
 
               if [ -z "$run_id" ]; then
                 if [ "$elapsed" -gt "$GRACE_SECONDS" ]; then
@@ -337,17 +363,29 @@ jobs:
 
           run_id="${BLAZE_RUN_ID:-}"
 
+          # Same anchored form as the poll loop -- see the comment there for why
+          # the parentheses are load-bearing and why the bare token is only a
+          # fallback. Cancelling the WRONG blaze run would be worse here than a
+          # missed cleanup, so the anchored form is tried first every attempt.
+          find_blaze_run() {
+            gh run list --repo "$BLAZE_REPO" --workflow "$BLAZE_WORKFLOW" \
+              --event workflow_dispatch --limit 100 \
+              --json databaseId,displayTitle,name \
+              --jq "[.[] | select(((.displayTitle // \"\") + \" \" + (.name // \"\")) | contains(\"$1\"))] | .[0].databaseId // empty" \
+              2>/dev/null || echo ""
+          }
+
           if [ -z "$run_id" ]; then
             # Cancelled before the poll loop resolved an id. The dispatch may or
             # may not have created a run; correlating on the token is the only
             # way to find out, and finding nothing is a legitimate outcome.
-            echo "No run id recorded yet; searching ${BLAZE_REPO} for a run carrying '${BLAZE_DISPATCH_ID}'"
+            echo "No run id recorded yet; searching ${BLAZE_REPO} for a run carrying '(${BLAZE_DISPATCH_ID})'"
             for attempt in $(seq 1 "$RETRIES"); do
-              run_id=$(gh run list --repo "$BLAZE_REPO" --workflow "$BLAZE_WORKFLOW" \
-                         --event workflow_dispatch --limit 100 \
-                         --json databaseId,displayTitle,name \
-                         --jq "[.[] | select(((.displayTitle // \"\") + \" \" + (.name // \"\")) | contains(\"${BLAZE_DISPATCH_ID}\"))] | .[0].databaseId // empty" \
-                       2>/dev/null || echo "")
+              run_id=$(find_blaze_run "(${BLAZE_DISPATCH_ID})")
+              if [ -z "$run_id" ]; then
+                run_id=$(find_blaze_run "${BLAZE_DISPATCH_ID}")
+                [ -n "$run_id" ] && echo "  matched on the bare dispatch-id (run-name no longer parenthesises it)"
+              fi
               [ -n "$run_id" ] && break
               echo "  attempt ${attempt}/${RETRIES}: not indexed yet"
               [ "$attempt" -lt "$RETRIES" ] && sleep "$RETRY_SLEEP"
