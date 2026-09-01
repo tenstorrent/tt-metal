@@ -567,7 +567,7 @@ void kernel_main() {
 
         dfb_ex_obj.reserve_back(onetile);
         dfb_ex2_obj.reserve_back(onetile);
-        if constexpr (fp32_sfpu_finalizer) {
+        if constexpr (welford_state_fp32_alias) {
             dfb_ex_welford_obj_main.reserve_back(onetile);
             dfb_ex2_welford_obj_main.reserve_back(onetile);
         }
@@ -578,7 +578,7 @@ void kernel_main() {
         tile_regs_release();
         dfb_ex_obj.push_back(onetile);
         dfb_ex2_obj.push_back(onetile);
-        if constexpr (fp32_sfpu_finalizer) {
+        if constexpr (welford_state_fp32_alias) {
             dfb_ex_welford_obj_main.push_back(onetile);
             dfb_ex2_welford_obj_main.push_back(onetile);
         }
@@ -590,13 +590,13 @@ void kernel_main() {
 
         dfb_ex_obj.wait_front(onetile);
         dfb_ex2_obj.wait_front(onetile);
-        if constexpr (fp32_sfpu_finalizer) {
+        if constexpr (welford_state_fp32_alias) {
             dfb_ex_welford_obj_main.wait_front(onetile);
             dfb_ex2_welford_obj_main.wait_front(onetile);
         }
         tile_regs_acquire();
-        constexpr auto dfb_mean_transpose = fp32_sfpu_finalizer ? dfb_ex_welford : dfb_ex;
-        constexpr auto dfb_var_transpose = fp32_sfpu_finalizer ? dfb_ex2_welford : dfb_ex2;
+        constexpr auto dfb_mean_transpose = welford_state_fp32_alias ? dfb_ex_welford : dfb_ex;
+        constexpr auto dfb_var_transpose = welford_state_fp32_alias ? dfb_ex2_welford : dfb_ex2;
         reconfig_data_format_srca(dfb_mean_transpose);
         transpose_init(dfb_mean_transpose);
         transpose_tile(dfb_mean_transpose, 0, mean_dst);
@@ -604,14 +604,14 @@ void kernel_main() {
         tile_regs_commit();
         dfb_ex_obj.pop_front(onetile);
         dfb_ex2_obj.pop_front(onetile);
-        if constexpr (fp32_sfpu_finalizer) {
+        if constexpr (welford_state_fp32_alias) {
             dfb_ex_welford_obj_main.pop_front(onetile);
             dfb_ex2_welford_obj_main.pop_front(onetile);
         }
 
         dfb_ex_obj.reserve_back(onetile);
         dfb_ex2_obj.reserve_back(onetile);
-        if constexpr (fp32_sfpu_finalizer) {
+        if constexpr (welford_state_fp32_alias) {
             dfb_ex_welford_obj_main.reserve_back(onetile);
             dfb_ex2_welford_obj_main.reserve_back(onetile);
         }
@@ -623,7 +623,7 @@ void kernel_main() {
         tile_regs_release();
         dfb_ex_obj.push_back(onetile);
         dfb_ex2_obj.push_back(onetile);
-        if constexpr (fp32_sfpu_finalizer) {
+        if constexpr (welford_state_fp32_alias) {
             dfb_ex_welford_obj_main.push_back(onetile);
             dfb_ex2_welford_obj_main.push_back(onetile);
         }
@@ -635,7 +635,7 @@ void kernel_main() {
         add_init(dfb_ex2, dfb_eps);
 
         dfb_ex2_obj.wait_front(onetile);
-        if constexpr (fp32_sfpu_finalizer) {
+        if constexpr (welford_state_fp32_alias) {
             dfb_ex2_welford_obj_main.wait_front(onetile);
         }
         tile_regs_acquire();
@@ -644,7 +644,7 @@ void kernel_main() {
         rsqrt_tile(dst0);
         tile_regs_commit();
         dfb_ex2_obj.pop_front(onetile);
-        if constexpr (fp32_sfpu_finalizer) {
+        if constexpr (welford_state_fp32_alias) {
             dfb_ex2_welford_obj_main.pop_front(onetile);
         }
 
@@ -702,7 +702,7 @@ void kernel_main() {
             dfb_ex2pe_fp32_obj.wait_front(onetile);
         }
         dfb_ex_obj.wait_front(onetile);
-        if constexpr (fp32_sfpu_finalizer) {
+        if constexpr (welford_state_fp32_alias) {
             dfb_ex_welford_obj_main.wait_front(onetile);
         }
 
@@ -1029,7 +1029,7 @@ void kernel_main() {
             dfb_ex2pe_fp32_obj.pop_front(onetile);
         }
         dfb_ex_obj.pop_front(onetile);
-        if constexpr (fp32_sfpu_finalizer) {
+        if constexpr (welford_state_fp32_alias) {
             dfb_ex_welford_obj_main.pop_front(onetile);
         }
     }  // NCHt loop
