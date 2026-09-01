@@ -218,6 +218,38 @@ def test_train_rejects_num_iterations_greater_than_one(expect_error):
         trainer.train()
 
 
+def test_publish_step_metrics_handles_step_in_self_metrics():
+    """Regression: ``_publish_step_metrics`` reads ``step`` from
+    ``self.metrics["step"]`` and passes it positionally to callbacks while
+    also splatting the metrics dict. It MUST filter ``step`` out of the
+    splat, otherwise Python raises ``TypeError: got multiple values for
+    argument 'step'`` at ``cb.on_step_end(trainer, step, step=step, ...)``.
+    """
+    import time
+
+    from ttml.trainers.grpo_trainer import GRPOTrainer
+
+    recorder = _RecordingCallback()
+    trainer = _make_trainer(
+        num_prompts=2,
+        generation_batch_prompts=2,
+        num_generations=2,
+        completer=_StubCompleter(completions_per_prompt=2),
+        callbacks=[recorder],
+    )
+    # Un-stub the two methods this exercises so we hit the real code path.
+    trainer._publish_step_metrics = GRPOTrainer._publish_step_metrics.__get__(trainer, type(trainer))  # type: ignore[assignment]
+    trainer._time_callback = GRPOTrainer._time_callback.__get__(trainer, type(trainer))  # type: ignore[assignment]
+    trainer.metrics = {"step": 5, "reward_mean": 0.3}
+    trainer._step_start_time = time.perf_counter()
+
+    trainer._publish_step_metrics()
+
+    assert recorder.step_end == 1
+    assert trainer.metrics["step"] == 5
+    assert "step_time_s" in trainer.metrics
+
+
 def test_train_rejects_sync_only_completer(expect_error):
     """A completer missing the async surface must fail fast, before any device work."""
 

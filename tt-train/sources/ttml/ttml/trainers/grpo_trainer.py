@@ -1341,10 +1341,17 @@ class GRPOTrainer:
         step = self.metrics["step"]
         monitor_cb = next((cb for cb in self.callbacks if isinstance(cb, GRPOMonitor)), None)
 
+        # ``step`` lives on ``self.metrics`` but is also passed positionally to
+        # match the callback signature ``on_step_end(trainer, step, **metrics)``.
+        # Filter it out of the splat so we don't hit "got multiple values for
+        # argument 'step'".
+        def _step_kwargs() -> dict:
+            return {k: v for k, v in self.metrics.items() if k != "step"}
+
         for cb in self.callbacks:
             if cb is monitor_cb:
                 continue
-            self._time_callback(cb, "on_step_end", self, step, **self.metrics)
+            self._time_callback(cb, "on_step_end", self, step, **_step_kwargs())
 
         # Seal step_time_s after all non-monitor work is done, so it covers
         # the full per-step wall time (rollout, host post-gen, reference
@@ -1353,7 +1360,7 @@ class GRPOTrainer:
         self.metrics["step_time_s"] = time.perf_counter() - self._step_start_time
 
         if monitor_cb is not None:
-            self._time_callback(monitor_cb, "on_step_end", self, step, **self.metrics)
+            self._time_callback(monitor_cb, "on_step_end", self, step, **_step_kwargs())
 
     def _maybe_checkpoint(self) -> None:
         """Save a checkpoint on interval + fire ``on_save`` for non-monitor
