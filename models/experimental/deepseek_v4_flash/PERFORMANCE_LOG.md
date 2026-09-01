@@ -7,7 +7,8 @@ reported the new number and a short description of the optimization that
 produced the gain.
 
 All numbers are per-user (tok/s/u) tokens/second at batch=1 unless a batch
-size is explicitly called out.
+size is explicitly called out. Steps 1–18 are the 8-chip PP-only path; from
+step 20 the headline number is 32-chip Galaxy (8 pipeline stages × TP4).
 
 ## Summary chart
 
@@ -30,12 +31,17 @@ size is explicitly called out.
 | 15 | 2026-08-11 | `4de494d` | **14.2 tok/s/u** | — | **Reusable GCB (Global Circular Buffer)** for `matmul_decode` — the prefetcher's GCB is now allocated once and reused across calls instead of being rebuilt each time. |
 | 16 | 2026-08-11 | `63f55dd` | **15.4 tok/s** | +8% | **Prefetcher used in MoE** — added `decode_prefetch.py` and wired the weight-prefetcher into the MoE matmuls, removing weight-fetch stalls. |
 | 17 | 2026-08-11 | `6150d00` | **15.7 tok/s/u** | +2% | **Optimized MoE router** — reworked `moe.py`'s hash router and `fused_experts` device op/kernels (expert-id computation) to cut router overhead. |
-| 18 | 2026-08-12 | `a4b9672` | **16.2 tok/s/u** | +3% | **Batched `MatmulDecode` combined with the Prefetcher** — extended the prefetcher-backed matmul decode op to operate on batched inputs, fusing two previous optimizations. |
+| 18 | 2026-08-12 | `a4b9672` | **16.2 tok/s/u** | +3% | **Batched `MatmulDecode` combined with the Prefetcher** — extended the prefetcher-backed matmul decode op to operate on batched inputs, fusing two previous optimizations. 8-chip PP-only. |
+| 19 | 2026-08-24 | `c1e2c56` | — | — | **Partial-width-sharded `matmul_decode` with overlapping ring gather of in0** — the fused all-gather+matmul path later used by TP4. (Same squash also recorded **15.9 tok/s/u** on the 8-chip BH lightbox demo.) |
+| 20 | 2026-08-26 | `ed59108` | **20 tok/s/u** | +23% vs 16.2; new cluster | **TP4 with prefetcher on 32-chip Galaxy** (8 pipeline stages × 4-chip stages). Attention projections, MoE `fused_experts`, and `matmul_decode` all run tensor-parallel; weights still stream through the decode GCB. |
+| 21 | 2026-08-31 | `c67f46aa` | — | — | **Working Sinkhorn LLK** — SFPU sinkhorn path in the hyper-connection kernel (`ckernel_sfpu_sinkhorn` / `sinkhorn.cpp`) instead of a reduce-based fallback. |
+| 22 | 2026-08-31 | `6c96b4c` | **24 tok/s/u** | +20% | **TP4, SP8** — eight 1×4 stages with a **private `HC_FN_GCB`** so hyper-connection `fn` (and, at the time, balanced q_a/kv) can prefetch on an 8-tile page that cannot share the 32-tile decode ring. Hyper-connections themselves join the prefetch FIFO. |
+| 23 | 2026-09-01 | `db9f622` | — (unmeasured) | — | **Replicated q_a and kv** — galaxy32 `qkv_tp_strategy` switched from `balanced` (N-shard + all-gather, `HC_FN_GCB`) to full-width replicas on every TP rank that join the shared 32-tile decode GCB. `q_b` stays head-sharded TP4. |
 
 ## Overall trajectory
 
-- **5.99 → 16.2 tok/s/u** at batch=1: a **~2.7x** improvement over ~6 weeks
-  (2026-06-29 → 2026-08-12).
+- **5.99 → 16.2 tok/s/u** at batch=1 on **8 chips** (PP-only): a **~2.7x**
+  improvement over ~6 weeks (2026-06-29 → 2026-08-12).
 - Early gains (steps 1-6, 5.99 → 11.6 tok/s, ~+94%) came from **algorithmic/op
   fusion work**: fusing HyperConnection, batching attention matmuls,
   restructuring HCA/CSA, switching KV-cache updates from concat to slice-write,
@@ -50,11 +56,19 @@ size is explicitly called out.
   then B=64 users concurrently. Per-user tok/s dips under heavy batching
   (4.3 tok/s/u @ B=64) because compute/bandwidth is shared, but total
   cluster throughput (aggregate tok/s across all users) is far higher.
-- The **final push** (steps 15-18, 14.2 → 16.2 tok/s/u, ~+14%) focused on the
-  **weight-prefetcher infrastructure**: making the prefetcher's global
+- The **prefetcher push** (steps 15-18, 14.2 → 16.2 tok/s/u, ~+14%) focused on
+  the **weight-prefetcher infrastructure**: making the prefetcher's global
   circular buffer (GCB) reusable, extending prefetching to MoE matmuls,
   optimizing the MoE router, and finally combining batched `MatmulDecode`
   with the prefetcher so both optimizations compound.
+- The **TP / Galaxy push** (steps 19-23, 16.2 → **24 tok/s/u**) moved the
+  headline number onto **32 chips** (8 pipeline stages × TP4). Ring-gather
+  PWS `matmul_decode` made intra-stage TP legal; wiring the prefetcher through
+  that layout landed **20 tok/s/u**; a second GCB for hyper-connection `fn`
+  plus SP8 staging landed **24 tok/s/u**. Replicated (unfused) q_a/kv is in
+  tree as of 2026-09-01 but has no new demo number yet. This is not a like-
+  for-like 8-chip comparison: per-layer compute is split across four ranks,
+  and the extra chips also cut layers-per-stage / socket hops.
 
 ## Commit reference
 
@@ -77,6 +91,11 @@ ceebba9f3ed  Batch=64. 4.3 tok/s/u
 63f55dd160c  Prefetcher in MoE 15.4 toks/s
 6150d00e3ce  Optimized Router. 15.7 tok/s/u
 a4b967209214 Batched MatmulDecode with Prefetcher. 16.2 tok/s/u
+c1e2c56161d  Working PWS with ring gather in0
+ed591086501  TP4 with prefetcher. 20 toks/s/u
+c67f46aa07a  Working sinkhorn llk
+6c96b4c132d  TP4, SP8 24tok/s/u
+db9f622bbc1  Replicated q_a & kv
 ```
 
 *(Generated from `git log --oneline -- models/experimental/deepseek_v4_flash`
