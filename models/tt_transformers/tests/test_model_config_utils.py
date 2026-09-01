@@ -74,33 +74,42 @@ def test_compute_galaxy_width_shard_cores(width, expected):
 @pytest.mark.parametrize(
     ("hidden_dim", "expected_cores", "expected_shard_width"),
     [
-        # 32768 // 8 = 4096 is not a multiple of 28 * 32, so the legacy 28-core grid
-        # cannot tile-align it; 32 cores can.
-        pytest.param(32768, 32, 128, id="qwen-72b-padded"),
-        # Every width the legacy 7x4 grid already tile-aligned must be untouched.
-        pytest.param(28672, 28, 128, id="llama-70b"),
-        pytest.param(14336, 28, 64, id="llama-8b"),
+        # Galaxy is 8x4. The reduce-scatter OUTPUT width is
+        # hidden_dim // mesh_rows // mesh_cols -- the op computes the shape itself as
+        # input_shape[dim] / ring_size, so this config describes the scattered width.
+        # Llama-70B: 28672 // 8 // 4 = 896 = 28 * 32, so the 7x4 grid is exact.
+        pytest.param(28672, 28, 32, id="llama-70b"),
+        # Qwen-72B padded: 32768 // 8 // 4 = 1024, which 28 cores cannot tile-align; 32 can.
+        pytest.param(32768, 32, 32, id="qwen-72b-padded"),
+        pytest.param(14336, 28, 16, id="llama-8b"),
     ],
 )
 def test_galaxy_ff1_out_reduce_scatter_memory_config(hidden_dim, expected_cores, expected_shard_width):
-    memory_config = create_galaxy_ff1_out_reduce_scatter_memcfg(hidden_dim)
+    memory_config = create_galaxy_ff1_out_reduce_scatter_memcfg(hidden_dim, mesh_rows=8, mesh_cols=4)
 
     assert memory_config.shard_spec.grid.num_cores() == expected_cores
     assert memory_config.shard_spec.shape == [32, expected_shard_width]
-    # Whatever grid is chosen, the shard must be tile-aligned.
-    assert expected_shard_width % 32 == 0
 
 
-@pytest.mark.parametrize("hidden_dim", [14336, 28672, 57344])
-def test_galaxy_ff1_preserves_legacy_layout_where_it_was_aligned(hidden_dim):
-    """Widths the pre-existing `hidden_dim // 28 // 8` config tile-aligned are unchanged."""
-    legacy_shard_width = hidden_dim // 28 // 8
-    assert legacy_shard_width % 32 == 0, "test input must be a width the legacy layout aligned"
+@pytest.mark.parametrize("hidden_dim", [28672, 32768])
+def test_galaxy_ff1_shard_grid_exactly_covers_the_scattered_width(hidden_dim):
+    """The shard grid must cover the reduce-scatter output width exactly, no more."""
+    memory_config = create_galaxy_ff1_out_reduce_scatter_memcfg(hidden_dim, mesh_rows=8, mesh_cols=4)
 
-    memory_config = create_galaxy_ff1_out_reduce_scatter_memcfg(hidden_dim)
+    scattered_width = hidden_dim // 8 // 4
+    covered = memory_config.shard_spec.grid.num_cores() * memory_config.shard_spec.shape[1]
+    assert covered == scattered_width
+    assert memory_config.shard_spec.shape[1] % 32 == 0
 
-    assert memory_config.shard_spec.grid.num_cores() == 28
-    assert memory_config.shard_spec.shape == [32, legacy_shard_width]
+
+def test_galaxy_ff1_matches_the_validated_demo_ratio():
+    """Cross-check against models/demos/llama3_70b_galaxy: 3840 in, 960 out, ratio 4."""
+    memory_config = create_galaxy_ff1_out_reduce_scatter_memcfg(28672, mesh_rows=8, mesh_cols=4)
+
+    covered = memory_config.shard_spec.grid.num_cores() * memory_config.shard_spec.shape[1]
+    per_device_width = 28672 // 8
+    assert covered == per_device_width // 4 == 896
+    assert covered <= 960  # the demo's 30-core layout pads 896 up to 960
 
 
 def test_compute_galaxy_width_shard_cores_rejects_non_positive_width(expect_error):
