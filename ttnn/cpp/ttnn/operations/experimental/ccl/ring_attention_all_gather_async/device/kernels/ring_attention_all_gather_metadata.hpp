@@ -39,15 +39,16 @@ inline LinkPageRange compute_link_page_range(uint32_t valid_pages, uint32_t num_
         next_link_idx * pages_per_link + (next_link_idx < remainder ? next_link_idx : remainder)};
 }
 
-// gather_valid_Ht = ceil(logical_n / chunk_global) * chunk_local_tiles, where
-// logical_nt = kv_actual_isl / TILE_HEIGHT + chunk_global_tiles and chunk_global_tiles =
-// chunk_local_tiles * ring_size. TILE_HEIGHT is 32, hence the >> 5.
+// gather_valid_Ht = ceil(logical_n / chunk_global) * chunk_local_tiles, where logical_nt is the padded
+// chunk extent clamped to the cache capacity and chunk_global_tiles = chunk_local_tiles * ring_size.
+// TILE_HEIGHT is 32.
 inline uint32_t compute_gather_valid_Ht(
     uint32_t kv_actual_isl, uint32_t chunk_local_tiles, uint32_t ring_size, uint32_t cache_local_tile_rows) {
     const uint32_t chunk_global_tiles = chunk_local_tiles * ring_size;
     const uint32_t cache_global_tiles = cache_local_tile_rows * ring_size;
     kv_actual_isl = trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_global_tiles, cache_global_tiles);
-    const uint32_t logical_nt_local = (kv_actual_isl >> 5) + chunk_global_tiles;
+    const uint32_t logical_nt_local =
+        trace_metadata::logical_tile_rows_clamped_to_cache(kv_actual_isl, chunk_global_tiles, cache_global_tiles);
     const uint32_t valid_slabs = (logical_nt_local + chunk_global_tiles - 1) / chunk_global_tiles;
     return valid_slabs * chunk_local_tiles;
 }
@@ -73,7 +74,8 @@ inline uint32_t compute_halo_tail_start_Ht(
     }
     kv_actual_isl =
         trace_metadata::bounded_kv_actual_isl(kv_actual_isl, q_group_tile_rows, cache_local_tile_rows * ring_size);
-    const uint32_t logical_k_tile_rows = (kv_actual_isl >> 5) + q_group_tile_rows;
+    const uint32_t logical_k_tile_rows = trace_metadata::logical_tile_rows_clamped_to_cache(
+        kv_actual_isl, q_group_tile_rows, cache_local_tile_rows * ring_size);
     if (logical_k_tile_rows < q_group_tile_rows) {
         return 0;
     }

@@ -517,7 +517,8 @@ void kernel_main() {
             noc, meta_args, get_common_arg_val<uint32_t>(0), cb_meta_scratch.get_write_ptr());
         kv_actual_isl =
             trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
-        logical_nt = ring_joint::compute_logical_nt(kv_actual_isl, chunk_size_t * 32, 32);
+        logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
+            kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
         const auto masks = ring_joint::build_ring_work_masks_device<full_mesh_rank_mapping>(
             fused_op_receiver.seq.ring_index,
             ring_size,
