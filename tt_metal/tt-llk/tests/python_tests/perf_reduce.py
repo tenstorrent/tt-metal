@@ -5,6 +5,7 @@ import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestAccumulation,
+    MathFidelity,
     MathOperation,
     PerfRunType,
     ReduceDimension,
@@ -18,6 +19,7 @@ from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
+    MATH_FIDELITY,
     MATH_OP,
     REDUCE_POOL_TYPE,
     TILE_COUNT,
@@ -28,6 +30,23 @@ REDUCE_MATHOP = {
     ReduceDimension.Column: MathOperation.ReduceColumn,
     ReduceDimension.Scalar: MathOperation.ReduceScalar,
 }
+
+
+def _fidelities(formats, pool_type):
+    """Fidelity axis for the perf sweep.
+
+    MAX pooling is GMPOOL only and ignores fidelity, so one point covers it. SUM/AVG cost scales
+    with the phase count (a 32x32 bf16 column sum is 16.1 cycles/tile at LoFi and 83.1 at HiFi4),
+    so both ends are worth tracking -- but only for one format pair, to keep the matrix small.
+    """
+    if pool_type == ReducePool.Max:
+        return [MathFidelity.HiFi4]
+    if (
+        formats.input_format == DataFormat.Float16_b
+        and formats.output_format == DataFormat.Float16_b
+    ):
+        return [MathFidelity.LoFi, MathFidelity.HiFi4]
+    return [MathFidelity.HiFi4]
 
 
 @pytest.mark.perf
@@ -43,6 +62,7 @@ REDUCE_MATHOP = {
     dest_acc=[DestAccumulation.No],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
+    math_fidelity=_fidelities,
 )
 def test_perf_reduce(
     perf_report,
@@ -50,6 +70,7 @@ def test_perf_reduce(
     dest_acc,
     reduce_dim,
     pool_type,
+    math_fidelity,
 ):
 
     tile_count = 16
@@ -66,6 +87,7 @@ def test_perf_reduce(
         templates=[
             MATH_OP(mathop=REDUCE_MATHOP[reduce_dim]),
             REDUCE_POOL_TYPE(pool_type),
+            MATH_FIDELITY(math_fidelity),
         ],
         runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(64)],
         variant_stimuli=StimuliConfig(
