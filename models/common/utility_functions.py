@@ -9,7 +9,6 @@ import time
 from typing import Union
 
 import numpy as np
-import pytest
 import torch
 from loguru import logger
 from ttnn.device import Arch
@@ -1070,6 +1069,8 @@ def is_slow_dispatch():
 
 
 def ti_skip(condition, reason="Invalid test parameters"):
+    import pytest
+
     return pytest.mark.skipif(condition, reason="Skipping unsupported case: " + reason)
 
 
