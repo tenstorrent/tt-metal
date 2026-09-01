@@ -51,7 +51,6 @@ class KDAProgramConfig:
     recurrence: KDARecurrenceProgramConfig = field(default_factory=KDARecurrenceProgramConfig)
     # Ceiling: the effective chunk is the largest TP-local channel divisor no greater than this value.
     qkv_channel_chunk_size: int = 768
-    output_projection_out_block_w: int | None = None
     tp_ccl_topology: ttnn.Topology = ttnn.Topology.Linear
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
@@ -61,10 +60,6 @@ class KDAProgramConfig:
             raise ValueError(
                 "qkv_channel_chunk_size must be a positive multiple of "
                 f"{ttnn.TILE_SIZE}, got {self.qkv_channel_chunk_size}"
-            )
-        if self.output_projection_out_block_w is not None and self.output_projection_out_block_w <= 0:
-            raise ValueError(
-                "output_projection_out_block_w must be positive, " f"got {self.output_projection_out_block_w}"
             )
         if self.gated_rms_output_dtype not in (ttnn.float32, ttnn.bfloat16):
             raise ValueError("gated_rms_output_dtype must be ttnn.float32 or ttnn.bfloat16")
@@ -81,7 +76,6 @@ def kimi_k3_program_config(*, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfi
         # Exact K3 T=5120 QKV median versus 768: 512 was 0.88% slower on SP1xTP8, 1.09% faster on
         # SP2xTP4, and 2.28% faster on SP4xTP2; end-to-end deltas were within 0.08% at identical PCC.
         qkv_channel_chunk_size=512,
-        output_projection_out_block_w=4,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,

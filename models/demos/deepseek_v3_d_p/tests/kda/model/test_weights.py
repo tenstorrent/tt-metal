@@ -10,7 +10,7 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.kda.utils import collect_mesh_accuracy_and_determinism_results, random_weights
-from models.demos.deepseek_v3_d_p.tt.kda.kda import _output_projection_program_config, ttKDA
+from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_equal
@@ -219,8 +219,6 @@ def test_2d_tp_weight_and_output_placement(
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
-    output_grid = mesh_device.compute_with_storage_grid_size()
-    value_tt = ttnn.reshape(value_tt, (1, 1, sequence, value_tt.shape[-1]))
     tt_ccl = TT_CCL(mesh_device)
 
     def run() -> tuple[ttnn.Tensor]:
@@ -228,18 +226,11 @@ def test_2d_tp_weight_and_output_placement(
             value_tt,
             weights.output_projection,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=_output_projection_program_config(
-                sequence,
-                value_tt.shape[-1],
-                weights.output_projection.shape[-1],
-                None,
-                (output_grid.x, output_grid.y),
-            ),
             compute_kernel_config=compute_config,
         )
         output = ttnn.experimental.reduce_scatter_minimal_async(
             output,
-            dim=3,
+            dim=-1,
             multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(tensor_parallel_axis),
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(tensor_parallel_axis),
             num_links=tt_ccl.get_num_links(tensor_parallel_axis),
