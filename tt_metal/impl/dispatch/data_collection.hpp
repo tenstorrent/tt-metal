@@ -116,8 +116,15 @@ public:
 // has not produced records yet".
 bool IsProgramRealtimeProfilerActive();
 
-// Internal lifecycle hooks wired by MeshDevice (not for end-user calls).
-void NotifyProgramRealtimeProfilerActivated(uint32_t chip_id);
-void NotifyProgramRealtimeProfilerDeactivated(uint32_t chip_id);
+// As above, for the collector owning `context_id`. Activation state lives per MetalContext, so a
+// caller that knows which context its devices belong to reads it from there; the no-argument form
+// answers for the default context.
+bool IsProgramRealtimeProfilerActive(tt::tt_metal::ContextId context_id);
+
+// Internal lifecycle hooks wired by MeshDevice (not for end-user calls). `context_id` is the owning
+// MeshDevice's context: activation marks the collector whose per-program metadata the profiler goes
+// on to consume, so it has to be the same one the dispatch path records into.
+void NotifyProgramRealtimeProfilerActivated(tt::tt_metal::ContextId context_id, uint32_t chip_id);
+void NotifyProgramRealtimeProfilerDeactivated(tt::tt_metal::ContextId context_id, uint32_t chip_id);
 
 }  // end namespace tt

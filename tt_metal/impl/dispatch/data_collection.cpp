@@ -105,12 +105,16 @@ bool IsProgramRealtimeProfilerActive() {
     return tt::tt_metal::MetalContext::instance().data_collector()->IsRealtimeProfilerActive();
 }
 
-void NotifyProgramRealtimeProfilerActivated(uint32_t chip_id) {
-    tt::tt_metal::MetalContext::instance().data_collector()->NotifyRealtimeProfilerActivated(chip_id);
+bool IsProgramRealtimeProfilerActive(ContextId context_id) {
+    return tt::tt_metal::MetalContext::instance(context_id).data_collector()->IsRealtimeProfilerActive();
 }
 
-void NotifyProgramRealtimeProfilerDeactivated(uint32_t chip_id) {
-    tt::tt_metal::MetalContext::instance().data_collector()->NotifyRealtimeProfilerDeactivated(chip_id);
+void NotifyProgramRealtimeProfilerActivated(ContextId context_id, uint32_t chip_id) {
+    tt::tt_metal::MetalContext::instance(context_id).data_collector()->NotifyRealtimeProfilerActivated(chip_id);
+}
+
+void NotifyProgramRealtimeProfilerDeactivated(ContextId context_id, uint32_t chip_id) {
+    tt::tt_metal::MetalContext::instance(context_id).data_collector()->NotifyRealtimeProfilerDeactivated(chip_id);
 }
 
 }  // namespace tt
