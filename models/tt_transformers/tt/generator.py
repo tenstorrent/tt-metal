@@ -798,6 +798,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         global_user_id = kwargs.get("global_user_id", None)
         use_start_pos = "sp1" if num_cached_tokens > 0 else "sp0"
         trace_key = f"{prefill_seq_len}_{model_id}_{batch_size}_{use_start_pos}"
+        logger.info(f"PROBE Prefill trace key: {trace_key} num_cached_tokens={num_cached_tokens}")  # TEMPORARY
 
         use_prefix_caching = num_cached_tokens > 0
         chunk_start_idx = num_cached_tokens

@@ -164,7 +164,10 @@
   arch: arch-wormhole_b0
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 80000000}'
   additional-server-args: "--max_model_len 16384 --max_num_seqs 1 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048"
-  additional-benchmark-args: "--num-prompts 16"
+  # TEMPORARY probe: 8000 tokens forces a chunked continuation past the 2048
+  # budget, so the resumed path runs. 4 prompts keeps it inside the benchmark
+  # budget at ~8.9 tok/s.
+  additional-benchmark-args: "--num-prompts 4 --random-input-len 8000"
   multimodal: false
   skus:
     wh_llmbox:
