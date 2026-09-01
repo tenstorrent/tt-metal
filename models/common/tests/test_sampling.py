@@ -18,6 +18,7 @@ from models.common.sampling import (
     format_sampling_params,
     scatter_sampling_params_to_slots,
 )
+from models.common.sampling._utils import topk_would_route_to_large_indices
 from models.common.sampling.generator import _hash_request_seed_to_device_seed, _mark_trace_buffers_corruptible
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
 from models.common.utility_functions import comp_pcc, is_blackhole
@@ -1284,7 +1285,6 @@ def test_topk_authoritative_route_decision(mesh_device, shape, k, expected):
     The cells pin important merged-policy boundaries (#53464: k_multiple=16,
     max_width=1<<19, no MoE-gate arm) without duplicating that policy in Python.
     """
-    from models.common.sampling._utils import topk_would_route_to_large_indices
 
     x = ttnn.from_torch(
         torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device
@@ -1378,7 +1378,6 @@ def test_ttsampling_routed_full_row_topk_end_to_end(vocab_size, mesh_device):
     of the bf16 logits, and every token must be a valid global vocab position -- i.e.
     the routed indices are global, not per-chunk.
     """
-    from models.common.sampling._utils import topk_would_route_to_large_indices
 
     torch.manual_seed(42)
     batch_size = 32
@@ -1429,3 +1428,190 @@ def test_ttsampling_routed_full_row_topk_end_to_end(vocab_size, mesh_device):
 
     header = f"{len(failures)}/{batch_size} users did not sample the row maximum (vocab_size={vocab_size})"
     assert not failures, header + ":\n" + "\n".join(failures)
+
+
+def _routed_single_device_args(mesh_device, vocab_size, max_top_k=32, max_batch_size=32):
+    """_single_device_sampling_args with the top-k sub-grid released.
+
+    TTSampling only relaxes its call shape when sub_core_grid_topk is None, so this is the
+    one knob that separates the routed full-row path from the chunked split. Everything else
+    (including sub_core_grids, which only places programs) stays identical to the chunked
+    helper, so a routed-vs-chunked comparison varies exactly one thing.
+    """
+    args = _single_device_sampling_args(mesh_device, vocab_size, max_top_k, max_batch_size)
+    args.sub_core_grid_topk = None
+    return args
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="topk_large_indices routing is Blackhole-only")
+@pytest.mark.parametrize("vocab_size", [pytest.param(128256, id="v128256")])
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_ttsampling_routed_full_row_random_sampling_stays_in_top_k(vocab_size, mesh_device):
+    """The ROUTED path must respect per-user top-k for RANDOM users (k > 1), not just greedy ones.
+
+    Every other routed-path test runs k=1, where the routed and chunked candidate sets are
+    provably equivalent (both contain the global maximum), so they cannot observe the thing
+    this path actually changes: the candidate row is now the global top-(num_splits*k) instead
+    of the union of the per-chunk top-ks. ttnn.sampling sorts and masks that row itself, so a
+    k=32 draw must still land inside the true global top-32.
+
+    Asserted against the k-th largest VALUE rather than the top-k index set: bfloat16 rounding
+    creates ties at the boundary, so a token outside torch's top-k indices can still be a
+    legitimate draw if its value ties the k-th largest.
+    """
+    torch.manual_seed(1234)
+    batch_size = 32
+    top_k = 32
+
+    sampler = TTSampling(
+        args=_routed_single_device_args(mesh_device, vocab_size, max_top_k=top_k),
+        mesh_device=mesh_device,
+        tt_ccl=None,
+        k=torch.full((batch_size,), top_k),  # random sampling, not greedy
+        p=torch.ones(batch_size),  # no nucleus filtering
+        temp=torch.ones(batch_size),
+    )
+    assert sampler.multi_step_reduction
+    assert sampler.sub_core_grid_topk is None
+    assert not sampler.force_argmax_sampling, "this test must exercise the sampling path, not argmax"
+
+    logits_host = torch.randn(1, 1, batch_size, vocab_size)
+    logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    assert topk_would_route_to_large_indices(
+        logits_tt, sampler._num_vocab_splits * sampler.max_top_k
+    ), "test premise broken: this cell no longer routes -- update the parametrization"
+
+    logits_bf16 = ttnn.to_torch(logits_tt).float().reshape(batch_size, vocab_size)
+    tokens = ttnn.to_torch(sampler(logits_tt)[0]).flatten()[:batch_size].long()
+
+    # Value of the k-th largest entry per row: any legitimate top-k draw is >= this.
+    kth_value = logits_bf16.topk(top_k, dim=-1).values[:, -1]
+    failures = []
+    for user in range(batch_size):
+        token = int(tokens[user])
+        if not 0 <= token < vocab_size:
+            failures.append(f"  user {user}: token {token} outside [0, {vocab_size})")
+            continue
+        value = logits_bf16[user, token].item()
+        if value < kth_value[user].item():
+            failures.append(
+                f"  user {user}: token {token} has logit {value:.6f}, below the top-{top_k} "
+                f"cutoff {kth_value[user].item():.6f} -- drawn from outside the candidate set"
+            )
+    assert not failures, f"{len(failures)}/{batch_size} random users drew outside top-{top_k}:\n" + "\n".join(failures)
+
+    # A k=32 draw with per-user seeds must not collapse to one token for the whole batch;
+    # that would mean the candidate row or the RNG stream degenerated.
+    assert len(set(tokens.tolist())) > 1, f"all {batch_size} random users drew the same token {int(tokens[0])}"
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="topk_large_indices routing is Blackhole-only")
+@pytest.mark.parametrize(
+    "vocab_size",
+    [pytest.param(128256, id="v128256"), pytest.param(50304, id="v50304")],
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_ttsampling_routed_full_row_matches_chunked_path(vocab_size, mesh_device):
+    """The routed full-row top-k must produce the SAME tokens as the chunked split it replaces.
+
+    The other routed tests assert only that the sampled token is a row maximum -- an invariant
+    the chunked path already satisfied before de-chunking, so they cannot catch the two paths
+    diverging. This runs both on identical logits with only sub_core_grid_topk differing
+    (None -> routed full row, set -> chunked split) and requires bit-identical tokens.
+
+    Greedy (k=1) on purpose: it makes the comparison deterministic without depending on the two
+    samplers drawing identical RNG streams. bfloat16 rounding of randn produces ties at the
+    maximum for some rows, so this also pins that _adjust_values_for_tiebreak resolves a tie to
+    the same global index on both paths.
+    """
+    torch.manual_seed(7)
+    batch_size = 32
+
+    def sample(args):
+        sampler = TTSampling(
+            args=args,
+            mesh_device=mesh_device,
+            tt_ccl=None,
+            k=torch.ones(batch_size),  # greedy: deterministic, no RNG dependence
+            p=torch.zeros(batch_size),
+            temp=torch.ones(batch_size),
+        )
+        assert sampler.multi_step_reduction
+        assert not sampler.force_argmax_sampling
+        logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+        routes = sampler.sub_core_grid_topk is None and topk_would_route_to_large_indices(
+            logits_tt, sampler._num_vocab_splits * sampler.max_top_k
+        )
+        tokens = ttnn.to_torch(sampler(logits_tt)[0]).flatten()[:batch_size].long().tolist()
+        return tokens, routes
+
+    logits_host = torch.randn(1, 1, batch_size, vocab_size)
+
+    routed_tokens, routed = sample(_routed_single_device_args(mesh_device, vocab_size))
+    chunked_tokens, chunked_routes = sample(_single_device_sampling_args(mesh_device, vocab_size))
+
+    assert routed, "test premise broken: the sub_core_grid_topk=None arm did not take the routed path"
+    assert not chunked_routes, "test premise broken: the sub-grid arm must stay on the chunked path"
+
+    mismatched = [
+        (user, routed_tokens[user], chunked_tokens[user])
+        for user in range(batch_size)
+        if routed_tokens[user] != chunked_tokens[user]
+    ]
+    assert not mismatched, (
+        f"{len(mismatched)}/{batch_size} users got a different token from the routed full-row "
+        f"top-k than from the chunked split (vocab_size={vocab_size}); "
+        f"(user, routed, chunked): {mismatched[:8]}"
+    )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="topk_large_indices routing is Blackhole-only")
+@pytest.mark.parametrize("vocab_size", [pytest.param(128256, id="v128256")])
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_ttsampling_routed_full_row_resolves_tie_plateau_wider_than_shard_k(vocab_size, mesh_device):
+    """A tie plateau WIDER than one shard's top-k still resolves to the lowest global index.
+
+    This is the case test_ttsampling_greedy_tied_max_picks_lowest_index documents but does not
+    cover: its 4-token plateau fits inside every per-chunk top-k, so both paths gather all of it.
+    With TIE_LEN=48 > max_top_k=32 the chunked path's first chunk must drop 16 of the tied maxima
+    through the unstable top-k network, and the lowest tied index can be among the dropped ones --
+    the KNOWN LIMITATION on _adjust_values_for_tiebreak.
+
+    The routed full row takes top-(num_splits * max_top_k) = 64 in ONE call, so all 48 tied
+    maxima reach the gathered candidate set and the lowest-index tie-break is exact. That is the
+    concrete determinism win of de-chunking, so it is asserted on the routed path only.
+    """
+    batch_size = 32
+    TIE_START = 777  # deliberately not 0: index 0 could win by zero-initialized accident
+    TIE_LEN = 48  # > max_top_k (32), <= num_vocab_splits * max_top_k (64)
+
+    sampler = TTSampling(
+        args=_routed_single_device_args(mesh_device, vocab_size),
+        mesh_device=mesh_device,
+        tt_ccl=None,
+        k=torch.ones(batch_size),  # greedy: top-1
+        p=torch.zeros(batch_size),
+        temp=torch.ones(batch_size),
+    )
+    assert sampler.multi_step_reduction
+    assert sampler.sub_core_grid_topk is None
+    assert not sampler.force_argmax_sampling
+    assert TIE_LEN > sampler.max_top_k, "plateau must exceed one shard's k or this adds no coverage"
+    assert TIE_LEN <= sampler._num_vocab_splits * sampler.max_top_k, "plateau must fit the routed candidate row"
+
+    torch.manual_seed(7)
+    # Tail strictly below the plateau (all values in [-2, -1)); the plateau is tied at exactly 0.0.
+    logits_host = torch.rand(1, 1, batch_size, vocab_size) - 2.0
+    logits_host[..., TIE_START : TIE_START + TIE_LEN] = 0.0
+    logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    assert topk_would_route_to_large_indices(
+        logits_tt, sampler._num_vocab_splits * sampler.max_top_k
+    ), "test premise broken: this cell no longer routes -- update the parametrization"
+
+    tokens = ttnn.to_torch(sampler(logits_tt)[0]).flatten()[:batch_size].long()
+
+    mismatched = [(u, int(tokens[u])) for u in range(batch_size) if int(tokens[u]) != TIE_START]
+    assert not mismatched, (
+        f"{len(mismatched)}/{batch_size} greedy users did not pick the lowest index {TIE_START} of a "
+        f"{TIE_LEN}-wide tie plateau: {mismatched[:8]}"
+    )
