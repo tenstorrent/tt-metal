@@ -1269,6 +1269,37 @@ KNOBS = {
     # reorders the hand row too (381105, -1.06%) — the booked comparator
     # stays the hand arm's own booked leg (the II/IG convention).
     "cyclic-region-schedule": "-mtt-tensix-optimize-cyclic-region-schedule",
+    # KJ (rename-temporal, FABLE_GOES_BURR section 4 R1): the 8-LREG-wall
+    # rename attack — (1) TEMPORALLY-SCOPED rename targets in the
+    # item-#7 du-chain engine (a target LREG is admissible when provably
+    # free across the chain SPAN rather than the whole block: any later
+    # touch opens with a fresh effect-audited all-write definition with
+    # no CC event between the chain close and it, a never-again-touched
+    # target must be DF-dead at exit in an opaque-free function,
+    # pinned-protocol registers never temporal-rename; the post-commit
+    # lockstep belt re-verifies the out-of-span lifetimes exactly
+    # preserved), and (2) the CYCLIC-INTERIOR rename consumer: interior
+    # regions of a barrier-chopped self-loop row request
+    # storage-collision chain renames through the item-#7 service
+    # before candidate generation, priced by the UNCHANGED strict
+    # whole-row steady-state II acceptance and undone exactly on any
+    # refusal (undo leg byte-identical, twin-pinned).
+    # MEASURED (laneKJ-evidence-20260831, BH p150, 3 reps ALL
+    # cycle-identical, corr-first PASS every session, paired CRAQ ctl/tmp
+    # rc=0 at pinned sim 1d162f0adf67): at the booked trigonometry-fresh
+    # comparator leg (ON36 + loop-prgm-reclaim + stochrnd-store-fold +
+    # cyclic-region-schedule) the sem anchor reproduces 395833 EXACT
+    # (the laneJU cell), and + rename-temporal delivers 391865 x3
+    # (-1.00%); the modeled whole-row II moved 96 -> 95 via exactly TWO
+    # temporal-tier renames through the service (uid 260 L4->L2, uid
+    # 1484 L5->L6 — the laneIJ cert's named "last slot needs a rename
+    # with no free LREG (8-LREG wall)" successor, now EXECUTED); the
+    # hand arm is byte- and cycle-inert under the flag (381105 x3,
+    # .text 3226 both legs) so the same-leg comparator stands; vs_hand
+    # +3.86 -> +2.82, LOSS stands, floor lowered.  Everything else in
+    # the row refuses by name (regrename-no-free-lreg 26 with the
+    # temporal tier ALSO exhausted, regrename-cc-span 16, constraint 6).
+    "rename-temporal": "-mtt-tensix-optimize-rename-temporal",
     # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
     # exactly the doomed-hoist mirror refusal
     # noexec-rerecord-dststore-composition-unaudited (Dst-store re-record
@@ -1702,6 +1733,15 @@ KNOB_MODES = {
     # construction).  on-plus while a booking knob; promotion requires
     # the ON-delta adjudication ceremony.
     "cyclic-region-schedule": "on-plus",
+    # KJ rename-temporal: default-off Init(0) booking knob; register
+    # fields only (delivered word counts belt-asserted unchanged), the
+    # II acceptance authority untouched.  A composition knob: its
+    # consumers are the item-#7 chains pass and the cyclic-interior
+    # path, so the booking A/B is (booked-leg + flag) vs booked-leg
+    # (the trig cell rides ON + reclaim + stoch + crs).  on-plus while
+    # a booking knob; promotion requires the ON-delta adjudication
+    # ceremony.
+    "rename-temporal": "on-plus",
     # HH launch-flatten: default-off Init(0) booking knob; a pure
     # GIMPLE unroll-request (delivery-shape change only, dynamic word
     # stream unchanged by construction).  on-plus while a booking knob;
