@@ -494,6 +494,7 @@ def test_llama_model_inference(
                                 logger.info(f"KV Cache Passed!")
                             else:
                                 logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
+                                kv_cache_tests_pass = False
                                 all_tests_pass = False
 
             if not dummy_weights:
