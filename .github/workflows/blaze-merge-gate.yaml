@@ -32,6 +32,9 @@ name: Blaze Merge Gate
 # unique `dispatch-id` into tt-blaze's `run-name` and matching it back. That token
 # is also tt-blaze's concurrency key, which is what keeps concurrent merge-gate
 # runs from cancelling each other's blaze run.
+#
+# Runs on Priority Loudboxes inside of blaze merge gate, priority loudboxes are only
+# Used in the two merge gates
 
 on:
   workflow_call:
