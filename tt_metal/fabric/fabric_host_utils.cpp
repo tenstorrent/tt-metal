@@ -25,7 +25,6 @@
 #include <unordered_set>
 #include <filesystem>
 #include <fstream>
-#include <enchantum/enchantum.hpp>
 #include <fmt/format.h>
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
@@ -81,61 +80,6 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ub
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y: return FabricType::TORUS_Y;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return FabricType::TORUS_XY;
         default: return FabricType::MESH;
-    }
-}
-
-tt::tt_fabric::FabricConfig coerce_fabric_config_to_realized_ring_extents(
-    tt::tt_fabric::FabricConfig fabric_config, const std::vector<MeshShape>& mesh_shapes) {
-    // A ring/torus wrap only realizes a distinct link with more than two devices along the wrapped
-    // dimension. A requested torus axis that no mesh realizes must not stay in the effective config:
-    // deadlock avoidance (bubble flow / first-level ACK) is derived from the config per direction,
-    // and enabling it for an unrealized axis produces mismatched credit protocols on inter-mesh
-    // links between rotated meshes (issue #54650). Downgrade such axes to the non-ring equivalent.
-    if (mesh_shapes.empty()) {
-        return fabric_config;
-    }
-    auto any_mesh_has_genuine_axis = [&](uint32_t axis) {
-        return std::any_of(mesh_shapes.begin(), mesh_shapes.end(), [axis](const MeshShape& shape) {
-            return is_genuine_torus_dim(shape[axis]);
-        });
-    };
-    auto downgrade = [&](tt::tt_fabric::FabricConfig to) {
-        log_warning(
-            tt::LogFabric,
-            "FabricConfig {} requests a ring/torus along a dimension where no mesh has more than 2 devices (a ring "
-            "needs at least 3) — the fabric config has been overridden to {}",
-            enchantum::to_string(fabric_config),
-            enchantum::to_string(to));
-        return to;
-    };
-    switch (fabric_config) {
-        case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: {
-            // A 1D ring tours all chips of a mesh (wrap-around-mesh: a 2x2 is a genuine 4-cycle over
-            // ordinary mesh edges), so the ring length is the mesh size, not the longest dimension.
-            const bool any_ring = std::any_of(mesh_shapes.begin(), mesh_shapes.end(), [](const MeshShape& shape) {
-                return shape.mesh_size() > 2;
-            });
-            return any_ring ? fabric_config : downgrade(tt::tt_fabric::FabricConfig::FABRIC_1D);
-        }
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X:
-            return any_mesh_has_genuine_axis(1) ? fabric_config : downgrade(tt::tt_fabric::FabricConfig::FABRIC_2D);
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y:
-            return any_mesh_has_genuine_axis(0) ? fabric_config : downgrade(tt::tt_fabric::FabricConfig::FABRIC_2D);
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: {
-            const bool x = any_mesh_has_genuine_axis(1);
-            const bool y = any_mesh_has_genuine_axis(0);
-            if (x && y) {
-                return fabric_config;
-            }
-            if (x) {
-                return downgrade(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X);
-            }
-            if (y) {
-                return downgrade(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y);
-            }
-            return downgrade(tt::tt_fabric::FabricConfig::FABRIC_2D);
-        }
-        default: return fabric_config;
     }
 }
 

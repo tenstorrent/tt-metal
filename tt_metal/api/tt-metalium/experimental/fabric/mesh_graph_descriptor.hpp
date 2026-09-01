@@ -17,7 +17,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/mesh_coord.hpp>
 
 // Forward declaration
 namespace tt::tt_fabric {
@@ -117,9 +116,7 @@ struct AsicPinningGroup {
 class MeshGraphDescriptor {
 public:
     // backwards_compatible will enable all checks related to MGD 1.0. This will limit the functionality of MGD 2.0
-    // source_path (when non-empty) names the descriptor file in error messages.
-    explicit MeshGraphDescriptor(
-        const std::string& text_proto, bool backwards_compatible = false, std::string_view source_path = {});
+    explicit MeshGraphDescriptor(const std::string& text_proto, bool backwards_compatible = false);
     explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path, bool backwards_compatible = false);
 
     ~MeshGraphDescriptor();
@@ -173,9 +170,6 @@ public:
 
     // Unique mesh descriptor names from mesh instances (e.g. "M0", "Decode32x4"), sorted lexicographically.
     std::vector<std::string> get_all_mesh_names() const;
-
-    // Device-topology shape of every mesh and switch instance (meshes first).
-    std::vector<tt::tt_metal::distributed::MeshShape> get_all_device_topology_shapes() const;
 
     // Queries
     const std::vector<GlobalNodeId>& instances_by_name(const std::string& name) const {
@@ -275,7 +269,7 @@ private:
 
     std::map<MeshId, std::vector<AsicPinningGroup>> pinnings_;
 
-    static void set_defaults(proto::MeshGraphDescriptor& proto, std::string_view source_path = {});
+    static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(
         const proto::MeshGraphDescriptor& proto, bool backwards_compatible = false);
 

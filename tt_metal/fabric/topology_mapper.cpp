@@ -1633,25 +1633,14 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     tt::tt_fabric::FabricConfig fabric_config,
     tt::tt_fabric::FabricReliabilityMode reliability_mode) {
-    // Get the total number of chips in the physical system descriptor
-    const auto total_number_of_chips = physical_system_descriptor.get_asic_descriptors().size();
-
-    // A 1D ring needs more than 2 devices; coerce to a line instead of exhausting shape candidates
-    // (FABRIC_1D_RING cannot downgrade to MESH during candidate iteration on non-T3K clusters).
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING && total_number_of_chips <= 2) {
-        log_warning(
-            tt::LogFabric,
-            "FabricConfig FABRIC_1D_RING requires a ring of more than 2 devices, but the physical system has only {} "
-            "chip(s); using FABRIC_1D instead",
-            total_number_of_chips);
-        fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
-    }
-
     // Come up with the biggest mesh that can be formed by the physical system descriptor based on number of chips
     const FabricType requested_fabric_type = get_fabric_type(fabric_config, cluster.is_ubb_galaxy());
 
     // Detect the number of connections per direction using the psd
     const auto number_of_connections = get_num_connections_per_direction(cluster, physical_system_descriptor);
+
+    // Get the total number of chips in the physical system descriptor
+    const auto total_number_of_chips = physical_system_descriptor.get_asic_descriptors().size();
 
     // Extract ASIC IDs from the descriptors map
     std::vector<tt::tt_metal::AsicID> all_asic_ids;

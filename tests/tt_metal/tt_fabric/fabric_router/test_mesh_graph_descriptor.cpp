@@ -184,11 +184,7 @@ TEST(MeshGraphDescriptorTests, ParsesFromTextProtoString) {
     EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
 }
 
-// RING on a dimension of extent <= 2 is coerced to LINE at parse (a ring needs more than 2
-// devices), so only the extent-4 axis remains a torus. See issue #54650 for why the declared
-// type must not stay RING: deadlock avoidance derived from an unrealized torus axis hangs
-// inter-mesh links between rotated meshes.
-TEST(MeshGraphDescriptorTests, CoercesDegenerateRingDimensionsToLine) {
+TEST(MeshGraphDescriptorTests, InfersDeclaredTorusTypeForDegenerateDimensions) {
     const std::string text_proto = R"proto(
         mesh_descriptors: {
           name: "M0"
@@ -206,10 +202,10 @@ TEST(MeshGraphDescriptorTests, CoercesDegenerateRingDimensionsToLine) {
     MeshGraphDescriptor desc(text_proto);
     const auto& instance = desc.get_instance(desc.instances_by_name("M0").at(0));
     const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
-    EXPECT_EQ(MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc), FabricType::TORUS_X);
+    EXPECT_EQ(MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc), FabricType::TORUS_XY);
 }
 
-TEST(MeshGraphDescriptorTests, CoercesDegenerateRingSwitchDimensionsToLine) {
+TEST(MeshGraphDescriptorTests, InfersDeclaredTorusTypeForDegenerateSwitchDimensions) {
     const std::string text_proto = R"proto(
         switch_descriptors: {
           name: "SW0"
@@ -226,7 +222,7 @@ TEST(MeshGraphDescriptorTests, CoercesDegenerateRingSwitchDimensionsToLine) {
     MeshGraphDescriptor desc(text_proto);
     const auto& instance = desc.get_instance(desc.instances_by_name("SW0").at(0));
     const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
-    EXPECT_EQ(MeshGraphDescriptor::infer_fabric_type_from_dim_types(switch_desc), FabricType::TORUS_X);
+    EXPECT_EQ(MeshGraphDescriptor::infer_fabric_type_from_dim_types(switch_desc), FabricType::TORUS_XY);
 }
 
 TEST(MeshGraphDescriptorTests, CollapsedTorusSwitchRetainsMeshDirectionsAndEdgePorts) {
@@ -894,26 +890,24 @@ TEST(MeshGraphDescriptorTests, TestIntraMeshConnections) {
     // Check intra mesh connections
     const auto& all_connections = desc.connections_by_type("MESH");
 
-    // The declared RING on the extent-2 dimension is coerced to LINE, so no wrap connections are
-    // generated (previously the extent-2 wrap duplicated each vertical link).
-    ASSERT_EQ(all_connections.size(), 18);
+    ASSERT_EQ(all_connections.size(), 24);
 
-    // Layout should look like this with express connections (no wrapping: both dims are lines)
+    // Layout should look like this with wrapping in x direction and express connections
     // 0 1 2
     // 3 4 5
     auto device_0 = desc.instances_by_name("D0")[0];
     auto connections = desc.connections_by_source_device_id(device_0);
-    ASSERT_EQ(connections.size(), 3);
+    ASSERT_EQ(connections.size(), 4);
     check_connections(desc, connections, {1, 3, 5}, 1u, mesh_ids[0], {"D1", "D3", "D5"});
 
     auto device_1 = desc.instances_by_name("D1")[0];
     connections = desc.connections_by_source_device_id(device_1);
-    ASSERT_EQ(connections.size(), 4);
+    ASSERT_EQ(connections.size(), 5);
     check_connections(desc, connections, {2, 4, 0, 5}, 1u, mesh_ids[0], {"D0", "D2", "D4", "D5"});
 
     auto device_2 = desc.instances_by_name("D2")[0];
     connections = desc.connections_by_source_device_id(device_2);
-    ASSERT_EQ(connections.size(), 2);
+    ASSERT_EQ(connections.size(), 3);
     check_connections(desc, connections, {1, 5}, 1u, mesh_ids[0], {"D1", "D5"});
 
     // Test all_names() returns unique names (as unordered_set)

@@ -29,14 +29,20 @@ Read more about Text proto at [Mesh Graph Descriptor 2.0](https://docs.google.co
 
 ### Torus dimensions
 
-`device_topology.dim_types` records declared topology. A `RING` axis realizes a
-distinct wrap edge only at size three or greater, so a `RING` declared on a
-dimension of extent one or two is coerced to `LINE` at parse time (with a
-warning). Ring/torus fabric configs behave the same way: a requested torus axis
-that no mesh realizes is dropped from the effective config (e.g.
-`FABRIC_2D_TORUS_Y` over 2x2 meshes runs as `FABRIC_2D`, `FABRIC_1D_RING` over
-1x2 runs as `FABRIC_1D`), so deadlock avoidance is never derived from an
-unrealized torus axis (see issue #54650).
+`device_topology.dim_types` records declared topology. A `RING` axis remains
+declared as torus even when its extent is one or two; Fabric realizes a distinct
+wrap edge only at size three or greater. Size-two links retain ordinary mesh
+directionality and boundary ports, while deadlock avoidance remains based on
+the declared torus configuration.
+
+When a torus axis comes from the fabric config rather than the MGD (the config
+overrides `LINE` dim_types with `FABRIC_2D_TORUS_X/Y/XY`), the edge ports of
+that axis are reserved for the torus and excluded from inter-mesh links — just
+as a genuine torus consumes them physically with wrap cables. Deadlock
+avoidance is derived per direction from the fabric config, so an inter-mesh
+link on a config-torused direction could face a peer that labels the axis
+differently and hang (issue #54650). An axis the MGD itself declares as `RING`
+keeps its boundary ports.
 
 
 ## Minimal workflow

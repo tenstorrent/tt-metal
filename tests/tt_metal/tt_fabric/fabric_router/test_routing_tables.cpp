@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <optional>
+#include <set>
 #include <unordered_set>
 #include <utility>
 #include <yaml-cpp/yaml.h>
@@ -28,6 +29,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <internal/blitz_decode_pipeline.hpp>
 
@@ -253,10 +255,64 @@ TEST(MeshGraphValidation, TestT3kCollapsedTorusYRetainsMeshDirections) {
     EXPECT_EQ(connectivity.at(0).at(4).port_direction, RoutingDirection::S);
     EXPECT_EQ(connectivity.at(4).at(0).port_direction, RoutingDirection::N);
 
-    // A collapsed torus axis has no wrap cable, so its boundary ports remain available for inter-mesh connections.
+    // The torus on axis 0 comes from the fabric config (the T3K MGD declares LINE), so the N/S edge
+    // ports are reserved for the torus and excluded from inter-mesh use even though the collapsed
+    // axis realizes no wrap cable (issue #54650). The non-torus axis keeps its boundary ports.
     const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(0);
-    EXPECT_EQ(edge_ports.at({RoutingDirection::N, 0}), 0);
-    EXPECT_EQ(edge_ports.at({RoutingDirection::S, 0}), 4);
+    EXPECT_EQ(edge_ports.count({RoutingDirection::N, 0}), 0u);
+    EXPECT_EQ(edge_ports.count({RoutingDirection::S, 0}), 0u);
+    EXPECT_EQ(edge_ports.at({RoutingDirection::W, 0}), 0);
+}
+
+// Torus edge-port reservation is decided per axis by who declared the torus (issue #54650):
+//  - an axis the MGD itself declares RING keeps its boundary ports, even at extent 2 — the
+//    descriptor author owns that mesh's port budget;
+//  - an axis torused only by the fabric config has its edge ports reserved for the torus, exactly
+//    as a genuine torus consumes them physically, so an inter-mesh link can never land on a
+//    direction whose deadlock-avoidance label may mismatch the rotated peer mesh.
+// Uses the 4-stage 2x2 pipeline-ring MGD (dim_types RING, LINE on every 2x2 stage).
+TEST(MeshGraphValidation, Test2x2StageRingPortReservationByTorusOrigin) {
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
+        "fabric_cpu_only_single_galaxy_2x2_ring_4stage_ring_mesh_graph_descriptor.textproto";
+
+    // Row-major 2x2: chip 0's axis-0 neighbor is chip 2. The declared RING on the extent-2 axis
+    // collapses onto the ordinary mesh edge and must keep normal directionality.
+    auto expect_collapsed_ring_directionality = [](const tt::tt_fabric::MeshGraph& mesh_graph) {
+        for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
+            const auto& connectivity = mesh_graph.get_intra_mesh_connectivity().at(*mesh_id);
+            EXPECT_EQ(connectivity.at(0).at(2).port_direction, RoutingDirection::S);
+            EXPECT_EQ(connectivity.at(2).at(0).port_direction, RoutingDirection::N);
+        }
+    };
+
+    // No fabric config: the MGD-declared RING keeps every boundary port.
+    {
+        auto mesh_graph = make_mesh_graph(mgd_path);
+        expect_collapsed_ring_directionality(mesh_graph);
+        for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
+            const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(*mesh_id);
+            EXPECT_EQ(edge_ports.at({RoutingDirection::N, 0}), 0);
+            EXPECT_EQ(edge_ports.at({RoutingDirection::S, 0}), 2);
+            EXPECT_EQ(edge_ports.at({RoutingDirection::E, 0}), 1);
+            EXPECT_EQ(edge_ports.at({RoutingDirection::W, 0}), 0);
+        }
+    }
+
+    // FABRIC_2D_TORUS_XY on top: axis 0 stays declared by the MGD (N/S ports remain), axis 1's
+    // torus exists only in the fabric config (E/W ports reserved).
+    {
+        auto mesh_graph = make_mesh_graph(mgd_path, tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
+        expect_collapsed_ring_directionality(mesh_graph);
+        for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
+            const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(*mesh_id);
+            EXPECT_EQ(edge_ports.at({RoutingDirection::N, 0}), 0);
+            EXPECT_EQ(edge_ports.at({RoutingDirection::S, 0}), 2);
+            EXPECT_EQ(edge_ports.count({RoutingDirection::E, 0}), 0u);
+            EXPECT_EQ(edge_ports.count({RoutingDirection::W, 0}), 0u);
+        }
+    }
 }
 
 TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
@@ -2203,6 +2259,68 @@ TEST_F(ControlPlaneFixture, TestBlitzDecodePipelineBuilder) {
         stages.push_back({s.stage_index, s.entry_node_coord, s.exit_node_coord});
     }
     validate_sp5_blitz_decode_pipeline_stages(control_plane, mesh_graph, mesh_ids, stages);
+}
+
+// 4-stage pipeline ring of 2x2 RING+LINE stages on a single galaxy (issue #54650 shape class):
+// an MGD may declare RING on a 2-device dimension and everything must still come up —
+//  - the ring collapses onto the ordinary mesh edge without duplicating connections,
+//  - routing planes are not downgraded: both cables of a pair (the "direct" and the "wrap") serve
+//    the same direction as extra planes instead of being split across opposite directions,
+//  - the inter-mesh ring closes, including the mesh 3 -> mesh 0 loopback.
+TEST_F(ControlPlaneFixture, Test2x2StageRingPipelineOnSingleGalaxy) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end());
+    ASSERT_EQ(mesh_ids.size(), 4u);
+
+    const auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
+    auto is_local_mesh = [&](MeshId mesh_id) {
+        return std::find(local_mesh_ids.begin(), local_mesh_ids.end(), mesh_id) != local_mesh_ids.end();
+    };
+
+    for (const auto& mesh_id : mesh_ids) {
+        const auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+        ASSERT_EQ(mesh_shape[0], 2u);
+        ASSERT_EQ(mesh_shape[1], 2u);
+
+        const auto& connectivity = mesh_graph.get_intra_mesh_connectivity().at(*mesh_id);
+        for (ChipId chip_id = 0; chip_id < 4; chip_id++) {
+            // Every chip of a 2x2 has exactly its two mesh neighbors; the collapsed ring must not
+            // add a duplicate wrap connection or relabel the pair onto one direction.
+            ASSERT_EQ(connectivity.at(chip_id).size(), 2u);
+            std::set<RoutingDirection> directions;
+            for (const auto& [peer_chip_id, edge] : connectivity.at(chip_id)) {
+                directions.insert(edge.port_direction);
+
+                // Both physical cables of the pair count as routing planes in this one direction.
+                // Plane state only exists for the mesh this rank hosts.
+                if (is_local_mesh(mesh_id)) {
+                    const FabricNodeId fabric_node_id(mesh_id, chip_id);
+                    EXPECT_GE(control_plane.get_num_usable_routing_planes(fabric_node_id, edge.port_direction), 2u)
+                        << "mesh " << *mesh_id << " chip " << chip_id << " direction "
+                        << enchantum::to_string(edge.port_direction);
+                }
+            }
+            EXPECT_EQ(directions.size(), 2u) << "mesh " << *mesh_id << " chip " << chip_id
+                                             << ": the two neighbors must sit in two distinct directions";
+        }
+    }
+
+    // The inter-stage ring closes: every consecutive pair, including the 3 -> 0 loopback, has at
+    // least one realized inter-mesh link.
+    for (size_t i = 0; i < mesh_ids.size(); i++) {
+        const auto src = mesh_ids[i];
+        const auto dst = mesh_ids[(i + 1) % mesh_ids.size()];
+        const auto exit_pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(src, dst);
+        EXPECT_FALSE(exit_pairs.empty()) << "no inter-mesh link between mesh " << *src << " and mesh " << *dst;
+    }
 }
 
 // ---------------------------------------------------------------------------

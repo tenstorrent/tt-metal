@@ -182,19 +182,7 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
     sp, tp = mesh_device.shape
     assert (sp, tp) in RING_PERF_MESHES
     assert ttnn.get_num_devices() == sp * tp, "perf proxy must use the complete physical box"
-    # The control plane consolidates torus axes whose wrapped dimension has 2 or fewer devices, so
-    # the latched config is a function of the underlying system mesh shape:
-    if ttnn.get_num_devices() == 4:
-        # QuietBox is a 2x2: neither axis has more than 2 devices, both torus axes consolidate away.
-        assert ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_2D
-    elif ttnn.get_num_devices() == 8:
-        # LoudBox is a 2x4 (orientation depends on discovery): only the extent-4 axis can ring, so
-        # the requested TORUS_XY keeps exactly that axis.
-        rows, cols = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
-        expected = ttnn.FabricConfig.FABRIC_2D_TORUS_X if cols == 4 else ttnn.FabricConfig.FABRIC_2D_TORUS_Y
-        assert ttnn.get_fabric_config() == expected
-    else:
-        pytest.fail(f"unexpected device count {ttnn.get_num_devices()}: add its consolidated fabric config here")
+    assert ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     assert kv_len % 32 == 0
     assert GLM52_Q_PER_SP_RANK == GLM52_Q_PER_CHIP * GLM52_TP
 

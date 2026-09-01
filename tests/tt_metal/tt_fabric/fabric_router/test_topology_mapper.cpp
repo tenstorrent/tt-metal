@@ -15,7 +15,6 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
 #include "utils.hpp"
-#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric {
@@ -1011,26 +1010,21 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
         }
     });
 
-    // --- Auto-discovery vs shape-based consolidation, on the same wrap-less 2x4 (the BH LoudBox
-    // hits the same shape class). Requesting FABRIC_2D_TORUS_XY:
-    //
-    //  1. The topology mapper tries candidates against the real cabling. Torus candidates that
-    //     demand a wrap on the extent-4 axis (TORUS_XY, TORUS_X) fail — T3K has no wrap cables.
-    //     TORUS_Y on an extent-2 axis is VACUOUS (genuine-gating builds no wrap edge, so its logical
-    //     graph is a plain mesh); such candidates are SKIPPED so a plain mesh is never mislabeled as
-    //     a torus, and discovery honestly realizes MESH. get_generated_fabric_type() regresses this.
-    //  2. coerce_fabric_config_to_realized_ring_extents() judges by dimension extents instead: the
-    //     extent-4 axis "could" ring, the extent-2 axis cannot, so TORUS_XY consolidates to TORUS_X
-    //     — an axis the cabling could not wire. Consolidating from the mapper's realized type
-    //     (step 1's MESH) instead of extents is the remaining follow-up; this pins the extent rule.
+    // --- Auto-discovery honesty on the same wrap-less 2x4 (the BH LoudBox hits the same shape
+    // class). Requesting FABRIC_2D_TORUS_XY: the mapper tries candidates against the real cabling.
+    // Torus candidates that demand a wrap on the extent-4 axis (TORUS_XY, TORUS_X) fail — T3K has
+    // no wrap cables. TORUS_Y on an extent-2 axis is VACUOUS (genuine-gating builds no wrap edge,
+    // so its logical graph is a plain mesh); such candidates are SKIPPED so a plain mesh is never
+    // mislabeled as a torus, and discovery honestly realizes MESH. get_generated_fabric_type()
+    // regresses this.
     MeshGraph torus_mesh_graph = TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         get_cluster(),
         *physical_system_descriptor_,
         FabricConfig::FABRIC_2D_TORUS_XY,
         FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 
-    // Step 1: discovery maps all 8 chips, but no wrap edge exists anywhere: the long axis has no
-    // wrap cabling and the short axis is genuine-gated. Chip 0 has exactly its two mesh neighbors.
+    // Discovery maps all 8 chips, but no wrap edge exists anywhere: the long axis has no wrap
+    // cabling and the short axis is genuine-gated. Chip 0 has exactly its two mesh neighbors.
     const auto torus_mesh_shape = torus_mesh_graph.get_mesh_shape(mesh_id);
     ASSERT_EQ(torus_mesh_shape.mesh_size(), 8u);
     ASSERT_EQ(std::max(torus_mesh_shape[0], torus_mesh_shape[1]), 4u);
@@ -1041,20 +1035,11 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
     EXPECT_EQ(chip0_connections.size(), 2u) << "corner chip of a wrap-less 2x4 has exactly E and S neighbors";
     const ChipId long_axis_wrap_peer = (torus_mesh_shape[1] == 4) ? 3 : 6;  // chip 0's long-axis end (row-major)
     EXPECT_EQ(chip0_connections.count(long_axis_wrap_peer), 0u) << "no wrap edge on the extent-4 axis";
-
-    // Step 2: the extent-based consolidation keeps the torus on the extent-4 axis discovery could
-    // not wire (and drops the extent-2 axis). Documents the contradiction; NOT the desired end state.
-    const auto consolidated =
-        coerce_fabric_config_to_realized_ring_extents(FabricConfig::FABRIC_2D_TORUS_XY, {torus_mesh_shape});
-    const auto expected_extent_based =
-        (torus_mesh_shape[1] == 4) ? FabricConfig::FABRIC_2D_TORUS_X : FabricConfig::FABRIC_2D_TORUS_Y;
-    EXPECT_EQ(consolidated, expected_extent_based);
 }
 
-// Auto-discovery coerces FABRIC_1D_RING to FABRIC_1D when the physical system cannot form a ring
-// (<= 2 chips) and still maps it as a ring when it can. Uses file-based mock PSDs so this runs on
-// any host.
-TEST(TopologyMapperAutoDiscovery, Fabric1DRingCoercesToLineOnTwoChipSystem) {
+// On non-UBB clusters FABRIC_1D_RING realizes as a MESH graph (issue #32146); a vacuous torus label
+// must never appear regardless of system size. Uses file-based mock PSDs so this runs on any host.
+TEST(TopologyMapperAutoDiscovery, Fabric1DRingRealizesMeshOnTwoChipSystem) {
     const std::filesystem::path psd_file_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_2asic_mesh.textproto";

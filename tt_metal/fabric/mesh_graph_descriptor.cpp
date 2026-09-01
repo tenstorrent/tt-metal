@@ -163,8 +163,7 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
 
 }  // namespace
 
-MeshGraphDescriptor::MeshGraphDescriptor(
-    const std::string& text_proto, const bool backwards_compatible, std::string_view source_path) :
+MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
     top_level_id_(static_cast<GlobalNodeId>(-1)) {
     proto::MeshGraphDescriptor temp_proto;
     google::protobuf::TextFormat::Parser parser;
@@ -173,23 +172,14 @@ MeshGraphDescriptor::MeshGraphDescriptor(
     parser.AllowUnknownField(true);
     parser.AllowUnknownExtension(true);
 
-    TT_FATAL(
-        parser.ParseFromString(text_proto, &temp_proto),
-        "Failed to parse MeshGraphDescriptor textproto{}{}",
-        source_path.empty() ? "" : ": ",
-        source_path);
+    TT_FATAL(parser.ParseFromString(text_proto, &temp_proto), "Failed to parse MeshGraphDescriptor textproto");
 
     // Set defaults for missing fields
-    set_defaults(temp_proto, source_path);
+    set_defaults(temp_proto);
 
     // Validate the proto
     const auto errors = static_validate(temp_proto, backwards_compatible);
-    TT_FATAL(
-        errors.empty(),
-        "Failed to validate MeshGraphDescriptor textproto{}{}: \n{}",
-        source_path.empty() ? "" : " ",
-        source_path,
-        get_validation_report(errors));
+    TT_FATAL(errors.empty(), "Failed to validate MeshGraphDescriptor textproto: \n{}", get_validation_report(errors));
 
     proto_ = std::make_shared<proto::MeshGraphDescriptor>(temp_proto);
 
@@ -210,8 +200,7 @@ MeshGraphDescriptor::MeshGraphDescriptor(
 
 MeshGraphDescriptor::MeshGraphDescriptor(
     const std::filesystem::path& text_proto_file_path, const bool backwards_compatible) :
-    MeshGraphDescriptor(
-        read_file_to_string(text_proto_file_path.string()), backwards_compatible, text_proto_file_path.string()) {}
+    MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible) {}
 
 MeshGraphDescriptor::~MeshGraphDescriptor() = default;
 
@@ -233,24 +222,6 @@ std::vector<std::string> MeshGraphDescriptor::get_all_mesh_names() const {
     std::vector<std::string> out(names.begin(), names.end());
     std::sort(out.begin(), out.end());
     return out;
-}
-
-std::vector<tt::tt_metal::distributed::MeshShape> MeshGraphDescriptor::get_all_device_topology_shapes() const {
-    std::vector<tt::tt_metal::distributed::MeshShape> shapes;
-    shapes.reserve(mesh_instances_.size() + switch_instances_.size());
-    for (GlobalNodeId id : mesh_instances_) {
-        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(get_instance(id).desc);
-        TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null for instance {}", id);
-        shapes.emplace_back(mesh_desc->device_topology().dims(0), mesh_desc->device_topology().dims(1));
-    }
-    // Switches build intra-mesh connectivity the same way as meshes, so a switch with a genuine ring
-    // axis realizes a torus and must count when consolidating the fabric config.
-    for (GlobalNodeId id : switch_instances_) {
-        const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(get_instance(id).desc);
-        TT_FATAL(switch_desc != nullptr, "Switch descriptor is null for instance {}", id);
-        shapes.emplace_back(switch_desc->device_topology().dims(0), switch_desc->device_topology().dims(1));
-    }
-    return shapes;
 }
 
 uint32_t MeshGraphDescriptor::get_chip_count(GlobalNodeId mesh_instance_id) const {
@@ -342,7 +313,7 @@ FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::Sw
     return infer_declared_fabric_type_from_dim_types(switch_desc);
 }
 
-void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto, std::string_view source_path) {
+void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
     // Set the default for channel policy to strict if not specified
     for (auto& mesh : *proto.mutable_mesh_descriptors()) {
         if (mesh.has_channels() && !mesh.channels().has_policy()) {
@@ -387,34 +358,6 @@ void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto, std::s
                 switch_desc.mutable_device_topology()->mutable_dim_types()->Add(proto::TorusTopology::LINE);
             }
         }
-    }
-
-    // A RING dimension only realizes a distinct wrap edge at extent three or larger. Coerce RING on
-    // smaller dimensions to LINE so nothing downstream (connection building, fabric-type inference,
-    // deadlock-avoidance selection) treats the axis as a torus. See issue #54650: a declared-but-
-    // degenerate torus axis enables bubble-flow/first-level-ACK on links that a rotated neighbor
-    // mesh labels differently, hanging inter-mesh traffic.
-    auto coerce_degenerate_rings = [source_path](proto::TorusTopology& device_topology, const std::string& name) {
-        for (int i = 0; i < device_topology.dim_types_size() && i < device_topology.dims_size(); i++) {
-            if (device_topology.dim_types(i) == proto::TorusTopology::RING && device_topology.dims(i) <= 2) {
-                log_warning(
-                    tt::LogFabric,
-                    "MeshGraphDescriptor: '{}'{}{} declares RING on dimension {} of extent {}; a ring needs more "
-                    "than 2 devices — the mesh graph descriptor has been modified to treat this dimension as LINE",
-                    name,
-                    source_path.empty() ? "" : " in ",
-                    source_path,
-                    i,
-                    device_topology.dims(i));
-                device_topology.set_dim_types(i, proto::TorusTopology::LINE);
-            }
-        }
-    };
-    for (auto& mesh : *proto.mutable_mesh_descriptors()) {
-        coerce_degenerate_rings(*mesh.mutable_device_topology(), mesh.name());
-    }
-    for (auto& switch_desc : *proto.mutable_switch_descriptors()) {
-        coerce_degenerate_rings(*switch_desc.mutable_device_topology(), switch_desc.name());
     }
 }
 
