@@ -6,7 +6,7 @@
 
 Focuses on what the async subclass adds on top of ``GRPOTrainer``:
 
-* the ``_make_batch_iterator`` / ``_async_gen_next_batch`` primitives,
+* the inherited ``_iter_prompt_batches`` / ``_async_gen_next_batch`` primitives,
 * the verl-shape ``train()`` composer (prime, then ``await`` -> ``push+submit``
   -> train per iteration),
 * the completer-contract preflight check.
@@ -21,8 +21,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any, List
-
-import numpy as np
 
 from ttml.trainers import OneStepAsyncGRPOTrainer
 
@@ -91,39 +89,49 @@ def _make_trainer(
         num_iterations=num_iterations,
         num_generations=num_generations,
     )
+    trainer.reward_funcs = []
+    trainer._reward_func_names = []
     trainer._prompts = [[i, i + 1] for i in range(num_prompts)]
-    trainer._extra_columns = {"answer": [f"a{i}" for i in range(num_prompts)]}
+    trainer._extra_dataset_columns = {"answer": [f"a{i}" for i in range(num_prompts)]}
     trainer._generation_batch_prompts = generation_batch_prompts
+    trainer.metrics = {}
 
-    def _stub_setup_training(self=trainer) -> None:
+    def _stub_setup(self=trainer) -> None:
         return None
 
-    def _stub_rewards(self, prompts_expanded, completions_batch, columns_expanded):
-        rewards = np.zeros(len(completions_batch), dtype=np.float32)
-        advantages = np.zeros_like(rewards)
-        prompts_strs = [str(p) for p in prompts_expanded]
-        completions_strs = [str(c) for c in completions_batch]
-        return rewards, advantages, prompts_strs, completions_strs
+    def _stub_expand(self, prompts, extra_cols):
+        g = self.config.num_generations
+        prompts_x = [p for p in prompts for _ in range(g)]
+        cols_x = {k: [v for v in col for _ in range(g)] for k, col in extra_cols.items()}
+        return prompts_x, cols_x
 
-    def _stub_ref(self, prompts_expanded, completions_batch):
-        return []
+    def _stub_rewards(self, prompts_x, completions, extra_cols_x):
+        import numpy as np
 
-    def _stub_optimizer_step(self, *args, **kwargs):
-        return 1.0
+        return np.zeros(len(completions), dtype=np.float32)
 
-    def _stub_finalize(self, *args, **kwargs):
+    def _stub_advantages(self, rewards_np):
+        import numpy as np
+
+        return np.zeros_like(rewards_np)
+
+    def _stub_noop(self, *args, **kwargs):
         return None
 
-    trainer._setup_training = _stub_setup_training  # type: ignore[assignment]
-    trainer._run_rewards_and_advantages = _stub_rewards.__get__(trainer, type(trainer))  # type: ignore[assignment]
-    trainer._run_ref_logprobs = _stub_ref.__get__(trainer, type(trainer))  # type: ignore[assignment]
-    trainer._run_optimizer_step = _stub_optimizer_step.__get__(trainer, type(trainer))  # type: ignore[assignment]
-    trainer._finalize_step_and_fire_callbacks = _stub_finalize.__get__(trainer, type(trainer))  # type: ignore[assignment]
+    trainer._setup = _stub_setup  # type: ignore[assignment]
+    trainer._expand_prompts_and_columns = _stub_expand.__get__(trainer, type(trainer))  # type: ignore[assignment]
+    trainer._compute_rewards = _stub_rewards.__get__(trainer, type(trainer))  # type: ignore[assignment]
+    trainer._compute_advantages = _stub_advantages.__get__(trainer, type(trainer))  # type: ignore[assignment]
+    trainer._optimize = _stub_noop.__get__(trainer, type(trainer))  # type: ignore[assignment]
+    trainer._apply_gradients = _stub_noop.__get__(trainer, type(trainer))  # type: ignore[assignment]
+    trainer._publish_step_metrics = _stub_noop.__get__(trainer, type(trainer))  # type: ignore[assignment]
+    trainer._maybe_checkpoint = _stub_noop.__get__(trainer, type(trainer))  # type: ignore[assignment]
+    trainer._reset_step_metrics = _stub_noop.__get__(trainer, type(trainer))  # type: ignore[assignment]
 
     return trainer
 
 
-def test_make_batch_iterator_yields_unexpanded_batches():
+def test_iter_prompt_batches_yields_unexpanded_batches():
     trainer = _make_trainer(
         num_prompts=6,
         generation_batch_prompts=2,
@@ -131,13 +139,13 @@ def test_make_batch_iterator_yields_unexpanded_batches():
         completer=_StubCompleter(completions_per_prompt=4),
         callbacks=[],
     )
-    batches = list(trainer._make_batch_iterator())
+    batches = list(trainer._iter_prompt_batches())
 
     assert len(batches) == 3, "6 prompts / gbp=2 -> 3 batches"
-    for prompts_batch, columns_batch in batches:
-        assert len(prompts_batch) == 2, "iterator must NOT pre-expand by num_generations"
-        assert list(columns_batch.keys()) == ["answer"]
-        assert len(columns_batch["answer"]) == 2
+    for prompts, extra_cols in batches:
+        assert len(prompts) == 2, "iterator must NOT pre-expand by num_generations"
+        assert list(extra_cols.keys()) == ["answer"]
+        assert len(extra_cols["answer"]) == 2
 
 
 def test_async_gen_next_batch_returns_none_without_touching_completer():
