@@ -299,6 +299,9 @@ def run_fresh_generation(model, tokenizer, token_ids, max_generated_tokens, draf
     [
         pytest.param(False, 30, None, id="no_mtp"),
         pytest.param(True, 30, 4, id="with_mtp"),
+        # Matches demo/text_demo.py's spec_128 id (seqlen=128, 200 generated tokens) for a
+        # fair tok/s comparison against the production TT_SPEC_DECODE=1 batched-verify path.
+        pytest.param(False, 200, None, id="no_mtp_200"),
     ],
 )
 def test_fresh_generation(mesh_device, use_mtp, max_generated_tokens, draft_len):
