@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import pytest
@@ -17,6 +17,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_perfor
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     BF16_ALLOWED,
+    CHUNK_SIZE,
     PROTOCOL_NAMES,
     assert_outputs_accurate,
     assert_runtime_contract,
@@ -66,6 +67,87 @@ _PRODUCTION_CASE = _PerformanceCase(
     expected_duration_ns=299_691,
 )
 _PRODUCTION_BF16 = frozenset({"kd", "q_decay", "final_decay"})
+
+
+def _summarize_chunk_recurrence_ops(
+    inputs: Sequence[torch.Tensor | ttnn.Tensor],
+    outputs: Sequence[torch.Tensor | ttnn.Tensor],
+) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
+    if len(inputs) != 7 or len(outputs) != 2:
+        raise ValueError("chunk-recurrence summary requires seven inputs and two outputs")
+    tensors = (*inputs, *outputs)
+    if any(any(dimension <= 0 for dimension in tensor.shape) for tensor in tensors):
+        raise ValueError("chunk-recurrence summary tensor shapes must be positive")
+    if any(len(tensor.shape) != 4 for tensor in inputs):
+        raise ValueError("chunk-recurrence summary tensor shapes are inconsistent")
+
+    batch_heads, num_chunks, chunk_size, value_dim = inputs[0].shape
+    key_dim = inputs[1].shape[-1]
+    expected_input_shapes = (
+        (batch_heads, num_chunks, CHUNK_SIZE, value_dim),
+        (batch_heads, num_chunks, CHUNK_SIZE, key_dim),
+        (batch_heads, num_chunks, CHUNK_SIZE, key_dim),
+        (batch_heads, num_chunks, CHUNK_SIZE, CHUNK_SIZE),
+        (batch_heads, num_chunks, key_dim, CHUNK_SIZE),
+        (batch_heads, num_chunks, key_dim, 1),
+        (batch_heads, num_chunks, CHUNK_SIZE, CHUNK_SIZE),
+    )
+    if (
+        chunk_size != CHUNK_SIZE
+        or key_dim != value_dim
+        or any(tensor.shape != expected for tensor, expected in zip(inputs, expected_input_shapes, strict=True))
+        or outputs[0].shape != (batch_heads, key_dim, key_dim)
+        or outputs[1].shape != (batch_heads, key_dim, value_dim)
+    ):
+        raise ValueError("chunk-recurrence summary tensor shapes are inconsistent")
+
+    instances = batch_heads * num_chunks
+    return (
+        perf_model.FpuOps(
+            matrix_flops=instances * (8 * CHUNK_SIZE * key_dim * value_dim + 4 * CHUNK_SIZE**2 * value_dim),
+            multiply_ops=instances * 2 * key_dim * value_dim,
+            add_ops=instances * (2 * CHUNK_SIZE * value_dim + 2 * key_dim * value_dim)
+            + batch_heads * key_dim * value_dim,
+        ),
+        perf_model.SfpuOps(),
+    )
+
+
+def _summarize_chunk_recurrence_performance(
+    inputs: Sequence[ttnn.Tensor],
+    outputs: Sequence[ttnn.Tensor],
+    *,
+    measured_ns: float,
+    math_fidelity: ttnn.MathFidelity,
+) -> perf_model.KdaPerformance:
+    fpu, sfpu = _summarize_chunk_recurrence_ops(inputs, outputs)
+    return perf_model.performance(
+        fpu=fpu,
+        sfpu=sfpu,
+        inputs=inputs,
+        outputs=outputs,
+        measured_ns=measured_ns,
+        math_fidelity=math_fidelity,
+    )
+
+
+def test_summarize_chunk_recurrence_work_golden() -> None:
+    inputs = (
+        torch.empty((1, 1, 32, 2)),
+        torch.empty((1, 1, 32, 2)),
+        torch.empty((1, 1, 32, 2)),
+        torch.empty((1, 1, 32, 32)),
+        torch.empty((1, 1, 2, 32)),
+        torch.empty((1, 1, 2, 1)),
+        torch.empty((1, 1, 32, 32)),
+    )
+    fpu, sfpu = _summarize_chunk_recurrence_ops(
+        inputs,
+        (torch.empty((1, 2, 2)), torch.empty((1, 2, 2))),
+    )
+
+    assert fpu == perf_model.FpuOps(matrix_flops=9216, multiply_ops=8, add_ops=140)
+    assert sfpu == perf_model.SfpuOps()
 
 
 @pytest.mark.parametrize(
@@ -293,12 +375,10 @@ def test_summarize_chunk_recurrence_regression_performance(device: ttnn.Device) 
     outputs, perf_record = profile_realtime_program(device, run)
     duration_ns = perf_record["duration_ns"]
     assert tuple(outputs[0].shape) == (case.batch_heads, case.dim, case.dim)
-    grid = device.compute_with_storage_grid_size()
-    performance = perf_model.summarize_chunk_recurrence_performance(
+    performance = _summarize_chunk_recurrence_performance(
         inputs,
         outputs,
         measured_ns=duration_ns,
-        core_count=int(grid.x) * int(grid.y),
         math_fidelity=ttnn.MathFidelity.HiFi4,
     )
     logger.info(
@@ -335,12 +415,10 @@ def test_summarize_chunk_recurrence_production_performance(device: ttnn.Device) 
     duration_ns = perf_record["duration_ns"]
     assert tuple(outputs[0].shape) == (case.batch_heads, case.dim, case.dim)
     assert outputs[0].memory_config() == output_memory
-    grid = device.compute_with_storage_grid_size()
-    performance = perf_model.summarize_chunk_recurrence_performance(
+    performance = _summarize_chunk_recurrence_performance(
         inputs,
         outputs,
         measured_ns=duration_ns,
-        core_count=int(grid.x) * int(grid.y),
         math_fidelity=ttnn.MathFidelity.HiFi4,
     )
     logger.info(

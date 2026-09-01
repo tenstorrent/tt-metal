@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -56,6 +57,73 @@ _PRODUCTION_CASES = (
     _BenchmarkCase("multiple-blocks", widths=(1024, 1024, 1024), channel_chunk_size=768, expected_duration_ns=48_090),
     _BenchmarkCase("asymmetric-split", widths=(512, 256, 128), channel_chunk_size=896, expected_duration_ns=53_270),
 )
+
+
+def _qkv_causal_conv1d_silu_ops(
+    input_tensor: torch.Tensor | ttnn.Tensor,
+    history: torch.Tensor | ttnn.Tensor,
+    taps: tuple[torch.Tensor | ttnn.Tensor, ...],
+    outputs: tuple[torch.Tensor | ttnn.Tensor, ...],
+) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
+    if len(taps) != 4 or len(outputs) != 3:
+        raise ValueError("QKV causal Conv1D plus SiLU requires four taps and three outputs")
+    tensors = (input_tensor, history, *taps, *outputs)
+    if any(any(dimension <= 0 for dimension in tensor.shape) for tensor in tensors):
+        raise ValueError("QKV causal Conv1D plus SiLU tensor shapes must be positive")
+    if (
+        len(input_tensor.shape) != 3
+        or len(history.shape) != 3
+        or any(len(tap.shape) == 0 for tap in taps)
+        or any(len(output.shape) != 3 for output in outputs)
+    ):
+        raise ValueError("QKV causal Conv1D plus SiLU tensor shapes are inconsistent")
+
+    batch, sequence, width = input_tensor.shape
+    if (
+        history.shape != (batch, 3, width)
+        or any(tap.shape[-1] != width or math.prod(tap.shape) != width for tap in taps)
+        or any(output.shape != (batch, sequence, output.shape[-1]) for output in outputs)
+        or sum(output.shape[-1] for output in outputs) != width
+    ):
+        raise ValueError("QKV causal Conv1D plus SiLU tensor shapes are inconsistent")
+
+    elements = batch * sequence * width
+    return (
+        perf_model.FpuOps(multiply_ops=4 * elements, add_ops=3 * elements),
+        perf_model.SfpuOps(silu_ops=elements),
+    )
+
+
+def _qkv_causal_conv1d_silu_performance(
+    input_tensor: ttnn.Tensor,
+    history: ttnn.Tensor,
+    taps: tuple[ttnn.Tensor, ...],
+    outputs: tuple[ttnn.Tensor, ...],
+    *,
+    measured_ns: float,
+    math_fidelity: ttnn.MathFidelity,
+) -> perf_model.KdaPerformance:
+    fpu, sfpu = _qkv_causal_conv1d_silu_ops(input_tensor, history, taps, outputs)
+    return perf_model.performance(
+        fpu=fpu,
+        sfpu=sfpu,
+        inputs=(input_tensor, history, *taps),
+        outputs=outputs,
+        measured_ns=measured_ns,
+        math_fidelity=math_fidelity,
+    )
+
+
+def test_qkv_causal_conv1d_silu_work_golden() -> None:
+    fpu, sfpu = _qkv_causal_conv1d_silu_ops(
+        torch.empty((1, 2, 4)),
+        torch.empty((1, 3, 4)),
+        tuple(torch.empty((1, 1, 4)) for _ in range(4)),
+        (torch.empty((1, 2, 1)), torch.empty((1, 2, 2)), torch.empty((1, 2, 1))),
+    )
+
+    assert fpu == perf_model.FpuOps(multiply_ops=32, add_ops=24)
+    assert sfpu == perf_model.SfpuOps(silu_ops=8)
 
 
 def _host_inputs(
@@ -358,14 +426,12 @@ def test_qkv_causal_conv1d_silu_production_performance(device: ttnn.Device, case
     outputs, perf_record = profile_realtime_program(device, run)
     duration_ns = perf_record["duration_ns"]
     assert tuple(tuple(output.shape) for output in outputs) == tuple((1, _SEQUENCE, width) for width in case.widths)
-    grid = device.compute_with_storage_grid_size()
-    performance = perf_model.qkv_causal_conv1d_silu_performance(
+    performance = _qkv_causal_conv1d_silu_performance(
         input_tt,
         history_tt,
         taps_tt,
         outputs,
         measured_ns=duration_ns,
-        core_count=int(grid.x) * int(grid.y),
         math_fidelity=ttnn.MathFidelity.HiFi4,
     )
     logger.info(

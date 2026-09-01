@@ -60,6 +60,71 @@ _PRODUCTION_CASES = (
 )
 
 
+def _affine_exclusive_scan_ops(
+    a: torch.Tensor | ttnn.Tensor,
+    b: torch.Tensor | ttnn.Tensor,
+    initial_state: torch.Tensor | ttnn.Tensor,
+    output: torch.Tensor | ttnn.Tensor,
+) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
+    tensors = (a, b, initial_state, output)
+    if any(len(tensor.shape) != 3 for tensor in tensors):
+        raise ValueError("affine exclusive-scan tensor shapes are inconsistent")
+    if any(any(dimension <= 0 for dimension in tensor.shape) for tensor in tensors):
+        raise ValueError("affine exclusive-scan tensor shapes must be positive")
+
+    batch_heads, key_dim, value_dim = initial_state.shape
+    if a.shape[0] % batch_heads:
+        raise ValueError("affine exclusive-scan tensor shapes are inconsistent")
+    groups_per_head = a.shape[0] // batch_heads
+    if (
+        a.shape != (batch_heads * groups_per_head, key_dim, key_dim)
+        or b.shape != (a.shape[0], key_dim, value_dim)
+        or output.shape != b.shape
+    ):
+        raise ValueError("affine exclusive-scan tensor shapes are inconsistent")
+
+    transitions = batch_heads * (groups_per_head - 1)
+    return (
+        perf_model.FpuOps(
+            matrix_flops=transitions * 2 * key_dim**2 * value_dim,
+            add_ops=transitions * key_dim * value_dim,
+        ),
+        perf_model.SfpuOps(),
+    )
+
+
+def _affine_exclusive_scan_performance(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    initial_state: ttnn.Tensor,
+    output: ttnn.Tensor,
+    *,
+    measured_ns: float,
+    math_fidelity: ttnn.MathFidelity,
+) -> perf_model.KdaPerformance:
+    fpu, sfpu = _affine_exclusive_scan_ops(a, b, initial_state, output)
+    return perf_model.performance(
+        fpu=fpu,
+        sfpu=sfpu,
+        inputs=(a, b, initial_state),
+        outputs=(output,),
+        measured_ns=measured_ns,
+        math_fidelity=math_fidelity,
+    )
+
+
+def test_affine_exclusive_scan_work_golden() -> None:
+    fpu, sfpu = _affine_exclusive_scan_ops(
+        torch.empty((2, 2, 2)),
+        torch.empty((2, 2, 1)),
+        torch.empty((1, 2, 1)),
+        torch.empty((2, 2, 1)),
+    )
+
+    assert fpu == perf_model.FpuOps(matrix_flops=8, add_ops=2)
+    assert sfpu == perf_model.SfpuOps()
+
+
 def _host_inputs(
     batch_heads: int,
     groups_per_head: int,
@@ -432,12 +497,10 @@ def test_affine_exclusive_scan_production_performance(device: ttnn.Device, case:
     )
     assert output.dtype == ttnn.float32
     assert_accurate(expected, ttnn.to_torch(output), name=f"{case.case_id} production output", pcc_threshold=0.999)
-    grid = device.compute_with_storage_grid_size()
-    performance = perf_model.affine_exclusive_scan_performance(
+    performance = _affine_exclusive_scan_performance(
         *device_inputs,
         output,
         measured_ns=duration_ns,
-        core_count=int(grid.x) * int(grid.y),
         math_fidelity=ttnn.MathFidelity.HiFi2,
     )
     logger.info(

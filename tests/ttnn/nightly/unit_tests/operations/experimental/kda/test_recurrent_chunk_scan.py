@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import pytest
@@ -70,6 +70,89 @@ _PRODUCTION_CASE = _PerformanceCase(
     expected_duration_ns=363_886,
 )
 _PRODUCTION_BF16 = frozenset({"kd", "q_decay", "final_decay"})
+
+
+def _recurrent_chunk_scan_ops(
+    inputs: Sequence[torch.Tensor | ttnn.Tensor],
+    state: torch.Tensor | ttnn.Tensor,
+    outputs: Sequence[torch.Tensor | ttnn.Tensor],
+) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
+    if len(inputs) != 7 or len(outputs) != 2:
+        raise ValueError("recurrent chunk scan requires seven protocol inputs and two outputs")
+    tensors = (*inputs, state, *outputs)
+    if any(any(dimension <= 0 for dimension in tensor.shape) for tensor in tensors):
+        raise ValueError("recurrent chunk-scan tensor shapes must be positive")
+    if any(len(tensor.shape) != 4 for tensor in inputs) or len(state.shape) != 3:
+        raise ValueError("recurrent chunk-scan tensor shapes are inconsistent")
+
+    batch_heads, num_chunks, chunk_size, value_dim = inputs[0].shape
+    key_dim = inputs[1].shape[-1]
+    expected_input_shapes = (
+        (batch_heads, num_chunks, CHUNK_SIZE, value_dim),
+        (batch_heads, num_chunks, CHUNK_SIZE, key_dim),
+        (batch_heads, num_chunks, CHUNK_SIZE, key_dim),
+        (batch_heads, num_chunks, CHUNK_SIZE, CHUNK_SIZE),
+        (batch_heads, num_chunks, key_dim, CHUNK_SIZE),
+        (batch_heads, num_chunks, key_dim, 1),
+        (batch_heads, num_chunks, CHUNK_SIZE, CHUNK_SIZE),
+    )
+    if (
+        chunk_size != CHUNK_SIZE
+        or any(tensor.shape != expected for tensor, expected in zip(inputs, expected_input_shapes, strict=True))
+        or state.shape != (batch_heads, key_dim, value_dim)
+        or outputs[0].shape != (batch_heads, num_chunks, CHUNK_SIZE, value_dim)
+        or outputs[1].shape != state.shape
+    ):
+        raise ValueError("recurrent chunk-scan tensor shapes are inconsistent")
+
+    instances = batch_heads * num_chunks
+    return (
+        perf_model.FpuOps(
+            matrix_flops=instances * (6 * CHUNK_SIZE * key_dim * value_dim + 4 * CHUNK_SIZE**2 * value_dim),
+            multiply_ops=instances * key_dim * value_dim,
+            add_ops=instances * (2 * CHUNK_SIZE * value_dim + key_dim * value_dim),
+        ),
+        perf_model.SfpuOps(),
+    )
+
+
+def _recurrent_chunk_scan_performance(
+    inputs: Sequence[ttnn.Tensor],
+    state: ttnn.Tensor,
+    outputs: Sequence[ttnn.Tensor],
+    *,
+    measured_ns: float,
+    math_fidelity: ttnn.MathFidelity,
+) -> perf_model.KdaPerformance:
+    fpu, sfpu = _recurrent_chunk_scan_ops(inputs, state, outputs)
+    return perf_model.performance(
+        fpu=fpu,
+        sfpu=sfpu,
+        inputs=(*inputs, state),
+        outputs=outputs,
+        measured_ns=measured_ns,
+        math_fidelity=math_fidelity,
+    )
+
+
+def test_recurrent_chunk_scan_work_golden() -> None:
+    inputs = (
+        torch.empty((1, 1, 32, 1)),
+        torch.empty((1, 1, 32, 2)),
+        torch.empty((1, 1, 32, 2)),
+        torch.empty((1, 1, 32, 32)),
+        torch.empty((1, 1, 2, 32)),
+        torch.empty((1, 1, 2, 1)),
+        torch.empty((1, 1, 32, 32)),
+    )
+    fpu, sfpu = _recurrent_chunk_scan_ops(
+        inputs,
+        torch.empty((1, 2, 1)),
+        (torch.empty((1, 1, 32, 1)), torch.empty((1, 2, 1))),
+    )
+
+    assert fpu == perf_model.FpuOps(matrix_flops=4480, multiply_ops=2, add_ops=66)
+    assert sfpu == perf_model.SfpuOps()
 
 
 @pytest.mark.parametrize(
@@ -312,13 +395,11 @@ def test_recurrent_chunk_scan_regression_performance(device: ttnn.Device) -> Non
         CHUNK_SIZE,
         case.value_dim,
     )
-    grid = device.compute_with_storage_grid_size()
-    performance = perf_model.recurrent_chunk_scan_performance(
+    performance = _recurrent_chunk_scan_performance(
         inputs,
         state,
         outputs,
         measured_ns=duration_ns,
-        core_count=int(grid.x) * int(grid.y),
         math_fidelity=ttnn.MathFidelity.HiFi4,
     )
     logger.info(
@@ -364,13 +445,11 @@ def test_recurrent_chunk_scan_production_performance(device: ttnn.Device) -> Non
         case.value_dim,
     )
     assert outputs[0].memory_config() == ttnn.DRAM_MEMORY_CONFIG
-    grid = device.compute_with_storage_grid_size()
-    performance = perf_model.recurrent_chunk_scan_performance(
+    performance = _recurrent_chunk_scan_performance(
         inputs,
         state,
         outputs,
         measured_ns=duration_ns,
-        core_count=int(grid.x) * int(grid.y),
         math_fidelity=ttnn.MathFidelity.HiFi2,
     )
     logger.info(

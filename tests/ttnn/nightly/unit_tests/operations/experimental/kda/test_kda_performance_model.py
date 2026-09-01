@@ -17,6 +17,17 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_perfor
 _addresses = count(0x1000, 0x1000)
 
 
+class _FakeDevice:
+    def arch(self) -> ttnn.device.Arch:
+        return ttnn.device.Arch.BLACKHOLE
+
+    def compute_with_storage_grid_size(self) -> Any:
+        return SimpleNamespace(x=1, y=1)
+
+
+_DEVICE = _FakeDevice()
+
+
 class _FakeTensor:
     def __init__(
         self,
@@ -25,11 +36,13 @@ class _FakeTensor:
         element_size: int = 2,
         buffer_type: ttnn.BufferType = ttnn.BufferType.L1,
         address: int | None = None,
+        device: _FakeDevice = _DEVICE,
     ) -> None:
         self.shape = shape
         self._element_size = element_size
         self._buffer_type = buffer_type
         self._address = next(_addresses) if address is None else address
+        self._device = device
 
     def storage_type(self) -> ttnn.StorageType:
         return ttnn.StorageType.DEVICE
@@ -49,25 +62,12 @@ class _FakeTensor:
     def memory_config(self) -> Any:
         return SimpleNamespace(buffer_type=self._buffer_type)
 
+    def device(self) -> _FakeDevice:
+        return self._device
+
 
 def _measurement() -> dict[str, Any]:
-    return {
-        "measured_ns": 1.0,
-        "core_count": 1,
-        "math_fidelity": ttnn.MathFidelity.LoFi,
-    }
-
-
-def _protocol(key_dim: int, value_dim: int) -> tuple[_FakeTensor, ...]:
-    return (
-        _FakeTensor((1, 1, 32, value_dim)),
-        _FakeTensor((1, 1, 32, key_dim)),
-        _FakeTensor((1, 1, 32, key_dim)),
-        _FakeTensor((1, 1, 32, 32)),
-        _FakeTensor((1, 1, key_dim, 32)),
-        _FakeTensor((1, 1, key_dim, 1)),
-        _FakeTensor((1, 1, 32, 32)),
-    )
+    return {"measured_ns": 1.0, "math_fidelity": ttnn.MathFidelity.LoFi}
 
 
 def test_tensor_volume_includes_tile_padding() -> None:
@@ -78,58 +78,23 @@ def test_tensor_volume_includes_tile_padding() -> None:
     assert tensor.volume() != math.prod(logical_shape)
 
 
-def test_sigmoid_gated_rms_norm_work_golden() -> None:
-    work = perf_model.sigmoid_gated_rms_norm_performance(
-        _FakeTensor((2, 1, 2)),
-        _FakeTensor((1, 1, 4)),
-        _FakeTensor((2,)),
-        _FakeTensor((1, 1, 4)),
-        **_measurement(),
-    ).work
-
-    assert work == perf_model.KdaWork(
-        fpu_multiply_ops=16,
-        fpu_add_ops=2,
-        fpu_reduction_ops=2,
-        sfpu_rsqrt_ops=2,
-        sfpu_sigmoid_ops=4,
-    )
-
-
-def test_qkv_causal_conv1d_silu_work_golden() -> None:
-    work = perf_model.qkv_causal_conv1d_silu_performance(
-        _FakeTensor((1, 2, 4)),
-        _FakeTensor((1, 3, 4)),
-        tuple(_FakeTensor((1, 1, 4)) for _ in range(4)),
-        (_FakeTensor((1, 2, 1)), _FakeTensor((1, 2, 2)), _FakeTensor((1, 2, 1))),
-        **_measurement(),
-    ).work
-
-    assert work == perf_model.KdaWork(fpu_multiply_ops=32, fpu_add_ops=24, sfpu_silu_ops=8)
-
-
-def test_reduce_affine_transforms_work_golden() -> None:
-    work = perf_model.reduce_affine_transforms_performance(
-        _FakeTensor((2, 2, 2)),
-        _FakeTensor((2, 2, 1)),
-        (_FakeTensor((1, 2, 2)), _FakeTensor((1, 2, 1))),
-        **_measurement(),
-    ).work
-
-    assert work == perf_model.KdaWork(fpu_matrix_flops=24, fpu_add_ops=2)
-
-
-def test_affine_exclusive_scan_performance_golden() -> None:
+def test_shared_roofline_golden() -> None:
     output_address = 0xCAFE
-    result = perf_model.affine_exclusive_scan_performance(
-        _FakeTensor((2, 2, 2), buffer_type=ttnn.BufferType.DRAM),
-        _FakeTensor((2, 2, 1), buffer_type=ttnn.BufferType.DRAM, address=output_address),
-        _FakeTensor((1, 2, 1), buffer_type=ttnn.BufferType.DRAM),
-        _FakeTensor((2, 2, 1), buffer_type=ttnn.BufferType.DRAM, address=output_address),
+    fpu = perf_model.FpuOps(matrix_flops=8, add_ops=2)
+    sfpu = perf_model.SfpuOps(exp_ops=3)
+    result = perf_model.performance(
+        fpu=fpu,
+        sfpu=sfpu,
+        inputs=(
+            _FakeTensor((2, 2, 2), buffer_type=ttnn.BufferType.DRAM),
+            _FakeTensor((2, 2, 1), buffer_type=ttnn.BufferType.DRAM, address=output_address),
+            _FakeTensor((1, 2, 1), buffer_type=ttnn.BufferType.DRAM),
+        ),
+        outputs=(_FakeTensor((2, 2, 1), buffer_type=ttnn.BufferType.DRAM, address=output_address),),
         **_measurement(),
     )
 
-    assert result.work == perf_model.KdaWork(fpu_matrix_flops=8, fpu_add_ops=2, dram_bytes=36)
+    assert result.work == perf_model.KdaWork(fpu=fpu, sfpu=sfpu, dram_bytes=36)
     assert result.ideal_fpu_ns == 0.013020833333333332
     assert result.ideal_dram_ns == 0.0703125
     assert result.ideal_ns == 0.0703125
@@ -138,90 +103,30 @@ def test_affine_exclusive_scan_performance_golden() -> None:
     assert result.utilization_pct == 7.03125
 
 
-def test_prepare_chunk_recurrence_work_golden() -> None:
-    inputs = (
-        _FakeTensor((1, 32, 2)),
-        _FakeTensor((1, 32, 2)),
-        _FakeTensor((1, 32, 1)),
-        _FakeTensor((1, 32, 2)),
-        _FakeTensor((1, 1, 32, 1)),
-    )
-    outputs = (
-        _FakeTensor((1, 1, 32, 1)),
-        _FakeTensor((1, 1, 32, 2)),
-        _FakeTensor((1, 1, 32, 2)),
-        _FakeTensor((1, 1, 32, 32)),
-        _FakeTensor((1, 1, 2, 32)),
-        _FakeTensor((1, 1, 2, 1)),
-        _FakeTensor((1, 1, 32, 32)),
-    )
-
-    work = perf_model.prepare_chunk_recurrence_performance(inputs, outputs, **_measurement()).work
-
-    assert work == perf_model.KdaWork(
-        fpu_matrix_flops=19104,
-        fpu_multiply_ops=672,
-        fpu_add_ops=1214,
-        fpu_reduction_ops=64,
-        sfpu_exp_ops=194,
-        sfpu_rsqrt_ops=64,
-    )
-
-
-def test_recurrent_chunk_scan_work_golden() -> None:
-    work = perf_model.recurrent_chunk_scan_performance(
-        _protocol(2, 1),
-        _FakeTensor((1, 2, 1)),
-        (_FakeTensor((1, 1, 32, 1)), _FakeTensor((1, 2, 1))),
-        **_measurement(),
-    ).work
-
-    assert work == perf_model.KdaWork(fpu_matrix_flops=4480, fpu_multiply_ops=2, fpu_add_ops=66)
-
-
-def test_summarize_chunk_recurrence_work_golden() -> None:
-    work = perf_model.summarize_chunk_recurrence_performance(
-        _protocol(2, 2),
-        (_FakeTensor((1, 2, 2)), _FakeTensor((1, 2, 2))),
-        **_measurement(),
-    ).work
-
-    assert work == perf_model.KdaWork(fpu_matrix_flops=9216, fpu_multiply_ops=8, fpu_add_ops=140)
-
-
 def test_invalid_public_inputs_raise(expect_error: Callable) -> None:
     with expect_error(ValueError, "aliased inputs"):
-        perf_model.affine_exclusive_scan_performance(
-            _FakeTensor((2, 2, 2), address=0xBAD),
-            _FakeTensor((2, 2, 1), address=0xBAD),
-            _FakeTensor((1, 2, 1)),
-            _FakeTensor((2, 2, 1)),
+        perf_model.performance(
+            fpu=perf_model.FpuOps(),
+            sfpu=perf_model.SfpuOps(),
+            inputs=(_FakeTensor((1,), address=0xBAD), _FakeTensor((1,), address=0xBAD)),
+            outputs=(_FakeTensor((1,)),),
             **_measurement(),
         )
 
-    with expect_error(ValueError, "shapes must be positive"):
-        perf_model.affine_exclusive_scan_performance(
-            _FakeTensor((2, 0, 2)),
-            _FakeTensor((2, 0, 1)),
-            _FakeTensor((1, 0, 1)),
-            _FakeTensor((2, 0, 1)),
-            **_measurement(),
-        )
-
-    with expect_error(ValueError, "shapes are inconsistent"):
-        perf_model.affine_exclusive_scan_performance(
-            _FakeTensor((3, 2, 2)),
-            _FakeTensor((3, 2, 1)),
-            _FakeTensor((2, 2, 1)),
-            _FakeTensor((3, 2, 1)),
+    with expect_error(ValueError, "operation counts"):
+        perf_model.performance(
+            fpu=perf_model.FpuOps(add_ops=-1),
+            sfpu=perf_model.SfpuOps(),
+            inputs=(_FakeTensor((1,)),),
+            outputs=(_FakeTensor((1,)),),
             **_measurement(),
         )
 
     with expect_error(ValueError, "measured_ns"):
-        perf_model.affine_exclusive_scan_performance(
-            _FakeTensor((2, 2, 2)),
-            _FakeTensor((2, 2, 1)),
-            _FakeTensor((1, 2, 1)),
-            _FakeTensor((2, 2, 1)),
+        perf_model.performance(
+            fpu=perf_model.FpuOps(),
+            sfpu=perf_model.SfpuOps(),
+            inputs=(_FakeTensor((1,)),),
+            outputs=(_FakeTensor((1,)),),
             **(_measurement() | {"measured_ns": 0.0}),
         )

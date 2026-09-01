@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import pytest
@@ -50,6 +50,105 @@ _PRODUCTION_CASE = _ProductionCase(
     value_dim=64,
     expected_duration_ns=25_419,
 )
+
+
+def _prepare_chunk_recurrence_ops(
+    inputs: Sequence[torch.Tensor | ttnn.Tensor],
+    outputs: Sequence[torch.Tensor | ttnn.Tensor],
+) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
+    if len(inputs) != 5 or len(outputs) != 7:
+        raise ValueError("chunk-recurrence preparation requires five inputs and seven outputs")
+    tensors = (*inputs, *outputs)
+    if any(any(dimension <= 0 for dimension in tensor.shape) for tensor in tensors):
+        raise ValueError("chunk-recurrence preparation tensor shapes must be positive")
+
+    q, k, v, g, beta = inputs
+    if len(q.shape) != 3 or len(v.shape) != 3 or len(beta.shape) != 4:
+        raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
+    num_heads, num_chunks, chunk_size, trailing = beta.shape
+    if chunk_size != CHUNK_SIZE or trailing != 1 or q.shape[-1] % num_heads or v.shape[-1] % num_heads:
+        raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
+    key_dim = q.shape[-1] // num_heads
+    value_dim = v.shape[-1] // num_heads
+    if (
+        q.shape != (1, num_chunks * CHUNK_SIZE, num_heads * key_dim)
+        or k.shape != q.shape
+        or g.shape != q.shape
+        or v.shape != (1, num_chunks * CHUNK_SIZE, num_heads * value_dim)
+    ):
+        raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
+    expected_output_shapes = (
+        (num_heads, num_chunks, CHUNK_SIZE, value_dim),
+        (num_heads, num_chunks, CHUNK_SIZE, key_dim),
+        (num_heads, num_chunks, CHUNK_SIZE, key_dim),
+        (num_heads, num_chunks, CHUNK_SIZE, CHUNK_SIZE),
+        (num_heads, num_chunks, key_dim, CHUNK_SIZE),
+        (num_heads, num_chunks, key_dim, 1),
+        (num_heads, num_chunks, CHUNK_SIZE, CHUNK_SIZE),
+    )
+    if any(output.shape != expected for output, expected in zip(outputs, expected_output_shapes, strict=True)):
+        raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
+
+    instances = num_heads * num_chunks
+    inverse_flops = CHUNK_SIZE * (CHUNK_SIZE - 1) * (CHUNK_SIZE + 1) // 3
+    return (
+        perf_model.FpuOps(
+            matrix_flops=instances * (4 * CHUNK_SIZE**2 * key_dim + inverse_flops),
+            multiply_ops=instances * (10 * CHUNK_SIZE * key_dim + CHUNK_SIZE * value_dim),
+            add_ops=instances * (2 * CHUNK_SIZE + (CHUNK_SIZE - 1) * key_dim + CHUNK_SIZE * key_dim + CHUNK_SIZE**2),
+            reduction_ops=instances * 2 * CHUNK_SIZE * (key_dim - 1),
+        ),
+        perf_model.SfpuOps(
+            exp_ops=instances * (3 * CHUNK_SIZE * key_dim + key_dim),
+            rsqrt_ops=instances * 2 * CHUNK_SIZE,
+        ),
+    )
+
+
+def _prepare_chunk_recurrence_performance(
+    inputs: Sequence[ttnn.Tensor],
+    outputs: Sequence[ttnn.Tensor],
+    *,
+    measured_ns: float,
+    math_fidelity: ttnn.MathFidelity,
+) -> perf_model.KdaPerformance:
+    fpu, sfpu = _prepare_chunk_recurrence_ops(inputs, outputs)
+    return perf_model.performance(
+        fpu=fpu,
+        sfpu=sfpu,
+        inputs=inputs,
+        outputs=outputs,
+        measured_ns=measured_ns,
+        math_fidelity=math_fidelity,
+    )
+
+
+def test_prepare_chunk_recurrence_work_golden() -> None:
+    inputs = (
+        torch.empty((1, 32, 2)),
+        torch.empty((1, 32, 2)),
+        torch.empty((1, 32, 1)),
+        torch.empty((1, 32, 2)),
+        torch.empty((1, 1, 32, 1)),
+    )
+    outputs = (
+        torch.empty((1, 1, 32, 1)),
+        torch.empty((1, 1, 32, 2)),
+        torch.empty((1, 1, 32, 2)),
+        torch.empty((1, 1, 32, 32)),
+        torch.empty((1, 1, 2, 32)),
+        torch.empty((1, 1, 2, 1)),
+        torch.empty((1, 1, 32, 32)),
+    )
+
+    fpu, sfpu = _prepare_chunk_recurrence_ops(inputs, outputs)
+    assert fpu == perf_model.FpuOps(
+        matrix_flops=19104,
+        multiply_ops=672,
+        add_ops=1214,
+        reduction_ops=64,
+    )
+    assert sfpu == perf_model.SfpuOps(exp_ops=194, rsqrt_ops=64)
 
 
 def _host_inputs(
@@ -358,12 +457,10 @@ def test_prepare_chunk_recurrence_production_performance(device: ttnn.Device) ->
     duration_ns = perf_record["duration_ns"]
     assert len(outputs) == 7
     assert tuple(outputs[0].shape) == (case.num_heads, case.num_chunks, CHUNK_SIZE, case.value_dim)
-    grid = device.compute_with_storage_grid_size()
-    performance = perf_model.prepare_chunk_recurrence_performance(
+    performance = _prepare_chunk_recurrence_performance(
         inputs,
         outputs,
         measured_ns=duration_ns,
-        core_count=int(grid.x) * int(grid.y),
         math_fidelity=ttnn.MathFidelity.HiFi4,
     )
     logger.info(

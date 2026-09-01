@@ -61,6 +61,70 @@ _PRODUCTION_CASES = (
 )
 
 
+def _sigmoid_gated_rms_norm_ops(
+    input_tensor: torch.Tensor | ttnn.Tensor,
+    gate: torch.Tensor | ttnn.Tensor,
+    weight: torch.Tensor | ttnn.Tensor,
+    output: torch.Tensor | ttnn.Tensor,
+) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
+    tensors = (input_tensor, gate, weight, output)
+    if any(any(dimension <= 0 for dimension in tensor.shape) for tensor in tensors):
+        raise ValueError("sigmoid-gated RMSNorm tensor shapes must be positive")
+    if len(input_tensor.shape) != 3 or len(gate.shape) != 3 or len(weight.shape) != 1 or output.shape != gate.shape:
+        raise ValueError("sigmoid-gated RMSNorm tensor shapes are inconsistent")
+
+    batch, sequence, hidden = gate.shape
+    value_dim = input_tensor.shape[-1]
+    if hidden % value_dim or weight.shape != (value_dim,):
+        raise ValueError("sigmoid-gated RMSNorm tensor shapes are inconsistent")
+    num_heads = hidden // value_dim
+    if input_tensor.shape != (batch * num_heads, sequence, value_dim):
+        raise ValueError("sigmoid-gated RMSNorm tensor shapes are inconsistent")
+
+    rows = batch * num_heads * sequence
+    elements = rows * value_dim
+    return (
+        perf_model.FpuOps(
+            multiply_ops=4 * elements,
+            add_ops=rows,
+            reduction_ops=rows * (value_dim - 1),
+        ),
+        perf_model.SfpuOps(rsqrt_ops=rows, sigmoid_ops=elements),
+    )
+
+
+def _sigmoid_gated_rms_norm_performance(
+    input_tensor: ttnn.Tensor,
+    gate: ttnn.Tensor,
+    weight: ttnn.Tensor,
+    output: ttnn.Tensor,
+    *,
+    measured_ns: float,
+    math_fidelity: ttnn.MathFidelity,
+) -> perf_model.KdaPerformance:
+    fpu, sfpu = _sigmoid_gated_rms_norm_ops(input_tensor, gate, weight, output)
+    return perf_model.performance(
+        fpu=fpu,
+        sfpu=sfpu,
+        inputs=(input_tensor, gate, weight),
+        outputs=(output,),
+        measured_ns=measured_ns,
+        math_fidelity=math_fidelity,
+    )
+
+
+def test_sigmoid_gated_rms_norm_work_golden() -> None:
+    fpu, sfpu = _sigmoid_gated_rms_norm_ops(
+        torch.empty((2, 1, 2)),
+        torch.empty((1, 1, 4)),
+        torch.empty((2,)),
+        torch.empty((1, 1, 4)),
+    )
+
+    assert fpu == perf_model.FpuOps(multiply_ops=16, add_ops=2, reduction_ops=2)
+    assert sfpu == perf_model.SfpuOps(rsqrt_ops=2, sigmoid_ops=4)
+
+
 def _torch_dtype(dtype: ttnn.DataType) -> torch.dtype:
     return torch.float32 if dtype == ttnn.float32 else torch.bfloat16
 
@@ -348,14 +412,12 @@ def test_sigmoid_gated_rms_norm_production_performance(device: ttnn.Device, case
         case.sequence,
         case.num_heads * _PRODUCTION_VALUE_DIM,
     )
-    grid = device.compute_with_storage_grid_size()
-    performance = perf_model.sigmoid_gated_rms_norm_performance(
+    performance = _sigmoid_gated_rms_norm_performance(
         input_tt,
         gate_tt,
         weight_tt,
         output_tt,
         measured_ns=duration_ns,
-        core_count=int(grid.x) * int(grid.y),
         math_fidelity=ttnn.MathFidelity.HiFi4,
     )
     logger.info(
