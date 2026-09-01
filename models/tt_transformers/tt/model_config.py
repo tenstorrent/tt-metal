@@ -1338,6 +1338,7 @@ class ModelArgs:
                         k=self.dim,
                         n=self.hidden_dim // self.cluster_shape[1],
                         num_cores=self.mlp_core_grid.num_cores,
+                        num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(TensorGroup.FF1_FF3),
                     )
         elif mode == Mode.PREFILL:
             return self.matmul_config(
@@ -1391,6 +1392,7 @@ class ModelArgs:
                         k=self.hidden_dim // self.cluster_shape[1],
                         n=self.dim,
                         num_cores=self.mlp2_core_grid.num_cores,
+                        num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(TensorGroup.FF2),
                     )
         elif mode == Mode.PREFILL:
             if seq_len > 128:
@@ -1708,6 +1710,7 @@ class ModelArgs:
                     k=self.dim,
                     n=self.qkv_size // self.num_devices,
                     num_cores=self.attn_input_grid.num_cores,
+                    num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(TensorGroup.WQKV),
                 )
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
@@ -2001,6 +2004,7 @@ class ModelArgs:
                     k=(self.n_heads * self.head_dim) // self.num_devices,
                     n=self.dim,
                     num_cores=self.n_heads // self.num_devices,
+                    num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(TensorGroup.WO),
                 )
         elif mode == Mode.PREFILL:
             return None
@@ -3585,7 +3589,29 @@ class ModelArgs:
                 return i
         return 1  # Fallback to 1 if no divisor found
 
-    def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None, fused_activation=None):
+    def get_dram_sharded_matmul_num_workers(self, tensor_group: TensorGroup) -> int:
+        """Return the validated P150 reader count for Llama 3.1 8B decode.
+
+        Each selected projection has a per-bank weight shard width that is divisible by two
+        (gate/up has 56 tiles per bank). Revalidate this setting if the shard geometry changes.
+        """
+        if self.base_model_name != "Llama-3.1-8B" or self.device_name != "P150":
+            return 1
+
+        if tensor_group in (TensorGroup.FF1_FF3, TensorGroup.FF2, TensorGroup.WQKV, TensorGroup.WO):
+            return 2
+
+        return 1
+
+    def dram_matmul_config(
+        self,
+        m: int,
+        k: int,
+        n: int,
+        num_cores=None,
+        fused_activation=None,
+        num_workers_per_dram_bank: int = 1,
+    ):
         # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
         if num_cores is None:
             # num_cores = self.dram_shard_core_grid_for_k(k).num_cores
@@ -3599,6 +3625,7 @@ class ModelArgs:
             per_core_M=math.ceil(m / ttnn.TILE_SIZE),
             per_core_N=math.ceil(n / (ttnn.TILE_SIZE * num_cores)),
             fused_activation=fused_activation,
+            num_workers_per_dram_bank=num_workers_per_dram_bank,
         )
 
     def matmul_1d_ring_config(
