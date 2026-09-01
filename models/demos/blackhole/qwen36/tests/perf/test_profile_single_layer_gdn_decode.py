@@ -56,7 +56,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
-from models.demos.blackhole.qwen36.tests.perf.perf_signposts import install_attention_signposts, install_mlp_signposts
 
 # Layer 0 is always GDN (``linear_attention``) in the hybrid G,G,G,F,... pattern regardless of how
 # many layers the model is truncated to, so a 1-layer build is enough to isolate it.
@@ -172,13 +171,7 @@ def test_profile_single_layer_gdn_decode(mesh_device, device_params, batch_size)
     for _ in range(NUM_WARMUP_ITERS):
         _run_decode_step(mesh_device, f)
 
-    # Nested MLP signposts only on the measured iteration, so the warmup stays unmarked.
-    restores = [g(f.layer) for g in (install_attention_signposts, install_mlp_signposts)] if use_signpost else []
-    try:
-        _run_decode_step(mesh_device, f, use_signpost=use_signpost)
-    finally:
-        for r in restores:
-            r()
+    _run_decode_step(mesh_device, f, use_signpost=use_signpost)
 
     ttnn.deallocate(f.x)
 

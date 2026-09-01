@@ -8,16 +8,14 @@ pair ONLY. Weight construction, residual upload and teardown sit outside the win
 
 WHY THIS IS ITS OWN TEST
 ------------------------
-The single-layer attention/GDN profile files already emit nested ``mlp_start`` /
-``mlp_stop`` (see ``perf_signposts.install_mlp_signposts``), but a ``tt-perf-report`` of
-those captures is a full-layer report: attention + both residuals + MLP. This file is the
-Tracy target for the FFN block alone, so a report of this test is an MLP/FFN report, not
-a layer report with the MLP mixed in.
+A ``tt-perf-report`` of the single-layer attention/GDN profile captures is a full-layer
+report: attention + both residuals + MLP. This file is the Tracy target for the FFN block
+alone, so a report of this test is an MLP/FFN report, not a layer report with the MLP
+mixed in.
 
-The measured region matches ``install_mlp_signposts`` exactly: ``ffn_norm`` (pre-AG
-stats / gather / RMSNorm on 9B; post-AG on 27B) then gate/up, SwiGLU multiply, down-proj,
-and the MLP reduce-scatter. The trailing residual add (``h + ff_output`` in
-``layer.forward``) is outside the window.
+The measured region is ``ffn_norm`` (pre-AG stats / gather / RMSNorm on 9B; post-AG on
+27B) then gate/up, SwiGLU multiply, down-proj, and the MLP reduce-scatter. The trailing
+residual add (``h + ff_output`` in ``layer.forward``) is outside the window.
 
 Dummy weights of the real 9B shapes (gate/up/down + post-attention RMSNorm). Matmul cost
 does not depend on the values, so loading the checkpoint would only add setup time. PCC
