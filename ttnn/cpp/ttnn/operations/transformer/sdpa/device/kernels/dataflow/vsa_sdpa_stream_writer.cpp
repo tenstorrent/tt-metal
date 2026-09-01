@@ -68,8 +68,23 @@ void kernel_main() {
 
     if (is_leader) {
         // Fetch K for every kreq {block_id, slot} from DRAM into the shared stream slots;
-        // a sentinel kreq ends each pass.
+        // a sentinel kreq ends each pass. Fetches are pipelined kAckLag blocks deep with
+        // per-block trids: block N's tile reads are tagged (N % 8) + 1, and its ack costs one
+        // trid barrier (already landed with the pipeline full) instead of a DRAM round trip.
+        // kAckLag stays BELOW the reader's fetch lag: the reader waits for block N's ack after
+        // sending kreqs N..N+3 only, so an ack gated on kreq N+4 would deadlock.
+        constexpr uint32_t kAckLag = 3;
+#if defined(VSA_PROBE) && VSA_PROBE == 7
+        return;  // probe 7: no K fetches, no acks (the reader skips its kack waits too)
+#endif
         const uint32_t k_base = head * k_head_stride;
+        uint32_t nfetch = 0, nacked = 0;
+        const auto ack_oldest = [&]() {
+            experimental::async_read_barrier_with_trid(noc, (nacked % 8) + 1);
+            kack_cb.reserve_back(1);
+            kack_cb.push_back(1);
+            ++nacked;
+        };
         for (uint32_t pass = 0; pass < n_passes; ++pass) {
             while (true) {
                 kreq_cb.wait_front(1);
@@ -82,16 +97,23 @@ void kernel_main() {
                 }
                 kreq_cb.pop_front(1);
                 if (block_id == 0xFFFFFFFFu) {
+                    while (nacked < nfetch) {
+                        ack_oldest();
+                    }
                     break;
                 }
-                sparse_sdpa_msa::TridRing ring{noc};
+                experimental::set_read_trid(noc, (nfetch % 8) + 1);
                 const uint32_t k_tile0 = k_base + block_id * k_tiles_per_block;
                 for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
-                    ring.read(k, k_cb, k_tile_bytes, k_tile0 + i, (slot * k_tiles_per_block + i) * k_tile_bytes);
+                    noc.async_read(
+                        k, k_cb, k_tile_bytes, {.page_id = k_tile0 + i},
+                        {.offset_bytes = (slot * k_tiles_per_block + i) * k_tile_bytes});
                 }
-                ring.drain();
-                kack_cb.reserve_back(1);
-                kack_cb.push_back(1);
+                experimental::set_read_trid(noc, 0);
+                ++nfetch;
+                if (nfetch - nacked > kAckLag) {
+                    ack_oldest();
+                }
             }
         }
         return;
@@ -113,26 +135,31 @@ void kernel_main() {
     uint32_t drained = 0;
     uint32_t pass_base = 0;
 
+    // K pulls accumulate on a trid ring; a window-end marker kreq (0xFFFFFFFF) drains the ring
+    // and sends ONE ack for the whole window, removing the per-arrival barrier round trip.
+    sparse_sdpa_msa::TridRing kring{noc};
     auto serve_kreq_if_any = [&]() {
-        if (!cb_pages_available_at_front(cb_kreq, 1)) {
-            return;
+        while (cb_pages_available_at_front(cb_kreq, 1)) {
+            kreq_cb.wait_front(1);
+            uint32_t leader_slot, slot;
+            {
+                volatile tt_l1_ptr uint32_t* rq =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
+                leader_slot = rq[0];
+                slot = rq[1];
+            }
+            kreq_cb.pop_front(1);
+            if (leader_slot == 0xFFFFFFFFu) {  // window end: drain and ack once
+                kring.drain();
+                kack_cb.reserve_back(1);
+                kack_cb.push_back(1);
+                continue;
+            }
+            const uint64_t src = get_noc_addr(
+                leader_x, leader_y, k_l1_base + leader_slot * k_tiles_per_block * k_tile_bytes, noc.get_noc_id());
+            kring.read_addr(src, k_l1_base + slot * k_tiles_per_block * k_tile_bytes,
+                            k_tiles_per_block * k_tile_bytes);
         }
-        kreq_cb.wait_front(1);
-        uint32_t leader_slot, slot;
-        {
-            volatile tt_l1_ptr uint32_t* rq = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
-            leader_slot = rq[0];
-            slot = rq[1];
-        }
-        kreq_cb.pop_front(1);
-        const uint64_t src = get_noc_addr(
-            leader_x, leader_y, k_l1_base + leader_slot * k_tiles_per_block * k_tile_bytes, noc.get_noc_id());
-        noc_async_read(
-            src, k_l1_base + slot * k_tiles_per_block * k_tile_bytes, k_tiles_per_block * k_tile_bytes,
-            noc.get_noc_id());
-        noc.async_read_barrier();
-        kack_cb.reserve_back(1);
-        kack_cb.push_back(1);
     };
 
     while (pass_base < row_count || drained < row_count) {

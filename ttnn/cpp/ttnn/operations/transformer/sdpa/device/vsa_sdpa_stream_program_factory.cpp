@@ -18,6 +18,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <bit>
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <variant>
@@ -247,6 +248,14 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
 
     // ---- kernels ----
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/";
+    // Perf triage only: TT_VSA_PROBE=1 consumes visits without math (delivery floor);
+    // =2 runs QK+PV without the softmax phases (math floor); =3 is 1 plus the worker K/V pulls
+    // skipped (protocol-only floor). Output is garbage in every probe mode.
+    std::map<std::string, std::string> probe_defines;
+    if (const char* probe = std::getenv("TT_VSA_PROBE"); probe != nullptr && probe[0] != '\0' && probe[0] != '0') {
+        probe_defines["VSA_PROBE"] = probe;
+    }
+
     tt::tt_metal::KernelDescriptor reader_desc;
     reader_desc.kernel_source = kdir + "dataflow/vsa_sdpa_stream_reader.cpp";
     reader_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
@@ -254,6 +263,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     reader_desc.compile_time_args = reader_ct;
     reader_desc.common_runtime_args = reader_crt;
     reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
+    reader_desc.defines = tt::tt_metal::KernelDescriptor::Defines(probe_defines.begin(), probe_defines.end());
 
     tt::tt_metal::KernelDescriptor writer_desc;
     writer_desc.kernel_source = kdir + "dataflow/vsa_sdpa_stream_writer.cpp";
@@ -262,6 +272,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     writer_desc.compile_time_args = writer_ct;
     writer_desc.common_runtime_args = writer_crt;
     writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
+    writer_desc.defines = tt::tt_metal::KernelDescriptor::Defines(probe_defines.begin(), probe_defines.end());
 
     auto [math_fidelity, math_approx, fp32_acc, packer_l1_acc, dst_full_sync] =
         get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), attrs.compute_kernel_config);
@@ -283,6 +294,9 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     std::map<std::string, std::string> cdefs{
         {"EXP_APPROX_MODE", std::to_string(static_cast<int>(math_approx))},
     };
+    if (!probe_defines.empty()) {
+        cdefs.insert(probe_defines.begin(), probe_defines.end());
+    }
     compute_desc.defines = tt::tt_metal::KernelDescriptor::Defines(cdefs.begin(), cdefs.end());
 
     auto* q_buf = t.q.buffer();
@@ -340,12 +354,38 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         reader_rt.push_back(n_active * kRowChunk);  // chunk-cyclic big stride
         reader_rt.push_back(row_count);
         if (sched.is_leader) {
-            for (uint32_t w = 0; w < n_active; ++w) {
+            // The group's workers are consecutive logical core ids in a row-major grid: they span
+            // at most ceil(n/grid.x)+1 row segments, each a height-1 multicast rectangle. The
+            // leader publishes log entries with ONE multicast write per segment.
+            struct Strip {
+                uint32_t sx, sy, ex, ey, n;
+            };
+            std::vector<Strip> strips;
+            uint32_t w = 0;
+            while (w < n_active) {
                 const uint32_t wc = sched.group_first + 1 + w;
-                const tt::tt_metal::CoreCoord w_logical = {wc % grid.x, wc / grid.x};
-                const tt::tt_metal::CoreCoord w_phys = device->worker_core_from_logical_core(w_logical);
-                reader_rt.push_back(static_cast<uint32_t>(w_phys.x));
-                reader_rt.push_back(static_cast<uint32_t>(w_phys.y));
+                const uint32_t row = wc / grid.x;
+                uint32_t n_seg = 1;
+                while (w + n_seg < n_active && (wc + n_seg) / grid.x == row) {
+                    ++n_seg;
+                }
+                const auto p0 = device->worker_core_from_logical_core({wc % grid.x, row});
+                const auto p1 = device->worker_core_from_logical_core({(wc + n_seg - 1) % grid.x, row});
+                strips.push_back(
+                    {static_cast<uint32_t>(p0.x),
+                     static_cast<uint32_t>(p0.y),
+                     static_cast<uint32_t>(p1.x),
+                     static_cast<uint32_t>(p1.y),
+                     n_seg});
+                w += n_seg;
+            }
+            reader_rt.push_back(static_cast<uint32_t>(strips.size()));
+            for (const auto& st : strips) {
+                reader_rt.push_back(st.sx);
+                reader_rt.push_back(st.sy);
+                reader_rt.push_back(st.ex);
+                reader_rt.push_back(st.ey);
+                reader_rt.push_back(st.n);
             }
         }
         reader_desc.emplace_runtime_args(core, reader_rt);

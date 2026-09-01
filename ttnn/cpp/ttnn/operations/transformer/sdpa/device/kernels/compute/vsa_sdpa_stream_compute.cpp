@@ -260,6 +260,9 @@ void kernel_main() {
                 entries[b] = ckernel::read_tile_value(cb_ctrl, 0, 2 + b);
             }
             ctrl_cb.pop_front(1);
+#if defined(VSA_PROBE) && (VSA_PROBE == 1 || VSA_PROBE >= 3)
+            continue;  // probe 1/3: delivery floor -- consume the visit without any math
+#endif
 
             const uint32_t row_slot = info & 0xff;
             const bool is_first = (info & ROW_IS_FIRST) != 0;
@@ -301,6 +304,10 @@ void kernel_main() {
                 }
                 tile_regs_release();
             }
+#if defined(VSA_PROBE) && VSA_PROBE == 2
+            // probe 2: math floor -- QK above and the deferred PV below, no softmax phases.
+            drain_pending_pv();
+#else
             bool any_mask = false;
             for (uint32_t b = 0; b < n_blocks; ++b) {
                 const uint32_t count = (entries[b] >> 8) & 0x7f;
@@ -431,6 +438,7 @@ void kernel_main() {
                 PACK((llk_pack_relu_config(ReluConfig::none())));
                 tile_regs_release();
             }
+#endif  // !(VSA_PROBE == 2)
             // No s4/s5 here: the PV of this visit is deferred to the next visit (or the next
             // flush/window boundary), so this visit's pack-thread exp overlaps the next visit's
             // QK and reduce math. drain_pending_pv() carries the probs-visibility sync.
