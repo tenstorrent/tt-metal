@@ -8,8 +8,6 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/split/split.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace composite_common {
@@ -131,8 +129,7 @@ ttnn::Tensor composite_reduce_scatter(
         ttnn::split(input_tensor, output_shape[scatter_dim], scatter_dim, input_tensor.memory_config());
     if (is_row_major) {
         for (uint32_t i = 0; i < num_devices; ++i) {
-            split_tensors[i] =
-                ttnn::tilize_with_zero_padding(split_tensors[i], split_tensors[i].memory_config(), std::nullopt, true);
+            /* TODO(nuked-op tilize_with_zero_padding): passthrough */ (void)0;
         }
     }
 
@@ -175,8 +172,7 @@ ttnn::Tensor composite_reduce_scatter(
             ends[i] = output_shape[i] - 1;
         }
 
-        rs_output_tensor =
-            ttnn::untilize_with_unpadding(padded_native_rs_output_tensor, ends, native_rs_output_memory_config);
+        rs_output_tensor = padded_native_rs_output_tensor /* TODO(nuked-op untilize_with_unpadding): passthrough */;
     } else {
         const ttsl::SmallVector<int32_t> steps(output_shape.rank(), 1);
         ttsl::SmallVector<int32_t> begins(output_shape.rank(), 0), ends(output_shape.cbegin(), output_shape.cend());

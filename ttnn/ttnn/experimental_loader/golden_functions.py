@@ -144,14 +144,9 @@ def _sharding_conversion_golden_function(input_tensor, *args, output_dtype=None,
     return golden_to_output_dtype(input_tensor, output_dtype)
 
 
-def _tilize_golden_function(input_tensor, *args, dtype=None, **kwargs):
-    return golden_to_output_dtype(input_tensor, dtype)
-
-
 ttnn.attach_golden_function(ttnn.interleaved_to_sharded, _sharding_conversion_golden_function)
 ttnn.attach_golden_function(ttnn.sharded_to_interleaved, _sharding_conversion_golden_function)
 ttnn.attach_golden_function(ttnn.reshard, _nop_golden_function)
-ttnn.attach_golden_function(ttnn.tilize, _tilize_golden_function)
 
 
 def _slice_write_golden_function(input_tensor, output_tensor, start, end, step, *args, **kwargs):
