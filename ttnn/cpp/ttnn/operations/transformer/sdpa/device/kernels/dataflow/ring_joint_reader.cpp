@@ -482,7 +482,8 @@ void kernel_main() {
             kv_actual_isl =
                 trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
             const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
-            logical_nt = ring_joint::compute_logical_nt(kv_actual_isl, chunk_size_t * 32, 32);
+            logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
+                kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
             const uint32_t tensor_rank =
                 ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                     fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);

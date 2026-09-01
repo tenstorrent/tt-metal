@@ -57,12 +57,25 @@ inline uint32_t bounded_kv_actual_isl(
     const bool tile_aligned = kv_actual_isl % tile_height == 0;
     const uint32_t kv_actual_tile_rows = kv_actual_isl / tile_height;
     const bool geometry_valid = chunk_global_tile_rows > 0 && chunk_global_tile_rows <= cache_global_tile_rows;
-    const bool metadata_valid =
-        geometry_valid && tile_aligned && kv_actual_tile_rows <= cache_global_tile_rows - chunk_global_tile_rows;
+    // The metadata identifies the existing KV prefix, not the number of valid rows in the current Q
+    // chunk. A partially filled final chunk may start less than one padded chunk from the cache end;
+    // validate the start here and clamp the derived logical extent below.
+    const bool metadata_valid = geometry_valid && tile_aligned && kv_actual_tile_rows < cache_global_tile_rows;
     ASSERT(metadata_valid);
     // Treat invalid metadata as the first chunk when device assertions are disabled. Every metadata
     // consumer uses this fallback, keeping CCL producer/consumer counts and SDPA work masks consistent.
     return metadata_valid ? kv_actual_isl : 0;
+}
+
+// Metadata does not carry the current chunk's valid-row count. Its padded extent is authoritative except
+// at the physical cache boundary, where the remaining cache rows describe a partially filled final chunk.
+inline uint32_t logical_tile_rows_clamped_to_cache(
+    uint32_t kv_actual_isl, uint32_t chunk_global_tile_rows, uint32_t cache_global_tile_rows) {
+    constexpr uint32_t tile_height = 32;
+    const uint32_t kv_actual_tile_rows = kv_actual_isl / tile_height;
+    const uint32_t remaining_tile_rows = cache_global_tile_rows - kv_actual_tile_rows;
+    return kv_actual_tile_rows +
+           (chunk_global_tile_rows < remaining_tile_rows ? chunk_global_tile_rows : remaining_tile_rows);
 }
 
 }  // namespace trace_metadata
