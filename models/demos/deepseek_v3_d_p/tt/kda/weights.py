@@ -57,6 +57,17 @@ def _cache_stem(
 
 
 @dataclass(frozen=True)
+class _KDAHostWeights:
+    input_projection: torch.Tensor
+    decay_output_projection: torch.Tensor
+    output_projection: torch.Tensor
+    decay_scale_flat: torch.Tensor
+    decay_bias_flat: torch.Tensor
+    norm: torch.Tensor
+    convolution_taps: tuple[torch.Tensor, ...]
+
+
+@dataclass(frozen=True)
 class KDAWeights:
     input_projection: ttnn.Tensor
     decay_output_projection: ttnn.Tensor
@@ -105,14 +116,24 @@ class KDAWeights:
         tensor_parallel_axis: int = 1,
     ) -> None:
         """Build all KDA tensorbins without copying weights to device memory."""
-        _convert_kda_weights(
+        if not state_dict:
+            raise ValueError("building the KDA TTNN cache requires a state_dict")
+        mesh_shape, tensor_parallel_size = _validated_parallel_geometry(
             mesh_device,
             config,
-            state_dict,
-            cache_path,
+            tensor_parallel_axis,
+        )
+        host_weights = _prepare_kda_host_weights(state_dict, config, tensor_parallel_size)
+        _materialize_kda_weights(
+            host_weights,
+            device=mesh_device,
+            config=config,
+            tensor_cache_path=Path(cache_path),
             cache_name_prefix=cache_name_prefix,
+            mesh_shape=mesh_shape,
+            tensor_parallel_size=tensor_parallel_size,
             tensor_parallel_axis=tensor_parallel_axis,
-            load_to_device=False,
+            place_on_device=False,
         )
 
     @classmethod
@@ -136,151 +157,274 @@ class KDAWeights:
         )
 
 
-def _convert_kda_weights(
+def _validated_parallel_geometry(
     device: ttnn.Device | ttnn.MeshDevice,
     config: KDAConfig,
-    state_dict: Mapping[str, torch.Tensor] | None,
-    tensor_cache_path: Path | None = None,
-    *,
-    cache_name_prefix: str = "kda",
-    tensor_parallel_axis: int = 1,
-    load_to_device: bool,
-) -> KDAWeights | None:
-    """Convert KDA weights, optionally writing cache artifacts without device placement."""
+    tensor_parallel_axis: int,
+) -> tuple[tuple[int, int], int]:
     mesh_shape, tensor_parallel_size = _parallel_geometry(device, tensor_parallel_axis)
-    if state_dict is not None and not state_dict:
-        raise ValueError("state_dict must be non-empty when provided; use None for cache-only loading")
     if config.num_heads % tensor_parallel_size != 0:
         raise ValueError(
             f"num_heads {config.num_heads} must be divisible by tensor parallel size {tensor_parallel_size}"
         )
-    if state_dict is None and not load_to_device:
-        raise ValueError("building the KDA TTNN cache requires a state_dict")
-    if state_dict is not None:
-        state_dict = normalize_kda_state_dict(state_dict, config)
-    elif not KDAWeights.check_cache_complete(
-        tensor_cache_path,
-        cache_name_prefix,
-        config,
-        device,
-        tensor_parallel_axis=tensor_parallel_axis,
-    ):
-        raise FileNotFoundError(f"incomplete KDA TTNN cache for {cache_name_prefix!r} at {tensor_cache_path!r}")
-    if tensor_cache_path is not None:
-        tensor_cache_path = Path(tensor_cache_path)
-        tensor_cache_path.mkdir(parents=True, exist_ok=True)
+    return mesh_shape, tensor_parallel_size
 
-    def device_tensor(
-        tensor: torch.Tensor | None,
-        name: str,
-        *,
-        dtype: ttnn.DataType = ttnn.bfloat16,
-        shard_dim: int | None = None,
-    ) -> ttnn.Tensor:
-        cache_name = _cache_stem(cache_name_prefix, name, config, mesh_shape, tensor_parallel_axis)
-        cache_file = tensor_cache_path / cache_name if tensor_cache_path is not None else None
-        mesh_mapper = None
-        if tensor_parallel_size > 1:
-            mesh_dims = [None, None]
-            mesh_dims[tensor_parallel_axis] = shard_dim
-            mesh_mapper = ttnn.ShardTensor2dMesh(device, dims=tuple(mesh_dims), mesh_shape=mesh_shape)
-        if state_dict is None:
-            assert cache_file is not None
-            serialized_cache_file = Path(f"{cache_file}_dtype_{dtype.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin")
-            return ttnn.load_tensor(serialized_cache_file, device=device)
-        assert tensor is not None
-        converted = ttnn.as_tensor(
-            tensor.contiguous(),
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device if load_to_device else None,
-            mesh_mapper=mesh_mapper,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if load_to_device else None,
-            cache_file_name=cache_file,
-        )
-        return converted
 
-    def group_output_shards(*weights: torch.Tensor) -> torch.Tensor:
-        """Group every projection tensor corresponding head slice on the same device."""
-        grouped = []
-        for device_index in range(tensor_parallel_size):
-            device_weights = []
-            for weight in weights:
-                shard_width = weight.shape[0] // tensor_parallel_size
-                start = device_index * shard_width
-                device_weights.append(weight[start : start + shard_width])
-            grouped.append(torch.cat(device_weights, dim=0))
-        return torch.cat(grouped, dim=0)
+def _group_projection_rows_by_tp_rank(
+    weights: tuple[torch.Tensor, ...],
+    tensor_parallel_size: int,
+) -> torch.Tensor:
+    """Place every projection's corresponding head slice next to the same TP rank."""
+    grouped = []
+    for device_index in range(tensor_parallel_size):
+        rank_weights = []
+        for weight in weights:
+            shard_width = weight.shape[0] // tensor_parallel_size
+            start = device_index * shard_width
+            rank_weights.append(weight[start : start + shard_width])
+        grouped.append(torch.cat(rank_weights, dim=0))
+    return torch.cat(grouped, dim=0)
 
-    if state_dict is not None:
-        common_input_weights = (
-            state_dict["q_proj.weight"],
-            state_dict["k_proj.weight"],
-            state_dict["v_proj.weight"],
-            state_dict["f_a_proj.weight"].repeat(tensor_parallel_size, 1),
-        )
-        if config.use_full_rank_gate:
-            input_projection = group_output_shards(
-                *common_input_weights,
+
+def _prepare_kda_host_weights(
+    state_dict: Mapping[str, torch.Tensor],
+    config: KDAConfig,
+    tensor_parallel_size: int,
+) -> _KDAHostWeights:
+    state_dict = normalize_kda_state_dict(state_dict, config)
+    common_input_weights = (
+        state_dict["q_proj.weight"],
+        state_dict["k_proj.weight"],
+        state_dict["v_proj.weight"],
+        state_dict["f_a_proj.weight"].repeat(tensor_parallel_size, 1),
+    )
+    if config.use_full_rank_gate:
+        input_projection = _group_projection_rows_by_tp_rank(
+            common_input_weights
+            + (
                 state_dict["g_proj.weight"],
                 state_dict["b_proj.weight"],
-            ).T
-        else:
-            output_gate_projection = state_dict["g_b_proj.weight"].reshape(
-                config.num_heads, config.head_v_dim, config.head_v_dim
-            )
-            output_gate_direct = torch.matmul(
-                output_gate_projection,
-                state_dict["g_a_proj.weight"],
-            ).reshape(config.v_dim, config.hidden_size)
-            input_projection = group_output_shards(
-                *common_input_weights,
+            ),
+            tensor_parallel_size,
+        ).T
+    else:
+        output_gate_projection = state_dict["g_b_proj.weight"].reshape(
+            config.num_heads,
+            config.head_v_dim,
+            config.head_v_dim,
+        )
+        output_gate_direct = torch.matmul(
+            output_gate_projection,
+            state_dict["g_a_proj.weight"],
+        ).reshape(config.v_dim, config.hidden_size)
+        input_projection = _group_projection_rows_by_tp_rank(
+            common_input_weights
+            + (
                 output_gate_direct,
                 state_dict["b_proj.weight"],
-            ).T
+            ),
+            tensor_parallel_size,
+        ).T
 
-        decay_scale = state_dict["A_log"].float().exp()
-        if config.gate_lower_bound is None:
-            decay_scale = -decay_scale
-        decay_bias = state_dict["dt_bias"].reshape(1, 1, config.num_heads, config.head_k_dim)
-        decay_scale_flat = decay_scale.expand(-1, -1, -1, config.head_k_dim).reshape(1, 1, config.q_dim)
-        decay_bias_flat = decay_bias.reshape(1, 1, config.q_dim)
-        decay_output_projection = state_dict["f_b_proj.weight"].T
-        output_projection = state_dict["o_proj.weight"].T
-        norm = state_dict["o_norm.weight"]
-        convolution_host_taps = []
-        for tap in range(config.conv_kernel_size):
-            tap_weights = (
-                state_dict["q_conv1d.weight"][:, 0, tap],
-                state_dict["k_conv1d.weight"][:, 0, tap],
-                state_dict["v_conv1d.weight"][:, 0, tap],
-            )
-            fused_tap = group_output_shards(*tap_weights).reshape(1, 1, -1)
-            convolution_host_taps.append(fused_tap)
-    else:
-        input_projection = None
-        decay_output_projection = None
-        output_projection = None
-        decay_scale_flat = None
-        decay_bias_flat = None
-        norm = None
-        convolution_host_taps = [None] * config.conv_kernel_size
+    decay_scale = state_dict["A_log"].float().exp()
+    if config.gate_lower_bound is None:
+        decay_scale = -decay_scale
+    decay_bias = state_dict["dt_bias"].reshape(1, 1, config.num_heads, config.head_k_dim)
+    decay_scale_flat = decay_scale.expand(-1, -1, -1, config.head_k_dim).reshape(1, 1, config.q_dim)
+    decay_bias_flat = decay_bias.reshape(1, 1, config.q_dim)
 
-    converted = {
-        "input_projection": device_tensor(input_projection, "input_projection_head_major", shard_dim=-1),
-        "decay_output_projection": device_tensor(decay_output_projection, "decay_output_projection", shard_dim=-1),
-        "output_projection": device_tensor(output_projection, "output_projection", shard_dim=-2),
-        "decay_scale_flat": device_tensor(decay_scale_flat, "decay_scale_flat", shard_dim=-1),
-        "decay_bias_flat": device_tensor(decay_bias_flat, "decay_bias_flat", shard_dim=-1),
-        "norm": device_tensor(norm, "norm"),
-    }
-    convolution_taps = tuple(
-        device_tensor(tensor, f"conv_tap_{tap}", shard_dim=-1) for tap, tensor in enumerate(convolution_host_taps)
+    convolution_taps = []
+    for tap in range(config.conv_kernel_size):
+        tap_weights = (
+            state_dict["q_conv1d.weight"][:, 0, tap],
+            state_dict["k_conv1d.weight"][:, 0, tap],
+            state_dict["v_conv1d.weight"][:, 0, tap],
+        )
+        fused_tap = _group_projection_rows_by_tp_rank(tap_weights, tensor_parallel_size).reshape(1, 1, -1)
+        convolution_taps.append(fused_tap)
+
+    return _KDAHostWeights(
+        input_projection=input_projection,
+        decay_output_projection=state_dict["f_b_proj.weight"].T,
+        output_projection=state_dict["o_proj.weight"].T,
+        decay_scale_flat=decay_scale_flat,
+        decay_bias_flat=decay_bias_flat,
+        norm=state_dict["o_norm.weight"],
+        convolution_taps=tuple(convolution_taps),
     )
-    if not load_to_device:
+
+
+def _mesh_mapper(
+    device: ttnn.Device | ttnn.MeshDevice,
+    *,
+    mesh_shape: tuple[int, int],
+    tensor_parallel_size: int,
+    tensor_parallel_axis: int,
+    shard_dim: int | None,
+) -> ttnn.CppTensorToMesh | None:
+    if tensor_parallel_size == 1:
+        return None
+    mesh_dims = [None, None]
+    mesh_dims[tensor_parallel_axis] = shard_dim
+    return ttnn.ShardTensor2dMesh(device, dims=tuple(mesh_dims), mesh_shape=mesh_shape)
+
+
+def _materialize_kda_tensor(
+    host_tensor: torch.Tensor | None,
+    name: str,
+    *,
+    device: ttnn.Device | ttnn.MeshDevice,
+    config: KDAConfig,
+    tensor_cache_path: Path | None,
+    cache_name_prefix: str,
+    mesh_shape: tuple[int, int],
+    tensor_parallel_size: int,
+    tensor_parallel_axis: int,
+    shard_dim: int | None = None,
+    place_on_device: bool,
+) -> ttnn.Tensor:
+    cache_name = _cache_stem(cache_name_prefix, name, config, mesh_shape, tensor_parallel_axis)
+    cache_file = tensor_cache_path / cache_name if tensor_cache_path is not None else None
+    if host_tensor is None:
+        if cache_file is None:
+            raise ValueError("cache-only KDA weight loading requires tensor_cache_path")
+        serialized_cache_file = Path(
+            f"{cache_file}_dtype_{ttnn.bfloat16.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
+        )
+        return ttnn.load_tensor(serialized_cache_file, device=device)
+
+    return ttnn.as_tensor(
+        host_tensor.contiguous(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device if place_on_device else None,
+        mesh_mapper=_mesh_mapper(
+            device,
+            mesh_shape=mesh_shape,
+            tensor_parallel_size=tensor_parallel_size,
+            tensor_parallel_axis=tensor_parallel_axis,
+            shard_dim=shard_dim,
+        ),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG if place_on_device else None,
+        cache_file_name=cache_file,
+    )
+
+
+def _materialize_kda_weights(
+    host_weights: _KDAHostWeights | None,
+    *,
+    device: ttnn.Device | ttnn.MeshDevice,
+    config: KDAConfig,
+    tensor_cache_path: Path | None,
+    cache_name_prefix: str,
+    mesh_shape: tuple[int, int],
+    tensor_parallel_size: int,
+    tensor_parallel_axis: int,
+    place_on_device: bool,
+) -> KDAWeights | None:
+    if tensor_cache_path is not None:
+        tensor_cache_path.mkdir(parents=True, exist_ok=True)
+
+    materialized = {
+        "input_projection": _materialize_kda_tensor(
+            None if host_weights is None else host_weights.input_projection,
+            "input_projection_head_major",
+            device=device,
+            config=config,
+            tensor_cache_path=tensor_cache_path,
+            cache_name_prefix=cache_name_prefix,
+            mesh_shape=mesh_shape,
+            tensor_parallel_size=tensor_parallel_size,
+            tensor_parallel_axis=tensor_parallel_axis,
+            shard_dim=-1,
+            place_on_device=place_on_device,
+        ),
+        "decay_output_projection": _materialize_kda_tensor(
+            None if host_weights is None else host_weights.decay_output_projection,
+            "decay_output_projection",
+            device=device,
+            config=config,
+            tensor_cache_path=tensor_cache_path,
+            cache_name_prefix=cache_name_prefix,
+            mesh_shape=mesh_shape,
+            tensor_parallel_size=tensor_parallel_size,
+            tensor_parallel_axis=tensor_parallel_axis,
+            shard_dim=-1,
+            place_on_device=place_on_device,
+        ),
+        "output_projection": _materialize_kda_tensor(
+            None if host_weights is None else host_weights.output_projection,
+            "output_projection",
+            device=device,
+            config=config,
+            tensor_cache_path=tensor_cache_path,
+            cache_name_prefix=cache_name_prefix,
+            mesh_shape=mesh_shape,
+            tensor_parallel_size=tensor_parallel_size,
+            tensor_parallel_axis=tensor_parallel_axis,
+            shard_dim=-2,
+            place_on_device=place_on_device,
+        ),
+        "decay_scale_flat": _materialize_kda_tensor(
+            None if host_weights is None else host_weights.decay_scale_flat,
+            "decay_scale_flat",
+            device=device,
+            config=config,
+            tensor_cache_path=tensor_cache_path,
+            cache_name_prefix=cache_name_prefix,
+            mesh_shape=mesh_shape,
+            tensor_parallel_size=tensor_parallel_size,
+            tensor_parallel_axis=tensor_parallel_axis,
+            shard_dim=-1,
+            place_on_device=place_on_device,
+        ),
+        "decay_bias_flat": _materialize_kda_tensor(
+            None if host_weights is None else host_weights.decay_bias_flat,
+            "decay_bias_flat",
+            device=device,
+            config=config,
+            tensor_cache_path=tensor_cache_path,
+            cache_name_prefix=cache_name_prefix,
+            mesh_shape=mesh_shape,
+            tensor_parallel_size=tensor_parallel_size,
+            tensor_parallel_axis=tensor_parallel_axis,
+            shard_dim=-1,
+            place_on_device=place_on_device,
+        ),
+        "norm": _materialize_kda_tensor(
+            None if host_weights is None else host_weights.norm,
+            "norm",
+            device=device,
+            config=config,
+            tensor_cache_path=tensor_cache_path,
+            cache_name_prefix=cache_name_prefix,
+            mesh_shape=mesh_shape,
+            tensor_parallel_size=tensor_parallel_size,
+            tensor_parallel_axis=tensor_parallel_axis,
+            place_on_device=place_on_device,
+        ),
+    }
+    host_taps = [None] * config.conv_kernel_size if host_weights is None else host_weights.convolution_taps
+    convolution_taps = tuple(
+        _materialize_kda_tensor(
+            tensor,
+            f"conv_tap_{tap}",
+            device=device,
+            config=config,
+            tensor_cache_path=tensor_cache_path,
+            cache_name_prefix=cache_name_prefix,
+            mesh_shape=mesh_shape,
+            tensor_parallel_size=tensor_parallel_size,
+            tensor_parallel_axis=tensor_parallel_axis,
+            shard_dim=-1,
+            place_on_device=place_on_device,
+        )
+        for tap, tensor in enumerate(host_taps)
+    )
+    if not place_on_device:
         return None
     return KDAWeights(
-        **converted,
+        **materialized,
         convolution_taps=convolution_taps,
         tensor_parallel_size=tensor_parallel_size,
         tensor_parallel_axis=tensor_parallel_axis,
@@ -296,15 +440,34 @@ def load_kda_weights(
     cache_name_prefix: str = "kda",
     tensor_parallel_axis: int = 1,
 ) -> KDAWeights:
-    """Fuse compatible projections and place whole-head shards on device."""
-    weights = _convert_kda_weights(
-        device,
-        config,
-        state_dict,
-        tensor_cache_path,
+    """Prepare KDA weights and materialize them on the target device."""
+    if state_dict is not None and not state_dict:
+        raise ValueError("state_dict must be non-empty when provided; use None for cache-only loading")
+    mesh_shape, tensor_parallel_size = _validated_parallel_geometry(device, config, tensor_parallel_axis)
+    cache_path = Path(tensor_cache_path) if tensor_cache_path is not None else None
+    if state_dict is None:
+        if not KDAWeights.check_cache_complete(
+            cache_path,
+            cache_name_prefix,
+            config,
+            device,
+            tensor_parallel_axis=tensor_parallel_axis,
+        ):
+            raise FileNotFoundError(f"incomplete KDA TTNN cache for {cache_name_prefix!r} at {cache_path!r}")
+        host_weights = None
+    else:
+        host_weights = _prepare_kda_host_weights(state_dict, config, tensor_parallel_size)
+
+    weights = _materialize_kda_weights(
+        host_weights,
+        device=device,
+        config=config,
+        tensor_cache_path=cache_path,
         cache_name_prefix=cache_name_prefix,
+        mesh_shape=mesh_shape,
+        tensor_parallel_size=tensor_parallel_size,
         tensor_parallel_axis=tensor_parallel_axis,
-        load_to_device=True,
+        place_on_device=True,
     )
-    assert weights is not None, "load_to_device=True always constructs KDAWeights"
+    assert weights is not None
     return weights
