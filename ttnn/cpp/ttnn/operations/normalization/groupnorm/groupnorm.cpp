@@ -15,7 +15,6 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
@@ -626,7 +625,7 @@ Tensor group_norm(
                 "reason: {}.",
                 !fits_l1 ? "resident tilized group does not fit L1" : "composite preferred for perf");
             // Keep the input's memory config; output_mem_config may well be different.
-            gn_input = ttnn::tilize_with_zero_padding(input_tensor, input_tensor.memory_config());
+            gn_input = input_tensor /* TODO(nuked-op tilize_with_zero_padding): passthrough */;
         }
     }
 

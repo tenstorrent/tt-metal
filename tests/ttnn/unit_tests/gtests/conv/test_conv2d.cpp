@@ -16,7 +16,6 @@
 #include "ttnn/operations/conv/conv_types.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/types.hpp"
