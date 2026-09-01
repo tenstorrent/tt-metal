@@ -75,7 +75,7 @@ PrefetcherPipeConfigPageLayout compute_prefetcher_pipe_config_page_layout(
 }  // namespace
 
 PrefetcherPipe::PrefetcherPipe(
-    IDevice* device,
+    distributed::MeshDevice* device,
     CoreCoord sender_core,
     const CoreRangeSet& receiver_cores,
     uint32_t ring_size,
@@ -147,22 +147,15 @@ void PrefetcherPipe::build_config_pages() {
 }
 
 void PrefetcherPipe::write_config_to_device() {
-    const auto* mesh_device = dynamic_cast<const distributed::MeshDevice*>(device_);
+    TT_FATAL(device_ != nullptr, "PrefetcherPipe device cannot be null");
     for (const auto& [core, page] : config_pages_) {
-        auto write_page = [&](IDevice* target_device) {
+        for (IDevice* target_device : device_->get_devices()) {
             auto page_copy = page;
             TT_FATAL(
                 detail::WriteToDeviceL1(target_device, core, config_address_, page_copy),
                 "Failed to write PrefetcherPipe config page to core {} on device {}",
                 core.str(),
                 target_device->id());
-        };
-        if (mesh_device != nullptr) {
-            for (IDevice* target_device : mesh_device->get_devices()) {
-                write_page(target_device);
-            }
-        } else {
-            write_page(device_);
         }
     }
 }
@@ -245,7 +238,7 @@ const CoreRangeSet& PrefetcherPipe::receiver_cores() const { return receiver_cor
 const CoreRangeSet& PrefetcherPipe::all_cores() const { return all_cores_; }
 
 PrefetcherPipe CreatePrefetcherPipe(
-    IDevice* device,
+    distributed::MeshDevice* device,
     CoreCoord sender_core,
     const CoreRangeSet& receiver_cores,
     uint32_t ring_size,

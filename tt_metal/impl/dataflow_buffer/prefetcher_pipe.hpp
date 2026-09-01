@@ -16,8 +16,11 @@
 
 namespace tt::tt_metal {
 
-class IDevice;
 class Program;
+
+namespace distributed {
+class MeshDevice;
+}
 
 namespace experimental {
 
@@ -41,7 +44,7 @@ public:
      *
      */
     PrefetcherPipe(
-        IDevice* device,
+        distributed::MeshDevice* device,
         CoreCoord sender_core,
         const CoreRangeSet& receiver_cores,
         uint32_t ring_size,
@@ -66,7 +69,7 @@ public:
     const CoreRangeSet& receiver_cores() const;
     const CoreRangeSet& all_cores() const;
     CoreCoord sender_core() const { return sender_core_; }
-    IDevice* get_device() const { return device_; }
+    distributed::MeshDevice* get_device() const { return device_; }
 
 private:
     void setup_buffers(BufferType buffer_type);
@@ -78,7 +81,7 @@ private:
     uint64_t config_allocation_id_ = 0;
     uint32_t data_address_ = 0;
     uint32_t config_address_ = 0;
-    IDevice* device_ = nullptr;
+    distributed::MeshDevice* device_ = nullptr;
     CoreCoord sender_core_;
     CoreRangeSet sender_cores_;
     CoreRangeSet receiver_cores_;
@@ -98,7 +101,7 @@ private:
  * to the same ring/config addresses.
  */
 PrefetcherPipe CreatePrefetcherPipe(
-    IDevice* device,
+    distributed::MeshDevice* device,
     CoreCoord sender_core,
     const CoreRangeSet& receiver_cores,
     uint32_t ring_size,
