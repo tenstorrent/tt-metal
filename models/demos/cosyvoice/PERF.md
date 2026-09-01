@@ -393,8 +393,8 @@ cause is now established and whose remedy is known but does not yet land cleanly
    reference showed chunk 0 clean (waveform PCC `0.99999994`) and chunk 1 with a
    *bit-identical mel* (PCC `1.0`) but waveform PCC `0.011` — which localises it to
    the state carried across the seam rather than to either stage. Parking those four
-   tensors on the host fixes the audio and also stops `synthesize_streaming` hanging
-   n300 — but it hangs `test_streaming_perf` on Blackhole, so it is not in the tree.
+   tensors on the host fixes the audio, but it hangs `test_streaming_perf` on
+   Blackhole, so it is not in the tree.
    `docs/VALIDATION.md` has the full account and what else was tried.
 
    **The separate n300 hang is now root-caused, and it is upstream of the port.**
