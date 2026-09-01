@@ -24,9 +24,7 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     width_sharded_l1_memcfg,
 )
 from models.demos.qwen3_tts.tt.linear_1d_program_config import find_1d_mcast_grid, make_linear_1d_program_config
-
-# Prefill bucket sizes that get a 2D-mcast QKV / O program config (M > 1 tile).
-_PREFILL_SEQS = (32, 64, 96, 128, 192, 256)
+from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS, SHORT_SEQ_LIMIT
 
 
 class Attention(LightweightModule):
@@ -309,7 +307,7 @@ class Attention(LightweightModule):
             packer_l1_acc=True,
         )
 
-        self.short_seq_limit = 32
+        self.short_seq_limit = SHORT_SEQ_LIMIT
         _grid = device.compute_with_storage_grid_size()
         _fp32_linear = self.compute_kernel_config.fp32_dest_acc_en
         # 1D program configs use per-chip sizes: QKV output = local_fused_qkv; O input = local_hidden.
@@ -351,12 +349,12 @@ class Attention(LightweightModule):
         _wo_gx, _wo_gy = find_1d_mcast_grid(self._local_hidden, hidden_size, _grid.x, _grid.y)
         self._prefill_wqkv_progcfg = {
             m: make_linear_1d_program_config(m, hidden_size, _local_fused_qkv, _qkv_gx, _qkv_gy, _fp32_linear)
-            for m in _PREFILL_SEQS
+            for m in PREFILL_SEQS
             if m > self.short_seq_limit
         }
         self._prefill_wo_progcfg = {
             m: make_linear_1d_program_config(m, self._local_hidden, hidden_size, _wo_gx, _wo_gy, _fp32_linear)
-            for m in _PREFILL_SEQS
+            for m in PREFILL_SEQS
             if m > self.short_seq_limit
         }
 
@@ -442,7 +440,7 @@ class Attention(LightweightModule):
             m_tiles=1, k_tiles=n_tiles_o, num_cores_x=cols_o, num_cores_y=rows_o
         )
 
-        # === Sharded NLP head op memcfgs (decode m=32) ===
+        # === Sharded NLP head op memcfgs (decode + prefill buckets) ===
         # nlp_concat_heads HEIGHT_SHARDED input over num_heads cores (1 head/shard).
         # nlp_create_qkv_heads WIDTH_SHARDED input with shard_width=(Q/KV+2)*head_dim
         # over fused_qkv/shard_width cores (= num_kv_heads).
@@ -495,7 +493,7 @@ class Attention(LightweightModule):
         self._decode_qkv_split_v_out_memcfg = self._decode_qkv_split_k_out_memcfg
 
         self._prefill_concat_configs = (
-            {} if self.tp_size > 1 else {m: _build_sharded_nlp_memcfgs(m) for m in _PREFILL_SEQS}
+            {} if self.tp_size > 1 else {m: _build_sharded_nlp_memcfgs(m) for m in PREFILL_SEQS}
         )
 
         # Pre-compute HEIGHT_SHARDED memory configs for paged_update_cache inputs.
@@ -582,7 +580,7 @@ class Attention(LightweightModule):
 
         # QKV: DRAM-sharded when M is one tile (decode / CP prefill / seq<=32).
         # Larger prefill: 1D-mcast on L1 interleaved in0 (faster than width-sharded).
-        use_dram_shard_qkv = seq_len <= 32
+        use_dram_shard_qkv = seq_len <= self.short_seq_limit
         # Sharded nlp_create_qkv_heads engages downstream of the DRAM-sharded QKV
         # since wqkv was rearranged to KV-group-interleaved layout.
         sharded_qkv_split = use_dram_shard_qkv
