@@ -9,9 +9,10 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
+from models.demos.deepseek_v3_d_p.tests.kda.utils import collect_mesh_accuracy_and_determinism_results
 from models.demos.deepseek_v3_d_p.tt.kda import ops
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_RECURRENT_STATE_DTYPE, KDARecurrenceProgramConfig
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
 
 pytestmark = [
     run_for_blackhole(),
@@ -165,6 +166,25 @@ def test_distributed_affine_prefix_matches_serial(
         )
     ttnn.synchronize_device(mesh_device)
     assert mesh_device.num_program_cache_entries() == cache_entries
+    run_index = 0
+
+    def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        nonlocal run_index
+        run_index += 1
+        if run_index == 1:
+            return entry_tt, final_tt
+        if run_index == 2:
+            return repeated_entry_tt, repeated_final_tt
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            return ops._distributed_affine_prefix(
+                a_tt,
+                b_tt,
+                state_tt,
+                sequence_parallel_axis=sp_axis,
+                compute_config=compute_config,
+            )
+
+    _, mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     with ttnn.manage_config("throw_exception_on_fallback", True):
@@ -183,8 +203,6 @@ def test_distributed_affine_prefix_matches_serial(
 
     actual_entries = _partitioned_to_torch(entry_tt, mesh_device, sp_axis, tensor_parallel_axis)
     actual_final = _replicated_sp_to_torch(final_tt, mesh_device, sp_axis, tensor_parallel_axis)
-    repeated_entries = _partitioned_to_torch(repeated_entry_tt, mesh_device, sp_axis, tensor_parallel_axis)
-    repeated_final = _replicated_sp_to_torch(repeated_final_tt, mesh_device, sp_axis, tensor_parallel_axis)
     traced_entries = _partitioned_to_torch(traced_entry_tt, mesh_device, sp_axis, tensor_parallel_axis)
     traced_final = _replicated_sp_to_torch(traced_final_tt, mesh_device, sp_axis, tensor_parallel_axis)
     ttnn.release_trace(mesh_device, trace_id)
@@ -194,60 +212,6 @@ def test_distributed_affine_prefix_matches_serial(
 
     assert_accurate(expected_entries, actual_entries, name=f"tp_axis={tensor_parallel_axis} production entries")
     assert_accurate(expected_final.squeeze(0), actual_final, name=f"tp_axis={tensor_parallel_axis} production final")
-    assert_accurate(expected_entries, repeated_entries, name=f"tp_axis={tensor_parallel_axis} repeated entries")
-    assert_accurate(expected_final.squeeze(0), repeated_final, name=f"tp_axis={tensor_parallel_axis} repeated final")
+    assert all(marker.item() == 0 for marker in mismatch_markers), "affine prefix is not bit-identical across runs"
     assert_accurate(expected_entries, traced_entries, name=f"tp_axis={tensor_parallel_axis} traced entries")
     assert_accurate(expected_final.squeeze(0), traced_final, name=f"tp_axis={tensor_parallel_axis} traced final")
-
-
-@pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
-def test_distributed_affine_prefix_determinism(
-    mesh_device: ttnn.MeshDevice,
-    tensor_parallel_axis: int,
-) -> None:
-    sp_axis = 1 - tensor_parallel_axis
-    sp_size = tuple(mesh_device.shape)[sp_axis]
-    heads, dim = 8, 32
-    local_heads = heads // tuple(mesh_device.shape)[tensor_parallel_axis]
-    generator = torch.Generator().manual_seed(1621 + tensor_parallel_axis)
-    eye = torch.eye(dim, dtype=torch.float32).reshape(1, 1, dim, dim)
-    transform_a = (0.91 * eye).expand(sp_size, heads, -1, -1).clone()
-    transform_a += 0.001 * torch.randn(sp_size, heads, dim, dim, generator=generator)
-    transform_b = 0.01 * torch.randn(sp_size, heads, dim, dim, generator=generator)
-    initial_state = 0.01 * torch.randn(heads, dim, dim, generator=generator)
-    summary_dims = [None, None]
-    summary_dims[tensor_parallel_axis] = 1
-    state_dims = [None, None]
-    state_dims[tensor_parallel_axis] = 0
-    replicated_a = _to_device(transform_a, mesh_device, tuple(summary_dims))
-    replicated_b = _to_device(transform_b, mesh_device, tuple(summary_dims))
-    a_tt = ttnn.reshape(ttnn.mesh_partition(replicated_a, dim=0, cluster_axis=sp_axis), (local_heads, dim, dim))
-    b_tt = ttnn.reshape(ttnn.mesh_partition(replicated_b, dim=0, cluster_axis=sp_axis), (local_heads, dim, dim))
-    state_tt = _to_device(initial_state, mesh_device, tuple(state_dims))
-    program_config = KDARecurrenceProgramConfig()
-    compute_config = ttnn.init_device_compute_kernel_config(
-        mesh_device.arch(),
-        math_fidelity=program_config.affine_prefix_math_fidelity,
-        fp32_dest_acc_en=True,
-    )
-
-    results = []
-    for _ in range(3):
-        entry_tt, final_tt = ops._distributed_affine_prefix(
-            a_tt,
-            b_tt,
-            state_tt,
-            sequence_parallel_axis=sp_axis,
-            compute_config=compute_config,
-        )
-        ttnn.synchronize_device(mesh_device)
-        results.append(
-            (
-                _partitioned_to_torch(entry_tt, mesh_device, sp_axis, tensor_parallel_axis),
-                _replicated_sp_to_torch(final_tt, mesh_device, sp_axis, tensor_parallel_axis),
-            )
-        )
-
-    for iteration, (entries, final) in enumerate(results[1:], start=1):
-        assert_bit_identical(results[0][0], entries, name=f"affine entries iteration {iteration}")
-        assert_bit_identical(results[0][1], final, name=f"affine final iteration {iteration}")
