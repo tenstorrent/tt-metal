@@ -18,6 +18,7 @@ ttnn::Tensor vsa_sdpa(
     std::optional<float> scale,
     uint32_t block_size,
     uint32_t k_chunk_blocks,
+    bool streaming,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     const uint32_t d = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(d)));
@@ -31,7 +32,7 @@ ttnn::Tensor vsa_sdpa(
         /*default_l1_acc=*/false);
 
     return ttnn::prim::vsa_sdpa(
-        q, k, v, indices, block_counts, resolved_scale, block_size, k_chunk_blocks, kernel_config);
+        q, k, v, indices, block_counts, resolved_scale, block_size, k_chunk_blocks, streaming, kernel_config);
 }
 
 }  // namespace ttnn::transformer

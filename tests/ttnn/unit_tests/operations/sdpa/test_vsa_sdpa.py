@@ -74,7 +74,7 @@ def build_counts(n_blocks, w, ragged, seed):
     return padded.to(torch.uint32)
 
 
-def run_vsa_sdpa(device, heads, seq_len, kv_len, pattern, ragged, m, seed=0):
+def run_vsa_sdpa(device, heads, seq_len, kv_len, pattern, ragged, m, seed=0, streaming=False):
     torch.manual_seed(seed)
     dim = 128
     n_q_tiles = seq_len // BLOCK
@@ -102,7 +102,7 @@ def run_vsa_sdpa(device, heads, seq_len, kv_len, pattern, ragged, m, seed=0):
         counts.view(torch.int32).reshape(1, 1, 1, w), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
     )
 
-    tt_out = ttnn.transformer.vsa_sdpa(tt_q, tt_k, tt_v, tt_idx, tt_counts, k_chunk_blocks=m)
+    tt_out = ttnn.transformer.vsa_sdpa(tt_q, tt_k, tt_v, tt_idx, tt_counts, k_chunk_blocks=m, streaming=streaming)
     out = ttnn.to_torch(tt_out)
 
     ref = fine_attention_ref(q.float(), k.float(), v.float(), indices, counts)
@@ -110,6 +110,7 @@ def run_vsa_sdpa(device, heads, seq_len, kv_len, pattern, ragged, m, seed=0):
 
 
 @skip_for_wormhole_b0("vsa_sdpa is Blackhole-only")
+@pytest.mark.parametrize("streaming", [False, True], ids=["v1", "stream"])
 @pytest.mark.parametrize("m", [1, 3])
 @pytest.mark.parametrize(
     ("heads", "seq_len", "kv_len", "pattern", "ragged"),
@@ -122,8 +123,10 @@ def run_vsa_sdpa(device, heads, seq_len, kv_len, pattern, ragged, m, seed=0):
     ],
     ids=["nonuniform_ragged", "dense_ragged", "single_block", "h14", "minimal"],
 )
-def test_vsa_sdpa_vs_torch(device, heads, seq_len, kv_len, pattern, ragged, m):
-    out, ref = run_vsa_sdpa(device, heads, seq_len, kv_len, pattern, ragged, m)
+def test_vsa_sdpa_vs_torch(device, heads, seq_len, kv_len, pattern, ragged, m, streaming):
+    if streaming and m != 1:
+        pytest.skip("the streaming path has no k-chunk knob")
+    out, ref = run_vsa_sdpa(device, heads, seq_len, kv_len, pattern, ragged, m, streaming=streaming)
     ok, pcc = comp_pcc(ref, out.float(), 0.999)
     assert ok, f"PCC {pcc}"
 

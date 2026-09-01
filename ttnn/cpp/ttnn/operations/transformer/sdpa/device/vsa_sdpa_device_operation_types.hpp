@@ -17,8 +17,13 @@ struct VsaSdpaParams {
     float scale = 1.0f;        // compile-time; included in the program hash
     uint32_t block_size = 64;  // tokens per KV block (the VSA cube size)
     // Blocks gathered per L1 chunk (the k_chunk multiplier m): one QK matmul + one softmax rescale per chunk.
-    // A row whose valid block count is not a multiple of m ends with a partial chunk.
+    // A row whose valid block count is not a multiple of m ends with a partial chunk. v1 path only.
     uint32_t k_chunk_blocks = 1;
+    // Streaming (v2) algorithm: rows stay resident in L1 with running softmax state while each
+    // core's union of listed KV blocks streams through ONCE in ascending block order -- eliminating
+    // the per-row re-gather that makes v1 DRAM-bound. Numerics: identical contract; online softmax
+    // is order-independent, so ascending order is as exact as list order (bf16 rounding differs).
+    bool streaming = false;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 

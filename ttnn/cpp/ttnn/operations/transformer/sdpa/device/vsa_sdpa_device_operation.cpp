@@ -132,6 +132,7 @@ ttsl::hash::hash_t VsaSdpaOperation::compute_program_hash(const VsaSdpaParams& a
         std::bit_cast<uint32_t>(attrs.scale),
         attrs.block_size,
         attrs.k_chunk_blocks,
+        attrs.streaming,
         attrs.compute_kernel_config,
         t.q.logical_shape(),
         t.q.dtype(),
@@ -225,6 +226,7 @@ Tensor vsa_sdpa(
     float scale,
     uint32_t block_size,
     uint32_t k_chunk_blocks,
+    bool streaming,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     using OperationType = ttnn::prim::VsaSdpaOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -232,6 +234,7 @@ Tensor vsa_sdpa(
             .scale = scale,
             .block_size = block_size,
             .k_chunk_blocks = k_chunk_blocks,
+            .streaming = streaming,
             .compute_kernel_config = compute_kernel_config,
         },
         OperationType::tensor_args_t{

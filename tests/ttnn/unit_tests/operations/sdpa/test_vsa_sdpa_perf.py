@@ -63,13 +63,13 @@ def make_inputs(device, s_local, n_blocks, row_blocks, dense_rows, order, seed=0
     )
 
 
-def bench(device, args, m, iters=8):
+def bench(device, args, m, iters=8, streaming=False):
     q, k, v, idx, counts, flops = args
-    out = ttnn.transformer.vsa_sdpa(q, k, v, idx, counts, k_chunk_blocks=m)  # compile
+    out = ttnn.transformer.vsa_sdpa(q, k, v, idx, counts, k_chunk_blocks=m, streaming=streaming)  # compile
     ttnn.synchronize_device(device)
     t0 = time.perf_counter()
     for _ in range(iters):
-        out = ttnn.transformer.vsa_sdpa(q, k, v, idx, counts, k_chunk_blocks=m)
+        out = ttnn.transformer.vsa_sdpa(q, k, v, idx, counts, k_chunk_blocks=m, streaming=streaming)
     ttnn.synchronize_device(device)
     ms = (time.perf_counter() - t0) / iters * 1e3
     ttnn.deallocate(out)
@@ -93,8 +93,8 @@ def test_vsa_sdpa_bench(device):
     print()
     for label, spec in cases:
         args = make_inputs(device, **spec)
-        for m in (1, 2, 4, 8, 16):
-            ms, util, grid = bench(device, args, m)
-            print(f"{label}  m={m:<2d}  {ms:8.3f} ms   util {util:5.2f} %   grid {grid}")
+        for mode, m in (("v1", 2), ("stream", 1)):
+            ms, util, grid = bench(device, args, m, streaming=(mode == "stream"))
+            print(f"{label}  {mode:<6s}  {ms:8.3f} ms   util {util:5.2f} %   grid {grid}")
         for t in args[:5]:
             ttnn.deallocate(t)

@@ -502,6 +502,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("scale") = nb::none(),
         nb::arg("block_size") = 64,
         nb::arg("k_chunk_blocks") = 1,
+        nb::arg("streaming") = false,
         nb::arg("compute_kernel_config") = nb::none());
 
     const auto* const chunked_doc =

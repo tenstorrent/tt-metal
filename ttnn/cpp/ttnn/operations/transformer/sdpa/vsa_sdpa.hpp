@@ -39,6 +39,7 @@ ttnn::Tensor vsa_sdpa(
     std::optional<float> scale = std::nullopt,
     uint32_t block_size = 64,
     uint32_t k_chunk_blocks = 1,
+    bool streaming = false,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace ttnn::transformer

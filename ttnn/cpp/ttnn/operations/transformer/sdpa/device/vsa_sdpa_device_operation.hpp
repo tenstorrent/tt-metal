@@ -33,7 +33,21 @@ struct VsaSdpaOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<VsaSdpaProgramFactory>;
+    // Streaming (v2) factory: resident-row online softmax over a single ascending-order pass of
+    // each core's union of listed KV blocks. Same op contract; selected by attrs.streaming.
+    struct VsaSdpaStreamProgramFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& attrs, const tensor_args_t& t, tensor_return_value_t& output);
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& t,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    using program_factory_t = std::variant<VsaSdpaProgramFactory, VsaSdpaStreamProgramFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     // Runtime-arg slots, named so create_descriptor's emplace order and override_runtime_arguments'
     // in-place writes reference the same symbols instead of agreeing on bare positions.
@@ -82,6 +96,7 @@ Tensor vsa_sdpa(
     float scale,
     uint32_t block_size,
     uint32_t k_chunk_blocks,
+    bool streaming,
     ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 }  // namespace ttnn::prim
