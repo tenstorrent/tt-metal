@@ -885,6 +885,21 @@ def warmup_gemma4_batched_prefill_traces(
     else:
         # Same as tt_transformers: batch-1-only traced prefill warmup.
         warmup_batch_sizes = (1,)
+        batched_runtime_enabled = (
+            not getattr(model_args, "disable_batched_prefill", False)
+            and os.environ.get("G4_FORCE_BATCH_PREFILL", "0") == "1"
+        )
+        if batched_runtime_enabled:
+            # Runtime batched prefill REPLAYS need boot-time captures. A cold
+            # capture at runtime allocates its persistent trace inputs and
+            # compile scratch while every decode/prefill trace is already
+            # live, so those traces' replays clobber them afterwards (#30187
+            # class): the first batched group is clean (it consumes the
+            # capture run's output) and every replayed group after returns
+            # garbage. Warm each supported batched shape (≤ user_cap) inside
+            # the boot safe window instead — runtime groups pad to these
+            # sizes (batched_prefill_padded_batch) and hit the warmed keys.
+            warmup_batch_sizes = tuple(b for b in SUPPORTED_PREFILL_BATCH_SIZES if b <= min(user_cap, max_batch_size))
 
     if warmup_batch_sizes == (1,):
         logger.info(

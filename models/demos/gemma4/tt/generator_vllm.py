@@ -1228,6 +1228,33 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         )
         use_sequential = batch_size > 1 and not will_batch
 
+        if will_batch:
+            slots = kwargs.get("empty_slots")
+            slots = [int(s) for s in slots] if slots is not None else None
+            if slots is not None and slots != list(range(len(slots))):
+                # Batched prefill places tokens at their device slots
+                # (``prefill_ids[slot] ← user i``) and the per-layer KV fill
+                # indexes tables by slot (``paged_fill_cache(batch_idx=slot)``),
+                # but the plugin's per-layer tables arrive in *local* prefill
+                # order (row i = user i). With non-identity ``empty_slots`` —
+                # exactly when another request is mid-decode — user i's KV was
+                # written through table row ``slot_i`` of a local-ordered
+                # table: each user's KV landed in the next user's blocks and
+                # the first user's blocks were never written (debt #1's single
+                # corrupted user). Scatter local rows to slot rows, mirroring
+                # ``_get_prefill_user_page_table``'s legacy scatter.
+                scattered = []
+                for pt in full_page_tables or []:
+                    if pt is None or not isinstance(pt, torch.Tensor) or pt.dim() < 2:
+                        scattered.append(pt)
+                        continue
+                    out = torch.zeros_like(pt)
+                    for i, slot in enumerate(slots):
+                        if i < pt.shape[0] and slot < out.shape[0]:
+                            out[slot] = pt[i]
+                    scattered.append(out)
+                full_page_tables = scattered
+
         # Always install per-layer tables when available. Under bounded sliding
         # kwargs["page_table"] is the remapped *sliding* table; clearing the
         # per-layer stash makes full-attention layers inherit it (empty thought
