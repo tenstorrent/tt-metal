@@ -91,6 +91,7 @@ fi
 SUITES=(
     unary binary bcast reduction add_exp mixed_format
     matmul matmul_bias matmul_mcast matmul_transpose matmul_blocked dst32
+    bmm_mcast
     custom_compute mcast_share rmsnorm rope attention attention_proj flash
     layer negative
 )
