@@ -10,6 +10,7 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
 #include <algorithm>
+#include <numeric>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -53,12 +54,15 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    // The intermediate is row-major, so it cannot be a block-float format. If the input is
+    // already block-float, unpack it to bfloat16; otherwise keep the input dtype. Conversion
+    // to the output dtype happens on the final pack (see retile.cpp).
+    auto intermediate_dtype = is_block_float(a.dtype()) ? tt::tt_metal::DataType::BFLOAT16 : a.dtype();
+    tt::DataFormat mid_cb_data_format = datatype_to_dataformat_converter(intermediate_dtype);
     uint32_t input_single_tile_size = input_tile.get_tile_size(input_cb_data_format);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_cb_data_format);
-    const uint32_t mid_page_size = input_single_tile_size;
-    // The intermediate stays in the input data format (conversion happens on the final pack), so
-    // the consumer view sizes an output tile in the input format, not the output format.
-    const uint32_t out_tile_size_input_fmt = output_tile.get_tile_size(input_cb_data_format);
+    const uint32_t mid_input_page_size = input_tile.get_tile_size(mid_cb_data_format);
+    const uint32_t mid_output_page_size = output_tile.get_tile_size(mid_cb_data_format);
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
@@ -107,8 +111,15 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
     const uint32_t src_cb_tiles = cb_num_pages_per_block * cb_factor;
     const uint32_t out_cb_tiles = cb_num_pages_per_block * cb_factor;
 
-    // One output block occupies `ratio` input tile-rows of RM in the grow case, one otherwise.
-    const uint32_t mid_pages_per_out_block = (shrink ? 1u : ratio) * tiles_per_block;
+    // The compute kernel untilizes the whole per-core assignment into mid, then tilizes it.
+    // Size mid for the busiest core's input tile-rows. Aliased c_1/c_2 page sizes can differ
+    // (e.g. bf16→bfp8 with different tile heights), so the allocation must be a multiple of both.
+    const uint32_t max_blocks = std::max(nblocks_per_core, nblocks_per_core_cliff);
+    const uint32_t max_input_rows_per_core = shrink ? max_blocks : max_blocks * ratio;
+    const uint32_t mid_input_pages = max_input_rows_per_core * tiles_per_block;
+    const uint32_t mid_size_align = std::lcm(mid_input_page_size, mid_output_page_size);
+    const uint32_t mid_total_size =
+        ((mid_input_pages * mid_input_page_size + mid_size_align - 1) / mid_size_align) * mid_size_align;
 
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
     constexpr uint32_t mid_cb_index = tt::CBIndex::c_1;       // input tile geometry (untilize producer)
@@ -134,19 +145,19 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
     // program-creation time: c_1 carries the input tile shape for pack_untilize to write into, c_2
     // the output tile shape so llk_unpack_tilize reads the correct number of RM rows.
     desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * mid_pages_per_out_block * mid_page_size,
+        .total_size = mid_total_size,
         .core_ranges = all_cores,
         .format_descriptors = {{
             CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(mid_cb_index),
-                .data_format = input_cb_data_format,
-                .page_size = mid_page_size,
+                .data_format = mid_cb_data_format,
+                .page_size = mid_input_page_size,
                 .tile = input_tile,
             },
             CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(mid_view_cb_index),
-                .data_format = input_cb_data_format,
-                .page_size = out_tile_size_input_fmt,
+                .data_format = mid_cb_data_format,
+                .page_size = mid_output_page_size,
                 .tile = output_tile,
             },
         }},
@@ -216,8 +227,15 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
             output_cb_index,
             in_tile_height,
             out_tile_height,
-            out_tile_size_input_fmt,
-            mid_page_size,
+            mid_output_page_size,
+            mid_input_page_size,
+            // Width-chunking CTAs. The interleaved retile factory does not chunk (chunk_tiles ==
+            // tiles_per_block, num_width_chunks == 1), which collapses the kernel's outer chunk
+            // loop to a single pass with pointer surgery equivalent to the original path.
+            tiles_per_block,
+            input_single_tile_size,
+            output_single_tile_size,
+            1u,
         };
         cd.config = ComputeConfigDescriptor{
             .fp32_dest_acc_en = fp32_llk_acc,

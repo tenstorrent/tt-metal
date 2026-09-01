@@ -1,0 +1,46 @@
+---
+description: Ask before running any command that uses the Tenstorrent device
+alwaysApply: true
+---
+
+# Ask before touching the device
+
+The Blackhole/Wormhole card is a shared resource. Multiple users on the box run
+long-lived servers (e.g. `warm_render_server`) and interactive debugger sessions
+(`pytest --pdb`) that hold `CHIP_IN_USE_*_PCIe`, so blindly launching a device
+command can deadlock, kill someone else's session, or be killed itself.
+
+## Rule
+
+Do NOT run any command that opens the device. Instead, tell the user exactly
+what command you would run and wait for them to run it (or explicitly approve).
+
+## What counts as a device command
+
+- `pytest ...` for any test that constructs a ttnn device / mesh (nearly all
+  `tests/ttnn/**`, `models/**/tests/**`, `tests/tt_metal/**` end-to-end tests)
+- Any Python script that calls `ttnn.open_device`, `ttnn.CreateDevice`,
+  `open_mesh_device`, `ttnn.experimental.*` op invocations, etc.
+- LLK tests that program silicon (`tt_metal/tt-llk/tests/**` runners)
+- Standalone binaries under `build_*/test/**` that touch a chip
+- Profiler / tracy captures that need a live device
+
+## What is fine to run without asking
+
+- `./build_metal.sh` and other pure host builds (no device open)
+- File reads, grep, glob, `git ...`
+- `python -c "import ttnn; print(ttnn.Tile((1,32)))"` and similar host-only
+  imports that do NOT call `open_device`
+- `ps`, `ls`, `head`, `cat` of terminal / log files
+
+## How to ask
+
+Give the user a copy-pasteable command and the reason, e.g.:
+
+> Ready to verify the fix. Please run:
+> ```
+> pytest 'tests/.../test_fused_experts.py::test_...[block0-...-batch1-...]' -x --tb=short
+> ```
+> Paste the failure summary (or "passed") back and I'll continue.
+
+Do not schedule, background, or "just try" a device command yourself.

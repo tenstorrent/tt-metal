@@ -1,0 +1,275 @@
+from typing import Optional
+
+import torch
+import ttnn
+
+from .attention import (
+    DeepSeekV4Attention,
+    _StaticLayerCache,
+)
+from .common import DeepSeekV4Module, _HIFI4, _profile, _region
+from .hyperconnection import DeepSeekV4HyperConnection
+from .layers import DeepSeekV4RMSNorm
+from .moe import DeepSeekV4SparseMoeBlock
+from .paged_cache import PagedLayerView
+from .weight_cache import WeightCache, _as_cache
+
+
+def _strip_prefix(weights: dict, prefix: str) -> dict:
+    """Sub-dict of ``weights`` whose keys start with ``prefix.`` (prefix stripped)."""
+    p = f"{prefix}."
+    return {k[len(p) :]: v for k, v in weights.items() if k.startswith(p)}
+
+
+class DeepSeekV4DecoderLayer(DeepSeekV4Module):
+    """ttnn port of ``DeepseekV4DecoderLayer`` (decode).
+
+    The residual is a stack of ``hc_mult`` parallel streams kept in
+    ``[B, S, H, D]`` (``H`` = ``hc_mult``, ``D`` = ``hidden_size``) throughout the
+    block, mixed in/out by two :class:`DeepSeekV4HyperConnection` modules. For
+    each sublayer (attention, then MoE) the matching HC collapses the streams
+    into the sublayer input, and the sublayer output is folded back into the
+    streams via the learned ``post`` placement weights plus the Sinkhorn
+    ``comb`` stream-mixing matrix::
+
+        post, comb, collapsed = hc(streams)
+        out = sublayer(norm(collapsed))
+        streams = post * out + (comb.T @ streams)
+
+    ``comb`` is consumed *transposed* (mix over the first hc axis), matching the
+    reference ``torch.matmul(comb.transpose(-1, -2), streams)``.
+
+    ``weights`` keys mirror the HF decoder-layer param names: ``self_attn.*``,
+    ``mlp.*``, ``attn_hc.{fn,base,scale}``, ``ffn_hc.{fn,base,scale}``,
+    ``input_layernorm.weight``, ``post_attention_layernorm.weight``. RoPE tables
+    and the additive mask are inputs (built by the surrounding model / test, per
+    :func:`make_rope_table`), exactly as for :class:`DeepSeekV4Attention`.
+    """
+
+    def __init__(
+        self,
+        config,
+        layer_idx: int,
+        weights: dict,
+        device: ttnn.MeshDevice,
+        experts=None,
+        gate=None,
+        cache: Optional[WeightCache] = None,
+        weight_dtype: ttnn.DataType = ttnn.bfloat16,
+        use_prefetcher: bool = False,
+        prefetch_buffers: Optional[dict] = None,
+        packed_weights=None,
+        tp_size: int = 1,
+    ):
+        self.config = config
+        self.layer_idx = layer_idx
+        self.device = device
+        eps = config.rms_norm_eps
+        cache = _as_cache(cache)
+        packed_bundle = None
+        if packed_weights is not None:
+            (packed_tensor, packed_layout), packed_slot = packed_weights
+            packed_bundle = (packed_tensor, packed_layout, packed_slot)
+
+        self.self_attn = DeepSeekV4Attention(
+            config,
+            layer_idx,
+            _strip_prefix(weights, "self_attn"),
+            device,
+            cache=cache.sub("self_attn"),
+            weight_dtype=weight_dtype,
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
+            packed_weights=packed_bundle,
+            tp_size=tp_size,
+        )
+        self.mlp = DeepSeekV4SparseMoeBlock(
+            config,
+            _strip_prefix(weights, "mlp"),
+            device,
+            experts=experts,
+            gate=gate,
+            cache=cache.sub("mlp"),
+            weight_dtype=weight_dtype,
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
+            packed_weights=packed_bundle,
+            tp_size=tp_size,
+        )
+        self.input_layernorm = DeepSeekV4RMSNorm(
+            weights["input_layernorm.weight"], eps, device, cache.file("input_layernorm"), sharded=True
+        )
+        self.post_attention_layernorm = DeepSeekV4RMSNorm(
+            weights["post_attention_layernorm.weight"],
+            eps,
+            device,
+            cache.file("post_attention_layernorm"),
+            sharded=True,
+        )
+        self.attn_hc = DeepSeekV4HyperConnection(
+            config,
+            _strip_prefix(weights, "attn_hc"),
+            device,
+            cache=cache.sub("attn_hc"),
+            packed_weights=packed_bundle,
+            packed_name="attn_hc.fn",
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
+            weight_dtype=weight_dtype,
+        )
+        self.ffn_hc = DeepSeekV4HyperConnection(
+            config,
+            _strip_prefix(weights, "ffn_hc"),
+            device,
+            cache=cache.sub("ffn_hc"),
+            packed_weights=packed_bundle,
+            packed_name="ffn_hc.fn",
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
+            weight_dtype=weight_dtype,
+        )
+        _profile(self.device)
+
+    def prefetch_weights(self):
+        """Stage this layer's prefetched weights ahead of the :meth:`decode` that uses them.
+
+        Hyper-connection ``fn`` first (private GCB, consumed before attention), then
+        attention (its own four projections and its compressor's pair), then the FFN
+        hyper-connection, then the MoE shared expert. Attention and MoE share one GCB
+        and must stay in that FIFO order; each HC streams through its own buffer.
+        The requests queued here must be consumed by this layer's own decode before
+        any later layer queues its own.
+        """
+        self.attn_hc.prefetch_weights()
+        self.self_attn.prefetch_weights()
+        self.ffn_hc.prefetch_weights()
+        self.mlp.prefetch_weights()
+
+    def _mix(
+        self, post: ttnn.Tensor, comb: ttnn.Tensor, sublayer_out: ttnn.Tensor, streams: ttnn.Tensor
+    ) -> ttnn.Tensor:
+        """``post[..,None] * out[..,None,:] + comb.T @ streams`` -> new streams.
+
+        ``post`` ``[B,S,H,1]``, ``comb`` ``[B,S,H,H]``, ``sublayer_out`` ``[B,S,1,D]``,
+        ``streams`` ``[B,S,H,D]``; returns ``[B,S,H,D]``.
+
+        Fused into a single composite device op (``ttnn.experimental.deepseek.mix_streams``)
+        that folds the broadcast-multiply, the ``comb`` transpose (via ``transpose_a=True``)
+        and the add into one op call, matching the eager math at HiFi4 / fp32 dest acc.
+        """
+        _profile(self.device)
+        return ttnn.experimental.deepseek.mix_streams(post, comb, sublayer_out, streams, compute_kernel_config=_HIFI4)
+
+    def decode(
+        self,
+        hidden_streams: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        neg_sin: ttnn.Tensor,
+        cos_win: ttnn.Tensor | None,
+        sin_win: ttnn.Tensor | None,
+        mask: ttnn.Tensor | None,
+        scache: "_StaticLayerCache",
+        sliding_pos: ttnn.Tensor,
+        compress_pos: ttnn.Tensor,
+        input_ids: Optional[torch.Tensor] = None,
+        paged: PagedLayerView | None = None,
+        pool_compressor: bool = True,
+        sdpa_cur_pos: ttnn.Tensor | None = None,
+        win_slot: ttnn.Tensor | None = None,
+        win_row: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        """Single-token decode: ``hidden_streams`` ``[B, 1, hc_mult, D]`` -> same.
+
+        Everything outside attention (hyper-connections, norms, MoE / MLP) is
+        per-token; attention runs against the paged in-place ``scache``.
+        """
+        with _region("ATTN_HC"):
+            post, comb, collapsed = self.attn_hc(hidden_streams)
+        with _region("INPUT_NORM"):
+            normed = self.input_layernorm(collapsed)
+        with _region("ATTENTION"):
+            attn_out = self.self_attn.decode(
+                normed,
+                cos,
+                sin,
+                neg_sin,
+                cos_win,
+                sin_win,
+                mask,
+                scache,
+                sliding_pos,
+                compress_pos,
+                paged=paged,
+                pool_compressor=pool_compressor,
+                sdpa_cur_pos=sdpa_cur_pos,
+                win_slot=win_slot,
+                win_row=win_row,
+            )
+        with _region("ATTN_MIX"):
+            hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
+        _profile(self.device)
+        with _region("FFN_HC"):
+            post, comb, collapsed = self.ffn_hc(hidden_streams)
+        with _region("POST_NORM"):
+            normed = self.post_attention_layernorm(collapsed)
+        with _region("MOE"):
+            mlp_out = self.mlp(normed, input_ids=input_ids)
+        with _region("FFN_MIX"):
+            return self._mix(post, comb, mlp_out, hidden_streams)
+
+    def decode_static(
+        self,
+        hidden_streams: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        neg_sin: ttnn.Tensor,
+        cos_win: ttnn.Tensor | None,
+        sin_win: ttnn.Tensor | None,
+        mask: ttnn.Tensor | None,
+        scache: "_StaticLayerCache",
+        sliding_pos: ttnn.Tensor,
+        compress_pos: ttnn.Tensor,
+        hash_token: ttnn.Tensor | None = None,
+        paged: PagedLayerView | None = None,
+        pool_compressor: bool = True,
+        sdpa_cur_pos: ttnn.Tensor | None = None,
+        win_slot: ttnn.Tensor | None = None,
+        win_row: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        """Trace-safe single-token decode (see :meth:`decode`). Uses the fixed-size
+        in-place attention cache + the host-sync-free MoE so the whole block can be
+        captured into a reusable ``ttnn`` trace.
+
+        ``pool_compressor`` is fixed at capture time: the traced path captures one
+        variant per window phase (see :meth:`DeepSeekV4Model._capture_traces`)."""
+        # return ttnn.assign(hidden_streams, memory_config=hidden_streams.memory_config())
+        post, comb, collapsed = self.attn_hc(hidden_streams)
+        normed = self.input_layernorm(collapsed)
+        attn_out = self.self_attn.decode_static(
+            normed,
+            cos,
+            sin,
+            neg_sin,
+            cos_win,
+            sin_win,
+            mask,
+            scache,
+            sliding_pos,
+            compress_pos,
+            paged=paged,
+            pool_compressor=pool_compressor,
+            sdpa_cur_pos=sdpa_cur_pos,
+            win_slot=win_slot,
+            win_row=win_row,
+        )
+        hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
+        # Both are spent, and at a wide batch the L1 they hold is the difference
+        # between the MoE's circular buffers fitting and not (a user's row is padded to
+        # a whole tile, so these grow with the batch). Nothing below reads them.
+        ttnn.deallocate(normed)
+        ttnn.deallocate(attn_out)
+        post, comb, collapsed = self.ffn_hc(hidden_streams)
+        collapsed = self.post_attention_layernorm(collapsed)
+        mlp_out = self.mlp.decode_static(collapsed, hash_token=hash_token)
+        return self._mix(post, comb, mlp_out, hidden_streams)

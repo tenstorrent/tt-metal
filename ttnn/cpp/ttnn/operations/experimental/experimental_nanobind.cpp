@@ -42,6 +42,7 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_hf/rotary_embedding_hf_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/fused_partial_rope/fused_partial_rope_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/copy/typecast/typecast_nanobind.hpp"
@@ -98,6 +99,9 @@
 #include "ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/zero_padded_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/moe/fused_experts/fused_experts_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/hyperconnection/fused_hyperconnection_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/mix_streams/mix_streams_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -129,6 +133,7 @@ void py_module(nb::module_& mod) {
     transformer::bind_rotary_embedding_hf(mod);
     transformer::bind_rotary_embedding_llama(mod);
     transformer::bind_rotary_embedding_llama_fused_qk(mod);
+    transformer::bind_fused_partial_rope(mod);
     transformer::bind_rotate_half(mod);
 
     create_qkv_heads::detail::bind_create_qkv_heads(mod);
@@ -157,6 +162,7 @@ void py_module(nb::module_& mod) {
     matmul::detail::bind_attn_matmul_from_cache(mod);
     matmul::detail::bind_group_attn_matmul(mod);
     matmul_decode::detail::bind_matmul_decode_operation(mod);
+    matmul_decode::detail::bind_matmul_decode_descriptor(mod);
     deepseek_prefill::masked_bincount::detail::bind_experimental_masked_bincount_operation(mod);
     high_bw_all_gather::detail::bind_experimental_high_bw_all_gather_operation(mod);
     deepseek_prefill::combine_fabric2d::detail::bind_experimental_combine_fabric2d_operation(mod);
@@ -199,6 +205,9 @@ void py_module(nb::module_& mod) {
     deepseek::moe::detail::bind_moe_gate_mm(mod);
     deepseek::moe::detail::bind_deepseek_moe_gate(mod);
     deepseek::moe::detail::bind_generalized_moe_gate(mod);
+    deepseek::moe::detail::bind_fused_experts(mod);
+    deepseek::detail::bind_fused_hyperconnection(mod);
+    deepseek::detail::bind_mix_streams(mod);
     topk_large_indices::detail::bind_topk_large_indices(mod);
     topk_router_gpt::detail::bind_topk_router_gpt(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
