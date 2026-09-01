@@ -39,6 +39,44 @@ std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric:
 
 namespace tt::tt_fabric {
 
+namespace {
+
+// Edge ports of a torus axis are reserved for the torus: a genuine torus axis (extent > 2) has
+// every port consumed by wrap cables, and a fabric-config-driven torus axis must behave the same
+// even when its extent is too small to realize a wrap, or the leftover ports get picked up as
+// inter-mesh links whose deadlock-avoidance labels can mismatch the peer mesh (issue #54650). An
+// axis the MGD itself declares as RING keeps its boundary ports.
+bool axis_ports_reserved_for_torus(
+    FabricType effective_fabric_type,
+    FabricType mgd_declared_fabric_type,
+    const std::optional<FabricConfig>& fabric_config,
+    const tt::tt_metal::distributed::MeshShape& mesh_shape,
+    uint32_t mesh_id,
+    const char* instance_kind,
+    uint32_t axis) {
+    if (has_genuine_torus_axis(effective_fabric_type, mesh_shape, axis)) {
+        return true;
+    }
+    if (fabric_config.has_value() &&
+        is_config_driven_torus_axis(effective_fabric_type, mgd_declared_fabric_type, axis)) {
+        log_warning(
+            tt::LogFabric,
+            "MeshGraph: FabricConfig {} declares a torus along axis {} of {} {} ({}x{}); the {} edge ports of that "
+            "axis are reserved for the torus and will not be used for inter-mesh links",
+            enchantum::to_string(*fabric_config),
+            axis,
+            instance_kind,
+            mesh_id,
+            mesh_shape[0],
+            mesh_shape[1],
+            axis == 0 ? "N/S" : "E/W");
+        return true;
+    }
+    return false;
+}
+
+}  // namespace
+
 constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
 
 /**
@@ -467,34 +505,11 @@ void MeshGraph::initialize_from_mgd(
         this->mesh_to_chip_ids_.emplace(
             mesh_instance.local_id, tt_metal::distributed::MeshContainer<ChipId>(mesh_shape, chip_ids));
 
-        // Get the edge ports of each mesh. Edge ports of a torus axis are reserved for the torus:
-        // a genuine torus axis (extent > 2) has every port consumed by wrap cables, and a
-        // fabric-config-driven torus axis must behave the same even when its extent is too small to
-        // realize a wrap, or the leftover ports get picked up as inter-mesh links whose
-        // deadlock-avoidance labels can mismatch the peer mesh (issue #54650). An axis the MGD
-        // itself declares as RING keeps its boundary ports.
-        auto axis_ports_reserved_for_torus = [&](uint32_t axis) {
-            if (has_genuine_torus_axis(effective_fabric_type, mesh_shape, axis)) {
-                return true;
-            }
-            if (fabric_config.has_value() &&
-                is_config_driven_torus_axis(effective_fabric_type, mgd_fabric_type, axis)) {
-                log_warning(
-                    tt::LogFabric,
-                    "MeshGraph: FabricConfig {} declares a torus along axis {} of mesh {} ({}x{}); the {} edge ports "
-                    "of that axis are reserved for the torus and will not be used for inter-mesh links",
-                    enchantum::to_string(*fabric_config),
-                    axis,
-                    *mesh_id,
-                    mesh_shape[0],
-                    mesh_shape[1],
-                    axis == 0 ? "N/S" : "E/W");
-                return true;
-            }
-            return false;
-        };
+        // Get the edge ports of each mesh; a torus axis's edge ports are reserved for the torus
+        // (see axis_ports_reserved_for_torus, issue #54650).
         std::uint32_t chan_id = 0;
-        if (!axis_ports_reserved_for_torus(0)) {
+        if (!axis_ports_reserved_for_torus(
+                effective_fabric_type, mgd_fabric_type, fabric_config, mesh_shape, *mesh_id, "mesh", 0)) {
             // North, start from NW corner
             for (std::uint32_t chip_id = 0; chip_id < mesh_shape[1]; chip_id++) {
                 for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
@@ -511,7 +526,8 @@ void MeshGraph::initialize_from_mgd(
                 }
             }
         }
-        if (!axis_ports_reserved_for_torus(1)) {
+        if (!axis_ports_reserved_for_torus(
+                effective_fabric_type, mgd_fabric_type, fabric_config, mesh_shape, *mesh_id, "mesh", 1)) {
             // East, start from NE corner
             chan_id = 0;
             for (std::uint32_t chip_id = (mesh_shape[1] - 1); chip_id < (mesh_shape[0] * mesh_shape[1]);
@@ -611,33 +627,14 @@ void MeshGraph::initialize_from_mgd(
         // Track this switch in switch_ids_
         this->switch_ids_.push_back(switch_mesh_id);
 
-        // Get the edge ports of each switch (same as mesh). Edge ports of a torus axis are reserved
-        // for the torus — see the mesh block above (issue #54650).
-        auto axis_ports_reserved_for_torus = [&](uint32_t axis) {
-            if (has_genuine_torus_axis(effective_fabric_type, switch_shape, axis)) {
-                return true;
-            }
-            if (fabric_config.has_value() &&
-                is_config_driven_torus_axis(effective_fabric_type, mgd_fabric_type, axis)) {
-                log_warning(
-                    tt::LogFabric,
-                    "MeshGraph: FabricConfig {} declares a torus along axis {} of switch {} ({}x{}); the {} edge "
-                    "ports of that axis are reserved for the torus and will not be used for inter-mesh links",
-                    enchantum::to_string(*fabric_config),
-                    axis,
-                    *switch_mesh_id,
-                    switch_shape[0],
-                    switch_shape[1],
-                    axis == 0 ? "N/S" : "E/W");
-                return true;
-            }
-            return false;
-        };
+        // Get the edge ports of each switch (same as mesh); a torus axis's edge ports are reserved
+        // for the torus (see axis_ports_reserved_for_torus, issue #54650).
         mesh_edge_ports_to_chip_id_.resize(
             std::max(mesh_edge_ports_to_chip_id_.size(), static_cast<size_t>(*switch_mesh_id + 1)));
         std::uint32_t chan_id = 0;
 
-        if (!axis_ports_reserved_for_torus(0)) {
+        if (!axis_ports_reserved_for_torus(
+                effective_fabric_type, mgd_fabric_type, fabric_config, switch_shape, *switch_mesh_id, "switch", 0)) {
             // North
             for (std::uint32_t chip_id = 0; chip_id < switch_shape[1]; chip_id++) {
                 for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
@@ -654,7 +651,8 @@ void MeshGraph::initialize_from_mgd(
                 }
             }
         }
-        if (!axis_ports_reserved_for_torus(1)) {
+        if (!axis_ports_reserved_for_torus(
+                effective_fabric_type, mgd_fabric_type, fabric_config, switch_shape, *switch_mesh_id, "switch", 1)) {
             // East
             chan_id = 0;
             for (std::uint32_t chip_id = (switch_shape[1] - 1); chip_id < (switch_shape[0] * switch_shape[1]);
