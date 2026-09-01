@@ -604,10 +604,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"padded_hw", pad.padded_hw},
         {"pad_scaler_bits", pad.scaler_bits(num_rows_per_batch_per_core_group_1 * num_channels_per_group)},
         {"has_row_mask", static_cast<uint32_t>(pad.active)},
-        {"sfpu_two_pass_reciprocal",
-         std::bit_cast<uint32_t>(
-             1.0f / static_cast<float>(
-                        std::max(1U, num_channels_per_group * num_rows_per_batch_per_core_group_1 / tile_width)))},
     };
 
     if (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) {

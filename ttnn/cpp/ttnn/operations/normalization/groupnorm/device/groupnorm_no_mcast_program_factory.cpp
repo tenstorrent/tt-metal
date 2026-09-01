@@ -752,10 +752,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"padded_hw", pad.padded_hw},
         {"pad_scaler_bits", pad.scaler_bits(reduce_factor_w_group_1)},
         {"has_row_mask", static_cast<uint32_t>(pad.active)},
-        {"sfpu_two_pass_reciprocal",
-         std::bit_cast<uint32_t>(
-             1.0f / static_cast<float>(
-                        std::max(1U, num_channels_per_group * num_rows_per_batch_per_core_group_1 / tile_width)))},
     };
 
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args_group_2 = {
@@ -790,10 +786,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"padded_hw", pad.padded_hw},
         {"pad_scaler_bits", pad.scaler_bits(reduce_factor_w_group_2)},
         {"has_row_mask", static_cast<uint32_t>(pad.active)},
-        {"sfpu_two_pass_reciprocal",
-         std::bit_cast<uint32_t>(
-             1.0f / static_cast<float>(
-                        std::max(1U, num_channels_per_group * num_rows_per_batch_per_core_group_2 / tile_width)))},
     };
 
     if (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) {
