@@ -77,6 +77,7 @@
 #include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/combine_fabric2d_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
@@ -159,6 +160,7 @@ void py_module(nb::module_& mod) {
     matmul_decode::detail::bind_matmul_decode_operation(mod);
     deepseek_prefill::masked_bincount::detail::bind_experimental_masked_bincount_operation(mod);
     high_bw_all_gather::detail::bind_experimental_high_bw_all_gather_operation(mod);
+    deepseek_prefill::combine_fabric2d::detail::bind_experimental_combine_fabric2d_operation(mod);
     deepseek_prefill::offset_cumsum::detail::bind_experimental_offset_cumsum_operation(mod);
     deepseek_prefill::moe_padding_config::detail::bind_moe_padding_config(mod);
     deepseek_prefill::detail::bind_outbound_socket_service_sync(mod);
