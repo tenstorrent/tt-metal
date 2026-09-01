@@ -605,10 +605,14 @@ void fill_sliding_window_edge_tiles(Noc noc, uint32_t start_tile_idx) {
  *                         [leading_current(3)] [trailing_next(4)] [partial tiles...]
  * Tiles are pushed once and stay permanently fronted for the entire kernel lifetime.
  *
- * @tparam global_n_partial_col  Column within tile where global_n padding starts (0 = tile-aligned, no partial)
- * @tparam joint_l_partial_col   Column within tile where joint_l padding starts (0 = tile-aligned, no partial)
+ * @tparam global_n_partial_col  Column within tile where global_n padding starts (0 = tile-aligned, no
+ *                               partial). Presence only: decides whether the tile exists in the CB layout.
+ * @tparam joint_l_partial_col   As above, for the joint tail.
  * @tparam cb_mask_in            CB to generate mask tiles into (must be constexpr for get_tile_size)
  * @tparam is_causal_lw          Whether to include the causal diagonal tile
+ * @param global_n_partial_col_rt  Column actually stamped (defaults to the template value; tensor-path
+ *                                 callers pass the live one).
+ * @param joint_l_partial_col_rt   As above, for the joint tail.
  */
 template <
     uint32_t global_n_partial_col,
@@ -616,7 +620,10 @@ template <
     uint32_t cb_mask_in,
     bool is_causal_lw = false,
     uint32_t sliding_window_size = 0>
-void generate_lightweight_mask_tiles(Noc noc) {
+void generate_lightweight_mask_tiles(
+    Noc noc,
+    uint32_t global_n_partial_col_rt = global_n_partial_col,
+    uint32_t joint_l_partial_col_rt = joint_l_partial_col) {
     constexpr uint32_t partial_mask_tiles = (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
     constexpr bool has_sliding_window = sliding_window_size > 0;
     constexpr uint32_t sliding_diag_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : 0;
@@ -643,10 +650,10 @@ void generate_lightweight_mask_tiles(Noc noc) {
     // Subsequent tiles: partial mask tiles for boundary conditions
     if constexpr (partial_mask_tiles > 0) {
         if constexpr (global_n_partial_col > 0) {
-            fill_vertical_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++, global_n_partial_col);
+            fill_vertical_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++, global_n_partial_col_rt);
         }
         if constexpr (joint_l_partial_col > 0) {
-            fill_vertical_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++, joint_l_partial_col);
+            fill_vertical_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++, joint_l_partial_col_rt);
         }
     }
 

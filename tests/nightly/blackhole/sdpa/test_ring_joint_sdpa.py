@@ -914,6 +914,9 @@ def run_ring_joint_sdpa(
     rmse_threshold=None,
     do_check=True,
     num_iterations=1,
+    # logical_n as a device tensor instead of a host int. Pure transport change, so the accuracy check
+    # below must pass identically.
+    logical_as_tensor=False,
 ):
     """
     Run Ring Joint Attention SDPA using direct ttnn operations with auto-detected devices.
@@ -1086,6 +1089,14 @@ def run_ring_joint_sdpa(
 
         # Set logical_n to the original full sequence length
         corrected_logical_n = sq
+        if logical_as_tensor:
+            corrected_logical_n = ttnn.from_torch(
+                torch.tensor([sq], dtype=torch.int64).reshape(1, 1, 1, 1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
 
         # Precompute mesh composer dims
         main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
@@ -4209,6 +4220,30 @@ STANDARD_MODEL_GROUPS, STANDARD_MODEL_GROUP_IDS = _generate_standard_model_group
 
 
 # === TEST 1: PERFORMANCE SWEEP (skipped on CI) ===
+# Causal / balanced-zigzag coverage for the logical_n tensor transport, where the ring-work masks
+# additionally carry the causal skip rule. models/tt_dit covers the non-causal shapes.
+@pytest.mark.parametrize(
+    "is_causal, is_balanced", [(True, False), (True, True), (False, False)], ids=["causal", "balanced", "noncausal"]
+)
+def test_ring_joint_attention_logical_tensor_accuracy(is_causal, is_balanced):
+    """logical_n read on-device must clear the same accuracy bar as the host scalar: run_ring_joint_sdpa
+    checks the CPU reference, so a mis-derived logical_nt or a missed tail mask shows up as a PCC failure."""
+    run_ring_joint_sdpa(
+        MESH_CONFIG,
+        1,  # b
+        8,  # nhq
+        8,  # nhk
+        256 * MESH_CONFIG.sp_size,  # sq: 256 per device, so half the local seq divides q_chunk_size (balanced case)
+        128,  # d_q
+        128,  # q_chunk_size
+        128,  # k_chunk_size
+        ttnn.bfloat16,
+        is_causal=is_causal,
+        is_balanced=is_balanced,
+        logical_as_tensor=True,
+    )
+
+
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize(
     "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",

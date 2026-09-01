@@ -7,6 +7,7 @@
 #include "kernels/sliding_window_geometry.hpp"
 #include "sliding_halo_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
@@ -1063,6 +1064,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Lightweight mask: needed when any K/joint dimension has padding, or when causal/chunked
     // masking is active.
     const bool local_n_has_padding = (kv_local_padded_Nt % Sk_chunk_t) != 0;
+    // Placeholder attributes already worst-case every size derivation below, except partial-column tile
+    // presence -- CB geometry is fixed at program creation, so force those tiles whenever a tensor is
+    // present (see partial_tile_present); the kernels stamp the live column.
+    const bool has_logical_n_tensor = tensor_args.has_logical_n_tensor();
+    const bool has_logical_l_tensor = tensor_args.has_logical_l_tensor();
     const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
     const uint32_t compile_time_logical_n = kv_pad_rotation_enabled ? 0 : static_cast<uint32_t>(args.logical_n);
     const uint32_t compile_time_logical_nt = kv_pad_rotation_enabled ? 0 : logical_nt;
@@ -1078,14 +1084,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // fully-padded trailing tiles and a sub-tile partial column (logical_l=63, L_local=32: 63 % 32 != 0).
     const bool joint_has_padding =
         L > 0 && (((Lt_local % Sk_chunk_t) != 0) || ((logical_l % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0));
-    const bool needs_lightweight_mask =
-        (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled || has_sliding_window;
+    const bool needs_lightweight_mask = (local_n_has_padding || global_n_has_padding || joint_has_padding) ||
+                                        diag_tile_enabled || has_sliding_window || has_logical_n_tensor ||
+                                        has_logical_l_tensor;
 
     // Partial tile support when the joint padding boundary falls inside a tile. Uses the true
     // logical length (logical_l % TILE_HEIGHT), mirroring global_n_partial_col = logical_n % TILE.
     const uint32_t joint_l_partial_col = logical_l % tt::constants::TILE_HEIGHT;
-    const uint32_t partial_mask_tiles =
-        (compile_time_global_n_partial_col != 0 ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
+    const bool has_global_n_partial_tile =
+        ring_joint::partial_tile_present(compile_time_global_n_partial_col, has_logical_n_tensor);
+    const bool has_joint_l_partial_tile = ring_joint::partial_tile_present(joint_l_partial_col, has_logical_l_tensor);
+    const uint32_t partial_mask_tiles = (has_global_n_partial_tile ? 1 : 0) + (has_joint_l_partial_tile ? 1 : 0);
     const uint32_t edge_mask_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : (diag_tile_enabled ? 1 : 0);
     // Single CB holds neginf, either the causal diagonal or sliding edge palette, and partial masks.
     const uint32_t total_lightweight_mask_tiles = 1 + edge_mask_tiles + partial_mask_tiles;
@@ -1450,8 +1459,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<uint32_t>(joint_is_sharded),
         // Slot 39: true (unpadded) joint length in tiles (twins spatial logical_nt). The reader uses it
         // to skip joint K chunks that lie entirely beyond the real joint tail (padding).
-        // Tensor accessors start at slot 40.
         logical_lt,
+        // Slots 40-41: logical-length transport. The reader NoC-reads the live values, re-derives
+        // logical_nt / logical_lt / the ring masks, and fans them to compute via cb_kv_pad_derived.
+        // Tensor accessors start at slot 42.
+        static_cast<uint32_t>(has_logical_n_tensor),
+        static_cast<uint32_t>(has_logical_l_tensor),
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -1486,6 +1499,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         if (kv_pad_from_metadata) {
             TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(reader_compile_time_args);
         }
+    }
+    // Appended as a pair when either is present (null accessor for the absent one) so kernel offsets do not
+    // depend on which was supplied. Separate accessors: the two single-page tensors can land in different
+    // DRAM banks, the same trap documented for slot_id/kv_actual_isl.
+    if (has_logical_n_tensor || has_logical_l_tensor) {
+        TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
+            .append_to(reader_compile_time_args);
+        TensorAccessorArgs(has_logical_l_tensor ? tensor_args.logical_l_tensor->buffer() : nullptr)
+            .append_to(reader_compile_time_args);
     }
 
     /**
@@ -1612,8 +1634,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Slot 36: sharded-joint flag. When true, one shard per ring iteration; do_joint_kv fires every iter.
         static_cast<uint32_t>(joint_is_sharded),
         // Slot 37: true (unpadded) joint length in tiles (twins spatial logical_nt). Combined with
-        // joint_l_partial_col it drives the joint mask-generation gate. Output accessors start at slot 38.
+        // joint_l_partial_col it drives the joint mask-generation gate.
         logical_lt,
+        // Slots 38-39: logical-length transport. The writer is a dataflow kernel, so it NoC-reads the live
+        // values itself rather than sharing the reader's L1 mailbox. Output accessors start at slot 40.
+        static_cast<uint32_t>(has_logical_n_tensor),
+        static_cast<uint32_t>(has_logical_l_tensor),
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -1621,6 +1647,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
     if (kv_pad_from_metadata) {
         TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(writer_compile_time_args);
+    }
+    if (has_logical_n_tensor || has_logical_l_tensor) {
+        TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
+            .append_to(writer_compile_time_args);
+        TensorAccessorArgs(has_logical_l_tensor ? tensor_args.logical_l_tensor->buffer() : nullptr)
+            .append_to(writer_compile_time_args);
     }
 
     std::vector<uint32_t> compute_compile_time_args = {
@@ -1682,8 +1714,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Slot 52: sharded-joint flag. When true, one shard per ring iteration; do_joint_kv fires every iter.
         static_cast<uint32_t>(joint_is_sharded),
         // Slot 53: true (unpadded) joint length in tiles (twins spatial logical_nt). Drives the
-        // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip. CB block starts at 54.
-        logical_lt};
+        // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
+        logical_lt,
+        // Slots 54-55: logical-length transport. Compute cannot NoC-read DRAM, so it takes the live values
+        // from cb_kv_pad_derived, which the reader fills. CB block starts at 56.
+        static_cast<uint32_t>(has_logical_n_tensor),
+        static_cast<uint32_t>(has_logical_l_tensor)};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -2571,12 +2607,35 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     reader_kernel.compile_time_args = reader_compile_time_args;
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
-    if (slot_from_metadata) {
-        reader_kernel.emplace_common_runtime_args(
-            {tensor_args.slot_id->buffer()->address(),  // smuggled-rta-ok: metadata tensor addr (on-device)
-             args.kv_cache_num_layers,
-             args.kv_cache_layer_idx,
-             tensor_args.kv_actual_isl->buffer()->address()});  // smuggled-rta-ok: metadata tensor addr (on-device)
+    // Layout: metadata block first (when present), then the logical-length pair, so the kernel's base index
+    // is ring_joint::kReaderMetadataCommonArgCount (or kWriterMetadataCommonArgCount) when its metadata block
+    // is present, else 0. Both slots are emplaced whenever either tensor is present. Passed as Buffer* (not
+    // ->address()) so a program-cache hit re-patches them if the tensor was reallocated.
+    const bool has_logical_length_tensor = has_logical_n_tensor || has_logical_l_tensor;
+    const auto append_logical_length_common_args = [&](KernelDescriptor::RTArgList& into) {
+        if (!has_logical_length_tensor) {
+            return;
+        }
+        for (const auto* logical_tensor : {&tensor_args.logical_n_tensor, &tensor_args.logical_l_tensor}) {
+            if (logical_tensor->has_value()) {
+                into.push_back((*logical_tensor)->buffer());
+            } else {
+                into.push_back(uint32_t{0});
+            }
+        }
+    };
+    if (slot_from_metadata || has_logical_length_tensor) {
+        KernelDescriptor::RTArgList reader_common_args;
+        if (slot_from_metadata) {
+            reader_common_args.push_back(
+                tensor_args.slot_id->buffer()->address());  // smuggled-rta-ok: metadata tensor addr (on-device)
+            reader_common_args.push_back(args.kv_cache_num_layers);
+            reader_common_args.push_back(args.kv_cache_layer_idx);
+            reader_common_args.push_back(
+                tensor_args.kv_actual_isl->buffer()->address());  // smuggled-rta-ok: metadata tensor addr (on-device)
+        }
+        append_logical_length_common_args(reader_common_args);
+        reader_kernel.emplace_common_runtime_args(reader_common_args);
     }
 
     KernelDescriptor writer_kernel{};
@@ -2587,9 +2646,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     writer_kernel.compile_time_args = writer_compile_time_args;
     writer_kernel.defines = kernel_defines;
     writer_kernel.config = WriterConfigDescriptor{};
-    if (kv_pad_from_metadata) {
-        writer_kernel.emplace_common_runtime_args(
-            {tensor_args.kv_actual_isl->buffer()->address()});  // smuggled-rta-ok: metadata tensor addr (on-device)
+    if (kv_pad_from_metadata || has_logical_length_tensor) {
+        KernelDescriptor::RTArgList writer_common_args;
+        if (kv_pad_from_metadata) {
+            writer_common_args.push_back(
+                tensor_args.kv_actual_isl->buffer()->address());  // smuggled-rta-ok: metadata tensor addr (on-device)
+        }
+        append_logical_length_common_args(writer_common_args);
+        writer_kernel.emplace_common_runtime_args(writer_common_args);
     }
 
     KernelDescriptor compute_kernel{};
