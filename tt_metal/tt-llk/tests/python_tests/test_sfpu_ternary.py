@@ -168,8 +168,13 @@ def _run_sfpu_ternary(
         dest_acc=dest_acc,
         collect_generated_nan=unspecified_nonfinite_sign,
     )
+    # Asked of the return value rather than of unspecified_nonfinite_sign, the way the binary
+    # driver asks it: DummyGoldenGenerator stands in for the golden under --compile-producer and
+    # returns a bare tensor whatever it is asked for, so keying the unpack off the flag would
+    # raise there and starve the shared ELF instead of building it. That phase skips inside
+    # run() below, before any comparison, so a None mask costs it nothing.
     emitted_nan = None
-    if unspecified_nonfinite_sign:
+    if isinstance(golden, tuple):
         golden, emitted_nan = golden
 
     configuration = TestConfig(
@@ -691,13 +696,31 @@ def test_sfpu_addcmul_cancellation(formats, dest_acc, mathop):
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
 
     spec_A, spec_B, spec_C = _addcmul_cancellation_specs()
-    _run_sfpu_ternary(
+    _, _, res_tensor = _run_sfpu_ternary(
         formats,
         dest_acc,
         mathop,
         spec_A=spec_A,
         spec_B=spec_B,
         spec_C=spec_C,
+    )
+
+    # passed_test() cannot make this assertion: the golden is all zeros, so its magnitude sits
+    # under PCC_SIGNAL_FLOOR and the verdict falls back to the per-element tolerance, which is
+    # atol=0.05 on both formats here -- a lane returning 0.01 would pass. So assert the zero
+    # directly. It is exact by construction and not by tolerance: every b and c is a power of
+    # two and value is 2.0, so value*b*c is representable in both formats and a = -value*b*c
+    # cancels it bit for bit, leaving a zero as the only admissible result.
+    #
+    # `!= 0` and not a bitwise test, because -0.0 == 0.0: the sign of the cancelled zero is the
+    # arch split this variant deliberately does not judge -- SFPMAD flushes to +0 on Wormhole
+    # where Blackhole preserves it -- and pinning it needs the bitwise comparator #52938 tracks.
+    nonzero = int((res_tensor != 0).sum())
+    assert nonzero == 0, (
+        f"a + value*b*c with a = -value*b*c must cancel to zero, but {nonzero} of "
+        f"{len(res_tensor)} lanes are non-zero (largest magnitude "
+        f"{float(res_tensor.abs().max())}) — the product or the add is losing bits the "
+        "operands were chosen to keep exact"
     )
 
 
@@ -1054,7 +1077,7 @@ def test_ttnn_where_specials(formats, dest_acc, mathop, operand):
         #
         # Before the producer guard below, not after: the guard's job is to leave the compile
         # producer with a non-empty list, and a filter applied downstream of it could empty the
-        # list again and skip the build the other five variants share.
+        # list again and skip the build the other two variants share.
         vals = [v for v in vals if not _is_negative_zero(v)]
 
     if not vals and TestConfig.BUILD_MODE == BuildMode.PRODUCE:
