@@ -66,11 +66,11 @@ conftest.py @tenstorrent/metalium-developers-infra
 
 # test scripts
 tests/CMakeLists.txt @tenstorrent/metalium-developers-infra
-tests/pipeline_reorg/blaze_models_prefill_tests.yaml @mbezuljTT @mtairum @roseli-TT
-tests/pipeline_reorg/models_device_perf_tests.yaml @mtairum @uaydonat @roseli-TT
-tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @uaydonat @roseli-TT
-tests/pipeline_reorg/models_sweep_tests.yaml @mtairum @uaydonat @roseli-TT
-tests/pipeline_reorg/models_unit_tests.yaml @mtairum @uaydonat @roseli-TT
+tests/pipeline_reorg/blaze_models_prefill_tests.yaml @mbezuljTT @mtairum @jonathansuTT @cglagovichTT
+tests/pipeline_reorg/models_device_perf_tests.yaml @mtairum @uaydonat @jonathansuTT @cglagovichTT
+tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @uaydonat @jonathansuTT @cglagovichTT
+tests/pipeline_reorg/models_sweep_tests.yaml @mtairum @uaydonat @jonathansuTT @cglagovichTT
+tests/pipeline_reorg/models_unit_tests.yaml @mtairum @uaydonat @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/vllm_model_tests.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
 tests/pipeline_reorg/ttsim-skip-list.yaml @roseli-TT @tdowdallTT @mcraigheadTT @tenstorrent-github-bot
 tests/scripts/ @tenstorrent/metalium-developers-infra
