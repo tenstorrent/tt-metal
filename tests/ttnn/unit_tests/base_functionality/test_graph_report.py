@@ -880,6 +880,43 @@ class TestImportGraphUnit:
 
         conn.close()
 
+    def test_legacy_orphan_preserves_cpp_input_tensors(self, tmp_path):
+        """Older reports and C++-initiated captures have no python_io; C++ inputs still join."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "tensor",
+                "params": {"tensor_id": "77", "shape": "[1, 1, 32, 32]", "device_id": "0", "address": "1024"},
+                "connections": [2],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "Conv2dDeviceOperation"},
+                "connections": [],
+                "input_tensors": [1],
+            },
+            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT operation_id, name FROM operations")
+        operations = cursor.fetchall()
+        assert len(operations) == 1, f"the unfinished C++ op must be recorded, got {operations}"
+        operation_id, name = operations[0]
+        assert name == "Conv2dDeviceOperation"
+
+        cursor.execute(
+            "SELECT input_index, tensor_id FROM input_tensors WHERE operation_id = ? ORDER BY input_index",
+            (operation_id,),
+        )
+        assert cursor.fetchall() == [(0, 77)], "orphan import must resolve C++ input_tensors to tensor_id 77"
+
+        conn.close()
+
     def test_aborted_function_end_is_reported_as_an_error(self, tmp_path):
         """A C++-only capture has no python_io, so the abort marker is the only evidence of failure."""
         mock_graph = [

@@ -373,6 +373,23 @@ def _without_capture_boundaries(nodes: list) -> list:
     return [node for node in nodes if node.get("node_type") not in ("capture_start", "capture_end")]
 
 
+def _tensor_ids_from_function_start_inputs(graph: list, node_counters) -> list:
+    """Resolve a function_start's C++ ``input_tensors`` (graph node counters) to tensor_ids.
+
+    python_io is absent in older reports and C++-initiated captures; the start node still
+    lists those counters, which is what the Visualizer uses to join the op to its tensors.
+    """
+    tensor_ids = []
+    for node_counter in node_counters:
+        if node_counter < len(graph):
+            tensor_node = graph[node_counter]
+            if tensor_node.get("node_type") == "tensor":
+                tid = tensor_node.get("params", {}).get("tensor_id", "")
+                if tid:
+                    tensor_ids.append(int(tid))
+    return tensor_ids
+
+
 def _build_operation_subgraph(nodes: list) -> list:
     """Wrap an operation's trace nodes in capture_start/capture_end and renumber them."""
     capture_start = {
@@ -1372,14 +1389,7 @@ def import_graph(
                 for idx, tid in enumerate(py_io["input_tensor_ids"]):
                     input_tensors_batch.append((operation_id, idx, int(tid), rank))
             elif start_node:
-                direct_inputs = []
-                for node_counter in start_node.get("input_tensors", []):
-                    if node_counter < len(graph):
-                        tensor_node = graph[node_counter]
-                        if tensor_node.get("node_type") == "tensor":
-                            tid = tensor_node.get("params", {}).get("tensor_id", "")
-                            if tid:
-                                direct_inputs.append(int(tid))
+                direct_inputs = _tensor_ids_from_function_start_inputs(graph, start_node.get("input_tensors", []))
 
                 if direct_inputs:
                     for idx, tid in enumerate(direct_inputs):
@@ -1657,8 +1667,26 @@ def import_graph(
             for idx, arg in enumerate(orphan.get("arguments", [])):
                 operation_arguments_batch.append((operation_id, f"arg_{idx}", str(arg), rank))
 
-        for idx, tid in enumerate(py_io.get("input_tensor_ids", [])):
-            input_tensors_batch.append((operation_id, idx, int(tid), rank))
+        if py_io.get("input_tensor_ids"):
+            for idx, tid in enumerate(py_io["input_tensor_ids"]):
+                input_tensors_batch.append((operation_id, idx, int(tid), rank))
+        else:
+            direct_inputs = _tensor_ids_from_function_start_inputs(graph, orphan.get("input_tensors", []))
+            if direct_inputs:
+                for idx, tid in enumerate(direct_inputs):
+                    input_tensors_batch.append((operation_id, idx, tid, rank))
+            elif nested_input_tensor_ids:
+                seen = set()
+                lifted_inputs = []
+                for tid in nested_input_tensor_ids:
+                    if tid in all_nested_output_ids:
+                        continue
+                    if tid in seen:
+                        continue
+                    seen.add(tid)
+                    lifted_inputs.append(tid)
+                for idx, tid in enumerate(lifted_inputs):
+                    input_tensors_batch.append((operation_id, idx, tid, rank))
 
         subgraph = py_io.get("captured_graph") or _build_operation_subgraph(
             _without_capture_boundaries(current_op_nodes)
