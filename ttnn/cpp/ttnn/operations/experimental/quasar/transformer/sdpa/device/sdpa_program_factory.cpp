@@ -183,6 +183,11 @@ uint32_t attention_sink_tile_count(bool use_attention_sink, bool use_streaming_c
 
 }  // namespace
 
+// This factory assembles the entire ProgramSpec -- DFB/tensor/semaphore specs, KV-chain topology,
+// mcast eligibility, windowed-narrowing buffers, and per-core work -- in one body: the host resource
+// layout and the runtime-arg layout must stay in lockstep, so splitting it would separate code that
+// has to be read together. Same rationale/suppression as the sibling ring_joint_sdpa factory.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
