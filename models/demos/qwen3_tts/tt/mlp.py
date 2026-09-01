@@ -20,6 +20,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     build_dram_sharded_weight,
     build_dram_sharded_weight_tp,
+    decode_hidden_width_memcfg,
     dram_sharded_program_config,
     find_grid_k_n,
     width_sharded_l1_memcfg,
@@ -246,6 +247,7 @@ class MLP(LightweightModule):
                 m_tiles=1, k_tiles=n_tiles_d, num_cores_x=cols_d, num_cores_y=rows_d
             )
             self._n150_gate_up_1d = False
+            self._decode_residual_memcfg = None
             return
 
         gate_w_kn = state_dict[f"{layer_prefix}.mlp.gate_proj.weight"].transpose(-2, -1).contiguous()
@@ -285,7 +287,11 @@ class MLP(LightweightModule):
         )
         # N150: 1D mcast on the full compute grid. DRAM-sharded gate/up is pinned
         # to the WH bank count (12) with in0_block_w=1. Other cards keep that path.
-        self._n150_gate_up_1d = is_n150(device)
+        # Residual dest is the same N150-only choice: slice padded-N into the
+        # decode RMSNorm shard spec so the next layer skips I2S.
+        _n150 = is_n150(device)
+        self._n150_gate_up_1d = _n150
+        self._decode_residual_memcfg = decode_hidden_width_memcfg(device, hidden_size) if _n150 else None
         if self._n150_gate_up_1d:
             self._decode_gate_up_1d_progcfg = make_linear_1d_program_config(
                 1,
@@ -407,7 +413,9 @@ class MLP(LightweightModule):
                 output_padded,
                 [0, 0, 0, 0],
                 [output_padded.shape[0], output_padded.shape[1], output_padded.shape[2], self.hidden_size],
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=(
+                    self._decode_residual_memcfg if self._decode_residual_memcfg is not None else ttnn.L1_MEMORY_CONFIG
+                ),
             )
             ttnn.deallocate(output_padded)
             if self.tp_size > 1:

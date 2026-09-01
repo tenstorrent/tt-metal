@@ -349,8 +349,13 @@ def apply_rope_qk(
         return _prefill(q), _prefill(k)
 
     hd_memcfg = _rope_decode_memcfg(head_dim)
-    cos_s = ttnn.to_memory_config(cos, hd_memcfg)
-    sin_s = ttnn.to_memory_config(sin, hd_memcfg)
+    if cos.memory_config() == hd_memcfg and sin.memory_config() == hd_memcfg:
+        cos_s, sin_s = cos, sin
+        _own_tables = False
+    else:
+        cos_s = ttnn.to_memory_config(cos, hd_memcfg)
+        sin_s = ttnn.to_memory_config(sin, hd_memcfg)
+        _own_tables = True
     rotated = []
     for t in (q, k):
         # [1, n_heads, 1, head_dim] -> [1, 1, n_heads, head_dim]: packs all heads into
@@ -369,9 +374,21 @@ def apply_rope_qk(
         ttnn.deallocate(t_d)
         rotated.append(ttnn.transpose(r, 1, 2, memory_config=mc))
         ttnn.deallocate(r)
-    ttnn.deallocate(cos_s)
-    ttnn.deallocate(sin_s)
+    if _own_tables:
+        ttnn.deallocate(cos_s)
+        ttnn.deallocate(sin_s)
     return rotated[0], rotated[1]
+
+
+def shard_decode_rope_tables(cos: ttnn.Tensor, sin: ttnn.Tensor, head_dim: int):
+    """Reshard decode cos/sin once so every layer's apply_rope_qk can skip I2S.
+
+    Returns (cos, sin, owned). Caller must deallocate when owned is True.
+    """
+    hd_memcfg = _rope_decode_memcfg(head_dim)
+    if cos.memory_config() == hd_memcfg and sin.memory_config() == hd_memcfg:
+        return cos, sin, False
+    return ttnn.to_memory_config(cos, hd_memcfg), ttnn.to_memory_config(sin, hd_memcfg), True
 
 
 def rearrange_to_interleaved(x: torch.Tensor) -> torch.Tensor:

@@ -20,6 +20,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     build_dram_sharded_weight,
+    decode_hidden_width_memcfg,
     dram_sharded_program_config,
     find_grid_k_n,
     width_sharded_l1_memcfg,
@@ -27,6 +28,27 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
 from models.demos.qwen3_tts.tt.linear_1d_program_config import find_1d_mcast_grid, make_linear_1d_program_config
 from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS, SHORT_SEQ_LIMIT
 from models.demos.qwen3_tts.tt.rope import apply_rope_qk, get_decode_transformation_mat
+
+
+def prepare_fused_sdpa_mask(mask):
+    """Return a DRAM bf16/bfp8/bfp4 mask for fused SDPA. Caller frees when owned.
+
+    Talker/CP padding masks are fp32; fused SDPA rejects that dtype. Idempotent
+    when the mask is already a legal DRAM tensor — Talker converts once per step.
+    """
+    if mask is None:
+        return None, False
+    own = False
+    if mask.dtype not in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b):
+        mask = ttnn.typecast(mask, dtype=ttnn.bfloat16)
+        own = True
+    if mask.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+        moved = ttnn.to_memory_config(mask, ttnn.DRAM_MEMORY_CONFIG)
+        if own:
+            ttnn.deallocate(mask)
+        mask = moved
+        own = True
+    return mask, own
 
 
 class Attention(LightweightModule):
@@ -454,6 +476,9 @@ class Attention(LightweightModule):
         self._decode_wo_out_memcfg = width_sharded_l1_memcfg(
             m_tiles=1, k_tiles=n_tiles_o, num_cores_x=cols_o, num_cores_y=rows_o
         )
+        # N150: slice padded wo N into the decode RMSNorm shard spec so the
+        # residual add stays sharded (Wormhole pads 2048→2304).
+        self._decode_residual_memcfg = decode_hidden_width_memcfg(device, hidden_size) if self._n150 else None
 
         # === Sharded NLP head op memcfgs (decode + prefill buckets) ===
         # nlp_concat_heads HEIGHT_SHARDED input over num_heads cores (1 head/shard).
@@ -623,12 +648,26 @@ class Attention(LightweightModule):
                 xqkv = ttnn.to_memory_config(xqkv_sharded, self._decode_qkv_split_in_memcfg)
                 ttnn.deallocate(xqkv_sharded)
                 xqkv_already_sharded_for_split = True
+            elif self._n150 and self._decode_wqkv_n_padded != self._fused_qkv:
+                # Slice padded N off the width-sharded matmul out into the nlp_create
+                # shard spec — no S2I.
+                xqkv = ttnn.slice(
+                    xqkv_sharded,
+                    [0, 0, 0, 0],
+                    [
+                        xqkv_sharded.shape[0],
+                        xqkv_sharded.shape[1],
+                        xqkv_sharded.shape[2],
+                        self._fused_qkv,
+                    ],
+                    memory_config=self._decode_qkv_split_in_memcfg,
+                )
+                ttnn.deallocate(xqkv_sharded)
+                xqkv_already_sharded_for_split = True
             else:
                 xqkv_padded = ttnn.to_memory_config(xqkv_sharded, ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(xqkv_sharded)
                 if self._decode_wqkv_n_padded != self._fused_qkv:
-                    # N150: slice padded N into the nlp_create shard spec (skips I→S).
-                    # Other cards slice to L1 interleaved; the split path reshard below.
                     xqkv = ttnn.slice(
                         xqkv_padded,
                         [0, 0, 0, 0],
@@ -638,10 +677,10 @@ class Attention(LightweightModule):
                             xqkv_padded.shape[2],
                             self._fused_qkv,
                         ],
-                        memory_config=(self._decode_qkv_split_in_memcfg if self._n150 else ttnn.L1_MEMORY_CONFIG),
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
                     )
                     ttnn.deallocate(xqkv_padded)
-                    xqkv_already_sharded_for_split = self._n150
+                    xqkv_already_sharded_for_split = False
                 else:
                     xqkv = xqkv_padded
                     xqkv_already_sharded_for_split = False
@@ -866,18 +905,7 @@ class Attention(LightweightModule):
                 else prefill_attn_mask
             )
             _use_causal = _explicit_mask is None and _q_seq == _k_seq_inner and _q_seq > 1
-            _own_sdpa_mask = False
-            if _explicit_mask is not None:
-                # Fused SDPA rejects fp32 masks (talker/CP padding masks are fp32).
-                if _explicit_mask.dtype not in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b):
-                    _explicit_mask = ttnn.typecast(_explicit_mask, dtype=ttnn.bfloat16)
-                    _own_sdpa_mask = True
-                if _explicit_mask.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
-                    _moved = ttnn.to_memory_config(_explicit_mask, ttnn.DRAM_MEMORY_CONFIG)
-                    if _own_sdpa_mask:
-                        ttnn.deallocate(_explicit_mask)
-                    _explicit_mask = _moved
-                    _own_sdpa_mask = True
+            _explicit_mask, _own_sdpa_mask = prepare_fused_sdpa_mask(_explicit_mask)
             attn_output = ttnn.transformer.scaled_dot_product_attention(
                 q,
                 k_for_attn,
@@ -1054,7 +1082,11 @@ class Attention(LightweightModule):
                             output_padded.shape[2],
                             self.hidden_size,
                         ],
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                        memory_config=(
+                            self._decode_residual_memcfg
+                            if self._decode_residual_memcfg is not None
+                            else ttnn.L1_MEMORY_CONFIG
+                        ),
                     )
                     ttnn.deallocate(output_padded)
                 else:
