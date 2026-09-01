@@ -284,13 +284,12 @@ def test_decode_stage(mesh_device, seconds, mode):
 
     config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
     ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
-    vae = MiniMaxH3Vae(config, mesh_device=mesh_device, ccl_manager=ccl_manager, **DECODE_STAGE_MODES[mode])
+    vae = MiniMaxH3Vae(
+        config, task="t2va", mesh_device=mesh_device, ccl_manager=ccl_manager, **DECODE_STAGE_MODES[mode]
+    )
     output_type = "yuv420" if mode == "yuv420" else "float"
 
-    vae.load_decoder_state(_decode_stage_state(weights_dir))
-    # Build the per-shape decoder outside the timed region, as `_prepare_vae(decode_shape=...)` does:
-    # its weight upload is seconds and would otherwise land inside the first `decode`.
-    vae._decoder_for(config.tokens_chunk_size + config.token_overlap, 16, 16)
+    vae.load_state(_decode_stage_state(weights_dir))
 
     torch.manual_seed(0)
     latent_h, latent_w = DECODE_STAGE_LATENT_HW
@@ -442,12 +441,13 @@ def test_encode_stage(mesh_device, case):
     # as uint8, and the encoders compute bf16 (4.2x the fp32 wave at PCC 99.998%).
     vae = MiniMaxH3Vae(
         config,
+        task="ref2va",
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         dtype=ttnn.bfloat16,
         pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
     )
-    vae.load_encoder_state(_encode_stage_state(weights_dir))
+    vae.load_state(_encode_stage_state(weights_dir))
 
     ratio = config.spatial_compression_ratio
     latent_height, latent_width = ENCODE_STAGE_HEIGHT // ratio, ENCODE_STAGE_WIDTH // ratio
@@ -455,9 +455,7 @@ def test_encode_stage(mesh_device, case):
     audio_seconds = {"audio_encode": 0.0}
 
     if case.startswith("fl2va"):
-        # Build the per-shape encoder outside the timed region, as `_prepare_vae(encode_shape=...)`
-        # does: its 0.72 GB weight upload is construction cost the stage does not bill.
-        vae._encoder_for(1, vae.tile_size, vae.tile_size, 1)
+        # Image encoder loads on first encode_clip; the warm `run()` below is that first use.
         image = create_fractal_image(ENCODE_STAGE_WIDTH, ENCODE_STAGE_HEIGHT)
         keyframes = [image]
         if case == "fl2va_2key":
@@ -472,7 +470,7 @@ def test_encode_stage(mesh_device, case):
             )
 
     else:
-        vae._encoder_for(config.clip_length, vae.tile_size, vae.tile_size, 3)
+        # Video encoder loads on first encode; the warm `run()` below is that first use.
         audio_config = load_config(weights_subdir("audio_vae")) if weights_subdir("audio_vae") else None
         if audio_config is None:
             pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_MODEL_PATH")

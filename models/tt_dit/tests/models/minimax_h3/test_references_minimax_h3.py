@@ -646,12 +646,7 @@ def test_encode_references_matches_reference(mesh_device, case, reset_seeds):
 
     pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights, task="ref2va")
     needs_video = any(reference.kind == "video" for reference in ours)
-    vae = pipeline._prepare_vae()
-    vae = pipeline._prepare_vae(encode_shape=(1, vae.tile_size, vae.tile_size), encode_taps=1)
-    if needs_video:
-        vae = pipeline._prepare_vae(
-            encode_shape=(pipeline.vae_config.clip_length, vae.tile_size, vae.tile_size), encode_taps=3
-        )
+    vae = pipeline.vae
     audio_encoder = pipeline._prepare_audio_encoder() if any(r.has_audio for r in ours) else None
 
     got_video, got_audio = R.encode_references(
