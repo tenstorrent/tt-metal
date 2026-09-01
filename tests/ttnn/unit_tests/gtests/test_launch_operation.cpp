@@ -146,31 +146,32 @@ struct CustomProgramSpecFactory {
     }
 };
 
-// Per-coordinate variants of both flavors: create_program_artifacts takes the MeshCoordinate, so the
-// adapter calls it once per coordinate and each call may return its own spec and run args.
-struct PerCoordProgramSpecFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+// Programs vary across the mesh: one call returns workload-scoped resources plus a program per
+// coordinate range.
+struct MeshWorkloadSpecFactory {
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const OperationAttributes& /*attrs*/,
         const Tensor& /*tensor_args*/,
         Tensor& /*tensor_return_value*/,
-        const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-        return ttnn::device_operation::ProgramArtifacts{};
+        const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/) {
+        return ttnn::device_operation::MeshWorkloadArtifacts{};
     }
 };
 
-struct PerCoordCustomProgramSpecFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+// Same, plus a per-coordinate cache-hit run-args refresh.
+struct MeshWorkloadSpecFactoryWithOverride {
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const OperationAttributes& /*attrs*/,
         const Tensor& /*tensor_args*/,
         Tensor& /*tensor_return_value*/,
-        const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-        return ttnn::device_operation::ProgramArtifacts{};
+        const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/) {
+        return ttnn::device_operation::MeshWorkloadArtifacts{};
     }
     static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
         const OperationAttributes& /*attrs*/,
         const Tensor& /*tensor_args*/,
         Tensor& /*tensor_return_value*/,
-        const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/ = std::nullopt) {
+        const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
         return {};
     }
 };
@@ -196,21 +197,27 @@ static_assert(!ttnn::device_operation::ProgramFactoryConcept<CustomProgramSpecFa
 static_assert(!ttnn::device_operation::MeshWorkloadFactoryConcept<CustomProgramSpecFactory>);
 static_assert(!ttnn::device_operation::ProgramDescriptorFactoryConcept<CustomProgramSpecFactory>);
 
-// Taking the coordinate doesn't change which flavor a factory is.
-static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<PerCoordProgramSpecFactory>);
-static_assert(!ttnn::device_operation::CustomProgramSpecFactoryConcept<PerCoordProgramSpecFactory>);
-static_assert(ttnn::device_operation::CustomProgramSpecFactoryConcept<PerCoordCustomProgramSpecFactory>);
-static_assert(!ttnn::device_operation::ProgramSpecFactoryConcept<PerCoordCustomProgramSpecFactory>);
+// A mesh-workload factory is its own flavor, and an override doesn't pull it into the others.
+static_assert(ttnn::device_operation::MeshWorkloadSpecFactoryConcept<MeshWorkloadSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramSpecFactoryConcept<MeshWorkloadSpecFactory>);
+static_assert(!ttnn::device_operation::CustomProgramSpecFactoryConcept<MeshWorkloadSpecFactory>);
+static_assert(ttnn::device_operation::MeshWorkloadSpecFactoryConcept<MeshWorkloadSpecFactoryWithOverride>);
+static_assert(!ttnn::device_operation::ProgramSpecFactoryConcept<MeshWorkloadSpecFactoryWithOverride>);
+static_assert(!ttnn::device_operation::CustomProgramSpecFactoryConcept<MeshWorkloadSpecFactoryWithOverride>);
+
+// Every flavor is exactly one alternative as far as a program_factory_t variant is concerned.
+static_assert(ttnn::device_operation::AllFactoriesValid<std::variant<ProgramSpecFactory>>);
+static_assert(ttnn::device_operation::AllFactoriesValid<std::variant<CustomProgramSpecFactory>>);
+static_assert(ttnn::device_operation::AllFactoriesValid<std::variant<MeshWorkloadSpecFactory>>);
+static_assert(ttnn::device_operation::AllFactoriesValid<std::variant<MeshWorkloadSpecFactoryWithOverride>>);
 
 template <typename Factory>
-using SpecAdapter =
-    device_operation::MeshDeviceOperationAdapter<ProgramSpecMinimalOp>::ProgramSpecMeshWorkloadFactoryAdapter<Factory>;
+using WorkloadSpecAdapter =
+    device_operation::MeshDeviceOperationAdapter<ProgramSpecMinimalOp>::MeshWorkloadSpecFactoryAdapter<Factory>;
 
-// The mesh-wide vs per-coordinate build path is picked by this predicate; pin both directions.
-static_assert(SpecAdapter<PerCoordProgramSpecFactory>::create_program_artifacts_uses_mesh_dispatch_coordinate());
-static_assert(SpecAdapter<PerCoordCustomProgramSpecFactory>::create_program_artifacts_uses_mesh_dispatch_coordinate());
-static_assert(!SpecAdapter<ProgramSpecFactory>::create_program_artifacts_uses_mesh_dispatch_coordinate());
-static_assert(!SpecAdapter<CustomProgramSpecFactory>::create_program_artifacts_uses_mesh_dispatch_coordinate());
+// The cache-hit path forks on this; pin both directions.
+static_assert(!WorkloadSpecAdapter<MeshWorkloadSpecFactory>::has_override_runtime_arguments());
+static_assert(WorkloadSpecAdapter<MeshWorkloadSpecFactoryWithOverride>::has_override_runtime_arguments());
 
 // Compile-coverage: taking the adapter methods' addresses ODR-uses them, forcing
 // the (otherwise un-instantiated) bodies to compile. Never dispatched.
@@ -226,12 +233,11 @@ TEST(LaunchOperationTest, ProgramSpecAdapterCompiles) {
     [[maybe_unused]] auto ccreate = &CustomAdapter::create_mesh_workload;
     [[maybe_unused]] auto capply = &CustomAdapter::apply_descriptor;
 
-    // The per-coordinate build path is a separate if-constexpr branch; instantiate it too.
-    [[maybe_unused]] auto pcreate = &SpecAdapter<PerCoordProgramSpecFactory>::create_mesh_workload;
-    using PerCoordCustomAdapter = device_operation::MeshDeviceOperationAdapter<
-        ProgramSpecMinimalOp>::CustomProgramSpecMeshWorkloadFactoryAdapter<PerCoordCustomProgramSpecFactory>;
-    [[maybe_unused]] auto pccreate = &PerCoordCustomAdapter::create_mesh_workload;
-    [[maybe_unused]] auto pcapply = &PerCoordCustomAdapter::apply_descriptor;
+    // The mesh-workload adapter is a separate template; instantiate both its hit-path branches.
+    [[maybe_unused]] auto wcreate = &WorkloadSpecAdapter<MeshWorkloadSpecFactory>::create_mesh_workload;
+    [[maybe_unused]] auto wapply = &WorkloadSpecAdapter<MeshWorkloadSpecFactory>::apply_descriptor;
+    [[maybe_unused]] auto wocreate = &WorkloadSpecAdapter<MeshWorkloadSpecFactoryWithOverride>::create_mesh_workload;
+    [[maybe_unused]] auto woapply = &WorkloadSpecAdapter<MeshWorkloadSpecFactoryWithOverride>::apply_descriptor;
     SUCCEED();
 }
 
@@ -401,29 +407,40 @@ TEST_F(LaunchOperation2x4Test, CachingHeterogeneousDispatch) {
     EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 2);
 }
 
-// Idle on odd columns, real spec elsewhere, so one create_mesh_workload exercises coordinate
-// enumeration, per-coordinate specs, and the empty-spec skip together.
+// Emits a program only for non-idle coordinates, so one create_mesh_workload covers the range split
+// and the sharing of workload-scoped resources.
 struct PerCoordProdAllFactory {
     using Op = ttnn::prim::ProdAllDeviceOperation;
     static bool is_idle(const ttnn::MeshCoordinate& coord) { return coord[1] % 2 == 1; }
 
-    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const Op::operation_attributes_t& attrs,
         const Op::tensor_args_t& tensor_args,
         Op::tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-        if (mesh_dispatch_coordinate.has_value() && is_idle(*mesh_dispatch_coordinate)) {
-            return {};
+        const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+        ttnn::device_operation::MeshWorkloadArtifacts artifacts;
+        for (const auto& range : tensor_coords.ranges()) {
+            for (const auto& coord : range) {
+                if (is_idle(coord)) {
+                    continue;
+                }
+                auto program =
+                    Op::ProdAllProgramFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
+                artifacts.programs.push_back(
+                    {.range = ttnn::MeshCoordinateRange(coord),
+                     .spec = std::move(program.spec),
+                     .run_params = std::move(program.run_params)});
+            }
         }
-        return Op::ProdAllProgramFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
+        return artifacts;
     }
 };
 
-TEST_F(LaunchOperation2x4Test, ProgramSpecAdapterPerCoordinateSkipsIdleCoords) {
+TEST_F(LaunchOperation2x4Test, MeshWorkloadSpecAdapterMapsProgramsPerCoordinate) {
     using Op = ttnn::prim::ProdAllDeviceOperation;
     using Adapter =
-        device_operation::MeshDeviceOperationAdapter<Op>::ProgramSpecMeshWorkloadFactoryAdapter<PerCoordProdAllFactory>;
-    static_assert(Adapter::create_program_artifacts_uses_mesh_dispatch_coordinate());
+        device_operation::MeshDeviceOperationAdapter<Op>::MeshWorkloadSpecFactoryAdapter<PerCoordProdAllFactory>;
+    static_assert(ttnn::device_operation::MeshWorkloadSpecFactoryConcept<PerCoordProdAllFactory>);
 
     auto input = make_tensor_with_num_shards(8, mesh_device_.get());
     Op::operation_attributes_t attrs{.output_mem_config = MemoryConfig{}};
@@ -447,6 +464,15 @@ TEST_F(LaunchOperation2x4Test, ProgramSpecAdapterPerCoordinateSkipsIdleCoords) {
     EXPECT_GT(expected, 0u);
     EXPECT_EQ(cached.workload.get_programs().size(), expected);
     EXPECT_EQ(cached.shared_variables.size(), expected);
+
+    // Workload-scoped, not per-device: every range shares one parked resource vector.
+    const auto* first_resources = static_cast<const void*>(nullptr);
+    for (const auto& [range, sv] : cached.shared_variables) {
+        if (first_resources == nullptr) {
+            first_resources = static_cast<const void*>(sv.op_owned_tensors.get());
+        }
+        EXPECT_EQ(static_cast<const void*>(sv.op_owned_tensors.get()), first_resources) << "range " << range;
+    }
 }
 
 TEST_F(LaunchOperation2x4Test, ProgramSpecAdapterProgramsOnUniformTensorCoords) {
