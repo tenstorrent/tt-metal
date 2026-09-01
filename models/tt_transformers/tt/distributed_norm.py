@@ -95,16 +95,16 @@ class DistributedNorm(LightweightModule):
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=self.args.model_config[self.ag_config_key]["num_links"]
-                if self.ag_config_key and mode == "decode"
+                if self.ag_config_key and mode == Mode.DECODE
                 else self.tt_ccl.get_num_links(1),
                 topology=self.args.ccl_topology(),
                 memory_config=input_mem_cfg,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=self.args.model_config[self.ag_config_key]["chunks_per_sync"]
-                if self.ag_config_key and mode == "decode"
+                if self.ag_config_key and mode == Mode.DECODE
                 else 10,
                 num_workers_per_link=self.args.model_config[self.ag_config_key]["num_workers_per_link"]
-                if self.ag_config_key and mode == "decode"
+                if self.ag_config_key and mode == Mode.DECODE
                 else 2,
                 num_buffers_per_channel=2,
                 subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
