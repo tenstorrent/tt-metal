@@ -7,7 +7,8 @@ The model-agnostic engine helpers (mesh open, H2D service, trace loading) live i
 the common package at ``models.demos.common.prefill.runners.runner_utils``. What
 remains here is the one piece of model-specific glue the runtime needs:
 ``prepare_prefill_input_tensor`` (the SP-sharded chunk input), which backs
-``TtPrefillRuntime.make_chunk_input``, plus the MTP shift-window uploads built on top of it.
+``TtPrefillRuntime.make_chunk_input``, plus the MTP overhang and shift-window uploads built on
+top of it.
 
 The MTP index algebra itself lives one layer down in
 ``models.demos.deepseek_v3_d_p.tt.mtp_prefill.token_windows``, which has no ``ttnn`` import so it
@@ -31,44 +32,68 @@ def prepare_prefill_input_tensor(
     is_balanced: bool,
     mesh_shape: tuple,
     sp_axis: int,
-    lookahead: int = 0,
 ) -> ttnn.Tensor:
-    """Shard and upload token IDs to device as a prefill input tensor.
+    """Shard and upload one chunk's token IDs as a prefill input tensor.
 
     Produces an SP-sharded uint32 ROW_MAJOR DRAM tensor of shape
-    [sp_factor, 1, (len(token_ids) - lookahead) // sp_factor + lookahead] — the format expected by
-    TtPrefillTransformer.forward.
+    ``[sp_factor, 1, len(token_ids) // sp_factor]`` -- the format
+    ``TtPrefillTransformer.forward`` expects, and the same one
+    ``prefill_producer._h2d_rows`` builds for the H2D socket.
 
-    ``lookahead`` (MTP, #53533) makes the rows OVERLAP: chip ``c`` gets
-    ``token_ids[c*L : c*L + L + K]`` instead of its disjoint ``[c*L, (c+1)*L)`` shard, so it holds
-    every token an MTP level needs from it and level ``k``'s window is the same local ``[k, k+L)``
-    slice on every chip. This is the SAME layout ``prefill_producer._chunk_to_host_array`` builds
-    for the H2D socket, and it has to be, because ``TtPrefillRuntime.prefill_chunk`` slices whatever
-    arrives with one set of bounds. Only the block-cyclic layout is supported: under ``is_balanced``
-    the row->position map is a permutation, so "the next K tokens" is not a contiguous row tail.
+    MTP's lookahead ids are NOT folded in here; they ride their own tensor
+    (:func:`prepare_prefill_mtp_overhang`), so an MTP run and a plain run upload identical trunk
+    chunks.
     """
-    assert lookahead >= 0, f"lookahead must be non-negative, got {lookahead}"
-    assert not (
-        lookahead and is_balanced
-    ), "MTP lookahead rows are only defined for the block-cyclic (non-balanced) layout"
-    isl_per_chip = (len(token_ids) - lookahead) // sp_factor
+    isl_per_chip = len(token_ids) // sp_factor
     assert (
-        len(token_ids) == sp_factor * isl_per_chip + lookahead
-    ), f"got {len(token_ids)} ids, expected sp_factor*L + lookahead = {sp_factor}*{isl_per_chip} + {lookahead}"
+        len(token_ids) == sp_factor * isl_per_chip
+    ), f"got {len(token_ids)} ids, not divisible by sp_factor={sp_factor}"
+    flat = torch.tensor(token_ids, dtype=torch.int64)
     if is_balanced:
-        chunk_order = create_balanced_chunk_order(sp_factor)
-        t = torch.tensor(token_ids, dtype=torch.int64).unsqueeze(0).unsqueeze(0).unsqueeze(-1)
-        t = reorder_tensor_chunks(t, chunk_order, seq_dim=2)
-        token_ids_sharded = t.squeeze(0).squeeze(-1).reshape(sp_factor, 1, isl_per_chip)
-    elif lookahead:
-        # unfold gives the sp overlapping windows of length L+K at stride L, as a view.
-        token_ids_sharded = (
-            torch.tensor(token_ids, dtype=torch.int64).unfold(0, isl_per_chip + lookahead, isl_per_chip).unsqueeze(1)
+        t = reorder_tensor_chunks(
+            flat.unsqueeze(0).unsqueeze(0).unsqueeze(-1), create_balanced_chunk_order(sp_factor), seq_dim=2
         )
+        token_ids_sharded = t.squeeze(0).squeeze(-1).reshape(sp_factor, 1, isl_per_chip)
     else:
-        token_ids_sharded = torch.tensor(token_ids, dtype=torch.int64).reshape(sp_factor, 1, isl_per_chip)
+        token_ids_sharded = flat.reshape(sp_factor, 1, isl_per_chip)
+    return _upload_ids(token_ids_sharded, mesh_device, mesh_shape, sp_axis)
+
+
+def prepare_prefill_mtp_overhang(
+    token_ids: list[int],
+    mesh_device: ttnn.MeshDevice,
+    sp_factor: int,
+    mesh_shape: tuple,
+    sp_axis: int,
+    *,
+    overhang: int,
+) -> ttnn.Tensor:
+    """Upload the MTP overhang: the ``overhang`` ids that follow each chip's trunk shard.
+
+    ``token_ids`` is this chunk's ``C`` tokens followed by the next ``overhang`` from the stream
+    (``C + overhang`` in all), and chip ``c`` gets ``token_ids[(c+1)*L : (c+1)*L + overhang]``.
+    Concatenated onto that chip's trunk row it forms the contiguous ``token_ids[c*L : c*L+L+overhang]``,
+    so MTP level ``k`` reads the same local slice ``[k, k+L)`` on every chip.
+
+    Only the LAST chip's row reaches past the chunk; the other ``sp-1`` take theirs from inside it.
+    Block-cyclic only: under ``is_balanced`` the row -> position map is a permutation, so "the next
+    ids after this row" is not a contiguous slice of the stream.
+    """
+    assert overhang > 0, f"overhang must be positive, got {overhang}"
+    isl_per_chip = (len(token_ids) - overhang) // sp_factor
+    assert len(token_ids) == sp_factor * isl_per_chip + overhang, (
+        f"got {len(token_ids)} ids, expected sp_factor*L + overhang = " f"{sp_factor}*{isl_per_chip} + {overhang}"
+    )
+    # unfold gives the sp windows of length `overhang` at stride L, as a view; dropping the first L
+    # ids is what shifts window c from chip c's own rows to the ids just past them.
+    rows = torch.tensor(token_ids, dtype=torch.int64)[isl_per_chip:].unfold(0, overhang, isl_per_chip).unsqueeze(1)
+    return _upload_ids(rows, mesh_device, mesh_shape, sp_axis)
+
+
+def _upload_ids(rows: torch.Tensor, mesh_device: ttnn.MeshDevice, mesh_shape: tuple, sp_axis: int) -> ttnn.Tensor:
+    """Upload a host ``[sp_factor, 1, row_len]`` id block, one row per SP chip."""
     return ttnn.from_torch(
-        token_ids_sharded.contiguous(),
+        rows.contiguous(),
         device=mesh_device,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,

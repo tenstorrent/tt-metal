@@ -99,7 +99,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
-from models.demos.common.prefill.runners.runner_utils import h2d_lookahead, load_trace_token_ids, resolve_trace_dir
+from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, mtp_overhang, resolve_trace_dir
 
 
 def _apply_manifest_env(manifest_path: str) -> dict:
@@ -187,9 +187,9 @@ def _load_env_config() -> None:
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
-    # MTP lookahead: with K levels every chip's H2D row carries K extra tokens that overlap the next
-    # chip's slice, so MTP level k's window is the same local slice on every chip. Must match the
-    # runner's PREFILL_MTP_LEVELS -- the payload-size assert in push_chunk catches a mismatch.
+    # MTP: with K levels each chip's H2D row is widened by mtp_overhang(K) lookahead ids (still ONE
+    # socket, one push). Must match the runner's PREFILL_MTP_LEVELS, which sizes the same row on the
+    # receiving side; a mismatch shows up as the payload-size assert in _push.
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
     # Same 11-chunk default as the runner: a larger default here would clamp requests to a depth the
     # runner's cache can't hold, and the runner asserts on the overrunning chunk.
@@ -206,47 +206,57 @@ def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
     return struct.pack("<III", slot_id, actual_start, actual_end)
 
 
-def _chunk_to_host_array(chunk_token_ids):
-    """One chunk's tokens as the un-sharded [SP, 1, chunk_local (+ lookahead)] uint32 buffer the H2D
-    service expects. Block-cyclic / chip-major layout, matching the runner's
-    prepare_prefill_input_tensor; the connected service resplits it across SP coordinates, so this
-    process needs no MeshDevice.
+def _push(service, expect_bytes: int, payload, metadata: bytes) -> None:
+    """One page onto one H2D socket, size-checked against what that socket advertised."""
+    assert payload.nbytes == expect_bytes, f"payload {payload.nbytes}B != service-expected {expect_bytes}B"
+    service.forward_to_tensor_bytes(payload, metadata=metadata)
 
-    With MTP_LEVELS == 0 this is the plain reshape: row c is ``tokens[c*L : (c+1)*L]``, disjoint.
-    With K > 0 the rows OVERLAP -- row c is ``tokens[c*L : c*L + L + K]`` -- so chip c holds every
-    token an MTP level needs from it and the shift becomes one uniform on-device slice with no
-    cross-chip rotation. ``chunk_token_ids`` must then be CHUNK_SIZE + K long (the last row's tail
-    is what makes the extra K needed).
-    """
-    sp = GLOBAL_MESH_SHAPE[0]
-    chunk_local = CHUNK_SIZE // sp
-    # NOT MTP_LEVELS directly: the socket's page size must be PCIe-aligned, so the row carries the
-    # K overlap ids rounded up to a whole page (K=4 -> 16 at L=640). The extra ids past K are never
-    # read; what matters is that the producer, the socket spec and the runtime warm-up all use this
-    # one number.
-    k = h2d_lookahead(CHUNK_SIZE, sp, MTP_LEVELS)
-    assert len(chunk_token_ids) == CHUNK_SIZE + k, f"expected {CHUNK_SIZE + k} tokens, got {len(chunk_token_ids)}"
-    flat = torch.tensor(chunk_token_ids, dtype=torch.int64)
-    if k == 0:
-        rows = flat.reshape(sp, 1, chunk_local)
-    else:
-        # unfold gives the sp overlapping windows of length L+k at stride L, as a view; contiguous()
-        # below materializes them.
-        rows = flat.unfold(0, chunk_local + k, chunk_local).unsqueeze(1)
+
+def _chunk_len() -> int:
+    """Tokens `_chunk_slice` must hand back: the chunk itself plus the MTP overhang past its edge."""
+    return CHUNK_SIZE + mtp_overhang(MTP_LEVELS)
+
+
+def _to_host_array(rows) -> "np.ndarray":
+    """[SP, 1, N] int64 -> the contiguous uint32 buffer an H2D service takes. The connected service
+    resplits it across SP coordinates, so this process needs no MeshDevice."""
     return rows.to(torch.uint32).contiguous().numpy()
 
 
-def _chunk_slice(pool, actual_start: int):
-    """This chunk's `CHUNK_SIZE + h2d_lookahead(...)` tokens out of `pool`, right-padded if the pool
-    ends first.
+def _h2d_rows(tokens):
+    """The ONE H2D tensor: `[SP, 1, L + overhang]`, row c holding `tokens[c*L : c*L + L + overhang]`.
 
-    Only the MTP lookahead can run past a pool sized to a whole number of chunks, and those tokens
-    are read only by MTP levels whose window extends past the request's real length -- rows the
-    transformer's own right-padding already discards. (The lookahead is K rounded up to a PCIe page,
-    so most of it is transport padding no level reads at all.) Pad id 1 matches _load_token_pool's
-    own filler.
+    Block-cyclic / chip-major, matching the runner's prepare_prefill_input_tensor. With MTP off
+    `overhang` is 0 and the rows are the disjoint `[c*L, (c+1)*L)` shards this has always sent.
+
+    With MTP on each row runs `overhang` ids PAST its own shard, into what is chip c+1's trunk (and,
+    for the last chip, into the next chunk). That overlap is the whole trick: the runner cuts the row
+    at L, so chip c's trunk is untouched, while its lookahead rows are the ids that immediately
+    follow it -- which is what lets MTP level k read the SAME local slice `[k, k+L)` on every chip,
+    with no SP ring-shift and no cross-chip rotation. It costs `overhang` re-sent ids per chip.
+
+    `unfold(0, row, L)` is exactly that: SP windows of width `row` at stride L. It is a view;
+    `_to_host_array` materializes it.
     """
-    want = CHUNK_SIZE + h2d_lookahead(CHUNK_SIZE, GLOBAL_MESH_SHAPE[0], MTP_LEVELS)
+    sp = GLOBAL_MESH_SHAPE[0]
+    stride = CHUNK_SIZE // sp
+    row = stride + mtp_overhang(MTP_LEVELS)
+    assert len(tokens) == _chunk_len(), f"expected {_chunk_len()} tokens, got {len(tokens)}"
+    flat = torch.tensor(tokens, dtype=torch.int64)
+    rows = flat.unfold(0, row, stride).unsqueeze(1)
+    assert rows.shape == (sp, 1, row), f"built {tuple(rows.shape)} rows, expected {(sp, 1, row)}"
+    return _to_host_array(rows)
+
+
+def _chunk_slice(pool, actual_start: int):
+    """This chunk's `_chunk_len()` tokens out of `pool`, right-padded if the pool ends first.
+
+    Only the MTP overhang can run past a pool sized to a whole number of chunks, and those tokens are
+    read only by MTP levels whose window extends past the request's real length -- rows the
+    transformer's own right-padding already discards. (The overhang is K rounded up to a tile, so most
+    of it is transport padding no level reads at all.) Pad id 1 matches _load_token_pool's own filler.
+    """
+    want = _chunk_len()
     tokens = list(pool[actual_start : actual_start + want])
     return tokens + [1] * (want - len(tokens))
 
@@ -1572,13 +1582,11 @@ def main() -> None:
 
     def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int) -> float:
         pool = pools_by_trace[slot_traces[slot_id]]
-        chunk_bytes = _chunk_to_host_array(_chunk_slice(pool, actual_start))
-        assert (
-            chunk_bytes.nbytes == payload_bytes
-        ), f"payload {chunk_bytes.nbytes}B != service-expected {payload_bytes}B"
+        tokens = _chunk_slice(pool, actual_start)
+        metadata = _pack_metadata(slot_id, actual_start, actual_end)
         logger.info(f"[producer] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
         push_start = time.perf_counter()
-        service.forward_to_tensor_bytes(chunk_bytes, metadata=_pack_metadata(slot_id, actual_start, actual_end))
+        _push(service, payload_bytes, _h2d_rows(tokens), metadata)
         return (time.perf_counter() - push_start) * 1000.0
 
     stats = run_schedule(cfg, push_fn=push_chunk)
@@ -1631,13 +1639,10 @@ def main() -> None:
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
         sentinel = struct.pack("<iii", -1, -1, -1)
         assert len(sentinel) == METADATA_SIZE_BYTES
-        # contents ignored by the runner; size must match
-        sentinel_payload = _chunk_to_host_array(
-            [1] * (CHUNK_SIZE + h2d_lookahead(CHUNK_SIZE, GLOBAL_MESH_SHAPE[0], MTP_LEVELS))
-        )
-        assert sentinel_payload.nbytes == payload_bytes
+        # contents ignored by the runner; size must match.
+        pad_tokens = [1] * _chunk_len()
         logger.info("[producer] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
-        service.forward_to_tensor_bytes(sentinel_payload, metadata=sentinel)
+        _push(service, payload_bytes, _h2d_rows(pad_tokens), sentinel)
         service.barrier()  # drain the sentinel before releasing the descriptor
         logger.info("[producer] exiting; SHUTDOWN sentinel sent — runner will drain and shut down.")
     else:

@@ -1,0 +1,21 @@
+# GLM-5.2 MTP4 (#53533), REQUEST mode, 1 rank / one galaxy. Same topology as
+# pipeline_prefill_request_1rank.yaml; the MTP config lives in the manifest so runner and producer
+# cannot disagree on level count or on the MTP weight-cache root.
+#
+#   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+#       models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_1rank_mtp4.yaml \
+#       bh-glx-110-d04u02:1 ens5f0np0
+#
+# rank 0 is both first and last rank: it embeds, runs all 78 trunk layers, then the 4 MTP levels into
+# KVPE slots 78..81. No D2D transport, so the H2D socket alone carries CHUNK_SIZE + 4 tokens per chunk.
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
+global_env:
+  # ABSOLUTE path: -x reaches only the launch-host rank, so the model config must come from the binding.
+  PREFILL_MANIFEST: "/data/nbabin/tt-metal/models/demos/deepseek_v3_d_p/tt/runners/manifests/glm52_mtp4.json"
+  PREFILL_FABRIC_MODE: "2d_torus_xy"
+  PREFILL_MAX_SEQ_LEN: "56320"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+  LOGURU_LEVEL: "INFO"

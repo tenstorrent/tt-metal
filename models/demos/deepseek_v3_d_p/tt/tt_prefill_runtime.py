@@ -13,20 +13,24 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.common.prefill.runners.runner_utils import d2d_activation_width, h2d_lookahead
+from models.demos.common.prefill.runners.runner_utils import (
+    d2d_activation_rows,
+    d2d_activation_width,
+    mtp_overhang,
+    mtp_union_rows,
+)
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import (
-    MTPTokenWindows,
-    TokenDigitCodec,
-    token_block_cols,
-)
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPUnionEmbedding
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtMTPPredictor
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import MTP_CACHE_ENV, MTP_CACHE_PREFIX, enable_mtp_indexer_slot
-from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
+from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
+    prepare_prefill_input_tensor,
+    prepare_prefill_mtp_overhang,
+)
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
@@ -74,9 +78,9 @@ class TtPrefillRuntimeConfig:
     # slices from $DFLASH_HF_MODEL; only the last rank builds the KV tail + cache.
     dflash_enabled: bool = False
     # GLM-5.2 MTP (#53533): number of prediction levels K to run after the trunk, 0 = off. K > 0 makes
-    # the runtime build a TtMTPPredictor, widens the H2D chunk to `chunk_size + K` tokens (level k needs
-    # the window shifted k tokens right) and the D2D activation by 32*K columns per chip (the token ids
-    # ride along as base-256 digits), and adds K KV-cache slots per user. See tt/mtp_prefill/.
+    # the runtime build a TtMTPPredictor, take the chunk's overhang ids as a second tensor cut off the
+    # ONE H2D row (level k reads the window shifted k tokens right), stack the chunk's union EMBEDDING under the
+    # hidden on the D2D activation, and add K KV-cache slots per user. See tt/mtp_prefill/.
     mtp_levels: int = 0
     # Pipeline-parallel rank slicing. first_layer_idx is the global index of this
     # rank's first layer; is_first_rank gates the embedding, is_last_rank marks the
@@ -142,11 +146,9 @@ class TtPrefillRuntime:
         self.drafter = None
         self._dflash_k_cache = None
         self._dflash_v_cache = None
-        # GLM-5.2 MTP (#53533). The predictor is built in _build_model on the LAST rank only; the
-        # digit codec is built lazily and ONLY where the D2D transport needs it, so a single-rank
-        # run (first rank == last rank, no D2D at all) never allocates the ~10 MB/chip table.
+        # GLM-5.2 MTP (#53533). Built in _build_model on the LAST rank only; every other rank just
+        # carries the chunk's union embedding across its socket.
         self.mtp_predictor = None
-        self._mtp_codec = None
 
         assert (
             config.max_seq_len % config.chunk_size == 0
@@ -200,14 +202,14 @@ class TtPrefillRuntime:
                 is_first_rank=self.config.is_first_rank,
                 is_last_rank=self.config.is_last_rank,
                 kv_only_last_layer=self.config.kv_only_last_layer,
-                # A last rank running MTP loads the embedding table too (it embeds its own shifted
-                # token windows). Without this the check skips the embedding on a non-first tail rank
-                # and calls a cache missing it complete; single-rank hid it, is_first_rank being true.
-                mtp_levels=self.config.mtp_levels,
                 # Required for a LatentMoE model (Kimi-K3): without it the per-block check cannot know
                 # to look for the latent-projection cache files and would call an incomplete cache
                 # complete. model_cfg is already in hand two lines up.
                 model_cfg=model_cfg,
+                # A last rank running MTP loads the embedding table too (it embeds the tokens its
+                # own LM head generates on the final chunk). Asked here from config because the
+                # predictor is not built until below.
+                mtp_levels=self.config.mtp_levels,
             ):
                 logger.info(f"TTNN weight cache complete at {self.config.weight_cache_path}; loading from disk")
             else:
@@ -470,105 +472,99 @@ class TtPrefillRuntime:
         partial = ttnn.slice(packed, [0, 0, 0, half], [s0, s1, s2, s3])
         return hidden, partial
 
-    def _mtp_pack_activation(self, hidden: ttnn.Tensor, block: ttnn.Tensor) -> ttnn.Tensor:
-        """Fuse this rank's output hidden and the chunk's MTP token digits into ONE D2D activation —
-        per-chip ``[1,1,L,H/tp]`` -> ``[1,1,L,H/tp + 32K]``. Consumes both; only a non-last rank packs.
+    def _mtp_pack_activation(self, hidden: ttnn.Tensor, union_parts: list) -> ttnn.Tensor:
+        """Fuse this rank's output hidden and the chunk's union EMBEDDING into ONE D2D activation --
+        per-chip ``[1,1,L,H/tp]`` stacked on the union's ``L+overhang`` rows ->
+        ``[1,1,2L+overhang,H/tp]``. Consumes the hidden; the union's blocks stay owned by their
+        :class:`MTPUnionEmbedding`.
 
-        Same shape of operation as :meth:`_pack_activation`, and for the same reason: there is one
-        socket between ranks, so anything the downstream rank needs travels in the activation. What
-        travels here is the tokens themselves — the MTP levels run on the LAST rank, and their ids
-        entered the pipeline at the first.
+        ``union_parts`` is the union as it is HELD -- one block on a rank that received it over D2D,
+        two (trunk, overhang) on the rank that gathered it. Concatenating them here writes the same
+        bytes joining them first would have, so the first rank never materializes the joined union at
+        all.
+
+        Same reason as :meth:`_pack_activation`: there is one socket between ranks, so anything the
+        downstream rank needs travels in the activation. DFlash grows the activation sideways because
+        its partial is a different feature vector for the same rows; MTP grows it DOWNWARD because
+        the union is the same features for different rows -- and rows are the axis the D2D mapper
+        already shards, so the socket's width is untouched.
         """
-        packed = ttnn.concat([hidden, block], dim=3)
+        packed = ttnn.concat([hidden, *union_parts], dim=2)
         ttnn.deallocate(hidden)
-        ttnn.deallocate(block)
         return packed
 
     def _mtp_unpack_activation(self, packed: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Inverse of :meth:`_mtp_pack_activation`. Does NOT free ``packed`` — the caller does, as on
+        """Inverse of :meth:`_mtp_pack_activation`. Does NOT free ``packed`` -- the caller does, as on
         the DFlash path.
 
-        The split point is NOT ``//2`` like DFlash's: the token block is ``32K`` columns per chip and
-        the hidden is ``H/tp``, two numbers that are only equal by accident. Both are known from the
-        config, so assert the received width against them rather than infer it — a socket whose width
-        disagrees with this rank's K produces a plausible tensor and silently wrong ids.
+        The split point is NOT ``//2`` like DFlash's: the union carries ``overhang`` rows more than
+        the hidden. Both counts are known from the config, so assert the received height against them
+        rather than infer it -- a socket whose height disagrees with this rank's K produces a
+        plausible tensor with every window off by the difference.
         """
-        cols = token_block_cols(self.config.mtp_levels)
+        rows = self.config.chunk_size // self.config.sp_factor
+        union_rows = mtp_union_rows(self.config.chunk_size, self.config.sp_factor, self.config.mtp_levels)
         s0, s1, s2, s3 = packed.shape
-        expected = self.hf_config.hidden_size // self.config.tp_factor + cols
-        assert s3 == expected, (
-            f"D2D activation is {s3} columns per chip, expected H/tp + 32K = "
-            f"{self.hf_config.hidden_size // self.config.tp_factor} + {cols}. The sending rank and "
-            "this one disagree on PREFILL_MTP_LEVELS, or the socket was built without it."
+        assert s2 == rows + union_rows, (
+            f"D2D activation is {s2} rows per chip, expected L + (L + overhang) = {rows} + {union_rows}. "
+            "The sending rank and this one disagree on PREFILL_MTP_LEVELS, or the socket was built "
+            "without it."
         )
-        hidden = ttnn.slice(packed, [0, 0, 0, 0], [s0, s1, s2, s3 - cols])
-        block = ttnn.slice(packed, [0, 0, 0, s3 - cols], [s0, s1, s2, s3])
-        return hidden, block
+        hidden = ttnn.slice(packed, [0, 0, 0, 0], [s0, s1, rows, s3])
+        union = ttnn.slice(packed, [0, 0, rows, 0], [s0, s1, s2, s3])
+        return hidden, union
 
-    @property
-    def mtp_codec(self) -> TokenDigitCodec:
-        """The token<->digit codec for the D2D transport, built on first use.
+    def _mtp_prepare_input(
+        self, input_tensor: ttnn.Tensor, overhang_tensor: Optional[ttnn.Tensor]
+    ) -> Tuple[MTPUnionEmbedding, ttnn.Tensor]:
+        """Turn what arrived into ``(union embedding, model input)``.
 
-        Lazy on purpose, twice over: a single-rank runner never crosses a D2D socket, so it reads its
-        windows straight off the H2D uint32 tensor and never builds one; and the codec builds its
-        ``[vocab, 32]`` table lazily too, so even holding one costs nothing until a rank encodes or
-        decodes.
-        """
-        if self._mtp_codec is None:
-            self._mtp_codec = TokenDigitCodec(self.mesh_device, self.hf_config.vocab_size)
-        return self._mtp_codec
-
-    def _mtp_codec_or_none(self, windows) -> Optional[TokenDigitCodec]:
-        """The codec `windows` needs to yield its levels, or None when it needs none.
-
-        Windows holding the uint32 ids (this rank is also the first) slice them directly; only a
-        rank that received them as digits has to decode. Asking for the codec builds one, so gate on
-        that rather than pass it unconditionally.
-        """
-        if windows is None or windows.has_tokens:
-            return None
-        return self.mtp_codec
-
-    def _mtp_prepare_input(self, input_tensor: ttnn.Tensor) -> Tuple[MTPTokenWindows, ttnn.Tensor]:
-        """Split what the socket delivered into ``(windows, trunk input)``.
-
-        First rank: the H2D tensor is ``[sp, 1, L + K]`` — this chip's ``L`` trunk tokens plus ``K``
-        of overlap with the next chip — so the trunk input is its local ``[0, L)`` slice and level
-        ``k``'s window is ``[k, k + L)``, the same local slice on every chip.
-        Downstream rank: the digit block rides in the activation; unpack it off the hidden.
+        First rank: the two id tensors the H2D row was cut into -- this chip's ``L`` trunk ids and
+        the ``overhang`` ids that follow them. Each is gathered separately, so the model input is the
+        trunk GATHER (``union.trunk``), not the ids: the transformer is told the input is already
+        embedded and skips its own gather, which would otherwise re-read the same ``L`` rows the
+        union just read. Both id tensors are consumed here.
+        Downstream rank: the union embedding rides in the activation; unpack it off the hidden.
         """
         k = self.config.mtp_levels
-        window_len = self.config.chunk_size // self.config.sp_factor
         if self.config.is_first_rank:
-            windows = MTPTokenWindows.from_tokens(input_tensor, k, window_len)
-            return windows, windows.trunk_tokens()
-        hidden, block = self._mtp_unpack_activation(input_tensor)
+            assert overhang_tensor is not None, (
+                "the device MTP path needs the overhang ids alongside the chunk; the first rank cuts "
+                "both out of one H2D row (see runner_utils.make_h2d_spec)"
+            )
+            union = MTPUnionEmbedding.from_ids(input_tensor, overhang_tensor, self.model.mtp_embed_ids, num_levels=k)
+            ttnn.deallocate(input_tensor)
+            ttnn.deallocate(overhang_tensor)
+            return union, union.trunk
+        assert overhang_tensor is None, "only the first rank receives H2D overhang ids"
+        hidden, union = self._mtp_unpack_activation(input_tensor)
         ttnn.deallocate(input_tensor)
-        return MTPTokenWindows.from_block(block, k, window_len), hidden
+        window_len = self.config.chunk_size // self.config.sp_factor
+        return MTPUnionEmbedding.from_embedding(union, k, window_len), hidden
 
     def make_placeholder_activation(self) -> ttnn.Tensor:
-        """Allocate a zero hidden-state activation matching what the D2D socket delivers:
-        [1, 1, chunk_per_chip, emb_dim/tp] — 2·emb_dim/tp under DFlash, which packs the drafter
-        partial alongside the hidden, or emb_dim/tp + 32K under MTP, which packs the chunk's token
-        ids — TILE_LAYOUT, DRAM, replicated.
+        """Allocate a zero activation matching what the D2D socket delivers, per chip:
+        ``[1, 1, rows, emb_dim/tp]`` bf16 TILE DRAM, replicated.
 
-        Stand-in input for a non-first rank until the upstream D2D-socket sync op
-        delivers the real activation. The first block's attn_norm reads from this
-        tensor; once the sync op lands, the wait-op overwrites it in place. Under DFlash or MTP the
-        delivered tensor is packed; prefill_chunk unpacks it before the model runs.
+        Stand-in input for a non-first rank until the upstream D2D-socket sync op delivers the real
+        activation. The first block's attn_norm reads from this tensor; once the sync op lands, the
+        wait-op overwrites it in place.
+
+        Both packed forms are accounted for, and they grow on different axes: DFlash widens to
+        ``2H/tp`` (drafter partial beside the hidden) and MTP heightens to ``2L + overhang`` (union
+        embedding under the hidden). The runner sizes the socket with these same two functions, so
+        the receive buffer cannot drift from it.
         """
-        chunk_per_chip = self.config.chunk_size // self.config.sp_factor
-        # DFlash packs [hidden ‖ drafter-partial] into the D2D activation (2H) and MTP packs
-        # [hidden ‖ K token-digit groups] (+32K per chip), so a non-first rank receives a wider tensor
-        # and this receive buffer must match. The runner sizes the socket with this same function.
-        feature_size = d2d_activation_width(
-            self.hf_config.hidden_size,
-            mtp_levels=self.config.mtp_levels,
-            tp_factor=self.config.tp_factor,
-            dflash=self.config.dflash_enabled,
+        rows = (
+            d2d_activation_rows(
+                self.config.chunk_size, sp_factor=self.config.sp_factor, mtp_levels=self.config.mtp_levels
+            )
+            // self.config.sp_factor
         )
-        emb_per_tp = feature_size // self.config.tp_factor
-        zeros = torch.zeros(1, 1, chunk_per_chip, emb_per_tp, dtype=torch.bfloat16)
+        emb_per_tp = d2d_activation_width(self.hf_config.hidden_size, dflash=self.config.dflash_enabled) // (
+            self.config.tp_factor
+        )
+        zeros = torch.zeros(1, 1, rows, emb_per_tp, dtype=torch.bfloat16)
         return ttnn.from_torch(
             zeros,
             device=self.mesh_device,
@@ -578,23 +574,19 @@ class TtPrefillRuntime:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-    def _h2d_lookahead(self) -> int:
-        """Ids past this chip's trunk shard that the H2D socket delivers — `mtp_levels` rounded up to
-        the socket's PCIe page. Same function the runner sizes the socket with and the producer
-        builds its rows with, so a locally-built input matches a socket-delivered one exactly."""
-        return h2d_lookahead(self.config.chunk_size, self.config.sp_factor, self.config.mtp_levels)
+    def _mtp_overhang(self) -> int:
+        """Ids past this chip's trunk shard that the H2D row carries past its trunk. Same function the
+        runner cuts that row with and the producer builds its rows with, so a locally-built input
+        matches a socket-delivered one exactly. 0 when MTP is off."""
+        return mtp_overhang(self.config.mtp_levels)
 
-    def make_chunk_input(self, token_ids: list[int], *, lookahead: Optional[int] = None) -> ttnn.Tensor:
-        """Build one chunk's device input for `prefill_chunk`. First-rank input is
-        SP-sharded token IDs; a non-first pipeline rank instead gets a placeholder
-        hidden-state activation (it does not embed — it receives the real activation
-        over the D2D socket).
+    def make_chunk_input(self, token_ids: list[int]) -> ttnn.Tensor:
+        """Build one chunk's device input for `prefill_chunk`. First-rank input is `chunk_size`
+        SP-sharded token IDs; a non-first pipeline rank instead gets a placeholder hidden-state
+        activation (it does not embed — it receives the real activation over the D2D socket).
 
-        `lookahead` defaults to this runtime's MTP level count, so a locally-built input has the
-        SAME per-chip width the H2D socket delivers under MTP (`chunk_size/sp + K`, overlapping
-        rows) and `prefill_chunk` can slice both with one set of bounds. `token_ids` must then be
-        `chunk_size + K` long. Pass `lookahead=0` to build a plain trunk-width input regardless —
-        the host MTP path does, since there the levels get their windows as separate uploads."""
+        MTP does not change this tensor: its lookahead ids come separately, from
+        :meth:`make_mtp_overhang_input`."""
         if self.config.is_first_rank:
             return prepare_prefill_input_tensor(
                 token_ids,
@@ -603,9 +595,24 @@ class TtPrefillRuntime:
                 False,  # chunked prefill is block-cyclic (non-balanced)
                 self.config.mesh_shape,
                 self.config.sp_axis,
-                lookahead=self._h2d_lookahead() if lookahead is None else lookahead,
             )
         return self.make_placeholder_activation()
+
+    def make_mtp_overhang_input(self, token_ids: list[int]) -> ttnn.Tensor:
+        """Build the MTP overhang companion to :meth:`make_chunk_input`, from the SAME
+        `chunk_size + overhang` list. First rank only — nobody else receives ids.
+
+        The two must come from one list: the overhang's whole job is to continue each chip's trunk
+        row, and a mismatch is invisible downstream (right shape, right dtype, wrong text)."""
+        assert self.config.is_first_rank, "only the first rank builds an MTP overhang input"
+        return prepare_prefill_mtp_overhang(
+            token_ids,
+            self.mesh_device,
+            self.config.sp_factor,
+            self.config.mesh_shape,
+            self.config.sp_axis,
+            overhang=self._mtp_overhang(),
+        )
 
     def make_mtp_chunk_input(self, mtp_stream: Sequence[int]) -> ttnn.Tensor:
         """Trunk input for a chunk whose MTP stream is `mtp_stream` — the `chunk_size + K` list from
@@ -629,9 +636,7 @@ class TtPrefillRuntime:
             "K positions past the chunk's right edge, so it is strictly longer than the chunk; a "
             "chunk_size-long list is the trunk input, not an MTP stream."
         )
-        # lookahead=0: on the HOST path the trunk input is the plain chunk and each level is uploaded
-        # separately by prepare_prefill_mtp_window, so this must NOT take the overlapping-row layout.
-        return self.make_chunk_input(list(mtp_stream[:c]), lookahead=0)
+        return self.make_chunk_input(list(mtp_stream[:c]))
 
     def compile(self, kv_caches: MlaKvCaches) -> None:
         """Warm up one chunk so the per-chunk loop hits no first-run cost. The engine passes the
@@ -663,15 +668,18 @@ class TtPrefillRuntime:
             self._kv_cache = kv_caches  # kept so capture_trace() can record after the ack is registered
             self._prepare_trace(kv_caches)
         else:
-            # The warm-up input must have the width the serving loop will actually receive, not the
-            # trunk width: under MTP the H2D socket delivers chunk_size/sp + K ids per chip, and
-            # prefill_chunk slices the K windows straight off it. Compiling against a narrower
-            # tensor would either fail here (it did: "H2D row is 640 ids, expected 640 + 4") or warm
-            # the wrong program shapes.
-            warm = chunk + self._h2d_lookahead()
+            # Warm every program the serving loop will run, which under MTP means the overhang
+            # tensor too: the union gather, the row-concat pack and the window slices all have shapes
+            # that exist only when it is present. Both tensors come from ONE stream, exactly as the
+            # producer builds them.
+            overhang = self._mtp_overhang()
             logger.info(f"TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
-            tt_input = self.make_chunk_input([0] * warm)
-            self.prefill_chunk(tt_input, kv_caches, slot_id=0, actual_start=0, actual_end=chunk)
+            stream = [0] * (chunk + overhang)
+            tt_input = self.make_chunk_input(stream[:chunk])
+            tt_overhang = self.make_mtp_overhang_input(stream) if overhang and self.config.is_first_rank else None
+            self.prefill_chunk(
+                tt_input, kv_caches, slot_id=0, actual_start=0, actual_end=chunk, mtp_overhang=tt_overhang
+            )
             ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
         logger.info(
@@ -791,6 +799,7 @@ class TtPrefillRuntime:
         d2h_service=None,
         record_dev: Optional[ttnn.Tensor] = None,
         mtp_tokens: Optional[list[int]] = None,
+        mtp_overhang: Optional[ttnn.Tensor] = None,
         mtp_seed_token: Optional[int] = None,
         on_mtp_complete=None,
     ) -> Optional[ttnn.Tensor]:
@@ -847,6 +856,10 @@ class TtPrefillRuntime:
                 users by. Migration knows about those slots: `kv_migration_stages` declares
                 num_layers + K on the last rank, which is what the chunk-address table strides users
                 by. None disables MTP for this chunk.
+            mtp_overhang: GLM-5.2 MTP, DEVICE path — the first rank's `[sp, 1, overhang]` uint32
+                companion to `input_tensor`, holding the ids just past each chip's trunk shard
+                (make_mtp_overhang_input, or the tail of the H2D row the runner cut). Required on the first rank
+                whenever config.mtp_levels is set, and rejected on any other rank. Deallocated here.
             mtp_seed_token: optional t_P for the last chunk (saves one 32-row LM head call).
             on_mtp_complete: tap fired once with (MTPPredictorOutput, generated_tokens).
         """
@@ -895,7 +908,7 @@ class TtPrefillRuntime:
             # slots NUM_LAYERS+k left untouched. The runner refuses this combination up front
             # (prefill_runner.py's PREFILL_MTP_LEVELS/PREFILL_USE_TRACE assert); this is the backstop
             # for anyone driving TtPrefillRuntime directly.
-            assert mtp_tokens is None and not self.config.mtp_levels, (
+            assert mtp_tokens is None and mtp_overhang is None and not self.config.mtp_levels, (
                 "use_trace does not support MTP: the shift-windows are sliced/uploaded per chunk (fresh "
                 "addresses) and the levels run after the captured segment, neither of which survives a "
                 "capture; run with PREFILL_USE_TRACE=0"
@@ -924,7 +937,10 @@ class TtPrefillRuntime:
             on_layer_complete = self._on_layer_complete
 
         model_input = input_tensor
-        mtp_windows = None
+        mtp_union = None
+        # Set when model_input IS union.trunk: the union owns that tensor and the D2D pack re-reads
+        # it after forward returns, so the unconditional free below must skip it.
+        mtp_owns_input = False
         if self.config.dflash_enabled:
             self.drafter.reset()
             if not self.config.is_first_rank:
@@ -937,7 +953,8 @@ class TtPrefillRuntime:
                 "(config.mtp_levels > 0). The runner's tokens arrive over the H2D socket and are "
                 "sliced on device; passing a host list too would prefill two different streams."
             )
-            mtp_windows, model_input = self._mtp_prepare_input(input_tensor)
+            mtp_union, model_input = self._mtp_prepare_input(input_tensor, mtp_overhang)
+            mtp_owns_input = self.config.is_first_rank
 
         out = self.model.forward(
             model_input,
@@ -953,13 +970,14 @@ class TtPrefillRuntime:
             index_kv_cache=kv_caches.index,
             mtp_tokens=mtp_tokens,
             # Only the rank that BUILT a predictor runs the levels; an upstream rank just carries the
-            # windows across its socket, so it must not hand them to a transformer that has none.
-            mtp_token_windows=mtp_windows if self.mtp_predictor is not None else None,
-            mtp_codec=self._mtp_codec_or_none(mtp_windows),
+            # union across its socket, so it must not hand it to a transformer that has none.
+            mtp_union=mtp_union if self.mtp_predictor is not None else None,
             mtp_seed_token=mtp_seed_token,
             on_mtp_complete=on_mtp_complete,
+            input_is_embedded=mtp_owns_input,
         )
-        ttnn.deallocate(model_input)
+        if not mtp_owns_input:
+            ttnn.deallocate(model_input)
 
         if self.config.dflash_enabled:
             if self.config.is_last_rank:
@@ -976,15 +994,15 @@ class TtPrefillRuntime:
             # Non-last rank: pack this rank's finalized FC partial alongside the hidden for the next rank.
             return self._pack_activation(out, self.drafter.export_partial())
 
-        if mtp_windows is not None:
+        if mtp_union is not None:
             if self.config.is_last_rank:
-                mtp_windows.deallocate()
+                mtp_union.deallocate()
                 return None
-            # Non-last rank: re-pack the tokens alongside the hidden so they reach the rank that runs
-            # MTP. .block() hands over ownership of a received block, so this costs an encode only on
-            # the first rank and nothing at all in the middle of the pipeline.
-            packed = self._mtp_pack_activation(out, mtp_windows.block(self.mtp_codec))
-            mtp_windows.deallocate()
+            # Non-last rank: re-stack the union under the hidden so it reaches the rank that runs MTP.
+            # A middle rank passes through the tensor it received — one gather on the first rank, and
+            # nothing at all after that.
+            packed = self._mtp_pack_activation(out, mtp_union.parts)
+            mtp_union.deallocate()
             return packed
 
         # Non-last rank: forward returns the hidden-state activation to forward downstream.
