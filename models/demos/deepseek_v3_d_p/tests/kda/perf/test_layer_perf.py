@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Real-weight correctness and performance acceptance for Kimi-K3 KDA."""
+"""Local real-weight and CI-synthetic performance acceptance for Kimi-K3 KDA."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import os
 import statistics
 import time
 from collections.abc import Callable
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -21,12 +22,14 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import KIMI_K3_FIRST_KDA_LAYER
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
     check_kimi_k3_accuracy,
     make_kimi_k3_device_case,
     make_kimi_k3_test_case,
+    make_synthetic_kimi_k3_test_case,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
@@ -35,23 +38,6 @@ pytestmark = [
     run_for_blackhole(),
     pytest.mark.perf,
     pytest.mark.timeout(900),
-    pytest.mark.parametrize(
-        "device_params",
-        [
-            # FABRIC_2D follow-up: SP1xTP8 hangs with a device timeout and failed
-            # Ethernet-core recovery. SP2xTP4/SP4xTP2 were correct but 0.05%/0.10%
-            # slower than FABRIC_1D; do not enable 2D until the SP1 failure is fixed.
-            pytest.param(
-                {
-                    "l1_small_size": 24576,
-                    "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                    "trace_region_size": 256 * 1024 * 1024,
-                },
-                id="fabric_1d",
-            ),
-        ],
-        indirect=True,
-    ),
 ]
 
 _SEQUENCE = 5120
@@ -68,6 +54,8 @@ _PERF_REFERENCE_MS = {
     "SP2xTP4": 9.539,
     "SP4xTP2": 9.991,
 }
+_GALAXY_PERF_REFERENCE_MS: float | None = None
+_GALAXY_CALIBRATION_ENV = "KDA_GALAXY_PERF_CALIBRATE"
 
 
 def _tensor_sha256(tensor: torch.Tensor) -> str:
@@ -81,8 +69,8 @@ def _cpu_reference_cache_path(case: KimiK3TestCase) -> Path:
     fingerprint.update(f"v{_CPU_REFERENCE_CACHE_VERSION}".encode())
     fingerprint.update(str(KIMI_K3_FIRST_KDA_LAYER).encode())
     fingerprint.update(str(case.hidden.shape[1]).encode())
-    fingerprint.update(case.checkpoint_identity.encode())
-    fingerprint.update((case.checkpoint_dir / "config.json").read_bytes())
+    fingerprint.update(case.weights_identity.encode())
+    fingerprint.update(json.dumps(asdict(case.config), sort_keys=True).encode())
     fingerprint.update(_tensor_sha256(case.hidden).encode())
     for source_path in sorted(reference_dir.glob("*.py")):
         fingerprint.update(source_path.name.encode())
@@ -90,7 +78,7 @@ def _cpu_reference_cache_path(case: KimiK3TestCase) -> Path:
     return (
         Path(ttnn.CONFIG.model_cache_path)
         / "kimi_k3"
-        / case.checkpoint_identity
+        / case.weights_identity
         / "cpu_reference"
         / f"layer_{KIMI_K3_FIRST_KDA_LAYER}_t{case.hidden.shape[1]}_{fingerprint.hexdigest()[:20]}.pt"
     )
@@ -350,11 +338,58 @@ def _trace_wall_samples_ms(
     return samples_ms, trace_pcc
 
 
+def _trace_wall_samples_without_accuracy(
+    mesh_device: ttnn.MeshDevice,
+    layer: ttKDA,
+    hidden: ttnn.Tensor,
+    repetitions: int,
+) -> list[float]:
+    state = _allocate_state(layer)
+    warm_output, warm_state = layer.forward(hidden, state)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(warm_output)
+    _deallocate_state(warm_state)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    output, next_state = layer.forward(hidden, state)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    samples_ms = []
+    for _ in range(_TIMING_SAMPLES):
+        start = time.perf_counter()
+        for _ in range(repetitions):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        samples_ms.append((time.perf_counter() - start) * 1e3 / repetitions)
+    ttnn.release_trace(mesh_device, trace_id)
+    ttnn.deallocate(output)
+    _deallocate_state(state)
+    _deallocate_state(next_state)
+    return samples_ms
+
+
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis",
     [((1, 8), 1), ((2, 4), 1), ((2, 4), 0)],
     indirect=["mesh_device"],
     ids=["SP1xTP8", "SP2xTP4", "SP4xTP2"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        # FABRIC_2D follow-up: SP1xTP8 hangs with a device timeout and failed
+        # Ethernet-core recovery. SP2xTP4/SP4xTP2 were correct but 0.05%/0.10%
+        # slower than FABRIC_1D; do not enable 2D until the SP1 failure is fixed.
+        pytest.param(
+            {
+                "l1_small_size": 24576,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": 256 * 1024 * 1024,
+            },
+            id="fabric_1d",
+        ),
+    ],
+    indirect=True,
 )
 def test_kimi_k3_layer_1_perf(
     mesh_device: ttnn.MeshDevice,
@@ -446,3 +481,62 @@ def test_kimi_k3_layer_1_perf(
             _log_device_program_times(mesh_device, layer, hidden_tt, layout)
         except Exception as error:
             print("KDA_LAYER_DEVICE_TIMES_ERROR=" + json.dumps({"layout": layout, "error": str(error)}, sort_keys=True))
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(l1_small_size=24576, trace_region_size=256 * 1024 * 1024),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="SP8xTP4-torus-xy",
+        )
+    ],
+    indirect=True,
+)
+def test_synthetic_kimi_k3_perf(
+    mesh_device: ttnn.MeshDevice,
+    device_params: dict,
+) -> None:
+    """Measure checkpoint-free production K3 latency; calibrate before enabling its gate."""
+    tensor_parallel_axis = 1
+    case = make_synthetic_kimi_k3_test_case(sequence=_SEQUENCE)
+    layer, hidden_tt = make_kimi_k3_device_case(
+        mesh_device,
+        case,
+        tensor_parallel_axis=tensor_parallel_axis,
+        cache_weights=False,
+    )
+    samples_ms = _trace_wall_samples_without_accuracy(mesh_device, layer, hidden_tt, _REPETITIONS)
+    median_wall_ms = statistics.median(samples_ms)
+    result = {
+        "fabric_config": ttnn.get_fabric_config().name,
+        "layout": "SP8xTP4",
+        "sequence": _SEQUENCE,
+        "weights": "deterministic synthetic",
+        "repetitions": _REPETITIONS,
+        "trace_wall_samples_ms": samples_ms,
+        "median_trace_wall_ms": median_wall_ms,
+        "timing_sample_count": _TIMING_SAMPLES,
+        "reference_trace_wall_ms": _GALAXY_PERF_REFERENCE_MS,
+        "perf_margin_pct": _PERF_MARGIN * 100.0,
+    }
+    print("KDA_SYNTHETIC_PERF=" + json.dumps(result, sort_keys=True))
+    if _GALAXY_PERF_REFERENCE_MS is None:
+        assert os.environ.get(_GALAXY_CALIBRATION_ENV) == "1", (
+            "Galaxy KDA perf target is not calibrated; set "
+            f"{_GALAXY_CALIBRATION_ENV}=1 only for the first hosted measurement"
+        )
+    else:
+        lower = _GALAXY_PERF_REFERENCE_MS * (1.0 - _PERF_MARGIN)
+        upper = _GALAXY_PERF_REFERENCE_MS * (1.0 + _PERF_MARGIN)
+        assert lower <= median_wall_ms <= upper, (
+            f"SP8xTP4 median trace wall {median_wall_ms:.3f} ms is outside Galaxy range "
+            f"[{lower:.3f}, {upper:.3f}] ms "
+            f"(reference {_GALAXY_PERF_REFERENCE_MS:.3f} ms ± {_PERF_MARGIN:.0%})"
+        )
+    try:
+        _log_device_program_times(mesh_device, layer, hidden_tt, "SP8xTP4")
+    except Exception as error:
+        print("KDA_LAYER_DEVICE_TIMES_ERROR=" + json.dumps({"layout": "SP8xTP4", "error": str(error)}, sort_keys=True))
