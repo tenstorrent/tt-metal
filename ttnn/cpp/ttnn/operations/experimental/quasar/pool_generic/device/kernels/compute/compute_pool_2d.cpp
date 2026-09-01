@@ -13,6 +13,7 @@
 #include "api/compute/add_int_sfpu.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 
 //   0 = production path: narrow pack_untilize straight into the real output CB (out_cb), then DPRINT it.
