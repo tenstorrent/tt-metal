@@ -180,23 +180,21 @@ _MEASURED_FLOORS = {
         "agreement declines only where the reference's own margin declines — no positional drift",
     ),
     ("64L-5120", "prefill_128-max_new_tokens_128"): (
-        0.67,
-        0.77,
-        0.35,
-        "Qwen3.6-27B WH T3K 1x8 (measured top1 75.97%, top5 84.50%, worst step PCC 0.3957); "
-        "re-measured unchanged after the prefill_paged TP reset fix. The 27B agrees with HF "
-        "markedly less than the 9B here (90.70%) and NO EXPLANATION HAS BEEN FOUND. Ruled out so "
-        "far, each by measurement: the reference method (HF chunked vs recurrent agree to 0.9997 "
-        "with no position trend), tensor-parallel width (TP=4 and TP=8 are identical bin for bin), "
-        "the stale-GDN-state bug in prefill_paged (numbers unchanged after the fix), and sequence "
-        "length (a 128-token prefill scores WORSE than a 256-token one, so PCC here tracks which "
-        "row is scored, not how long the sequence is). The corpus accounts for about 4 points: "
-        "starting past Tale of Two Cities' front matter (prefill_len=512) moves top-1 to 79.84%. "
-        "What is odd and unexplained is the position trend -- agreement falls 96.97% -> 43.33% "
-        "across the bins while the REFERENCE becomes more decisive (margin 7.75 -> 9.75, entropy "
-        "-> 0.05), which is the opposite of a text-difficulty explanation. Treat these floors as a "
-        "regression detector for a known-imperfect state, not as an accuracy target: raise them if "
-        "the gap is diagnosed and closed; do not edit them down if it worsens",
+        0.87,
+        0.93,
+        0.75,
+        "Qwen3.6-27B WH T3K 1x8 (measured top1 93.02%, top5 97.67%, worst step PCC 0.8768). "
+        "RESOLVED: the earlier 75.97%/84.50%/0.3957 state was a MISSING PAGED KV-CACHE WRITE in "
+        "TPAttention.forward_decode -- the `not wh_9b_n300` branch prepared k_sh/v_sh and never "
+        "called paged_update_cache, so decode attended over a cache holding only the prefill "
+        "tokens with every generated token's slot left at zero. That is why agreement fell "
+        "96.97% -> 43.33% across position bins (each step lost more history) while the reference "
+        "grew more decisive, and why the 9B was unaffected (it takes the wh_9b_n300 branch, which "
+        "does write). Fixing it removed the position trend entirely (bins now 93.94 / 93.94 / "
+        "87.88 / 96.67%, the last bin the best) and the 27B now exceeds the 9B's 90.70%. "
+        "TT-vs-truth 89.84% now sits just under HF-vs-truth 93.75%, i.e. the residual gap is "
+        "ordinary numerics, not a structural defect. Do not edit these floors down if agreement "
+        "worsens -- a drop means a regression",
     ),
 }
 _FALLBACK_FLOORS = (0.75, 0.92, 0.55, "NOT measured for this model/length — inherited default")
