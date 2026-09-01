@@ -119,9 +119,20 @@ bool supported_by_codegen(const Tensor& input_tensor, int8_t dim, const Tensor& 
 }
 
 bool is_demoted(const Tensor& /*input_tensor*/, int8_t /*dim*/, const Tensor& /*input_index_tensor*/) {
-    // The perf gate demotes NOTHING: every measured in-scope configuration beats the native prim on
-    // device, so ttnn::gather() runs codegen wherever supported_by_codegen() admits it. The
-    // signature stays so the routing expression's `supported && !demoted` wiring is identical
+    // The perf gate demotes NOTHING, so ttnn::gather() runs codegen wherever supported_by_codegen()
+    // admits it -- including one class that is accepted rather than demoted: a gather whose logical
+    // height is a single row runs ~2% slower than the native prim. These kernels work in whole
+    // tiles while native's scale with real element rows, so at height 1 native touches 1/32 of a
+    // tile the readers still walk end to end, and its 32x smaller workload just edges ahead.
+    //
+    // Accepted because no predicate over the attributes isolates it. [1, 32768] and
+    // [1, 1, 32, 32768] agree on dtype, layout, dim, Wt_input and Wt_index, and both are full
+    // width, yet they measure 1.03x and 0.21x: a condition on width, or on the index/input tile
+    // ratio, would demote a case nearly five times faster than native to spare a 2% one. Only the
+    // logical height separates them, and where between height 1 and the heights that win it turns
+    // is unmeasured.
+    //
+    // The signature stays so the routing expression's `supported && !demoted` wiring is identical
     // whether or not a demotion is ever found; a future demotion belongs here as a condition over
     // the tensor attributes, not as a shape-tuple carve-out.
     //
