@@ -8,8 +8,13 @@
 
 namespace internal {
 
-// This should go away when we upgrade to C++20 in-favor of CTAD
-inline constexpr size_t MAX_TEMPLATE_STRING_LEN = 63;
+// Maximum number of characters this type can hold, excluding the terminating NUL.
+//
+// This restriction is aribtary to support use of TemplateString type as a non-type template parameter without CTAD.
+// This should go away when we upgrade to C++20.
+//
+// MAINTAINER: This constant must be kept in sync with MAX_ACCESSOR_NAME_LENGTH in kernel_spec.hpp on host.
+inline constexpr size_t MAX_TEMPLATE_STRING_LEN = 65;  // 64 + NUL
 
 /**
  * Represents a null terminated string meant to be used as a non-type template parameter.
@@ -30,14 +35,14 @@ inline constexpr size_t MAX_TEMPLATE_STRING_LEN = 63;
  */
 struct TemplateString {
     // invariant: always null-terminated
-    char value[MAX_TEMPLATE_STRING_LEN + 1] = {};
+    char value[MAX_TEMPLATE_STRING_LEN] = {};
+    // Size of the string including the terminating NUL.
     std::size_t length;
 
     template <std::size_t N>
     constexpr TemplateString(const char (&str)[N]) : length(N) {
         static_assert(
-            N <= MAX_TEMPLATE_STRING_LEN,
-            "Template String must be instantiated with a string that's shorter than MAX_TEMPLATE_STRING_LEN");
+            N <= MAX_TEMPLATE_STRING_LEN, "TemplateString content must be at most MAX_TEMPLATE_STRING_LEN characters");
         for (size_t i = 0; i < N; ++i) {
             value[i] = str[i];
         }

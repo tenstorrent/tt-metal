@@ -397,6 +397,30 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidLocalAccessorNameFails) {
     }
 }
 
+TEST_F(ProgramSpecTestQuasar, CPU_TooLongLocalAccessorNameFails) {
+    // An accessor_name longer than MAX_ACCESSOR_NAME_LENGTH cannot be passed to the kernel-side
+    // by-name binding lookup, so a valid-but-too-long identifier must fail at Program construction
+    // rather than as a kernel JIT static_assert.
+    const std::string too_long(MAX_ACCESSOR_NAME_LENGTH + 1, 'a');
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto kernel = MakeMinimalGen2DMKernel("kernel");
+    auto dfb = MakeMinimalDFB("dfb");
+    kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, too_long));
+
+    spec.kernels = {kernel};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("must be at most " + std::to_string(MAX_ACCESSOR_NAME_LENGTH) + " characters")));
+}
+
 TEST_F(ProgramSpecTestQuasar, CPU_KernelReferencesUnknownDFBFails) {
     NodeCoord node{0, 0};
 
@@ -1515,6 +1539,18 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidScratchpadAccessorNameFails) {
             ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be a valid C++ identifier")))
             << "Expected rejection for scratchpad accessor_name: '" << bad_name << "'";
     }
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_TooLongScratchpadAccessorNameFails) {
+    const std::string too_long(MAX_ACCESSOR_NAME_LENGTH + 1, 'a');
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024}};
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = too_long}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be at most")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_MultipleScratchpadsEachBoundToOwnKernelSucceeds) {
@@ -3899,6 +3935,16 @@ TEST_F(ProgramSpecTestGen1, CPU_InvalidTensorAccessorNameFails) {
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("tensor accessor_name 'has-dash' must be a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_TooLongTensorAccessorNameFails) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", std::string(MAX_ACCESSOR_NAME_LENGTH + 1, 'a'));
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be at most")));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_AccessorNamesAcrossCategoriesAreSeparateNamespaces) {
