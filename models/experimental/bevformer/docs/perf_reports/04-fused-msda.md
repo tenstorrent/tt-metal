@@ -151,5 +151,5 @@ SCA is now 352.0 ms, split:
 - **[Candidate 3](../perf_optimization_candidates.md#candidate-3--tile-padding-waste) rescopes from
   ~60 ms to ~24 ms.** Its two `Permute` sites were inside the decomposition and are gone; only the
   pre-core `div` survives.
-- **1b and [candidate 5](../perf_optimization_candidates.md#candidate-5--trace-capture) are
+- **1b and [candidate 9](../perf_optimization_candidates.md#candidate-9--trace-capture) are
   unchanged.** The DRAM ceiling that sank 1b is still there, as the 200×200 failure shows.

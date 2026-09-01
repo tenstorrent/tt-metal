@@ -144,7 +144,7 @@ because the single-layer harness gets `rebatch_plan = None` and rebuilds it
 inside the window.
 
 **Conclusion for ranking: 1e is not a gap optimization.** Its case is
-[candidate 5](perf_optimization_candidates.md#candidate-5--trace-capture) — a
+[candidate 9](perf_optimization_candidates.md#candidate-9--trace-capture) — a
 `rebatch_len` that is constant across replays — and this capture is the evidence
 that the milliseconds will not carry it.
 

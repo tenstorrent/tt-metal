@@ -205,7 +205,7 @@ from the table entirely**, absorbed into `MSDAOperation`.
 The profile has changed character. Through stage 03 the story was layout churn: reshape, permute,
 concat and grid-sample around a small amount of real work. Now **one op is over a third of the
 layer**, and it is more expensive per sample than the `GridSample` it replaced (see
-[candidate 6](perf_optimization_candidates.md#candidate-6--msdaoperation-itself)). Every remaining
+[candidate 10](perf_optimization_candidates.md#candidate-10--msdaoperation-itself)). Every remaining
 model-side lever — ~103 ms of per-level tilize/untilize churn being the largest — is smaller than
 the op itself.
 

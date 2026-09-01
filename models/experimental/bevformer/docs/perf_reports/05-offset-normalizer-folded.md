@@ -87,7 +87,7 @@ TSA's one.
 | MatmulDeviceOperation | 11 | 4.7 | 1.0 |
 
 `MSDAOperation` is now **36.7% of the layer** and the gap to the next op has widened.
-[Candidate 6](../perf_optimization_candidates.md#candidate-6--msdaoperation-itself) is the only
+[Candidate 10](../perf_optimization_candidates.md#candidate-10--msdaoperation-itself) is the only
 remaining item of comparable size, and it is an upstream question rather than a model-side one.
 
 ## Note for stage 03

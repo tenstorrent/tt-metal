@@ -52,7 +52,7 @@ take that path.
 
 Five of six `bev_mask` readbacks are gone, and **the layer loop no longer contains one at all**.
 That is the structural result, and it matters more than the 2%: a readback inside the layer loop is
-a hard blocker for [candidate 5](../perf_optimization_candidates.md#candidate-5--trace-capture),
+a hard blocker for [candidate 9](../perf_optimization_candidates.md#candidate-9--trace-capture),
 where one above the loop is not.
 
 Not sufficient for trace capture on its own: `rebatch_len` still varies per frame, so a captured
