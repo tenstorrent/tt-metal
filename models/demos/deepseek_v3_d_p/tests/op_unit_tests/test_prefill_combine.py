@@ -10,6 +10,7 @@ PyTorch reference implementation when combining expert outputs back to token pos
 Uses torch-generated dispatch inputs to isolate the combine operation.
 """
 
+import os
 from dataclasses import dataclass
 
 import pytest
@@ -38,6 +39,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_ep_mesh_mapper,
     get_expert_token_counts_mesh_mapper,
     get_gate_outputs,
+    initialize_hot_expert_test_inputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
@@ -50,6 +52,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+
+
+# Launches of the op per test, for sampling its time. 1 keeps a test run a single launch.
+def perf_iterations():
+    return int(os.environ.get("CMBF2D_PERF_ITERS", "1"))
 
 
 def run_combine(
@@ -66,10 +73,13 @@ def run_combine(
     use_fp8_output,
     num_links=2,
     cmb_version=1,
+    iterations=1,
+    hot_expert=None,
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
-    num_experts_per_tok) shape axis."""
+    num_experts_per_tok) shape axis, and on whether the router is balanced or sends every token to
+    one expert (`hot_expert`)."""
     torch.manual_seed(42)
 
     num_devices = mesh_device.get_num_devices()
@@ -110,7 +120,19 @@ def run_combine(
 
     # Step 1: Generate initial inputs using torch
     # For 2D mesh, generate different weights per EP rank
-    if use_predictable_data:
+    if hot_expert is not None:
+        x, weights, indices = initialize_hot_expert_test_inputs(
+            dispatch_group_size,
+            seq_len_per_chip,
+            emb_dim,
+            num_routed_experts,
+            num_experts_per_tok,
+            max_dispatched_tokens_per_expert,
+            hot_expert=hot_expert,
+            num_dispatch_groups=num_dispatch_groups,
+        )
+        logger.debug(f"Using HOT EXPERT test data, expert {hot_expert} holds every token")
+    elif use_predictable_data:
         x, weights, indices = initialize_predictable_test_inputs(
             dispatch_group_size,
             seq_len_per_chip,
@@ -241,7 +263,7 @@ def run_combine(
             fp8_output=use_fp8_output,
         )
 
-        tt_output = tt_combine(
+        combine_inputs = (
             tt_dispatched_buffer,
             tt_dispatched_metadata,
             tt_expert_token_counts,
@@ -269,7 +291,7 @@ def run_combine(
             topology=topology,
         )
 
-        tt_output = tt_combine(
+        combine_inputs = (
             tt_dispatched_buffer,
             tt_dispatched_metadata,
             tt_expert_token_counts,
@@ -277,15 +299,46 @@ def run_combine(
             tt_expert_offsets,
         )
 
+    tt_output = tt_combine(*combine_inputs)
+    # Sampling the op's time needs many launches, not many test runs: everything above this line — the
+    # torch reference included — is setup that a second launch does not repeat. The profiler reports one
+    # record per launch, so `iterations` samples cost a launch each rather than a process each. When the
+    # output is checked it is the LAST launch that gets checked, which is also what proves a launch leaves
+    # the op's counters fit for the next one.
+    #
+    # Gated on > 1 so the default really is one launch: capture does not execute, so the block below costs
+    # 1 eager + `iterations` replays. Ungated it would double the device time of every PCC case in the
+    # collected matrix to sample a number nobody asked for.
+    if iterations > 1:
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(tt_output)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        tt_output = tt_combine(*combine_inputs)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        for _ in range(iterations):
+            ttnn.synchronize_device(mesh_device)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        ttnn.release_trace(mesh_device, trace_id)
+
+    # A single test run leaves its tensors to teardown, but the sweep below launches the op a hundred-odd
+    # times against one open mesh, and inputs that outlive their phase exhaust the device. Freeing them
+    # here keeps the sweep's phases independent instead of cumulative.
+    def _release_device_tensors():
+        for tensor in (*combine_inputs, tt_output):
+            ttnn.deallocate(tensor)
+
     if not run_pcc_check:
         ttnn.synchronize_device(mesh_device)
         logger.debug("Skipping PCC validation (run_pcc_check=False)")
+        _release_device_tensors()
         return
 
     # Step 6: Convert ttnn output to torch for comparison
     mesh_composer = get_ep_mesh_composer(mesh_device)
 
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)
+    _release_device_tensors()
     if use_fp8_output:
         # ttnn.to_torch returns a torch.float8_e4m3fn tensor for FP8_E4M3 device tensors
         # (see ttnn/ttnn/operations/core.py). Widen to bfloat16 for validation, since
@@ -424,6 +477,17 @@ def _mesh_id(mesh, fabric_cfg):
     return f"{profile}-{mesh[0]}x{mesh[1]}"
 
 
+# The two operating points every combine test runs at: a short sequence for checking the output, and
+# the production length for timing it. Named here because the collected matrix, the combine_fabric2d
+# entrypoint and the sweep all walk them, and a scenario that drifted between them would silently stop
+# being comparable.
+_CMB_TEST_SCENARIOS = (
+    # (id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc)
+    ("pcc", 128, 4, True),
+    ("perf_no_pcc", 640, 8, False),
+)
+
+
 def _cross_product_conflated_cmb_test_dimensions():
     params = []
     for model_name, model_config_class, test_meshes in COMBINE_MODELS:
@@ -431,11 +495,7 @@ def _cross_product_conflated_cmb_test_dimensions():
             device_params = fabric_to_device_params(fabric_cfg)
             topo_marker = _topo_marker(target_mesh, fabric_cfg)
             marks = pytest.mark.requires_mesh_topology(mesh_shape=target_mesh, topology=topo_marker)
-            test_scenarios = [
-                ("pcc", 128, 4, True),
-                ("perf_no_pcc", 640, 8, False),
-            ]
-            for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in test_scenarios:
+            for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in _CMB_TEST_SCENARIOS:
                 model_config = _model_scaledown(model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc)
 
                 num_experts = model_config.NUM_ROUTED_EXPERTS
@@ -653,10 +713,7 @@ def _cmb_fabric2d_dimensions():
     marks = pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=_topo_marker(mesh, fabric_cfg))
 
     params = []
-    for scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in (
-        ("pcc", 128, 4, True),
-        ("perf_no_pcc", 640, 8, False),
-    ):
+    for scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in _CMB_TEST_SCENARIOS:
         model_config = _model_scaledown(
             DeepSeekV3Config(), SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh, mesh, pcc_only=run_pcc
         )
@@ -708,3 +765,256 @@ def test_ttnn_combine_fabric2d(
         use_fp8_output=False,
         cmb_version=2,
     )
+
+
+# ---------------------------------------------------------------------------------------------------
+# Cross-model sweep
+#
+# One process, one open mesh, one fabric: every model in COMBINE_MODELS x both combine versions x both
+# input layouts x both router shapes x both operating points, as phases of a single test. Opening the
+# 8x4 mesh and building the fabric costs far more than any workload here, so what would be hundreds of
+# collected cases — each paying that cost again — is instead one case that pays it once.
+# ---------------------------------------------------------------------------------------------------
+
+# The sweep names its own mesh and fabric rather than reading COMBINE_MODELS' target_meshes: those
+# tables drive the collected matrix and say which proxy hardware each model is allowed on, which is a
+# different question from what this sweep measures. Every model's full_model_mesh is 8x4, so
+# _model_scaledown leaves the hyper-params at production scale here.
+_CMB_SWEEP_MESH = (8, 4)
+_CMB_SWEEP_FABRIC = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+
+# The router shapes combine has to survive. A balanced router is the common case; one expert holding
+# every token of the dispatch group is the case a balanced router cannot produce, and it is what the
+# per-destination forwarding bound and the per-expert batching are sized for.
+_CMB_SWEEP_TRAFFIC = (
+    # (id, hot_expert)
+    ("balanced", None),
+    ("hot_expert", 0),
+)
+
+_CMB_SWEEP_LAYOUTS = (
+    ("row_major", ttnn.ROW_MAJOR_LAYOUT),
+    ("tile", ttnn.TILE_LAYOUT),
+)
+
+# 1 is `combine`, 2 is `combine_fabric2d` — the same work over a different transport. Both run in the
+# same process against the same inputs, so the ratio between them is measured, not assembled from two
+# runs that may not have seen the same data or the same device state.
+_CMB_SWEEP_VERSIONS = (1, 2)
+
+
+def _sweep_axis(env_var, axis, key=lambda item: item[0]):
+    """Restrict one sweep axis from the environment, e.g. CMB_SWEEP_MODELS=dsv3,kimi_k26.
+
+    The full sweep is a long device booking, and the useful thing during bring-up is a subset of it --
+    one model, or v2 only. An unknown name is an error rather than an empty axis, so a typo costs a
+    second instead of a run that quietly measured nothing.
+    """
+    requested = os.environ.get(env_var)
+    if not requested:
+        return axis
+    wanted = [name.strip() for name in requested.split(",") if name.strip()]
+    available = {str(key(item)): item for item in axis}
+    unknown = [name for name in wanted if name not in available]
+    assert not unknown, f"{env_var}: unknown {unknown}, available {sorted(available)}"
+    return [available[name] for name in wanted]
+
+
+def _cmb_sweep_dimensions():
+    """The single device configuration the sweep runs on. Model, version, layout, traffic and scenario
+    are deliberately NOT parametrize axes — the sweep walks all of them inside one test so they share
+    one open mesh."""
+    return [
+        pytest.param(
+            _CMB_SWEEP_MESH,
+            fabric_to_device_params(_CMB_SWEEP_FABRIC),
+            marks=pytest.mark.requires_mesh_topology(
+                mesh_shape=_CMB_SWEEP_MESH, topology=_topo_marker(_CMB_SWEEP_MESH, _CMB_SWEEP_FABRIC)
+            ),
+            id=_mesh_id(_CMB_SWEEP_MESH, _CMB_SWEEP_FABRIC),
+        )
+    ]
+
+
+# What a phase raises when the op under test does not implement that combination yet. The sweep runs
+# against every branch of the op's development, and what is unsupported moves as those branches land
+# (TILE input, for one), so a phase is classified by what the op says at runtime rather than by a
+# version check that would need editing per branch. These match the op's own assertion text -- keep
+# them matching it, a marker that matches nothing silently turns an unsupported phase into a failure.
+_CMB_UNSUPPORTED_MARKERS = (
+    "must be ROW_MAJOR",
+    "Layout::ROW_MAJOR",
+    "does not untilize",
+    "no fp8 output path",
+)
+
+# What a phase raises when it did not merely fail but left the device unusable. Continuing after one of
+# these is worse than useless: every later phase launches into a wedged device, fails the same way, and
+# the run ends with the device needing a reset anyway -- having thrown away the phases it could have
+# measured after a restart. The sweep stops the process instead, and the driver resets and resumes.
+_CMB_HANG_MARKERS = (
+    "potential hang detected",
+    "device is unrecoverable",
+    "system_memory_manager",
+    "Timed out while waiting for active ethernet",
+    "TIMEOUT: device timeout",
+)
+
+
+def _classify_phase_failure(exc):
+    message = str(exc)
+    if any(marker in message for marker in _CMB_HANG_MARKERS):
+        return "HANG"
+    if any(marker in message for marker in _CMB_UNSUPPORTED_MARKERS):
+        return "unsup"
+    return "FAIL"
+
+
+# Where the sweep records what it has already attempted, so a run that the device does not survive can
+# be resumed rather than restarted. A crash takes the process with it -- a C++ abort is not catchable
+# from Python -- so the record has to be on disk and flushed per phase, not held in memory.
+def _sweep_state_path():
+    return os.environ.get("CMB_SWEEP_STATE", "")
+
+
+def _sweep_state_record(outcome, name, detail=""):
+    path = _sweep_state_path()
+    if not path:
+        return
+    # One line per phase, flushed, because the reader of this file is the process that comes after the
+    # one the device killed. Tabs and newlines would break that line apart, so the detail is one line.
+    summary = " ".join(detail.split())[:300]
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(f"{outcome}\t{name}\t{summary}\n")
+        handle.flush()
+
+
+def _sweep_state_load():
+    """Return (finished, begun) from the state file.
+
+    A phase with a BEGIN and no outcome is one whose process died while it ran: the device took the
+    run down, so the phase is charged as HANG rather than retried, which is what stops a phase that
+    reliably wedges the device from restarting the sweep forever.
+    """
+    path = _sweep_state_path()
+    finished, begun = {}, set()
+    if not path or not os.path.exists(path):
+        return finished, begun
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 2:
+                continue
+            outcome, name = parts[0], parts[1]
+            if outcome == "BEGIN":
+                begun.add(name)
+            else:
+                finished[name] = (outcome, parts[2] if len(parts) > 2 else "")
+    return finished, begun
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    _cmb_sweep_dimensions(),
+    indirect=["mesh_device", "device_params"],
+)
+def test_ttnn_combine_sweep(mesh_device, device_params):
+    """Every model and configuration the combine ops support, in one open mesh.
+
+    Each phase is a full launch of the op with its own program and buffers; what the phases share is the
+    device, the fabric, and -- where the axes allow it -- the host-side inputs. A phase that fails is
+    recorded and the rest still run, so one bad configuration does not hide the state of the others.
+
+    The loops are ordered by what a change costs. Model and scenario decide the tensor shapes, so they
+    change least often; traffic decides the router, and with it the torch reference; layout decides how
+    the same data is uploaded; version only decides which op reads it. Nesting them this way computes
+    the torch reference once per (model, scenario, traffic) instead of once per phase, and hands both
+    combine versions the very same device tensors.
+
+    Set CMB_SWEEP_STATE to make the sweep resumable: phases are checkpointed as they are attempted, a
+    phase that wedges the device ends the process rather than poisoning the phases behind it, and the
+    next invocation picks up where this one stopped. Without it the sweep is a single all-or-nothing run.
+    """
+    topology = per_axis_topology(device_params["fabric_config"])[0]
+
+    models = _sweep_axis("CMB_SWEEP_MODELS", COMBINE_MODELS)
+    scenarios = _sweep_axis("CMB_SWEEP_SCENARIOS", _CMB_TEST_SCENARIOS)
+    traffic_shapes = _sweep_axis("CMB_SWEEP_TRAFFIC", _CMB_SWEEP_TRAFFIC)
+    layouts = _sweep_axis("CMB_SWEEP_LAYOUTS", _CMB_SWEEP_LAYOUTS)
+    versions = _sweep_axis("CMB_SWEEP_VERSIONS", _CMB_SWEEP_VERSIONS, key=lambda version: version)
+
+    finished, begun = _sweep_state_load()
+    # Charge every phase that a previous process began and never finished, so it is not tried again.
+    for name in begun - set(finished):
+        logger.warning(f"[sweep] {name} did not survive its process; recording HANG")
+        _sweep_state_record("HANG", name, "process died during this phase")
+        finished[name] = ("HANG", "process died during this phase")
+
+    attempted = 0
+    for model_name, model_config_class, test_meshes in models:
+        for scenario_id, seq_len_per_chip, capacity_factor, run_pcc in scenarios:
+            # _model_scaledown mutates the config it is handed, so each scenario gets a fresh one.
+            model_config = _model_scaledown(
+                model_config_class(), test_meshes.full_model_mesh, _CMB_SWEEP_MESH, pcc_only=run_pcc
+            )
+            # Timing wants many launches of one program; checking the output wants exactly one.
+            iterations = 1 if run_pcc else perf_iterations()
+
+            for traffic_id, hot_expert in traffic_shapes:
+                for layout_id, layout in layouts:
+                    for version in versions:
+                        name = f"{model_name}-{scenario_id}-{traffic_id}-{layout_id}-cmb_v{version}"
+                        if name in finished:
+                            continue
+                        logger.info(f"[sweep] === {name} === seq_len={seq_len_per_chip} {iterations=}")
+                        _sweep_state_record("BEGIN", name)
+                        attempted += 1
+                        try:
+                            run_combine(
+                                mesh_device,
+                                seq_len_per_chip,
+                                model_config.EMB_SIZE,
+                                model_config.NUM_ROUTED_EXPERTS,
+                                model_config.NUM_EXPERTS_PER_TOKEN,
+                                capacity_factor,
+                                topology,
+                                False,  # use_predictable_data -- both traffic shapes supply their own data
+                                run_pcc,
+                                layout,
+                                False,  # use_fp8_output -- neither router shape is an fp8 case
+                                cmb_version=version,
+                                iterations=iterations,
+                                hot_expert=hot_expert,
+                            )
+                        # A phase the op does not support yet raises pytest's Skipped, which derives from
+                        # BaseException and so needs its own clause ahead of the failure one.
+                        except pytest.skip.Exception as e:
+                            logger.info(f"[sweep] {name} unsup: {e}")
+                            _sweep_state_record("unsup", name, str(e))
+                        except Exception as e:  # noqa: BLE001 - a phase's outcome is data here, not control flow
+                            outcome = _classify_phase_failure(e)
+                            logger.exception(f"[sweep] {name} {outcome}")
+                            _sweep_state_record(outcome, name, str(e))
+                            if outcome == "HANG":
+                                # The device is gone; every phase after this one would fail the same way.
+                                # End the process so the driver can reset and resume at the next phase.
+                                logger.error(f"[sweep] {name} left the device unusable, ending this process")
+                                pytest.exit(f"device hang in {name}", returncode=3)
+                        else:
+                            _sweep_state_record("pass", name, "")
+
+        # The device profiler buffer holds a bounded number of records and drops the rest silently, so
+        # it is drained per model rather than at the end of a sweep that launches the op hundreds of times.
+        ttnn.ReadDeviceProfiler(mesh_device)
+
+    finished, _ = _sweep_state_load()
+    logger.info(f"[sweep] this process attempted {attempted} phase(s); {len(finished)} recorded overall")
+    for name, (outcome, detail) in finished.items():
+        logger.info(f"[sweep]   {outcome:<5} {name:<52} {detail[:90]}")
+    counts = {}
+    for outcome, _detail in finished.values():
+        counts[outcome] = counts.get(outcome, 0) + 1
+    logger.info(f"[sweep] {len(finished)} phases: {counts}")
+
+    failed = [f"{name}: {detail}" for name, (outcome, detail) in finished.items() if outcome in ("FAIL", "HANG")]
+    assert not failed, "sweep phases failed:\n" + "\n".join(failed)

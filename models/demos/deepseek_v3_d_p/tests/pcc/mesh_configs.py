@@ -20,6 +20,7 @@ Test-id naming convention
 - Production IDs are `fabric2d-torus-xy-8x4-{1,2}link`.
 """
 
+
 import pytest
 
 import ttnn
@@ -31,6 +32,9 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_y_device_params,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_max_payload_size
+
+# Holds one captured combine launch, which is how the perf cases sample the op's device time.
+TRACE_REGION_SIZE = 330000
 
 
 def _mesh_param(shape, fabric, payload, nlinks, topo_marker, test_id, reliability_mode=None):
@@ -166,19 +170,11 @@ ALL_MESH_CONFIGS = [
 
 
 def fabric_to_device_params(fabric_cfg):
-    assert fabric_cfg in (
-        ttnn.FabricConfig.FABRIC_1D,
-        ttnn.FabricConfig.FABRIC_2D,
-        ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-        ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-    )
-    if fabric_cfg == ttnn.FabricConfig.FABRIC_1D:
-        return fabric_1d_device_params()
-    if fabric_cfg == ttnn.FabricConfig.FABRIC_2D:
-        return fabric2d_device_params()
-    if fabric_cfg == ttnn.FabricConfig.FABRIC_2D_TORUS_X:
-        return torus_x_device_params()
-    if fabric_cfg == ttnn.FabricConfig.FABRIC_2D_TORUS_Y:
-        return torus_y_device_params()
-    return torus_xy_device_params()
+    profile = {
+        ttnn.FabricConfig.FABRIC_1D: fabric_1d_device_params,
+        ttnn.FabricConfig.FABRIC_2D: fabric2d_device_params,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X: torus_x_device_params,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_Y: torus_y_device_params,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY: torus_xy_device_params,
+    }[fabric_cfg]
+    return profile(trace_region_size=TRACE_REGION_SIZE)
