@@ -21,7 +21,8 @@ from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import (
 import ttnn
 from loguru import logger
 import pytest
-from models.common.utility_functions import skip_for_blackhole
+from models.common.reference_rope import ReferenceRMSNorm
+from models.common.utility_functions import nearest_y, skip_for_blackhole
 
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
@@ -30,7 +31,6 @@ from models.demos.deepseek_v3.reference.deepseek.rope_helpers import (
     precompute_freqs_cis,
     apply_rotary_emb,
 )
-from models.common.utility_functions import nearest_y
 from transformers import AutoConfig
 from types import SimpleNamespace
 
@@ -39,22 +39,6 @@ from models.demos.deepseek_v3.utils.test_utils import get_test_weight_config
 
 TP = 8
 DP = 4
-
-
-# Copied verbatim from the removed legacy Llama-3.1 reference model so the reference
-# RMSNorm numerics stay bit-identical without depending on that reference submodule.
-class ReferenceRMSNorm(torch.nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-6):
-        super().__init__()
-        self.eps = eps
-        self.weight = torch.nn.Parameter(torch.ones(dim))
-
-    def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-
-    def forward(self, x):
-        output = self._norm(x.float()).type_as(x)
-        return output * self.weight
 
 
 @pytest.fixture

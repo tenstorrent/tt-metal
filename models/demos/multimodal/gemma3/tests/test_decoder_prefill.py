@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import math
 import os
 
 import pytest
@@ -9,6 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.reference_rope import precompute_freqs_cis
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.multimodal.gemma3.tt.model_config import ModelArgs as Gemma3ModelArgs
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
@@ -16,39 +16,6 @@ from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, get_rot_transformation_mat
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.rope import get_rot_mats
-
-
-# Copied verbatim from the removed legacy Llama-3.1 reference model so the reference
-# RoPE numerics stay bit-identical without depending on that reference submodule.
-def apply_scaling(freqs: torch.Tensor, scale_factor: float = 8):
-    low_freq_factor = 1
-    high_freq_factor = 4
-    old_context_len = 8192  # original llama3 length
-
-    low_freq_wavelen = old_context_len / low_freq_factor
-    high_freq_wavelen = old_context_len / high_freq_factor
-    new_freqs = []
-    for freq in freqs:
-        wavelen = 2 * math.pi / freq
-        if wavelen < high_freq_wavelen:
-            new_freqs.append(freq)
-        elif wavelen > low_freq_wavelen:
-            new_freqs.append(freq / scale_factor)
-        else:
-            assert low_freq_wavelen != high_freq_wavelen
-            smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
-            new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
-    return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
-
-
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, use_scaled: bool = False, scale_factor: float = 8):
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-    t = torch.arange(end, device=freqs.device, dtype=torch.float32)
-    if use_scaled:
-        freqs = apply_scaling(freqs, scale_factor)
-    freqs = torch.outer(t, freqs)
-    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
-    return freqs_cis
 
 
 @torch.no_grad()
