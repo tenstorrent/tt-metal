@@ -339,7 +339,7 @@ models:
     wh_n150: 28
     wh_galaxy_perf: 215
     bh_p150: 27
-    bh_quietbox_2: 255
+    bh_quietbox_2: 260
     bh_galaxy: 78
     bh_sc1: 140
     bh_sc4: 120
