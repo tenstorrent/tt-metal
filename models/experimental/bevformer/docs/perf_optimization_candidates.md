@@ -48,7 +48,7 @@ the tighter per-module gates (SCA at 0.999) bind before the encoder's 0.997 does
 | [2](#candidate-2--fused-msda) | fused `multi_scale_deformable_attn` | kernel | **−191.6 ms kernel (−28.1%)** | M | med | **landed — [04](perf_reports/04-fused-msda.md)** |
 | [3](#candidate-3--tile-padding-waste) | fold the offset normalizer into the Linear | kernel | **−32.7 ms kernel** | S | low | **landed — [05](perf_reports/05-offset-normalizer-folded.md)** |
 | [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | — | — | — | **moot — deleted by [04](perf_reports/04-fused-msda.md)** |
-| [5](#candidate-5--data-movement-vs-compute) | shrink the data-movement / compute ratio | kernel | **220.8 ms** DM vs **220.7 ms** compute (~1:1) | M | low | todo — analysis |
+| [5](#candidate-5--data-movement-vs-compute) | shape/order changes on the layout churn — **5a–5f** | kernel | **~157 ms (−34%)** across six changes; 46.6 of 48.2 ms `BinaryNg` is padding | S–M | low | **analysis done — [5a](#5a-delete-the-key-permute) is −19.3 ms for a deletion; take it first** |
 | [6](#candidate-6--permutereshape-by-reformulation) | drop permute/reshape by reformulation or weight reorder | kernel | **139.8 ms** reshape+permute | M | med | todo |
 | [7](#candidate-7--l1-vs-dram) | place operands in L1 instead of DRAM | kernel | unknown; expected small | S | low | todo — likely small |
 | [8](#candidate-8--fuse-binaryng) | fuse `BinaryNg` into its producers | kernel | **48.2 ms** (10.6%) | M | med | todo |
@@ -622,61 +622,302 @@ reporting upstream.
 
 ## Candidate 5 — data-movement vs compute
 
-**Analysis first, not a fix.** After [stage 05](perf_reports/05-offset-normalizer-folded.md) the
-layer is no longer host-bound and no longer concat/grid-sample-bound. What is left splits almost
-evenly between moving tensors and computing on them:
+**The analysis is done.** This entry was "classify the CSV, then decide what 6 / 8 / 11 are worth."
+The classification is below, and it produced six concrete shape/ordering changes with a combined
+expected value of **~165 ms of the 456.8 ms layer (~36%)** — none of which needs a new kernel, an
+upstream op change, or a single bit of accuracy. The op-count reduction the entry asked about is
+real, but it is the *second* finding; the first is that **most of the layout time is arithmetic and
+re-layout on tile padding, not on data**.
 
-| class | ops in the stage-05 table | kernel | % of 456.8 ms |
-|---|---|---:|---:|
-| data movement | ReshapeView, Permute, Untilize, Tilize, Slice, Transpose | **220.8 ms** | **48.3%** |
-| compute | MSDAOperation, BinaryNg, Matmul | **220.7 ms** | **48.3%** |
-| other | Scatter, rest | 15.3 ms | 3.3% |
+Source: per-op `DEVICE KERNEL DURATION` from
+`generated/profiler/reports/2026_08_28_10_23_13/ops_perf_results_2026_08_28_10_23_13.csv`, rows
+418–559 — the final layer forward, between the `TTNN BEVFormerLayer Forward Start` / `End`
+signposts. Row numbers below are 0-based indices into that CSV and are quoted so every claim is
+checkable.
 
-Matmul is 1.0%. The compute side is the fused sampler and elementwise, not GEMM. The data-movement
-side is layout: getting a tensor into the contract the next op accepts, then converting it back.
-A change that deletes a permute and inserts an untilize has not moved this ratio.
+### First correction: the 1:1 ratio understates the problem
 
-The ratio is how you decide which of [6](#candidate-6--permutereshape-by-reformulation) /
-[8](#candidate-8--fuse-binaryng) / [11](#candidate-11--absorb-msda-layout-prep) is worth doing, and it is
-how you know you are done.
+The table this entry used to open with classified `BinaryNg` as compute. Six of its seventeen
+instances are elementwise arithmetic on tensors whose trailing two axes are `(num_points, 2)` or
+`(num_levels, num_points)` — extent 4 and 2 — tile-padded to `32 × 32`:
 
-### How to measure it
+| row | op | shape as run | real elements | waste |
+|--:|---|---|---:|---:|
+| 480 | add (`ref + offsets`, SCA) | `119808 × 4 × 32 × 32` | 1/128 | **14.98 ms** |
+| 485 | mul 2.0 (SCA) | tile-padded `(…, L, P, 2)` | 1/128 | 9.40 ms |
+| 486 | sub 1.0 (SCA) | as above | 1/128 | 9.69 ms |
+| 434 | add (`ref + offsets`, TSA) | `80000 × 1 × 32 × 32` | 1/128 | 9.41 ms |
+| 436 | mul 2.0 (TSA) | as above | 1/128 | 1.57 ms |
+| 437 | sub 1.0 (TSA) | as above | 1/128 | 1.55 ms |
 
-Do not count ops. A cheap view and a 30 ms permute are both one row. Classify every row in the
-stage-05 CSV (`2026_08_28_10_23_13`) and sum **kernel ms**:
+**46.6 of the 48.2 ms of `BinaryNg` is arithmetic on zeros.** Read the same way, real compute in the
+layer is `MSDAOperation` 167.8 + Matmul 4.7 + Softmax 1.2 + ~1.6 ms of genuine elementwise ≈
+**175 ms (38%)**, and everything else — 265 ms, **58%** — is layout, padding, or work that does not
+need to happen. The ratio to track is not 1.00; it is 1.51 against a corrected denominator. Candidate
+3 killed one padded `div` for −32.7 ms; it did not touch the six rows above, which are the same
+defect on the same tensors.
 
-1. **Tag each op** as compute, data-movement, or mixed. Compute is anything that reads values and
-   writes a function of them (MSDA, BinaryNg, Matmul, Softmax, Embedding, ScatterAdd). Data-movement
-   is layout/shape/memory only (ReshapeView, Permute, Transpose, Tilize, Untilize, Slice, Clone,
-   Typecast). Mixed is the rest — Scatter is the one that matters here.
-2. **Attribute each data-movement op to the compute that required it.** The useful question is not
-   "how many permutes" but "which compute's contract forced this shuffle." Group by producer →
-   consumer pair, using the signposts already in the layer (`TT MS Deformable Attn Module`,
-   `MSDA Fused Core`, SCA rebatch). The ~103 ms of per-level prep around the fused op
-   ([candidate 10](#candidate-10--msdaoperation-itself) / [11](#candidate-11--absorb-msda-layout-prep))
-   should fall out as one group.
-3. **Split necessary from accidental.** Necessary = the next compute's device-op validation
-   rejects any other layout (the fused MSDA's ROW_MAJOR / INTERLEAVED / `(N, H, W, D)` contract is
-   the current example). Accidental = the tensor was stored in an order that a weight reorder or a
-   different reshape would have avoided ([candidate 6](#candidate-6--permutereshape-by-reformulation)).
-   Only the accidental bucket is a model-side win.
-4. **Optional: bound vs compute.** If a `noc.csv` / Tracy capture is available, mark each
-   data-movement group as DRAM-bandwidth-bound or just launch-heavy. Bandwidth-bound groups are
-   the ones that would move if the tensor lived in L1 ([candidate 7](#candidate-7--l1-vs-dram));
-   launch-heavy groups are the ones that disappear only when the op count drops (fusion, [8](#candidate-8--fuse-binaryng)
-   and [11](#candidate-11--absorb-msda-layout-prep)).
-5. **Re-measure the ratio after every landed change.** The headline number is
-   `data-movement_ms / compute_ms`. Stage 05 is ~1.00. A real win moves it down; a shuffle that
-   trades Permute for Untilize leaves it where it is.
+### The classified table
 
-Work items:
+Grouped by producer→consumer as the old work item asked, summing kernel ms over the layer:
 
-- [ ] Produce the classified table from the stage-05 CSV, one row per op-code, with the
-      producer→consumer grouping. That table is the input to 6, 8 and 11 — do not start those
-      without it.
-- [ ] Call out the largest accidental group. If it is the MSDA pre/post shuffle, 6 and 11 own it;
-      if it is something else (SCA key/value permute, reference-point unsqueezes), write that down
-      before inventing a kernel.
+| group | rows | ms | % of 456.8 | verdict |
+|---|---|---:|---:|---|
+| `MSDAOperation` ×5 | 445, 496, 507, 519, 531 | **167.8** | 36.7 | [10](#candidate-10--msdaoperation-itself) / [12](#candidate-12--one-fused-call-for-all-levels), upstream |
+| sampling-location math, SCA | 475, 479, 480, 485, 486, 487 | **69.7** | 15.3 | **accidental — [5b](#5b-do-the-sampling-location-math-in-row_major)** |
+| per-level `attn` feed, SCA | 492–495, 501–506, 513–518, 525–530 | **43.0** | 9.4 | **accidental — [5c](#5c-untilize-attn-once-not-per-level)** |
+| sampling-location math, TSA | 428, 432–438 | **34.8** | 7.6 | **accidental — [5b](#5b-do-the-sampling-location-math-in-row_major)** |
+| per-level `grid` slice + permute, SCA | 490, 491, 499, 500, 511, 512, 523, 524 | **25.2** | 5.5 | **accidental — [5e](#5e-permute-grid-once-slice-after)** |
+| `value` head-split reshape, SCA | 473 | **21.1** | 4.6 | **accidental — [5d](#5d-split-value-into-heads-in-row_major)** |
+| `key` permute | 469 | **19.3** | 4.2 | **dead work — [5a](#5a-delete-the-key-permute)** |
+| `value` permute-in | 470 | 19.3 | 4.2 | necessary (op contract) — [11](#candidate-11--absorb-msda-layout-prep) |
+| `value` per-level transpose + untilize | 488, 489, 497, 498, 509, 510, 521, 522 | 14.0 | 3.1 | mixed — [5d](#5d-split-value-into-heads-in-row_major) |
+| scatter-back block | 539–546 | 11.4 | 2.5 | necessary (`scatter_add` is ROW_MAJOR) |
+| TSA `value`/`attn` prep | 426, 430, 431, 439–444 | 8.4 | 1.8 | mixed |
+| rebatch-plan build | 459–465 | 6.8 | 1.5 | **harness artifact — see the caveat below** |
+| Matmul ×11 | — | 4.7 | 1.0 | necessary |
+| `value` level split | 481–484 | 3.9 | 0.8 | necessary |
+| output pack (TSA + SCA) | 446–448, 533–535 | 3.6 | 0.8 | necessary — [11](#candidate-11--absorb-msda-layout-prep) |
+| per-level adds, FFN, LayerNorm, clones, rest | — | ~4 | ~0.9 | necessary |
+
+**Caveat on rows 459–465.** They are `build_rebatch_plan`'s clamp / untilize / embedding / tilize /
+repeat, i.e. per-*forward* work that [1c](#1c-hoist-index-computation-above-the-layer-loop) hoisted
+above the layer loop in the encoder ([tt_encoder.py:495](../tt/tt_encoder.py#L495)). Their presence
+inside the profiled layer means the layer-level harness calls SCA without a prebuilt plan and pays
+it per layer. **6.8 ms of the 456.8 ms figure does not exist in the encoder path.** It is not a
+candidate; fix the harness or subtract it. Rows 466–468 (query untilize + gather, 0.3 ms) *are*
+genuinely per layer.
+
+**Answer to the "necessary vs accidental" split the old entry asked for:** ~157 ms of the
+data-movement side is accidental — padding-driven or ordering-driven — against ~48 ms that the fused
+op's ROW_MAJOR / INTERLEAVED contract genuinely forces. The forced part is [11](#candidate-11--absorb-msda-layout-prep)'s;
+the accidental part is below and does not need 11.
+
+---
+
+### The proposals
+
+Ordered by expected gain per unit of effort. 5a–5c are independent of each other and of every other
+candidate. Gains are against the 456.8 ms layer and are **estimates derived from measured rows** —
+each names the row it is priced from, so a miss is diagnosable.
+
+| # | change | site | expected | effort | risk |
+|--:|---|---|---:|---|---|
+| [5a](#5a-delete-the-key-permute) | delete the dead `key` permute | [sca:349-350](../tt/tt_spatial_cross_attention.py#L349-L350) | **landed: −18.1 ms (−4.0%) — [06](perf_reports/06-sca-key-permute-deleted.md)** | XS | **none** |
+| [5b](#5b-do-the-sampling-location-math-in-row_major) | sampling-location math in ROW_MAJOR | [msda:110-117](../tt/tt_ms_deformable_attention.py#L110-L117), [313-357](../tt/tt_ms_deformable_attention.py#L313-L357) | **−90 ms (−20%)** | M | low |
+| [5c](#5c-untilize-attn-once-not-per-level) | untilize `attn` once, slice in ROW_MAJOR | [msda:322-332](../tt/tt_ms_deformable_attention.py#L322-L332), [58-61](../tt/tt_ms_deformable_attention.py#L58-L61) | **−35 ms (−7.7%)** | S | low |
+| [5e](#5e-permute-grid-once-slice-after) | permute `grid` once above the loop | [msda:54-56](../tt/tt_ms_deformable_attention.py#L54-L56) | **−13 ms (−2.8%)** | S | low |
+| [5d](#5d-split-value-into-heads-in-row_major) | head-split `value` in ROW_MAJOR | [msda:296-305](../tt/tt_ms_deformable_attention.py#L296-L305), [50-52](../tt/tt_ms_deformable_attention.py#L50-L52) | **−10…−20 ms**, uncertain | M | med |
+| [5f](#5f-the-per-level-guards-are-free-dont-book-them) | per-level `to_layout` / `typecast` guards | [msda:61-68](../tt/tt_ms_deformable_attention.py#L61-L68) | **0 ms** — measured | XS | none |
+
+Total, excluding 5d's uncertain half and 5f: **~157 ms, −34% of the layer.** That is larger than
+[candidate 6](#candidate-6--permutereshape-by-reformulation)'s whole 139.8 ms scope, needs no weight
+reorder, and overlaps 6 only at 5d/5e.
+
+#### 5a. Delete the `key` permute
+
+**Landed** — [stage 06](perf_reports/06-sca-key-permute-deleted.md), −18.1 ms kernel, PCC unchanged at
+0.999611. The `Permute` row moved 62.7 → 43.4 ms, i.e. exactly the predicted 19.3 ms; the layer
+figure reads −18.1 because of ~1 ms of run-to-run noise elsewhere.
+
+**19.3 ms per layer of work whose result is never read.** SCA builds `key_reshaped`
+([sca:349-350](../tt/tt_spatial_cross_attention.py#L349-L350)) and passes it as `key=` to the
+deformable attention ([sca:356-364](../tt/tt_spatial_cross_attention.py#L356-L364)).
+`TTMSDeformableAttention.forward` ([msda:232-242](../tt/tt_ms_deformable_attention.py#L232-L242))
+has no `key` parameter — it lands in `**kwargs` and is never touched. Grep the module: the only
+occurrences of `key` are the fold cache key and `num_keys`.
+
+Row 469 is that permute: `6 × 30125 × 32 × 256 TILE → 1 × 6 × 30144 × 256`, **19.32 ms**. Row 470 is
+the identical permute of `value`, 19.30 ms, and it *is* used. The encoder makes it worse:
+[tt_encoder.py:197-198](../tt/tt_encoder.py#L197-L198) sets `value = key` when `value is None`, so
+in the encoder path the two rows are the **same tensor permuted twice**.
+
+Fix: drop `key_reshaped` and read the length off `key` directly (`_, L, _, _ = key.shape` at
+[sca:336](../tt/tt_spatial_cross_attention.py#L336) already does this and is the only real use).
+
+**Expected: −19.3 ms (−4.2%), exactly.** No numerical change — nothing consumes the deleted tensor.
+This is the cheapest item on the entire backlog and it should land before anything else in 5.
+
+#### 5b. Do the sampling-location math in ROW_MAJOR
+
+**The largest accidental group: 104.4 ms (22.9%) across SCA and TSA**, and essentially all of it is
+tile padding.
+
+The chain today, per attention module
+([msda:313-357](../tt/tt_ms_deformable_attention.py#L313-L357) then
+[110-117](../tt/tt_ms_deformable_attention.py#L110-L117)):
+
+```
+Linear → (bs, Q, heads*L*P*2)  TILE, 256 wide           # well-shaped, 0.25 ms  (row 474)
+reshape → (bs*Q*heads, L, P, 2)                         # 16.88 ms  (row 475)
+reshape → (bs, Q, heads, L, P//D, D, 2)                 #  4.44 ms  (row 479)
+add ref_points_expanded                                 # 14.98 ms  (row 480)
+reshape → (bs, Q, heads, L, P, 2)                        # (view)
+mul 2.0 ; sub 1.0                                       # 19.09 ms  (rows 485, 486)
+to_layout ROW_MAJOR                                     # 14.26 ms  (row 487)
+```
+
+Every step after the Linear runs on a tensor whose trailing axes are `(4, 2)` or `(1, 4, 2)`, padded
+to `32 × 32`. Row 487 is the clearest: it untilizes **490 M padded elements to produce 3.8 M real
+ones** — 128× — and it is the single most wasteful op in the layer.
+
+**The reordering.** Every one of those steps is either a pure view or an elementwise op, and
+elementwise ops do not care what the axes *mean*. So do all of them on the `(bs, Q, 256)` shape the
+Linear already emits, in ROW_MAJOR, and let the split into `(heads, L, P, 2)` be a trailing-axis
+view — free in ROW_MAJOR, which
+[`_fused_msda_level`](../tt/tt_ms_deformable_attention.py#L48-L52) already documents and relies on:
+
+```
+Linear → (bs, Q, 256) TILE
+to_layout ROW_MAJOR                                     # ~0.15 ms   (priced from row 467:
+                                                        #  10016×256 untilize = 0.09 ms)
+add ref_term                                            # ~0.3 ms    (priced from row 508:
+                                                        #  1×48×2496×32 RM add = 0.32 ms)
+reshape → (bs, Q, heads, L, P, 2)                        # view, 0 ms
+```
+
+`ref_term` is the only new object. `reference_points` is `(bs, Q, D, 2)` with `D = 4`, and the
+Linear's channel order is `(head, level, point, xy)` with `point = (P//D, D)` and `P//D == 1`
+([msda:349-351](../tt/tt_ms_deformable_attention.py#L349-L351), and the ordering is already
+documented and depended upon by
+[`_folded_sampling_offsets`](../tt/tt_ms_deformable_attention.py#L188-L200)). So channel
+`(h, l, p, xy)` needs `ref[b, q, p, xy]` — i.e. `ref_term` is `ref` flattened to `(bs, Q, 8)` and
+tiled `heads * num_levels = 32` times along channels. One `ttnn.repeat` in ROW_MAJOR, and at SCA it
+is **frame-invariant across layers**: `reference_points_batched` already lives on the
+[`SCARebatchPlan`](../tt/tt_spatial_cross_attention.py#L49-L64), so build `ref_term` there once per
+forward instead of six times.
+
+**Fold `* 2 - 1` while you are here.** `2·(ref + off) - 1 == (2·ref - 1) + 2·off`. The `2·off` half
+is a static per-channel scale that folds into the already-folded `sampling_offsets` weight
+([msda:188-230](../tt/tt_ms_deformable_attention.py#L188-L230) — multiply the existing `1/[W,H]`
+scale by 2); the `2·ref - 1` half folds into `ref_term`, which is precomputed anyway. **Both binaries
+disappear entirely, not just get cheaper.** This is the fold
+[candidate 8](#candidate-8--fuse-binaryng) lists as its second work item; it is strictly easier here,
+because 5b is already rewriting the same expression. Exact, no accuracy cost.
+
+| | today | after 5b |
+|---|---:|---:|
+| SCA (rows 475, 479, 480, 485, 486, 487) | 69.7 ms | ~0.5 ms |
+| TSA (rows 428, 432–438) | 34.8 ms | ~0.3 ms |
+| `ref_term` build | — | ~1 ms (SCA: per forward, so ~0.2 ms/layer) |
+
+**Expected: −90 ms (−20%).** Booked below the arithmetic 104 → 1 because a ROW_MAJOR add at these
+shapes has not been measured at the SCA size and the estimate rests on row 508's 0.32 ms; call it
+−85 to −100. Op count drops by 5 per SCA call and 6 per TSA call.
+
+**Risk.** Low but not zero: the channel-order assumption is load-bearing. It is the same assumption
+[stage 05](perf_reports/05-offset-normalizer-folded.md) already validated to 0.999611 PCC — if it
+were wrong, the offset-normalizer fold would have broken. Gate on PCC anyway, per change.
+
+#### 5c. Untilize `attn` once, not per level
+
+**43.0 ms (9.4%) to feed the fused op a 0.5 MB tensor.** `attention_weights` after softmax is
+`(bs, Q, heads, L, P)` in TILE with trailing axes `(4, 4)` — padded `32 × 32` again — and
+[`_fused_msda_level`](../tt/tt_ms_deformable_attention.py#L58-L61) slices the level axis out of it
+per call. Slicing a tile-padded, non-tile-aligned axis forces an unpad/pad round trip:
+
+| rows | per level | ms |
+|---|---|---:|
+| 501, 502, 503 | untilize `14976×8×32×32` → slice → **re-tilize back** | 9.60 |
+| 513, 514, 515 | same, level 2 | 9.63 |
+| 525, 526, 527 | same, level 3 | 9.73 |
+| 492 | level 1 takes a different path (TILE slice) | 2.41 |
+| 493–495, 504–506, 516–518, 528–530 | reshape + transpose + untilize, ×4 | 11.6 |
+
+Levels 2–4 each pay a full ROW_MAJOR round trip that level 1 does not — 29 ms of the 43 is that one
+asymmetry, and it is the proof the round trip is avoidable rather than intrinsic.
+
+**The reordering.** Keep the softmax where it is — `(bs, Q, heads, L*P)` is 128 wide and tiles
+properly, and row 478 costs 0.73 ms. Then, **once, above the level loop**: untilize to ROW_MAJOR
+(~0.2 ms by row 467's rate), permute `(bs, Q, heads, …)` → `(bs, heads, Q, …)` once, and reshape to
+`(bs*heads, Q, L, P)` as a view. Per level the op then needs only a slice on the `L` axis of a
+ROW_MAJOR tensor — a strided copy of contiguous `P`-element runs — plus a free trailing view. Delete
+the reshape at [msda:330-332](../tt/tt_ms_deformable_attention.py#L330-L332) (its only purpose is to
+create the padded `(L, P)` tail) and the per-level `to_layout` at
+[msda:61](../tt/tt_ms_deformable_attention.py#L61).
+
+**Expected: −35 ms (−7.7%).** 43.0 → ~8 ms: one untilize, one permute (priced from row 491's 5.01 ms
+for a comparable ROW_MAJOR permute), four small slices. Op count: −14 per SCA call.
+
+This is the same "hoist the per-level `to_layout`" observation
+[candidate 6](#free-hoists-in-the-same-function-worth-taking-either-way) makes in one line. It is
+worth 35 ms, not a footnote, and it does not need 6's weight reorder.
+
+#### 5d. Split `value` into heads in ROW_MAJOR
+
+**Measure first — this is the one proposal that can lose.** `value` comes out of `value_proj` as
+`(bs, num_keys, 256)` TILE and is reshaped to `(bs, num_keys, heads, 32)` at
+[msda:305](../tt/tt_ms_deformable_attention.py#L305): row 473, **21.12 ms**, a TILE re-layout that
+pads the new extent-8 head axis to 32 (4× waste). Then per level it is transposed (5.1 ms total) and
+untilized (8.9 ms total) — rows 488/489, 497/498, 509/510, 521/522 — for the op's
+`(N, H, W, D)` ROW_MAJOR contract.
+
+Reordering to `untilize once → head-split as a free ROW_MAJOR view → permute in ROW_MAJOR` deletes
+the 21.12 ms reshape outright. What replaces it is a ROW_MAJOR permute of ~46 M elements with a
+32-element inner run, and **that is the unknown**: row 489 untilizes 69 MB in 6.68 ms (~10 GB/s), so
+a full untilize is ~9 ms, but no ROW_MAJOR permute at this size has been measured. If it lands near
+the TILE transpose's rate the group goes 39.0 → ~19 ms; if the small inner run costs an order of
+magnitude, it is a regression.
+
+Note **slicing per level before the reshape does not help** — the padded volume is the same either
+way. The win comes only from moving the head split out of TILE.
+
+**Expected: −10…−20 ms (−2…−4%), or a regression.** Microbenchmark the ROW_MAJOR permute at
+`(6, 30144, 8, 32)` before writing any of it. Also note this is exactly the operand
+[candidate 6](#what-a-weight-reorder-cannot-reach) proves no weight reorder can reach and
+[candidate 11](#candidate-11--absorb-msda-layout-prep) route 1 would delete properly — so if 5d
+measures badly, the answer is 11, not a cleverer reshape.
+
+#### 5e. Permute `grid` once, slice after
+
+**25.2 ms, and four launches where one would do.**
+[`_fused_msda_level`](../tt/tt_ms_deformable_attention.py#L54-L56) slices the level out of
+`sampling_grids` and *then* permutes `(0, 2, 1, 3, 4)`, per level: rows 490/491, 499/500, 511/512,
+523/524 — Slice 1.28 + Permute 5.01, four times over. The permute is the same axis move every time,
+on a 1.3 MB tensor.
+
+Permuting the full `(bs, Q, heads, L, P, 2)` once above the loop and slicing the level axis
+afterwards is the same bytes through one launch instead of four. Priced at one ~8 ms permute of the
+4×-larger tensor plus four cheap ROW_MAJOR slices: **−13 ms (−2.8%)**, and −4 ops per SCA call.
+
+Sequence this **after [5b](#5b-do-the-sampling-location-math-in-row_major)**, which already delivers
+the grid in ROW_MAJOR and changes what this permute costs. Doing 5e first means pricing it twice.
+
+#### 5f. The per-level guards are free — don't book them
+
+[Candidate 6](#free-hoists-in-the-same-function-worth-taking-either-way) lists the three per-level
+`typecast` guards at [msda:63-68](../tt/tt_ms_deformable_attention.py#L63-L68) alongside the
+`to_layout` hoist. **The CSV contains no `Typecast` rows at all** — everything is already bfloat16,
+so the guards never fire and cost exactly zero. Keep them as guards; do not count their removal as a
+win. The `to_layout` in the same block is a different matter and is [5c](#5c-untilize-attn-once-not-per-level).
+
+### Work items
+
+- [ ] **5a first**, on its own commit. It is a deletion, its number is exact, and it needs no PCC
+      argument beyond "nothing read the tensor."
+- [ ] **5b next**, and land the `* 2 - 1` fold in the same change — the expression is being rewritten
+      anyway, and folding it separately means touching the same six lines twice. Report PCC per
+      change against the [gates](#candidates); the fold is exact, so expect 0.999611 unchanged.
+- [ ] **5c**, independent of 5b. Cheapest 35 ms on the list.
+- [ ] **5e after 5b.**
+- [ ] **5d only after** a standalone ROW_MAJOR-permute microbenchmark at `(6, 30144, 8, 32)`.
+      If it loses, record it in [DEAD_ENDS](perf_reports/DEAD_ENDS.md) with the number and hand the
+      operand to [11](#candidate-11--absorb-msda-layout-prep).
+- [ ] Re-profile after each and re-derive the corrected ratio (real compute ~175 ms as the
+      denominator, not 220.7). If 5a–5c land as estimated the layer is ~310 ms and
+      `MSDAOperation` is **~54%** of it — at which point everything model-side is finished and
+      [10](#candidate-10--msdaoperation-itself) / [12](#candidate-12--one-fused-call-for-all-levels)
+      are the only items left that matter.
+- [ ] Fix or subtract the harness's per-layer `build_rebatch_plan` (rows 459–465, 6.8 ms) before
+      quoting any of these percentages as encoder-path numbers.
+
+### What this entry no longer needs
+
+The optional `noc.csv` pass. It was there to decide whether the data-movement groups are
+bandwidth-bound or launch-heavy, so that [11](#candidate-11--absorb-msda-layout-prep) could be
+scoped. It is not needed for 5a–5e: those groups are neither — they are **padding**, and the fix is
+to stop running ops on `32 × 32` tiles that hold 8 real values. Keep the noc pass for 5d, where the
+question is genuinely bandwidth, and for 11.
 
 ## Candidate 6 — permute/reshape by reformulation
 
@@ -842,7 +1083,12 @@ Work items:
 - [ ] Inventory the 17 remaining `BinaryNg` rows from the stage-05 CSV: producer, both operands,
       shape, and whether a layout op sits between producer and binary. That list is the scope;
       do not fuse blindly from the table above.
-- [ ] Price the `* 2 - 1` fold into the already-folded `sampling_offsets` weight. Exact
+- [ ] The `* 2 - 1` fold has moved to [5b](#5b-do-the-sampling-location-math-in-row_major), which
+      rewrites the same expression and prices it there. **46.6 of the 48.2 ms is padding**, not
+      arithmetic ([candidate 5](#first-correction-the-11-ratio-understates-the-problem)) — so most of
+      this entry is 5b's, and what is left for 8 is the residual add and the per-level accumulate.
+      Original item, for the record: price the `* 2 - 1` fold into the already-folded
+      `sampling_offsets` weight. Exact
       (`2·(x + off) - 1` vs `(2x - 1)` after the add) and it removes two binaries plus,
       possibly, their tile-padding waste if the extent-2 coordinate axis is still one of the
       tiled dims.
@@ -1092,12 +1338,17 @@ is not correctness-preserving.
    static `rebatch_len` that costs neither +129 ms nor accuracy, and it is what makes 9 answerable.
    Its own gap payoff is ≤2.1 ms — rank it on the trace-capturability, not the milliseconds.
 9. **1f** — refactor only, and only as a by-product of 1e. Never worth doing on its own.
-10. **5** — classify the remaining 456.8 ms as data-movement vs compute and attribute each shuffle
-    to the compute that required it. Cheap, and it is the input to 6 / 8 / 11. Do not start those
-    without the table.
+10. **5** — **the classification is done and it produced six changes worth ~157 ms.** Take them in
+    order: [5a](#5a-delete-the-key-permute) (−19.3 ms, a deletion),
+    [5b](#5b-do-the-sampling-location-math-in-row_major) (−90 ms, includes candidate 8's `* 2 - 1`
+    fold), [5c](#5c-untilize-attn-once-not-per-level) (−35 ms),
+    [5e](#5e-permute-grid-once-slice-after) (−13 ms), then
+    [5d](#5d-split-value-into-heads-in-row_major) only behind a microbenchmark. This now outranks 6:
+    none of it needs a weight reorder, and it changes what 6 and 11 are left holding.
 11. **6** — drop permute/reshape by emitting tensors in the consumer's layout (weight reorder /
-    reformulation). 139.8 ms on the table; sequence before 11 so a new kernel is not written for
-    a shuffle a storage change would delete.
+    reformulation). 139.8 ms on the table, but **5b/5c/5e overlap it** — re-scope 6 after they land;
+    what survives is the `value` head permute and the output pack. Sequence before 11 so a new
+    kernel is not written for a shuffle a storage change would delete.
 12. **8** — fuse the remaining 48.2 ms of `BinaryNg` into producers, starting with the inventory
     and the `* 2 - 1` fold. Independent of 6; can run in parallel once 5 has named the sites.
 13. **7** — L1 vs DRAM. Expected small; do not block anything on it. Reject-with-numbers or keep

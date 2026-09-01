@@ -345,9 +345,10 @@ class TTSpatialCrossAttention:
                 f"spatial_shapes: {spatial_shapes.tolist()}, key.shape: {key.shape}"
             )
 
-        # [num_cams, L, bs, embed_dims] -> [bs * num_cams, L, embed_dims]
-        key_reshaped = ttnn.permute(key, (2, 0, 1, 3))  # [bs, num_cams, L, embed_dims]
-        key_reshaped = ttnn.reshape(key_reshaped, (bs * self.num_cams, L, self.embed_dims))
+        # [num_cams, L, bs, embed_dims] -> [bs * num_cams, L, embed_dims]. Only ``value`` is laid
+        # out: deformable attention samples the value tensor and never reads a key, so permuting
+        # ``key`` as well would move 92 MB for nothing — and in the encoder path ``value is key``,
+        # so it would be the same tensor permuted twice.
         value_reshaped = ttnn.permute(value, (2, 0, 1, 3))  # [bs, num_cams, L, embed_dims]
         value_reshaped = ttnn.reshape(value_reshaped, (bs * self.num_cams, L, self.embed_dims))
 
@@ -355,7 +356,6 @@ class TTSpatialCrossAttention:
             logger.info("SCA Calling Deformable Attention")
         queries_output = self.deformable_attention(
             query=queries_batched,
-            key=key_reshaped,
             value=value_reshaped,
             reference_points=reference_points_batched,
             spatial_shapes=spatial_shapes,

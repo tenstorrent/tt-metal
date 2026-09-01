@@ -48,6 +48,7 @@ today. The signposted region therefore carries host dispatch, and both columns a
 | 3 | [constant uploads cached](perf_reports/03-constant-uploads-cached.md) | 681.7 ms | 40.5 ms | **722.2 ms** | −4.5 ms | 121 |
 | 4 | [fused multi_scale_deformable_attn](perf_reports/04-fused-msda.md) | 489.5 ms | 14.0 ms | 503.5 ms | **−191.6 ms kernel** † | 129 |
 | 5 | [offset normalizer folded into the Linear](perf_reports/05-offset-normalizer-folded.md) | 456.8 ms | *see below* | — | **−32.7 ms kernel** | 127 |
+| 6 | [dead SCA `key` permute deleted](perf_reports/06-sca-key-permute-deleted.md) | 438.4 ms | 14.4 ms | — | **−18.1 ms kernel** ‡ | 126 |
 
 `kernel` = summed `DEVICE KERNEL DURATION`. `gap` = summed `OP TO OP LATENCY`, i.e. device idle
 between ops waiting on host dispatch. `wall` = kernel + gap, per layer.
@@ -55,6 +56,11 @@ between ops waiting on host dispatch. `wall` = kernel + gap, per layer.
 Rows 1–3 were re-measured 2026-08-27 (`2026_08_27_08_56_58`, `2026_08_27_21_31_29`,
 `2026_08_27_13_47_55`), each on that stage's `tt/` sources — Python-only diffs, no rebuild. PCC
 0.999608 in all three.
+
+‡ Row 6 onward (candidate 5's sub-items) each quote a Δ against a **same-session re-measure of the
+previous stage** on unchanged code. For row 6 that is `2026_09_01_22_47_34`: 456.5 ms kernel,
+127 ops — which reproduced stage 05's 456.8 ms to 0.3 ms and its per-op table exactly, so the
+harness is stable on kernel time across days.
 
 † Row 4's Δ is against a **same-session re-measure of row 3** (`2026_08_27_23_03_17`: 681.1 ms
 kernel / 13.0 ms gap / 694.1 ms wall), not against the 722.2 ms in row 3.
