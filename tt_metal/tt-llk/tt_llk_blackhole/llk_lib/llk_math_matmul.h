@@ -336,8 +336,16 @@ inline void matmul_configure_mop(
     const bool is_in0_32x16 = (in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim <= FACE_C_DIM);
     const bool is_in1_16x32 = (in1_tile_r_dim <= FACE_R_DIM) && (in1_tile_c_dim > FACE_C_DIM);
 
-    const std::uint32_t replay_buf_len =
-        (is_in0_16x32 && is_in1_32x16) ? 4 : ((is_in0_16x32 || is_in1_32x16 || is_in0_32x16 || is_in1_16x32) ? (partial_face ? 4 : 8) : 16);
+    // Must match the branch the lambda below actually takes, instruction for instruction: lltt::record
+    // captures exactly this many instructions and anything beyond executes immediately, outside the
+    // record window, against sources the MOP has not validated. The old form collapsed all four narrow
+    // flags into `partial_face ? 4 : 8`, which under-counted two branches that emit 8 regardless of
+    // partial_face -- reachable for a legal tiny-tile shape such as in0 16x[<16 rows] x in1 [16 rows]x32,
+    // where only is_in1_16x32 is set.
+    const std::uint32_t replay_buf_len = is_in1_32x16                     ? (is_in0_16x32 ? 4 : 8)
+                                         : (is_in0_16x32 || is_in0_32x16) ? (partial_face ? 4 : 8)
+                                         : is_in1_16x32                   ? 8
+                                                                          : 16;
 
     load_replay_buf(
         ckernel::math::replay_buf_offset,
