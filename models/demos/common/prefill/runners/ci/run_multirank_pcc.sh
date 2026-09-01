@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 set -euo pipefail
 
 MODEL="${1:?usage: run_multirank_pcc.sh <model-key>}"
