@@ -11,7 +11,7 @@
 > on down** — document in LinkHealth (including intermesh) and **ignore `is_link_healthy` / ETH-up
 > for abort**. Filter failure fails **every rank with the same message**. **Downgraded-plane holes
 > go to `get_unused_downed_links()`** and do not count as `planes_lost`. **Mapper keys on
-> `(host, tray, loc)`, not AsicID** — FSD placement matches live/tt-run. See README §3.1–§3.3.
+> `(host_id, tray, loc)`, not AsicID** — FSD placement matches live/tt-run. See README §3.1–§3.3.
 
 **Contents**
 
@@ -70,7 +70,7 @@ Build two descriptors in-code, no device.
 - Same ASIC, different tray → `mismatched_asics`.
 - One cable is two directed records → exactly one entry per end, not two per end.
 - Output vectors sorted; two runs byte-identical.
-- Disjoint AsicID spaces with the **same** `(host, tray, loc)` on both sides → still `matches()` for
+- Disjoint AsicID spaces with the **same** `(host_id, tray, loc)` on both sides → still `matches()` for
   those chips. Join is positional (implementation plan §5.5). Disjoint positions → missing+extra.
 
 ## 3. `LinkHealth`
@@ -246,7 +246,7 @@ The packed hostname is **exactly** the FSD `hosts[].hostname` (`bh-glx-110-c01u0
 Hall is part of that name; we do not drop it. The mock YAML **filename** is not a
 hostname — it just happens to contain a different token (`bh-glx-c01u02`, SC36
 `bh-glx-120-d10u20`). That is file naming in tt-cluster-descriptors, not a
-canonicalization we apply. `PhysicalNodeId.host[]` is the FSD string
+canonicalization we apply. `PhysicalNodeId.host_id[]` is the FSD string
 ([`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) §8).
 
 When names do collide (comment at `run_local_discovery` ~654: 64-rank superpod reusing 16 mock files),
@@ -287,7 +287,7 @@ build_mock_to_fsd_host_alias(live_psd, fsd):
         0 matches  → fatal, list the live key + a few FSD names   // wrong FSD / no token
         >1 match   → fatal, ambiguous join
     require the map is injective both ways
-    // values() are FSD hosts[].hostname — PhysicalNodeId.host[] and the filter both use these
+    // values() are FSD hosts[].hostname — PhysicalNodeId.host_id[] and the filter both use these
 ```
 
 Prefer `ClusterDescriptor::get_host_id()`
@@ -303,7 +303,7 @@ script that **writes** the field. See
 2. If FSD path is set **and** mock env is set: `alias = build_mock_to_fsd_host_alias(live, fsd)`.
 3. Filter the FSD with **`alias.values()`** (real FSD hostnames), not `live.get_all_hostnames()`.
    `filter_factory_descriptor` matches `hosts[].hostname`; passing YAML basenames is a zero-overlap fatal.
-4. Join `(host, tray, loc)` with **`host` compared by token** (or by walking `alias`), not by raw
+4. Join `(host_id, tray, loc)` with **`host` compared by token** (or by walking `alias`), not by raw
    string. Do **not** rewrite FSD AsicIDs to live UMD ids before the mapper (§5.5 / §7.8). Copy
    `host_to_rank` from live onto the FSD PSD at provision (ranks only).
 5. Live PSD keys are **not** rewritten. `my_host_name()` stays the basename. `LinkInfo` physical host
@@ -498,7 +498,7 @@ any live PSD.
 This is a **negative** test section: almost everything here asserts that something does *not* happen.
 
 - FSD contains a chip absent from live → init **throws**. The message names **every** absent chip with
-  `(host, tray, loc)`, not just the first — one pulled board is several ASICs.
+  `(host_id, tray, loc)`, not just the first — one pulled board is several ASICs.
 - **The throw precedes the mapper.** Assert it is the absent-chip error and not a
   `verify_topology_mapping` fatal, a `validate_mesh_connections` fatal, or the >10%-downed error. Matching
   on the message is the point of this assertion: if the error arrives from `TopologyMapper` instead, the
@@ -524,14 +524,14 @@ This is a **negative** test section: almost everything here asserts that somethi
   chip as absent and fatals on a healthy system. Assert the check is scoped to hosts the live PSD
   enumerates. This is the most likely way to ship a false fatal.
 
-### 7.8 Mapper identity is `(host, tray, loc)`, not AsicID
+### 7.8 Mapper identity is `(host_id, tray, loc)`, not AsicID
 
 Implementation plan §5.5. FSD synthesizes AsicIDs `1..N`; live discovery uses UMD unique ids. If the
 solver keys on AsicID, those two graphs pick different equally-valid placements. Overlay-before-solve
 is the wrong fix: it makes placement wait on UMD (place → recover → provision cannot).
 
 - **Load-bearing.** Same FSD, two PSDs that differ **only** in AsicID values (builder `1..N` vs an
-  injected UMD-like map on the same `(host, tray, loc)` graph). `TopologyMapper` produces the **same**
+  injected UMD-like map on the same `(host_id, tray, loc)` graph). `TopologyMapper` produces the **same**
   `FabricNodeId` for every position. If this fails, FM and `tt-run` will disagree in production.
 - `generate_rank_bindings` with an FSD path does **not** call `run_psd_discovery` and does **not**
   rewrite AsicIDs. Its placement equals ControlPlane's on the same FSD when live is healthy.
@@ -539,7 +539,7 @@ is the wrong fix: it makes placement wait on UMD (place → recover → provisio
 - Diff of those two PSDs: `matches()` on cables (positional join). No overlay step.
 - `#54752` already instantiates the solver on the position tuple with no library change — keep those
   tests; they are the mechanical proof the mapper change is legal.
-- Duplicate `(host, tray, loc)` → fatal.
+- Duplicate `(host_id, tray, loc)` → fatal.
 - Documented, not blocking: lexicographic host order (`host10` before `host2`). Both FSD and live use
   the same canonical string, so they still agree. Do not sort by AsicID to "fix" it.
 

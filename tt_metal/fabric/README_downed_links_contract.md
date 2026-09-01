@@ -65,11 +65,19 @@ with `NONE` directions. Cross-host intermesh is visible on `get_downed_links_bet
 See the note at the top of this file and
 [`PLAN_fsd_solve_and_downed_links.md`](PLAN_fsd_solve_and_downed_links.md) §4.
 
-The two descriptors are compared by **physical position** `(canonical host, tray, loc, chan)`, not by
+The two descriptors are compared by **physical address** `(host_id, tray, loc, chan)`, not by
 AsicID. FSD does not encode ASIC ids; the builder synthesizes opaque labels that must not drive the
 mapper or the diff (implementation plan §5.5). `LinkInfo::src_asic` / `dst_asic` carry the **live**
-UMD id when that chip exists (looked up by position after the solve). `(hostname, TrayID, ASICLocation)`
-is the stable identity on every record. `medium` is the descriptor's port type for the expected edge.
+UMD id when that chip exists (looked up by address after the solve).
+
+**The logical address of an ASIC is `(host_id, TrayID, ASICLocation)`** — that triple, and nothing
+else, is the stable identity on every record. `host_id` is not a hostname: it identifies the group of
+TT accelerators behind a common host / controller / root complex, and its value today happens to be
+that group's hostname (UMD cluster-descriptor field `host_id` —
+[`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md); packed form
+`PhysicalNodeId` — [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md)). Records and query
+parameters below name it `host_id` for that reason. `medium` is the descriptor's port type for the
+expected edge.
 
 ## 3. No FSD, empty diff, and `fsd_rerouting_active`
 
@@ -99,7 +107,7 @@ wrong allocation and fails init before `LinkHealth` is built, so it never appear
 | Condition | Action | Log |
 |-----------|--------|-----|
 | Live has a cable the FSD does not | OK. Not downed. | info: `FSD is golden: N live-only extra cable(s) ignored (not downed).` |
-| **FSD has a whole chip live does not** | **Fatal, before the topology map is built.** A missing chip is not a downed-link case: `LinkHealth` is never constructed and no downed records are produced for its cables. Fatal in **every** reliability mode. | error: `FSD: N chip(s) expected by the factory descriptor are absent from the live cluster: <host/tray/loc …>. A missing chip is not a downed-link case — check the allocation and the boards.` |
+| **FSD has a whole chip live does not** | **Fatal, before the topology map is built.** A missing chip is not a downed-link case: `LinkHealth` is never constructed and no downed records are produced for its cables. Fatal in **every** reliability mode. | error: `FSD: N chip(s) expected by the factory descriptor are absent from the live cluster: <host_id/tray/loc …>. A missing chip is not a downed-link case — check the allocation and the boards.` |
 | Hosts do not match (zero overlap / wrong FSD) | **Fatal on every rank, same message.** All-reduce first (`agree_or_throw_fsd_host_filter`). No per-rank fallback. §5.3 case 9 / testing plan §7.6. | error: `FSD host filter is not identical on every rank (local_ok_min=…, host_checksum min=… max=…, fsd_fingerprint min=… max=…). Every rank fails together with this message. No per-rank fallback to live mapping.` |
 | More than **10%** of FSD-expected connections missing from live | **Error.** Fail init. | info of the fraction, then throw (see §3.3) |
 | At most 10% missing, hosts match | Init continues. Records in `LinkHealth`. | info: `FSD: E expected connections, D downed (P%). Extra live-only cables ignored.` |
@@ -203,7 +211,7 @@ struct LinkInfo {
     bool logical_resolved = false;       // false ⇒ the MGD solve never placed one of these ASICs,
                                          // so every field above this line is meaningless and the
                                          // physical fields below are the whole record. Such a link
-                                         // appears in get_downed_links() and in the per-host /
+                                         // appears in get_downed_links() and in the per-host-id /
                                          // per-ASIC queries, but NOT in the per-node, per-direction
                                          // or per-mesh-pair ones. Check this before reading src_node.
 
@@ -217,8 +225,9 @@ struct LinkInfo {
     // For lost capacity on planes fabric still uses, get_num_downed_routing_planes_in_direction.
 
     // ---- physical (from the descriptor) ----
-    std::string  src_host;  TrayID src_tray;  ASICLocation src_loc;  AsicID src_asic;
-    std::string  dst_host;  TrayID dst_tray;  ASICLocation dst_loc;  AsicID dst_asic;
+    // The ASIC's logical address: (host_id, tray, loc). Not a hostname — see §2.
+    std::string  src_host_id;  TrayID src_tray;  ASICLocation src_loc;  AsicID src_asic;
+    std::string  dst_host_id;  TrayID dst_tray;  ASICLocation dst_loc;  AsicID dst_asic;
     PortType     medium;                // QSFP_DD / WARP400 / TRACE ...
 
     // Only meaningful when logical_resolved.
@@ -312,9 +321,9 @@ std::vector<FabricNodeId> get_exit_nodes_with_downed_links(MeshId src_mesh, Mesh
 // Same presence check as the logical overload — works on mock. STRICT + FSD: ignore for abort.
 bool is_link_healthy(const std::string& host, TrayID, ASICLocation, chan_id_t) const;
 bool is_link_healthy(AsicID, chan_id_t) const;
-std::vector<LinkInfo> get_downed_links_for_host (const std::string& host) const;
+std::vector<LinkInfo> get_downed_links_for_host (const std::string& host_id) const;
 std::vector<LinkInfo> get_downed_links_for_asic (AsicID) const;
-std::vector<LinkInfo> get_downed_links_between_hosts(const std::string& a, const std::string& b) const;
+std::vector<LinkInfo> get_downed_links_between_hosts(const std::string& a_host_id, const std::string& b_host_id) const;
 
 }  // namespace
 ```
@@ -343,7 +352,7 @@ for (const auto& l : cp.get_downed_intermesh_links()) {
 }
 for (const auto& l : cp.get_downed_intermesh_links(mesh_a, mesh_b)) {
     // l.src_node / l.dst_node  → logical endpoints
-    // l.src_host/tray/loc + l.medium → physical cable to inspect
+    // l.src_host_id/tray/loc + l.medium → physical cable to inspect
 }
 for (const auto& l : cp.get_downed_links_between_hosts("hostA", "hostB")) {
     // intra AND intermesh cross-host. Not intra-only.

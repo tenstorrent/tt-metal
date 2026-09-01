@@ -15,7 +15,7 @@ Namespace: `tt::tt_fabric`. Types live in `link_health.hpp`; `ControlPlane` forw
 > connections missing are errors (log the fraction). **STRICT + FSD: do not fatal on down** —
 > record in LinkHealth (including intermesh) and ignore `is_link_healthy` / ETH-up for abort.
 > Filter failure: every rank, same message. **Downgraded-plane intra holes → `get_unused_downed_links()`**;
-> `planes_lost` ignores them (§3.3). **Mapper physical identity is `(host, tray, loc)`, not AsicID**
+> `planes_lost` ignores them (§3.3). **Mapper physical identity is `(host_id, tray, loc)`, not AsicID**
 > (§5.5) — FSD placement and tt-run / live discovery must produce the same solve. See implementation
 > §7.1–§7.3 and the contract README.
 
@@ -58,7 +58,7 @@ flowchart TB
     HF["tt-run --hosts / Phase 1 hostfile<br/>no live PSD exists"]
     FILTP["filter_factory_descriptor<br/>canonical host names §5.2"]
     BUILDP["fsd_psd<br/>expected graph for the allocation"]
-    PACKP["PhysicalNodeId per chip<br/>host[] + tray + loc"]
+    PACKP["PhysicalNodeId per chip<br/>host_id[] + tray + loc"]
     SOLVEP["TopologyMapper(fsd_psd, MGD)<br/>same FabricNodeId per PhysicalNodeId"]
     BIND["rank bindings written<br/>STOP — no discovery, no LinkHealth"]
 
@@ -119,7 +119,7 @@ flowchart TB
   MGD --> LIVE_SOLVE
 ```
 
-**What moves.** FSD + host list → `fsd_psd`. Live discovery (ControlPlane only) → `live_psd`. Both graphs are re-keyed to `PhysicalNodeId` before the solver, so placement and provision assign the same `FabricNodeId`. Pairing never reads the FSD. `LinkHealth` diffs the two graphs by `(host, tray, loc, chan)` after pairing.
+**What moves.** FSD + host list → `fsd_psd`. Live discovery (ControlPlane only) → `live_psd`. Both graphs are re-keyed to `PhysicalNodeId` before the solver, so placement and provision assign the same `FabricNodeId`. Pairing never reads the FSD. `LinkHealth` diffs the two graphs by `(host_id, tray, loc, chan)` after pairing.
 
 **What does not move.** Placement never calls discovery. Overlay of live UMD ids onto the FSD graph is gone — Cluster ChipId is a post-solve lookup, not a mapper input. Missing **chip** at provision is a fatal **before** the mapper (§7.4), not a downed-link record.
 
@@ -574,7 +574,7 @@ nothing. From `physical_system_discovery.cpp`:
   needs a `hostname_matches` helper for this — the mismatch is real, not hypothetical.
 
 Define one canonicalization and use it on **both** sides, for the filter and for the overlay's
-`(host, tray, loc)` join:
+`(host_id, tray, loc)` join:
 
 ```
 canonical(h):
@@ -597,10 +597,10 @@ sides; never rewrite the FSD on disk.
 | 4 | **Zero overlap** | retained set empty | Fatal, distinct message, print a few names from each side (not a diff of thousands) |
 | 5 | Allocation **not connected** in the FSD | retained hosts fall into >1 component (the builder already computes components for `build_physical_descriptors`) | Warn; fatal if the MGD needs a mesh spanning them |
 | 6 | Live-only ASICs on a retained host | `extra_asics` in the diff | Warn per host with counts — mapping on the FSD makes them invisible to the mapper |
-| 7 | **Board-type mismatch** per `(host, tray)` | compare FSD board type against live | Fatal — wrong/stale FSD, would otherwise surface as a confusing partial mapping |
+| 7 | **Board-type mismatch** per `(host_id, tray)` | compare FSD board type against live | Fatal — wrong/stale FSD, would otherwise surface as a confusing partial mapping |
 | 8 | **Duplicate hostnames inside the FSD** | duplicates among retained hosts | Fatal — `filter_factory_descriptor` keeps *all* matching indices, so one name silently pulls in two machines |
 | 9 | Any rank's filter failed, **or** ranks disagree on the filter | `agree_or_throw_fsd_host_filter` — all-reduce `local_ok` + host-list checksum + FSD fingerprint **before** ingest | **Every rank throws the same `std::runtime_error`.** See protocol below. |
-| 10 | **Mock cluster + FSD** | live name from `ClusterDescriptor::get_host_id()` once filled ([`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)); filename is not a hostname | Prefer the UMD `host_id` field (value is the exact FSD name). If the field is still empty, aisle-token alias (testing plan §6.3) so `PhysicalNodeId.host[]` and the filter still use FSD hostnames. Fatal if a live key has no field and no token, the token misses or collides, or the map is not injective. ClosetBox / no-field / no-FSD keeps the basename fallback. |
+| 10 | **Mock cluster + FSD** | live name from `ClusterDescriptor::get_host_id()` once filled ([`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)); filename is not a hostname | Prefer the UMD `host_id` field (value is the exact FSD name). If the field is still empty, aisle-token alias (testing plan §6.3) so `PhysicalNodeId.host_id[]` and the filter still use FSD hostnames. Fatal if a live key has no field and no token, the token misses or collides, or the map is not injective. ClosetBox / no-field / no-FSD keeps the basename fallback. |
 
 Case 2 **replaces** the earlier "unknown host in the FSD filter: warn, fall back to live, leave
 `link_health_` null". That fallback is per-rank: one rank maps on live while the others map on the FSD, so
@@ -652,7 +652,7 @@ does not need live ranks: it is producing the rank binding.
 
 The init sequence that applies all of this is in §7.
 
-### 5.5 Mapper identity is `(host, tray, loc)`, not AsicID
+### 5.5 Mapper identity is `(host_id, tray, loc)`, not AsicID
 
 > **Decision.** The topology solver's physical node is a **POD**
 > `{canonical_host[64], TrayID, ASICLocation}`, not UMD `AsicID`, not FSD `1..N`, and not
@@ -683,7 +683,7 @@ The init sequence that applies all of this is in §7.
    before the solve makes a host that failed discovery a **hard blocker for (1)**. Do not do that.
 
 The rejected alternative — "build a PSD with live UMD ids and FSD connectivity" — is the same overlay,
-and it has the same blocker. Connectivity comes from the FSD; identity comes from `(host, tray, loc)`.
+and it has the same blocker. Connectivity comes from the FSD; identity comes from `(host_id, tray, loc)`.
 
 **What changes in the mapper.** `TopologyMapper` already reads tray and location off the descriptor
 (`topology_mapper.cpp`, the `config.asic_positions` / `hostname_to_asics` fill). Lift that into the
@@ -703,7 +703,7 @@ struct PhysicalNodeKey {
   are on the node). That is the payoff #54752 pins.
 - `PhysicalSystemDescriptor::get_asic_id(hostname, tray, loc)` already exists — Cluster ChipId and
   `LinkInfo::src_asic` still resolve through it **after** the solve.
-- Duplicate `(host, tray, loc)` is fatal (the descriptor already keys ASICs uniquely this way).
+- Duplicate `(host_id, tray, loc)` is fatal (the descriptor already keys ASICs uniquely this way).
 - Canonical host injectivity (§5.2) is now the **node identity**, not only the overlay join.
 
 **Two stages, two fatals.**
@@ -724,7 +724,7 @@ assert one specific mapping will need a re-baseline; that is expected and is the
 #54752.
 
 **What this deletes.** Overlay-before-mapper. Reserved-range synthesized ids as an "absent" detector
-(§7.4 keys on `(host, tray, loc)` missing from live). The diff precondition "same AsicID space"
+(§7.4 keys on `(host_id, tray, loc)` missing from live). The diff precondition "same AsicID space"
 (§6 joins on position). `generate_rank_bindings` calling discovery or overlay when an FSD is set.
 
 ---
@@ -757,7 +757,7 @@ PhysicalSystemDelta diff_physical_system_descriptors(
 }  // namespace tt::tt_metal
 ```
 
-Join key: canonical `(host, tray, loc, chan)` on each endpoint, then undirected
+Join key: canonical `(host_id, tray, loc, chan)` on each endpoint, then undirected
 `(min(end, end), max(end, end))`. Host compared with §5.2 canonicalization (and the mock aisle-token
 alias). Do **not** put `port_type` or AsicID in the key. Hash-map: golden `|= GOLDEN`, candidate
 `|= CANDIDATE`. Sort output vectors. Diff ASIC graph only, not `host_connectivity_graph`.
@@ -811,8 +811,8 @@ if (rtoptions_.get().has_factory_system_descriptor_path()) {
     // Catch local filter/alias errors → local_ok=false. Do not throw yet.
     agree_or_throw_fsd_host_filter(ctx, checksum_sorted_host_list(hosts), fsd_fingerprint, local_ok);  // §5.3 case 9
     fsd_physical_system_descriptor_ = build_physical_descriptor_from_file(path, hosts);
-    // Do NOT overlay UMD AsicIDs onto the FSD graph. Mapper keys on (host, tray, loc) — §5.5.
-    // FAIL EARLY at provision (§7.4): any FSD (host, tray, loc) with no live counterpart.
+    // Do NOT overlay UMD AsicIDs onto the FSD graph. Mapper keys on (host_id, tray, loc) — §5.5.
+    // FAIL EARLY at provision (§7.4): any FSD (host_id, tray, loc) with no live counterpart.
     // Reports every absent chip. Same message on every rank. Does not run in generate_rank_bindings.
     throw_on_fsd_chips_absent_from_live(*fsd_physical_system_descriptor_, *physical_system_descriptor_);
 }
@@ -849,9 +849,9 @@ void ControlPlane::classify_unused_downed_after_plane_trim() {
 
 Replacing mapper/live without `refresh(mapper, live)` or reconstruct dangles `link_health_`. Host filter derivation and every failure mode of it: §5.
 
-`load_physical_chip_mapping`: `FabricNodeId → (host,tray,loc) → live AsicID → cluster chip id` via
+`load_physical_chip_mapping`: `FabricNodeId → (host_id, tray, loc) → live AsicID → cluster chip id` via
 `PhysicalSystemDescriptor::get_asic_id`. There is **no missing-chip case to handle at provision**: §7.4
-fails ControlPlane init if an FSD `(host, tray, loc)` has no live counterpart, so every node resolves to a
+fails ControlPlane init if an FSD `(host_id, tray, loc)` has no live counterpart, so every node resolves to a
 real ChipId and no placeholder is needed. Skip `validate_mesh_connections` ETH fatals on downed-cable
 edges. Do **not** overlay AsicIDs before the mapper (§5.5). `verify_topology_mapping` Check 1/3 compare
 against cluster unique ids using the live AsicID looked up by position after the solve.
@@ -997,7 +997,7 @@ throw_on_fsd_chips_absent_from_live(*fsd_physical_system_descriptor_, *physical_
 
 **Rules.**
 
-- Report **every** absent chip, not the first, each with `(host, tray, loc)`. One pulled board is
+- Report **every** absent chip, not the first, each with `(host_id, tray, loc)`. One pulled board is
   several ASICs; a per-chip abort makes the operator re-run init once per chip.
 - The check reads only the filtered FSD PSD and the live PSD, both of which are identical on every rank
   when discovery is global — so **every rank throws the same message** and there is no partial-abort
@@ -1022,7 +1022,7 @@ place this ASIC", never "absent from live".
 
 ## 8. Tests
 
-**`test_physical_system_descriptor_diff.cpp`** (offline): identical → `matches()`; drop edge → both endpoints in `missing_links`; swap args → `extra_links`; drop ASIC; extra cable; drop+add; `port_type` mismatch → `mismatched_links` not missing+extra; tray mismatch → `mismatched_asics`; one cable two directed reps → one entry per end; stable sort; **disjoint AsicID spaces with the same `(host,tray,loc)` still match** (join is positional, §5.5).
+**`test_physical_system_descriptor_diff.cpp`** (offline): identical → `matches()`; drop edge → both endpoints in `missing_links`; swap args → `extra_links`; drop ASIC; extra cable; drop+add; `port_type` mismatch → `mismatched_links` not missing+extra; tray mismatch → `mismatched_asics`; one cable two directed reps → one entry per end; stable sort; **disjoint AsicID spaces with the same `(host_id, tray, loc)` still match** (join is positional, §5.5).
 
 **`test_link_health.cpp`**: copy `test_topology_mapper.cpp` fixture. Mutate live, keep mapper. Identical → empty; drop intra/cross-host/ASIC; extras not in `get_downed_links()`; `fsd_rerouting_active`; intra `src_direction` / `dst_direction` match MeshGraph both ways (typically opposites); `planes_lost` = count of **active** `downed_` on `(node, src_direction)` after classify (§3.3); unused-plane holes in `get_unused_downed_links()` and not in `downed_`; queryable after ctor; `refresh()` idempotent; `refresh(nullptr, &live)` rebind; not default-constructible; index pointers identity + in `downed_`; unmapped → `logical_resolved == false`, physical façade only; intra vs inter getters disjoint union of resolved; `medium` from expected `port_type`; physical fields from expected.
 
