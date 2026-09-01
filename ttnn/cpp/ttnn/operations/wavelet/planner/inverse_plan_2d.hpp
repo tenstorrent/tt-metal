@@ -310,7 +310,7 @@ inline void append_axis_routes(
     LiftingInversePlan x_plan,
     const uint32_t core_limit,
     const uint64_t l1_budget_bytes,
-    const uint64_t inverse_coordination_penalty_cycles_per_core = 0) {
+    const uint64_t inverse_penalty_per_core = 0) {
     TT_FATAL(core_limit > 0, "2D ILWT requires at least one worker core");
     TT_FATAL(y_plan.original_length > 0 && x_plan.original_length > 0, "2D ILWT output shape must be positive");
     TT_FATAL(
@@ -350,10 +350,9 @@ inline void append_axis_routes(
                 l1_budget_bytes,
                 [&](const IndexRectangle output) { return inverse_2d_detail::build_chunk(y_plan, x_plan, output); },
                 [&](const Lwt2DChunkPlan& chunk) {
-                    return plan_2d_detail::estimate_chunk_latency_cycles(
-                        chunk, y_plan.forward_trace, x_plan.forward_trace, true);
+                    return plan_2d_detail::estimate_chunk_cost(chunk, y_plan.forward_trace, x_plan.forward_trace, true);
                 },
-                inverse_coordination_penalty_cycles_per_core);
+                inverse_penalty_per_core);
             if (!candidate.has_value()) {
                 continue;
             }
@@ -389,6 +388,7 @@ inline void append_axis_routes(
         .band = TiledShape2D::from_logical(
             Shape2D{.height = y_plan.coefficient_length, .width = x_plan.coefficient_length}),
     };
+    validate_lwt_2d_tiling_contract(tiling);
     return Ilwt2DExecutionPlan{
         .y_plan = std::move(y_plan),
         .x_plan = std::move(x_plan),
@@ -411,7 +411,7 @@ template <typename Scheme>
     const uint32_t core_limit,
     const uint64_t l1_budget_bytes,
     const BoundaryMode boundary_mode = BoundaryMode::kSymmetric,
-    const uint64_t inverse_coordination_penalty_cycles_per_core = 0) {
+    const uint64_t inverse_penalty_per_core = 0) {
     TT_FATAL(output_height > 0 && output_width > 0, "2D ILWT output dimensions must be positive");
     TT_FATAL(
         output_height <= kMax2DLogicalExtent && output_width <= kMax2DLogicalExtent,
@@ -440,7 +440,7 @@ template <typename Scheme>
         },
         core_limit,
         l1_budget_bytes,
-        inverse_coordination_penalty_cycles_per_core);
+        inverse_penalty_per_core);
 }
 
 [[nodiscard]] inline std::vector<uint32_t> build_ilwt_2d_chunk_config_words(const Ilwt2DExecutionPlan& plan) {
@@ -449,22 +449,6 @@ template <typename Scheme>
     for (size_t chunk_index = 0; chunk_index < plan.chunks.size(); ++chunk_index) {
         const Lwt2DChunkPlan& chunk = plan.chunks[chunk_index];
         const size_t offset = chunk_index * device_protocol::kLwt2DChunkConfigWordCount;
-        words[offset + device_protocol::kLwt2DFinalYBegin] =
-            plan_2d_detail::checked_u32(chunk.final_band_rect.y.begin, "2D ILWT final y begin");
-        words[offset + device_protocol::kLwt2DFinalYLength] =
-            plan_2d_detail::checked_u32(chunk.final_band_rect.height(), "2D ILWT final height");
-        words[offset + device_protocol::kLwt2DFinalXBegin] =
-            plan_2d_detail::checked_u32(chunk.final_band_rect.x.begin, "2D ILWT final x begin");
-        words[offset + device_protocol::kLwt2DFinalXLength] =
-            plan_2d_detail::checked_u32(chunk.final_band_rect.width(), "2D ILWT final width");
-        words[offset + device_protocol::kLwt2DExecutionTileYBegin] =
-            plan_2d_detail::checked_u32(chunk.execution_band_rect.y.begin / kTileHeight2D, "2D ILWT execution tile y");
-        words[offset + device_protocol::kLwt2DExecutionTileYCount] =
-            plan_2d_detail::checked_u32(chunk.execution_band_rect.height() / kTileHeight2D, "2D ILWT execution rows");
-        words[offset + device_protocol::kLwt2DExecutionTileXBegin] =
-            plan_2d_detail::checked_u32(chunk.execution_band_rect.x.begin / kTileWidth2D, "2D ILWT execution tile x");
-        words[offset + device_protocol::kLwt2DExecutionTileXCount] =
-            plan_2d_detail::checked_u32(chunk.execution_band_rect.width() / kTileWidth2D, "2D ILWT execution columns");
         plan_2d_detail::write_protocol_rectangle(words, offset + device_protocol::kLwt2DInitialEe, chunk.initial.ee);
         plan_2d_detail::write_protocol_rectangle(words, offset + device_protocol::kLwt2DInitialEo, chunk.initial.eo);
         plan_2d_detail::write_protocol_rectangle(words, offset + device_protocol::kLwt2DInitialOe, chunk.initial.oe);
@@ -488,7 +472,6 @@ template <typename Scheme>
             const size_t offset =
                 (chunk_index * route_count + route_index) * device_protocol::kLwt2DRouteConfigWordCount;
             words[offset + device_protocol::kLwt2DRouteAxis] = static_cast<uint32_t>(route.axis);
-            words[offset + device_protocol::kLwt2DRouteType] = static_cast<uint32_t>(route.type);
             words[offset + device_protocol::kLwt2DRouteSourceSlot] = static_cast<uint32_t>(route.source_slot);
             words[offset + device_protocol::kLwt2DRouteBaseSlot] = static_cast<uint32_t>(route.base_slot);
             words[offset + device_protocol::kLwt2DRouteOutputSlot] = static_cast<uint32_t>(route.output_slot);
@@ -505,8 +488,6 @@ template <typename Scheme>
                 flags |= device_protocol::kLwt2DRouteFlagScale;
             }
             words[offset + device_protocol::kLwt2DRouteFlags] = flags;
-            words[offset + device_protocol::kLwt2DRouteAxisStepIndex] =
-                plan_2d_detail::checked_u32(route.axis_route_index, "2D ILWT axis route index");
         }
     }
     return words;

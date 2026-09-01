@@ -20,6 +20,7 @@
 #include "ttnn/operations/wavelet/common/storage_contract.hpp"
 #include "ttnn/operations/wavelet/common/tiling_2d.hpp"
 #include "ttnn/operations/wavelet/device/protocol/lwt_2d_config.hpp"
+#include "ttnn/operations/wavelet/planner/cost_model.hpp"
 #include "ttnn/operations/wavelet/planner/execution_plan.hpp"
 #include "ttnn/operations/wavelet/planner/plan.hpp"
 
@@ -76,7 +77,6 @@ struct Lwt2DRoutePlan {
     IndexRectangle source{};
     IndexRectangle base{};
     IndexRectangle output{};
-    bool inline_terminal_scale{false};
 };
 
 struct Lwt2DBandSlots {
@@ -302,9 +302,6 @@ inline void append_axis_routes(
         const bool fused_scale_route = terminal_scale != nullptr &&
                                        route_index != terminal_scale->predict_update_route_index &&
                                        requirement.type == terminal_scale->scale_type;
-        const bool inline_terminal_scale =
-            terminal_scale != nullptr && route_index == terminal_scale->predict_update_route_index;
-
         const Lwt2DPlaneSlot source_slot = predict      ? slots.even
                                            : update     ? slots.odd
                                            : scale_even ? slots.even
@@ -321,7 +318,6 @@ inline void append_axis_routes(
             .source = axis_rectangle(axis, requirement.source, transverse),
             .base = axis_rectangle(axis, requirement.base, transverse),
             .output = fused_scale_route ? IndexRectangle{} : axis_rectangle(axis, requirement.output, transverse),
-            .inline_terminal_scale = inline_terminal_scale,
         });
 
         if (!predict && !update) {
@@ -517,11 +513,20 @@ struct Candidate {
     uint32_t chunk_tiles_x{0};
     uint32_t active_core_count{0};
     double max_dependency_overhead{0.0};
-    uint64_t estimated_latency_cycles{0};
+    uint64_t estimated_cost{0};
     std::vector<Lwt2DChunkPlan> chunks;
 };
 
 using AxisConeSignature = std::vector<int64_t>;
+
+// Update the signature encoding below whenever either dependency structure changes.
+static_assert(sizeof(AxisRouteRequirement) == 120);
+static_assert(sizeof(AxisConePlan) == 88);
+
+constexpr size_t kIntervalSignatureWords = 3;
+constexpr size_t kConeHeaderSignatureWords = 4 * kIntervalSignatureWords + 1;
+constexpr size_t kRouteSignatureWords = 1 + 7 * kIntervalSignatureWords;
+constexpr size_t kOutputSignatureWords = 2;
 
 inline void update_signature_anchor(const IndexInterval interval, size_t& anchor) noexcept {
     if (!interval.empty()) {
@@ -595,7 +600,8 @@ inline void append_cone_signature(
 
     AxisConeSignature signature;
     signature.reserve(
-        15 + 22 * exact_cone.routes.size() + (routed_cone != nullptr ? 13 + 22 * routed_cone->routes.size() : 0));
+        kOutputSignatureWords + kConeHeaderSignatureWords + kRouteSignatureWords * exact_cone.routes.size() +
+        (routed_cone != nullptr ? kConeHeaderSignatureWords + kRouteSignatureWords * routed_cone->routes.size() : 0));
     signature.push_back(static_cast<int64_t>(output.begin % tile_extent));
     signature.push_back(static_cast<int64_t>(output.length()));
     append_cone_signature(signature, exact_cone, anchor, tile_extent);
@@ -612,7 +618,7 @@ struct AxisChunkClasses {
 
 template <typename SignatureBuilder>
 [[nodiscard]] AxisChunkClasses make_axis_chunk_classes(
-    const size_t length, const size_t chunk_extent, SignatureBuilder&& build_signature) {
+    const size_t length, const size_t chunk_extent, const SignatureBuilder& build_signature) {
     TT_FATAL(chunk_extent > 0, "2D planner chunk extent must be positive");
     std::vector<AxisConeSignature> signatures;
     AxisChunkClasses classes;
@@ -639,7 +645,8 @@ template <typename SignatureBuilder>
     const size_t length,
     const uint32_t maximum_chunk_tiles,
     const size_t tile_extent,
-    SignatureBuilder build_signature) {
+    const SignatureBuilder& build_signature) {
+    // Chunk-tile counts are one-based, so index zero is intentionally unused.
     std::vector<AxisChunkClasses> classes(static_cast<size_t>(maximum_chunk_tiles) + 1);
     for (uint32_t chunk_tiles = 1; chunk_tiles <= maximum_chunk_tiles; ++chunk_tiles) {
         classes[chunk_tiles] =
@@ -648,32 +655,18 @@ template <typename SignatureBuilder>
     return classes;
 }
 
-template <typename ChunkBuilder, typename CostEstimator>
-[[nodiscard]] std::optional<Candidate> evaluate_candidate(
+struct RowMajorScheduleEstimate {
+    uint32_t active_core_count{0};
+    uint64_t cost{0};
+};
+
+[[nodiscard]] inline RowMajorScheduleEstimate estimate_row_major_schedule(
     const AxisChunkClasses& y_classes,
     const AxisChunkClasses& x_classes,
-    const uint32_t chunk_tiles_y,
-    const uint32_t chunk_tiles_x,
+    const std::vector<uint64_t>& representative_costs,
     const uint32_t core_limit,
-    const uint64_t l1_budget_bytes,
-    ChunkBuilder&& build_chunk,
-    CostEstimator&& estimate_cost,
-    const uint64_t coordination_penalty_cycles_per_core = 0) {
+    const uint64_t penalty_per_core) {
     const size_t class_columns = x_classes.representatives.size();
-    std::vector<uint64_t> latency_cycles;
-    latency_cycles.reserve(checked_area(y_classes.representatives.size(), class_columns, "2D planner chunk classes"));
-    double max_dependency_overhead = 0.0;
-    for (const IndexInterval y : y_classes.representatives) {
-        for (const IndexInterval x : x_classes.representatives) {
-            const Lwt2DChunkPlan chunk = build_chunk(IndexRectangle{.y = y, .x = x});
-            if (chunk.resources.total_l1_bytes > l1_budget_bytes) {
-                return std::nullopt;
-            }
-            max_dependency_overhead = std::max(max_dependency_overhead, chunk.dependency_overhead);
-            latency_cycles.push_back(estimate_cost(chunk));
-        }
-    }
-
     const size_t chunk_count = checked_area(y_classes.class_ids.size(), x_classes.class_ids.size(), "2D chunk grid");
     const uint32_t active_core_count = static_cast<uint32_t>(std::min(chunk_count, static_cast<size_t>(core_limit)));
     const size_t base = chunk_count / active_core_count;
@@ -684,8 +677,8 @@ template <typename ChunkBuilder, typename CostEstimator>
     for (size_t y_class = 0; y_class < row_prefixes.size(); ++y_class) {
         auto& prefix = row_prefixes[y_class];
         for (size_t column = 0; column < x_classes.class_ids.size(); ++column) {
-            const size_t metric_index = y_class * class_columns + x_classes.class_ids[column];
-            prefix[column + 1] = prefix[column] + latency_cycles[metric_index];
+            const size_t cost_index = y_class * class_columns + x_classes.class_ids[column];
+            prefix[column + 1] = prefix[column] + representative_costs[cost_index];
         }
     }
     std::vector<uint64_t> row_cost_prefix(y_classes.class_ids.size() + 1, 0);
@@ -700,23 +693,57 @@ template <typename ChunkBuilder, typename CostEstimator>
     };
 
     size_t linear_index = 0;
-    uint64_t estimated_latency_cycles = 0;
+    uint64_t estimated_cost = 0;
     for (uint32_t core = 0; core < active_core_count; ++core) {
         const size_t count = base + (core < extra ? 1U : 0U);
-        const uint64_t core_cycles = 30'000 + prefix_cost(linear_index + count) - prefix_cost(linear_index);
-        estimated_latency_cycles = std::max(estimated_latency_cycles, core_cycles);
+        const uint64_t core_cost =
+            planner_cost_model::kCoreStartup + prefix_cost(linear_index + count) - prefix_cost(linear_index);
+        estimated_cost = std::max(estimated_cost, core_cost);
         linear_index += count;
     }
-    if (coordination_penalty_cycles_per_core > 0 && active_core_count > 64) {
-        estimated_latency_cycles +=
-            static_cast<uint64_t>(active_core_count - 64) * coordination_penalty_cycles_per_core;
+    if (penalty_per_core > 0 && active_core_count > 64) {
+        estimated_cost += static_cast<uint64_t>(active_core_count - 64) * penalty_per_core;
     }
+    return RowMajorScheduleEstimate{
+        .active_core_count = active_core_count,
+        .cost = estimated_cost,
+    };
+}
+
+template <typename ChunkBuilder, typename CostEstimator>
+[[nodiscard]] std::optional<Candidate> evaluate_candidate(
+    const AxisChunkClasses& y_classes,
+    const AxisChunkClasses& x_classes,
+    const uint32_t chunk_tiles_y,
+    const uint32_t chunk_tiles_x,
+    const uint32_t core_limit,
+    const uint64_t l1_budget_bytes,
+    ChunkBuilder&& build_chunk,
+    CostEstimator&& estimate_cost,
+    const uint64_t penalty_per_core) {
+    const size_t class_columns = x_classes.representatives.size();
+    std::vector<uint64_t> costs;
+    costs.reserve(checked_area(y_classes.representatives.size(), class_columns, "2D planner chunk classes"));
+    double max_dependency_overhead = 0.0;
+    for (const IndexInterval y : y_classes.representatives) {
+        for (const IndexInterval x : x_classes.representatives) {
+            const Lwt2DChunkPlan chunk = build_chunk(IndexRectangle{.y = y, .x = x});
+            if (chunk.resources.total_l1_bytes > l1_budget_bytes) {
+                return std::nullopt;
+            }
+            max_dependency_overhead = std::max(max_dependency_overhead, chunk.dependency_overhead);
+            costs.push_back(estimate_cost(chunk));
+        }
+    }
+
+    const RowMajorScheduleEstimate schedule =
+        estimate_row_major_schedule(y_classes, x_classes, costs, core_limit, penalty_per_core);
     return Candidate{
         .chunk_tiles_y = chunk_tiles_y,
         .chunk_tiles_x = chunk_tiles_x,
-        .active_core_count = active_core_count,
+        .active_core_count = schedule.active_core_count,
         .max_dependency_overhead = max_dependency_overhead,
-        .estimated_latency_cycles = estimated_latency_cycles,
+        .estimated_cost = schedule.cost,
         .chunks = {},
     };
 }
@@ -752,9 +779,9 @@ enum class AlignmentCostClass : uint8_t {
     kGeneric,
 };
 
-[[nodiscard]] inline int64_t signed_tile_modulo(const int64_t value) noexcept {
-    const int64_t remainder = value % static_cast<int64_t>(kTileHeight);
-    return remainder < 0 ? remainder + static_cast<int64_t>(kTileHeight) : remainder;
+[[nodiscard]] inline int64_t signed_tile_modulo(const int64_t value, const uint32_t tile_extent) noexcept {
+    const int64_t remainder = value % static_cast<int64_t>(tile_extent);
+    return remainder < 0 ? remainder + static_cast<int64_t>(tile_extent) : remainder;
 }
 
 [[nodiscard]] inline AlignmentCostClass alignment_cost_class(
@@ -766,8 +793,8 @@ enum class AlignmentCostClass : uint8_t {
     if (!inside) {
         return AlignmentCostClass::kGeneric;
     }
-    const bool y_aligned = signed_tile_modulo(requested_y) == 0;
-    const bool x_aligned = signed_tile_modulo(requested_x) == 0;
+    const bool y_aligned = signed_tile_modulo(requested_y, kTileHeight) == 0;
+    const bool x_aligned = signed_tile_modulo(requested_x, kTileWidth) == 0;
     if (y_aligned && x_aligned) {
         return AlignmentCostClass::kExact;
     }
@@ -777,27 +804,21 @@ enum class AlignmentCostClass : uint8_t {
     return AlignmentCostClass::kGeneric;
 }
 
-[[nodiscard]] constexpr uint64_t staging_class_cycles(const AlignmentCostClass tile_class) noexcept {
-    // Relative planner weights; these are not cycle-accurate profiler measurements.
+[[nodiscard]] constexpr uint64_t staging_class_cost(const AlignmentCostClass tile_class) noexcept {
     switch (tile_class) {
-        case AlignmentCostClass::kExact: return 900;
-        case AlignmentCostClass::kOneAxisShifted: return 7'000;
-        case AlignmentCostClass::kGeneric: return 9'000;
+        case AlignmentCostClass::kExact: return planner_cost_model::kExactStaging;
+        case AlignmentCostClass::kOneAxisShifted: return planner_cost_model::kOneAxisShiftedStaging;
+        case AlignmentCostClass::kGeneric: return planner_cost_model::kGenericStaging;
     }
-    return 70'000;
+    return planner_cost_model::kUnknownStaging;
 }
 
-[[nodiscard]] inline uint64_t estimate_chunk_latency_cycles(
+[[nodiscard]] inline uint64_t estimate_chunk_cost(
     const Lwt2DChunkPlan& chunk,
     const LiftingForwardPlan& y_plan,
     const LiftingForwardPlan& x_plan,
     const bool inverse = false) {
-    constexpr uint64_t route_config_and_sync_cycles = 3'700;
-    constexpr uint64_t full_tile_persistence_cycles = 1'200;
-    constexpr uint64_t fragmented_terminal_tile_cycles = 80'000;
-    constexpr uint64_t interleaved_terminal_tile_cycles = 80'000;
-    constexpr uint64_t tiled_terminal_tile_cycles = 1'200;
-    uint64_t cycles = chunk.initial.total_area() * 12;
+    uint64_t cost = chunk.initial.total_area() * planner_cost_model::kInitialElement;
     std::array<IndexRectangle, 5> stored = {
         chunk.initial.ee,
         chunk.initial.eo,
@@ -806,7 +827,7 @@ enum class AlignmentCostClass : uint8_t {
         IndexRectangle{},
     };
     for (const Lwt2DRoutePlan& route : chunk.routes) {
-        cycles += route_config_and_sync_cycles;
+        cost += planner_cost_model::kRouteConfigAndSync;
         if (route.output.empty()) {
             continue;
         }
@@ -833,28 +854,32 @@ enum class AlignmentCostClass : uint8_t {
                 };
                 if (is_predict_update_step(route.type)) {
                     const auto [base_y, base_x] = requested_origin(route.base);
-                    cycles +=
-                        staging_class_cycles(alignment_cost_class(stored[slot_index(route.base_slot)], base_y, base_x));
+                    cost +=
+                        staging_class_cost(alignment_cost_class(stored[slot_index(route.base_slot)], base_y, base_x));
                     const auto [source_y, source_x] = requested_origin(route.source);
                     for (uint32_t source_tile = 0; source_tile < 2; ++source_tile) {
                         const int64_t requested_y =
                             source_y +
                             (route.axis == Lwt2DAxis::kVertical ? static_cast<int64_t>(source_tile * kTileHeight) : 0);
-                        const int64_t requested_x = source_x + (route.axis == Lwt2DAxis::kHorizontal
-                                                                    ? static_cast<int64_t>(source_tile * kTileWidth) -
-                                                                          static_cast<int64_t>(17 - k)
-                                                                    : 0);
-                        cycles += staging_class_cycles(
+                        const int64_t requested_x =
+                            source_x + (route.axis == Lwt2DAxis::kHorizontal
+                                            ? static_cast<int64_t>(source_tile * kTileWidth) -
+                                                  static_cast<int64_t>(device_protocol::kStepCoeffCapacity - k)
+                                            : 0);
+                        cost += staging_class_cost(
                             alignment_cost_class(stored[slot_index(route.source_slot)], requested_y, requested_x));
                     }
-                    cycles += route.axis == Lwt2DAxis::kVertical ? 16'000 + 2'500 * k : 12'000 + 1'800 * k;
+                    cost += route.axis == Lwt2DAxis::kVertical
+                                ? planner_cost_model::kVerticalStencilBase + planner_cost_model::kVerticalStencilTap * k
+                                : planner_cost_model::kHorizontalStencilBase +
+                                      planner_cost_model::kHorizontalStencilTap * k;
                 } else {
                     const auto [source_y, source_x] = requested_origin(route.source);
-                    cycles += staging_class_cycles(
+                    cost += staging_class_cost(
                         alignment_cost_class(stored[slot_index(route.source_slot)], source_y, source_x));
-                    cycles += 8'000;
+                    cost += planner_cost_model::kNonStencilRoute;
                 }
-                cycles += full_tile_persistence_cycles;
+                cost += planner_cost_model::kFullTilePersistence;
             }
         }
         stored[slot_index(route.output_slot)] = route.output;
@@ -867,26 +892,27 @@ enum class AlignmentCostClass : uint8_t {
         static_cast<uint64_t>(tt::div_up(chunk.final_band_rect.height(), static_cast<size_t>(kTileHeight))) *
         tt::div_up(chunk.final_band_rect.width(), static_cast<size_t>(kTileWidth));
     if (inverse) {
-        cycles += terminal_tiles * interleaved_terminal_tile_cycles;
+        cost += terminal_tiles * planner_cost_model::kInterleavedTerminalTile;
     } else {
-        cycles +=
-            4 * terminal_tiles * (full_terminal_tiles ? tiled_terminal_tile_cycles : fragmented_terminal_tile_cycles);
+        cost += device_protocol::kLwt2DBandCount * terminal_tiles *
+                (full_terminal_tiles ? planner_cost_model::kTiledTerminalTile
+                                     : planner_cost_model::kFragmentedTerminalTile);
     }
-    return cycles;
+    return cost;
 }
 
 [[nodiscard]] inline bool is_better_candidate(
     const Candidate& candidate, const Candidate& best, const bool latency_oriented) noexcept {
-    if (latency_oriented && candidate.estimated_latency_cycles != best.estimated_latency_cycles) {
+    if (latency_oriented && candidate.estimated_cost != best.estimated_cost) {
         if (candidate.active_core_count < best.active_core_count) {
-            return static_cast<long double>(candidate.estimated_latency_cycles) <
-                   0.90L * static_cast<long double>(best.estimated_latency_cycles);
+            return static_cast<long double>(candidate.estimated_cost) <
+                   planner_cost_model::kFewerCoresCostRatio * static_cast<long double>(best.estimated_cost);
         }
         if (candidate.active_core_count > best.active_core_count) {
-            return static_cast<long double>(candidate.estimated_latency_cycles) <=
-                   1.10L * static_cast<long double>(best.estimated_latency_cycles);
+            return static_cast<long double>(candidate.estimated_cost) <=
+                   planner_cost_model::kMoreCoresCostRatio * static_cast<long double>(best.estimated_cost);
         }
-        return candidate.estimated_latency_cycles < best.estimated_latency_cycles;
+        return candidate.estimated_cost < best.estimated_cost;
     }
     if (candidate.active_core_count != best.active_core_count) {
         return candidate.active_core_count > best.active_core_count;
@@ -982,9 +1008,8 @@ enum class AlignmentCostClass : uint8_t {
                 [&](const IndexRectangle output) {
                     return plan_2d_detail::build_chunk(y_plan, x_plan, output, fuse_terminal_scale, route_domain);
                 },
-                [&](const Lwt2DChunkPlan& chunk) {
-                    return plan_2d_detail::estimate_chunk_latency_cycles(chunk, y_plan, x_plan);
-                });
+                [&](const Lwt2DChunkPlan& chunk) { return plan_2d_detail::estimate_chunk_cost(chunk, y_plan, x_plan); },
+                0);
             if (!candidate.has_value()) {
                 continue;
             }
@@ -1110,22 +1135,6 @@ inline void write_protocol_rectangle(
     for (size_t chunk_index = 0; chunk_index < plan.chunks.size(); ++chunk_index) {
         const Lwt2DChunkPlan& chunk = plan.chunks[chunk_index];
         const size_t offset = chunk_index * device_protocol::kLwt2DChunkConfigWordCount;
-        words[offset + device_protocol::kLwt2DFinalYBegin] =
-            plan_2d_detail::checked_u32(chunk.final_band_rect.y.begin, "2D final y begin");
-        words[offset + device_protocol::kLwt2DFinalYLength] =
-            plan_2d_detail::checked_u32(chunk.final_band_rect.height(), "2D final height");
-        words[offset + device_protocol::kLwt2DFinalXBegin] =
-            plan_2d_detail::checked_u32(chunk.final_band_rect.x.begin, "2D final x begin");
-        words[offset + device_protocol::kLwt2DFinalXLength] =
-            plan_2d_detail::checked_u32(chunk.final_band_rect.width(), "2D final width");
-        words[offset + device_protocol::kLwt2DExecutionTileYBegin] =
-            plan_2d_detail::checked_u32(chunk.execution_band_rect.y.begin / kTileHeight2D, "2D execution tile y");
-        words[offset + device_protocol::kLwt2DExecutionTileYCount] =
-            plan_2d_detail::checked_u32(chunk.execution_band_rect.height() / kTileHeight2D, "2D execution tile rows");
-        words[offset + device_protocol::kLwt2DExecutionTileXBegin] =
-            plan_2d_detail::checked_u32(chunk.execution_band_rect.x.begin / kTileWidth2D, "2D execution tile x");
-        words[offset + device_protocol::kLwt2DExecutionTileXCount] =
-            plan_2d_detail::checked_u32(chunk.execution_band_rect.width() / kTileWidth2D, "2D execution tile columns");
         plan_2d_detail::write_protocol_rectangle(words, offset + device_protocol::kLwt2DInitialEe, chunk.initial.ee);
         plan_2d_detail::write_protocol_rectangle(words, offset + device_protocol::kLwt2DInitialEo, chunk.initial.eo);
         plan_2d_detail::write_protocol_rectangle(words, offset + device_protocol::kLwt2DInitialOe, chunk.initial.oe);
@@ -1149,7 +1158,6 @@ inline void write_protocol_rectangle(
             const size_t offset =
                 (chunk_index * route_count + route_index) * device_protocol::kLwt2DRouteConfigWordCount;
             words[offset + device_protocol::kLwt2DRouteAxis] = static_cast<uint32_t>(route.axis);
-            words[offset + device_protocol::kLwt2DRouteType] = static_cast<uint32_t>(route.type);
             words[offset + device_protocol::kLwt2DRouteSourceSlot] = static_cast<uint32_t>(route.source_slot);
             words[offset + device_protocol::kLwt2DRouteBaseSlot] = static_cast<uint32_t>(route.base_slot);
             words[offset + device_protocol::kLwt2DRouteOutputSlot] = static_cast<uint32_t>(route.output_slot);
@@ -1165,12 +1173,7 @@ inline void write_protocol_rectangle(
             if (is_scale_step(route.type)) {
                 flags |= device_protocol::kLwt2DRouteFlagScale;
             }
-            if (route.inline_terminal_scale) {
-                flags |= device_protocol::kLwt2DRouteFlagInlineTerminalScale;
-            }
             words[offset + device_protocol::kLwt2DRouteFlags] = flags;
-            words[offset + device_protocol::kLwt2DRouteAxisStepIndex] =
-                plan_2d_detail::checked_u32(route.axis_route_index, "2D axis route index");
         }
     }
     return words;

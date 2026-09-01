@@ -10,6 +10,7 @@
 
 #include <umd/device/types/arch.hpp>
 
+#include "ttnn/operations/wavelet/planner/cost_model.hpp"
 #include "ttnn/operations/wavelet/planner/execution_plan.hpp"
 
 namespace ttnn::operations::wavelet {
@@ -20,13 +21,12 @@ struct ArchitecturePolicy {
     bool inverse_scale_inline{true};
     bool final_interleave_direct{false};
     bool compact_2d_reader{false};
-    uint64_t inverse_2d_coordination_penalty_cycles_per_core{0};
+    uint64_t inverse_penalty_per_core{0};
     uint32_t l1_scratch_bytes{0};
 };
 
 [[nodiscard]] inline ArchitecturePolicy make_architecture_policy(
     const tt::ARCH architecture, const std::optional<WorkspaceLayout> ilwt_layout_override = std::nullopt) {
-    constexpr uint64_t kBlackholeInverse2DCoordinationPenaltyCyclesPerCore = 6'000;
     switch (architecture) {
         case tt::ARCH::WORMHOLE_B0:
             return ArchitecturePolicy{
@@ -35,7 +35,7 @@ struct ArchitecturePolicy {
                 .inverse_scale_inline = true,
                 .final_interleave_direct = false,
                 .compact_2d_reader = true,
-                .inverse_2d_coordination_penalty_cycles_per_core = 0,
+                .inverse_penalty_per_core = 0,
                 .l1_scratch_bytes = 0,
             };
         case tt::ARCH::BLACKHOLE: {
@@ -45,11 +45,8 @@ struct ArchitecturePolicy {
                 .ilwt_layout = layout,
                 .inverse_scale_inline = true,
                 .final_interleave_direct = layout == WorkspaceLayout::kTileNative,
-                // Complex boundary specializations can exceed the shared 69 KiB
-                // Tensix kernel-config window even for modest route counts. Keep
-                // helper bodies out of line on both supported architectures.
                 .compact_2d_reader = true,
-                .inverse_2d_coordination_penalty_cycles_per_core = kBlackholeInverse2DCoordinationPenaltyCyclesPerCore,
+                .inverse_penalty_per_core = planner_cost_model::kBlackholeInversePenaltyPerCore,
                 .l1_scratch_bytes = 0,
             };
         }
