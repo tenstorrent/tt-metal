@@ -112,6 +112,9 @@ template <uint32_t Kt, uint32_t Vt, uint32_t BH, uint32_t G>
 TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     constexpr uint32_t affine_a_tiles = Kt * Kt;
     constexpr uint32_t affine_b_tiles = Kt * Vt;
+    constexpr uint32_t worker_count = BH * G;
+    static_assert(worker_count <= 128, "affine prefix coordinate table exceeds runtime-arg budget");
+
     const auto a_accessor = TensorAccessor(tensor::a);
     const auto b_accessor = TensorAccessor(tensor::b);
     const auto initial_state_accessor = TensorAccessor(tensor::initial_state);

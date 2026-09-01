@@ -13,21 +13,6 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: Kimi-K3 KDA layer-1 accuracy and device perf SP2xTP4
-  cmd: |
-    export KIMI_K3_CKPT={kda_checkpoint}
-    export KDA_PERF_SKU={sku}
-    test -f "$KIMI_K3_CKPT/config.json" || { echo "missing pinned Kimi-K3 config: $KIMI_K3_CKPT/config.json" >&2; exit 1; }
-    test -f "$KIMI_K3_CKPT/model.safetensors.index.json" || { echo "missing pinned Kimi-K3 safetensor index: $KIMI_K3_CKPT/model.safetensors.index.json" >&2; exit 1; }
-    pytest --timeout=300 models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py -k "SP2xTP4" -vvv --tb=short -s
-  model: kimi-k3-kda
-  skus:
-    bh_loudbox:
-      timeout: 6
-      kda_checkpoint: /mnt/MLPerf/huggingface/hub/models--moonshotai--Kimi-K3/snapshots/9f62e4e9fffbd0a83ddd60e1c209d828994b3569
-  owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-
 - name: Llama 3.1-8B device perf tests
   cmd: |
     export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000

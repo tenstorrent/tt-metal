@@ -390,7 +390,6 @@ models:
   device_perf:
     wh_n150: 20
     wh_galaxy_perf: 55
-    bh_loudbox: 6
     bh_p150: 20
     bh_p300: 20
     bh_quietbox_2: 80

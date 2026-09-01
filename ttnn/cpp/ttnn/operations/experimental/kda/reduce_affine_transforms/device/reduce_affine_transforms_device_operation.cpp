@@ -3,6 +3,7 @@
 
 #include "reduce_affine_transforms_device_operation.hpp"
 
+#include <algorithm>
 #include <array>
 
 #include <tt-metalium/constants.hpp>
@@ -62,8 +63,9 @@ void ReduceAffineTransformsOperation::validate_on_program_cache_miss(
             b_shape[2] == attrs.value_dim,
         "reduce_affine_transforms: input shapes must match operation attributes");
 
+    constexpr uint32_t max_coordinate_table_workers = 128;
     const auto grid = in.a.device()->compute_with_storage_grid_size();
-    const uint32_t worker_limit = grid.x * grid.y;
+    const uint32_t worker_limit = std::min<uint32_t>(grid.x * grid.y, max_coordinate_table_workers);
     const uint32_t group_workers = attrs.batch_heads * attrs.groups_per_head;
     TT_FATAL(
         group_workers <= worker_limit,

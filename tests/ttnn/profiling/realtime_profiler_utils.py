@@ -107,7 +107,7 @@ def profile_realtime_program_merged(
     device, run_fn, *, record_timeout_seconds=DEFAULT_RT_PROFILER_RECORD_TIMEOUT_SECONDS
 ) -> tuple:
     """profile_realtime_program with the per-chip records merged per program: returns (result,
-    {runtime_id -> {"duration_ns" (max across chips = critical path), "kernel_sources", "chip_ids", "record_count"}}) in dispatch
+    {runtime_id -> {"duration_ns" (max across chips = critical path), "kernel_sources"}}) in dispatch
     order. Callers identify their own program, by kernel path or as the only entry."""
     result, records = profile_realtime_program(
         device, run_fn, collect_all=True, record_timeout_seconds=record_timeout_seconds
@@ -118,16 +118,8 @@ def profile_realtime_program_merged(
         runtime_id = record["runtime_id"]
         if not runtime_id:
             continue
-        entry = per_program.setdefault(
-            runtime_id,
-            {"duration_ns": 0.0, "kernel_sources": record["kernel_sources"], "chip_ids": set(), "record_count": 0},
-        )
+        entry = per_program.setdefault(runtime_id, {"duration_ns": 0.0, "kernel_sources": record["kernel_sources"]})
         entry["duration_ns"] = max(entry["duration_ns"], record["duration_ns"])
-        entry["chip_ids"].add(record["chip_id"])
-        entry["record_count"] += 1
-
-    for entry in per_program.values():
-        entry["chip_ids"] = tuple(sorted(entry["chip_ids"]))
 
     assert per_program, "real-time profiler returned no valid program records for the measured region"
     return result, per_program

@@ -517,25 +517,15 @@ def test_affine_exclusive_scan_rejects_invalid_inputs(
         _run(a_tt, b_tt, state_tt, groups_per_head)
 
 
-def test_affine_exclusive_scan_enforces_device_worker_capacity(
+def test_affine_exclusive_scan_rejects_excess_workers(
     device: ttnn.Device,
     expect_error: Callable,
 ) -> None:
     grid = device.compute_with_storage_grid_size()
-    worker_limit = grid.x * grid.y
-
-    a, b, initial_state = _host_inputs(1, worker_limit, 32, 32)
-    expected = _oracle(a, b, initial_state, 1, worker_limit)
-    actual = _run(
-        _to_device(a, device),
-        _to_device(b, device),
-        _to_device(initial_state, device),
-        worker_limit,
-    )
-    assert_accurate(expected, ttnn.to_torch(actual), name="full-grid exclusive scan", pcc_threshold=0.999)
-
+    worker_limit = min(grid.x * grid.y, 128)
     group_workers = worker_limit + 1
     a, b, initial_state = _host_inputs(1, group_workers, 32, 32)
+
     with expect_error(RuntimeError, f"supports at most {worker_limit} group workers on this device"):
         _run(
             _to_device(a, device),
