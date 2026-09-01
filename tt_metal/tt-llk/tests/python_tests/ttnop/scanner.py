@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Thin wrapper over the C++ scanner: build it on demand, run it, cache the result."""
+"""Thin wrapper over the C++ scanner"""
 
 import json
 import os
@@ -10,9 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-# One scanner per arch: the filler encodings are compiled in, and the same
-# UNPACR_NOP word means "delay this unpacker" on one arch and "zero SrcA and set
-# its dvalid" on another.
 SCANNER = HERE / f"scan-{os.environ.get('CHIP_ARCH', 'wormhole').strip().lower()}"
 
 
@@ -32,12 +29,8 @@ class Site:
 class Scan:
     elf: str
     mode: str
-    body_start: int
-    body_end: int
-    body_source: str
     cave_start: int
     cave_limit: int
-    cave_source: str
     unpacker_mask: int
     fillers: dict
     sites: tuple
@@ -61,24 +54,18 @@ def scan(elf: str, mode: str = "sync") -> Scan:
     if key in _cache:
         return _cache[key]
 
-    # Always ask make: a binary built before a filler or opcode was added is worse
-    # than a missing one, because it answers with a stale table instead of failing.
     _build()
     out = subprocess.run(
         [str(SCANNER), "--mode", mode, elf], capture_output=True, text=True, check=True
     ).stdout
     raw = json.loads(out)
 
-    cave = raw["cave"] or {"start": 0, "limit": 0, "source": "none"}
+    cave = raw["cave"] or {"start": 0, "limit": 0}
     result = Scan(
         elf=elf,
         mode=raw["mode"],
-        body_start=raw["body"]["start"],
-        body_end=raw["body"]["end"],
-        body_source=raw["body"]["source"],
         cave_start=cave["start"],
         cave_limit=cave["limit"],
-        cave_source=cave["source"],
         unpacker_mask=raw["unpacker_mask"],
         fillers=raw["fillers"],
         sites=tuple(

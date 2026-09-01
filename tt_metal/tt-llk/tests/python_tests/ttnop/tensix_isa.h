@@ -5,10 +5,6 @@
 #ifndef TTNOP_TENSIX_ISA_H
 #define TTNOP_TENSIX_ISA_H
 
-// Encodings needed to recognise detour sites in a compiled kernel's .text and to
-// build the filler instructions that pad the cave. Shared by the scanner; the host
-// side reads the same numbers back out of the scanner's JSON.
-
 #include <cstdint>
 
 struct SyncOp
@@ -57,8 +53,7 @@ constexpr std::uint32_t TT_STALLWAIT_WAIT_MASK = 0x7fffu;
 constexpr std::uint32_t P_STALL_SFPU           = 0x100u;
 constexpr std::uint32_t P_STALL_WAIT_SFPU      = 0x4000u;
 
-// TO determine what unpacker(s) the kernel loads with we OR CntSetMask from SETADCXX words.
-// LLK only SETADCXXs the unpackers that read L1
+// Combine CntSetMask from every SETADCXX to find the unpackers that read L1.
 //
 // SETADCXX params layout
 //   params bits:  23 22 21   | 20 ...... 10 | 9 ...... 0
@@ -68,7 +63,7 @@ constexpr std::uint32_t TT_OP_SETADCXX          = 0x5eu;
 constexpr unsigned TT_SETADCXX_CNTSETMASK_SHIFT = 21;
 constexpr std::uint32_t TT_SETADCXX_UNP_MASK    = 0x3u;
 
-// .ttinsn stores TT_OP rotated left by 2; rotate right to recover the logical TT_OP word.
+// .ttinsn stores TT_OP rotated left by 2. Rotate right to recover the original word.
 constexpr unsigned TTINSN_ROTATE_BITS = 2;
 
 static std::uint32_t rotate_right_2(std::uint32_t word)
@@ -76,8 +71,8 @@ static std::uint32_t rotate_right_2(std::uint32_t word)
     return (word >> TTINSN_ROTATE_BITS) | (word << (32u - TTINSN_ROTATE_BITS));
 }
 
-// REPLAY params: bit0 = load_mode and bits[13:4] = len. if its in load mode
-// skip the next 'len' instructions
+// REPLAY params use bit 0 for load mode and bits [13:4] for length.
+// In load mode, skip the next `len` instructions.
 constexpr std::uint32_t TT_REPLAY_LOAD_MODE = 0x1u;
 constexpr unsigned TT_REPLAY_LEN_SHIFT      = 4;
 constexpr std::uint32_t TT_REPLAY_LEN_MASK  = 0x3ffu;
@@ -88,14 +83,14 @@ inline bool is_tensix_word(std::uint32_t word)
     return (word & 3u) != 3u;
 }
 
-// Every SFPU op lives in this range; the SFPU nop is 0x8f. Anything here is an SFPU site.
+// Every SFPU op lives in this range. The SFPU nop is 0x8f.
 constexpr std::uint32_t SFPU_OPCODE_FIRST = 0x70u;
 constexpr std::uint32_t SFPU_OPCODE_LAST  = 0x95u;
 constexpr std::uint32_t TT_OP_SFPNOP      = 0x8fu;
 
 // Filler words as .text stores them (.ttinsn = TT_OP rotated left by 2). Verified
-// encodings — only pure UNP_NOP mode for the unpackers (no ZEROSRC / SET_DVALID /
-// NEGINFSRC side effects). WH/BH UNP_NOP is Nop_type=2; Quasar Nop_type=2 is
+// encodings. Only pure UNP_NOP mode is safe for the unpackers because ZEROSRC,
+// SET_DVALID, and NEGINFSRC change state. WH/BH use Nop_type=2. On Quasar it is
 // UNP_NOP_SETDAVLID (sets SrcA/B dvalid and can stall on FPU). Quasar cycle delay
 // is Nop_type=1 → TT_OP(0x43, (UNP_SEL<<8)|1).
 constexpr std::uint32_t FILLER_TTI_NOP = 0x08000000u; // TTI_NOP
@@ -114,9 +109,9 @@ constexpr std::uint32_t FILLER_UNPACR1 = 0x0E000009u; // WH UNPACR_NOP unpacker 
 // asm volatile("nop") assembles to.
 constexpr std::uint32_t FILLER_RISC_NOP = 0x00000013u;
 
-// Two STALLWAITs that bound an SFPU block — pack sfpnop here instead of tti:
-//   start: STALLWAIT(STALL_SFPU, MATH)    // _llk_math_eltwise_sfpu_start_ — stall SFPU until math is done
-//   done:  STALLWAIT(STALL_CFG, WAIT_SFPU) // _llk_math_eltwise_sfpu_done_  — stall CFG until SFPU is done
+// These STALLWAITs bound an SFPU block, so use sfpnop instead of tti_nop.
+//   start: STALLWAIT(STALL_SFPU, MATH)     // Wait for math before starting SFPU
+//   done:  STALLWAIT(STALL_CFG, WAIT_SFPU) // Wait for SFPU before continuing CFG
 inline bool stallwait_touches_sfpu(std::uint32_t params)
 {
     const std::uint32_t stall = params >> TT_STALLWAIT_STALL_SHIFT;

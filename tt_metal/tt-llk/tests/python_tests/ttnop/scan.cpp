@@ -35,7 +35,6 @@ struct Range
 {
     std::uint32_t start = 0;
     std::uint32_t end   = 0;
-    const char* source  = "none";
 
     bool valid() const
     {
@@ -43,9 +42,9 @@ struct Range
     }
 };
 
-// Prefer the run_kernel function: optimisation folds the LLK helpers into it
-// The symbol is C++-mangled, and it needs substring match; if several match, take the largest.
-Range find_body(const ElfImage& elf, const Range& cave)
+// The body is the run_kernel function: optimisation folds the LLK helpers into it.
+// The symbol is C++-mangled, so match by substring. Use the largest match.
+Range find_body(const ElfImage& elf)
 {
     const Symbol* run_kernel = nullptr;
     for (const auto& [name, symbol] : elf.symbols)
@@ -58,34 +57,19 @@ Range find_body(const ElfImage& elf, const Range& cave)
             }
         }
     }
-    if (run_kernel != nullptr)
+    if (run_kernel == nullptr)
     {
-        return {run_kernel->value, run_kernel->value + run_kernel->size, "run_kernel"};
+        // Every LLK test kernel has one. Falling back to all of .text would sweep the
+        // runtime as well, so say so instead of guessing at a body.
+        die("no run_kernel symbol. This is not an LLK test kernel");
     }
-
-    const std::uint32_t text_start = elf.text().header.sh_addr;
-    // Metal kernels have no run_kernel symbol (LTO folds it into _start). Body is
-    // .text up to the in-text cave (text_to_cave); whole .text if that cave is missing.
-    if (cave.valid() && cave.start > text_start)
-    {
-        return {text_start, cave.start, "text_to_cave"};
-    }
-    return {text_start, text_start + elf.text().header.sh_size, "text"};
+    return {run_kernel->value, run_kernel->value + run_kernel->size};
 }
 
-// Two ways to get scratch space, one per runtime. Metal reserves it inside .text at link
-// time so both detour jumps stay PC-relative through XIP. LLK links its kernel into a
-// fixed 16K L1 region whose tail is unused, and .loader_init is the next section after
-// that region, so its start doubles as the region bound.
+// LLK links its kernel into a fixed 16K L1 region whose tail is unused, and .loader_init
+// is the next section after that region, so its start doubles as the region bound.
 Range find_cave(const ElfImage& elf)
 {
-    const auto reserved_start = elf.symbols.find("__kernel_cave_start");
-    const auto reserved_end   = elf.symbols.find("__kernel_cave_end");
-    if (reserved_start != elf.symbols.end() && reserved_end != elf.symbols.end())
-    {
-        return {reserved_start->second.value, reserved_end->second.value, "linker"};
-    }
-
     const auto etext       = elf.symbols.find("_etext");
     const auto loader_init = elf.symbols.find("__loader_init_start");
     if (etext != elf.symbols.end() && loader_init != elf.symbols.end())
@@ -93,7 +77,7 @@ Range find_cave(const ElfImage& elf)
         const std::uint32_t start = (etext->second.value + 15u) & ~15u;
         if (loader_init->second.value > start)
         {
-            return {start, loader_init->second.value, "l1_tail"};
+            return {start, loader_init->second.value};
         }
     }
     return {};
@@ -130,7 +114,7 @@ ScanResult scan_text(const ElfImage& elf, const Range& body, bool all_instructio
     const Elf32_Shdr& text         = elf.text().header;
     const std::uint32_t text_start = text.sh_addr;
     const std::uint32_t text_end   = text_start + text.sh_size;
-    // Sites only come from the body; word count is a hard upper bound on push_backs.
+    // Sites only come from the body. Its word count is a safe reserve size.
     if (body.valid())
     {
         result.sites.reserve((body.end - body.start) / 4u);
@@ -208,10 +192,10 @@ void emit_json(const std::string& path, const ElfImage& elf, const Range& body, 
     std::printf("  \"elf\": \"%s\",\n", path.c_str());
     std::printf("  \"mode\": \"%s\",\n", mode);
     std::printf("  \"text\": {\"start\": %u, \"end\": %u},\n", text.sh_addr, text.sh_addr + text.sh_size);
-    std::printf("  \"body\": {\"start\": %u, \"end\": %u, \"source\": \"%s\"},\n", body.start, body.end, body.source);
+    std::printf("  \"body\": {\"start\": %u, \"end\": %u},\n", body.start, body.end);
     if (cave.valid())
     {
-        std::printf("  \"cave\": {\"start\": %u, \"limit\": %u, \"source\": \"%s\"},\n", cave.start, cave.end, cave.source);
+        std::printf("  \"cave\": {\"start\": %u, \"limit\": %u},\n", cave.start, cave.end);
     }
     else
     {
@@ -269,12 +253,12 @@ int main(int argc, char** argv)
     load_elf(path, elf);
 
     const Range cave      = find_cave(elf);
-    const Range body      = find_body(elf, cave);
+    const Range body      = find_body(elf);
     const ScanResult scan = scan_text(elf, body, std::strcmp(mode, "all") == 0);
 
     if (cave.valid() && cave.start >= body.start && cave.start < body.end)
     {
-        die("cave overlaps the kernel body; detouring would corrupt live code");
+        die("cave overlaps the kernel body. A detour would corrupt live code");
     }
     emit_json(path, elf, body, cave, scan, mode);
     return 0;

@@ -1,218 +1,260 @@
-# ttnop — timing perturbation for Tensix kernels
+# ttnop timing perturbation for Tensix kernels
 
-Races between the three Tensix threads, and between a RISC MMIO write and the
-backend unit that consumes it, only show up when relative timing shifts. This
-tool shifts it on purpose: it inserts a controlled delay at a sync site and
-re-runs the same test against the same golden, so a window that fails once a
-month in CI fails on demand.
+`ttnop` helps find timing races in LLK kernels. It adds a small delay at one
+instruction, runs the test again, and records which delays change the result.
+This turns an occasional CI failure into a repeatable test case that is easier
+to debug.
 
-## How a delay gets in
+The tool runs LLK Python tests.
 
-Kernels are never rebuilt per delay. Each thread ELF is scanned once, and the
-free tail of its L1 code region becomes a **cave**:
+## Choose a runner
 
-```
-cave start              ->  NOP          \
-                            NOP           |  max_delay words (default 100)
-                            ...          /
-displaced_instruction   ->  <the instruction that used to live at the site>
-ret                     ->  jal x0, site+4
-end                     ->  first byte past this layout
-```
+There are two ways to run the tool.
 
-The ELF only reserves `[start, limit)` (`__kernel_cave_end` or the L1 tail).
-`ret` is not a symbol in that ELF — it is the trampoline word the injector
-writes inside the reservation. `end` is how much of that reservation this
-layout uses; `limit` is how much the linker set aside.
-
-The site itself is overwritten with `jal x0, <somewhere in the cave>`. Executing
-`n` fillers is just aiming that jump `n` words short of the displaced instruction,
-so changing the delay costs one word write. Delay 0 lands directly on the displaced
-instruction, which makes it a free control: it still detours, so if delay 0
-passes and delay 8 fails, the fillers did it, not the jump.
-
-A sweep walks the delays of one site back to back, so the injector only writes
-what actually changed: the filler run when the nop changes, the displaced word and
-its jump back when the site changes, and always the one word at the site. The
-common step — next delay, same site — is a single word. Nothing is rebuilt and
-nothing is reloaded, which is what makes sweeping all 100 counts affordable.
-
-## Which nop
-
-A nop only widens a window if it retires on the unit whose timing is in
-question. `TTI_NOP` advances the RISC and the front-end together, so it cannot
-open a RISC-MMIO-vs-unpacker gap at all; `risc_nop` is the one that can, because
-it costs the RISC a cycle while the backend keeps draining its instruction FIFO.
-The two therefore perturb in opposite directions and are both worth trying at
-the same site.
-
-| filler | word | retires on |
+| runner | use it when | what it does |
 | --- | --- | --- |
-| `tti_nop` | `0x08000000` | RISC + front-end |
-| `risc_nop` | `0x00000013` | RISC alone (RV32 `addi x0, x0, 0`) |
-| `sfpnop` | `0x3C000002` | SFPU |
-| `unpacr0` | `0x0C000009` | unpacker 0 / SrcA |
-| `unpacr1` | `0x0E000009` | unpacker 1 / SrcB |
+| `ci.sh` | You want to search many tests | Runs each planned delay once and can split work across hosts |
+| `focus.sh` | You already have one failing test or report entry | Repeats selected delays and shows a failure rate |
 
-Only pure `UNP_NOP` mode is ever used. `ZEROSRC`, `SET_DVALID` and `NEGINFSRC`
-have side effects on the source registers and would corrupt data rather than
-delay it.
+Both runners compile first and take a device lock. They write a report when
+they find something. `ci.sh` also uses a supervisor so it can recover when a
+Tensix core hangs.
 
-Under the `auto` policy every site is tried with `tti_nop` and `risc_nop`, plus
-whichever unit-retired nop applies: an unpacker nop on unpack-thread sync sites,
-the SFPU nop on SFPU sites. So an unpack sync site costs three variants per
-delay (four when the unpacker census came back empty) and a math site two, or
-three at an SFPU site.
-
-`risc_nop` is the weakest filler per count — one core cycle, against an
-`UNPACR_NOP` that occupies the unpacker itself — and the instruction FIFO can
-absorb the first few outright while the RISC is still running ahead of it. Expect
-it to fail in a cliff rather than a band, and if a site looks immune to it,
-suspect the delay range before concluding the site is clean.
-
-**Picking the unpacker by counting UNPACR in `.text` does not work.** LLK
-records both SrcA and SrcB UNPACRs into the MOP/replay buffer before any runtime
-branch, so the text looks dual-unpacker even when only one loads real data. The
-scanner instead ORs the `CntSetMask` of every `SETADCXX`, which LLK only issues
-for the unpacker(s) that actually read L1. An empty census means both are swept
-rather than guessed.
-
-A site counts as SFPU-related if its opcode is in `[0x70, 0x95]`, or if it is a
-`STALLWAIT` that stalls the SFPU or waits on it — those block boundaries are
-often as interesting as the SFPU ops themselves.
-
-## Running it
-
-Breadth, one shot per variant, shardable across machines:
+Run these commands from this directory.
 
 ```bash
+# Search one test file
 ./ci.sh --test test_eltwise_unary_datacopy.py --k Float16_b
-./ci.sh --test test_sdpa_reinits.py --splits 4 --group 2 --report-dir reports/host2
+
+# Search one part of a suite
+./ci.sh --test test_sdpa_reinits.py \
+    --splits 4 --group 2 \
+    --report-dir reports/host2
+
+# Measure one site and two delay counts
+./focus.sh --sites unpack:3 --nop risc_nop --delays 8,16 \
+    'test_x.py::test_y[params]'
 ```
 
-Depth, one case repeated until a flaky race shows a rate:
+Always quote a pytest node id. Parameterized ids often contain brackets and
+other characters that the shell treats specially.
+
+See [FOCUS.md](FOCUS.md) for the full `focus.sh` guide.
+
+## Breadth runner options
+
+`ci.sh` accepts one or more `--test` paths. Use `--test .` to select the full
+LLK Python test suite.
+
+| flag | default | meaning |
+| --- | --- | --- |
+| `--test PATH` | required | Test file or directory. May be given more than once |
+| `--k EXPR` | no filter | pytest name filter |
+| `--markers EXPR` | `PYTEST_MARKERS` | pytest marker filter |
+| `--splits N --group G` | no split | Select group G from N pytest-split groups |
+| `--jobs N` | `15` | CPU workers used for compilation |
+| `--device-jobs N` | `8` | xdist workers used for the sweep |
+| `--report-dir DIR` | `reports` | Output directory for this run |
+| `--collect-to FILE` | disabled | Compile and save node ids without using the device |
+| `--nodeids FILE` | disabled | Sweep a saved node-id list. The tests must already be compiled |
+
+Give each host its own report directory when a sweep is split across machines.
+`ci.sh` also accepts settings such as `TTNOP_DELAYS=1-20` and
+`CHIP_ARCH=blackhole` as command-line arguments.
+
+## What happens during a sweep
+
+1. The runner compiles the selected tests.
+2. Each test runs once without a detour. This is the clean baseline.
+3. The scanner finds candidate instructions in the selected thread ELFs.
+4. The plugin points a site at the code cave and runs each planned delay.
+5. Failures and output changes are appended to `failures.jsonl`.
+6. The records are turned into `report.md`.
+
+Tests that fail during the clean baseline are not swept. A test must load an
+LLK ELF. Tests that call `run()` also need a result to compare. Tests that call
+`run_elf_files()` directly can use assertions in their test body.
+
+## How the delay works
+
+The ELF is scanned once. The unused tail of its L1 code region is used as a
+small code cave.
+
+```text
+cave start              -> filler instructions
+displaced instruction   -> original instruction from the selected site
+return                   -> jal x0, site + 4
+```
+
+The selected instruction is replaced with a jump into the cave. A delay of
+`n` starts `n` filler words before the displaced instruction. Changing the
+delay only changes that jump, so the kernel does not need to be rebuilt or
+reloaded for every count.
+
+Any run with more than one repeat also includes delay 0. Delay 0 still takes
+the jump but skips every filler. If delay 0 passes and delay 8 fails, the filler
+caused the change rather than the detour itself.
+
+The default cave holds 100 filler words. Raise `TTNOP_MAX_DELAY` if you need a
+larger delay, but the ELF must have enough free L1 space.
+
+## Filler instructions
+
+Different fillers delay different parts of Tensix.
+
+| filler | word | what it delays |
+| --- | --- | --- |
+| `tti_nop` | `0x08000000` | RISC and the Tensix front end |
+| `risc_nop` | `0x00000013` | RISC only |
+| `sfpnop` | `0x3C000002` | SFPU |
+| `unpacr0` | `0x0C000009` on WH/BH, `0x0C000005` on Quasar | unpacker 0 and SrcA |
+| `unpacr1` | `0x0E000009` on WH/BH, `0x0C000405` on Quasar | unpacker 1 and SrcB |
+
+The `auto` policy always tries `tti_nop` and `risc_nop`. It also adds the
+active unpacker filler when scanning unpack sync sites. It adds `sfpnop` at
+SFPU sites on architectures where the scanner identifies them. Pack uses only
+`tti_nop` and `risc_nop`. If the scanner cannot tell which unpacker is active,
+it tries both.
+
+Only pure unpacker NOP mode is used. Modes such as `ZEROSRC`, `SET_DVALID`, and
+`NEGINFSRC` change source state and would test data corruption instead of
+timing.
+
+`risc_nop` may need a wider delay range because the instruction FIFO can absorb
+the first few cycles. Do not assume a site is safe after checking only a few
+small counts.
+
+## Main settings
+
+The runners read these environment variables. `focus.sh` has matching flags for
+the settings used most often.
+
+| variable | default | meaning |
+| --- | --- | --- |
+| `CHIP_ARCH` | `wormhole` | Architecture used for the build and device lock |
+| `TTNOP_SITE_MODE` | `sync` | Use `sync` for sync and stall sites, or `all` for every safe candidate |
+| `TTNOP_THREADS` | `unpack,math` | Thread ELFs to scan. Add `pack` when needed |
+| `TTNOP_SITES` | all found sites | Specific indices such as `unpack:3,math:7` |
+| `TTNOP_DELAYS` | `1-100` | Counts and ranges such as `1-8,16,32` |
+| `TTNOP_MAX_DELAY` | `100` | Number of filler words reserved in the cave |
+| `TTNOP_FILLER` | `auto` | A filler name or raw instruction word |
+| `TTNOP_REPEATS` | `1` | Runs per variant. `focus.sh` changes this default to `10` |
+| `TTNOP_DRIFT` | `1` | Freeze input data and compare output with the clean run |
+| `TTNOP_REPORT_DIR` | runner-specific | `reports` for `ci.sh` and `reports/focus` for `focus.sh` |
+| `TTNOP_DEVICE_JOBS` | `8` | Tensix cores used during the device phase |
+| `TTNOP_VERBOSE` | off | Print every detour as it is armed |
+| `TTNOP_BUILD_LOCK` | `/tmp/ttnop-build-$CHIP_ARCH.lock` | Lock shared by compile producers |
+| `TTNOP_DEVICE_LOCK` | `/tmp/tt-llk-test-$CHIP_ARCH.lock` | Lock that keeps sweeps off the same card |
+
+`TTNOP_DELAYS` accepts comma-separated counts and inclusive ranges. For example,
+`1-8,16,32` runs counts 1 through 8, then 16 and 32.
+Counts above `TTNOP_MAX_DELAY` are rejected instead of being shortened.
+
+Use every count when possible. Timing races often appear in a band, and a short
+list of powers of two can miss that band.
+
+With `CHIP_ARCH=quasar`, the runners add `--run-simulator` and use
+`EXALENS_PORT`, which defaults to `5556`. Wormhole and Blackhole use silicon.
+
+## Drift
+
+A test may still pass its tolerance check even when the output bits changed.
+With drift checking enabled, every variant uses the same random input as the
+clean baseline and is compared with that baseline bit for bit.
+
+A drift record means the output changed but the test still passed its own
+golden check. Drift is written to the report and does not make the pytest case
+fail.
+
+Some tests cannot reproduce the same bits by design. The plugin disables drift
+for cases the LLK harness marks as unsupported. It also runs one extra clean
+control before trusting drift results. If that control changes, drift is
+disabled for the case.
+
+Set `TTNOP_DRIFT=0` or pass `focus.sh --no-drift` to let the random stream move
+between variants. This can explore more input values, but the outputs can no
+longer be compared with the baseline.
+
+## Reading the output
+
+`failures.jsonl` is the source data. Each line is written as soon as a variant
+is recorded, so completed findings survive a stopped run.
+
+`report.md` is only written when the run records a finding or a supervised skip.
+It groups those records by test, site, and filler. It includes:
+
+- the widest band of failing delay counts
+- the highest failure rate when repeats are enabled
+- the failure type, such as `mismatch`, `drift`, `assert`, `error`, `hang`, or `wedge`
+- the source call chain from DWARF when it is available
+- a `focus.sh` command for reproducing each finding
+
+The widest band is usually the best reproducer. A single failing count may only
+hit the bad timing by chance.
+
+Supervised `ci.sh` runs also write `junit.xml`. The supervisor builds it from
+per-case records because a killed pytest session cannot write a complete JUnit
+file on its own.
+
+Each run locks its report directory. This prevents two branches from appending
+to the same files at the same time. Before a new run, `failures.jsonl` is moved
+to `failures.jsonl.prev`. Old `report.md`, `skips.jsonl`, and `junit.xml` files
+are removed. Only one previous failure log is kept. `ci.sh --collect-to` does
+not reset the report directory. Use a different `--report-dir` when you need
+to keep more runs.
+
+## Hangs and recovery
+
+`ci.sh` watches every pytest worker. When a variant hangs a core, the worker
+records the variant and asks the supervisor for recovery. The supervisor first
+tries to remove that worker so xdist can replace it on a spare core. If that is
+not possible, it stops the attempt, resets the card, and resumes the unfinished
+cases.
+
+The supervisor also catches workers that stop responding inside a device call.
+These show up as `wedge` records. A mismatch can leave device state dirty, so a
+supervised run also moves that worker to a spare core before giving it another
+case.
+
+Cases skipped because a sibling already hung the same test family are saved in
+`skips.jsonl` and listed in the report. They are not separate findings.
+
+`focus.sh` has no supervisor. It records the hang and ends the case, but it
+cannot free the hung core. Reset the card before using it again.
+
+`focus.sh` normally uses pytest exit statuses. The additional supervisor
+statuses below only come from `ci.sh`.
+
+| status | meaning |
+| --- | --- |
+| `0` | Clean run, possibly with drift-only records |
+| `1` | At least one non-drift variant failed |
+| `4` | Invalid command line |
+| `70` | `ci.sh` did not get a JUnit file |
+| `75` | A wedge was recorded and the remaining cases finished |
+| `76` | The supervisor stopped with unfinished cases |
+
+## Checking changes to the tool
+
+Run the silicon check after changing scanner or injector behavior.
 
 ```bash
-./focus.sh --sites unpack:3 --delays 8,16 'test_x.py::test_y[params]'
+make check
 ```
 
-[FOCUS.md](FOCUS.md) is the full reference for the depth runner; its flags are
-aliases for the variables below.
+This builds one datacopy kernel and checks clean detours, forced mismatches, and
+drift detection on a card.
 
-`TTNOP_DELAYS` takes ints and `lo-hi` ranges, comma separated: `1-100` (the
-default), `1,5,10,20,40,60,80,100` for a coarse probe, `1-8,16,32` for a mix.
-Sweep every count unless you have a reason not to — the races found so far live
-in bands tens of counts wide, and sampling powers of two walks past most of them.
+The hang check intentionally wedges a core. It tries to reset the card when it
+finishes and tells you if a manual reset is still needed.
 
-| variable | meaning |
-| --- | --- |
-| `TTNOP_SITE_MODE` | `sync` (default) or `all` |
-| `TTNOP_THREADS` | default `unpack,math` (add `pack` to include it) |
-| `TTNOP_DELAYS` | filler counts, default `1-100` |
-| `TTNOP_MAX_DELAY` | cave capacity, default 100 |
-| `TTNOP_FILLER` | `auto`, a name from the table, or a raw word |
-| `TTNOP_SITES` | e.g. `unpack:3,math:7` |
-| `TTNOP_REPEATS` | runs per variant (10 under `focus.sh`); >1 adds the delay-0 control |
-| `TTNOP_DRIFT` | compare each variant's output to the baseline's, default on |
-| `TTNOP_REPORT_DIR` | one per machine when sharding |
-| `TTNOP_VERBOSE` | print each detour as it is applied |
-
-## Drift: the failures that still pass
-
-A delay that shifts a mantissa bit is not a failure to this suite. `passed_test`
-gates on per-element tolerance and a PCC floor (0.99, lower for the block floats),
-and skips PCC entirely for MX formats and for goldens with no signal — so a
-variant can change the answer and still go green.
-
-Drift asks the question the golden cannot: **did the output change at all** from
-the clean run. That needs no threshold, because the baseline carries the same
-approximation error as the variant, and for a race-free kernel the answer is "no
-change" whatever the format. Any difference is recorded as a `drift` tag, with the
-PCC *against the baseline* and the number of elements that moved.
-
-It costs the stimulus lottery. To make the two runs the same problem, the RNG is
-rewound to the baseline's state before every variant, so all variants share one
-stimulus set — `TTNOP_DRIFT=0` restores the rolling stream instead, at the price
-of having nothing to compare. Freezing also makes a breadth finding exactly
-reproducible, which the reproduce line in `report.md` could not promise before.
-
-Two guards keep it honest, because a case that cannot reproduce its own output
-would otherwise report drift on every variant:
-
-- The harness already knows which variants are not bit-reproducible —
-  `TestConfig._bit_exact_unsupported_reason()` names l1_acc, coverage builds and
-  deliberately-undefined state — and drift takes its word for it.
-- Every other case runs its body one extra time, same stimuli and no detour, and
-  has to reproduce itself before any drift verdict is believed. That control also
-  proves the rewind worked, so a test drawing from outside torch's global RNG
-  cannot invent findings.
-
-A drift-only case stays **green**: the variant passed the test's own golden, so the
-finding lives in `report.md` and `failures.jsonl` rather than in the exit code.
-
-A case that loses a variant goes red and names it, so a sweep reads like an
-ordinary pytest run:
-
-```
->> delays=1-100 threads=unpack,math,pack sites=sync filler=auto
->> [3/3] sweeping
-⨯ test_bcast.py::test_unpack_bcast[...] 47 perturbation(s) failed: unpack ATGETM@0x05550 n=54 unpacr1 mismatch (+46 more)
->> 69 recorded variant(s) (22 drift) -> reports/report.md
+```bash
+make check-hang
 ```
 
-Output is `failures.jsonl` plus a `report.md` rendered from it, written only when
-there is something to report. Each site lists the exact counts that broke it, its
-addr2line inline chain (resolved during the sweep, while the ELF still exists) and
-a copy-paste `focus.sh` line that re-runs just those counts as a rate.
+## Current limit
 
-A supervised run also writes `junit.xml`, covering every case it reached. The
-supervisor builds it rather than pytest, because pytest writes its junit file at
-session end and a wedged core gets that session killed — every result from that
-attempt would be missing from exactly the runs worth reading. It comes instead
-from a per-case log the workers append as they go, which survives the kill and
-spans the attempts a resume is split across, and it carries the hung cases as
-failures: the worker that would have reported one is stuck in a device read.
-
-`--device-jobs N` fans the device phase out over N Tensix cores (the harness maps
-xdist `gwN` to core `N/8, N%8`). Default is 8. A breadth run gives each worker
-different cases; a depth run has only one, so `focus.sh` hands it to every worker
-with `--dist each` and splits the variant plan between them instead. Variants call
-the test body directly (`item.obj`), not `item.runtest`, so the sweep hook cannot
-nest.
-
-## Notes on the LLK harness
-
-- Both loaders are wrapped. Suites like SDPA, pack-dest-bank and streams call
-  `run_elf_files()` directly and never return a result, so their own asserts are
-  the golden; a `run()` that produced no result is skipped because there is
-  nothing to mismatch.
-- The harness only reloads ELFs when the variant directory changes, which within
-  a case it never does — so the image stays put and a variant is a couple of word
-  writes. `LAST_LOADED_ELFS` is cleared once at the end of the case, because the
-  cave bytes outlive the restore and the next case must not inherit them.
-- Stimuli come from a global RNG seeded once per test. Under `TTNOP_DRIFT=1` (the
-  default) every variant is rewound to the state the baseline drew from, so they
-  share one stimulus set and their outputs are comparable. `TTNOP_DRIFT=0` lets the
-  stream run on instead: different data per variant, and some races only show up on
-  later draws, but no two runs can be compared.
-- Variants are meant to fail, so the harness's logging is muted while one runs;
-  otherwise every mismatch dumps the offending tiles in colour. The baseline pass
-  runs outside that, so a genuinely broken test still says why.
-- A hang is a `TimeoutError`. The finding is recorded, the case is closed, and
-  the worker parks until the supervisor kills it — xdist then brings a
-  replacement up on one of the card's spare Tensix, so the wedged core is simply
-  never addressed again and the other seven workers keep their cases. Only a card
-  with no spare cores left falls back to `tt-smi -r`. Soft reset-and-continue is
-  gone: it rebooted BRISC mid-session and failed every case after the hang.
-
-## Metal
-
-Not supported. Metal rewrites all three TRISC binaries into L1 from a host-side
-`ll_api::memory` on *every* slow-dispatch launch, with no "already configured"
-guard, so an L1 poke is erased before the kernel runs. The host image is not
-reachable from Python and is cached by path for the life of the process, so
-editing the ELF on disk does nothing either. Supporting Metal needs a C++ change
-in the metal tree — the smallest being an env-gated skip of the binary rewrite in
-`ComputeKernel::configure`, or a patch hook in `LaunchProgram` between configure
-and the go signal. The cave and detour arithmetic here is already backend
-agnostic; only `Perturber.run` in `ttnop_plugin.py` is LLK specific.
+Metal kernels are not supported. Metal copies its cached host binaries into L1
+on every slow-dispatch launch, which overwrites a device-side patch before the
+kernel runs. Supporting Metal needs a host-side patch point between kernel
+configuration and the go signal.

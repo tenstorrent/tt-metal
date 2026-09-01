@@ -33,9 +33,6 @@ DONE = "done"
 _HEARTBEAT_PREFIX = "hb."
 _DONE_PREFIX = "done."
 _RESULTS_PREFIX = "results."
-# One file, not one per worker: the supervisor only needs to be told once that a
-# worker is stuck on a core it can no longer use, and a second worker hanging
-# before it gets there is the same request.
 _RECOVERY_REQUEST = "recovery-requested"
 
 # Enough of a failure to identify it in a report without carrying a whole tensor
@@ -147,10 +144,11 @@ class Writer:
         }
         # Same temp-and-rename as a beat: the supervisor polls this file and must
         # never catch a half-written record.
-        temp = self.root / f"{_RECOVERY_REQUEST}.{os.getpid()}.tmp"
+        path = self.root / f"{_RECOVERY_REQUEST}.{self.worker}.{os.getpid()}"
+        temp = path.with_name(f"{path.name}.tmp")
         with open(temp, "w") as handle:
             json.dump(payload, handle, separators=(",", ":"))
-        os.replace(temp, self.root / _RECOVERY_REQUEST)
+        os.replace(temp, path)
 
     def record_result(
         self, nodeid: str, outcome: str, duration: float = 0.0, message: str = ""
@@ -313,17 +311,33 @@ def record_skipped(root: Path, nodeids, reason: str = "") -> None:
             )
 
 
-def recovery_request(root: Path):
-    """The worker asking to be taken off a hung core, or None if nobody has hung."""
-    return _read(root / _RECOVERY_REQUEST)
+def recovery_requests(root: Path) -> list:
+    """Every worker asking to leave a core, paired with its request path."""
+    requests = []
+    for path in root.glob(f"{_RECOVERY_REQUEST}*"):
+        if path.name.endswith(".tmp"):
+            continue
+        request = _read(path)
+        if request is not None:
+            requests.append((path, request))
+    return sorted(requests, key=lambda item: item[0].name)
 
 
-def clear_recovery_request(root: Path) -> None:
-    """Drop a request once it has been acted on, so one hang buys one recovery."""
+def clear_recovery_request(path: Path) -> None:
+    """Drop one request after it has been acted on."""
     try:
-        (root / _RECOVERY_REQUEST).unlink()
+        path.unlink()
     except OSError:
         pass
+
+
+def clear_recovery_requests(root: Path) -> None:
+    """Drop requests and partial writes left by a previous attempt."""
+    for path in root.glob(f"{_RECOVERY_REQUEST}*"):
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
 
 def clear_heartbeats(root: Path) -> None:

@@ -9,6 +9,12 @@ scan-%: scan.cpp tensix_isa.h elf32.h
 	$(CXX) $(CXXFLAGS) -DARCH_$(shell echo $* | tr a-z A-Z) -o $@ scan.cpp
 
 clean:
-	rm -f scan scan-*
+	rm -f scan-*
 
-.PHONY: clean
+check:
+	python3 tests/ttnop_check.py
+
+check-hang:
+	python3 tests/ttnop_check.py --hang
+
+.PHONY: clean check check-hang

@@ -44,7 +44,7 @@ _parked = False
 
 
 def _hb() -> heartbeat.Writer:
-    """One progress writer per process; a no-op unless a supervisor is watching."""
+    """Return this process's progress writer."""
     global _writer
     if _writer is None:
         _writer = heartbeat.Writer()
@@ -54,9 +54,7 @@ def _hb() -> heartbeat.Writer:
 def _hang_closes_case(nodeid: str, variant: str, skip_family: bool = True) -> None:
     """Close a case out on a hang, and ask to be moved off the core it cost us."""
     global _parked
-    # Done, not retried: a case that just hung a core mostly hangs the next one,
-    # and anything resuming from the done-log has to step over it. The red pytest
-    # reports is what carries the result.
+    # Do not retry a case that just hung a core. The pytest failure keeps the result.
     _hb().mark_done(nodeid)
     _hb().request_recovery(nodeid, variant, skip_family=skip_family)
     # Nobody is watching an unsupervised run, so there is no recovery coming and
@@ -67,11 +65,8 @@ def _hang_closes_case(nodeid: str, variant: str, skip_family: bool = True) -> No
 def _park() -> None:
     """Stop taking cases and wait for the supervisor to kill this worker.
 
-    A hung core is not this worker's to fix, and every case it pulls off the
-    queue meanwhile fails against that core in about a second — marked done for
-    a run it never really got, so permanently red for a fault it never saw. That
-    is how one hang turned seventy cases red. Sleeping instead costs only the
-    seconds until the supervisor's next poll.
+    Any new case on the hung core would fail without getting a real run. Wait
+    here until the supervisor removes this worker.
 
     The DONE beat first, so the silence that follows is read as a worker with
     nothing left to do rather than one that stopped answering.
@@ -83,16 +78,7 @@ def _park() -> None:
 
 @contextmanager
 def quiet_harness():
-    """Mute the harness's own logging for the duration of a run.
-
-    Variants are *meant* to fail, and the harness answers every mismatch with a
-    colour dump of the offending tiles. A hundred of those is the whole console.
-    The baseline pass is muted on the same grounds: a red baseline is skipped
-    rather than swept, so its dump tells the sweep nothing, and at scale it is
-    the entire log (868 red baselines rendered 245k of one shard's 273k lines).
-    conftest's one-line report still names every failure; run the test without
-    this plugin to get the tiles back.
-    """
+    """Mute the harness's own logging for the duration of a run."""
     logger.disable("helpers")
     try:
         yield
@@ -143,9 +129,8 @@ class Perturber:
     def begin(self) -> None:
         """Reset the per-test state and remember the RNG the baseline will draw from.
 
-        Called from the hook before the body runs, which is after conftest's autouse
-        seed fixture — so restoring this state hands every variant byte-for-byte the
-        stimuli the baseline saw.
+        This runs after the seed fixture. Restoring this state gives every
+        variant the same input as the baseline.
         """
         self.baseline = _Baseline()
         self._results = []
@@ -173,8 +158,7 @@ class Perturber:
     def _forget_kernel_image(self) -> None:
         """Make the harness re-flash the TRISCs, and stop trusting our view of L1.
 
-        BRISC is deliberately left alone: it is mid command loop, and re-flashing it
-        from under itself is what stops it answering at all.
+        BRISC is left alone because it is already running its command loop.
         """
         TestConfig.LAST_LOADED_ELFS = None
         self._injector_for_device().forget()
@@ -184,8 +168,8 @@ class Perturber:
     def watch_baseline(self):
         """Wrap both loaders. Suites like SDPA never call run(), only run_elf_files().
 
-        Stays installed for the whole case, not just the clean pass: the variants
-        need their results collected through the same seam to be comparable.
+        Keep the wrappers installed for the variants so their results can be
+        compared with the clean pass.
         """
         original_run, original_load = TestConfig.run, TestConfig.run_elf_files
         baseline = self.baseline
@@ -213,15 +197,8 @@ class Perturber:
         TestConfig.run, TestConfig.run_elf_files = wrapped_run, wrapped_load
         return unwatch
 
-    # -- the runtime the sweep loop drives ---------------------------------
-
     def beat(self, variant=None) -> None:
-        """Say what we are about to attempt, before we attempt it.
-
-        Published ahead of the call because the call is what may never return:
-        afterwards is too late to name the variant that wedged the card, and
-        naming it is the whole finding.
-        """
+        """Say what we are about to attempt, before we attempt it."""
         writer = _hb()
         if not writer.enabled:
             return
@@ -241,8 +218,7 @@ class Perturber:
                 "filler_word": variant.filler_word,
                 "delay": variant.delay,
                 "label": variant.label(),
-                # Kept so the supervisor can still resolve the inline chain: it
-                # renders the finding after the run it belonged to is dead.
+                # The supervisor may need this after the worker has stopped.
                 "elf": getattr(scan, "elf", "") if scan is not None else "",
             },
         )
@@ -251,13 +227,7 @@ class Perturber:
         return Path(self.baseline.config.temp_elfs[0]).resolve().parent
 
     def _reload_scanned_image(self) -> None:
-        """Put the kernel we scanned back in L1.
-
-        For test_generalized_moe_gate_idx_offset: two GMG_IDX_OFFSET
-        specializations in one node, so the last kernel is still loaded when we
-        arm. Re-flash the scanned ELFs and drop injector bookkeeping —
-        restore() would write the old kernel's word onto the new image.
-        """
+        """Put the scanned kernel back in L1."""
         self._forget_kernel_image()
         config = self.baseline.config
         with quiet_harness():
@@ -276,11 +246,7 @@ class Perturber:
 
     def run(self, variant):
         self.beat(variant)
-        # The ELF is already in L1 and the cores are idle, so arming is a couple of
-        # word writes. Leaving the image alone is what keeps a 100-delay sweep cheap:
-        # a reload per variant would cost three ELFs to buy the same one instruction.
-        # Reload only when the body left a different kernel than we scanned
-        # (test_generalized_moe_gate_idx_offset).
+        # The ELF is already in L1, so arming only needs a few word writes.
         self._prepare_arm()
         self._injector_for_device().arm(
             variant.thread,
@@ -292,20 +258,16 @@ class Perturber:
         if self.verbose:
             print(f">> {variant.label()}", flush=True)
         # Rewind to the stimuli the baseline drew, so a difference in the output is
-        # the delay and not the data. With drift off the RNG stream instead runs on
-        # across variants, which samples different data per variant but leaves the
-        # runs incomparable: some races only show up on later draws.
+        # the delay and not the data.
         if self._rng_state is not None:
             torch.set_rng_state(self._rng_state)
         self._results = []
         try:
-            # Call the body, not item.runtest: we are already inside pytest_runtest_call,
-            # and re-entering that hook nests another full sweep.
+            # Calling item.runtest here would enter this hook again.
             with quiet_harness():
                 self._item.obj(**self._kwargs)
             moved, pcc = self._output_moved()
-            # A depth run repeats a variant; keep the worst score across its runs
-            # rather than whichever repeat happened to go last. _record clears it.
+            # Keep the worst score from all repeats. _record clears it afterward.
             if moved and pcc is not None:
                 if self._last_pcc is None or pcc < self._last_pcc:
                     self._last_pcc = pcc
@@ -333,12 +295,7 @@ class Perturber:
         return sweep_module.describe_drift(self._baseline_results, self._results)
 
     def _prove_reproducible(self, item) -> None:
-        """Run the body once more, same stimuli, no detour, and check it agrees.
-
-        A case that cannot reproduce its own output is non-deterministic for reasons
-        that have nothing to do with a delay, and every variant of it would otherwise
-        be reported as drift.
-        """
+        """Run the body once more, same stimuli, no detour, and check it agrees."""
         if not self.config.drift or not self._comparable:
             return
         self._baseline_results, self._results = self._results, []
@@ -346,9 +303,7 @@ class Perturber:
         try:
             with quiet_harness():
                 item.obj(**self._kwargs)
-        # pytest's outcomes derive from BaseException; a body that just passed and
-        # now skips or fails is as unreproducible as one that raised, and letting
-        # either escape would rewrite the case's result.
+        # pytest outcomes derive from BaseException, so catch them explicitly.
         except (*_SKIPPED, _FAILED, Exception) as err:
             self._comparable, reason = False, f"{type(err).__name__}: {err}"
         else:
@@ -358,8 +313,6 @@ class Perturber:
             print(
                 f">> {item.nodeid}: not reproducible, drift off ({reason})", flush=True
             )
-
-    # -- driving one test --------------------------------------------------
 
     def sweep(self, item) -> list:
         """Perturb every planned variant of one test. Returns (label, tags) per finding."""
@@ -374,7 +327,7 @@ class Perturber:
         for scan in self.scans.values():
             injector.cave_for(scan)
 
-        # z_state/reconfig has no result buffer; the body asserts TensixState.
+        # z_state/reconfig checks TensixState in the body and has no result buffer.
         # risc_nop is the only filler that shifts a RISC cfg write.
         saved = self.config.filler, self.config.threads
         if "z_state/reconfig/" in item.nodeid:
@@ -408,8 +361,7 @@ class Perturber:
             try:
                 injector.restore()
             except Exception:
-                # Only reachable once the device stopped taking writes, which is
-                # already being raised past us — do not mask it with the symptom.
+                # Keep the original device error instead of raising a restore error.
                 pass
             # The cave bytes outlive the restore, so the next case must not be handed
             # an L1 image the harness still believes is pristine.
@@ -466,9 +418,6 @@ def _get() -> Perturber:
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item):
-    # Siblings of a hang land on the done-log from the supervisor. Skip them
-    # before fixtures open the device, or the next worker hits the same site
-    # and we lose another core.
     root = heartbeat.state_dir()
     if root is not None and item.nodeid in heartbeat.completed(root):
         pytest.skip("already recorded")
@@ -481,8 +430,6 @@ def pytest_runtest_call(item):
     unwatch = perturber.watch_baseline()
     _hb().beat(item.nodeid)
     try:
-        # The baseline runs muted too: a red one is skipped rather than swept, so
-        # its tile dump buys nothing here, and conftest still names the failure.
         with quiet_harness():
             outcome = yield
 
@@ -490,8 +437,8 @@ def pytest_runtest_call(item):
         if outcome.excinfo is not None:
             _hb().mark_done(item.nodeid)
             return
-        # Reconfig tests compare TensixState in the body, so they have no result
-        # buffer; still sweep them if the baseline loaded ELFs.
+        # Reconfig tests can be swept without a result buffer because the body
+        # checks TensixState.
         if not perturber.baseline.worth_sweeping() and not (
             perturber.baseline.saw_load and "z_state/reconfig/" in item.nodeid
         ):
@@ -500,22 +447,18 @@ def pytest_runtest_call(item):
         try:
             findings = perturber.sweep(item)
         except sweep_module.DeviceWedged as err:
-            # The hang is both the finding and the end of the case; clearing the
-            # core is the supervisor's job, so all this does is say so.
+            # Record the hang and let the supervisor clear the core.
             _hang_closes_case(item.nodeid, str(err))
             outcome.force_exception(
-                AssertionError(f"hang: {err} wedged the core; recovery requested")
+                AssertionError(f"hang: {err} wedged the core. Recovery requested")
             )
             return
-        # After sweep(), not in a finally: a case that died with the device
-        # must stay on the resume list, not be recorded as covered.
+        # A case that loses the device stays unfinished for the next attempt.
         _hb().mark_done(item.nodeid)
-        # Drift is report-only: the variant still passed the test's own golden, so
-        # the case stays green and the record lives in report.md.
+        # Drift stays in the report because the variant still passed its golden.
         failures = [label for label, tags in findings if tags - {"drift"}]
         if failures:
-            # Hang the finding on the case itself so a sweep reads like an ordinary
-            # pytest run: the case goes red and names the variant that broke it.
+            # Fail the pytest case and name the first variant that broke it.
             head = (
                 failures[0]
                 if len(failures) == 1
@@ -524,22 +467,14 @@ def pytest_runtest_call(item):
             outcome.force_exception(
                 AssertionError(f"{len(failures)} perturbation(s) failed: {head}")
             )
-            # A mismatch race still dirties dest/semaphores. The next case on this
-            # core then fails its clean baseline (860 LoFi matmuls after one
-            # moe_gate race). Same spare-core eviction as a hang; siblings stay
-            # queued because they are another window, not another wedge.
+            # A mismatch can leave device state dirty, so move this worker too.
             _hang_closes_case(item.nodeid, failures[0], skip_family=False)
     finally:
         unwatch()
 
 
-# The argument has to be named `report` for pytest to bind it, which shadows the
-# report module for the body of this hook; nothing here needs that module.
+# The argument has to be named `report` for pytest to bind it
 def pytest_runtest_logreport(report):
-    # The junit file is assembled from these lines rather than from pytest's own
-    # --junit-xml, which lands only at session end; the supervisor kills the session
-    # when a core wedges, so that file would be missing on exactly the runs worth
-    # reading. Setup and teardown are only worth a line when they went wrong.
     if not (
         report.when == "call"
         or report.outcome == "failed"
@@ -556,9 +491,7 @@ def pytest_runtest_logreport(report):
 
 def pytest_runtest_logfinish(nodeid, location):
     # Once per item, whichever way it ended, and after teardown has let go of the
-    # device. From here until the next case starts the worker owns nothing, so the
-    # supervisor must not read the gap as a stall — at the tail of a sweep that
-    # gap is however long the slowest worker still has left to run.
+    # device
     _hb().idle()
     # Here rather than where the hang was caught, so the case that asked for
     # recovery is fully reported before this worker stops answering for work.
@@ -570,7 +503,7 @@ def pytest_sessionfinish(session, exitstatus):
     # Drop out of the live set first: a worker that ran out of work is not a
     # worker that stopped answering, and the supervisor must not confuse them.
     _hb().finish()
-    # Workers each swept part of the suite into the shared JSONL; the master renders it.
+    # Workers share the JSONL. Only the master process renders the report.
     if hasattr(session.config, "workerinput"):
         return
     config = sweep_module.Config.from_env()

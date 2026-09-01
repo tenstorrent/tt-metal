@@ -21,9 +21,21 @@ if [[ "${CHIP_ARCH}" == "quasar" ]]; then
     PYTEST_SIM_ARGS=(--run-simulator --port="${EXALENS_PORT:-5556}" )
 fi
 
-# Serialise against other agents driving the same silicon, and against each other.
 DEVICE_LOCK="${TTNOP_DEVICE_LOCK:-/tmp/tt-llk-test-$CHIP_ARCH.lock}"
 BUILD_LOCK="${TTNOP_BUILD_LOCK:-/tmp/ttnop-build-$CHIP_ARCH.lock}"
+
+lock_report_dir() {
+    # Serialize shared paths across branches
+    exec 8<"$1"
+    flock 8
+}
+
+reset_report_dir() {
+    local report_dir="$1"
+    [[ ! -f "$report_dir/failures.jsonl" ]] || \
+        mv -f "$report_dir/failures.jsonl" "$report_dir/failures.jsonl.prev"
+    rm -f "$report_dir/skips.jsonl" "$report_dir/report.md" "$report_dir/junit.xml"
+}
 
 build_scanner() {
     make --silent -C "$HERE" "scan-$CHIP_ARCH"

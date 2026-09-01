@@ -8,11 +8,9 @@ on:
       architecture:
         description: "Architecture to run ttnop on"
         required: true
-        default: all
+        default: blackhole
         type: choice
         options:
-          - all
-          - wormhole
           - blackhole
 
 permissions:

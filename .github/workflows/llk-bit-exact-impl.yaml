@@ -5,7 +5,7 @@ on:
   workflow_call:
     inputs:
       architecture:
-        description: "Architecture to run: wormhole (BH parked)" # TEMP: was all, wormhole, or blackhole
+        description: "Architecture to run: all, wormhole, or blackhole"
         required: false
         default: wormhole # TEMP: was all
         type: string
@@ -61,7 +61,6 @@ jobs:
     secrets: inherit
 
   # Build the WH/BH shard matrix from llk_ttnop_tests.yaml.
-  # TEMP: WH only (BH parked).
   load-test-matrix:
     runs-on: ubuntu-slim
     needs: [build-images]

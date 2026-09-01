@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cave layout, detour arithmetic and the filler policy.
+"""Cave layout, detour arithmetic, and filler selection.
 
 The cave is scratch space laid out once per site. The ELF only reserves the
-range [start, limit) (symbols __kernel_cave_start/__kernel_cave_end, or the
-unused L1 tail for LLK tests). The words below are written at inject time, inside that range:
+range [start, limit), from `_etext` to `__loader_init_start` or the unused L1
+tail. The injector writes this layout inside that range:
 
     start                  ->  NOP       \\
                                NOP        | max delay NOPs
@@ -16,8 +16,7 @@ unused L1 tail for LLK tests). The words below are written at inject time, insid
 
 Delaying by n is the same as aiming the site's jump n words short of the
 displaced instruction, so switching delay costs a single word write and no rebuild.
-Everything here is arithmetic on addresses, which is why the same code drives
-both a device-memory write and a host-image write.
+The same address math works for device memory and a host image.
 """
 
 from dataclasses import dataclass
@@ -65,7 +64,7 @@ class Cave:
         assert self.start % 4 == 0, "cave must be word aligned"
         assert self.end <= self.limit, (
             f"cave needs 0x{self.end - self.start:x} bytes but only "
-            f"0x{self.limit - self.start:x} are reserved; lower max_delay"
+            f"0x{self.limit - self.start:x} are reserved. Lower max_delay"
         )
 
     @property
@@ -75,12 +74,12 @@ class Cave:
 
     @property
     def ret(self) -> int:
-        """Address of the jal x0, site+4, which is the LAST instruction written here at inject time."""
+        """Address of the jump back to the instruction after the site."""
         return self.displaced_instruction + 4
 
     @property
     def end(self) -> int:
-        """First byte past the cave. Distinct from the ELF reservation end, which is `limit`."""
+        """First byte past the cave layout."""
         return self.ret + 4
 
     def entry(self, delay: int) -> int:
@@ -91,36 +90,30 @@ class Cave:
         return self.displaced_instruction - delay * 4
 
     def tail(self, displaced_word: int, return_to: int) -> list:
-        """The two words behind the filler run: the displaced instruction, and the jump back to site + 4."""
+        """Return the displaced instruction and the jump back."""
         return [displaced_word, encode_jal(self.ret, return_to)]
 
 
 def filler_choices(thread: str, site, scan, forced: str = None) -> list:
     """Which filler(s) to try at a site, as (name, word) pairs.
 
-    - `tti_nop`: does nothing other than delaying the issuing thread's next
-      Tensix instruction by one cycle.
-    - `unpacr0` / `unpacr1`: UNPACR_NOP in pure UNP_NOP mode on unpacker 0
-      (SrcA) / unpacker 1 (SrcB). Does nothing other than delaying that
-      unpacker by one cycle.
-    - `sfpnop`: does nothing other than delaying the next SFPU instruction
-      by one cycle.
-    - `risc_nop`: delays the RISC alone, leaving the backend to drain — the
-      opposite direction to `tti_nop`, and the only way to shift a RISC MMIO
-      write against the unit that consumes it.
+    - `tti_nop`: delays the issuing thread by one cycle.
+    - `unpacr0` / `unpacr1`: delays one unpacker by one cycle using pure
+      UNP_NOP mode.
+    - `sfpnop`: delays the next SFPU instruction by one cycle.
+    - `risc_nop`: delays the RISC alone
 
-    TDMA NOP (`DMANOP`) can be added as a filler as well for future.
+    TDMA NOP (`DMANOP`) and a packer nop can be added later. For now, the pack
+    thread only has `tti_nop` and `risc_nop`.
     """
     if forced:
-        # A raw word as a delay is allowed
+        # A forced filler can be a known name or a raw instruction word.
         return [(forced, scan.fillers.get(forced) or int(forced, 0))]
     names = ["tti_nop"]
     if thread == "unpack" and scan.mode == "sync":
-        names += [
-            f"unpacr{unit}" for unit in (scan.unpackers() or (0, 1))
-        ]  # only input unpacr NOPs on sync + unpack
+        names += [f"unpacr{unit}" for unit in (scan.unpackers() or (0, 1))]
     elif site.sfpu:
-        # SFPU nops stay off the unpack thread the SFPU belongs to math
+        # SFPU belongs to the math thread.
         names.append("sfpnop")
     names.append("risc_nop")
     return [(name, scan.fillers[name]) for name in names]
@@ -129,8 +122,8 @@ def filler_choices(thread: str, site, scan, forced: str = None) -> list:
 class Injector:
     """Applies and undoes detours through a caller-supplied word reader/writer.
 
-    Same-site delay steps rewrite one word (the jump). Bookkeeping is per thread;
-    call forget() if something else reloaded the kernel.
+    Same-site delay steps only rewrite the jump. Bookkeeping is per thread.
+    Call forget() after something else reloads the kernel.
     """
 
     def __init__(self, read_words, write_words, max_delay: int = DEFAULT_MAX_DELAY):
@@ -163,12 +156,12 @@ class Injector:
                     f"{thread} 0x{site.addr:05x} holds 0x{live:08x}, "
                     f"scan expected 0x{site.word:08x}"
                 )
-        # repopulate the cave with the correct NOP type if changed (TTI_NOP to SFPU_NOP)
+        # Rewrite the filler run when the NOP type changes.
         if self._filler.get(thread) != filler_word:
             self._write(cave.start, [filler_word] * cave.max_delay)
             self._filler[thread] = filler_word
 
-        # Undo the previous site's jump and write the last two cave words (displaced op + jal back)
+        # Restore the old site before preparing the new one.
         if new_site:
             self._restore(thread)
             self._write(cave.displaced_instruction, cave.tail(site.word, site.addr + 4))
@@ -179,7 +172,7 @@ class Injector:
         detour = encode_jal(site.addr, cave.entry(delay))
         self._write(site.addr, [detour])
 
-        # Confirm the first write stuck; later delays only retarget this jal.
+        # Check the first write. Later delays only retarget this jal.
         if new_site and self._read(site.addr, 1)[0] != detour:
             raise DetourError(
                 f"{thread} 0x{site.addr:05x} did not take the detour write"
@@ -191,6 +184,6 @@ class Injector:
             self._write(site.addr, [site.word])
 
     def restore(self) -> None:
-        """Undo every live detour, not just the last one, so no thread is left half-patched."""
+        """Restore every patched thread."""
         for thread in list(self._displaced):
             self._restore(thread)

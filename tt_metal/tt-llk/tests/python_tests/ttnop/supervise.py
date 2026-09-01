@@ -59,6 +59,7 @@ import signal
 import subprocess
 import sys
 import time
+from enum import IntEnum
 from pathlib import Path
 
 import heartbeat
@@ -128,11 +129,20 @@ EVICT_GRACE = float(os.environ.get("TTNOP_EVICT_GRACE", "30"))
 # on short-handed, so a rough figure is enough.
 RESET_COST = float(os.environ.get("TTNOP_RESET_COST", "240"))
 
-# Outside pytest's 0-5 so a caller can tell the two apart: a non-zero pytest
-# status means the sweep found races, which is a result and the whole point,
-# while this means the card stopped answering and had to be reset, which is a
-# broken run whatever the sweep managed to collect around it.
-EXIT_WEDGED = 75
+
+class ExitStatus(IntEnum):
+    CLEAN = 0
+    TESTS_FAILED = 1
+    USAGE_ERROR = 4
+    WEDGED = 75
+    INCOMPLETE = 76
+
+    @classmethod
+    def from_code(cls, code) -> "ExitStatus":
+        try:
+            return cls(code)
+        except (TypeError, ValueError):
+            return cls.INCOMPLETE
 
 
 def log(message: str) -> None:
@@ -406,9 +416,8 @@ def watch(child, root: Path, total: int, config, pool: int, all_ids: list):
         # thing left is to get it off that core — the same problem the silent
         # wedge below has, and it takes the same answer. Parked means sitting in
         # a plain sleep, so unlike a silent wedge this one always dies when asked.
-        request = heartbeat.recovery_request(root)
-        if request:
-            heartbeat.clear_recovery_request(root)
+        for request_path, request in heartbeat.recovery_requests(root):
+            heartbeat.clear_recovery_request(request_path)
             name = request.get("worker", "?")
             label = request.get("variant") or "an unknown variant"
             # One hang is the race. The other formats of this test hit the same
@@ -524,27 +533,45 @@ def attempt(
 # -- entry point -----------------------------------------------------------
 
 
-def main(argv) -> int:
+def final_status(
+    status: ExitStatus, all_ids, done, results, wedges, aborted: bool
+) -> ExitStatus:
+    """Preserve findings and make every partial or aborted run non-zero."""
+    if aborted or set(all_ids) - set(done):
+        return ExitStatus.INCOMPLETE
+    if wedges:
+        return ExitStatus.WEDGED
+    if status == ExitStatus.CLEAN and any(
+        record.get("outcome") == "failed" for record in results.values()
+    ):
+        return ExitStatus.TESTS_FAILED
+    return status
+
+
+def main(argv) -> ExitStatus:
     if len(argv) < 2:
         print("usage: supervise.py IDS_FILE [pytest args...]", file=sys.stderr)
-        return 4
+        return ExitStatus.USAGE_ERROR
 
     pytest_args = argv[2:]
     all_ids = read_ids(argv[1])
     if not all_ids:
         print("ttnop: nothing collected")
-        return 0
+        return ExitStatus.CLEAN
 
     root = heartbeat.state_dir()
     if root is None:
         log(f"{heartbeat.STATE_DIR_ENV} unset; running unsupervised")
-        return subprocess.call([sys.executable, str(RUNNER), argv[1], *pytest_args])
+        return ExitStatus.from_code(
+            subprocess.call([sys.executable, str(RUNNER), argv[1], *pytest_args])
+        )
     root.mkdir(parents=True, exist_ok=True)
 
     config = sweep_module.Config.from_env()
     remaining_path = root / "remaining.txt"
-    status = 0
+    status = ExitStatus.CLEAN
     wedged = []
+    aborted = False
     # Asked now, while the card is known good — the workflow resets it just before
     # this — because the answer is only ever needed once a core has wedged, and
     # that is the moment we least want to be talking to the device.
@@ -562,6 +589,7 @@ def main(argv) -> int:
         remaining_path.write_text("\n".join(remaining) + "\n")
 
         heartbeat.clear_heartbeats(root)
+        heartbeat.clear_recovery_requests(root)
         child, (outcome, code, payload) = attempt(
             remaining_path, pytest_args, root, len(all_ids), config, pool, all_ids
         )
@@ -570,17 +598,19 @@ def main(argv) -> int:
         if outcome == "exited":
             # Reached even after an eviction: xdist replaced the worker and the
             # run finished around it. The wedges still count, so the shard is red.
-            status = code
+            status = ExitStatus.from_code(code)
             break
 
         terminate(child)
 
         if reset_count >= MAX_RESETS:
             log(f"hit the {MAX_RESETS}-reset cap; giving up on this shard")
+            aborted = True
             break
 
         log(f"resetting the card (reset {reset_count + 1} of {MAX_RESETS})")
         if not reset_card():
+            aborted = True
             break
         # The reset is what lets a stuck device call return, so this is where a
         # worker we could not kill finally dies. Confirm it before handing the
@@ -590,6 +620,7 @@ def main(argv) -> int:
                 "previous run outlived the reset; stopping rather than putting a "
                 "second sweep on the same cores"
             )
+            aborted = True
             break
         # The hung case and the rest of its test are already on the done-log, so
         # the resume starts at a different test; nothing to do here but go again.
@@ -609,13 +640,20 @@ def main(argv) -> int:
     junit_path = junit.render(results, wedged, Path(config.report_dir) / "junit.xml")
     log(f"{len(results)} case result(s) + {len(wedged)} wedge(s) -> {junit_path}")
 
-    if wedged:
+    done = heartbeat.completed(root)
+    status = final_status(status, all_ids, done, results, wedged, aborted)
+    if status == ExitStatus.INCOMPLETE:
+        missing = len(set(all_ids) - done)
+        log(
+            f"sweep incomplete ({missing} case(s) unfinished); "
+            f"exiting {status.value}"
+        )
+    elif status == ExitStatus.WEDGED:
         # Overrides whatever the last attempt exited with, including a clean 0: the
         # wedges are recorded in the junit file above, but nothing carries them into
         # pytest's exit code, and the attempt that mopped up the remainder can easily
         # look perfectly healthy on its own.
-        log(f"{len(wedged)} wedge(s) recorded; exiting {EXIT_WEDGED}")
-        status = EXIT_WEDGED
+        log(f"{len(wedged)} wedge(s) recorded; exiting {status.value}")
     # Resume files (hb.gwN, done.*, remaining.txt) only exist so this process can
     # pick up after a reset. The report dir should hold what a human reads:
     # report.md, failures.jsonl, junit.xml.

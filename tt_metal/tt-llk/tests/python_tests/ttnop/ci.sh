@@ -25,7 +25,7 @@ MARKERS="${TTNOP_MARKERS:-${PYTEST_MARKERS:-}}"
 SPLITS=""
 GROUP=""
 JOBS="${TTNOP_JOBS:-15}"
-# One Tensix core per xdist worker (harness maps gwN -> core N/8,N%8).
+# One Tensix core per xdist worker (pytest's parallel process).
 DEVICE_JOBS="${TTNOP_DEVICE_JOBS:-8}"
 REPORT_DIR="${TTNOP_REPORT_DIR:-$HERE/reports}"
 COLLECT_TO=""
@@ -58,6 +58,8 @@ mkdir -p "$REPORT_DIR"
 [[ "$REPORT_DIR" = /* ]] || REPORT_DIR="$HERE/$REPORT_DIR"
 REPORT_DIR="$(cd "$REPORT_DIR" && pwd)"
 export TTNOP_REPORT_DIR="$REPORT_DIR"
+lock_report_dir "$REPORT_DIR"
+[[ -n "$COLLECT_TO" ]] || reset_report_dir "$REPORT_DIR"
 
 # Heartbeat / resume state. Wiped per invocation so a stale done-log cannot
 # skip the whole sweep, and wiped again on exit so the report dir is only
@@ -118,14 +120,15 @@ exec 9>"$DEVICE_LOCK"
 flock 9
 echo ">> [3/3] sweeping"
 started=$SECONDS
-# Exit 1 = races found (a result). The supervisor resets a wedged card and
-# resumes; it exits 75 for that, and 70 if the sweep never produced junit.xml.
+# Exit 1 means the sweep found a race. The supervisor handles a wedged card and
+# resumes unfinished work. Exit 75 means a recorded wedge, 76 means an
+# incomplete run, and 70 means no JUnit file was produced.
 status=0
 supervise_nodeids "$NODEIDS" --compile-consumer \
     "${QUIET_ARGS[@]}" "${PYTEST_SIM_ARGS[@]}" "${XDIST_ARGS[@]}" || status=$?
 
 if [[ ! -f "$REPORT_DIR/junit.xml" ]]; then
-    echo ">> ttnop: sweep did not complete — no junit.xml in $REPORT_DIR" >&2
+    echo ">> ttnop: sweep did not complete. No junit.xml in $REPORT_DIR" >&2
     status=70
 fi
 # Heartbeats and the done-log are resume internals. Drop them so the report dir
