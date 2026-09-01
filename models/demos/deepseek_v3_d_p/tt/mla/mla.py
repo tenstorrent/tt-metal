@@ -23,6 +23,37 @@ from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, ML
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat, MlaKvCacheGeometry
 
+# Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
+# A fabric only wraps the axis its torus flag names (see ccl_common.cpp get_axis_topology).
+_SNAKE_CLOSING_TORUS_CONFIGS = {
+    0: (ttnn.FabricConfig.FABRIC_2D_TORUS_Y, ttnn.FabricConfig.FABRIC_2D_TORUS_XY),
+    1: (ttnn.FabricConfig.FABRIC_2D_TORUS_X, ttnn.FabricConfig.FABRIC_2D_TORUS_XY),
+}
+
+
+def _snake_ring_can_close(mesh_shape) -> bool:
+    """Whether SOME snake orientation closes its ring on a direct physical hop.
+
+    Mirrors the orientation search in resolve_mesh_ring_plan (mesh_ring_plan.cpp). The ring order is a
+    boustrophedon, so its last device is (rows-1, 0) for a Row snake and (0, cols-1) for a Column one:
+    the closing edge always spans the WHOLE closing axis. That edge is a direct hop only when the axis
+    is a torus ring, or its extent is 2 -- in which case the "wrap" is just the neighbour. An odd extent
+    has no boustrophedon cycle at all and the op skips that orientation.
+
+    Checked here because the op does not degrade on an unclosable ring: it TT_FATALs
+    ("neighbor unicast requires a host-proved direct physical line/ring").
+
+    Conservative in one direction only: the fabric flag names an axis, but the closing link must also be
+    physically wired, which the op verifies (is_axis_wrap_wired) and Python cannot see."""
+    fabric_config = ttnn.get_fabric_config()
+    for closing_axis in (0, 1):
+        extent = mesh_shape[closing_axis]
+        if extent % 2 != 0:
+            continue
+        if extent == 2 or fabric_config in _SNAKE_CLOSING_TORUS_CONFIGS[closing_axis]:
+            return True
+    return False
+
 
 class ttMLA:
     MLA_WEIGHT_NAMES = [
@@ -547,6 +578,10 @@ class ttMLA:
         # dense-run V3.2 key on this, not _has_indexer (see _get_sdpa_program_config).
         self._is_dsa_family = TtIndexer.matches_config(config)
         self._sparse_kv_gather_buffer = None
+        # Whether the LAST _gather_kvpe_prefix result is caller-owned transient storage. Only the two
+        # KV-dedup routes differ: the two-stage gather allocates its own output, the full-mesh snake
+        # writes (and returns) the persistent scratch above. See _gather_kvpe_prefix.
+        self._kvpe_prefix_result_transient = False
         if self._has_indexer and not self.kv_only and self.sp_factor > 1:
             self._sparse_kv_gather_buffer = self.tt_ccl.get_mla_sparse_kv_gather_buffer(
                 seq_len=seq_len,
@@ -1576,9 +1611,14 @@ class ttMLA:
         # wrapper identity here: SP>1 always writes the model-owned persistent scratch. At SP=1,
         # slicing a multi-slot cache creates transient storage, while slicing a single-slot cache
         # is a no-op that aliases the caller-owned persistent cache.
-        # KV dedup is the exception: its two-stage all_gather_async allocates its own output at every
-        # SP factor, so that result is ALWAYS transient and leaks per layer per chunk if not released.
-        if (self.tp_shard_kv and self.tp_factor > 1) or (self.sp_factor == 1 and kvpe_cache.storage.shape[0] > 1):
+        # KV dedup has two routes and they differ here: the two-stage all_gather_async allocates its own
+        # output, so that result is transient and leaks per layer per chunk if not released, while the
+        # full-mesh snake gathers INTO the persistent scratch and returns it -- releasing that frees the
+        # model-owned buffer for every later chunk and layer. Read the route that ran rather than
+        # re-deriving it; letting the two drift apart is exactly how the scratch got freed once already.
+        if (self.tp_shard_kv and self.tp_factor > 1 and self._kvpe_prefix_result_transient) or (
+            self.sp_factor == 1 and kvpe_cache.storage.shape[0] > 1
+        ):
             ttnn.deallocate(kvpe_dev.storage)
         ttnn.deallocate(tt_q)
         return self._apply_wkv_b2(attn_out, seq_len_local)
@@ -1804,10 +1844,24 @@ class ttMLA:
         top-k indices, so its unwritten suffix is never consumed."""
 
         if self.tp_shard_kv and self.tp_factor > 1:
-            # GLM-5.2 KV dedup: high_bw_all_gather rides ONE cluster axis and lands in the single
-            # preallocated worst-case scratch, so it cannot rebuild an sp*tp-striped slab -- that needs a
-            # TP-inner gather first, into an intermediate the scratch has no room for. Take the pre-fusion
-            # two-stage route; teaching the high-BW gather sp*tp stripes is follow-up work.
+            # GLM-5.2 KV dedup: the cache is dim-2 sharded across BOTH mesh axes, and row-major over the
+            # mesh IS the sp*tp linearization, so ONE full-mesh (snake-ring) gather rebuilds the slab in
+            # exactly the order the two-stage TP-inner -> SP-outer route produced -- without its transient
+            # TP intermediate. That intermediate, not the result, is what the worst-case scratch had no
+            # room for: the scratch already spans the whole global sequence, so it takes the sp*tp result
+            # as-is. Falls back to the two-stage route wherever the snake cannot run.
+            if self._can_full_mesh_gather_kvpe(kvpe_cache.storage):
+                # Lands in the persistent scratch: NOT the caller's to release.
+                self._kvpe_prefix_result_transient = False
+                return self._gather_kvpe_prefix_full_mesh(
+                    kvpe_cache,
+                    cache_batch_idx,
+                    populated_global,
+                    block_cyclic_chunk_local=block_cyclic_chunk_local,
+                )
+            # all_gather_async allocates its own output: transient, and leaks per layer per chunk if
+            # not released.
+            self._kvpe_prefix_result_transient = True
             return self._gather_kvpe_prefix_tp_sharded(
                 kvpe_cache,
                 cache_batch_idx,
@@ -1852,6 +1906,100 @@ class ttMLA:
                 gathered_dim_size=gathered_dim_size,
             )
 
+        return MlaKvCache(
+            format=kvpe_cache.format,
+            storage=gathered,
+            geometry=kvpe_cache.geometry,
+        )
+
+    def _can_full_mesh_gather_kvpe(self, cache_storage) -> bool:
+        """Whether one snake ring can replace the two-stage sp*tp KV-prefix gather.
+
+        Every condition here mirrors a hard TT_FATAL in high_bw_all_gather, so the guard degrades to the
+        two-stage route instead of crashing. The op does not fail softly on any of them."""
+        if self._sparse_kv_gather_buffer is None:
+            return False
+        # The snake lands the gather in mesh row-major order, which equals the sp*tp order only for the
+        # (sp_axis=0, tp_axis=1) layout this path already asserts.
+        if self.sp_axis != 0 or self.tp_axis != 1:
+            return False
+        # The snake linearizes the COMPLETE 2D mesh, so it needs both axes populated, and a boustrophedon
+        # cycle exists only when some lane count is even.
+        shape = tuple(self.mesh_device.shape)
+        if len(shape) != 2 or shape[0] < 2 or shape[1] < 2:
+            return False
+        if not (shape[0] % 2 == 0 or shape[1] % 2 == 0):
+            return False
+        # An even lane count is necessary but not sufficient: the ring still has to CLOSE on a direct hop.
+        # On 8x4 that needs a torus; on 8x2 the Column snake closes across an extent-2 axis without one.
+        if not _snake_ring_can_close(shape):
+            return False
+        # The op requires the input's DECLARED dim-2 shard factor to span every device: a full-mesh gather
+        # is only sound if the metadata says the sequence really is split sp*tp ways. A TP-deduped KVPE
+        # cache that still declares the legacy kv-head-on-TP layout (Shard(2), Shard(1)) reports 8, not 32.
+        if self._declared_seq_shard_factor(cache_storage) != self.sp_factor * self.tp_factor:
+            return False
+        # The op requires input and output on the same mesh handle. MeshDevice binds no __eq__, so `==`
+        # on the wrappers is object identity and .device() need not return the same wrapper twice --
+        # compare the device id. An unallocated tensor reports .device() None; treat that as a mismatch
+        # rather than crashing.
+        buffer_device = self._sparse_kv_gather_buffer.device()
+        cache_device = cache_storage.device()
+        if buffer_device is None or cache_device is None:
+            return False
+        return buffer_device.id() == cache_device.id()
+
+    @staticmethod
+    def _declared_seq_shard_factor(t) -> int:
+        """Product of mesh extents over the axes whose placement shards tensor dim 2 (mirrors the op's
+        tensor_dim_shard_factor)."""
+        topology = t.tensor_topology()
+        dist = topology.distribution_shape()
+        placements = topology.placements()
+        dist_dims = tuple(dist)
+        if len(placements) != len(dist_dims):
+            return 0
+        factor = 1
+        for axis, placement in enumerate(placements):
+            if isinstance(placement, ttnn.PlacementShard) and placement.dim == 2:
+                factor *= dist_dims[axis]
+        return factor
+
+    def _gather_kvpe_prefix_full_mesh(
+        self,
+        kvpe_cache: MlaKvCache,
+        cache_batch_idx,
+        populated_global: int,
+        *,
+        block_cyclic_chunk_local: int,
+    ) -> MlaKvCache:
+        """_gather_kvpe_prefix for an SP*TP-DEDUPED cache: ONE full-mesh snake gather.
+
+        Each device holds seq_len/(sp*tp) rows in sp*tp row-major order, which is what the snake ring
+        reassembles directly -- no TP-inner stage, no intermediate allocation, and the result lands in the
+        persistent worst-case scratch rather than being transient. Same linear chip-major buffer that
+        sparse_sdpa decodes with block_cyclic_cache_tp_sharded=True."""
+        storage = kvpe_cache.storage
+        slot_lo = cache_batch_idx if storage.shape[0] > 1 else 0
+        stripes = self.sp_factor * self.tp_factor
+        # Block-cyclic storage is meaningful only in whole global slabs, as on the SP-only path; the slab
+        # is sp-wide because block_cyclic_chunk_local is the per-SP-ROW width (each chip holds 1/tp of it).
+        slab_global = block_cyclic_chunk_local * self.sp_factor
+        gathered_dim_size = min(
+            storage.shape[2] * stripes,
+            ((populated_global + slab_global - 1) // slab_global) * slab_global,
+        )
+        assert gathered_dim_size > 0
+        assert self._sparse_kv_gather_buffer is not None
+        gathered = ttnn.experimental.high_bw_all_gather(
+            storage,
+            dim=2,
+            output_tensor=self._sparse_kv_gather_buffer,
+            num_links=self.ccl_num_links,
+            cluster_axis=None,
+            input_batch_index=slot_lo,
+            gathered_dim_size=gathered_dim_size,
+        )
         return MlaKvCache(
             format=kvpe_cache.format,
             storage=gathered,
