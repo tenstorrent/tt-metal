@@ -98,10 +98,16 @@ constexpr noc_att::Window REMOTE_WINDOW{
 constexpr std::uint64_t LOCAL_WINDOW_BASE = LOCAL_WINDOW.make_address(/*selector*/ 0, /*local_address*/ 0);
 static_assert(LOCAL_WINDOW_BASE == 0x1800000000ull);
 
-// The UMD-visible dispatch tile (1,2): selector from the tile table
-// (ATT_TILE_SELECTORS[y * 2 + x] = 4), aliasing the 2x3_DISPATCH RTL
-// placement at (0,2).
+// The dispatch tile. The installed emu-quasar-2x3_DISPATCH image's soc
+// descriptor exposes dispatch at (0,2) and pcie at (1,2), and Quasar
+// translation is the identity, so the host publishes (0,2) as the dispatch
+// core's coordinate (go signals, worker completion targets). Selector 4 is
+// the physical dispatch tile's full-tile endpoint (word 0x80 = node (0,2)).
+// The (1,2) row is kept as an alias for the checked-in UMD test descriptor
+// (tests/soc_descs/quasar_simulation_2x3.yaml), whose dispatch row is [1-2];
+// resolution is a table scan, so both keys may coexist.
 inline constexpr noc_att::MapData::DispatchEntry DISPATCH_ENTRIES[] = {
+    {.x = 0, .y = 2, .selector = 4, .window = noc_att::WindowClass::FullTile},
     {.x = 1, .y = 2, .selector = 4, .window = noc_att::WindowClass::FullTile},
 };
 
