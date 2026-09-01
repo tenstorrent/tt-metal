@@ -1,0 +1,56 @@
+# Single BH galaxy carved into 4 Z-connected [8,1] meshes, wired as a Z-CHAIN 0->1->2->3 (no wraparound).
+#
+# Each mesh is one COLUMN of the logical 8x4 galaxy, i.e. SP=8 x TP=1 -- the stage shape every
+# single-process Mistral Small 4 pipeline measurement uses (test_prefill_pipeline_concurrent.py's
+# `8x1`), so a number measured through this descriptor is directly comparable to those. The sibling
+# single_bh_galaxy_4x4x2_z_chain descriptor instead carves 4 trays into [2,4] meshes: same rank
+# count, different stage shape, and a shape for which no tuned matmul config or weight cache exists.
+#
+# A column spans TWO trays (4 chips from each), so its device set cannot be read off tray discovery
+# (Generate2x4SliceToPCIeDeviceMapping exposes only 2x4 blocks). The per-rank TT_VISIBLE_DEVICES in
+# pipeline_prefill_request_intragalaxy_4rank_8x1.yaml were read off a live 8x4 mesh instead, via
+# create_submeshes(MeshShape(8,1)) -- the same carving the single-process test uses.
+#
+# LINE (not RING) on the SP axis: the D2D MeshSocket needs FABRIC_2D, and a 2d_torus_* mode would
+# have to be matched by dim_types here. Ring-attention CCLs on an 8-long line still work, they just
+# do not get the wrap; see PREFILL_FABRIC_MODE in runner_utils.open_mesh_device.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+
+  # Adjacent columns of the galaxy are joined by one X-link per row (8 per boundary); 4 RELAXED
+  # mirrors the proven [2,4] z-chain rather than demanding every link.
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+    assign_z_direction: true
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    channels { count: 4 policy: RELAXED }
+    assign_z_direction: true
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    channels { count: 4 policy: RELAXED }
+    assign_z_direction: true
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
