@@ -41,10 +41,10 @@ inline __attribute__((always_inline)) void cfg_reg_rmw_tensix(const std::uint32_
     }
 }
 
-template <RegisterFile File, std::uint32_t Addr, std::uint32_t Mask>
-inline __attribute__((always_inline)) void write_word_mmio(const ConfigWord<File, Addr, Mask>& word, volatile std::uint32_t* tt_reg_ptr cfg)
+template <RegisterScope Scope, std::uint32_t Addr, std::uint32_t Mask>
+inline __attribute__((always_inline)) void write_word_mmio(const ConfigWord<Scope, Addr, Mask>& word, volatile std::uint32_t* tt_reg_ptr cfg)
 {
-    static_assert(File == RegisterFile::State, "Access::MMIO targets the state CFG; use Access::TensixCfgUnit for thread CFG (SETC16)");
+    static_assert(Scope == RegisterScope::State, "Access::MMIO targets the state CFG; use Access::TensixCfgUnit for thread CFG (SETC16)");
     if constexpr (Mask == 0xffffffffu)
     {
         cfg[Addr] = word.data;
@@ -59,7 +59,7 @@ inline __attribute__((always_inline)) void write_word_mmio(const ConfigWord<File
 template <typename Assignment>
 inline __attribute__((always_inline)) void write_word_mmio(const SingleFieldWord<Assignment>& word, volatile std::uint32_t* tt_reg_ptr cfg)
 {
-    static_assert(Assignment::file == RegisterFile::State, "Access::MMIO targets the state CFG; use Access::TensixCfgUnit for thread CFG (SETC16)");
+    static_assert(Assignment::scope == RegisterScope::State, "Access::MMIO targets the state CFG; use Access::TensixCfgUnit for thread CFG (SETC16)");
     const std::uint32_t data = encode(word.assignment);
     if constexpr (Assignment::mask == 0xffffffffu)
     {
@@ -72,8 +72,8 @@ inline __attribute__((always_inline)) void write_word_mmio(const SingleFieldWord
     }
 }
 
-template <Access A, RegisterFile File, std::uint32_t Addr, std::uint32_t Mask>
-inline __attribute__((always_inline)) void write_word(const ConfigWord<File, Addr, Mask>& word)
+template <Access A, RegisterScope Scope, std::uint32_t Addr, std::uint32_t Mask>
+inline __attribute__((always_inline)) void write_word(const ConfigWord<Scope, Addr, Mask>& word)
 {
     static_assert(
         A == Access::MMIO || A == Access::TensixCfgUnit,
@@ -82,7 +82,7 @@ inline __attribute__((always_inline)) void write_word(const ConfigWord<File, Add
     {
         write_word_mmio(word, ckernel::get_cfg_pointer());
     }
-    else if constexpr (File == RegisterFile::Thread)
+    else if constexpr (Scope == RegisterScope::Thread)
     {
         // SETC16 replaces the complete thread word. Bits absent from Mask are
         // written as zero, matching the existing single-field API.
@@ -106,7 +106,7 @@ inline __attribute__((always_inline)) void write_word(const SingleFieldWord<Assi
     {
         write_word_mmio(word, ckernel::get_cfg_pointer());
     }
-    else if constexpr (Assignment::file == RegisterFile::Thread)
+    else if constexpr (Assignment::scope == RegisterScope::Thread)
     {
         TT_SETC16(Assignment::addr, encode(word.assignment) & 0xffffu);
     }
@@ -119,7 +119,7 @@ inline __attribute__((always_inline)) void write_word(const SingleFieldWord<Assi
 template <const Field& F, Sec S, std::uint32_t Count, std::size_t ArrayCount>
 inline __attribute__((always_inline)) void write_array_mmio(volatile std::uint32_t* tt_reg_ptr cfg, const std::uint32_t (&values)[ArrayCount])
 {
-    static_assert(F.file == RegisterFile::State, "RISC writes target state CFG");
+    static_assert(F.scope == RegisterScope::State, "RISC writes target state CFG");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
     static_assert(Count <= ArrayCount, "CFG word count exceeds source array");
 
@@ -129,10 +129,10 @@ inline __attribute__((always_inline)) void write_array_mmio(volatile std::uint32
     }
 }
 
-template <RegisterFile File, std::uint32_t Addr, std::uint32_t Mask, std::uint32_t Data>
+template <RegisterScope Scope, std::uint32_t Addr, std::uint32_t Mask, std::uint32_t Data>
 inline __attribute__((always_inline)) void write_constant_word()
 {
-    if constexpr (File == RegisterFile::Thread)
+    if constexpr (Scope == RegisterScope::Thread)
     {
         TTI_SETC16(Addr, Data & 0xffffu);
     }
@@ -215,7 +215,7 @@ inline __attribute__((always_inline)) void write_assignment_group(
     if constexpr (A == Access::TensixCfgUnit && group_is_constant)
     {
         constexpr std::uint32_t data = (0u | ... | encode_constant_group_assignment<Key, remove_cvref_t<std::tuple_element_t<Indices, Tuple>>>());
-        write_constant_word<Key::file, Key::addr, mask, data>();
+        write_constant_word<Key::scope, Key::addr, mask, data>();
     }
     else if constexpr (group_size == 1u)
     {
@@ -234,7 +234,7 @@ inline __attribute__((always_inline)) void write_assignment_group(
     {
         const std::uint32_t data =
             (0u | ... | encode_group_assignment<Key, remove_cvref_t<std::tuple_element_t<Indices, Tuple>>>(std::get<Indices>(assignments)));
-        const ConfigWord<Key::file, Key::addr, mask> grouped_word {data};
+        const ConfigWord<Key::scope, Key::addr, mask> grouped_word {data};
         if constexpr (A == Access::MMIO)
         {
             write_word_mmio(grouped_word, cfg);
@@ -267,7 +267,7 @@ inline __attribute__((always_inline)) void write_assignments(const Assignments&.
     static_assert(assignment_groups_disjoint<Assignments...>::value, "overlapping CFG field assignments in one physical word");
     if constexpr (A == Access::MMIO)
     {
-        static_assert(((Assignments::file == RegisterFile::State) && ...), "Access::MMIO cannot write thread CFG assignments");
+        static_assert(((Assignments::scope == RegisterScope::State) && ...), "Access::MMIO cannot write thread CFG assignments");
     }
 
     const auto assignment_tuple            = std::tie(assignments...);
@@ -282,7 +282,7 @@ inline __attribute__((always_inline)) void write_assignments(const Assignments&.
 template <typename... Assignments>
 inline __attribute__((always_inline)) void write_assignments_mmio(volatile std::uint32_t* tt_reg_ptr cfg, const Assignments&... assignments)
 {
-    static_assert(((Assignments::file == RegisterFile::State) && ...), "Access::MMIO cannot write thread CFG assignments");
+    static_assert(((Assignments::scope == RegisterScope::State) && ...), "Access::MMIO cannot write thread CFG assignments");
     static_assert(assignment_groups_disjoint<Assignments...>::value, "overlapping CFG field assignments in one physical word");
 
     const auto assignment_tuple = std::tie(assignments...);
@@ -294,7 +294,7 @@ inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprOpe
 {
     static_assert(
         A == Access::TensixCfgUnit || A == Access::TensixScalarUnit, "GPR-backed cfg::write requires Access::TensixCfgUnit or Access::TensixScalarUnit");
-    static_assert(F.file == RegisterFile::State, "GPR-backed cfg::write cannot write thread CFG (SETC16) fields");
+    static_assert(F.scope == RegisterScope::State, "GPR-backed cfg::write cannot write thread CFG (SETC16) fields");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
     static_assert(F.shamt(S) == 0, "GPR cfg::write must start at the beginning of a CFG word");
     if constexpr (Size == GprTransferSize::Bits128)
