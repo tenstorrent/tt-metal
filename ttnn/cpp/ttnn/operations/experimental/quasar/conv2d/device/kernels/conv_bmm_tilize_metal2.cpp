@@ -671,12 +671,12 @@ void kernel_main() {
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
-                        MATH((DPRINT(
-                                  "SUB k={} i0={} i1={} rl={}\n",
-                                  in0_block_w_i,
-                                  in0_subblock_i,
-                                  in1_subblock_i,
-                                  (uint32_t)enable_reload);));
+                        DPRINT_MATH(
+                            "SUB k={} i0={} i1={} rl={}\n",
+                            in0_block_w_i,
+                            in0_subblock_i,
+                            in1_subblock_i,
+                            (uint32_t)enable_reload);
                         if (enable_reload) {
                             reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
                             copy_init(matmul_partials_cb);
@@ -685,11 +685,11 @@ void kernel_main() {
 
                             uint32_t start_dst_index = 0;
                             uint32_t start_tile_index = 0;
-                            MATH((DPRINT("RLOAD_RD\n");));
+                            DPRINT_MATH("RLOAD_RD\n");
                             copy_block(matmul_partials_cb, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
                             cb_matmul_partials.pop_front(out_subblock_num_tiles);
-                            MATH((DPRINT("RLOAD_OK\n");));
+                            DPRINT_MATH("RLOAD_OK\n");
                             reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
                             matmul_block_init(
                                 mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
