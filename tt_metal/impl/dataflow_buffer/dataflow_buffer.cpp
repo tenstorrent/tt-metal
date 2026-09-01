@@ -436,25 +436,15 @@ void verify_dfb_global_header_participation(
 bool has_dm_risc(uint16_t risc_mask);
 bool has_tensix_risc(uint16_t risc_mask);
 
-static uint32_t dfb_side_block_entries(
-    uint32_t stride_in_entries, ::dfb::AccessPattern side_pattern, uint32_t side_block_size, bool producer_blocked) {
-    if (side_pattern != ::dfb::AccessPattern::BLOCKED) {
-        return 1u;
-    }
-    const uint32_t block = std::max<uint32_t>(side_block_size, 1u);
-    return (producer_blocked || stride_in_entries == 1) ? block : 1u;
-}
-
 uint8_t calculate_num_tile_counters(const DataflowBufferConfig& config, bool is_producer);
 
-// Entries this side moves per NoC transaction: block_size for a batching BLOCKED side, else 1.
+// Entries this side moves in one NoC transaction: its block size when the side is BLOCKED, else 1.
 static uint32_t dfb_effective_block_entries(const DataflowBufferImpl& dfb, bool is_producer) {
     const DataflowBufferConfig& config = dfb.config;
-    return dfb_side_block_entries(
-        dfb.stride_in_entries,
-        is_producer ? config.pap : config.cap,
-        is_producer ? config.producer_block_size : config.consumer_block_size,
-        config.pap == ::dfb::AccessPattern::BLOCKED);
+    if ((is_producer ? config.pap : config.cap) != ::dfb::AccessPattern::BLOCKED) {
+        return 1u;
+    }
+    return std::max<uint32_t>(is_producer ? config.producer_block_size : config.consumer_block_size, 1u);
 }
 
 // One transaction from a BLOCKED producer on a STRIDED ring spans every one of its tile counters
@@ -465,6 +455,9 @@ static bool dfb_dm_side_credits_split(const DataflowBufferImpl& dfb, bool is_pro
            config.cap == ::dfb::AccessPattern::STRIDED && config.num_consumers > 1;
 }
 
+// How many transactions this DM hart makes on one tile counter before rotating to the next.
+// 1 = rotate after every transaction; 0 = a split producer (every transaction touches all its
+// counters, so there are no turns).
 static uint32_t dfb_dm_side_txns_to_collect(const DataflowBufferImpl& dfb, bool is_producer) {
     const DataflowBufferConfig& config = dfb.config;
     if (!is_producer && config.pap == ::dfb::AccessPattern::BLOCKED) {
@@ -749,11 +742,10 @@ size_t serialize_dfb_config_for_core(
             entry.logical_dfb_id = dfb_narrow_field<uint8_t>(dfb->device_slot, dfb->id, "logical_dfb_id");
             entry.num_tcs        = num_tcs;
 
-            // Tell the device how to hop from one entry this hart owns to the next.
-            // Evenly spaced entries need one number: hop `stride` every time. Under BLOCKED the
-            // entries come in blocks, so block_size (the ring's block, for every hart on the
-            // ring) and `jump` say how to cross one and reach the next. How many hops cross a
-            // block is not sent: the device derives it as block_size / stride.
+            // Tell the device how this hart's cursor hops from one of its entries to the next.
+            // Evenly spaced entries need one number: hop `stride` every time. On a BLOCKED ring
+            // the entries come in blocks, so two more numbers are sent: `block_size` and `jump`,
+            // where `jump` is the number of entries to skip after each block.
             uint32_t side_stride_entries = dfb->stride_in_entries;
             const bool is_dm_hart = h < ::dfb::TENSIX_RISC_OFFSET;
             uint32_t block_out;
@@ -762,24 +754,17 @@ size_t serialize_dfb_config_for_core(
             const uint32_t bs = std::max<uint32_t>(dfb->config.producer_block_size, 1u);
             const uint32_t P = dfb->config.num_producers;
             block_out = producer_blocked ? bs : dfb_effective_block_entries(*dfb, rc.is_producer);
-            // The jump is the stride, with two exceptions on a BLOCKED ring. `share` is the
-            // ring stride (lcm(P,C) for B->B, C for B->S -- the consumers one block feeds --
-            // and 1 for B->A), which is what unifies the consumer formulas below.
             const uint32_t share = dfb->stride_in_entries;
             uint32_t jump_entries = side_stride_entries;
             if (producer_blocked) {
                 if (dfb->config.cap == ::dfb::AccessPattern::BLOCKED) {
-                    // Whole-block movers hop one stride; a Tensix hart crosses the block tile
-                    // by tile, then jumps over the other harts' blocks.
                     jump_entries = is_dm_hart ? side_stride_entries : (share - 1u) * bs + 1u;
                 } else if (rc.is_producer) {
                     if (is_dm_hart) {
-                        // A whole block per op: the stride itself skips the others' blocks.
                         side_stride_entries = P * share;
                     }
                     jump_entries = side_stride_entries;
                 } else {
-                    // Cross its share of a block, then jump to its share of the next one.
                     jump_entries = (P - 1u) * bs + share;
                 }
             }
@@ -787,7 +772,6 @@ size_t serialize_dfb_config_for_core(
             split_out = dfb_dm_side_credits_split(*dfb, rc.is_producer);
             entry.block_size = dfb_narrow_field<uint16_t>(block_out, dfb->id, "block_size");
             entry.split_tc = split_out ? 1u : 0u;
-            // Entries for every hart kind; the device converts to bytes for DM once, at init.
             entry.entries_to_jump = dfb_narrow_field<uint16_t>(jump_out, dfb->id, "entries_to_jump");
             entry.capacity = rc.is_producer ? dfb_narrow_field<uint16_t>(dfb->capacity, dfb->id, "capacity")
                                             : static_cast<uint16_t>(0);
@@ -1310,8 +1294,7 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
     return desc;
 }
 
-// Would compute_txn_descriptor() accept this txn-id count? It mirrors that function's checks, so
-// the picker below can reject a count instead of choosing one the descriptor would then FATAL on.
+// Returns true if the given txn_id count is valid for the given DFB configuration, false otherwise.
 static bool dfb_txn_id_count_is_legal(
     uint16_t num_entries,
     uint8_t num_txn_ids,
@@ -1325,27 +1308,29 @@ static bool dfb_txn_id_count_is_legal(
                                           ? static_cast<uint32_t>(num_txn_ids) * num_tcs_per_risc
                                           : static_cast<uint32_t>(num_txn_ids) * num_prods_or_cons * num_tcs_per_risc;
     if (required_divisor == 0 || num_entries % required_divisor != 0) {
-        return false;
+        return false;  // must be divisible to ensure equal credits per TC per ISR cycle.
     }
     const uint32_t wide_per_txn = num_entries / num_txn_ids;
     const uint32_t wide_entry_threshold = consumes_all ? (num_prods_or_cons * wide_per_txn) : wide_per_txn;
     if (block_size == 0 || wide_entry_threshold % block_size != 0) {
-        return false;
+        return false;  // threshold must be a whole number of blocks.
     }
     if (wide_entry_threshold / block_size > 0xFFu || wide_per_txn > 0xFFu) {
-        return false;
+        return false;  // threshold and per_txn must fit in uint8_t.
     }
     const uint32_t per_txn = consumes_all ? wide_per_txn : (wide_entry_threshold / num_prods_or_cons);
     if (txns_to_collect > 1 && num_tcs_per_risc > 1 && per_txn % (txns_to_collect * num_tcs_per_risc) != 0) {
-        return false;
+        return false;  // each txn window must cover whole counter visits on every tile counter.
     }
     if (block_size > 1 && credits_split) {
-        return per_txn % block_size == 0 && block_size % num_tcs_per_risc == 0;
+        return per_txn % block_size == 0 &&
+               block_size % num_tcs_per_risc == 0;  // each block must split evenly over tile counters.
     }
     if (block_size > 1) {
-        return per_txn % (block_size * num_tcs_per_risc) == 0;
+        return per_txn % (block_size * num_tcs_per_risc) ==
+               0;  // each block must be a whole number of blocks of tile counters.
     }
-    return true;
+    return true;  // all checks passed, the txn_id count is legal.
 }
 
 // Returns the smallest n in (1, NUM_TXN_IDS] that compute_txn_descriptor() will accept.
@@ -1733,8 +1718,6 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
 
     std::tie(capacity, stride_in_entries) = compute_capacity_and_stride(*this);
     validate_ring_extent(*this);
-    // The override may have raised block_size * entry_size past one NoC packet; the txn descriptors
-    // recomputed below scale their ack threshold assuming exactly one ack per block.
     validate_implicit_burst_fits_one_packet(*this);
 
     if (configs_finalized && MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
@@ -1870,6 +1853,7 @@ std::vector<DFBRiscConfig> DataflowBufferImpl::compute_per_core_risc_configs(con
     std::vector<DFBRiscConfig> per_core_rc = hw_risc_configs;
     const uint32_t slot_span = producer_blocked ? (this->config.num_entries * entry_size)
                                                 : ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
+    // Assign base_addr and limit for each RISC's tile counters.  The assignment depends on the access pattern.
     if (producer_blocked && this->config.cap == ::dfb::AccessPattern::STRIDED) {
         uint32_t producer_ordinal = 0;
         for (auto& rc : per_core_rc) {
@@ -2143,6 +2127,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         config.num_consumers);
 
     uint32_t capacity;
+    // Compute capacity and stride based on the config. This also validates that the ring fits in L1.
     {
         auto [cap_v, stride_v] = compute_capacity_and_stride(*dfb);
         capacity = cap_v;

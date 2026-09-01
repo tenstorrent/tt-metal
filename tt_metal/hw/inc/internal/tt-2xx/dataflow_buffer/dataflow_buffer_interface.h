@@ -53,11 +53,10 @@ struct LocalDFBInterface {
     uint8_t stride_size_tiles;
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
-    uint16_t block_size;       // tiles in one block; 1 unless the ring is BLOCKED
-    uint16_t split_tc;         // Tensix B->S producer: each tile belongs to the next consumer's
-                               // TC, so credit and rotate TCs every tile
-    uint16_t tiles_collected;  // tiles taken from the current counter so far
-    uint16_t jump;             // cursor jump in tiles, taken on each hand-off
+    uint16_t block_size;
+    uint16_t split_tc;
+    uint16_t tiles_collected;
+    uint16_t jump;
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 } __attribute__((packed));
 
@@ -83,11 +82,10 @@ struct LocalDFBInterface {
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
     uint8_t tensix_trisc_mask;
-    uint16_t block_size;       // tiles in one block; 1 unless the ring is BLOCKED
-    uint16_t split_tc;         // Tensix B->S producer: each tile belongs to the next consumer's
-                               // TC, so credit and rotate TCs every tile
-    uint16_t tiles_collected;  // tiles taken from the current counter so far
-    uint16_t jump;             // cursor jump in tiles, taken on each hand-off
+    uint16_t block_size;
+    uint16_t split_tc;
+    uint16_t tiles_collected;
+    uint16_t jump;
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 } __attribute__((packed));
 
@@ -126,7 +124,7 @@ struct LocalDFBInterface {
 
     uint16_t num_entries;
     uint16_t block_size;       // entries in one block; 1 unless the ring is BLOCKED
-    uint16_t split_tc;         // B->S producer: a transaction spans all its TCs, so give
+    uint16_t split_tc;         // Blocked->Strided producer: a transaction spans all its TCs, so give
                                // each TC its share instead of one TC everything
     uint16_t tiles_collected;  // tiles taken from the current counter so far
     uint32_t jump;             // cursor jump in bytes, taken on each TC rotation

@@ -400,7 +400,7 @@ private:
 
 #ifdef ARCH_QUASAR
     template <bool is_producer>
-    void handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index);
+    void handle_final_credits(uint16_t tiles_issued, uint8_t txn_id_index);
 
 #ifndef COMPILE_FOR_TRISC
     friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_*

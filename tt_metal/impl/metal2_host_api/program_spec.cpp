@@ -1381,8 +1381,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
 
         // block_size is meaningful only for the BLOCKED access pattern: it must be > 0 iff
-        // BLOCKED, and 0 for STRIDED/ALL. (Divisibility of num_entries by block_size*threads
-        // is enforced device-side in the capacity switch alongside the STRIDED/ALL checks.)
+        // BLOCKED, and 0 for STRIDED/ALL.
         auto check_block_size_validity = [&](const auto& records, std::string_view role) {
             for (const auto& rec : records) {
                 const bool is_blocked = rec.binding->access_pattern == DFBAccessPattern::BLOCKED;
@@ -1408,7 +1407,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         //
         // BLOCKED -> BLOCKED also requires matching block_size and an integer
         // producer/consumer thread-count ratio.
-        // BLOCKED -> ALL and BLOCKED -> STRIDED reuse the existing ALL/STRIDED paths.
         if (!endpoints.producers.empty() && !endpoints.consumers.empty()) {
             const auto& prod = endpoints.producers.front();
             const auto& cons = endpoints.consumers.front();
