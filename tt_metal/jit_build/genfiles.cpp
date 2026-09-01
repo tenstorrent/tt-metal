@@ -218,6 +218,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         tensor_binding_sequence_entries.empty()) {
         content << "// No bindings for this kernel.\n";
     } else {
+        content << "#include \"internal/template_string.h\"\n";
         if (!dfb_entries.empty()) {
             content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
         }
@@ -264,6 +265,20 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                     content << "constexpr DFBBindingToken " << name << "{" << id << "};\n";
                 }
             }
+
+            content << "template <::internal::TemplateString name>\n"
+                    << "constexpr const DFBBindingToken* get_binding_if_present() {\n";
+            const char* if_kw = "    if constexpr";
+            for (const auto& entry : dfb_entries) {
+                content << if_kw << " (name == \"" << entry.first << "\") {\n"
+                        << "        return &" << entry.first << ";\n";
+                if_kw = "    } else if constexpr";
+            }
+            content << "    } else {\n"
+                    << "        return nullptr;\n"
+                    << "    }\n";
+            content << "}\n";
+
             content << "}  // namespace dfb\n";
         }
 
@@ -327,7 +342,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             }
         }
 
-        if (!ta_entries.empty() || !tensor_binding_sequence_entries.empty()) {
+        if (!ta_entries.empty()) {
             // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
             // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
             // its implicit base-address CRTA.
@@ -343,10 +358,27 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                         << "u, " << entry.addr_crta_offset << "u>;\n";
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
             }
+
+            // return type is auto as individual binding tokens have different template parameters.
+            content << "template <::internal::TemplateString name>\n"
+                    << "constexpr auto get_binding_if_present() {\n";
+            const char* if_kw = "    if constexpr";
+            for (const auto& entry : ta_entries) {
+                content << if_kw << " (name == \"" << entry.name << "\") {\n"
+                        << "        return &" << entry.name << ";\n";
+                if_kw = "    } else if constexpr";
+            }
+            content << "    } else {\n"
+                    << "        return nullptr;\n"
+                    << "    }\n";
+
+            content << "}\n";
+
             for (const auto& sequence : tensor_binding_sequence_entries) {
                 content << fmt::format(
                     "constexpr auto {} = std::make_tuple({});\n", sequence.name, fmt::join(sequence.members, ", "));
             }
+
             content << "}  // namespace tensor\n";
         }
 
@@ -362,6 +394,20 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                 content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
                         << entry.size_bytes << "u};\n";
             }
+
+            content << "template <::internal::TemplateString name>\n"
+                    << "constexpr const ScratchpadBindingToken* get_binding_if_present() {\n";
+            const char* if_kw = "    if constexpr";
+            for (const auto& entry : scratch_entries) {
+                content << if_kw << " (name == \"" << entry.name << "\") {\n"
+                        << "        return &" << entry.name << ";\n";
+                if_kw = "    } else if constexpr";
+            }
+            content << "    } else {\n"
+                    << "        return nullptr;\n"
+                    << "    }\n";
+            content << "}\n";
+
             content << "}  // namespace scratch\n";
         }
     }

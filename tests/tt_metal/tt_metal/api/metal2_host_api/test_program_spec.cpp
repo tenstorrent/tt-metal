@@ -3966,6 +3966,9 @@ void kernel_main() {
     auto noc_addr = accessor.get_noc_addr(0);
     (void)noc_addr;
 }
+
+static_assert(tensor::get_binding_if_present<"input_tensor">() == &tensor::input_tensor);
+static_assert(tensor::get_binding_if_present<"not_a_tensor">() == nullptr);
 )"};
 
     spec.kernels = {dm_kernel};
@@ -4295,6 +4298,9 @@ void kernel_main() {
     volatile uint32_t base = pad.get_base_address();
     (void)base;
 }
+
+static_assert(scratch::get_binding_if_present<"scratch">() == &scratch::scratch);
+static_assert(scratch::get_binding_if_present<"not_a_scratch">() == nullptr);
 )"};
     dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
@@ -4324,6 +4330,9 @@ void kernel_main() {
     volatile uint32_t base = pad.get_base_address();
     (void)base;
 }
+
+static_assert(scratch::get_binding_if_present<"scratch">() == &scratch::scratch);
+static_assert(scratch::get_binding_if_present<"not_a_scratch">() == nullptr);
 )"};
 
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
@@ -4355,6 +4364,9 @@ void kernel_main() {
     volatile int32_t sink = acc;  // keep the loop live so the range-for is actually instantiated
     (void)sink;
 }
+
+static_assert(scratch::get_binding_if_present<"scratch">() == &scratch::scratch);
+static_assert(scratch::get_binding_if_present<"not_a_scratch">() == nullptr);
 )"};
     dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
@@ -4397,6 +4409,9 @@ TT_KERNEL void compute_entry(uint32_t input_offset, uint32_t num_tiles) {  // RT
     volatile uint32_t sink = magic ^ entry_size ^ input_offset;
     (void)sink;
 }
+
+static_assert(dfb::get_binding_if_present<"out_dfb">() == &dfb::out_dfb);
+static_assert(dfb::get_binding_if_present<"not_a_dfb">() == nullptr);
 )";
 
 TEST_F(ProgramSpecTestGen1, CPU_TtKernelComputeShimCompiles) {
