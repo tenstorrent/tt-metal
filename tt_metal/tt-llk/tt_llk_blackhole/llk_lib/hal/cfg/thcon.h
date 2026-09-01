@@ -17,62 +17,50 @@ namespace cfg
 
 class ThconReg0Selector
 {
-public:
 };
 
 class ThconReg1Selector
 {
-public:
 };
 
 class ThconReg2Selector
 {
-public:
 };
 
 class ThconReg3Selector
 {
-public:
 };
 
 class ThconReg4Selector
 {
-public:
 };
 
 class ThconReg5Selector
 {
-public:
 };
 
 class ThconReg6Selector
 {
-public:
 };
 
 class ThconReg7Selector
 {
-public:
 };
 
 class ThconReg8Selector
 {
-public:
 };
 
 class ThconReg9Selector
 {
-public:
 };
 
 class ThconReg10Selector
 {
-public:
 };
 
 class ThconReg11Selector
 {
-public:
 };
 
 inline constexpr ThconReg0Selector Reg0 {};
