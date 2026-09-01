@@ -170,15 +170,29 @@ class Qwen3CompleterRemoteRollout(GRPOCompleter):
 
         For N prompts, returns N * ``completions_per_prompt`` completions.
         """
+        self.submit_generate(prompts)
+        return self.await_generate()
+
+    def submit_generate(self, prompts: List[List[int]]) -> None:
+        """Non-blocking submit for one-step-async trainers.
+
+        Expands by ``completions_per_prompt`` and ships to the ttt worker
+        without waiting. Pair with exactly one :meth:`await_generate` before
+        submitting again.
+        """
         ctx = self._ctx
         if ctx.completions_per_prompt > 1:
             expanded = [list(p) for p in prompts for _ in range(ctx.completions_per_prompt)]
         else:
             expanded = [list(p) for p in prompts]
-        return self._client.remote_generate(
+        self._client.submit_remote_generate(
             expanded,
             max_new_tokens=int(ctx.max_tokens_to_complete),
         )
+
+    def await_generate(self) -> List[List[int]]:
+        """Block for the completions of the last :meth:`submit_generate`."""
+        return self._client.await_remote_generate()
 
     def generate_str(self, prompt_strs: List[str]) -> List[str]:
         """Generate from strings: tokenise locally, ship IDs, decode locally."""

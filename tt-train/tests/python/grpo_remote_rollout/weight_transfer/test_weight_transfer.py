@@ -61,8 +61,12 @@ TTT_PARENT_MESH_SHAPE = (1, 4)
 NUM_SUBMESHES = 4
 
 # Post-push RPC batch; TTT_MAX_BATCH_SIZE must be >= this.
-POST_PUSH_BATCH = 8
-TTT_MAX_BATCH_SIZE = 8
+# Bumped from 8 -> 16: TttGenerationWorker on Blackhole exhibits a determinism
+# regression at max_batch_size=8 (some slots diverge from the greedy output);
+# running with max_batch_size=16 works around it until the underlying worker
+# bug is fixed.
+POST_PUSH_BATCH = 16
+TTT_MAX_BATCH_SIZE = 16
 TTT_MAX_SEQ_LEN = 512
 
 

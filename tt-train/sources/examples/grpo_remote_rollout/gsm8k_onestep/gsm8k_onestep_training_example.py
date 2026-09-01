@@ -3,15 +3,26 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""GRPO on GSM8K, async-rollout variant.
+"""GRPO on GSM8K, ONE-STEP-ASYNC rollout variant.
 
-Two-rank tt-run entrypoint (rank 0 = ttml Qwen3 policy + GRPOTrainer, rank 1
-= TttGenerationWorker on the rollout mesh); reward is the sum of five signals
-(correctness, xmlcount, soft_format, strict_format, int) dispatched by the
-framework and logged as ``{name}_mean`` columns.
+Two-rank tt-run entrypoint (rank 0 = ttml Qwen3 policy + OneStepAsyncGRPOTrainer,
+rank 1 = TttGenerationWorker on the rollout mesh); the trainer overlaps
+generation of the next batch on rank 1 with the optimizer step on the current
+batch on rank 0 (verl-shape loop, off-policy staleness = 1).
+
+Diffs vs the sync sibling ``gsm8k/gsm8k_training_example.py``:
+
+  * ``GRPOTrainer`` -> ``OneStepAsyncGRPOTrainer``.
+  * No ``WeightSyncCallback``: the async trainer's ``_async_gen_next_batch``
+    already pushes ``theta_t`` at the top of every iteration, so an on-step-end
+    callback would push twice per step.
+  * No eager ``completer.push_weights()`` after ``client.connect()``: the
+    trainer's own prime call does exactly that push before it submits ``gen_0``.
+  * Early ``num_iterations == 1`` assert so the CLI exits before rank 1 boots
+    when the yaml is misconfigured.
 
 Run:
-    tt-train/sources/examples/grpo_remote_rollout/gsm8k/runner.sh
+    tt-train/sources/examples/grpo_remote_rollout/gsm8k_onestep/runner.sh
 """
 
 from __future__ import annotations
@@ -34,7 +45,7 @@ import ttml
 import ttnn
 from datasets import load_dataset
 from ttml.common.config import DeviceConfig, get_model_config, load_config
-from ttml.trainers import GRPOTrainer, get_grpo_config
+from ttml.trainers import OneStepAsyncGRPOTrainer, get_grpo_config
 from utils.mesh_socket_bridge import MeshSocketWeightBridge
 from utils.mpi_rollout import MPIRolloutClient, MPIRolloutServer
 from utils.qwen3_grpo_completer import Qwen3CompleterRemoteRollout, Qwen3CompletionCtx
@@ -170,7 +181,7 @@ def build_dataset(seed: int):
 def get_output_dir() -> str:
     return os.path.join(
         str(REPO_ROOT),
-        "generated/tt-train/grpo_gsm8k_run",
+        "generated/tt-train/grpo_gsm8k_onestep_run",
         datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S"),
     )
 
@@ -201,30 +212,6 @@ def _make_receiver_bridge(kind: str, *, mesh: Any, peer_rank: int, submeshes: Li
     raise ValueError(f"training_config.weight_bridge must be one of {_VALID_WEIGHT_BRIDGES}, got {kind!r}")
 
 
-class WeightSyncCallback:
-    def __init__(self, completer: Any, every: int = 1) -> None:
-        if every < 1:
-            raise ValueError(f"WeightSyncCallback: 'every' must be >= 1 (got {every})")
-        self.completer = completer
-        self.every = every
-
-    def on_train_begin(self, trainer: Any) -> None:
-        pass
-
-    def on_step_end(self, trainer: Any, step: int, *args: Any, **kwargs: Any) -> None:
-        if step % self.every == 0:
-            self.completer.push_weights()
-
-    def on_before_optimizer_step(self, trainer: Any) -> None:
-        pass
-
-    def on_save(self, trainer: Any, step: int, path: str) -> None:
-        pass
-
-    def on_train_end(self, trainer: Any) -> None:
-        pass
-
-
 def _load_device_config():
     raw = load_config(os.path.join(str(REPO_ROOT), CONFIG_REL))
     return DeviceConfig(raw), raw
@@ -240,15 +227,26 @@ def _close_ttml_device() -> None:
     ttml.autograd.AutoContext.get_instance().close_device()
 
 
+def _assert_onestep_config(raw: dict) -> None:
+    """Fail fast before rank 1 boots the TTT worker if the yaml disagrees with
+    the OneStepAsyncGRPOTrainer contract."""
+    num_iterations = int(raw["training_config"]["grpo_config"].get("num_iterations", 1))
+    if num_iterations != 1:
+        raise ValueError(
+            f"gsm8k_onestep requires grpo_config.num_iterations == 1 (got {num_iterations}). "
+            "Use the sync gsm8k example if you need multiple mini-epochs per rollout batch."
+        )
+
+
 def _ttml_main() -> None:
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     autograd_ctx.initialize_distributed_context(*sys.argv)
 
     device_config, raw = _load_device_config()
+    _assert_onestep_config(raw)
     mesh_device = _open_ttml_device(device_config)
 
     model_id = raw["training_config"]["model_id"]
-    weight_sync_every = int(raw["training_config"]["weight_sync_every"])
 
     completer: Any = None
     client: Any = None
@@ -277,16 +275,18 @@ def _ttml_main() -> None:
             enable_ddp=device_config.enable_ddp,
         )
 
+        # Async trainer owns all weight pushes -- no eager boot push, no
+        # WeightSyncCallback. The prime call inside train() pushes theta_0
+        # before submitting gen_0.
         client.connect()
-        completer.push_weights()
 
-        trainer = GRPOTrainer(
+        trainer = OneStepAsyncGRPOTrainer(
             completer=completer,
             dataset=dataset,
             config=grpo_config,
             reward_funcs=REWARD_FUNCS,
             optimizer_dict=optimizer_dict,
-            callbacks=[WeightSyncCallback(completer, every=weight_sync_every)],
+            callbacks=[],
             model_source=model_id,
         )
         trainer.train()
@@ -306,6 +306,7 @@ def _ttt_main() -> None:
         ttnn.init_distributed_context()
 
     raw = load_config(os.path.join(str(REPO_ROOT), CONFIG_REL))
+    _assert_onestep_config(raw)
     grpo_temperature = float(raw["training_config"]["grpo_config"]["temperature"])
     model_id = raw["training_config"]["model_id"]
     rr = raw["remote_rollout_config"]
@@ -367,8 +368,8 @@ if __name__ == "__main__":
     world_size = int(ttnn.distributed_context_get_size())
     if world_size != 2:
         raise RuntimeError(
-            f"gsm8k_training_example must run under tt-run with world_size == 2 (got {world_size}). "
-            "Use gsm8k/runner.sh."
+            f"gsm8k_onestep_training_example must run under tt-run with world_size == 2 (got {world_size}). "
+            "Use gsm8k_onestep/runner.sh."
         )
 
     rank = int(ttnn.distributed_context_get_rank())
