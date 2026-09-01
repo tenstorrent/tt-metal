@@ -345,6 +345,11 @@ Scored with whisper `large-v3`; CER for CJK, WER for English.
 *worse* on the same text through the same ASR — `83.87 %` against this port's `64.52 %`
 zero-shot.
 
+`cross_lingual yue` also terminates early — 122 tokens for 2.44 s of audio against the
+reference's 387 for 7.73 s. RAS is stochastic and the model's Cantonese confidence is
+low, so an early stop is plausible without a bug, but it is unproven either way; a
+greedy run of the same case would settle it.
+
 ## 9. Tuning flags
 
 Everything ships at a default that was measured. Defaults are read from the code, not
@@ -614,6 +619,13 @@ both parts.
 noise. It was found on a real `zero_shot` prompt, not on a golden — 22 795 `Inf`
 values in a 50 560-element tensor. Fixed with `ttnn.relu` on the variance before
 `eps`, at a 2–8 % timing cost and no PCC change.
+
+### 2.4 An empty tensor into `ttnn::concat` segfaults rather than raising
+
+Surfaced through three empty-prompt edge cases in the flow stage; two crashed the
+process outright, with no Python frame to point at the call site. Named here so a
+silent crash is recognisable rather than mysterious the next time an empty tensor
+reaches this op.
 
 ## 3. The vocoder
 
