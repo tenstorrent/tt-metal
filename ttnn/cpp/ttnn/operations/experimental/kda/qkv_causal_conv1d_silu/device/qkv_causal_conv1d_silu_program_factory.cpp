@@ -38,7 +38,6 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     const auto& k = outputs[1].mesh_tensor();
     const auto& v = outputs[2].mesh_tensor();
     const auto& device = input.device();
-    const auto arch = device.arch();
 
     const uint32_t Mt = attrs.sequence / tt::constants::TILE_HEIGHT;
     const uint32_t Qt = attrs.q_width / tt::constants::TILE_WIDTH;
@@ -114,7 +113,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
             },
         .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     tt::tt_metal::experimental::KernelSpec writer{
@@ -132,7 +131,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
             },
         .compile_time_args = {{"Qt", Qt}, {"Kt", Kt}, {"Vt", Vt}, {"block_ct", block_ct}, {"num_blocks", num_blocks}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     tt::tt_metal::experimental::KernelSpec compute{
@@ -160,7 +159,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
             },
         .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_count"}},
-        .hw_config = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config),
+        .hw_config = ttnn::to_compute_hardware_config(attrs.compute_kernel_config),
     };
 
     tt::tt_metal::experimental::KernelRunArgs reader_run_args{.kernel = reader_kernel_name};

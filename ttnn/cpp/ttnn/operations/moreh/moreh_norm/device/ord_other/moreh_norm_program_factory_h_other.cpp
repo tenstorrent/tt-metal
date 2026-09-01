@@ -189,7 +189,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
             {
                 .runtime_arg_names = {"input_is_dram", "num_cols_per_core", "tile_offset", "Ht", "Wt", "origin_h"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -214,7 +214,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
             {
                 .runtime_arg_names = {"output_is_dram", "num_cols_per_core", "tile_offset"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -237,7 +237,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_h/kernels/"
         "moreh_norm_h_kernel.cpp";
 
-    auto compute_hw_config = ttnn::to_compute_hardware_config(arch, operation_attributes.compute_kernel_config);
+    auto compute_hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
     // The legacy config set UnpackToDestMode::Default for every CB index; Default is UnpackToSrc.
     // An explicit entry is *required* for any Float32 DFB the compute kernel consumes while
     // enable_32_bit_dest (= fp32_dest_acc_en) is set. That is reachable two independent ways here:
@@ -245,7 +245,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
     // input dtype is float32. Naming every consumed DFB covers both without a dtype-dependent branch,
     // and reproduces the legacy all-Default vector byte for byte. `output` is producer-only on
     // compute, so it takes no entry.
-    std::get<ComputeGen1Config>(compute_hw_config).unpack_modes = {
+    compute_hw_config.unpack_modes = {
         {INPUT_DFB, UnpackMode::UnpackToSrc},
         {ONE_DFB, UnpackMode::UnpackToSrc},
         {MASK_H_DFB, UnpackMode::UnpackToSrc},

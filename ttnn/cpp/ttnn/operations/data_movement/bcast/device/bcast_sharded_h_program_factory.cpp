@@ -157,10 +157,10 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
         // Legacy arg names on the reader side: the kernel reads index 4 as "NC" (fed Ht_per_core) and
         // index 5 as "batch_offset" (fed tile_offset). Names preserve the kernel-side identifiers.
         .runtime_arg_schema = {.runtime_arg_names = {"Ht", "Wt", "offset", "NC", "batch_offset"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    ComputeHardwareConfig compute_hw = ComputeGen1Config{};  // legacy ComputeConfigDescriptor{} defaults
+    ComputeHardwareConfig compute_hw{};
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source =

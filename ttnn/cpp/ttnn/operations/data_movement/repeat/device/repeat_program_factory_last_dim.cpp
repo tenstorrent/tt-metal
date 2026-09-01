@@ -119,7 +119,7 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryLastDim::create_pro
              TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args = {{"original_page_size_bytes", source_page_size_bytes}, {"num_repeats", num_repeats}},
         .runtime_arg_schema = {.runtime_arg_names = {"page_start", "page_end", "nop"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelRunArgs reader_run_args{.kernel = READER};

@@ -115,7 +115,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::cre
                 {"reciprocal_scale_w_fixed", static_cast<std::uint32_t>(reciprocal_scale_w_fixed)},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_sticks", "start_stick_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     metal2::KernelSpec writer{
@@ -128,7 +128,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::cre
         .tensor_bindings = {metal2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .compile_time_args = {{"aligned_stick_nbytes", aligned_output_page_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_sticks", "start_stick_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     metal2::ProgramSpec spec{

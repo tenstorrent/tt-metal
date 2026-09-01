@@ -41,25 +41,27 @@ namespace {
 
 using namespace experimental;
 
-constexpr const char* ALIAS_PRODUCER_KERNEL =
-    "tests/tt_metal/tt_metal/test_kernels/dataflow/alias_dfb_producer.cpp";
-constexpr const char* ALIAS_CONSUMER_KERNEL =
-    "tests/tt_metal/tt_metal/test_kernels/dataflow/alias_dfb_consumer.cpp";
+constexpr const char* ALIAS_PRODUCER_KERNEL = "tests/tt_metal/tt_metal/test_kernels/dataflow/alias_dfb_producer.cpp";
+constexpr const char* ALIAS_CONSUMER_KERNEL = "tests/tt_metal/tt_metal/test_kernels/dataflow/alias_dfb_consumer.cpp";
 
 inline TensorSpec make_alias_dram_tensor_spec(uint32_t entry_size, uint32_t num_entries) {
     const uint32_t words = entry_size / sizeof(uint32_t);
     return TensorSpec(
         Shape{num_entries, words},
-        TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR),
-                     MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
 }
 
 inline TensorSpec make_alias_l1_tensor_spec(uint32_t entry_size, uint32_t num_entries) {
     const uint32_t total_words = num_entries * entry_size / sizeof(uint32_t);
     return TensorSpec(
         Shape{1, total_words},
-        TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR),
-                     MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));
 }
 
 // Build a DataflowBufferConfig for direct-API tests (no kernel compilation).
@@ -80,11 +82,11 @@ inline dfb::DataflowBufferConfig make_1sx1s_config(uint32_t entry_size, uint32_t
 }
 
 struct AliasDFBProgramComponents {
-    ProgramSpec       spec;
-    MeshTensor        in_a;
-    MeshTensor        in_b;
-    MeshTensor        out_a;
-    MeshTensor        out_b;
+    ProgramSpec spec;
+    MeshTensor in_a;
+    MeshTensor in_b;
+    MeshTensor out_a;
+    MeshTensor out_b;
 };
 
 AliasDFBProgramComponents make_alias_dfb_program_spec(
@@ -114,11 +116,19 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
     DataMovementHardwareConfig producer_cfg;
     DataMovementHardwareConfig consumer_cfg;
     if (mesh_device.arch() == ARCH::QUASAR) {
-        producer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-        consumer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        producer_cfg = DataMovementHardwareConfig{
+            .gen2_specific =
+                DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true}};
+        consumer_cfg = DataMovementHardwareConfig{
+            .gen2_specific =
+                DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true}};
     } else {
-        producer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
-        consumer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+        producer_cfg = DataMovementHardwareConfig{
+            .gen1_specific =
+                DataMovementHardwareConfig::DataMovement1XXConfig{.processor = DataMovementProcessor::RISCV_0}};
+        consumer_cfg = DataMovementHardwareConfig{
+            .gen1_specific = DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1}};
     }
 
     DataflowBufferSpec dfb_a{
@@ -229,10 +239,7 @@ void run_alias_dfb_program(
     uint8_t num_producers = 1,
     uint8_t num_consumers = 1) {
     auto [spec, in_a, in_b, out_a, out_b] = make_alias_dfb_program_spec(
-        mesh_device, node,
-        entry_size_a, num_entries_a,
-        entry_size_b, num_entries_b,
-        num_producers, num_consumers);
+        mesh_device, node, entry_size_a, num_entries_a, entry_size_b, num_entries_b, num_producers, num_consumers);
 
     Program program = MakeProgramFromSpec(mesh_device, spec);
 
@@ -286,19 +293,17 @@ void run_alias_dfb_program(
     slow_dispatch::ReadFromBuffer(out_a.mesh_buffer(), result_a);
     slow_dispatch::ReadFromBuffer(out_b.mesh_buffer(), result_b);
 
-    EXPECT_EQ(result_a, input_a)
-        << "Phase A output mismatch: DFB_A data did not round-trip correctly";
-    EXPECT_EQ(result_b, input_b)
-        << "Phase B output mismatch: DFB_B (alias) data did not round-trip correctly";
+    EXPECT_EQ(result_a, input_a) << "Phase A output mismatch: DFB_A data did not round-trip correctly";
+    EXPECT_EQ(result_b, input_b) << "Phase B output mismatch: DFB_B (alias) data did not round-trip correctly";
 }
 
 struct AliasBorrowedDFBComponents {
-    ProgramSpec  spec;
-    MeshTensor   in_a;
-    MeshTensor   in_b;
-    MeshTensor   out_a;
-    MeshTensor   out_b;
-    MeshTensor   ring_tensor;  // L1 tensor that backs dfb
+    ProgramSpec spec;
+    MeshTensor in_a;
+    MeshTensor in_b;
+    MeshTensor out_a;
+    MeshTensor out_b;
+    MeshTensor ring_tensor;  // L1 tensor that backs dfb
 };
 
 AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
@@ -317,11 +322,19 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
     DataMovementHardwareConfig producer_cfg;
     DataMovementHardwareConfig consumer_cfg;
     if (mesh_device.arch() == ARCH::QUASAR) {
-        producer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-        consumer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        producer_cfg = DataMovementHardwareConfig{
+            .gen2_specific =
+                DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true}};
+        consumer_cfg = DataMovementHardwareConfig{
+            .gen2_specific =
+                DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true}};
     } else {
-        producer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
-        consumer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+        producer_cfg = DataMovementHardwareConfig{
+            .gen1_specific =
+                DataMovementHardwareConfig::DataMovement1XXConfig{.processor = DataMovementProcessor::RISCV_0}};
+        consumer_cfg = DataMovementHardwareConfig{
+            .gen1_specific = DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1}};
     }
 
     // dfb_borrowed: backed by ring_tensor (L1)
@@ -449,10 +462,7 @@ TEST_F(UnitMeshFixture, AliasDFBAddressEquality1Sx1S) {
 
     EXPECT_EQ(addr_a, addr_b) << "Aliased DFBs must share the same L1 base address";
 
-    log_info(
-        tt::LogTest,
-        "AliasDFB_AddressEquality_1Sx1S: addr_a=0x{:x}  addr_b=0x{:x}",
-        addr_a, addr_b);
+    log_info(tt::LogTest, "AliasDFB_AddressEquality_1Sx1S: addr_a=0x{:x}  addr_b=0x{:x}", addr_a, addr_b);
 }
 
 TEST_F(UnitMeshFixture, AliasDFBDataFlow1Sx1S) {
@@ -682,8 +692,7 @@ TEST_F(UnitMeshFixture, AliasDFBAllocSecondarySkipped) {
 
     // addr_c must follow the primary's footprint, not the secondary's.
     const uint32_t group_end = addr_a + cfg_a.entry_size * cfg_a.num_entries;
-    EXPECT_GE(addr_c, group_end)
-        << "Non-aliased DFB_C must start after the alias group";
+    EXPECT_GE(addr_c, group_end) << "Non-aliased DFB_C must start after the alias group";
     EXPECT_LT(addr_c, group_end + cfg_b.entry_size * cfg_b.num_entries)
         << "Allocator double-counted the secondary: addr_c is too far";
 }
@@ -691,8 +700,8 @@ TEST_F(UnitMeshFixture, AliasDFBAllocSecondarySkipped) {
 TEST_F(UnitMeshFixture, AliasDFBAlloc3Way) {
     const CoreCoord core{0, 0};
 
-    const auto cfg_a = make_1sx1s_config(512,  8);
-    const auto cfg_b = make_1sx1s_config(256,  16);
+    const auto cfg_a = make_1sx1s_config(512, 8);
+    const auto cfg_b = make_1sx1s_config(256, 16);
     const auto cfg_c = make_1sx1s_config(1024, 4);
 
     Program program = CreateProgram();
@@ -712,10 +721,7 @@ TEST_F(UnitMeshFixture, AliasDFBAlloc3Way) {
     EXPECT_EQ(addr_a, addr_b) << "DFB_B must share DFB_A's address";
     EXPECT_EQ(addr_a, addr_c) << "DFB_C must share DFB_A's address";
 
-    log_info(
-        tt::LogTest,
-        "AliasDFB_Alloc_3Way: addr_a=0x{:x}  addr_b=0x{:x}  addr_c=0x{:x}",
-        addr_a, addr_b, addr_c);
+    log_info(tt::LogTest, "AliasDFB_Alloc_3Way: addr_a=0x{:x}  addr_b=0x{:x}  addr_c=0x{:x}", addr_a, addr_b, addr_c);
 }
 
 TEST_F(UnitMeshFixture, AliasDFBAgreedGroupResize) {
@@ -763,8 +769,8 @@ TEST_F(UnitMeshFixture, AliasDFBAgreedGroupResize) {
 
 TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryAddressEquality) {
     const NodeCoord node{0, 0};
-    constexpr uint32_t kEntrySize   = 512;
-    constexpr uint32_t kNumEntries  = 8;
+    constexpr uint32_t kEntrySize = 512;
+    constexpr uint32_t kNumEntries = 8;
 
     auto [spec, in_a, in_b, out_a, out_b, ring] =
         make_alias_borrowed_dfb_program_spec(this->device(), node, kEntrySize, kNumEntries);
@@ -806,26 +812,26 @@ TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryAddressEquality) {
     SetProgramRunArgs(program, run_params);
 
     const uint32_t id_borrowed = program.impl().get_dfb_handle("dfb_borrowed");
-    const uint32_t id_alias    = program.impl().get_dfb_handle("dfb_alias");
+    const uint32_t id_alias = program.impl().get_dfb_handle("dfb_alias");
 
     const uint32_t addr_borrowed = program.impl().get_dataflow_buffer(id_borrowed)->uniform_alloc_addr();
-    const uint32_t addr_alias    = program.impl().get_dataflow_buffer(id_alias)->uniform_alloc_addr();
+    const uint32_t addr_alias = program.impl().get_dataflow_buffer(id_alias)->uniform_alloc_addr();
     const uint32_t ring_addr = static_cast<uint32_t>(ring.mesh_buffer().address());
 
-    EXPECT_EQ(addr_borrowed, ring_addr)
-        << "dfb_borrowed must resolve to the ring tensor's L1 address";
-    EXPECT_EQ(addr_alias, ring_addr)
-        << "dfb_alias must inherit the ring tensor's L1 address via alias propagation";
+    EXPECT_EQ(addr_borrowed, ring_addr) << "dfb_borrowed must resolve to the ring tensor's L1 address";
+    EXPECT_EQ(addr_alias, ring_addr) << "dfb_alias must inherit the ring tensor's L1 address via alias propagation";
 
     log_info(
         tt::LogTest,
         "AliasDFB_BorrowedMemory_AddressEquality: addr_borrowed=0x{:x}  addr_alias=0x{:x}  ring=0x{:x}",
-        addr_borrowed, addr_alias, ring_addr);
+        addr_borrowed,
+        addr_alias,
+        ring_addr);
 }
 
 TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
     const NodeCoord node{0, 0};
-    constexpr uint32_t kEntrySize  = 512;
+    constexpr uint32_t kEntrySize = 512;
     constexpr uint32_t kNumEntries = 8;
 
     auto [spec, in_a, in_b, out_a, out_b, ring] =
@@ -880,10 +886,8 @@ TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
     slow_dispatch::ReadFromBuffer(out_a.mesh_buffer(), result_a);
     slow_dispatch::ReadFromBuffer(out_b.mesh_buffer(), result_b);
 
-    EXPECT_EQ(result_a, input_a)
-        << "Phase A (dfb_borrowed) data did not round-trip correctly";
-    EXPECT_EQ(result_b, input_b)
-        << "Phase B (dfb_alias via borrowed L1) data did not round-trip correctly";
+    EXPECT_EQ(result_a, input_a) << "Phase A (dfb_borrowed) data did not round-trip correctly";
+    EXPECT_EQ(result_b, input_b) << "Phase B (dfb_alias via borrowed L1) data did not round-trip correctly";
 }
 
 }  // namespace

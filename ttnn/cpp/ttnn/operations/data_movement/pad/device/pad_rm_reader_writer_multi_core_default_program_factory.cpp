@@ -215,7 +215,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
                      "start_dim_offset_c",
                      "start_dim_offset_n"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -248,7 +248,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
             {
                 .runtime_arg_names = {"num_sticks_per_core", "num_sticks_per_barrier", "start_page_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Build per-core runtime args inline (legacy path called get_runtime_args_rm()

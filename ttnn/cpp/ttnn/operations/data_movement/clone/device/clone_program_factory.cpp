@@ -181,7 +181,7 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
             .dfb_spec_name = SRC, .accessor_name = "src", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = rta_names},
-        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     KernelSpec writer{
         .unique_id = WRITER,
@@ -190,7 +190,7 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
             .dfb_spec_name = writer_dfb, .accessor_name = "dst", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = rta_names},
-        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     spec.kernels.push_back(reader);
     spec.kernels.push_back(writer);
@@ -199,15 +199,12 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
     // Compute KernelSpecs for dtype conversion (per core group — preserved multiplicity)
     // ---------------------------------------------------------------------
     if (convert_dtype) {
-        auto compute_hw =
-            ttnn::to_compute_hardware_config(input.device()->arch(), operation_attributes.compute_kernel_config);
+        auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
         // Metal 2.0 requires an explicit unpack_modes entry when a compute kernel consumes a
         // Float32 DFB with a 32-bit dest register. Legacy ComputeConfigDescriptor left
         // unpack_to_dest_mode default (== UnpackToSrc); mirror that value faithfully.
-        if (auto* gen1 = std::get_if<ComputeGen1Config>(&compute_hw)) {
-            if (input_data_format == tt::DataFormat::Float32 && gen1->enable_32_bit_dest) {
-                gen1->unpack_modes = ComputeUnpackModes{{SRC, UnpackMode::UnpackToSrc}};
-            }
+        if (input_data_format == tt::DataFormat::Float32 && compute_hw.enable_32_bit_dest) {
+            compute_hw.unpack_modes = ComputeUnpackModes{{SRC, UnpackMode::UnpackToSrc}};
         }
 
         auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_tiles) {

@@ -142,7 +142,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                 .endpoint_type = DFBEndpointType::PRODUCER,
             }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // Writer kernel (writes interleaved output to DRAM). Both layout variants present the same binding
@@ -159,7 +159,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                 .endpoint_type = DFBEndpointType::CONSUMER,
             }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
-        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     if (is_tile) {
         writer.source =
@@ -213,7 +213,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
             // false = Precise SFPU; bfp8_pack_precise false = Approximate pack; fp32_dest_acc_en
             // false; dst_full_sync_en false = double_buffer_dest true), so an all-default Gen1 config
             // reproduces the legacy settings exactly.
-            .hw_config = ComputeHardwareConfig{ComputeGen1Config{}},
+            .hw_config = ComputeHardwareConfig{},
         });
         work_unit_kernels.push_back(COMPUTE);
     }

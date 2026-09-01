@@ -251,7 +251,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
                      "origin_h",
                      "origin_w"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     Group<DFBBinding> writer_dfb_bindings{};
@@ -279,7 +279,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
             {
                 .runtime_arg_names = {"tile_offset", "num_channels_per_core", "num_inner_tiles", "batch"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -331,7 +331,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     // would silently flip every field, because that helper's defaults favor performance while the
     // Metal struct's favor precision. With enable_32_bit_dest at its default false, the Float32
     // unpack_modes requirement does not apply, so the table stays empty.
-    const ComputeHardwareConfig compute_hw = ComputeGen1Config{};
+    const ComputeHardwareConfig compute_hw{};
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_channels_per_core) {
         return KernelSpec{

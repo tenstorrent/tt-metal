@@ -1207,7 +1207,7 @@ void add_compute_defines(m2::KernelSpec& kernel, const SpecConfig& c, bool is_al
 // is the preferred mode for anything the SFPU consumes, so these assignments stay legal but become
 // slower than they need to be. They want revisiting before this op targets Gen2.
 void set_compute_unpack_modes(m2::KernelSpec& kernel, const m2::ProgramSpec& spec, const SpecConfig& c) {
-    auto& modes = m2::unpack_modes(std::get<m2::ComputeHardwareConfig>(kernel.hw_config));
+    auto& modes = std::get<m2::ComputeHardwareConfig>(kernel.hw_config).unpack_modes;
     if (c.welford_fp32_alias) {
         modes.emplace(X_WELFORD, UnpackMode::UnpackToDest);
     }
@@ -1238,10 +1238,12 @@ void add_kernel_and_work_unit_specs(
     const bool has_not_all_to_all_workers = workers.num_none_all_to_all_workers > 0;
     const bool has_inactive_cores = !core_ranges.inactive_cores.empty();
 
-    const m2::DataMovementHardwareConfig reader_hw = m2::DataMovementGen1Config{
-        .processor = DataMovementProcessor::RISCV_0, .noc = c.reader_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-    const m2::DataMovementHardwareConfig writer_hw = m2::DataMovementGen1Config{
-        .processor = DataMovementProcessor::RISCV_1, .noc = c.writer_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+    const m2::DataMovementHardwareConfig reader_hw{
+        .gen1_specific = m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = c.reader_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC}};
+    const m2::DataMovementHardwareConfig writer_hw{
+        .gen1_specific = m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+            .processor = DataMovementProcessor::RISCV_1, .noc = c.writer_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC}};
 
     // The reader's trailing coordinate block is one X coordinate per multicast column followed by one
     // Y coordinate per multicast row. Its length is a compile-time property of the kernel, but the

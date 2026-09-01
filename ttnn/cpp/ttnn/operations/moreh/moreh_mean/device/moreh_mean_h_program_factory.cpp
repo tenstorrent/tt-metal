@@ -158,7 +158,7 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
                 {"reduce_factor", origin_H},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols", "mask_h"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // ---- Writer kernel ----
@@ -173,7 +173,7 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     // ---- Compute kernels (two groups) ----
@@ -185,13 +185,13 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
     }
     KernelSpec::CompilerOptions::Defines compute_defines(compute_defines_map);
 
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
-    if (auto* compute_gen1 = std::get_if<ComputeGen1Config>(&compute_hw); compute_gen1 && fp32_dest_acc_en) {
-        // Legacy set unpack_to_dest_mode[CBIndex::c_24] = UnpackToDestFp32 when fp32 accumulation is
-        // on; reindexed onto the DFB name and translated to the Metal 2.0 spelling. Metal 2.0 also
-        // *requires* an explicit entry here (accum_dst is Float32 and the kernel consumes it with a
-        // 32-bit dest register).
-        compute_gen1->unpack_modes = ComputeUnpackModes{{ACCUM_DST_DFB, UnpackMode::UnpackToDest}};
+    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
+    // Legacy set unpack_to_dest_mode[CBIndex::c_24] = UnpackToDestFp32 when fp32 accumulation is
+    // on; reindexed onto the DFB name and translated to the Metal 2.0 spelling. Metal 2.0 also
+    // *requires* an explicit entry here (accum_dst is Float32 and the kernel consumes it with a
+    // 32-bit dest register).
+    if (fp32_dest_acc_en) {
+        compute_hw.unpack_modes = ComputeUnpackModes{{ACCUM_DST_DFB, UnpackMode::UnpackToDest}};
     }
 
     // The compute kernel binds the mask DFB in every configuration: it constructs the buffer object

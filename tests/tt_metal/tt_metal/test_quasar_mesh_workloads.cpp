@@ -61,7 +61,7 @@ distributed::MeshWorkload create_workload(
             .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         });
         wu_kernel_names.push_back(std::move(kernel_id));
     }
@@ -72,7 +72,7 @@ distributed::MeshWorkload create_workload(
         .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = kNumComputeNEOs,
         .runtime_arg_schema = {.runtime_arg_names = {"l1_address"}},
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     });
     wu_kernel_names.push_back(COMPUTE_KERNEL);
 
@@ -152,13 +152,13 @@ distributed::MeshWorkload create_multi_node_workload(
                  .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
                  .num_threads = 1,
                  .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-                 .hw_config = experimental::DataMovementGen2Config{}},
+                 .hw_config = experimental::DataMovementHardwareConfig{}},
              experimental::KernelSpec{
                  .unique_id = compute_kernel,
                  .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
                  .num_threads = kNumComputeNEOs,
                  .runtime_arg_schema = {.runtime_arg_names = {"l1_address"}},
-                 .hw_config = experimental::ComputeGen2Config{}}},
+                 .hw_config = experimental::ComputeHardwareConfig{}}},
         .work_units = {experimental::WorkUnitSpec{
             .name = "multi_node", .kernels = {dm_kernel, compute_kernel}, .target_nodes = node_range}},
     };

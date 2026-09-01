@@ -28,7 +28,6 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
     const auto& output_a = outputs[0].mesh_tensor();
     const auto& output_b = outputs[1].mesh_tensor();
     const auto& device = a.device();
-    const auto arch = device.arch();
 
     const uint32_t Kt = attrs.key_dim / tt::constants::TILE_WIDTH;
     const uint32_t Vt = attrs.value_dim / tt::constants::TILE_WIDTH;
@@ -135,12 +134,12 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
             },
         .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"G", G}},
         .runtime_arg_schema = {.runtime_arg_names = {"worker_index", "group"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_common_runtime_varargs = 2 * group_heads},
     };
 
-    auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
-    auto& unpack_modes = tt::tt_metal::experimental::unpack_modes(compute_hw);
+    auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
+    auto& unpack_modes = compute_hw.unpack_modes;
     for (const auto& name :
          {stage_a_dfb_name, stage_b_dfb_name, remote_a_dfb_name, remote_b_dfb_name, scratch_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;

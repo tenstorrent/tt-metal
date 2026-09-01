@@ -302,7 +302,7 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
         .compile_time_args = {{"fill_momentum_fp32", static_cast<uint32_t>(any_float32)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"momentum", "start_tile_id", "num_tiles", "HtWt", "n_stride", "c_stride", "N", "C"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // WRITER KERNEL
@@ -378,7 +378,7 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
             {{"old_stat_is_fp32", static_cast<uint32_t>(running_stat_data_format == DataFormat::Float32)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_tile_id", "num_tiles", "HtWt", "n_stride", "c_stride", "N", "C"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // COMPUTE KERNEL
@@ -515,13 +515,12 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
         });
     }
 
-    auto compute_hw_config =
-        ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+    auto compute_hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
     if (fp32_dest_acc_en) {
         // Re-key of the legacy unpack_to_dest_mode vector, which was indexed by CB id. The
         // writer-facing stat buffers are producer-only for this kernel, so they get no entry. An
         // omitted DFB keeps the UnpackToSrc default.
-        auto& unpack_modes = std::get<ComputeGen1Config>(compute_hw_config).unpack_modes;
+        auto& unpack_modes = compute_hw_config.unpack_modes;
         for (const auto& dfb_name :
              {BATCH_MEAN_DFB,
               BATCH_VAR_DFB,

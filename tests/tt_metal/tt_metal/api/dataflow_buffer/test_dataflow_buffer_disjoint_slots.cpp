@@ -47,8 +47,12 @@ void apply_gen1_dm_configs(m2::KernelSpec& producer, m2::KernelSpec& consumer, d
     if (mesh_device.arch() == ARCH::QUASAR) {
         return;
     }
-    producer.hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
-    consumer.hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+    producer.hw_config = m2::DataMovementHardwareConfig{
+        .gen1_specific =
+            m2::DataMovementHardwareConfig::DataMovement1XXConfig{.processor = DataMovementProcessor::RISCV_0}};
+    consumer.hw_config = m2::DataMovementHardwareConfig{
+        .gen1_specific = m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1}};
 }
 
 void expect_half_grid_slots_packed(Program& program, uint32_t num_dfbs_per_half, bool /*is_quasar*/) {
@@ -77,7 +81,9 @@ m2::KernelSpec make_touch_producer(const std::string& name, uint32_t num_dfbs, d
     kernel.compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}};
     kernel.compile_time_args = {{"implicit_sync", implicit_sync ? 1u : 0u}};
     if (!implicit_sync) {
-        kernel.hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
+        kernel.hw_config = m2::DataMovementHardwareConfig{
+            .gen1_specific =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{.processor = DataMovementProcessor::RISCV_0}};
     }
     return kernel;
 }
@@ -91,7 +97,9 @@ m2::KernelSpec make_touch_consumer(
     kernel.compile_time_args = {{"implicit_sync", implicit_sync ? 1u : 0u}, {"touched_magic", touched_magic}};
     kernel.runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}};
     if (!implicit_sync) {
-        kernel.hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+        kernel.hw_config = m2::DataMovementHardwareConfig{
+            .gen1_specific = m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1}};
     }
     return kernel;
 }

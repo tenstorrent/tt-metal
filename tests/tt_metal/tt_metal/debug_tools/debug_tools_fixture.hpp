@@ -83,7 +83,9 @@ protected:
     void RunTestOnDevice(
         const std::function<void(T*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
         const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-        auto run_function_no_args = [this, run_function, mesh_device]() { run_function(static_cast<T*>(this), mesh_device); };
+        auto run_function_no_args = [this, run_function, mesh_device]() {
+            run_function(static_cast<T*>(this), mesh_device);
+        };
         MeshDispatchFixture::RunTestOnDevice(run_function_no_args, mesh_device);
     }
 };
@@ -107,7 +109,9 @@ public:
         // increase because we'll likely check in the middle of a dump.
         if (wait_for_dump) {
             int curr_count = MetalContext::instance().watcher_server()->dump_count();
-            while (MetalContext::instance().watcher_server()->dump_count() < curr_count + 2) {;}
+            while (MetalContext::instance().watcher_server()->dump_count() < curr_count + 2) {
+                ;
+            }
         }
     }
 
@@ -121,7 +125,8 @@ protected:
     bool test_mode_previous{};
     void SetUp() override {
         // Initialize log file name once during setup
-        log_file_name = tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() + "generated/watcher/watcher.log";
+        log_file_name =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() + "generated/watcher/watcher.log";
 
         // Enable watcher for this test, save the previous state so we can restore it later.
         watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
@@ -189,15 +194,25 @@ public:
         delayed_cores[CoreType::WORKER] = {{0, 0}, {1, 1}};
 
         // Store the previous state of the watcher features
-        saved_target_selection[tt::llrt::RunTimeDebugFeatureReadDebugDelay] = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_targets(tt::llrt::RunTimeDebugFeatureReadDebugDelay);
-        saved_target_selection[tt::llrt::RunTimeDebugFeatureWriteDebugDelay] = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_targets(tt::llrt::RunTimeDebugFeatureWriteDebugDelay);
-        saved_target_selection[tt::llrt::RunTimeDebugFeatureAtomicDebugDelay] = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_targets(tt::llrt::RunTimeDebugFeatureAtomicDebugDelay);
+        saved_target_selection[tt::llrt::RunTimeDebugFeatureReadDebugDelay] =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_targets(
+                tt::llrt::RunTimeDebugFeatureReadDebugDelay);
+        saved_target_selection[tt::llrt::RunTimeDebugFeatureWriteDebugDelay] =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_targets(
+                tt::llrt::RunTimeDebugFeatureWriteDebugDelay);
+        saved_target_selection[tt::llrt::RunTimeDebugFeatureAtomicDebugDelay] =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_targets(
+                tt::llrt::RunTimeDebugFeatureAtomicDebugDelay);
 
         // Enable read and write debug delay for the test core
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(tt::llrt::RunTimeDebugFeatureReadDebugDelay, true);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(tt::llrt::RunTimeDebugFeatureReadDebugDelay, delayed_cores);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(tt::llrt::RunTimeDebugFeatureWriteDebugDelay, true);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(tt::llrt::RunTimeDebugFeatureWriteDebugDelay, delayed_cores);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(
+            tt::llrt::RunTimeDebugFeatureReadDebugDelay, true);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(
+            tt::llrt::RunTimeDebugFeatureReadDebugDelay, delayed_cores);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(
+            tt::llrt::RunTimeDebugFeatureWriteDebugDelay, true);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(
+            tt::llrt::RunTimeDebugFeatureWriteDebugDelay, delayed_cores);
 
         // Call parent
         MeshWatcherFixture::SetUp();
@@ -208,9 +223,15 @@ public:
         MeshWatcherFixture::TearDown();
 
         // Restore
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureReadDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureReadDebugDelay]);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureWriteDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureWriteDebugDelay]);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureAtomicDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureAtomicDebugDelay]);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(
+            tt::llrt::RunTimeDebugFeatureReadDebugDelay,
+            saved_target_selection[tt::llrt::RunTimeDebugFeatureReadDebugDelay]);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(
+            tt::llrt::RunTimeDebugFeatureWriteDebugDelay,
+            saved_target_selection[tt::llrt::RunTimeDebugFeatureWriteDebugDelay]);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(
+            tt::llrt::RunTimeDebugFeatureAtomicDebugDelay,
+            saved_target_selection[tt::llrt::RunTimeDebugFeatureAtomicDebugDelay]);
     }
 };
 
@@ -328,9 +349,11 @@ public:
     // Hardware config for a single-threaded data-movement kernel, portable across generations.
     static experimental::DataMovementHardwareConfig SingleThreadDmConfig(tt::ARCH arch) {
         if (arch == tt::ARCH::QUASAR) {
-            return experimental::DataMovementGen2Config{};
+            return experimental::DataMovementHardwareConfig{};
         }
-        return experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+        return experimental::DataMovementHardwareConfig{
+            .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}};
     }
 
     // Compiles the kernel and returns the path to its ELF, so the caller can inspect the binary.
@@ -484,4 +507,4 @@ protected:
     }
 };
 
-} // namespace tt::tt_metal
+}  // namespace tt::tt_metal

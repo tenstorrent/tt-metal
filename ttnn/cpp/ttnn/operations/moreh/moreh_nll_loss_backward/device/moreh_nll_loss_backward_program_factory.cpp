@@ -256,7 +256,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_2d(
         .tensor_bindings = std::move(reader_tensor_bindings),
         .runtime_arg_schema =
             {.runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "C", "weight_num_tile"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -275,7 +275,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_2d(
                 TensorBinding{.tensor_parameter_name = TENSOR_INPUT_GRAD, .accessor_name = "input_grad"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     Group<DFBBinding> compute_dfb_bindings{
@@ -334,8 +334,8 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_2d(
         require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TMP2, fp32_dest_acc_en_data_format);
     }
 
-    auto compute_hw_config = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
-    unpack_modes(compute_hw_config) = std::move(compute_unpack_modes);
+    auto compute_hw_config = ttnn::to_compute_hardware_config(compute_kernel_config);
+    compute_hw_config.unpack_modes = std::move(compute_unpack_modes);
 
     auto make_compute = [&](KernelSpecName unique_id, uint32_t units_per_core_group) {
         return KernelSpec{
@@ -619,7 +619,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_3d(
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"ignore_index", "num_tiles_per_core", "start_id", "C", "num_inner_tile", "weight_num_tile"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -638,7 +638,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_3d(
                 TensorBinding{.tensor_parameter_name = TENSOR_INPUT_GRAD, .accessor_name = "input_grad"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     Group<DFBBinding> compute_dfb_bindings{
@@ -697,8 +697,8 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_3d(
         require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TMP2, fp32_dest_acc_en_data_format);
     }
 
-    auto compute_hw_config = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
-    unpack_modes(compute_hw_config) = std::move(compute_unpack_modes);
+    auto compute_hw_config = ttnn::to_compute_hardware_config(compute_kernel_config);
+    compute_hw_config.unpack_modes = std::move(compute_unpack_modes);
 
     auto make_compute = [&](KernelSpecName unique_id, uint32_t units_per_core_group) {
         return KernelSpec{
@@ -985,7 +985,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_4d(
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"ignore_index", "num_tiles_per_core", "start_id", "C", "num_inner_tile", "weight_num_tile"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -1004,7 +1004,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_4d(
                 TensorBinding{.tensor_parameter_name = TENSOR_INPUT_GRAD, .accessor_name = "input_grad"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     Group<DFBBinding> compute_dfb_bindings{
@@ -1063,8 +1063,8 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_4d(
         require_unpack_mode(compute_unpack_modes, fp32_dest_acc_en, DFB_TMP2, fp32_dest_acc_en_data_format);
     }
 
-    auto compute_hw_config = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
-    unpack_modes(compute_hw_config) = std::move(compute_unpack_modes);
+    auto compute_hw_config = ttnn::to_compute_hardware_config(compute_kernel_config);
+    compute_hw_config.unpack_modes = std::move(compute_unpack_modes);
 
     auto make_compute = [&](KernelSpecName unique_id, uint32_t units_per_core_group) {
         return KernelSpec{

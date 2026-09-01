@@ -131,14 +131,17 @@ inline m2::KernelSpec make_dm_kernel(
     const std::string& source_path,
     uint8_t num_threads = 1,
     std::vector<m2::DFBSpecName> disable_implicit_sync_for = {}) {
+    m2::DataMovementHardwareConfig dm{};
+    if (!disable_implicit_sync_for.empty()) {
+        dm.gen2_specific = m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+            .disable_dfb_implicit_sync_for = std::move(disable_implicit_sync_for),
+        };
+    }
     return m2::KernelSpec{
         .unique_id = unique_id,
         .source = std::filesystem::path{source_path},
         .num_threads = num_threads,
-        .hw_config =
-            m2::DataMovementGen2Config{
-                .disable_dfb_implicit_sync_for = std::move(disable_implicit_sync_for),
-            },
+        .hw_config = std::move(dm),
     };
 }
 
@@ -148,15 +151,16 @@ inline m2::KernelSpec make_compute_kernel(
         .unique_id = unique_id,
         .source = std::filesystem::path{source_path},
         .num_threads = num_threads,
-        .hw_config = m2::ComputeGen2Config{},
+        .hw_config = m2::ComputeHardwareConfig{},
     };
 }
 
 inline void disable_implicit_sync_for(m2::KernelSpec& kernel, m2::DFBSpecName dfb_name) {
     auto& dm_cfg = std::get<m2::DataMovementHardwareConfig>(kernel.hw_config);
-    TT_FATAL(std::holds_alternative<m2::DataMovementGen2Config>(dm_cfg), "Can only set implicit sync for Gen2 Kernel");
-    auto& gen2_cfg = std::get<m2::DataMovementGen2Config>(dm_cfg);
-    gen2_cfg.disable_dfb_implicit_sync_for.push_back(std::move(dfb_name));
+    if (!dm_cfg.gen2_specific.has_value()) {
+        dm_cfg.gen2_specific = m2::DataMovementHardwareConfig::DataMovement2XXConfig{};
+    }
+    dm_cfg.gen2_specific->disable_dfb_implicit_sync_for.push_back(std::move(dfb_name));
 }
 
 inline void maybe_disable_implicit_sync(m2::KernelSpec& kernel, bool implicit_sync, m2::DFBSpecName dfb_name) {
@@ -361,16 +365,18 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     } else {
         // WH/BH: Gen1 config (Gen1 has no implicit sync, so no disable knob needed).
         if (p.producer_type == M2PorCType::DM) {
-            producer.hw_config =
-                m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
+            producer.hw_config = m2::DataMovementHardwareConfig{
+                .gen1_specific = m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0}};
         } else {
-            producer.hw_config = m2::ComputeGen1Config{};
+            producer.hw_config = m2::ComputeHardwareConfig{};
         }
         if (p.consumer_type == M2PorCType::DM) {
-            consumer.hw_config = m2::DataMovementGen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1};
+            consumer.hw_config = m2::DataMovementHardwareConfig{
+                .gen1_specific = m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1}};
         } else {
-            consumer.hw_config = m2::ComputeGen1Config{};
+            consumer.hw_config = m2::ComputeHardwareConfig{};
         }
     }
 

@@ -175,7 +175,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_GRAD_TENSOR, .accessor_name = "src"}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"num_tiles", "start_id", "mask_h", "mask_w", "do_mask_h", "do_mask_w"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     spec.kernels.push_back(KernelSpec{
@@ -188,7 +188,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = BIAS_GRAD_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -255,7 +255,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
     // Style A: the op resolves a TTNN DeviceComputeKernelConfig, so the TTNN helper carries its
     // values across (including the math_approx_mode bool -> Precision mapping and the
     // dst_full_sync_en -> double_buffer_dest inversion).
-    auto compute_hw = ttnn::to_compute_hardware_config(arch, compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
 
     // Legacy carried an unpack-to-dest-mode vector indexed by buffer index and left every entry at
     // its default in this factory. Metal 2.0 keys the same information by DFB name and requires an
@@ -282,12 +282,8 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
         // binding's condition.
         dfb_unpack_modes.emplace(MASK_H_W_DFB, UnpackMode::UnpackToSrc);
     }
-    // Assign through the generation-neutral accessor rather than std::get<ComputeGen1Config>: the
-    // helper above returns whichever alternative matches `arch`, so naming Gen1 here would throw
-    // std::bad_variant_access on Quasar. (The local is named dfb_unpack_modes so it does not shadow
-    // the accessor.)
     // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
-    unpack_modes(compute_hw) = std::move(dfb_unpack_modes);
+    compute_hw.unpack_modes = std::move(dfb_unpack_modes);
 
     spec.kernels.push_back(KernelSpec{
         .unique_id = COMPUTE,

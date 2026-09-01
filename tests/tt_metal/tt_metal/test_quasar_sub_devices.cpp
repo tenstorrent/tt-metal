@@ -81,7 +81,7 @@ distributed::MeshWorkload create_l1_write_workload(
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-            .hw_config = experimental::DataMovementGen2Config{}}},
+            .hw_config = experimental::DataMovementHardwareConfig{}}},
         .work_units = {experimental::WorkUnitSpec{
             .name = "writer_" + id, .kernels = {kernel_name}, .target_nodes = target_nodes}},
     };
@@ -133,7 +133,7 @@ SyncWorkloads create_sync_workloads(
             .source = "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/persistent_waiter.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "num_inc", "sync_core_x", "sync_core_y"}},
-            .hw_config = experimental::DataMovementGen2Config{}}},
+            .hw_config = experimental::DataMovementHardwareConfig{}}},
         .work_units = {experimental::WorkUnitSpec{
             .name = "waiter", .kernels = {waiter_kernel}, .target_nodes = experimental::NodeCoord(waiter_node)}},
     };
@@ -158,7 +158,7 @@ SyncWorkloads create_sync_workloads(
             .source = "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/syncer.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"sem_addr"}},
-            .hw_config = experimental::DataMovementGen2Config{}}},
+            .hw_config = experimental::DataMovementHardwareConfig{}}},
         .work_units = {experimental::WorkUnitSpec{
             .name = "syncer", .kernels = {syncer_kernel}, .target_nodes = experimental::NodeCoord(syncer_node)}},
     };
@@ -179,7 +179,7 @@ SyncWorkloads create_sync_workloads(
             .source = "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/incrementer.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "waiter_core_x", "waiter_core_y"}},
-            .hw_config = experimental::DataMovementGen2Config{}}},
+            .hw_config = experimental::DataMovementHardwareConfig{}}},
         .work_units = {experimental::WorkUnitSpec{
             .name = "incrementer", .kernels = {incrementer_kernel}, .target_nodes = incrementer_nodes}},
     };

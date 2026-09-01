@@ -134,8 +134,11 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
             .runtime_arg_schema =
                 {.runtime_arg_names = {"first_shard_id"},
                  .common_runtime_arg_names = {"num_shards", "shard_id_stride"}},
-            .hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
-                .processor = processor, .noc = noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC}},
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .gen1_specific =
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = processor, .noc = noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC}},
         };
     };
 

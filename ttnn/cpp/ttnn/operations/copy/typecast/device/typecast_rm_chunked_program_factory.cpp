@@ -165,7 +165,7 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
                 {"partial_chunk_size_bytes", input_partial_chunk_size_bytes}  // DRAM read size
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "start_row_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     const KernelSpec writer{
@@ -182,7 +182,7 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
                 {"partial_chunk_size_bytes", output_partial_chunk_size_bytes}  // DRAM write size
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "start_row_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Create compute kernels - compute per_core_block_cnt as total chunks (full + partial) per core
@@ -232,14 +232,18 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
             .compile_time_args =
                 {{"per_core_block_cnt", per_core_block_cnt},  // rows * total_chunks_per_row
                  {"per_core_block_dim", 1u}},
-            .hw_config = ComputeHardwareConfig{ComputeGen1Config{
-                .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-                .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
-                .bfp_pack_precision_mode =
-                    args.bfp8_pack_precise ? tt::tt_metal::Precision::Precise : tt::tt_metal::Precision::Approximate,
-                .enable_32_bit_dest = args.fp32_dest_acc_en,
-                .unpack_modes = unpack_modes,
-            }},
+            .hw_config =
+                ComputeHardwareConfig{
+                    .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                    .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
+                    .enable_32_bit_dest = args.fp32_dest_acc_en,
+                    .unpack_modes = unpack_modes,
+                    .gen1_specific =
+                        ComputeHardwareConfig::Compute1XXConfig{
+                            .bfp_pack_precision_mode = args.bfp8_pack_precise ? tt::tt_metal::Precision::Precise
+                                                                              : tt::tt_metal::Precision::Approximate,
+                        },
+                },
         };
     };
 

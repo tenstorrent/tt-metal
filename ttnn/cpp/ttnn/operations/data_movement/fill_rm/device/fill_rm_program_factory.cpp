@@ -88,7 +88,7 @@ ttnn::device_operation::ProgramArtifacts FillRMProgramFactory::create_program_ar
             {
                 .runtime_arg_names = {"NC", "H", "W", "fillH", "fillW", "val_hi", "val_lo"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(output.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     ProgramSpec spec{

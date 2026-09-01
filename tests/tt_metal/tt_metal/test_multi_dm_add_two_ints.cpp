@@ -67,7 +67,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
                 {
                     .runtime_arg_names = {"a", "b"},
                 },
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
     };
 
@@ -121,12 +121,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<uint32_t> result_core_0(3, 0);
-    tt_metal::detail::ReadFromDeviceL1(
-        dev, CoreCoord(0, 0), result_base, sizeof(uint32_t) * 3, result_core_0);
+    tt_metal::detail::ReadFromDeviceL1(dev, CoreCoord(0, 0), result_base, sizeof(uint32_t) * 3, result_core_0);
 
     std::vector<uint32_t> result_core_1(3, 0);
-    tt_metal::detail::ReadFromDeviceL1(
-        dev, CoreCoord(1, 0), result_base, sizeof(uint32_t) * 3, result_core_1);
+    tt_metal::detail::ReadFromDeviceL1(dev, CoreCoord(1, 0), result_base, sizeof(uint32_t) * 3, result_core_1);
 
     ASSERT_EQ(result_core_0, (std::vector<uint32_t>{3, 7, 11}));
     ASSERT_EQ(result_core_1, (std::vector<uint32_t>{3, 7, 15}));

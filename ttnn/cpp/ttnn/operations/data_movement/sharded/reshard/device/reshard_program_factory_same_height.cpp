@@ -163,10 +163,8 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
     // The two same-source instances split the sticks of each core, so both raw-touch the shard DFB.
     // Two role-free touchers over one grid -> assign 1P + 1C.
     spec.kernels = {
-        make_worker(
-            kSHReaderKernel, ttnn::create_reader_datamovement_config(device->arch()), DFBEndpointType::PRODUCER),
-        make_worker(
-            kSHWriterKernel, ttnn::create_writer_datamovement_config(device->arch()), DFBEndpointType::CONSUMER),
+        make_worker(kSHReaderKernel, ttnn::create_reader_datamovement_config(), DFBEndpointType::PRODUCER),
+        make_worker(kSHWriterKernel, ttnn::create_writer_datamovement_config(), DFBEndpointType::CONSUMER),
     };
 
     // Local sharded DFB, built on the local buffer's borrowed memory so its backing L1 address is

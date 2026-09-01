@@ -134,8 +134,8 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCoreSharded::c
     TensorParameter output_param{.unique_id = OUTPUT_PARAM, .spec = output.tensor_spec()};
 
     // hw_config — Style B (see the interleaved factory for the rationale).
-    const ComputeHardwareConfig compute_hw_config =
-        ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+    const ComputeHardwareConfig compute_hw_config{
+        .fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
 
     auto self_loop = [](const DFBSpecName& dfb, const std::string& name) {
         return Group<DFBBinding>{

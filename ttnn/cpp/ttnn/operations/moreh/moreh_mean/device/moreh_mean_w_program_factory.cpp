@@ -155,7 +155,7 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanWFactory::
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
         .compile_time_args = {{"scaler", packed_scaler_value}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id", "mask_w"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // ---- Writer kernel ----
@@ -170,7 +170,7 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanWFactory::
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     // ---- Compute kernels (two groups) ----
@@ -182,12 +182,12 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanWFactory::
     }
     KernelSpec::CompilerOptions::Defines compute_defines(compute_defines_map);
 
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
-    if (auto* compute_gen1 = std::get_if<ComputeGen1Config>(&compute_hw); compute_gen1 && fp32_dest_acc_en) {
-        // Legacy left unpack_to_dest_mode entirely Default here (unlike the H factory). Metal 2.0
-        // requires the choice to be explicit once a consumed DFB is Float32 with a 32-bit dest
-        // register, so spell out the legacy Default: UnpackToSrc. Value-preserving.
-        compute_gen1->unpack_modes = ComputeUnpackModes{{ACCUM_DST_DFB, UnpackMode::UnpackToSrc}};
+    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
+    // Legacy left unpack_to_dest_mode entirely Default here (unlike the H factory). Metal 2.0
+    // requires the choice to be explicit once a consumed DFB is Float32 with a 32-bit dest
+    // register, so spell out the legacy Default: UnpackToSrc. Value-preserving.
+    if (fp32_dest_acc_en) {
+        compute_hw.unpack_modes = ComputeUnpackModes{{ACCUM_DST_DFB, UnpackMode::UnpackToSrc}};
     }
 
     // The compute kernel binds the mask DFB in every configuration: it constructs the buffer object

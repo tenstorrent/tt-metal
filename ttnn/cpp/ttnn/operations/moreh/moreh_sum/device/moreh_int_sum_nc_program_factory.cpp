@@ -133,7 +133,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumNCIntFactory
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_input_tiles", "num_output_tiles", "start_id", "dim", "reduce_tile_size", "inner_tile_size"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     spec.kernels.push_back(KernelSpec{
@@ -146,7 +146,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumNCIntFactory
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -157,19 +157,17 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumNCIntFactory
         compute_defines.emplace("FP32_DEST_ACC_EN", "1");
     }
 
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
-    if (auto* compute_gen1 = std::get_if<ComputeGen1Config>(&compute_hw); compute_gen1) {
-        // This factory overrides the caller's fp32_dest_acc_en above (integer sum requires a 32-bit
-        // dest); carry the *forced* value rather than the one the attributes came in with.
-        compute_gen1->enable_32_bit_dest = fp32_dest_acc_en;
-        // Every DFB here carries the Int32 output format and the dest register is 32-bit, so the
-        // Src-vs-Dest choice is real for each one the compute kernel consumes. Issue #49936 extends
-        // the choice to Int32/UInt32, where an unspecified consumer becomes a hard error.
-        compute_gen1->unpack_modes = ComputeUnpackModes{
-            {INPUT_DFB, UnpackMode::UnpackToSrc},
-            {INTERMED0_DFB, UnpackMode::UnpackToSrc},
-        };
-    }
+    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
+    // This factory overrides the caller's fp32_dest_acc_en above (integer sum requires a 32-bit
+    // dest); carry the *forced* value rather than the one the attributes came in with.
+    // Every DFB here carries the Int32 output format and the dest register is 32-bit, so the
+    // Src-vs-Dest choice is real for each one the compute kernel consumes. Issue #49936 extends
+    // the choice to Int32/UInt32, where an unspecified consumer becomes a hard error.
+    compute_hw.enable_32_bit_dest = fp32_dest_acc_en;
+    compute_hw.unpack_modes = ComputeUnpackModes{
+        {INPUT_DFB, UnpackMode::UnpackToSrc},
+        {INTERMED0_DFB, UnpackMode::UnpackToSrc},
+    };
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t units_per_core) {
         return KernelSpec{

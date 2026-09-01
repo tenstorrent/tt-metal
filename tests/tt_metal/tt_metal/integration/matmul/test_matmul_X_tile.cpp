@@ -253,10 +253,13 @@ static void matmul_tile_block(
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .gen2_specific = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true}};
     } else {
-        reader_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
     }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
@@ -291,10 +294,13 @@ static void matmul_tile_block(
 
     experimental::DataMovementHardwareConfig writer_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .gen2_specific = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true}};
     } else {
-        writer_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
     }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
@@ -334,13 +340,13 @@ static void matmul_tile_block(
 
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeGen2Config{
+        compute_hw_config = experimental::ComputeHardwareConfig{
             .fpu_math_fidelity = cfg.math_fidelity,
             .enable_32_bit_dest = cfg.fp32_dest_acc_en,
             .double_buffer_dest = !cfg.dst_full_sync_en,
         };
     } else {
-        compute_hw_config = experimental::ComputeGen1Config{
+        compute_hw_config = experimental::ComputeHardwareConfig{
             .fpu_math_fidelity = cfg.math_fidelity,
             .enable_32_bit_dest = cfg.fp32_dest_acc_en,
             .double_buffer_dest = !cfg.dst_full_sync_en,

@@ -615,7 +615,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
                 {"tilized_cb_second_reader_offset", 0u},
                 {"split_reader_cb_shared", 0u},
             },
-        .hw_config = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config),
+        .hw_config = ttnn::to_compute_hardware_config(compute_kernel_config),
     };
 
     // ---- Activation reader kernel ----
@@ -626,9 +626,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         // QSR: this width-sharded activation reader fills the ACT_ROW_MAJOR/ACT DFB via per-window "stick"
         // sub-tile NOC reads; that pattern stalls the DFB implicit-sync credit accounting (reader pinned at
         // NRBW). Opt out so explicit reserve/push credits stay authoritative (mirrors tilize/transpose HC-sharded).
-        act_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        act_hw = m2::DataMovementHardwareConfig{
+            .gen2_specific =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true}};
     } else {
-        act_hw = m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc};
+        act_hw = m2::DataMovementHardwareConfig{
+            .gen1_specific = m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc}};
     }
     m2::KernelSpec act_kernel{
         .unique_id = KERNEL_ACT,
@@ -733,10 +737,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         // implicit-sync ISR bumps the same 16-bit tile counter as the explicit push -> overflow ->
         // TILE_COUNTERS fault on the compute unpack consuming WEIGHTS. Opt out so explicit credits are
         // authoritative.
-        weights_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        weights_hw = m2::DataMovementHardwareConfig{
+            .gen2_specific =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true}};
     } else {
-        weights_hw =
-            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc};
+        weights_hw = m2::DataMovementHardwareConfig{
+            .gen1_specific = m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc}};
     }
     m2::KernelSpec weights_kernel{
         .unique_id = KERNEL_WEIGHTS,

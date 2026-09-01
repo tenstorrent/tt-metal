@@ -816,9 +816,7 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
             "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/multi_block_compute.cpp",
             core,
             tt_metal::experimental::quasar::QuasarComputeConfig{
-                .num_threads_per_cluster = 1,
-                .compile_args = compute_compile_args,
-                .defines = compute_defines});
+                .num_threads_per_cluster = 1, .compile_args = compute_compile_args, .defines = compute_defines});
 
         tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
             program_, in0_id, reader_kernel, compute_kernel);
@@ -1039,15 +1037,21 @@ void run_matmul_no_mop(const std::shared_ptr<distributed::MeshDevice>& mesh_devi
     experimental::DataMovementHardwareConfig writer_hw_config;
     experimental::ComputeHardwareConfig compute_hw_config;
     if (is_quasar) {
-        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-        compute_hw_config = experimental::ComputeGen2Config{.fpu_math_fidelity = test_config.math_fidelity};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .gen2_specific = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true}};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .gen2_specific = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true}};
+        compute_hw_config = experimental::ComputeHardwareConfig{.fpu_math_fidelity = test_config.math_fidelity};
     } else {
-        reader_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
-        writer_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
-        compute_hw_config = experimental::ComputeGen1Config{.fpu_math_fidelity = test_config.math_fidelity};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .gen1_specific = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
+        compute_hw_config = experimental::ComputeHardwareConfig{.fpu_math_fidelity = test_config.math_fidelity};
     }
 
     // Reads num_tiles into in0 and num_bcast_tiles into in1 from two DRAM buffers, which is exactly

@@ -112,8 +112,6 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
     // reader-produced IN directly.
     const m2::DFBSpecName& writer_dfb = convert_df ? OUT : IN;
 
-    const auto arch = device->arch();
-
     m2::KernelSpec reader{
         .unique_id = READER,
         .source = KERNEL_READER_INTERLEAVED,
@@ -133,7 +131,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     m2::KernelSpec writer{
@@ -155,7 +153,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Compute kernel (only present when converting data format): consumes IN, produces OUT.
@@ -182,7 +180,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
             {
                 .runtime_arg_names = {"per_core_tile_cnt"},
             },
-        .hw_config = m2::ComputeGen1Config{},
+        .hw_config = m2::ComputeHardwareConfig{},
     };
 
     // Runtime args: each core owns a contiguous span of tiles.

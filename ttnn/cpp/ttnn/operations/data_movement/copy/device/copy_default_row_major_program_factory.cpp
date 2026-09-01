@@ -127,8 +127,6 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::c
         .data_format_metadata = output_data_format,
     };
 
-    const auto arch = device->arch();
-
     m2::KernelSpec reader{
         .unique_id = READER,
         .source = KERNEL_READER,
@@ -170,7 +168,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::c
             {
                 .runtime_arg_names = {"start_row", "num_rows_to_process"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     m2::KernelSpec writer{
@@ -200,7 +198,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::c
             {
                 .runtime_arg_names = {"start_row", "num_rows_to_process"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Runtime args: each core owns a contiguous span of logical rows.

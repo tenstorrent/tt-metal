@@ -196,7 +196,7 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreHWProgramFactory::create_
         .tensor_bindings = reader_tensor_bindings,
         .runtime_arg_schema =
             {.runtime_arg_names = {"num_tiles", "HtWt", "base_start_id_HtWt", "curr_id_from_base", "bcast_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // Rung-1 reuse of the shared eltwise/unary writer's Metal 2.0 fork (do not edit — it already has
@@ -211,10 +211,10 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreHWProgramFactory::create_
             .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = writer_tensor_bindings,
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    ComputeHardwareConfig compute_hw = ComputeGen1Config{};  // legacy ComputeConfigDescriptor{} defaults
+    ComputeHardwareConfig compute_hw{};  // legacy ComputeConfigDescriptor{} defaults
     KernelSpec compute{
         .unique_id = COMPUTE,
         // Rung-2 fork of the lent bcast_hw.cpp compute kernel (rotate_half still binds the legacy original).

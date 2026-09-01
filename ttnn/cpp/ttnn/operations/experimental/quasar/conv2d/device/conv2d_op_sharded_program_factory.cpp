@@ -1695,10 +1695,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         // QSR: this conv activation reader fills the ACT/ACT_ROW_MAJOR DFB via per-window "stick" sub-tile NOC
         // reads (read_sticks()); that pattern stalls the DFB implicit-sync credit accounting (reader pinned at
         // NRBW). Opt out so explicit reserve/push credits stay authoritative (mirrors tilize/transpose HC-sharded).
-        reader_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        reader_hw = m2::DataMovementHardwareConfig{
+            .gen2_specific =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true}};
     } else {
-        reader_hw =
-            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc};
+        reader_hw = m2::DataMovementHardwareConfig{
+            .gen1_specific = m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc}};
     }
     m2::KernelSpec reader_kernel_spec{
         .unique_id = KERNEL_READER,
@@ -1939,10 +1942,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         // compute. On Quasar the implicit-sync ISR would ALSO bump those tile counters -> double-count ->
         // 16-bit counter overflow -> TILE_COUNTERS fault on the compute unpack that consumes WEIGHTS. Opt out
         // so explicit credits stay authoritative (mirrors the reader + matmul mcast fix).
-        writer_sender_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        writer_sender_hw = m2::DataMovementHardwareConfig{
+            .gen2_specific =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true}};
     } else {
-        writer_sender_hw = m2::DataMovementGen1Config{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc};
+        writer_sender_hw = m2::DataMovementHardwareConfig{
+            .gen1_specific = m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc}};
     }
     m2::KernelSpec writer_sender_spec{
         .unique_id = KERNEL_WRITER_SENDER,
@@ -1998,10 +2004,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         // Same as the sender: the receiver does explicit reserve_back/push_back on WEIGHTS/BIAS/ACT_SECOND;
         // opt out of implicit sync so those tile counters aren't double-bumped (else TILE_COUNTERS overflow
         // on the compute unpack consuming WEIGHTS).
-        writer_receiver_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        writer_receiver_hw = m2::DataMovementHardwareConfig{
+            .gen2_specific =
+                m2::DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true}};
     } else {
-        writer_receiver_hw = m2::DataMovementGen1Config{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc};
+        writer_receiver_hw = m2::DataMovementHardwareConfig{
+            .gen1_specific = m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc}};
     }
     m2::KernelSpec writer_receiver_spec{
         .unique_id = KERNEL_WRITER_RECEIVER,
@@ -2174,7 +2183,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .source = std::filesystem::path(compute_kernel),
         .compiler_options = {.defines = m2::KernelSpec::CompilerOptions::Defines(compute_defines)},
         .dfb_bindings = std::move(compute_dfb_bindings),
-        .hw_config = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config),
+        .hw_config = ttnn::to_compute_hardware_config(compute_kernel_config),
     };
 
     if (is_conv_1d_depthwise_conv) {
@@ -2294,9 +2303,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
               act_subblock_h_ntiles * act_num_subblocks * (full_k_ntiles / act_block_w_ntiles)}},
         .hw_config =
             (device->arch() == tt::ARCH::QUASAR)
-                ? m2::DataMovementHardwareConfig{m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}}
-                : m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
-                      .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc}},
+                ? m2::DataMovementHardwareConfig{.gen2_specific = m2::DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true}}
+                : m2::DataMovementHardwareConfig{.gen1_specific = m2::DataMovementHardwareConfig::DataMovement1XXConfig{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc}},
     };
 
     // ---- Register kernels ----

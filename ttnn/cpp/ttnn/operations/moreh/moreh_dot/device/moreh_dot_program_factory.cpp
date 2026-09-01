@@ -43,8 +43,6 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
     uint32_t mask_h = (pad_h == 0) ? (tt::constants::TILE_HEIGHT) : (pad_h);
     uint32_t mask_w = (pad_w == 0) ? (tt::constants::TILE_WIDTH) : (pad_w);
 
-    IDevice* device = input_a.device();
-
     const uint32_t in0_t = 2;   // a
     const uint32_t in1_t = 2;   // b
     const uint32_t in2_t = 1;   // scaler
@@ -101,7 +99,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
                 TensorBinding{.tensor_parameter_name = INPUT_B, .accessor_name = "src1"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id", "mask_h", "mask_w"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     };
 
     // ----- Writer kernel -----
@@ -117,7 +115,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
                 TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     };
 
     // ----- Compute kernel -----
@@ -140,7 +138,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
             },
         .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt"}},
         // Style A: op resolves a TTNN ComputeKernelConfig; translate it to the Gen1 hardware config.
-        .hw_config = to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
+        .hw_config = to_compute_hardware_config(operation_attributes.compute_kernel_config),
     };
 
     // ----- ProgramSpec -----

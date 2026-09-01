@@ -377,7 +377,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         .tensor_bindings = reader_tensor_bindings,
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ---- Writer kernel ----
@@ -394,7 +394,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"}},
         .compile_time_args = {{"num_datum_padded", num_datum_padded}, {"tile_hw", tile_height * tile_width}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset", "blk", "mask_padded_data", "Wt"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // for broadcasting in H direction we need to
@@ -458,12 +458,11 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
 
     // Compute hardware config (Style A). Legacy defaulted unpack_to_dest_mode (=> UnpackToSrc); Metal 2.0
     // requires an explicit entry for every Float32 DFB the compute consumes under enable_32_bit_dest.
-    auto compute_hw = ttnn::to_compute_hardware_config(arch, attributes.compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(attributes.compute_kernel_config);
     if (fp32_dest_acc_en) {
-        auto& gen1 = std::get<ComputeGen1Config>(compute_hw);
         auto add_unpack = [&](const DFBSpecName& name, tt::DataFormat fmt) {
             if (fmt == tt::DataFormat::Float32) {
-                gen1.unpack_modes.insert({name, tt::tt_metal::UnpackMode::UnpackToSrc});
+                compute_hw.unpack_modes.insert({name, tt::tt_metal::UnpackMode::UnpackToSrc});
             }
         };
         add_unpack(IN0, in0_cb_data_format);

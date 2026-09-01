@@ -130,12 +130,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllFro
 
     DataMovementHardwareConfig requestor_hw_config;
     if (device->arch() == tt::ARCH::QUASAR) {
-        requestor_hw_config = DataMovementGen2Config{};
+        requestor_hw_config = DataMovementHardwareConfig{};
     } else {
-        requestor_hw_config = DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = test_config.noc_id,
-        };
+        requestor_hw_config = DataMovementHardwareConfig{
+            .gen1_specific = DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = test_config.noc_id,
+            }};
     }
     KernelSpec requestor_spec{
         .unique_id = KernelSpecName{"requestor"},

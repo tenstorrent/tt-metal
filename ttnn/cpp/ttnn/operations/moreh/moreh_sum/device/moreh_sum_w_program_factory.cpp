@@ -179,7 +179,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumWFactory::cr
         // halves of one uint32_t, which the reader splats across the scaler tile.
         .compile_time_args = {{"scaler", packed_scaler_value}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id", "mask_w"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // ---- Writer kernel ----
@@ -193,7 +193,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumWFactory::cr
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     // ---- Compute kernels (two groups) ----
@@ -203,13 +203,13 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumWFactory::cr
     }
     KernelSpec::CompilerOptions::Defines reduce_defines(reduce_defines_map);
 
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
-    if (auto* compute_gen1 = std::get_if<ComputeGen1Config>(&compute_hw); compute_gen1 && fp32_dest_acc_en) {
+    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
+    if (fp32_dest_acc_en) {
         // Legacy set unpack_to_dest_mode[CBIndex::c_24] = UnpackToDestFp32 when fp32 accumulation is
         // on; reindexed onto the DFB name and translated to the Metal 2.0 spelling. Metal 2.0 also
         // *requires* an explicit entry here (accum_dst is Float32 and the kernel consumes it with a
         // 32-bit dest register).
-        compute_gen1->unpack_modes = ComputeUnpackModes{{ACCUM_DST_DFB, UnpackMode::UnpackToDest}};
+        compute_hw.unpack_modes = ComputeUnpackModes{{ACCUM_DST_DFB, UnpackMode::UnpackToDest}};
     }
 
     // The compute kernel binds the mask DFB in every configuration: it constructs the buffer object

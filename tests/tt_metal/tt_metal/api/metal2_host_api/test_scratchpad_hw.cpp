@@ -81,7 +81,10 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
                 .runtime_arg_names = {"report_addr"},
             },
         .hw_config =
-            experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0},
+            experimental::DataMovementHardwareConfig{
+                .gen1_specific =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}},
     };
     dm_kernel.scratchpad_bindings.push_back(experimental::KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = experimental::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
@@ -206,7 +209,10 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadNocEndpoints) {
                 .runtime_arg_names = {"remote_noc_x", "remote_noc_y", "src_addr", "dst_addr", "report_addr"},
             },
         .hw_config =
-            experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0},
+            experimental::DataMovementHardwareConfig{
+                .gen1_specific =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}},
     };
     dm_kernel.scratchpad_bindings.push_back(experimental::KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = experimental::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
