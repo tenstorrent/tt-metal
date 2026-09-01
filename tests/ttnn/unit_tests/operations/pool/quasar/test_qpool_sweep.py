@@ -61,7 +61,9 @@ def _run_case(
     shard="height",  # "height" | "block" | "width"
     grid_yx=None,  # (y, x) core grid for block/width sharding
     pool="max",  # "max" | "avg" (avg cases use padding=0 to sidestep count_include_pad semantics)
+    pattern=None,  # input pattern override (default: module-level PATTERN)
 ):
+    pattern = pattern or PATTERN
     kernel, stride, padding = list(kernel), list(stride), list(padding)
     out_h = (in_h - kernel[0] + 2 * padding[0]) // stride[0] + 1
     out_w = (in_w - kernel[1] + 2 * padding[1]) // stride[1] + 1
@@ -69,7 +71,7 @@ def _run_case(
     assert tensor_height % 32 == 0, f"N*H*W={tensor_height} must be a multiple of 32"
     tiled_input = channels % 32 == 0
 
-    x_nhwc = _build_input(PATTERN, batch, in_h, in_w, channels, SEED, 0).to(torch.bfloat16)
+    x_nhwc = _build_input(pattern, batch, in_h, in_w, channels, SEED, 0).to(torch.bfloat16)
     input_max = x_nhwc.float().max().item()
     if pool == "max":
         golden_nchw = torch.nn.functional.max_pool2d(
@@ -107,7 +109,8 @@ def _run_case(
 
     print(
         f"\nQPOOL-MATRIX: {pool} C={channels} in={batch}x{in_h}x{in_w} k={kernel} s={stride} p={padding} "
-        f"{core_desc} layout={'TILE' if tiled_input else 'ROW_MAJOR'}",
+        f"{core_desc} layout={'TILE' if tiled_input else 'ROW_MAJOR'}"
+        + (f" pattern={pattern}" if pattern != PATTERN else ""),
         flush=True,
     )
 
@@ -215,6 +218,11 @@ def test_qpool_matrix(mesh_device):
         # exercising the partial-chunk stale-tail fill on the avg path); padding=0 (see _run_case)
         ("avg_k3x3_s1", dict(pool="avg", kernel=(3, 3), stride=(1, 1), padding=(0, 0), cores=1)),
         ("avg_k7x7_s1_large", dict(pool="avg", kernel=(7, 7), stride=(1, 1), padding=(0, 0), cores=1)),
+        # all-negative inputs: any 0 leaking into a max (e.g. a zero-filled instead of -inf-filled
+        # in_cb identity) turns a -0.5 golden into 0.0. Small kernel = partial-face init path;
+        # large kernel = chunked path. padding=0 keeps halo pad values out of the picture.
+        ("neg_k3x3_s1", dict(kernel=(3, 3), stride=(1, 1), padding=(0, 0), cores=1, pattern="const:-0.5")),
+        ("neg_k7x7_s1_large", dict(kernel=(7, 7), stride=(1, 1), padding=(0, 0), cores=1, pattern="const:-0.5")),
         # sharding layouts
         ("block_2x2", dict(shard="block", grid_yx=(2, 2))),
         ("width_1x2_c128", dict(channels=128, in_h=8, in_w=4, shard="width", grid_yx=(1, 2))),

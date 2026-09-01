@@ -145,29 +145,33 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                         in_cb.push_back(1);
                         in_cb.reserve_back(1);
                         write_offset = 0;
-                        // If the next chunk is PARTIAL, rows [remaining, max_sticks) are not written by
-                        // its reads. Fill that tail with the pool identity for MAX and AVG alike:
-                        // - MAX: the once-at-init clear is ZEROS (valid only for non-negative inputs)
-                        //   and the never-rewritten tail goes stale on the sim under num_threads=4
-                        //   (TL1 coherence); filling true -inf each boundary removes both hazards.
-                        // - AVG: same role as the old whole-entry clear_out_tiles (0 = sum identity);
-                        //   rows [0, remaining) need no clear — the chunk overwrites them full-stride.
-                        // Direct CPU fill + flush: the NoC self-loopback copy is unreliable on the sim.
-                        const uint32_t remaining_rows = total_elems_to_reduce - processed_sticks;
-                        if (remaining_rows > 0 && remaining_rows < max_sticks_for_reduction) {
-                            constexpr uint32_t row_stride_elems =
-                                wide_reduction ? (MAX_TILES_PER_REDUCTION * TILE_WIDTH) : (in_ntiles_c * TILE_WIDTH);
-                            const uint32_t tail_offset_bytes = remaining_rows * row_stride_elems * BYTES_PER_ELEM;
-                            const uint32_t tail_elems = (max_sticks_for_reduction - remaining_rows) * row_stride_elems;
-                            fill_with_val(
-                                in_cb.get_write_ptr() + tail_offset_bytes,
-                                tail_elems,
-                                static_cast<uint16_t>(bf16_init_value));
+                        // If the next chunk is PARTIAL, its reads leave rows [remaining, max_sticks)
+                        // unwritten. Max pool needs no fill: those rows hold either the -inf init
+                        // (never overwritten under the ring) or an earlier chunk of the SAME window
+                        // (duplicates cannot change a max). For avg pool they would contribute to the
+                        // average, so fill them with the identity (0). Tail-only: the incoming chunk
+                        // overwrites rows [0, remaining) at full row stride. Direct CPU fill + flush
+                        // instead of clear_out_tiles: its NoC self-loopback read is unreliable on the
+                        // Quasar sim.
+                        if constexpr (is_avg_pool) {
+                            const uint32_t remaining_rows = total_elems_to_reduce - processed_sticks;
+                            if (remaining_rows > 0 && remaining_rows < max_sticks_for_reduction) {
+                                constexpr uint32_t row_stride_elems = wide_reduction
+                                                                          ? (MAX_TILES_PER_REDUCTION * TILE_WIDTH)
+                                                                          : (in_ntiles_c * TILE_WIDTH);
+                                const uint32_t tail_offset_bytes = remaining_rows * row_stride_elems * BYTES_PER_ELEM;
+                                const uint32_t tail_elems =
+                                    (max_sticks_for_reduction - remaining_rows) * row_stride_elems;
+                                fill_with_val(
+                                    in_cb.get_write_ptr() + tail_offset_bytes,
+                                    tail_elems,
+                                    static_cast<uint16_t>(bf16_init_value));
 #ifdef ARCH_QUASAR
-                            flush_l2_cache_range(
-                                static_cast<uintptr_t>(in_cb.get_write_ptr() + tail_offset_bytes),
-                                static_cast<size_t>(tail_elems) * 2);
+                                flush_l2_cache_range(
+                                    static_cast<uintptr_t>(in_cb.get_write_ptr() + tail_offset_bytes),
+                                    static_cast<size_t>(tail_elems) * 2);
 #endif
+                            }
                         }
                     }
                 }
@@ -318,45 +322,23 @@ void kernel_main() {
     // cursor; no push — compute's census binding never waits)
     if constexpr (is_avg_pool || need_to_initialize_in_cb || force_max_clear) {
         fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-        // for average pool clear out tiles runs in loop, no need to initialize here
+        // for average pool the boundary fill in the large-kernel loop covers it, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel) {
-            if constexpr (is_avg_pool) {
-                // QSR avg_pool coherency fix (same class as the MAX fix below): the original pre-clear
-                // (clear_out_tiles) copies clear_value_cb -> in_cb via a NoC self-loopback read, which is
-                // UNRELIABLE on the Quasar sim (drops / reads stale SRAM) and HANGS the small-kernel avg
-                // path. 0 is the avg additive (sum) identity -- padding rows must contribute nothing to the
-                // sum -- so the SRAM-coherent NoC zero-write produces the identical clear without the
-                // loopback. Once-at-init persists across the in_cb ring because the reader only overwrites
-                // the window rows (the unwritten tail rows stay 0 and reduce to a no-op in the sum).
-                DataflowBuffer icb_clear(in_cb_id);
-                Noc clear_noc;
-                clear_noc.async_write_zeros(icb_clear, icb_clear.get_entry_size() * multi_buffering_factor);
-                clear_noc.write_zeros_l1_barrier();
-            } else {
-                // QSR max_pool coherency fix: the pre-clear above (clear_out_tiles) uses a NoC
-                // self-loopback read from clear_value_cb into in_cb. On the Quasar sim that self-loopback
-                // read is unreliable (drops / reads stale SRAM), so in_cb's rows beyond the window are
-                // left holding stale L1. The compute reduces the FULL 4-face (32-row) tile, so that stale
-                // L1 leaks into the MAX (e.g. one reader's output pinned to a spurious max). Clear in_cb
-                // with the SRAM-coherent NoC zero-write instead (the same primitive FIX #1 / the halo pad
-                // use). Compute the region from the DFB object (get_local_cb_interface / get_tile_size are
-                // stale for Metal-2.0 DFBs). For MAX the reduce identity must be <= every real window
-                // element; the pooled inputs here are non-negative (resnet stem maxpool is post-ReLU), so 0
-                // is a safe identity and the once-at-init clear persists across the in_cb ring (the reader
-                // only overwrites the window rows). The unwritten tail rows then reduce to a no-op.
-                DataflowBuffer icb_clear(in_cb_id);
-                Noc clear_noc;
+            // Clear the WHOLE in_cb ring with the pool identity (-inf for max, 0 for avg). A
+            // thread's ring entries are strided (i, i+T, ...), so a per-thread contiguous clear
+            // from its own cursor miscovers the ring for num_threads > 1 — instead recover the
+            // ring base (cursor - thread_id * entry, the raw-view pattern) and let every thread
+            // idempotently fill it all. Direct CPU fill + flush instead of clear_out_tiles: its
+            // NoC self-loopback read is unreliable on the Quasar sim. NOTE: an earlier bring-up
+            // version zero-filled here, which is a valid max identity only for non-negative
+            // (post-ReLU) inputs; -inf is correct for any input.
+            DataflowBuffer icb_clear(in_cb_id);
+            const uint32_t icb_base = icb_clear.get_write_ptr() - get_my_thread_id() * icb_clear.get_entry_size();
+            const uint32_t clear_bytes = icb_clear.get_entry_size() * multi_buffering_factor * get_num_threads();
+            fill_with_val(icb_base, clear_bytes / 2, bf16_init_value);
 #ifdef ARCH_QUASAR
-                // clrsz = esz*mbf bytes starting at get_write_ptr() (= the DM wr_ptr). It overruns adjacent L1
-                // if clrsz > alloc (mbf > nent) OR if wr_ptr is stale from a prior op (not reset to the ring
-                // base per launch -- the suspected Bug-1 reconfig escape). Compare across a lone 64c run vs a
-                // 64c-after-32c run: wr changing => stale wr_ptr; clrsz>alloc => size overrun. (The 0xDEADBEEF
-                // poison was reverted -- a bf16 value can't fault the RISC; the poison fault was this overrun
-                // clobbering a control region with garbage instead of benign zeros.)
+            flush_l2_cache_range(static_cast<uintptr_t>(icb_base), static_cast<size_t>(clear_bytes));
 #endif
-                clear_noc.async_write_zeros(icb_clear, icb_clear.get_entry_size() * multi_buffering_factor);
-                clear_noc.write_zeros_l1_barrier();
-            }
         }
     }
 
