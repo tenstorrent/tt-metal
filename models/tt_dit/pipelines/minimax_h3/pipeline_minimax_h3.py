@@ -159,14 +159,6 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 }
 
 
-# Precision levers, env-only, matching cpu_vs_device.py's CVD_SPLIT_MODE/CVD_TAP_MATMUL/CVD_PREFER_MAC.
-# Unset means "leave the constructor default alone" (full/True/True, accurate mode) -- an env var set
-# to "0"/"false" is not the same as omitting it.
-def _audio_lever_flag(name):
-    raw = os.environ.get(name)
-    return None if raw is None else raw not in ("0", "false", "False", "")
-
-
 def resolve_mesh_preset(mesh_shape: tuple[int, ...], *, required: bool = True) -> dict:
     """The measured defaults for this mesh shape, or `{}` when unlisted and `required` is False.
 
@@ -1152,8 +1144,7 @@ class MiniMaxH3Pipeline:
                 model_name=MODEL_NAME,
                 # The audio precision levers change the module's parameter set, so they are part of
                 # the cache key -- read off the module so the key cannot drift from what was built.
-                subfolder="audio_encoder"
-                + weights_variant(encoder.split_mode, encoder.tap_matmul, encoder.max_c_in_block),
+                subfolder="audio_encoder" + weights_variant(encoder.split_mode, encoder.max_c_in_block),
                 parallel_config=self.vae_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,
@@ -1203,13 +1194,7 @@ class MiniMaxH3Pipeline:
             config = self.audio_config
             logger.info("building the audio decoder")
             audio_levers = {
-                k: v
-                for k, v in (
-                    ("split_mode", os.environ.get("MINIMAX_H3_PIPELINE_SPLIT_MODE")),
-                    ("tap_matmul", _audio_lever_flag("MINIMAX_H3_PIPELINE_TAP_MATMUL")),
-                    ("prefer_mac", _audio_lever_flag("MINIMAX_H3_PIPELINE_PREFER_MAC")),
-                )
-                if v is not None
+                k: v for k, v in (("split_mode", os.environ.get("MINIMAX_H3_PIPELINE_SPLIT_MODE")),) if v is not None
             }
             decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
@@ -1241,8 +1226,7 @@ class MiniMaxH3Pipeline:
                 model_name=MODEL_NAME,
                 # The audio precision levers change the module's parameter set, so they are part of
                 # the cache key -- read off the module so the key cannot drift from what was built.
-                subfolder="audio_decoder"
-                + weights_variant(decoder.split_mode, decoder.tap_matmul, decoder.max_c_in_block),
+                subfolder="audio_decoder" + weights_variant(decoder.split_mode, decoder.max_c_in_block),
                 parallel_config=self.vae_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,

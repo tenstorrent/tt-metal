@@ -69,8 +69,6 @@ class MiniMaxH3AudioDecoder(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "full",
-        tap_matmul: bool = True,
-        prefer_mac: bool = True,
         max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
         # H3-only latency opt-ins, off by default pending wider coverage (channel-TP, other shard
         # factors). Env-defaulted here specifically -- not as a module global in audio_ops.py, which
@@ -88,14 +86,12 @@ class MiniMaxH3AudioDecoder(Module):
         for rate in decoder_rates:
             self.hop_length *= rate
 
-        # The precision levers default to accurate: all three on measures 0.0045 rel RMSE /
-        # 99.9990 % PCC / 67.53 dB at 5 s stereo against 0.1046 / 99.5451 % / 40.29 dB all-fast --
-        # 23x less error for ~3x on the stage. H3-only: LTX constructs the same conv classes with
-        # its own fast defaults. Kept as attributes so the pipeline's device-weight cache key
-        # (`weights_variant`) reads the exact values this module was built with.
+        # The conv3d precision levers default to accurate. H3-only: LTX constructs the same conv
+        # classes with its own fast defaults. Kept as attributes so the pipeline's device-weight
+        # cache key (`weights_variant`) reads the exact values this module was built with. The
+        # depthwise resample filters need no lever: their conv1d kernel is exact in fp32
+        # (see compute_depthwise_conv1d.cpp).
         self.split_mode = split_mode
-        self.tap_matmul = tap_matmul
-        self.prefer_mac = prefer_mac
         self.max_c_in_block = max_c_in_block
         # Layout/partitioning only -- unlike the levers above, these don't change which weight
         # tensors exist, so they aren't part of the pipeline's `weights_variant` cache key.
@@ -119,7 +115,6 @@ class MiniMaxH3AudioDecoder(Module):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
         self.decoder = Vocoder(
             resblock_kernel_sizes=list(resblock_kernel_sizes),
@@ -136,11 +131,8 @@ class MiniMaxH3AudioDecoder(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            # H3-only opt-in: LTX's vocoder keeps the default fast conv1d filters and
-            # single-conv weights.
-            prefer_mac=prefer_mac,
+            # H3-only opt-in: LTX's vocoder keeps its default single-conv weights.
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
             tight_t_align=tight_t_align,
             local_tpad_tail=local_tpad_tail,
         )

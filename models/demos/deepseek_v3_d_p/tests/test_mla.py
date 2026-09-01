@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     cpu_mla_reference,
     load_trace,
@@ -210,14 +211,14 @@ def run_model(
 
     topology = per_axis_topology(device_params["fabric_config"])
 
-    production_mesh = [32, 4]
     sp_axis = 0
     tp_axis = 1
 
     mesh_shape = list(mesh_device.shape)
 
+    # 640 tokens on every chip; the global length follows the mesh. max_sl keeps the literal seq_len.
     if scale_down_sl:
-        seq_len = (seq_len // production_mesh[sp_axis]) * mesh_shape[sp_axis]
+        seq_len = PREFILL_CHUNK_TOKENS_PER_CHIP * mesh_shape[sp_axis]
 
     # temp hack
     config.max_seq_len = seq_len
@@ -428,7 +429,11 @@ def _ci_unsupported_param_combos(**params):
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
+@pytest.mark.parametrize(
+    "seq_len",
+    [PREFILL_CHUNK_TOKENS],
+    ids=["seq5k"],
+)
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
@@ -755,10 +760,10 @@ def _run_chunked_prefill(
                     )
                     for val in (u, kv_actual, valid_end)
                 )
-            # Metadata path: pass ONLY the metadata tensor (the runner hands tt_metadata straight from
-            # inbound_socket_service_sync) -- actual_start/actual_end are read on-device, so leave them
-            # None to prove forward needs no host per-chunk scalars. cache_user_id is unused on this path
-            # (slot comes from metadata[0]).
+            # Metadata path: pass ONLY the per-element metadata operands (the runtime's _trace_metadata
+            # equivalent) -- actual_start/actual_end are read on-device, so leave them None to prove
+            # forward needs no host per-chunk scalars. cache_user_id is unused on this path (slot comes
+            # from metadata[0]).
             # Determinism re-issues the SAME forward on the same device inputs. forward takes
             # actual_start/cache_user_id from the caller, so a repeat rewrites the same cache slots
             # with the same data -- idempotent, like the repeated block() in test_prefill_block.

@@ -30,20 +30,20 @@ CONV_SPLIT_MODES = ("off", "weight", "full")
 DEFAULT_MAX_C_IN_BLOCK = 128
 
 
-def weights_variant(split_mode: str, tap_matmul: bool, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK) -> str:
+def weights_variant(split_mode: str, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK) -> str:
     """Cache-key suffix for the precision levers that change the prepared parameter set.
 
-    ``split_mode`` decides whether the ``weight_lo`` / ``tap_w{k}_lo`` residual parameters exist, and
-    ``tap_matmul`` swaps a stride-1 conv's ``weight`` for per-tap ``tap_w{k}`` matmul weights -- so
-    device-weight caches prepared under different settings hold different ``.tensorbin`` sets and are
-    not interchangeable. ``max_c_in_block`` changes the prepared weight *bytes* with an unchanged file
+    ``split_mode`` decides whether the ``weight_lo`` residual parameters exist, so device-weight
+    caches prepared under different settings hold different ``.tensorbin`` sets and are not
+    interchangeable. ``max_c_in_block`` changes the prepared weight *bytes* with an unchanged file
     set (`prepare_conv3d_weight_state` blocks by ``C_in_block``), so it gets a term too.
 
-    Only the all-fast configuration maps to ``""``; the H3 default (split=full, tap on) yields
-    ``"_split-full_tap1"``, so it can never collide with a stale fast-path cache under the
-    unsuffixed path. The caller must pass the same values it constructed its modules with.
+    Only the all-fast configuration maps to ``""``; the H3 default yields ``"_split-full"`` --
+    deliberately distinct from both the unsuffixed fast path and the retired tap_matmul era's
+    ``"_split-full_tap1"``, so it can never collide with a stale cache from either. The caller
+    must pass the same values it constructed its modules with.
     """
-    suffix = "" if split_mode == "off" and not tap_matmul else f"_split-{split_mode}_tap{int(tap_matmul)}"
+    suffix = "" if split_mode == "off" else f"_split-{split_mode}"
     if max_c_in_block != DEFAULT_MAX_C_IN_BLOCK:
         suffix += f"_cinb{max_c_in_block}"
     return suffix
@@ -275,24 +275,18 @@ def _t_neighbor_pad(
     )
 
 
-def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache, prefer_mac: bool = False):
+def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     """Valid depthwise filter (same K taps per channel) on padded ``(B, T_pad, C)`` ROW_MAJOR.
 
     Returns ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1`` via a single
-    ``ttnn.conv1d`` (groups=C) with the prepared weight cached in ``cache``, or via the exact
-    shift-multiply-add form when ``prefer_mac``. The MAC form is structurally more accurate: it is a
-    sum of elementwise multiplies and adds, which are *exact* in fp32 on this hardware, whereas
-    conv1d's FPU multiply keeps ~11 significand bits -- measured ~29000x less error on one
-    anti-aliased downsampler (K=12, stride 2), at the cost of K passes over the tensor.
-    ``prefer_mac`` is an explicit opt-in (MiniMax-H3 passes it); the default keeps the fast conv1d
-    path for LTX call sites.
+    ``ttnn.conv1d`` (groups=C) with the prepared weight cached in ``cache``. For fp32 operands
+    conv1d's depthwise kernel accumulates on the SFPU (see compute_depthwise_conv1d.cpp), so it
+    matches the exact shift-multiply-add form bit-for-bit -- the MAC form survives only as the
+    fallback for shapes conv1d cannot find a valid configuration for.
     """
     B, T_pad, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
     K = len(taps)
     T_out = (T_pad - K) // stride + 1
-
-    if prefer_mac:
-        return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out, dtype=dtype)
 
     # Cache the prepared (tilized/sharded) weight to keep the on-device path; key on
     # (C, stride, taps) since the upsampler reuses one cache for distinct sub-tap vectors.
@@ -367,7 +361,7 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache, pref
 
     def try_mac(exc):
         # No chunking fits either: the shift-multiply-add form, which has no sharding constraint at
-        # all -- slower, but this is a correctness path (and MAC is the *more* accurate form).
+        # all -- slower, but bit-equal to the conv1d path in fp32, so purely an availability fallback.
         # `exc` is None when MAC is a cached winner tried before anything else has failed this call.
         reason = f" ({exc})" if exc is not None else ""
         logger.warning(f"depthwise conv1d failed at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback{reason}")
@@ -392,9 +386,7 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache, pref
             out = (
                 try_direct()
                 if candidate == "direct"
-                else try_mac(last_exc)
-                if candidate == "mac"
-                else try_chunk(candidate)
+                else try_mac(last_exc) if candidate == "mac" else try_chunk(candidate)
             )
         except RuntimeError as exc:
             last_exc = exc
@@ -979,7 +971,6 @@ class Conv1dViaConv3d(Module):
         ccl_manager: CCLManager | None = None,
         channel_shard_output: bool = True,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
 
@@ -1072,14 +1063,12 @@ class Conv1dViaConv3d(Module):
             packer_l1_acc=True,
         )
 
-        # Both levers are explicit constructor arguments: MiniMax-H3 opts in, LTX's audio path keeps
-        # the fast defaults. Splitting only helps an fp32 datapath.
+        # An explicit constructor argument: MiniMax-H3 opts in, LTX's audio path keeps the fast
+        # default. Splitting only helps an fp32 datapath.
         self.split_mode = split_mode if dtype == ttnn.float32 else "off"
 
         self.same_pad = same_pad
         self.eff_k = eff_k
-        # Needs stride 1 to index taps directly and fp32 to be worth doing.
-        self.tap_matmul = tap_matmul and dtype == ttnn.float32 and stride == 1 and channel_axis(parallel_config) is None
 
         self._alloc_weight_bias()
 
@@ -1090,29 +1079,7 @@ class Conv1dViaConv3d(Module):
         if "conv.bias" in state:
             state["bias"] = state.pop("conv.bias")
 
-        if "weight" in state and self.tap_matmul:
-            w = state.pop("weight")
-            assert w.dim() == 3, f"expected 3D Conv1d weight, got {tuple(w.shape)}"
-            # (C_out, C_in, k) -> one (C_in_aligned, C_out_aligned) matrix per tap, zero-padded on both
-            # channel axes to match what the aligned input and output carry.
-            padded = torch.zeros(self.out_channels, self.in_channels, w.shape[2], dtype=torch.float32)
-            padded[: w.shape[0], : w.shape[1]] = w.float()
-            # `_AlignedOutConv1d` rounds a non-32-multiple C_out up (ups[5] emits 16), and the bias is
-            # allocated at the rounded width. The conv3d route pads it inside
-            # `prepare_conv3d_weight_state`, which this branch bypasses, so it must pad here too.
-            if "bias" in state and self.out_channels != self.unpadded_out_channels:
-                state["bias"] = torch.nn.functional.pad(
-                    state["bias"], (0, self.out_channels - self.unpadded_out_channels)
-                )
-            for tap in range(self.kernel_size[0]):
-                tap_w = padded[:, :, tap].transpose(0, 1).contiguous()  # (C_in, C_out)
-                if self.split_mode == "off":
-                    state[f"tap_w{tap}"] = tap_w
-                else:
-                    hi = tap_w.bfloat16().float()
-                    state[f"tap_w{tap}"] = hi
-                    state[f"tap_w{tap}_lo"] = tap_w - hi
-        elif "weight" in state:
+        if "weight" in state:
             w = state["weight"]
             assert w.dim() == 3, f"expected 3D Conv1d weight, got {tuple(w.shape)}"
             prepare_conv3d_weight_state(
@@ -1138,48 +1105,25 @@ class Conv1dViaConv3d(Module):
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
         mesh_axes = [None, channel_axis(self.parallel_config)] if self._is_col_parallel() else None
 
-        if self.tap_matmul:
-            # One (C_in, C_out) matrix per tap, plus its bf16 residual when splitting. The conv3d-prepared
-            # weight is deliberately not allocated: it would never be loaded, leaving a Parameter holding
-            # uninitialised device memory behind an attribute that reads like a live weight. The taps are
-            # held in lists and registered in `_parameters` under their state-dict names (`tap_w{k}`,
-            # `tap_w{k}_lo`), so save/load naming and cache paths are unchanged.
-            self.weight = None
-            self.weight_lo = None
-            self.tap_weights = []
-            self.tap_weights_lo = []
-            for tap in range(self.kernel_size[0]):
-                for suffix, taps in (("", self.tap_weights), ("_lo", self.tap_weights_lo)):
-                    if suffix == "_lo" and self.split_mode == "off":
-                        continue
-                    parameter = Parameter(
-                        total_shape=[self.in_channels, self.out_channels],
-                        device=self.mesh_device,
-                        pad_value=0,
-                        dtype=self.dtype,
-                    )
-                    self._parameters[f"tap_w{tap}{suffix}"] = parameter
-                    taps.append(parameter)
-        else:
-            self.weight = Parameter(
+        self.weight = Parameter(
+            total_shape=[d, self.out_channels],
+            device=self.mesh_device,
+            pad_value=0,
+            dtype=self.dtype,
+            mesh_axes=mesh_axes,
+        )
+        # The weight residual is laid out exactly like the weight, so it shards the same way.
+        self.weight_lo = (
+            Parameter(
                 total_shape=[d, self.out_channels],
                 device=self.mesh_device,
                 pad_value=0,
                 dtype=self.dtype,
                 mesh_axes=mesh_axes,
             )
-            # The weight residual is laid out exactly like the weight, so it shards the same way.
-            self.weight_lo = (
-                Parameter(
-                    total_shape=[d, self.out_channels],
-                    device=self.mesh_device,
-                    pad_value=0,
-                    dtype=self.dtype,
-                    mesh_axes=mesh_axes,
-                )
-                if self.split_mode != "off"
-                else None
-            )
+            if self.split_mode != "off"
+            else None
+        )
         self.bias = (
             Parameter(
                 total_shape=[1, self.out_channels],
@@ -1200,100 +1144,9 @@ class Conv1dViaConv3d(Module):
             return self.weight.data, weight_lo, bias, self.conv_config_shard, self.out_channels_shard
         return self.weight.data, weight_lo, bias, self.conv_config, self.out_channels
 
-    def _forward_tap_matmul(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        """``sum_j x[:, t + dilation*j, :] @ W_j``: a stride-1 conv as ``kernel_size`` shifted matmuls.
-
-        No im2col matrix is needed at stride 1, and the fp32 matmul sum is exact, so this removes
-        conv3d's residual error source -- partial-sum rounding across ``C_in_block`` -- measured ~2x
-        less error at real AMP shapes. Costs ``kernel_size`` tilizes plus one untilize per conv, which
-        is a real end-to-end cost in this layout-dominated stage.
-
-        Slices in ROW_MAJOR and tilizes each tap, rather than tilizing once and slicing in TILE: a
-        ``ttnn.slice`` at a non-tile row boundary untilizes its whole input anyway, so slicing first keeps
-        the conversion to one tilize per tap instead of an untilize/retilize pair.
-        """
-        # Derived from the same fields the conv3d path uses rather than recomputed from padding_mode:
-        # `ConvTranspose1dViaConv3d` builds a causal inner conv and then forces `external_pad_front = 0`
-        # because it supplies its own symmetric padding, so a tap path that re-derived `eff_k - 1` from
-        # the mode would silently prepend zeros to all 7 upsamplers.
-        #
-        sharded = self.parallel_config is not None and self.parallel_config.factor > 1
-        if sharded:
-            # Context must come from the neighbour; `_zero_pad_t` is local and would zero its rows. The
-            # widths have to sum to `eff_k - 1` (what the taps consume) or `t_out` is not the shard's own
-            # T and the residual add rejects it. `halo_pad_left/right` are both `eff_k // 2`, which only
-            # sums right for odd `eff_k`, so derive it here.
-            pad_left = self.halo_pad_left
-            pad_right = (self.eff_k - 1) - pad_left
-            x_padded = _t_neighbor_pad(
-                x_BTC,
-                pad_left=pad_left,
-                pad_right=pad_right,
-                parallel_config=self.parallel_config,
-                ccl_manager=self.ccl_manager,
-                padding_mode="zeros",
-            )
-        else:
-            pad_left = self.external_pad_front + self.internal_padding[0]
-            pad_right = self.internal_padding[0]
-            x_padded = _zero_pad_t(x_BTC, pad_left, pad_right, self.mesh_device) if pad_left or pad_right else x_BTC
-        t_out = x_padded.shape[1] - (self.eff_k - 1)
-        batch, _, channels = x_padded.shape
-
-        accumulator = None
-        for tap in range(self.kernel_size[0]):
-            offset = tap * self.dilation
-            # Skip a slice that selects everything: it hands back a tensor sharing the input's
-            # storage, so the deallocate below would free the CALLER's tensor. A 1x1 stride-1
-            # conv pads nothing (`x_padded` IS `x_BTC`) and its single tap spans the full extent,
-            # which is exactly the audio encoder's two posterior heads -- mean_proj was freeing
-            # the input that logs_proj still needed. Identity on the Python object is the only
-            # test that works here; `ttnn.slice` returns a fresh wrapper even when it aliases,
-            # so comparing its result would not detect the sharing.
-            full_extent = offset == 0 and t_out == x_padded.shape[1]
-            x_tap = x_padded if full_extent else ttnn.slice(x_padded, [0, offset, 0], [batch, offset + t_out, channels])
-            x_tile = ttnn.to_layout(x_tap, ttnn.TILE_LAYOUT)
-            if x_tap is not x_padded:
-                ttnn.deallocate(x_tap)
-
-            weight = self.tap_weights[tap].data
-            if self.split_mode == "off":
-                term = ttnn.matmul(x_tile, weight, dtype=self.dtype, compute_kernel_config=self.compute_kernel_config)
-            else:
-                weight_lo = self.tap_weights_lo[tap].data
-                if self.split_mode == "full":
-                    x_hi, x_lo = _split_operand(x_tile)
-                else:
-                    x_hi, x_lo = x_tile, None
-                mm = lambda a, b: ttnn.matmul(a, b, dtype=self.dtype, compute_kernel_config=self.compute_kernel_config)
-                term = ttnn.add(mm(x_hi, weight), mm(x_hi, weight_lo))
-                if x_lo is not None:
-                    term = ttnn.add(term, mm(x_lo, weight))
-                    ttnn.deallocate(x_lo)
-                if x_hi is not x_tile:
-                    ttnn.deallocate(x_hi)
-            ttnn.deallocate(x_tile)
-            if accumulator is None:
-                accumulator = term
-            else:
-                new_accumulator = ttnn.add(accumulator, term)
-                ttnn.deallocate(accumulator)
-                ttnn.deallocate(term)
-                accumulator = new_accumulator
-        # Sharded, `x_padded` is the ccl_manager's ping-pong buffer, so freeing it corrupts that cache.
-        if not sharded and x_padded is not x_BTC:
-            ttnn.deallocate(x_padded)
-
-        if self.bias is not None:
-            accumulator = ttnn.add(accumulator, ttnn.reshape(self.bias.data, (1, 1, self.out_channels)))
-        return ttnn.to_layout(accumulator, ttnn.ROW_MAJOR_LAYOUT)
-
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         """``x_BTC``: ``(B, T, C)`` ROW_MAJOR → ``(B, T_out, C_out)`` (T sharded uses a halo exchange)."""
         assert x_BTC.layout == ttnn.ROW_MAJOR_LAYOUT
-
-        if self.tap_matmul:
-            return self._forward_tap_matmul(x_BTC)
 
         # Channel-TP: gather C_in to full, then column-parallel emits this chip's C_out slice.
         x_BTC = gather_channel_to_full(self.ccl_manager, x_BTC, self.parallel_config)
@@ -1359,7 +1212,6 @@ class _AlignedOutConv1d(Conv1dViaConv3d):
         ccl_manager: CCLManager | None = None,
         channel_shard_output: bool = True,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__(
             in_channels=in_channels,
@@ -1376,7 +1228,6 @@ class _AlignedOutConv1d(Conv1dViaConv3d):
             ccl_manager=ccl_manager,
             channel_shard_output=channel_shard_output,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
@@ -1407,7 +1258,6 @@ class ConvTranspose1dViaConv3d(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        tap_matmul: bool = False,
         tight_t_align: bool = False,
     ) -> None:
         super().__init__()
@@ -1435,7 +1285,6 @@ class ConvTranspose1dViaConv3d(Module):
             parallel_config=None,
             ccl_manager=None,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
         # forward() supplies its own symmetric padding, so the inner conv's causal front pad is disabled.
         self.conv.external_pad_front = 0

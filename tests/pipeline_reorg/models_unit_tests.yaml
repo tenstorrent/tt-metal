@@ -28,16 +28,16 @@
     pytest --timeout 300 models/tt_transformers/tests/test_attention_prefill.py
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 400 models/tt_transformers/tests/test_decoder_prefill.py
-    # pytest --timeout 500 models/tt_transformers/tests/test_model.py -k full
+    pytest --timeout 500 models/tt_transformers/tests/test_model.py -k full
     # pytest --timeout 500 models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
   model: llama3.1-8b
   model_family: Llama
   skus:
     wh_n150:
-      timeout: 30
+      timeout: 40
       tier: 1
     wh_llmbox_perf:
-      timeout: 12
+      timeout: 18
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -102,13 +102,13 @@
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_class_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py
-    # pytest --timeout 900 models/tt_transformers/tests/test_model.py -k quick
+    pytest --timeout 900 models/tt_transformers/tests/test_model.py -k quick
     # pytest --timeout 900 models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer"
   model: llama3.2-90b-vision
   model_family: Llama
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 28
       tier: 2
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
@@ -225,13 +225,13 @@
     pytest --timeout 600 models/tt_transformers/tests/test_rms_norm.py
     pytest --timeout 600 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
-    #pytest --timeout 600 models/tt_transformers/tests/test_model.py -k full
+    pytest --timeout 600 models/tt_transformers/tests/test_model.py -k full
     #pytest --timeout 600 models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
   model: mistral-7b
   model_family: Mistral
   skus:
     wh_n150:
-      timeout: 20
+      timeout: 28
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -262,7 +262,7 @@
     wh_llmbox:
       timeout: 20
       tier: 3
-  owner_id: U08GEGWHQJF # Adam Roberge
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
 - name: ViT unit tests
@@ -479,7 +479,7 @@
 
 - name: Gemma-4-26B-A4B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-26B-A4B-it
     pytest --timeout 900 \
@@ -547,7 +547,7 @@
 
 - name: Gemma-4-12B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-12B-it
     pytest --timeout 900 \
@@ -621,10 +621,11 @@
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_decoder_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k quick
   model: llama3.3-70b-galaxy
   skus:
     wh_galaxy_perf:
-      timeout: 30
+      timeout: 40
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
@@ -876,7 +877,7 @@
 
 - name: Qwen2.5-72B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     export HF_MODEL=Qwen/Qwen2.5-72B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-72B-Instruct
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
@@ -1339,7 +1340,7 @@
 
 - name: TT-DiT Wan2.2-I2V-A14B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=45
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "is_fsdp1"
@@ -1352,7 +1353,7 @@
     #   timeout: 120
     #   tier: 1
     wh_galaxy:
-      timeout: 40
+      timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -1557,7 +1558,7 @@
 
 - name: On-device sampling unit tests
   cmd: |
-    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap or topk_route_mirror_parity"
+    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap or topk_authoritative_route_decision"
   model: tt-model-sampling
   skus:
     wh_n150:
@@ -1803,4 +1804,57 @@
       timeout: 5
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: DeepSeek-V3 unit tests (Galaxy)
+  cmd: |
+    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
+    export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+    export MESH_DEVICE=TG
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
+  model: deepseek-v3
+  skus:
+    wh_galaxy_perf:
+      timeout: 10
+      tier: 2
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+
+- name: DeepSeek-V3 module tests (Galaxy)
+  cmd: |
+    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
+    export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+    export MESH_DEVICE=TG
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    pytest models/demos/deepseek_v3/tests -x \
+      -m "not t3k_compat" \
+      --ignore=models/demos/deepseek_v3/tests/unit \
+      --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests \
+      --timeout 600 --durations=0
+  model: deepseek-v3
+  skus:
+    wh_galaxy_perf:
+      timeout: 45
+      tier: 2
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+
+- name: DeepSeek-V3 TG MoE tests (Galaxy)
+  cmd: |
+    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
+    export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    MESH_DEVICE=TG USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_combine_tg.py -v
+    MESH_DEVICE=TG USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_compute_tg.py -v
+    MESH_DEVICE=TG8X4 USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_optimized_moe_decode_block_tg.py -v
+  model: deepseek-v3
+  skus:
+    wh_galaxy_perf:
+      timeout: 20
+      tier: 2
+  owner_id: U03HY7MK4BT # Mark O'Connor
   team: models

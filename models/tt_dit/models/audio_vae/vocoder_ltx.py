@@ -54,7 +54,6 @@ class DilatedConv1d(_AlignedOutConv1d):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__(
             in_channels=in_channels,
@@ -69,7 +68,6 @@ class DilatedConv1d(_AlignedOutConv1d):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
 
 
@@ -87,9 +85,7 @@ class AMPBlock1(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
-        prefer_mac: bool = False,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
         self.channels = channels
@@ -112,7 +108,6 @@ class AMPBlock1(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
-                    tap_matmul=tap_matmul,
                 )
                 for i in range(self.num_branches)
             ]
@@ -130,7 +125,6 @@ class AMPBlock1(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
-                    tap_matmul=tap_matmul,
                 )
                 for i in range(self.num_branches)
             ]
@@ -151,7 +145,6 @@ class AMPBlock1(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
-                    prefer_mac=prefer_mac,
                 )
                 for _ in range(self.num_branches)
             ]
@@ -171,7 +164,6 @@ class AMPBlock1(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
-                    prefer_mac=prefer_mac,
                 )
                 for _ in range(self.num_branches)
             ]
@@ -236,9 +228,7 @@ class Vocoder(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
-        prefer_mac: bool = False,
         split_mode: str = "off",
-        tap_matmul: bool = False,
         # H3-only opt-ins, defaulted from env in MiniMaxH3AudioDecoder: LTX's construction never
         # passes these, so it always gets `False` here regardless of that env var. See audio_ops.py.
         tight_t_align: bool = False,
@@ -299,7 +289,6 @@ class Vocoder(Module):
             parallel_config=None if self._conv_pre_unsharded else parallel_config,
             ccl_manager=None if self._conv_pre_unsharded else ccl_manager,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
 
         self.ups = ModuleList(
@@ -315,7 +304,6 @@ class Vocoder(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
-                    tap_matmul=tap_matmul,
                     tight_t_align=tight_t_align,
                 )
                 for i in range(self.num_upsamples)
@@ -337,9 +325,7 @@ class Vocoder(Module):
                         dtype=dtype,
                         parallel_config=parallel_config,
                         ccl_manager=ccl_manager,
-                        prefer_mac=prefer_mac,
                         split_mode=split_mode,
-                        tap_matmul=tap_matmul,
                     )
                 )
 
@@ -358,7 +344,6 @@ class Vocoder(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            prefer_mac=prefer_mac,
         )
 
         self.conv_post = _AlignedOutConv1d(
@@ -375,7 +360,6 @@ class Vocoder(Module):
             # out_channels=2 is too small to channel-shard; keep output full (no trailing gather).
             channel_shard_output=False,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:

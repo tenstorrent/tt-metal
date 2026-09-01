@@ -45,6 +45,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import generate_pcc_plots, write_pcc_summary
 from models.demos.deepseek_v3_d_p.utils.test_utils import save_intermediate_output
@@ -61,6 +62,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     load_and_compute_layer_by_layer,
     load_debug_trace,
     load_reference_cache,
+    mla_kvpe_width,
     save_reference_cache,
     slice_debug_trace,
     slice_non_padded,
@@ -80,9 +82,6 @@ DETERMINISM_PCC_THRESHOLD = 1.0
 INFINITEBENCH_SUBSET_NAMES = {"longbook_qa_eng"}
 # input_source meaning "this variant's own golden" — naming it after a prompt would go stale.
 VARIANT_DEFAULT_TRACE = "variant_default"
-SEQ_LEN_1K = 1024
-SEQ_LEN_5K = 5120
-SEQ_LEN_25K = 25600
 
 
 def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_padded_tokens, padding_side):
@@ -255,7 +254,10 @@ def run_model(
         n_routed_experts=n_routed_experts,
         padding_side=padding_side,
     )
-    ref_cache_exists = check_reference_cache_exists(variant, cache_key) if (pcc_validation and trace is None) else False
+    # A cache written before the compressed-line fix holds expanded per-head keys, and without the
+    # width check still reports as reusable.
+    kvpe_width = mla_kvpe_width(config)
+    ref_cache_exists = pcc_validation and trace is None and check_reference_cache_exists(variant, cache_key, kvpe_width)
 
     logger.info(
         f"Cache status: TTNN={ttnn_cache_complete}, Trace={'YES' if trace else 'NO'}, Reference={ref_cache_exists}"
@@ -855,7 +857,8 @@ def run_model(
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_1K, 8), (SEQ_LEN_25K, 8)],
+    [(PREFILL_CHUNK_TOKENS, 8)],
+    ids=["isl_5k"],
 )
 @pytest.mark.parametrize(
     "num_layers",
@@ -969,8 +972,8 @@ def test_ds_prefill_transformer(
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_1K, 8), (SEQ_LEN_5K, 8), (SEQ_LEN_25K, 8)],
-    ids=["1k", "5k", "25k"],
+    [(PREFILL_CHUNK_TOKENS, 8)],
+    ids=["isl_5k"],
 )
 @pytest.mark.parametrize(
     "num_layers",
@@ -1073,8 +1076,8 @@ def test_kimi_prefill_transformer(
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_5K, 8)],
-    ids=["5k"],
+    [(PREFILL_CHUNK_TOKENS, 8)],
+    ids=["isl_5k"],
 )
 @pytest.mark.parametrize(
     "num_layers",
