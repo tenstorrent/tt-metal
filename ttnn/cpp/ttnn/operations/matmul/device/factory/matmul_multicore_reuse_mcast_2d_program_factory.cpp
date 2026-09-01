@@ -1314,14 +1314,23 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)  // out_tensor_start_tile_id
                 };
 
+                // Cores here always cover the first H-block. If there's only one H-block total, this
+                // is also the last one, so clamp its write size to the real remaining rows — otherwise
+                // it always writes a full block's worth, even past the tensor's actual end.
+                bool is_last_h_block = in0_idx == in0_end_idx;
+                uint32_t out_num_nonzero_subblocks_h_arg =
+                    is_last_h_block ? last_block_num_nonzero_subblocks_h : (out_block_h / out_subblock_h);
+                uint32_t out_last_subblock_h_arg = is_last_h_block ? last_subblock_of_last_block_h : out_subblock_h;
+                uint32_t padded_block_tiles_h_skip_arg = is_last_h_block ? last_block_padded_block_tiles_h_skip : 0;
+
                 if (in1_idx == in1_end_idx) {  // right cores when no transpose_mcast
                     // padding args (READER)
                     mm_in1_sender_writer_args.push_back(last_out_block_w);
 
                     // padding args (WRITER)
-                    mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(0);
+                    mm_in1_sender_writer_args.push_back(out_num_nonzero_subblocks_h_arg);
+                    mm_in1_sender_writer_args.push_back(out_last_subblock_h_arg);
+                    mm_in1_sender_writer_args.push_back(padded_block_tiles_h_skip_arg);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(last_block_num_nonzero_subblocks_w);
                     mm_in1_sender_writer_args.push_back(last_subblock_of_last_block_w);
@@ -1332,9 +1341,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     mm_in1_sender_writer_args.push_back(out_block_w);
 
                     // padding args (WRITER)
-                    mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(0);
+                    mm_in1_sender_writer_args.push_back(out_num_nonzero_subblocks_h_arg);
+                    mm_in1_sender_writer_args.push_back(out_last_subblock_h_arg);
+                    mm_in1_sender_writer_args.push_back(padded_block_tiles_h_skip_arg);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(out_subblock_w);
@@ -2821,14 +2830,23 @@ create_program_mcast_in0_in1(
                     ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)  // out_tensor_start_tile_id
                 };
 
+                // Cores here always cover the first H-block. If there's only one H-block total, this
+                // is also the last one, so clamp its write size to the real remaining rows — otherwise
+                // it always writes a full block's worth, even past the tensor's actual end.
+                bool is_last_h_block = in0_idx == in0_end_idx;
+                uint32_t out_num_nonzero_subblocks_h_arg =
+                    is_last_h_block ? last_block_num_nonzero_subblocks_h : (out_block_h / out_subblock_h);
+                uint32_t out_last_subblock_h_arg = is_last_h_block ? last_subblock_of_last_block_h : out_subblock_h;
+                uint32_t padded_block_tiles_h_skip_arg = is_last_h_block ? last_block_padded_block_tiles_h_skip : 0;
+
                 if (in1_idx == in1_end_idx) {  // right cores when no transpose_mcast
                     // padding args (READER)
                     mm_in1_sender_writer_args.push_back(last_out_block_w);
 
                     // padding args (WRITER)
-                    mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(0);
+                    mm_in1_sender_writer_args.push_back(out_num_nonzero_subblocks_h_arg);
+                    mm_in1_sender_writer_args.push_back(out_last_subblock_h_arg);
+                    mm_in1_sender_writer_args.push_back(padded_block_tiles_h_skip_arg);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(last_block_num_nonzero_subblocks_w);
                     mm_in1_sender_writer_args.push_back(last_subblock_of_last_block_w);
@@ -2839,9 +2857,9 @@ create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.push_back(out_block_w);
 
                     // padding args (WRITER)
-                    mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(0);
+                    mm_in1_sender_writer_args.push_back(out_num_nonzero_subblocks_h_arg);
+                    mm_in1_sender_writer_args.push_back(out_last_subblock_h_arg);
+                    mm_in1_sender_writer_args.push_back(padded_block_tiles_h_skip_arg);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(out_subblock_w);
