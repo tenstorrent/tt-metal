@@ -360,13 +360,37 @@ struct OperationPack : Operation<Exu::Pack, Hoistable::Yes>
     using Struct = StateStruct<OperationPack, NumTiles>;
 };
 
+// ---------------------------
+// OPERATION - PACK UNTILIZE
+// ---------------------------
+
+struct OperationPackUntilize : Operation<Exu::Pack, Hoistable::No>
+{
+    template <typename T>
+    using Field = StateField<OperationPackUntilize, T>;
+
+    struct BlockCtDim : Field<std::uint32_t>
+    {
+    };
+
+    struct FullCtDim : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationPackUntilize,
+        /* Fields */
+        BlockCtDim,
+        FullCtDim>;
+};
+
 using UnpackOperations = OperationList<OperationUnpackUnary, OperationUnpackMatmul, OperationUnpackTilize>;
 
 using FpuOperations = OperationList<OperationFpuMatmul, OperationFpuEltwiseUnaryDatacopy>;
 
 using SfpuOperations = OperationList<>;
 
-using PackOperations = OperationList<OperationPack>;
+using PackOperations = OperationList<OperationPack, OperationPackUntilize>;
 
 template <>
 struct ExuOperations<Exu::Unpack>

@@ -362,9 +362,7 @@ ALWI void pack_untilize_uninit(uint32_t ocb) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
 
-#ifdef ARCH_BLACKHOLE
     PACK((llk_pack_untilize_uninit(ocb)));
-#endif
 
     // Reconfigure data format to match the initial configuration, before calling init.
     // Init is called to ensure special untilize init overrides are cleaned up.

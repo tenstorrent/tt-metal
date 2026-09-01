@@ -31,6 +31,23 @@ inline void llk_pack_untilize_init_impl(
     const std::uint32_t face_r_dim,
     const std::uint32_t num_faces) {
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format, pack_dst_format));
+
+    if constexpr (narrow_row || row_num_datums != TILE_C_DIM) {
+        // Narrow-row packing is not modelled yet: https://github.com/tenstorrent/tt-metal/issues/56088
+        SAN_HOOK(unsupported());
+    }
+
+    SAN_HOOK(init<OperationPackUntilize>(
+        StateVal<OperationPackUntilize::BlockCtDim>(block_ct_dim),
+        StateVal<OperationPackUntilize::FullCtDim>(full_ct_dim),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateDiscard<bool>(narrow_row),
+        StateDiscard<std::uint32_t>(row_num_datums),
+        StateDiscard<bool>(dense)));
+
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
         pack_src_format, pack_dst_format, face_r_dim, num_faces);
 }
@@ -60,6 +77,25 @@ inline void llk_pack_untilize_impl(
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format, pack_dst_format));
 
+    if constexpr (narrow_row || row_num_datums != TILE_C_DIM) {
+        // Narrow-row packing is not modelled yet: https://github.com/tenstorrent/tt-metal/issues/56088
+        SAN_HOOK(unsupported());
+    }
+
+    SAN_HOOK(execute<OperationPackUntilize>(
+        StateVal<OperationPackUntilize::BlockCtDim>(block_ct_dim),
+        StateVal<OperationPackUntilize::FullCtDim>(full_ct_dim),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateDiscard<bool>(narrow_row),
+        StateDiscard<std::uint32_t>(row_num_datums),
+        StateDiscard<bool>(dense),
+        StateDiscard<std::uint32_t>(block_rt_dim),
+        StateDiscard<std::uint32_t>(block_c_index),
+        StateDiscard<std::uint32_t>(tile_dst_rt_offset)));
+
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(
             pack_tile_addr, num_faces, block_rt * block_ct_dim + tile_dst_rt_offset);
@@ -69,6 +105,8 @@ inline void llk_pack_untilize_impl(
 }
 
 inline void llk_pack_untilize_uninit_impl(const std::uint32_t pack_src_format) {
+    SAN_HOOK(uninit<OperationPackUntilize>(StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format)));
+
     _llk_pack_untilize_uninit_(pack_src_format);
 }
 
@@ -95,7 +133,6 @@ template <
     std::uint32_t row_num_datums = TILE_C_DIM,
     bool dense = false>
 inline void llk_pack_untilize_init(std::uint32_t output) {
-    SAN_HOOK(unsupported());
     static_assert(diagonal == false, "Diagonal is only supported on WH");
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -112,7 +149,6 @@ inline void llk_pack_untilize_init(std::uint32_t output) {
  * @param output Output circular buffer / operand index.
  */
 inline void llk_pack_untilize_uninit(std::uint32_t output) {
-    SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(output);
     llk_pack_untilize_uninit_impl(pack_src_format[output_id]);
 }
@@ -149,7 +185,6 @@ inline void llk_pack_untilize(
     std::uint32_t output,
     const std::uint32_t block_c_index = 0,
     const std::uint32_t tile_dst_rt_offset = 0) {
-    SAN_HOOK(unsupported());
     static_assert(diagonal == false, "Diagonal is only supported on WH");
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
