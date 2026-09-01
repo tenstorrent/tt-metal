@@ -60,16 +60,9 @@
   team: runtime
 
 # --- Disaggregation: KV chunk address table (in-memory map + protobuf wire format) ---
-# Host-only suites (no device I/O); both live in unit_tests_api.
-- name: runtime_sanity_kv_chunk_address_table
-  cmd: ./build/test/tt_metal/unit_tests_api --gtest_filter='KvChunkAddressTable*'
-  skus:
-    wh_n150_civ2:
-      timeout: 2
-    bh_p150b_civ2:
-      timeout: 2
-  owner_id: U099A7FMKL2 # Manish Sudumbrekar
-  team: runtime
+# Covered by runtime_sim_cpp_unit_tests below: its unit_tests_api invocation uses a negative
+# filter (everything but a few Quasar fixtures), which already includes KvChunkAddressTable*.
+# No separate entry — the sanity budget on the civ2 SKUs is fully allocated.
 
 # --- BH Multi-Card: System Health ---
 - name: bh_multicard_system_health
