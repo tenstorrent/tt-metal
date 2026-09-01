@@ -2323,6 +2323,66 @@ TEST_F(ControlPlaneFixture, Test2x2StageRingPipelineOnSingleGalaxy) {
     }
 }
 
+// Same 4-stage 2x2 pipeline ring, but every axis is declared LINE in the MGD and the fabric config
+// requests FABRIC_2D_TORUS_XY on top. Both planar axes are then config-driven torus axes, so ALL
+// N/S/E/W edge ports are reserved for the torus (issue #54650) and the declared inter-mesh
+// connections have exactly one direction class left: the ring must come up entirely on Z-direction
+// routers (Z pairs only with Z, and a Z label reads identically on both ends of a cable, so the
+// deadlock-avoidance setting can never mismatch across it).
+TEST_F(ControlPlaneFixture, Test2x2StageRingForcedOntoZByConfigTorus) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // The requested config stays latched — nothing rewrites it.
+    EXPECT_EQ(control_plane.get_fabric_config(), tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
+
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    auto mesh_ids = mesh_graph.get_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end());
+    ASSERT_EQ(mesh_ids.size(), 4u);
+
+    // Every planar edge port is reserved; only Z ports remain as inter-mesh candidates.
+    for (const auto& mesh_id : mesh_ids) {
+        const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(*mesh_id);
+        ASSERT_FALSE(edge_ports.empty());
+        for (const auto& [port_id, chip_id] : edge_ports) {
+            EXPECT_EQ(port_id.first, RoutingDirection::Z)
+                << "mesh " << *mesh_id << " still exposes a " << enchantum::to_string(port_id.first)
+                << " edge port despite the config-driven torus on both axes";
+        }
+    }
+
+    // The ring closes on Z: every consecutive pair (including 3 -> 0) has inter-mesh links, and
+    // every inter-mesh-facing ethernet channel on this rank's mesh is a Z-direction router.
+    const auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
+    auto is_local_mesh = [&](MeshId mesh_id) {
+        return std::find(local_mesh_ids.begin(), local_mesh_ids.end(), mesh_id) != local_mesh_ids.end();
+    };
+    for (size_t i = 0; i < mesh_ids.size(); i++) {
+        const auto src = mesh_ids[i];
+        const auto dst = mesh_ids[(i + 1) % mesh_ids.size()];
+        const auto exit_pairs = control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(src, dst);
+        EXPECT_FALSE(exit_pairs.empty()) << "no inter-mesh link between mesh " << *src << " and mesh " << *dst;
+        for (const auto& [exit_node, peer_node] : exit_pairs) {
+            if (!is_local_mesh(exit_node.mesh_id)) {
+                continue;  // per-channel direction state only exists for the mesh this rank hosts
+            }
+            const auto intermesh_chans = control_plane.get_intermesh_facing_eth_chans(exit_node);
+            EXPECT_FALSE(intermesh_chans.empty());
+            for (const auto& chan : intermesh_chans) {
+                EXPECT_EQ(control_plane.get_eth_chan_direction(exit_node, chan), eth_chan_directions::Z)
+                    << "inter-mesh channel " << +chan << " on " << exit_node << " is not a Z-direction router";
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Pure CPU-only unit tests for the inter-mesh hop allocator behind the blitz
 // decode pipeline builder (detail::assign_non_colliding_hops). No control plane
