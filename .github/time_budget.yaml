@@ -279,9 +279,12 @@ runtime:
   perf:
     wh_n300_civ2: 65
     bh_p150_perf: 50
+  # Profiler-build runtime perf jobs (runtime_perf_op_to_op_latency +
+  # runtime_perf_tensor_accessor), each a single profiler benchmark with a 5-min per-SKU
+  # timeout; budget is the sum of the two (5 + 5 = 10).
   perf_profiler:
-    wh_n300_civ2: 5
-    bh_p150_perf: 5
+    wh_n300_civ2: 10
+    bh_p150_perf: 10
 
 triage:
   merge_gate:

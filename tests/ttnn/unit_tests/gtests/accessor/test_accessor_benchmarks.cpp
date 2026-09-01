@@ -17,6 +17,8 @@
 
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include "impl/profiler/profiler_state.hpp"
+
 namespace accessor_benchmarks {
 
 // TODO: Very similar to test_buffer_distribution_spec.cpp; refactor to common header?
@@ -26,6 +28,10 @@ struct InputBufferParams {
     tt::tt_metal::Shape2D page_shape;
     float bytes_per_element;
     tt::DataFormat data_format;  // Used for setting up CBs
+
+    // When true the buffer is interleaved (no distribution spec); the shard-spec
+    // fields below are ignored except for buffer_type.
+    bool is_interleaved = false;
 
     struct DistributionSpecParams {
         tt::tt_metal::Shape physical_shard_shape;
@@ -50,11 +56,20 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_m
     if (is_interleaved) {
         input_buffer_distribution_spec = std::nullopt;
     } else {
+        // For sharded DRAM the shards are distributed across DRAM banks, whose logical
+        // grid (bank_id, 0) differs per arch, so derive it from the device rather than
+        // the (worker-core) grid baked into the test params. Only the first DRAM row is
+        // used since higher y coordinates can be NOC-port replicas of the same banks.
+        tt::tt_metal::CoreRangeSet grid = inputs.input_shard_spec.grid;
+        if (inputs.input_shard_spec.buffer_type == tt::tt_metal::BufferType::DRAM) {
+            const auto dram_grid_size = mesh_device->dram_grid_size();
+            grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {dram_grid_size.x - 1, 0}));
+        }
         input_buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
             inputs.physical_tensor_shape,
             inputs.input_shard_spec.physical_shard_shape,
             inputs.page_shape,
-            inputs.input_shard_spec.grid,
+            grid,
             inputs.input_shard_spec.shard_orientation);
     }
     const tt::tt_metal::distributed::DeviceLocalBufferConfig input_device_local_config{
@@ -166,6 +181,83 @@ void benchmark_all_args_combinations_single_core(
     benchmark_args_combinations_single_core(params, mesh_device_, res_path, kernel_path, all_args_combinations);
 }
 
+// Full-chip get_noc_addr (address-calculation) benchmark: run the address-calc kernel
+// on EVERY Tensix worker core simultaneously for one pinned all-static arg config, so
+// the measured per-core zone reflects address calculation under full-chip occupancy.
+// Used to capture the cost across all supported tensor topologies (interleaved L1/DRAM,
+// 1D/2D/ND sharded L1, sharded DRAM); the topology is fully described by `params`
+// (is_interleaved + buffer_type + shapes). The profiler records one zone per core and
+// the post-processor averages across cores.
+void benchmark_get_noc_addr_full_chip(
+    const InputBufferParams& params,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device_,
+    const std::string& res_path) {
+    using tensor_accessor::ArgConfig;
+    using tensor_accessor::ArgsConfig;
+
+    const bool is_interleaved = params.is_interleaved;
+    const auto input_mesh_buffer =
+        create_replicated_input_mesh_buffer_from_inputs(params, mesh_device_.get(), is_interleaved);
+
+    const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
+    auto* const input_device_buffer = input_mesh_buffer->get_device_buffer(mesh_coordinate);
+
+    auto profiler_dir = res_path + "/" + params.test_name;
+    tt::tt_metal::detail::SetDeviceProfilerDir(profiler_dir);
+    log_info(tt::LogTest, "Setting profiler dir to: {}", profiler_dir);
+    tt::tt_metal::detail::FreshProfilerDeviceLog();
+
+    // Pinned all-static config for the buffer's layout (interleaved: no bits set;
+    // sharded: only the Sharded bit set). The IsDram bit is derived from the buffer.
+    ArgsConfig arg_config = is_interleaved ? ArgsConfig{} : ArgsConfig{ArgConfig::Sharded};
+    auto args_bitmask = arg_config.raw();
+    std::string crta_config_str = fmt::format("\"SHARDED_ACCESSOR_{:07b}\"", args_bitmask);
+
+    // Run the address-calc kernel across the entire Tensix compute grid.
+    const auto grid_size = mesh_device_->compute_with_storage_grid_size();
+    const tt::tt_metal::CoreRangeSet all_cores(tt::tt_metal::CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
+    log_info(
+        tt::LogTest,
+        "Full-chip get_noc_addr benchmark ({}): grid {}x{}, config {}",
+        params.test_name,
+        grid_size.x,
+        grid_size.y,
+        crta_config_str);
+
+    auto program = CreateProgram();
+
+    const auto accessor_args = TensorAccessorArgs(*input_device_buffer, arg_config);
+    auto cta = accessor_args.get_compile_time_args();
+    // Interleaved accessors have no dspec(); the kernel reads the page count from this
+    // trailing compile-time arg (INTERLEAVED_LAYOUT path). Harmless for sharded.
+    cta.push_back(input_device_buffer->num_pages());
+
+    std::map<std::string, std::string> defines{{"ACCESSOR_CONFIG_NAME", crta_config_str}};
+    defines["INTERLEAVED_LAYOUT"] = is_interleaved ? "1" : "0";
+
+    KernelHandle reader_kernel_id = CreateKernel(
+        program,
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_get_noc_addr_page_id_benchmark.cpp",
+        all_cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = cta,
+            .defines = defines});
+
+    SetCommonRuntimeArgs(program, reader_kernel_id, accessor_args.get_common_runtime_args());
+
+    auto mesh_work_load = tt::tt_metal::distributed::MeshWorkload();
+    mesh_work_load.add_program((tt::tt_metal::distributed::MeshCoordinateRange)mesh_coordinate, std::move(program));
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_work_load, false);
+
+    log_info(tt::LogTest, "Program launched!");
+    Finish(mesh_device_->mesh_command_queue());
+    log_info(tt::LogTest, "Program finished!");
+
+    tt::tt_metal::ReadMeshDeviceProfilerResults(*mesh_device_);
+}
+
 TEST_P(AccessorBenchmarks, GetNocAddr) {
     benchmark_all_args_combinations_single_core(
         GetParam(),
@@ -231,6 +323,134 @@ TEST_P(AccessorBenchmarks, PagesIteratorInterleaved) {
         static_interleaved_args_combinations,
         true);  // is_interleaved = true
 }
+
+// Full-chip address-calculation (get_noc_addr) benchmark across all supported tensor
+// topologies. One pinned all-static config per topology, kernel run on the full Tensix
+// grid. Captures the address-calc cost for: interleaved L1, interleaved DRAM, 1D/2D/ND
+// sharded L1, and sharded DRAM.
+class AccessorFullChipBenchmarks : public GenericMeshDeviceFixture,
+                                   public ::testing::WithParamInterface<InputBufferParams> {};
+
+TEST_P(AccessorFullChipBenchmarks, GetNocAddr) {
+    // These are perf benchmarks whose only output is device-profiler timing. Skip them
+    // unless the profiler is actually enabled so they never run (and can never fail) in
+    // the non-profiler functional gates that run this whole binary unfiltered
+    // (ops_unit_tests.yaml, t3000 unit tests) — they run only in the profiler-build
+    // Runtime Performance Tests pipeline.
+    if (!getDeviceProfilerState()) {
+        GTEST_SKIP() << "TensorAccessor full-chip benchmarks require the device profiler "
+                        "(ENABLE_TRACY build + TT_METAL_DEVICE_PROFILER=1); skipping in non-profiler run.";
+    }
+    benchmark_get_noc_addr_full_chip(GetParam(), mesh_device_, "accessor_full_chip_get_noc_addr_benchmarks");
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AccessorTests,
+    AccessorFullChipBenchmarks,
+    ::testing::Values(
+        // --- Interleaved ---
+        InputBufferParams{
+            .test_name = "interleaved_l1",
+            .physical_tensor_shape = tt::tt_metal::Shape{320, 320},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+            .is_interleaved = true,
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{320, 320},  // ignored for interleaved
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {0, 0})),        // ignored for interleaved
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
+        InputBufferParams{
+            .test_name = "interleaved_dram",
+            .physical_tensor_shape = tt::tt_metal::Shape{320, 320},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+            .is_interleaved = true,
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{320, 320},  // ignored for interleaved
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {0, 0})),        // ignored for interleaved
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::DRAM,
+                },
+        },
+        // --- Sharded L1: 1D / 2D / ND ---
+        InputBufferParams{
+            .test_name = "sharded_l1_1d",
+            .physical_tensor_shape = tt::tt_metal::Shape{2048},
+            .page_shape = tt::tt_metal::Shape2D{1, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{512},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
+        InputBufferParams{
+            .test_name = "sharded_l1_2d",
+            .physical_tensor_shape = tt::tt_metal::Shape{320, 320},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{96, 96},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
+        InputBufferParams{
+            .test_name = "sharded_l1_nd",
+            .physical_tensor_shape = tt::tt_metal::Shape{5, 5, 5, 160, 160},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{3, 3, 3, 96, 96},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
+        // --- Sharded DRAM: 2D / ND (grid derived from dram_grid_size at runtime) ---
+        InputBufferParams{
+            .test_name = "sharded_dram_2d",
+            .physical_tensor_shape = tt::tt_metal::Shape{320, 320},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{96, 96},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),  // overridden by dram_grid_size for DRAM
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::DRAM,
+                },
+        },
+        InputBufferParams{
+            .test_name = "sharded_dram_nd",
+            .physical_tensor_shape = tt::tt_metal::Shape{5, 5, 5, 160, 160},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{3, 3, 3, 96, 96},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),  // overridden by dram_grid_size for DRAM
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::DRAM,
+                },
+        }));
 
 INSTANTIATE_TEST_SUITE_P(
     AccessorTests,
