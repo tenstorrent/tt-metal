@@ -201,17 +201,17 @@ const char* noc_vs_idma_benchmark_name(uint32_t config_id) {
 
 // NoC vs iDMA local TL1 copy benchmark. Averaged kernel rows are written into an L1 result buffer and logged
 // by the host; the destination check only validates the final largest sample's copied contents.
-bool run_noc_vs_idma_copy_bench(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+bool run_noc_vs_idma_copy_bench(distributed::MeshDevice& mesh_device) {
     constexpr CoreCoord core = {0, 0};
     constexpr uint32_t kLargestSweepSize = 131072;  // must match kSweepSizes.back() in the kernel
     constexpr uint32_t num_words = kLargestSweepSize / sizeof(uint32_t);
 
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device.get_devices()[0];
     auto buffers = make_idma_src_dst_buffers(mesh_device, kLargestSweepSize);
     distributed::DeviceLocalBufferConfig local_buffer_config = {
         .page_size = kNocVsIdmaResultBytes, .buffer_type = tt::tt_metal::BufferType::L1};
     distributed::ReplicatedBufferConfig buffer_config = {.size = kNocVsIdmaResultBytes};
-    auto result_buffer = distributed::MeshBuffer::create(buffer_config, local_buffer_config, mesh_device.get());
+    auto result_buffer = distributed::MeshBuffer::create(buffer_config, local_buffer_config, &mesh_device);
     const uint32_t src_base = buffers.src->address();
     const uint32_t dst_base = buffers.dst->address();
     const uint32_t result_base = result_buffer->address();
@@ -308,7 +308,7 @@ TEST_F(QuasarIdmaOps, NocVsIdmaCopyBench) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
     // Measurement rows are read from L1 and logged by the host; the assertion checks final destination contents.
-    EXPECT_TRUE(unit_tests::dm::quasar_idma::run_noc_vs_idma_copy_bench(devices_[0]));
+    EXPECT_TRUE(unit_tests::dm::quasar_idma::run_noc_vs_idma_copy_bench(this->device()));
 }
 
 }  // namespace tt::tt_metal
