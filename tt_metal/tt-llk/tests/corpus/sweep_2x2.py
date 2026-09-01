@@ -1352,6 +1352,39 @@ KNOBS = {
     # the row refuses by name (regrename-no-free-lreg 26 with the
     # temporal tier ALSO exhausted, regrename-cc-span 16, constraint 6).
     "rename-temporal": "-mtt-tensix-optimize-rename-temporal",
+    # KP (residency-merge-rename, FABLE_GOES_BURR R1(b)): the addrsqrt
+    # cert's GIMPLE-side rename successor, executed — the const-residency
+    # walk's MERGE-RENAME class renames an in-loop constant-immediate CC
+    # merge (single-issue FLOATB sfploadi_lv over a loop-varying link,
+    # the one materialization no invariant/residency class can hoist
+    # because the STATEMENT is loop-variant even though its immediate is
+    # not) into a parked full-lane twin (the pressure-park LREG tier's
+    # proven programming point) plus an in-loop register-source
+    # sfpassign_lv merge.  The rename is delivery-word-neutral BY
+    # CONSTRUCTION (one in-loop word before and after) while the park
+    # adds its materialization word once, so the shipped verdict is the
+    # named refusal merge-rename-word-neutral; the companion
+    # -mtt-tensix-merge-rename-allow-neutral adjudication override
+    # (never on by default) admits the neutral rename for measurement
+    # legs only.  MEASURED (laneKP-evidence-20260901, BH p150 CHIP 2,
+    # 3 reps ALL cycle-identical, corr-first PASS every session): at the
+    # booked addrsqrt-fresh leg (ON37 + stochrnd-store-fold) the sem
+    # anchor reproduces 121006 EXACT and the hand comparator 119837
+    # EXACT (the booked cell, fresh both-arm re-measure); with the
+    # rename FIRED on the exact cert-named shape (the qnan 0x7FC00000
+    # lv-merge parked at the pre-peel entry, in-loop SFPLOADI -> SFPMOV,
+    # rolled row still 24 words, LREG file 7/8 -> 8/8) the sem arm
+    # measures 121132 x3 = +126 cy (+0.10%) WORSE — the priced
+    # word-neutral refusal is silicon-validated: the rename can only add
+    # the parked twin's delivered word.  Composition census: with the
+    # rename fired, 2datum/round-interleave/cyclic knobs stay
+    # byte-inert on the row and the item-#7 chains engine that byte-fired
+    # on base goes SILENT (the park consumed the file's last free LREG) —
+    # a GIMPLE-side rename SPENDS the 8-LREG wall's slack, never creates
+    # it.  Cert re-certified, cell unchanged (LOSS +0.98 stands);
+    # remaining successors = R2 CC-dance restructure + JU-class
+    # economics.
+    "residency-merge-rename": "-mtt-tensix-optimize-residency-merge-rename",
     # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
     # exactly the doomed-hoist mirror refusal
     # noexec-rerecord-dststore-composition-unaudited (Dst-store re-record
@@ -1802,6 +1835,14 @@ KNOB_MODES = {
     # a booking knob; promotion requires the ON-delta adjudication
     # ceremony.
     "rename-temporal": "on-plus",
+    # KP residency-merge-rename: default-off Init(0) walk-vocabulary
+    # widening whose shipped verdict on every in-vocabulary site is the
+    # named word-neutral refusal (the flag alone is corpus byte-inert by
+    # construction; fires exist only under the never-default
+    # allow-neutral adjudication override, measured WORSE on the target
+    # row).  on-plus so the nightly knob leg pins the corpus-wide
+    # byte-inertness and the refusal counters; promotion is not sought.
+    "residency-merge-rename": "on-plus",
     # HH launch-flatten: default-off Init(0) booking knob; a pure
     # GIMPLE unroll-request (delivery-shape change only, dynamic word
     # stream unchanged by construction).  on-plus while a booking knob;
