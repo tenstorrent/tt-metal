@@ -140,9 +140,12 @@ private:
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
+    // Only ever read on the dispatch path, which holds the api lock.
     mutable std::unordered_map<MeshCoordinateRange, std::vector<IDevice*>> local_devices_by_range_;
-    mutable std::optional<CoreCoord> compute_with_storage_grid_size_;
-    mutable std::optional<uint32_t> l1_size_per_core_;
+    // Established once the devices are open (see establish_device_property_caches) so that the
+    // accessors below stay pure reads: ttnn calls them from many threads without the api lock.
+    std::optional<CoreCoord> compute_with_storage_grid_size_;
+    std::optional<uint32_t> l1_size_per_core_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
@@ -193,6 +196,9 @@ private:
     // Throws if the tracker is null (e.g., on remote-only MeshDevices).
     void validate_sub_device_manager_tracker() const;
     std::vector<AllocatorImpl*> trace_allocators() const;
+    // Resolves the mesh-wide device properties that are fixed once the devices are open. Called
+    // during initialization and again after a reshape swaps the view.
+    void establish_device_property_caches();
 
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;

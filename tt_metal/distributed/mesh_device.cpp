@@ -251,13 +251,13 @@ bool MeshDeviceImpl::is_remote_only() const {
 }
 
 uint32_t MeshDeviceImpl::l1_size_per_core() const {
-    // Cached for the same reason as compute_with_storage_grid_size(): fixed for the life of the mesh,
-    // and circular buffer validation asks for it once per program per enqueue.
-    if (!l1_size_per_core_.has_value()) {
-        l1_size_per_core_ = validate_and_get_reference_value(
-            this->get_devices(), [](const auto* device) { return device->l1_size_per_core(); });
+    if (l1_size_per_core_.has_value()) {
+        return *l1_size_per_core_;
     }
-    return *l1_size_per_core_;
+    // Only reachable before initialization establishes the value, where the mesh is still
+    // single-threaded. Answer without caching so this accessor never writes.
+    return validate_and_get_reference_value(
+        this->get_devices(), [](const auto* device) { return device->l1_size_per_core(); });
 }
 
 uint32_t MeshDeviceImpl::dram_size_per_channel() const {
@@ -888,14 +888,31 @@ DeviceIds MeshDeviceImpl::get_device_ids() const {
 size_t MeshDeviceImpl::num_devices() const { return view_->num_devices(); }
 
 CoreCoord MeshDeviceImpl::compute_with_storage_grid_size() const {
-    // Fixed once the devices are open, but the cross-device agreement check walks the whole mesh and
-    // rebuilds the device list to do it. Dispatch asks for this once per program per enqueue (circular
-    // buffer validation), so establish agreement on first use and answer from the cache after that.
-    if (!compute_with_storage_grid_size_.has_value()) {
-        compute_with_storage_grid_size_ = validate_and_get_reference_value(
-            this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
+    if (compute_with_storage_grid_size_.has_value()) {
+        return *compute_with_storage_grid_size_;
     }
-    return *compute_with_storage_grid_size_;
+    // Only reachable before initialization establishes the value, where the mesh is still
+    // single-threaded. Answer without caching so this accessor never writes.
+    return validate_and_get_reference_value(
+        this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
+}
+
+// The cross-device agreement check behind these two properties rebuilds the device list and walks
+// the whole mesh, and circular buffer validation asks for both once per program on every enqueue.
+// They are fixed once the devices are open, so resolve them here: the accessors then answer from a
+// value nobody writes, which is what makes them safe to call without holding the api lock.
+void MeshDeviceImpl::establish_device_property_caches() {
+    const auto devices = this->get_devices();
+    if (devices.empty()) {
+        // Remote-only mesh: there is no local device to agree with. The accessors throw if called.
+        compute_with_storage_grid_size_.reset();
+        l1_size_per_core_.reset();
+        return;
+    }
+    compute_with_storage_grid_size_ = validate_and_get_reference_value(
+        devices, [](const auto* device) { return device->compute_with_storage_grid_size(); });
+    l1_size_per_core_ =
+        validate_and_get_reference_value(devices, [](const auto* device) { return device->l1_size_per_core(); });
 }
 
 tt::ARCH MeshDeviceImpl::arch() const { return tt_metal::MetalContext::instance().get_cluster().arch(); }
@@ -969,8 +986,7 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
     auto new_view = std::make_unique<MeshDeviceView>(new_shape, new_device_order, new_fabric_node_ids);
     view_ = std::move(new_view);
     local_devices_by_range_.clear();
-    compute_with_storage_grid_size_.reset();
-    l1_size_per_core_.reset();
+    establish_device_property_caches();
 }
 
 bool MeshDeviceImpl::close() {
@@ -1621,6 +1637,8 @@ bool MeshDeviceImpl::initialize_impl(
 
     active_distributed_context_ = distributed_context_->split(
         distributed::multihost::Color(0), distributed::multihost::Key(*distributed_context_->rank()));
+
+    establish_device_property_caches();
 
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
