@@ -102,9 +102,7 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
             "TT_DIT_CACHE_DIR is unset, so every weight load reads safetensors and the run will take far longer."
         )
 
-    pipeline = MiniMaxH3Pipeline.create_pipeline(
-        mesh_device=mesh_device, weights_dir=weights, precomputed_adaln=False, dit_fsdp=False
-    )
+    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights, dit_fsdp=False)
 
     output = run_warm_generation(
         pipeline,

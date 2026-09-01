@@ -41,7 +41,6 @@ itself (~2.8 s), never the reload.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import time
@@ -67,7 +66,6 @@ from ...layers.audio_ops import weights_variant
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
-from ...models.transformers.minimax_h3.adaln_cache_minimax_h3 import MiniMaxH3AdalnCache
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import DEFAULT_TILE_SIZE, MiniMaxH3Vae, MiniMaxH3VaeConfig
@@ -78,7 +76,6 @@ from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch
 from ...utils.tracing import StateTensor
 from ..events import DenoiseStep, PipelineEventCallback, event_section, null_callback
-from .adaln_precompute import precompute_adaln_table, request_step_timesteps
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
 from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
 from .conditioning import encode_keyframes, keyframe_condition_noise
@@ -95,7 +92,6 @@ from .packing import (
     audio_latent_num_frames,
     build_packed_sequence,
     build_rope_tables,
-    build_row_timesteps,
     build_slot_routing,
     patchify_video_latents,
     prepare_keyframe_image,
@@ -263,7 +259,6 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
-        precomputed_adaln: bool = False,
         dit_fsdp: bool = False,
         trace_denoise: bool | None = None,
     ) -> None:
@@ -287,10 +282,9 @@ class MiniMaxH3Pipeline:
         # measured-call report, not the compile pass. Construction logs still go through `_host_log`.
         self._log_generation = True
         # Denoise generations completed. Tracing engages only after one untraced pass; see `_denoise`.
-        # The request a live trace was captured at: shapes plus the AdaLN cache object. A capture is
-        # only valid for that exact request, so both are compared before reusing it.
+        # The request a live trace was captured at: packed shapes plus the AdaLN slot count.
+        # A capture is only valid for that exact request, so both are compared before reusing it.
         self._trace_signature: tuple | None = None
-        self._trace_adaln_cache = None
         # Persistent per-step trace I/O for the denoise loop, the LTX / Flux2 pattern: a ttnn trace
         # bakes its inputs' addresses, so the buffers that change every step live in one place and are
         # refreshed *in* (via `ttnn.copy` when traced) rather than reallocated. The static per-request
@@ -385,15 +379,8 @@ class MiniMaxH3Pipeline:
         self._vision_config = None
         self._audio_decoder = None
         self._audio_encoder = None
-        self._adaln_cache = None
-        self._adaln_cache_steps: int | None = None
-        # AdaLN strategy. The default (`precomputed_adaln=False`) keeps the `adaln_proj` weights
-        # resident and projects `temb` on device every step. `precomputed_adaln=True` projects every
-        # block's `adaln_proj` on host into a modulation table for the request's schedule, so the
-        # 26 GB of projection weights (6.50 GB/device at TP=4) never reach the device.
         # `dit_fsdp=True` shards the DiT's SP-replicated weights over the SP axis (all-gathered per
         # use) to relieve memory pressure.
-        self.precomputed_adaln = precomputed_adaln
         self.dit_fsdp = dit_fsdp
         self._resident: str | None = None
         # The last call's padded packed length. Exposed so a perf test can assert that `warmup` and the
@@ -414,7 +401,6 @@ class MiniMaxH3Pipeline:
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
-        precomputed_adaln: bool = False,
         dit_fsdp: bool = False,
         trace_denoise: bool | None = None,
     ) -> "MiniMaxH3Pipeline":
@@ -423,12 +409,9 @@ class MiniMaxH3Pipeline:
         The parallel configuration defaults to this mesh shape's entry in `_PRESETS_BH`; pass any of
         `tp_axis`/`sp_axis`/`num_links`/`topology` to override it.
 
-        `precomputed_adaln=True` projects every block's `adaln_proj` on host into a modulation table
-        so the 26 GB of projection weights never reach the device; the default (`False`) keeps those
-        weights resident and projects `temb` on device each step. `dit_fsdp=True` shards the DiT over
-        the SP axis. `trace_denoise` defaults to the mesh preset (on for the quad only); pass `True`
-        to trace the denoise step on other shapes, e.g. to exercise the traced resident path on one
-        4x8 Galaxy.
+        `dit_fsdp=True` shards the DiT over the SP axis. `trace_denoise` defaults to the mesh preset
+        (on for the quad only); pass `True` to trace the denoise step on other shapes, e.g. to
+        exercise the traced resident path on one 4x8 Galaxy.
         """
         weights_dir = weights_dir or os.environ.get("MINIMAX_H3_MODEL_PATH")
         if not weights_dir:
@@ -444,23 +427,9 @@ class MiniMaxH3Pipeline:
             num_links=num_links,
             topology=topology,
             task=task,
-            precomputed_adaln=precomputed_adaln,
             dit_fsdp=dit_fsdp,
             trace_denoise=trace_denoise,
         )
-
-    @staticmethod
-    def _ranks_agree(local: bool) -> bool:
-        """Whether *every* rank sees `local` as true. A collective; all ranks must call it.
-
-        A per-rank `Path.is_file()` must not gate collective work: a shared cache can disagree between
-        hosts, and a rank taking a cached early return skips collectives the others are still waiting
-        in, which deadlocks rather than fails. Unanimity, as `utils/cache.py` does for the weight
-        cache, so a partially populated cache costs a recompute instead of a hang.
-        """
-        if not ttnn.using_distributed_env():
-            return local
-        return all(ttnn.distributed_context_allgather_int(1 if local else 0))
 
     def _read_config(self, subfolder: str) -> dict:
         path = self.weights_dir / subfolder / "config.json"
@@ -469,42 +438,20 @@ class MiniMaxH3Pipeline:
         return {k: v for k, v in json.loads(path.read_text()).items() if not k.startswith("_")}
 
     def _read_safetensors(self, subfolder: str) -> dict[str, torch.Tensor]:
-        """A partition's weights, sharded or single-file. `transformer` and `vae` are sharded here.
-
-        On the precomputed-AdaLN path the keys the table replaces are dropped per shard as it is read
-        and never accumulated into the returned state. The shard still has to be read to get at the
-        keys beside them -- avoiding that entirely would need per-key `safe_open` access -- but the
-        26 GB never reaches the state dict, the device, or the weight cache. On the resident-AdaLN
-        path (`precomputed_adaln=False`) those same keys are exactly what the on-device projections
-        load, so they are kept.
-        """
+        """A partition's weights, sharded or single-file. `transformer` and `vae` are sharded here."""
         from safetensors.torch import load_file
-
-        # Either transformer partition: the keys the precomputed table replaces are the same in both,
-        # so this must not test for the literal "transformer". Only dropped when the table actually
-        # replaces them -- the resident path needs `adaln_proj` / `time_embedder` / `norm_out.linear`.
-        drop = self.precomputed_adaln and subfolder.startswith("transformer")
-
-        def keep(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-            if not drop:
-                return state
-            return {
-                k: v
-                for k, v in state.items()
-                if ".adaln_proj." not in k and not k.startswith("time_embedder.") and "norm_out.linear" not in k
-            }
 
         directory = self.weights_dir / subfolder
         index = directory / "diffusion_pytorch_model.safetensors.index.json"
         state: dict[str, torch.Tensor] = {}
         if index.is_file():
             for shard in sorted(set(json.loads(index.read_text())["weight_map"].values())):
-                state.update(keep(load_file(str(directory / shard))))
+                state.update(load_file(str(directory / shard)))
         else:
             single = directory / "diffusion_pytorch_model.safetensors"
             if not single.is_file():
                 raise FileNotFoundError(f"no safetensors (sharded or single) under {directory}")
-            state.update(keep(load_file(str(single))))
+            state.update(load_file(str(single)))
         return state
 
     # ------------------------------------------------------------------ residency
@@ -537,8 +484,8 @@ class MiniMaxH3Pipeline:
         dropped explicitly. It still holds its host state dict, so rebuilding is a re-upload rather
         than a re-read from disk.
 
-        **The text encoder is kept co-resident too.** Measured on a 4x8 Blackhole mesh with the
-        precomputed AdaLN path: encoder, DiT and VAE fit together, and a prompt's Encoder row
+        **The text encoder is kept co-resident too.** Measured on a 4x8 Blackhole mesh:
+        encoder, DiT and VAE fit together, and a prompt's Encoder row
         drops from **23.9 s to 2.8 s** because the 50 GB reload disappears. Every request runs the
         conditioner encode, so this is on the critical path of essentially every served request.
         `coresident=False` evicts each stage for a mesh where they do not fit.
@@ -754,6 +701,20 @@ class MiniMaxH3Pipeline:
             kinds,
         )
 
+    def _prepare_text_encoder(self):
+        """The on-device Qwen3-VL conditioner, loaded once and kept co-resident by default."""
+        self._make_resident("text")
+        if self._text_encoder is None:
+            self._host_log("building the Qwen3-VL text encoder")
+            self._text_encoder, self._text_config = build_minimax_h3_text_encoder(
+                self.weights_dir / "text_encoder",
+                mesh_device=self.mesh_device,
+                parallel_config=self.encoder_parallel_config,
+                ccl_manager=self.ccl_manager,
+                is_fsdp=True,
+            )
+        return self._text_encoder
+
     def _prepare_vision_tower(self):
         if self._vision_tower is None:
             # Sharded on the pipeline's own axes (TP on tp_axis, SP on sp_axis), the tp4_sp8
@@ -825,16 +786,7 @@ class MiniMaxH3Pipeline:
             detail = f" ({int(type_ids.sum())} of them vision, {len(keyframes)} keyframe(s))"
         self._log(f"encoding {seq_len} presentation tokens on device" + detail)
 
-        self._make_resident("text")
-        if self._text_encoder is None:
-            self._text_encoder, self._text_config = build_minimax_h3_text_encoder(
-                self.weights_dir / "text_encoder",
-                mesh_device=self.mesh_device,
-                parallel_config=self.encoder_parallel_config,
-                ccl_manager=self.ccl_manager,
-                is_fsdp=True,
-            )
-        config = self._text_config
+        encoder = self._prepare_text_encoder()
 
         # The vision tower, and the two ways its output enters the decoder. Run before the rope tables
         # so a tower failure surfaces before any decoder work.
@@ -890,7 +842,7 @@ class MiniMaxH3Pipeline:
         # With a vision run the three mRoPE axes diverge, so `mrope_interleaved` stops being a no-op
         # and the chunked section split is wrong. t2va keeps the default (shared `arange`) path, where
         # the two layouts are bit-identical -- measured.
-        rope_scaling = config["rope_scaling"]
+        rope_scaling = self._text_config["rope_scaling"]
         position_ids = None
         if has_vision:
             if not rope_scaling.get("mrope_interleaved"):
@@ -912,8 +864,8 @@ class MiniMaxH3Pipeline:
             1,
             seq_len,
             None,
-            config["head_dim"],
-            rope_scaling.get("rope_theta", config["rope_theta"]),
+            self._text_config["head_dim"],
+            rope_scaling.get("rope_theta", self._text_config["rope_theta"]),
             rope_scaling["mrope_section"],
             position_ids=position_ids,
             interleaved=has_vision,
@@ -925,7 +877,7 @@ class MiniMaxH3Pipeline:
             device=self.mesh_device,
         )
         # Causal, and a single un-padded presentation, so no mask is needed.
-        taps = self._text_encoder.forward(
+        taps = encoder.forward(
             tt_ids,
             attention_mask=None,
             pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
@@ -1062,41 +1014,33 @@ class MiniMaxH3Pipeline:
         config = {k: v for k, v in self.transformer_config.items() if k not in ("rope_freq_dim", "rope_theta")}
         config["patch_size"] = tuple(config["patch_size"])
 
-        # Default (`precomputed_adaln=False`): the `adaln_proj` weights stay resident and `temb` is
-        # projected on device each step. `precomputed_adaln=True` projects every `adaln_proj` on host
-        # into a table for the exact schedule so the 26 GB of projection weights (6.50 GB/device at
-        # TP=4) never reach the device. `dit_fsdp=True` additionally shards the DiT over SP.
-        # See `models/transformers/minimax_h3/adaln_cache_minimax_h3.py`.
-        adaln_mode = "precomputed_adaln" if self.precomputed_adaln else "resident_adaln"
-        if self.dit_fsdp:
-            adaln_mode += "_fsdp"
+        # AdaLN projections stay resident and `temb` is projected on device each step.
+        # `dit_fsdp=True` additionally shards the DiT over SP. The cache key keeps the historical
+        # `resident_adaln` token so existing weight-cache entries still hit.
+        weight_mode = "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
         self._host_log(
             f"building the {config['num_layers']}-layer transformer from {self.transformer_subfolder}/, "
-            f"TP={self.tp_factor}/SP={self.sp_factor} ({adaln_mode})"
+            f"TP={self.tp_factor}/SP={self.sp_factor} ({weight_mode})"
         )
         model = MiniMaxH3Transformer3DModel(
             **config,
             mesh_device=self.mesh_device,
             ccl_manager=self.ccl_manager,
             parallel_config=self.dit_parallel_config,
-            precomputed_adaln=self.precomputed_adaln,
             is_fsdp=self.dit_fsdp,
             cache_padding=self.trace_denoise,
         )
 
         # Cache-aware: on a hit this reads pre-sharded device tensors instead of 62 GB of
         # safetensors plus every `_prepare_torch_state` fixup. With TT_DIT_CACHE_DIR unset it falls
-        # through to the direct load and logs that it did. The load underneath is strict, and the key
-        # count differs by mode (the resident path carries the `adaln_proj` tensors the precomputed
-        # one drops), so a single unmapped key is a real bug.
+        # through to the direct load and logs that it did. The load underneath is strict, so a
+        # single unmapped key is a real bug.
         cache.load_model(
             model,
             model_name=MODEL_NAME,
-            # `adaln_mode` keeps the four builds (precomputed / resident, each ± FSDP) in distinct
-            # cache entries so a differently-sharded or differently-populated state can never read a
-            # stale file, and the partition term keeps the two partitions -- which share a repository
-            # and a config -- from hashing to one entry.
-            subfolder=f"{self.transformer_subfolder}_{adaln_mode}",
+            # The partition term keeps the two partitions -- which share a repository and a config --
+            # from hashing to one entry; FSDP vs full replication is a distinct layout.
+            subfolder=f"{self.transformer_subfolder}_{weight_mode}",
             parallel_config=self.dit_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
@@ -1104,106 +1048,6 @@ class MiniMaxH3Pipeline:
         )
         self._transformer = model
         return model
-
-    def _adaln_cache_path(self, num_inference_steps: int) -> Path:
-        """Disk location for a built table.
-
-        The key must cover **everything the rows depend on**, because a stale hit is silent: it
-        modulates every block slightly wrong at every step, in the same direction, and nothing
-        downstream can notice. That is the schedule (step count and both per-modality shifts), the
-        conditioning floor, the model geometry, and the checkpoint itself.
-        """
-        cache_dir = Path(os.environ.get("TT_DIT_CACHE_DIR") or Path.home() / ".cache/tt-dit") / "minimax-h3-adaln"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        key = "|".join(
-            str(part)
-            for part in (
-                self.weights_dir.resolve(),
-                # The partition: the two share a repository and a config, so without it
-                # they hash to one file and a ref2va run modulates with t2va's weights.
-                self.transformer_subfolder,
-                num_inference_steps,
-                VIDEO_SHIFT,
-                AUDIO_SHIFT,
-                MINIMAX_H3_KEYFRAME_NOISE_AUG,
-                # ref2va carries a fourth level (the audio conditioning t = 1.0), so its table
-                # has more rows per step than t2va's and the two must not share a file.
-                self.task,
-                self.transformer_config["num_layers"],
-                self.transformer_config["hidden_size"],
-                self.transformer_config["freq_dim"],
-            )
-        )
-        return cache_dir / f"{hashlib.sha256(key.encode()).hexdigest()[:32]}.adaln.pt"
-
-    def _prepare_adaln_cache(self, num_inference_steps: int):
-        """Host-build (or load) the modulation table for this schedule and upload it.
-
-        A prepare, so it belongs outside every timed row: the build reads the checkpoint's AdaLN
-        weights on host and is paid once per (checkpoint, schedule).
-        """
-        if self._adaln_cache is not None and self._adaln_cache_steps == num_inference_steps:
-            return self._adaln_cache
-
-        video = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-        audio = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
-        video.set_timesteps(num_inference_steps)
-        audio.set_timesteps(num_inference_steps)
-        step_timesteps = request_step_timesteps(
-            video.sigmas,
-            audio.sigmas,
-            MINIMAX_H3_KEYFRAME_NOISE_AUG,
-            # A fourth level for ref2va only: reference soundtrack rows run at a literal
-            # t = 1.0. t2va and fl2va have no audio conditioning rows and keep three.
-            audio_condition_timestep=MINIMAX_H3_AUDIO_CONDITION_TIMESTEP if self.task == "ref2va" else None,
-        )
-
-        path = self._adaln_cache_path(num_inference_steps)
-        # Unanimous even though both branches are host-only: a rank reading a half-written table
-        # diverges numerically and silently.
-        if self._ranks_agree(path.is_file()):
-            self._host_log(f"AdaLN table from cache: {path}")
-            table = torch.load(path, weights_only=False)
-        else:
-            self._host_log(
-                f"building the AdaLN table on host for {len(step_timesteps)} forwards from "
-                f"{self.transformer_subfolder}/ (reads the checkpoint)"
-            )
-            t0 = time.time()
-            table = precompute_adaln_table(
-                self.weights_dir / self.transformer_subfolder,
-                step_timesteps,
-                num_layers=self.transformer_config["num_layers"],
-                hidden_size=self.transformer_config["hidden_size"],
-                freq_dim=self.transformer_config["freq_dim"],
-            )
-            self._host_log(f"AdaLN table built in {time.time() - t0:.1f}s ({table.nbytes() / 1e9:.3f} GB); caching")
-            is_distributed = ttnn.using_distributed_env()
-            try:
-                if not is_distributed or int(ttnn.distributed_context_get_rank()) == 0:
-                    torch.save(table, path)
-            except OSError as exc:
-                # Warn rather than raise: the table is already in memory, so a failed write costs a
-                # recompute next run and nothing else. Every rank then misses the cache together,
-                # since `_ranks_agree` reads the same absent file, so the ranks stay consistent.
-                if _is_host_rank():
-                    logger.warning(f"could not cache the AdaLN table to {path}: {exc}")
-            finally:
-                # In `finally`, so a write error on rank 0 cannot leave its peers blocked here.
-                if is_distributed:
-                    ttnn.distributed_context_barrier()
-
-        self._adaln_cache = MiniMaxH3AdalnCache(
-            table,
-            mesh_device=self.mesh_device,
-            parallel_config=self.dit_parallel_config,
-            num_layers=self.transformer_config["num_layers"],
-            hidden_size=self.transformer_config["hidden_size"],
-        )
-        self._adaln_cache.assert_covers(len(step_timesteps))
-        self._adaln_cache_steps = num_inference_steps
-        self._adaln_table = table
-        return self._adaln_cache
 
     @property
     def patch_size(self) -> tuple[int, int, int]:
@@ -1911,11 +1755,7 @@ class MiniMaxH3Pipeline:
         `_prepare_*` outside a section, one section per stage -- and two copies of that would drift.
         `condition_spec` is the only thing the tasks differ by here, and only `ref2va` passes one.
         """
-        # The weight load is a prepare, so it sits outside the section -- and so is the AdaLN table
-        # build, which is paid once per (checkpoint, schedule).
         transformer = self._prepare_transformer()
-        # None on the resident-AdaLN path: the blocks project `temb` themselves, so there is no table.
-        adaln_cache = self._prepare_adaln_cache(num_inference_steps) if self.precomputed_adaln else None
         with event_section(on_event, "denoising"):
             video_rows, audio_rows = self._denoise(
                 transformer,
@@ -1925,7 +1765,6 @@ class MiniMaxH3Pipeline:
                 audio_rows,
                 scheduler,
                 audio_scheduler,
-                adaln_cache,
                 condition_spec=condition_spec,
                 on_event=on_event,
             )
@@ -2017,7 +1856,6 @@ class MiniMaxH3Pipeline:
         audio_rows: torch.Tensor,
         scheduler: MiniMaxH3Scheduler,
         audio_scheduler: MiniMaxH3Scheduler,
-        adaln_cache,
         condition_spec: Sequence[tuple[str, int]] | None = None,
         on_event: PipelineEventCallback = null_callback,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -2059,14 +1897,13 @@ class MiniMaxH3Pipeline:
         timesteps = scheduler.timesteps
         audio_timesteps = audio_scheduler.timesteps
 
-        # Resident-AdaLN routing is constant for the whole request: a row's noise level is fixed by
-        # its role. Only `slot_roles` -- which sizes the per-step timestep vector -- is needed before
-        # the trace signature; the index tensors it implies are built once below, after `traced` is
-        # known, so they land in the persistent buffers the trace bakes rather than a fresh per-call
-        # allocation. The precomputed path keeps its own per-step absolute-row indexing in the loop.
-        row_slot = slot_roles = None
-        if adaln_cache is None:
-            row_slot, slot_roles = build_slot_routing(layout)
+        # AdaLN routing is constant for the whole request: a row's noise level is fixed by its role.
+        # Slot count is fixed -- duplicates included -- because tracing demands a constant shape;
+        # when video and audio share `t = 0` at step 0, both slots are still embedded. Only
+        # `slot_roles` -- which sizes the per-step timestep vector -- is needed before the trace
+        # signature; the index tensors it implies are built once below, after `traced` is known, so
+        # they land in the persistent buffers the trace bakes rather than a fresh per-call allocation.
+        row_slot, slot_roles = build_slot_routing(layout)
 
         # Trace the per-step forward where the preset asks for it, as Wan does on the quad only. At
         # SP=32 a step is dominated by dispatching 50 blocks from host across four MPI ranks rather
@@ -2077,30 +1914,19 @@ class MiniMaxH3Pipeline:
         # the trace whenever the signature changes -- which also lets the transformer reallocate its
         # padding buffer at the new shape without a live trace referencing the old one.
         #
-        # The precomputed path additionally keys on the AdaLN cache object and step count: its tables
-        # are captured by *address*, so a rebuilt cache would replay the old schedule's modulation.
-        # The resident path projects modulation in-trace from the per-step `timestep`, so it keys on
-        # shapes alone (with `num_slots`, which sets the timestep width) -- a new schedule at the same
-        # resolution reuses the capture and never retraces.
-        shape_signature = (tuple(video_rows.shape), tuple(audio_rows.shape), tuple(prompt_embeds.shape))
-        if adaln_cache is None:
-            signature = (*shape_signature, len(slot_roles))
-            warm = signature == self._trace_signature
-        else:
-            signature = (*shape_signature, len(timesteps))
-            warm = signature == self._trace_signature and adaln_cache is self._trace_adaln_cache
+        # Modulation is projected in-trace from the per-step `timestep`, so the signature is shapes
+        # plus `num_slots` (the timestep width) -- a new schedule at the same resolution reuses the
+        # capture and never retraces.
+        signature = (tuple(video_rows.shape), tuple(audio_rows.shape), tuple(prompt_embeds.shape), len(slot_roles))
+        warm = signature == self._trace_signature
         if not warm:
             self.release_traces()
             self._trace_signature = None
-            self._trace_adaln_cache = None
 
         # Not on the first generation at a signature: a capture can neither compile a program nor
         # allocate a buffer, and `CCLManager` fills its persistent buffers lazily. One untraced
         # generation does both, so the first pass at a shape runs untraced and later ones are traced.
         traced = self.trace_denoise and warm
-        if traced:
-            # `None` on the resident path; `traced_step` reads it off `self`.
-            transformer.traced_adaln_cache = adaln_cache
 
         # Per-request-constant trace inputs -> persistent StateTensors, updated once now that the
         # trace decision is made. A ttnn trace bakes its inputs' addresses, so each must occupy one
@@ -2144,13 +1970,9 @@ class MiniMaxH3Pipeline:
                 )
                 tt_cond.append((self._tt_cond[block].value, modality))
 
-        # Resident-path index tensors are constant across the request, so uploaded once here. The
-        # precomputed path refreshes the same two buffers per step in the loop instead.
-        if adaln_cache is None:
-            self._tt_adaln.update(
-                self._row_indices(adaln_indices(layout.token_tags, row_slot), padded_len), traced=traced
-            )
-            self._tt_tsi.update(self._row_indices(row_slot, padded_len), traced=traced)
+        # Index tensors are constant across the request, so uploaded once here.
+        self._tt_adaln.update(self._row_indices(adaln_indices(layout.token_tags, row_slot), padded_len), traced=traced)
+        self._tt_tsi.update(self._row_indices(row_slot, padded_len), traced=traced)
 
         # Target latents: uploaded once and advanced in place on device by the Euler step below, so
         # they stay resident across the loop -- no per-step re-upload, no host round-trip. Under
@@ -2173,61 +1995,34 @@ class MiniMaxH3Pipeline:
         t_first = t_steady = 0.0
         for i, t in enumerate(timesteps):
             t_step = time.time()
-            # Every trace input is a persistent buffer hoisted above the loop; only the per-step
-            # modulation input changes. The resident path refreshes just the per-slot noise levels;
-            # the precomputed path refreshes the two index tensors into the same buffers.
-            if adaln_cache is not None:
-                # Precomputed path: the host-built table numbers levels per step in `step_timesteps`
-                # order, so a row's absolute table row is found by matching its level *by value*.
-                # `build_row_timesteps` numbers levels in its own order and the level count varies per
-                # step (the conditioning floor collides with the video level early in the schedule and
-                # separates later), so positional correspondence is not guaranteed. The per-row
-                # indices are rebuilt each step into the resident buffers; `timestep` is unused here.
-                unique, row_index = build_row_timesteps(
-                    layout,
-                    float(t),
-                    float(audio_timesteps[i]),
-                    max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG),
-                    MINIMAX_H3_AUDIO_CONDITION_TIMESTEP,
-                )
-                levels = self._adaln_table.step_timesteps(i)
-                position = torch.tensor(
-                    [int((levels == value).nonzero()[0, 0]) for value in unique], dtype=row_index.dtype
-                )
-                step_row_index = adaln_cache.step_offset(i) + position[row_index]
-                self._tt_adaln.update(
-                    self._row_indices(adaln_indices(layout.token_tags, step_row_index), padded_len), traced=traced
-                )
-                self._tt_tsi.update(self._row_indices(step_row_index, padded_len), traced=traced)
-            else:
-                # Resident-AdaLN path: the index tensors are constant, so only the per-slot noise
-                # levels change per step. Each block projects `temb` for these levels on device (row
-                # `slot * MODALITY_NUM + tag`), so a row indexes its slot directly -- no table offset,
-                # nothing rebuilt from the host per step.
-                levels = slot_levels(
-                    slot_roles,
-                    video_timestep=float(t),
-                    audio_timestep=float(audio_timesteps[i]),
-                    condition_video_timestep=max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG),
-                    condition_audio_timestep=MINIMAX_H3_AUDIO_CONDITION_TIMESTEP,
-                )
-                # Replicated, fp32 so the sinusoid is computed in fp32, and shaped [1, 1, num_slots, 1]
-                # so it broadcasts against the frequency factor. `num_slots` is fixed for the request,
-                # so the buffer's shape never changes and the trace can bake its address; only the
-                # values are refreshed in place.
-                self._tt_timestep.update(
-                    levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
-                )
+            # Every trace input is a persistent buffer hoisted above the loop; only the per-slot
+            # noise levels change. Each block projects `temb` for these levels on device (row
+            # `slot * MODALITY_NUM + tag`), so a row indexes its slot directly -- nothing rebuilt
+            # from the host per step.
+            level_kwargs = {
+                "video_timestep": float(t),
+                "audio_timestep": float(audio_timesteps[i]),
+            }
+            if "condition_video" in slot_roles:
+                level_kwargs["condition_video_timestep"] = max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG)
+            if "condition_audio" in slot_roles:
+                level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
+            levels = slot_levels(slot_roles, **level_kwargs)
+            # Replicated, fp32 so the sinusoid is computed in fp32, and shaped [1, 1, num_slots, 1]
+            # so it broadcasts against the frequency factor. `num_slots` is fixed for the request,
+            # so the buffer's shape never changes and the trace can bake its address; only the
+            # values are refreshed in place.
+            self._tt_timestep.update(
+                levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
+            )
 
-            # `None` timestep on the precomputed path -- its buffer is never populated.
-            tt_timestep = self._tt_timestep.value if adaln_cache is None else None
             if traced:
                 video_velocity, audio_velocity = transformer.traced_step(
                     video_1BVC=self._tt_video.value,
                     audio_1BAC=self._tt_audio.value,
                     prompt_1BLP=self._tt_prompt.value,
                     condition_blocks=tt_cond,
-                    timestep=tt_timestep,
+                    timestep=self._tt_timestep.value,
                     adaln_indices=self._tt_adaln.value,
                     timestep_indices=self._tt_tsi.value,
                     rope_cos=self._tt_rope_cos.value,
@@ -2240,12 +2035,11 @@ class MiniMaxH3Pipeline:
                     audio_1BAC=self._tt_audio.value,
                     prompt_1BLP=self._tt_prompt.value,
                     condition_blocks=tt_cond,
-                    timestep=tt_timestep,
+                    timestep=self._tt_timestep.value,
                     adaln_indices=self._tt_adaln.value,
                     timestep_indices=self._tt_tsi.value,
                     rope_cos=self._tt_rope_cos.value,
                     rope_sin=self._tt_rope_sin.value,
-                    adaln_cache=adaln_cache,
                 )
 
             # On-device Euler, in place so the latents stay resident and the (traced) input buffers
@@ -2269,7 +2063,6 @@ class MiniMaxH3Pipeline:
 
         # This request is now warm: a later call with the same signature may trace.
         self._trace_signature = signature
-        self._trace_adaln_cache = adaln_cache
         steady_steps = max(len(timesteps) - 1, 1)
         self._log(
             f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s) | "

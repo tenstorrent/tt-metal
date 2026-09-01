@@ -15,7 +15,6 @@ from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.tracing import traced_function
-from .adaln_cache_minimax_h3 import MiniMaxH3AdalnCache
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 
@@ -62,14 +61,12 @@ class MiniMaxH3AdaLayerNormOut(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         fsdp_mesh_axis: int | None = None,
-        precomputed_adaln: bool = False,
     ) -> None:
         super().__init__()
 
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
         self.tp_factor = parallel_config.tensor_parallel.factor
         self.hidden_local = hidden_size // self.tp_factor
-        self.precomputed_adaln = precomputed_adaln
 
         self.norm = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -79,18 +76,14 @@ class MiniMaxH3AdaLayerNormOut(Module):
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
         )
-        self.linear = (
-            None
-            if precomputed_adaln
-            else ColParallelLinear(
-                time_embed_dim,
-                NUM_OUT_MODULATION_PARAMS * hidden_size,
-                bias=True,
-                mesh_device=mesh_device,
-                mesh_axis=self.tp_mesh_axis,
-                fsdp_mesh_axis=fsdp_mesh_axis,
-                ccl_manager=ccl_manager,
-            )
+        self.linear = ColParallelLinear(
+            time_embed_dim,
+            NUM_OUT_MODULATION_PARAMS * hidden_size,
+            bias=True,
+            mesh_device=mesh_device,
+            mesh_axis=self.tp_mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -102,12 +95,6 @@ class MiniMaxH3AdaLayerNormOut(Module):
             t = t.reshape(NUM_OUT_MODULATION_PARAMS, self.tp_factor, self.hidden_local, *trailing)
             t = t.permute(1, 0, 2, *range(3, t.ndim))
             return t.reshape(-1, *trailing)
-
-        if self.precomputed_adaln:
-            # Dropped: the host-built table replaces this projection.
-            state.pop("linear.weight", None)
-            state.pop("linear.bias", None)
-            return
 
         for key in ("weight", "bias"):
             value = state.get(f"linear.{key}")
@@ -121,20 +108,9 @@ class MiniMaxH3AdaLayerNormOut(Module):
     def forward(
         self,
         hidden: ttnn.Tensor,
-        temb: ttnn.Tensor | None,
+        temb: ttnn.Tensor,
         timestep_indices: ttnn.Tensor,
-        modulation_tables: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
-        if modulation_tables is not None:
-            # Precomputed tables already carry the `1 +` on scale, so this applies them directly.
-            shift_table, scale_table = modulation_tables
-
-            def gather_row(table: ttnn.Tensor) -> ttnn.Tensor:
-                return ttnn.unsqueeze(ttnn.embedding(timestep_indices, table, layout=ttnn.TILE_LAYOUT), 0)
-
-            return ttnn.add(ttnn.mul(self.norm(hidden), gather_row(scale_table)), gather_row(shift_table))
-        if self.precomputed_adaln:
-            raise ValueError("norm_out was built with precomputed_adaln but forward got no modulation_tables")
         activated = ttnn.silu(temb)
         if activated.dtype != ttnn.bfloat16:
             activated = ttnn.typecast(activated, ttnn.bfloat16)
@@ -193,8 +169,8 @@ class MiniMaxH3Transformer3DModel(Module):
 
     The load-bearing invariant is **one frame of reference for row
     indices**. The block list is assembled by walking the reference list in packed order, which is the
-    same walk that produced `layout.position_ids`, `token_tags`, `video_indices`, `audio_indices` and
-    `adaln_index_ranges`. There is no second ordering to keep in step.
+    same walk that produced `layout.position_ids`, `token_tags`, `video_indices` and `audio_indices`.
+    There is no second ordering to keep in step.
 
     Because the sequence is assembled globally, the caller's per-row metadata (`rope_cos`, `rope_sin`,
     `adaln_indices`, `timestep_indices`) is simply built for the padded global sequence in that same
@@ -257,10 +233,6 @@ class MiniMaxH3Transformer3DModel(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
-        # Off by default: the reference path builds and loads every AdaLN projection. When on, the
-        # caller must supply a `MiniMaxH3AdalnCache` per forward -- see `adaln_cache_minimax_h3` --
-        # and the 26 GB of `adaln_proj` weights (6.50 GB/device at TP=4) never reach the device.
-        precomputed_adaln: bool = False,
         # Hold the sequence padding in one buffer instead of allocating it per forward. Only the
         # traced path needs it -- `ttnn.zeros` writes to device and a capture rejects writes -- so it
         # is off by default and the untraced path keeps its per-call allocation.
@@ -268,15 +240,11 @@ class MiniMaxH3Transformer3DModel(Module):
     ) -> None:
         super().__init__()
 
-        self.precomputed_adaln = precomputed_adaln
         self.cache_padding = cache_padding
         self.hidden_size = hidden_size
         self.freq_dim = freq_dim
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
-        # Read by `traced_step`, which cannot take it as an argument -- see that method. The caller
-        # sets it once per request, before the denoising loop.
-        self.traced_adaln_cache: MiniMaxH3AdalnCache | None = None
         self._pad_key: tuple[int, ttnn.DataType, ttnn.Layout] | None = None
         self._pad_buffer: ttnn.Tensor | None = None
         self.parallel_config = parallel_config
@@ -317,17 +285,11 @@ class MiniMaxH3Transformer3DModel(Module):
             dtype=ttnn.float32,
             mesh_device=mesh_device,
         )
-        # With precomputed AdaLN nothing consumes `temb`, so the embedder is neither built nor
-        # loaded; `time_proj` is kept because it is parameter-free and cheap to leave in place.
-        self.time_embedder = (
-            None
-            if precomputed_adaln
-            else MiniMaxH3TimestepEmbedding(
-                in_channels=freq_dim,
-                hidden_dim=time_embed_hidden_dim,
-                out_dim=time_embed_dim,
-                mesh_device=mesh_device,
-            )
+        self.time_embedder = MiniMaxH3TimestepEmbedding(
+            in_channels=freq_dim,
+            hidden_dim=time_embed_hidden_dim,
+            out_dim=time_embed_dim,
+            mesh_device=mesh_device,
         )
 
         # 3. Text stream refiner. It runs before the packed sequence is fractured, so its text stream
@@ -363,7 +325,6 @@ class MiniMaxH3Transformer3DModel(Module):
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
                     is_fsdp=is_fsdp,
-                    precomputed_adaln=precomputed_adaln,
                 )
                 for _ in range(num_layers)
             ]
@@ -379,7 +340,6 @@ class MiniMaxH3Transformer3DModel(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             fsdp_mesh_axis=fsdp_mesh_axis,
-            precomputed_adaln=precomputed_adaln,
         )
         self.proj_out = Linear(hidden_size, video_patch_dim, bias=True, mesh_device=mesh_device)
         self.audio_proj_out = Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device)
@@ -396,7 +356,6 @@ class MiniMaxH3Transformer3DModel(Module):
         timestep_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
-        adaln_cache: MiniMaxH3AdalnCache | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         video_1BVC: [1, 1, V, in_channels * prod(patch_size)], replicated on SP and TP. The *target*
@@ -407,7 +366,7 @@ class MiniMaxH3Transformer3DModel(Module):
             `"video"` block is [1, 1, k, in_channels * prod(patch_size)] and an `"audio"` block
             [1, 1, k, audio_in_channels]; per-block row counts are arbitrary. fl2va passes one
             `"video"` block; ref2va passes one per reference medium, interleaved.
-        timestep: [1, 1, num_timesteps, 1] float32, replicated. Unscaled, in [0, 1].
+        timestep: [1, 1, num_slots, 1] float32, replicated. Unscaled, in [0, 1].
         adaln_indices: [1, 1, 1, S_padded_local] integers, `timestep_indices * 3 + token_tags`, built
             for the padded global sequence `[text | condition | audio | video | pad]` and sharded on SP
         timestep_indices: [1, 1, 1, S_padded_local] integers, same order
@@ -434,12 +393,6 @@ class MiniMaxH3Transformer3DModel(Module):
         v_len = video_1BVC.shape[2]
         a_len = audio_1BAC.shape[2]
         l_len = prompt_1BLP.shape[2]
-        if (adaln_cache is not None) != self.precomputed_adaln:
-            raise ValueError(
-                "adaln_cache and precomputed_adaln must agree: "
-                f"cache={'given' if adaln_cache is not None else 'None'}, precomputed_adaln={self.precomputed_adaln}"
-            )
-
         condition_blocks = condition_blocks or []
         for index, (block, modality) in enumerate(condition_blocks):
             if modality not in ("video", "audio"):
@@ -495,10 +448,8 @@ class MiniMaxH3Transformer3DModel(Module):
             hidden = ttnn.to_layout(hidden, ttnn.TILE_LAYOUT)
         hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
-        # 3. One timestep embedding per distinct noise level, shared by every AdaLN projection. With
-        # precomputed modulation there is nothing to project, so this is skipped entirely -- the
-        # tables already hold what every block would have computed for this step.
-        temb = None if self.precomputed_adaln else self.time_embedder(self.time_proj(timestep))
+        # 3. One timestep embedding per slot, shared by every AdaLN projection.
+        temb = self.time_embedder(self.time_proj(timestep))
 
         # 4. Integer index tensors for the two gathers. ttnn.embedding wants [batch, seq] uint32.
         def as_indices(t: ttnn.Tensor) -> ttnn.Tensor:
@@ -509,7 +460,7 @@ class MiniMaxH3Transformer3DModel(Module):
         timestep_idx = as_indices(timestep_indices)
 
         # 5. The block stack. `logical_n` is the *true* length, so ring attention ignores the pad tail.
-        for layer, block in enumerate(self.transformer_blocks):
+        for block in self.transformer_blocks:
             hidden = block(
                 hidden,
                 N=seq_len,
@@ -517,7 +468,6 @@ class MiniMaxH3Transformer3DModel(Module):
                 adaln_indices=adaln_idx,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
-                modulation_tables=adaln_cache.block_tables(layer) if adaln_cache is not None else None,
             )
 
         # 6. Output norm, then the two heads. Both heads are narrow (96 and 32), so projecting while
@@ -527,7 +477,6 @@ class MiniMaxH3Transformer3DModel(Module):
             hidden,
             temb,
             timestep_idx,
-            modulation_tables=adaln_cache.final_tables() if adaln_cache is not None else None,
         )
         if self.tp_factor > 1:
             hidden = self.ccl_manager.all_gather_persistent_buffer(hidden, dim=3, mesh_axis=self.tp_mesh_axis)
@@ -584,26 +533,19 @@ class MiniMaxH3Transformer3DModel(Module):
         audio_1BAC: ttnn.Tensor,
         prompt_1BLP: ttnn.Tensor,
         condition_blocks: list[tuple[ttnn.Tensor, str]] | None,
-        timestep: ttnn.Tensor | None = None,
+        timestep: ttnn.Tensor,
         adaln_indices: ttnn.Tensor,
         timestep_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """One denoising forward, shaped so `Tracer` can capture it. Serves both AdaLN paths.
+        """One denoising forward, shaped so `Tracer` can capture it.
 
         `Tracer` accepts only tensors and plain scalars, nested in tuples/lists/dicts, and validates
-        that every input keeps its shape across calls. Two of `forward`'s arguments need care:
-
-        * `adaln_cache` is a `MiniMaxH3AdalnCache` object, not a tensor, so it is read off `self` here
-          instead of being passed. Set `self.traced_adaln_cache` before the loop (it is `None` on the
-          resident path).
-        * `timestep` is `[1, 1, num_slots, 1]`. On the resident path the caller assigns each row a
-          *fixed* slot by role rather than deduplicating levels per step, so `num_slots` is constant
-          for the whole request and the tensor is a valid traced input -- only its values change,
-          which the tracer copies in place. On the precomputed path nothing consumes it (`forward`
-          computes `temb` only when `not self.precomputed_adaln`), so the caller passes `None` and it
-          is a constant scalar input.
+        that every input keeps its shape across calls. `timestep` is `[1, 1, num_slots, 1]`: the
+        caller assigns each row a *fixed* slot by role rather than deduplicating levels per step, so
+        `num_slots` is constant for the whole request and the tensor is a valid traced input -- only
+        its values change, which the tracer copies in place.
 
         Everything else is fixed-shape for a given request: the row counts are set by the packed
         layout and the index tensors are built against `padded_len`.
@@ -618,5 +560,4 @@ class MiniMaxH3Transformer3DModel(Module):
             timestep_indices=timestep_indices,
             rope_cos=rope_cos,
             rope_sin=rope_sin,
-            adaln_cache=self.traced_adaln_cache,
         )

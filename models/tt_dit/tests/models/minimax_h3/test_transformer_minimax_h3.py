@@ -25,18 +25,12 @@ from tracy import signpost
 
 import ttnn
 
-from ....models.transformers.minimax_h3.adaln_cache_minimax_h3 import MiniMaxH3AdalnCache
 from ....models.transformers.minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, prepare_rope_tables
 from ....models.transformers.minimax_h3.token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
-from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import (
-    MODALITY_NUM,
-    NUM_MODULATION_PARAMS,
-    MiniMaxH3TransformerBlock,
-)
+from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
-from ....pipelines.minimax_h3 import adaln_precompute as ap
 from ....pipelines.minimax_h3.packing import (
     MINIMAX_H3_FPS,
     align_num_frames,
@@ -46,7 +40,7 @@ from ....pipelines.minimax_h3.packing import (
 )
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch, local_device_to_torch
-from ....utils.test import ring_params_req_exact_devices, skip_if_unsupported_num_links
+from ....utils.test import skip_if_unsupported_num_links
 from .common import (
     GALAXY_RING,
     REAL_BLOCK_CONFIG,
@@ -1155,83 +1149,3 @@ def test_minimax_h3_token_refiner(
 
     tt_out = tt_out[:1]
     assert_quality(torch_out, tt_out, pcc=MIN_PCC)
-
-
-# ---- precomputed-AdaLN block: table self-consistency misses wiring bugs, so compare vs torch AND the projected path ----
-
-
-MIN_PCC = 0.9995
-MIN_PCC_PATHS_AGREE = 0.9999  # same weights by construction: anything looser is a wiring bug
-
-
-class _SingleLayerTable:
-    """One-layer stand-in for `precompute_adaln_table`, projected by the real `adaln_precompute` code."""
-
-    def __init__(self, temb: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, hidden_size: int) -> None:
-        projected = ap.project_block_adaln(temb, weight, bias, hidden_size)
-        self.block_params = projected.unsqueeze(0)  # [1 layer, rows * MODALITY_NUM, params, hidden]
-        rows = temb.shape[0]
-        self.final_shift = torch.zeros(rows, hidden_size, dtype=torch.bfloat16)
-        self.final_scale = torch.zeros(rows, hidden_size, dtype=torch.bfloat16)
-        self.step_offsets = torch.tensor([0, rows])
-        self.num_layers = 1
-        self.hidden_size = hidden_size
-        self.num_steps = 1
-
-
-@pytest.mark.parametrize(
-    ("mesh_device", "sp_axis", "tp_axis", "num_links", "is_fsdp", "topology"),
-    [
-        pytest.param((4, 8), 1, 0, 2, False, ttnn.Topology.Ring, id="4x8sp1tp0nl2_ring_is_fsdp0"),
-    ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize("device_params", [ring_params_req_exact_devices], indirect=True)
-@pytest.mark.parametrize(("num_text", "num_audio", "num_video"), [pytest.param(512, 256, 1280, id="small_s2048")])
-def test_precomputed_adaln_matches_projected_path(
-    mesh_device: ttnn.MeshDevice,
-    sp_axis: int,
-    tp_axis: int,
-    num_links: int,
-    num_text: int,
-    num_audio: int,
-    num_video: int,
-    is_fsdp: bool,
-    topology: ttnn.Topology,
-    reset_seeds,
-) -> None:
-    skip_if_unsupported_num_links(mesh_device, num_links)
-
-    fixture = _block_setup(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, num_text, num_audio, num_video)
-
-    projected_block = MiniMaxH3TransformerBlock(**fixture.block_kwargs)
-    projected_block.load_torch_state_dict(fixture.torch_model.state_dict())
-    projected_out = fixture.run(projected_block)
-
-    state = fixture.torch_model.state_dict()
-    table = _SingleLayerTable(
-        fixture.temb_input,
-        state["adaln_proj.linear.weight"].bfloat16(),
-        state["adaln_proj.linear.bias"].bfloat16(),
-        HIDDEN_SIZE,
-    )
-    cache = MiniMaxH3AdalnCache(
-        table,
-        mesh_device=mesh_device,
-        parallel_config=fixture.parallel_config,
-        num_layers=1,
-        hidden_size=HIDDEN_SIZE,
-    )
-    precomputed_block = MiniMaxH3TransformerBlock(**fixture.block_kwargs, precomputed_adaln=True)
-    precomputed_block.load_torch_state_dict(fixture.torch_model.state_dict())
-    tables = cache.block_tables(0)
-    assert len(tables) == NUM_MODULATION_PARAMS
-    assert tuple(tables[0].shape)[-2:] == (fixture.num_timesteps * MODALITY_NUM, HIDDEN_SIZE // fixture.tp_factor)
-    precomputed_out = fixture.run(precomputed_block, temb=None, modulation_tables=tables)
-
-    logger.info("projected path vs torch")
-    assert_quality(fixture.torch_out, projected_out, pcc=MIN_PCC)
-    logger.info("precomputed path vs torch")
-    assert_quality(fixture.torch_out, precomputed_out, pcc=MIN_PCC)
-    logger.info("precomputed vs projected -- same weights, so this is the wiring check")
-    assert_quality(projected_out, precomputed_out, pcc=MIN_PCC_PATHS_AGREE)
