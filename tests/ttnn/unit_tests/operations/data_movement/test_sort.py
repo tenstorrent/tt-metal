@@ -1009,11 +1009,17 @@ def test_sort_tied_values_indices_are_a_permutation(descending, device):
     other's. Gather-based checks cannot see this — the values are tied, so a
     duplicated index still gathers the right value — so assert injectivity.
 
-    Wt is taken just past the single-core threshold so the cross-core path is
-    exercised on any grid, and the shape stays small enough to be cheap.
+    Wt = 128 is the smallest width past the single-core threshold. On any grid
+    with >= 64 compute cores (every standard Wormhole and Blackhole part) the
+    CrossCore capacity is at least 2 * cores >= 128 tiles, so this width always
+    selects the CrossCoreDataExchange factory that carried the bug; on smaller
+    grids it falls to the DRAM multi-core factory, whose tie behaviour this
+    then checks instead. Deriving Wt from the grid size does not do this: a
+    grid whose core count is not a power of two can only take the CrossCore
+    route at widths just above 64 tiles, so e.g. on 140 cores next_pow2(2 *
+    cores) = 512 lands on the multi-core factory while Wt = 128 is CrossCore.
     """
-    grid = device.compute_with_storage_grid_size()
-    wt = _next_pow2(grid.x * grid.y * 2)
+    wt = 128
     n = wt * TILE_WIDTH
 
     input_tensor = torch.zeros((1, n), dtype=torch.float32)
