@@ -20,8 +20,6 @@
 namespace ckernel {
 namespace experimental {
 
-#ifdef ARCH_BLACKHOLE
-
 // Id-free (2.0) two-operand eltwise binary (add/sub/mul). Each op takes one LLKOperand per input
 // (A -> SrcA, B -> SrcB); format+geometry are NTTPs, L1 addresses the only runtime state. Format-free at
 // the op level: src/dst register formats are programmed at compute_kernel_hw_startup; the op forwards only
@@ -506,8 +504,6 @@ ALWI void mul_reuse_dest_tiles(
     LLKOperand<Format, Shape> in, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
     detail::binary_reuse_dest_tiles<EltwiseBinaryType::ELWMUL, reuse_dest>(in, in_tile_index, dst_tile_index);
 }
-
-#endif  // ARCH_BLACKHOLE
 
 }  // namespace experimental
 }  // namespace ckernel

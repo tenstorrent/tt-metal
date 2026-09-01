@@ -5,8 +5,7 @@
 #pragma once
 
 // The experimental 2.0 compute API is Blackhole-only this phase. llk_operand.h is included by every 2.0 op
-// header, so guarding it here hard-fails the compile of any 2.0 kernel built for another arch (rather than
-// silently compiling an empty op body from the per-file `#ifdef ARCH_BLACKHOLE` guards).
+// header, so guarding it here hard-fails the compile of any 2.0 kernel built for another arch.
 #ifndef ARCH_BLACKHOLE
 #error "The experimental 2.0 compute API (LLKOperand) is Blackhole-only; build with ARCH_BLACKHOLE defined."
 #endif

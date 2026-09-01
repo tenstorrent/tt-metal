@@ -7,7 +7,6 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
-#include "data_format_derive.h"  // ckernel::infer_unpack_dst_format
 
 #ifdef TRISC_MATH
 #include "experimental/2_0/llk_math_unary_datacopy.h"
@@ -37,23 +36,13 @@
 namespace ckernel {
 namespace experimental {
 
-#ifdef ARCH_BLACKHOLE
-
 namespace detail {
-// Whether the unary broadcast takes the unpack-to-dest path, decided from the DERIVED REGISTER format
-// (fp32-dest-acc rebias aware), not the raw L1 Format.
-template <DataFormat Format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-constexpr bool unary_bcast_unpack_to_dest() {
-    return is_32bit_format(ckernel::infer_unpack_dst_format(Format, is_fp32_dest_acc_en));
-}
-
 // A2D/B2D data-copy direction for the unary broadcast, folded to a constant. Shared by unary_bcast_init /
 // unary_bcast so the policy is spelled once.
 template <BroadcastType bcast_type, DataFormat Format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 constexpr DataCopyType unary_bcast_dcopy() {
-    return (unary_bcast_unpack_to_dest<Format, is_fp32_dest_acc_en>() || bcast_type == BroadcastType::NONE)
-               ? DataCopyType::A2D
-               : DataCopyType::B2D;
+    return (is_unpack_to_dest<Format, is_fp32_dest_acc_en>() || bcast_type == BroadcastType::NONE) ? DataCopyType::A2D
+                                                                                                   : DataCopyType::B2D;
 }
 }  // namespace detail
 
@@ -77,7 +66,7 @@ ALWI void unary_bcast_init(LLKOperand<Format, Shape> /*src*/) {
         is_legal_tile_shape(Shape),
         "unary_bcast_init: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
     // 32-bit register formats use the unpack-to-dest A2D path (SrcB is only 19 bits wide); folds to a constant.
-    constexpr bool enable_unpack_to_dest = detail::unary_bcast_unpack_to_dest<Format, is_fp32_dest_acc_en>();
+    constexpr bool enable_unpack_to_dest = is_unpack_to_dest<Format, is_fp32_dest_acc_en>();
     constexpr DataCopyType dcopy = detail::unary_bcast_dcopy<bcast_type, Format, is_fp32_dest_acc_en>();
     UNPACK((llk_unpack_A_init<
             LLKOperand<Format, Shape>::descriptor,
@@ -114,7 +103,7 @@ ALWI void unary_bcast(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_inde
     static_assert(
         is_legal_tile_shape(Shape),
         "unary_bcast: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
-    constexpr bool enable_unpack_to_dest = detail::unary_bcast_unpack_to_dest<Format, is_fp32_dest_acc_en>();
+    constexpr bool enable_unpack_to_dest = is_unpack_to_dest<Format, is_fp32_dest_acc_en>();
     constexpr DataCopyType dcopy = detail::unary_bcast_dcopy<bcast_type, Format, is_fp32_dest_acc_en>();
     UNPACK((llk_unpack_A<
             LLKOperand<Format, Shape>::descriptor,
@@ -146,7 +135,7 @@ ALWI void unary_bcast(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_inde
 // clang-format on
 template <BroadcastType bcast_type, DataFormat Format, TensorShape Shape>
 ALWI void unary_bcast_uninit(LLKOperand<Format, Shape> /*src*/) {
-    constexpr bool enable_unpack_to_dest = detail::unary_bcast_unpack_to_dest<Format, DST_ACCUM_MODE>();
+    constexpr bool enable_unpack_to_dest = is_unpack_to_dest<Format, DST_ACCUM_MODE>();
     UNPACK((llk_unpack_A_uninit<bcast_type>()));
     MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, enable_unpack_to_dest>()));
 }
@@ -338,8 +327,6 @@ ALWI void mul_tiles_bcast(
     any_tiles_bcast<EltwiseBinaryType::ELWMUL, tBcastDim, is_fp32_dest_acc_en>(
         a, b, itile0, itile1, idst, bcast_row_idx);
 }
-
-#endif  // ARCH_BLACKHOLE
 
 }  // namespace experimental
 }  // namespace ckernel

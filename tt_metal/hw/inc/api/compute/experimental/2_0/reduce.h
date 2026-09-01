@@ -23,8 +23,6 @@
 namespace ckernel {
 namespace experimental {
 
-#ifdef ARCH_BLACKHOLE
-
 // Id-free (2.0) reduce (data + scaler -> reduced). Takes one LLKOperand per input (data, scaler) and one for
 // the output. Format-free at the op level (formats set at compute_kernel_hw_startup); every LLK core here
 // consumes only geometry (data tile shape / output face_r_dim) + the two runtime input addresses. Geometry
@@ -183,8 +181,6 @@ ALWI void reduce_uninit() {
     MATH((llk_math_reduce_uninit()));
     PACK((llk_pack_reduce_mask_clear()));
 }
-
-#endif  // ARCH_BLACKHOLE
 
 }  // namespace experimental
 }  // namespace ckernel

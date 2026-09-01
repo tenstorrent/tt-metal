@@ -19,8 +19,6 @@
 namespace ckernel {
 namespace experimental {
 
-#ifdef ARCH_BLACKHOLE
-
 // clang-format off
 /**
  * Id-free datacopy init. Takes an LLKOperand whose data format + tile geometry are NTTPs (deduced from the
@@ -148,8 +146,6 @@ ALWI void copy_block(
             LLKOperand<Format, Shape>(detail::tile_address(src, start_in_tile_index + i)), start_dst_tile_index + i);
     }
 }
-
-#endif  // ARCH_BLACKHOLE
 
 }  // namespace experimental
 }  // namespace ckernel

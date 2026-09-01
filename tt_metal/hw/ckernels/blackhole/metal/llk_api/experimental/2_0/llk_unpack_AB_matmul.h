@@ -30,8 +30,8 @@
  *     formats, single-tile test path never applies the multiplier).
  *************************************************************************/
 
-// matmul_tile_size is a shared helper in internal/llk_descriptor.h. partial_face is derived INLINE below
-// (< TILE_R_DIM) rather than via a helper -- the UNPACK/MATH threshold divergence is documented there.
+// partial_face is derived INLINE below (< TILE_R_DIM) rather than via a helper -- the UNPACK/MATH
+// threshold divergence is documented in llk_descriptor.h.
 
 template <ckernel::experimental::LLKMemDescriptor IN0_DESC, ckernel::experimental::LLKMemDescriptor IN1_DESC>
 inline void llk_unpack_AB_matmul_init(
@@ -69,8 +69,8 @@ inline void llk_unpack_AB_matmul(
         base_ptr_in1,
         tile_index_in0,
         tile_index_in1,
-        ckernel::experimental::matmul_tile_size(IN0_DESC),
-        ckernel::experimental::matmul_tile_size(IN1_DESC),
+        ckernel::experimental::tile_stride_words(IN0_DESC.format, IN0_DESC.shape),
+        ckernel::experimental::tile_stride_words(IN1_DESC.format, IN1_DESC.shape),
         IN1_DESC.shape.total_row_dim() < ckernel::TILE_R_DIM,  // partial_face_a (SrcA <- IN1)
         IN0_DESC.shape.total_row_dim() < ckernel::TILE_R_DIM,  // partial_face_b (SrcB <- IN0)
         ct_dim,

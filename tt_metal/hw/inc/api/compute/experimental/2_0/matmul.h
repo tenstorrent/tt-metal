@@ -23,8 +23,6 @@
 namespace ckernel {
 namespace experimental {
 
-#ifdef ARCH_BLACKHOLE
-
 // Id-free (2.0) matmul: single-tile (matmul_init + matmul_tiles) and block (matmul_block_init + matmul_block).
 // Two LLKOperands (in0, in1); in0 -> SrcB, in1 -> SrcA (matmul role swap), applied via
 // compute_kernel_hw_startup<SrcOrder::Reverse>(in0, in1, out). Format-free at the op level -- these ops forward
@@ -144,8 +142,6 @@ ALWI void matmul_block(
     // Block execute takes no operand id; format-free, fixed MM_THROTTLE (no dynamic throttle).
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
 }
-
-#endif  // ARCH_BLACKHOLE
 
 }  // namespace experimental
 }  // namespace ckernel

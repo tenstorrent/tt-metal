@@ -23,8 +23,6 @@
 namespace ckernel {
 namespace experimental {
 
-#ifdef ARCH_BLACKHOLE
-
 // clang-format off
 /**
  * Id-free tilize init. Takes an input and an output LLKOperand (data format + tile geometry as NTTPs,
@@ -136,8 +134,6 @@ ALWI void tilize_uninit(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<OutForm
     UNPACK((llk_unpack_tilize_uninit<LLKOperand<InFormat, InShape>::descriptor, DST_ACCUM_MODE>()));
     PACK((llk_pack_init<LLKOperand<OutFormat, OutShape>::descriptor, DST_ACCUM_MODE, PackMode::Default>()));
 }
-
-#endif  // ARCH_BLACKHOLE
 
 }  // namespace experimental
 }  // namespace ckernel

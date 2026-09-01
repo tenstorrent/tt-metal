@@ -44,8 +44,6 @@
 namespace ckernel {
 namespace experimental {
 
-#ifdef ARCH_BLACKHOLE
-
 // ---------------------------------------------------------------------------------------------------------
 // (1) reconfig_data_format_srca
 // ---------------------------------------------------------------------------------------------------------
@@ -124,8 +122,6 @@ ALWI void pack_reconfig_data_format(LLKOperand<Format, Shape> /*new_out*/) {
     static_assert(is_legal_tile_shape(Shape), "pack_reconfig_data_format: illegal output tile shape.");
     PACK((llk_pack_reconfig_data_format<LLKOperand<Format, Shape>::descriptor, DST_ACCUM_MODE>()));
 }
-
-#endif  // ARCH_BLACKHOLE
 
 }  // namespace experimental
 }  // namespace ckernel

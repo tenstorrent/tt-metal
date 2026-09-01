@@ -24,8 +24,6 @@
 namespace ckernel {
 namespace experimental {
 
-#ifdef ARCH_BLACKHOLE
-
 // clang-format off
 /**
  * Id-free pack-untilize init. Takes an input and an output LLKOperand (data format + tile geometry as NTTPs)
@@ -267,8 +265,6 @@ ALWI void pack_untilize_uninit(LLKOperand<OutFormat, OutShape> /*out*/) {
     PACK((llk_pack_reconfig_data_format<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en>()));
     PACK((llk_pack_init<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en, PackMode::Default>()));
 }
-
-#endif  // ARCH_BLACKHOLE
 
 }  // namespace experimental
 }  // namespace ckernel

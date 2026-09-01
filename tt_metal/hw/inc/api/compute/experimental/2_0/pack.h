@@ -15,8 +15,6 @@
 namespace ckernel {
 namespace experimental {
 
-#ifdef ARCH_BLACKHOLE
-
 // clang-format off
 /**
  * Id-free pack init. Takes an output LLKOperand (L1 format + geometry as NTTPs); the DST register format is
@@ -190,8 +188,6 @@ ALWI void pack_rows_uninit(LLKOperand<Format, Shape> /*out*/) {
         "use a full 32-row tile.");
     PACK((llk_pack_rows_uninit()));
 }
-
-#endif  // ARCH_BLACKHOLE
 
 }  // namespace experimental
 }  // namespace ckernel

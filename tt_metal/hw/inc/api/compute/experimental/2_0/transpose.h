@@ -7,7 +7,6 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
-#include "data_format_derive.h"  // ckernel::infer_unpack_dst_format -- pure constexpr, used unconditionally below
 
 #ifdef TRISC_MATH
 #include "experimental/2_0/llk_math_unary_datacopy.h"
@@ -29,8 +28,6 @@
 namespace ckernel {
 namespace experimental {
 
-#ifdef ARCH_BLACKHOLE
-
 // clang-format off
 /**
  * Init for transpose_tile / transpose_block. Takes an LLKOperand whose data format + tile geometry are NTTPs
@@ -47,22 +44,13 @@ namespace experimental {
  * | Function   | src    | The source L1 operand (format + shape; address unused here)   | LLKOperand  | N/A         | True     |
  */
 // clang-format on
-namespace detail {
-// True iff transpose takes the unpack-to-dest (A2D) path: the operand's REGISTER format (after
-// infer_unpack_dst_format) is 32-bit. Shared by transpose_init / transpose_tile.
-template <DataFormat Format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-constexpr bool transpose_unpack_to_dest() {
-    return is_32bit_format(ckernel::infer_unpack_dst_format(Format, is_fp32_dest_acc_en));
-}
-}  // namespace detail
-
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void transpose_init(LLKOperand<Format, Shape> /*src*/) {
     static_assert(
         is_legal_tile_shape(Shape),
         "transpose_init: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
 
-    constexpr bool enable_unpack_to_dest = detail::transpose_unpack_to_dest<Format, is_fp32_dest_acc_en>();
+    constexpr bool enable_unpack_to_dest = is_unpack_to_dest<Format, is_fp32_dest_acc_en>();
     // Low-nibble compare intentionally matches both signed Int8 (14) and unsigned UInt8 (30 -> low nibble
     // 0xE): both 8-bit integer formats need the int-FPU (ELWADD) A2D reconstruct path.
     constexpr bool is_8bit_int =
@@ -122,7 +110,7 @@ ALWI void transpose_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std
         is_legal_tile_shape(Shape),
         "transpose_tile: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
 
-    constexpr bool enable_unpack_to_dest = detail::transpose_unpack_to_dest<Format, is_fp32_dest_acc_en>();
+    constexpr bool enable_unpack_to_dest = is_unpack_to_dest<Format, is_fp32_dest_acc_en>();
     const std::uint32_t addr = detail::tile_address(src, itile);
 
     if constexpr (enable_unpack_to_dest) {
@@ -184,8 +172,6 @@ ALWI void transpose_block(
         transpose_tile<is_fp32_dest_acc_en>(src, start_itile + i, start_idst + i);
     }
 }
-
-#endif  // ARCH_BLACKHOLE
 
 }  // namespace experimental
 }  // namespace ckernel

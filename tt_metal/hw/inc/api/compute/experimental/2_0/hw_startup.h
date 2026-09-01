@@ -37,8 +37,6 @@
 
 namespace ckernel {
 
-#ifdef ARCH_BLACKHOLE
-
 // clang-format off
 /**
  * Id-free (2.0) two-input hardware startup. Programs the UNPACK/MATH/PACK register formats + tile geometry
@@ -109,7 +107,5 @@ template <SrcOrder src_order = SrcOrder::Regular, DataFormat F, TensorShape S, D
 ALWI void compute_kernel_hw_startup(experimental::LLKOperand<F, S> in, experimental::LLKOperand<FO, SO> out) {
     compute_kernel_hw_startup<src_order>(in, in, out);
 }
-
-#endif  // ARCH_BLACKHOLE
 
 }  // namespace ckernel

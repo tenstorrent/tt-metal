@@ -8,6 +8,7 @@
 
 #include "tensor_shape.h"                // ckernel::TensorShape + geometry helpers
 #include "api/compute/common_globals.h"  // DataFormat enum + ckernel_defs macros (IS_BFP_FORMAT, SCALE_DATUM_SIZE, ...)
+#include "data_format_derive.h"          // infer_unpack_dst_format (register-format rebias)
 
 // =====================================================================================================
 // INTERNAL (NOT user-facing). The compile-time descriptor + per-tile stride math consumed by the LLK layer
@@ -84,16 +85,7 @@ constexpr std::uint32_t tile_stride_words(DataFormat format, TensorShape shape) 
 //   * UNPACK (llk_unpack_AB_matmul.h): partial_face = (shape.total_row_dim() < TILE_R_DIM), matching the
 //     host-side Tile::partial_face (tile height < TILE_HEIGHT) via get_operand_partial_face().
 // A one-face-high operand (total_row_dim() == 16) is thus partial-face to the unpacker (16 < 32) but
-// full-face to the math (16 == FACE_R_DIM, not <).
-
-/**
- * (internal) Per-tile L1 size in 16B words (fifo_page_size units) for a matmul operand descriptor: geometry-exact
- * for linear formats, exp section included for block floats. Thin wrapper over tile_stride_words. `desc`: the
- * operand's descriptor.
- */
-constexpr std::uint32_t matmul_tile_size(const LLKMemDescriptor& desc) {
-    return tile_stride_words(desc.format, desc.shape);
-}
+// full-face to the math (16 == FACE_R_DIM, not <). Matmul per-tile L1 size is tile_stride_words.
 
 // -----------------------------------------------------------------------------------------------------
 // Compile-time contract helpers. With no CB id, the legality the CB descriptor used to guarantee is
@@ -128,14 +120,21 @@ constexpr bool is_32bit_format(DataFormat f) {
 }
 
 /**
- * (internal) True iff `f` is a block-float register format (Bfp8/Bfp4/Bfp2, a- and b-exponent families).
- * The BH compute datapath only handles FULL-height (32-row) block-float tiles; partial-height block floats
- * are rejected at the copy/pack surfaces (silent-garbage otherwise). Typed sibling of the IS_BFP_FORMAT macro.
+ * (internal) True iff the operand's REGISTER format (after fp32-dest-acc rebias) is 32-bit and must take
+ * the unpack-to-dest A2D path. Shared by unary bcast and transpose so the same infer+is_32bit check is
+ * not spelled twice.
  */
-constexpr bool is_block_float_format(DataFormat f) {
-    return f == DataFormat::Bfp8 || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4 || f == DataFormat::Bfp4_b ||
-           f == DataFormat::Bfp2 || f == DataFormat::Bfp2_b;
+template <DataFormat Format, bool is_fp32_dest_acc_en>
+constexpr bool is_unpack_to_dest() {
+    return is_32bit_format(ckernel::infer_unpack_dst_format(Format, is_fp32_dest_acc_en));
 }
+
+/**
+ * (internal) True iff `f` is a block-float format (Bfp8/Bfp4/Bfp2, a- and b-exponent families).
+ * The BH compute datapath only handles FULL-height (32-row) block-float tiles; partial-height block floats
+ * are rejected at the copy/pack surfaces (silent-garbage otherwise). Typed wrapper over IS_BFP_FORMAT.
+ */
+constexpr bool is_block_float_format(DataFormat f) { return IS_BFP_FORMAT(static_cast<std::uint32_t>(f)); }
 
 /**
  * (internal) True iff the tile has fewer than 32 rows (partial tile height). For block-float formats a
