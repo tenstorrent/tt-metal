@@ -127,7 +127,7 @@ struct Logical2DShape {
         route_count <= std::numeric_limits<size_t>::max() / (2 * device_protocol::kLwt2DRouteConfigPageBytes),
         "2D route-config scratch size overflows size_t");
     const size_t route_config_bytes = route_count * device_protocol::kLwt2DRouteConfigPageBytes;
-    const size_t route_config_tile_count = ceil_div(2 * route_config_bytes, static_cast<size_t>(kTileBytes));
+    const size_t route_config_tile_count = tt::div_up(2 * route_config_bytes, static_cast<size_t>(kTileBytes));
     const size_t tile_count =
         std::max(static_cast<size_t>(split_scratch_tile_count(boundary_mode, inverse)), route_config_tile_count);
     TT_FATAL(
@@ -311,7 +311,7 @@ void replace_plane_tile_counts_with_widths(std::vector<uint32_t>& args, const Pl
 template <typename Plan>
 [[nodiscard]] std::vector<uint32_t> compute_args(const Plan& plan, const CoreChunkWork& work) {
     const size_t route_count = plan.chunks.front().routes.size();
-    const size_t packed_words_per_chunk = ceil_div(route_count, static_cast<size_t>(4));
+    const size_t packed_words_per_chunk = tt::div_up(route_count, static_cast<size_t>(4));
     std::vector<uint32_t> args;
     args.reserve(1 + static_cast<size_t>(work.chunk_count) * packed_words_per_chunk);
     args.push_back(work.chunk_count);

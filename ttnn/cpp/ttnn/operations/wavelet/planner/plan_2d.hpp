@@ -489,8 +489,8 @@ inline void append_axis_routes(
     const size_t chunk_height = static_cast<size_t>(chunk_tiles_y) * kTileHeight;
     const size_t chunk_width = static_cast<size_t>(chunk_tiles_x) * kTileWidth;
     std::vector<Lwt2DChunkPlan> chunks;
-    const size_t chunk_rows = ceil_div(y_plan.output_length, chunk_height);
-    const size_t chunk_cols = ceil_div(x_plan.output_length, chunk_width);
+    const size_t chunk_rows = tt::div_up(y_plan.output_length, chunk_height);
+    const size_t chunk_cols = tt::div_up(x_plan.output_length, chunk_width);
     chunks.reserve(checked_area(chunk_rows, chunk_cols, "2D LWT chunk grid"));
     for (size_t y = 0; y < y_plan.output_length;) {
         const size_t y_end = y + std::min(chunk_height, y_plan.output_length - y);
@@ -616,7 +616,7 @@ template <typename SignatureBuilder>
     TT_FATAL(chunk_extent > 0, "2D planner chunk extent must be positive");
     std::vector<AxisConeSignature> signatures;
     AxisChunkClasses classes;
-    classes.class_ids.reserve(ceil_div(length, chunk_extent));
+    classes.class_ids.reserve(tt::div_up(length, chunk_extent));
     for (size_t begin = 0; begin < length;) {
         const size_t end = begin + std::min(chunk_extent, length - begin);
         const IndexInterval interval{.begin = begin, .end = end};
@@ -864,8 +864,8 @@ enum class AlignmentCostClass : uint8_t {
         chunk.final_band_rect.y.begin % kTileHeight == 0 && chunk.final_band_rect.x.begin % kTileWidth == 0 &&
         chunk.final_band_rect.height() % kTileHeight == 0 && chunk.final_band_rect.width() % kTileWidth == 0;
     const uint64_t terminal_tiles =
-        static_cast<uint64_t>(ceil_div(chunk.final_band_rect.height(), static_cast<size_t>(kTileHeight))) *
-        ceil_div(chunk.final_band_rect.width(), static_cast<size_t>(kTileWidth));
+        static_cast<uint64_t>(tt::div_up(chunk.final_band_rect.height(), static_cast<size_t>(kTileHeight))) *
+        tt::div_up(chunk.final_band_rect.width(), static_cast<size_t>(kTileWidth));
     if (inverse) {
         cycles += terminal_tiles * interleaved_terminal_tile_cycles;
     } else {
@@ -941,8 +941,8 @@ enum class AlignmentCostClass : uint8_t {
         "2D LWT L1 budget {} is too small for fixed kernel resources",
         l1_budget_bytes);
 
-    const size_t band_tiles_y_size = ceil_div(y_plan.output_length, static_cast<size_t>(plan_2d_detail::kTileHeight));
-    const size_t band_tiles_x_size = ceil_div(x_plan.output_length, static_cast<size_t>(plan_2d_detail::kTileWidth));
+    const size_t band_tiles_y_size = tt::div_up(y_plan.output_length, static_cast<size_t>(plan_2d_detail::kTileHeight));
+    const size_t band_tiles_x_size = tt::div_up(x_plan.output_length, static_cast<size_t>(plan_2d_detail::kTileWidth));
     TT_FATAL(
         band_tiles_y_size <= std::numeric_limits<uint32_t>::max() &&
             band_tiles_x_size <= std::numeric_limits<uint32_t>::max(),

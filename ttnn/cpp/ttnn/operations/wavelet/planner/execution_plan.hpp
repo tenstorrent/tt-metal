@@ -426,8 +426,8 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
             final_odd_origin + plan.output_length <= plan.final_odd_length,
         "LWT terminal streams do not cover the canonical output interval");
     const size_t max_final_length = plan.output_length;
-    const size_t final_group_count =
-        std::max(ceil_div(max_final_length, static_cast<size_t>(device_protocol::kLwtGroupOutputElements)), size_t{1});
+    const size_t final_group_count = std::max(
+        tt::div_up(max_final_length, static_cast<size_t>(device_protocol::kLwtGroupOutputElements)), size_t{1});
     const size_t chunk_count = std::min(static_cast<size_t>(requested_chunk_count), final_group_count);
     const size_t base_groups = final_group_count / chunk_count;
     const size_t extra_groups = final_group_count % chunk_count;
@@ -524,8 +524,8 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
     TT_FATAL(l1_signal_budget_bytes >= 3 * device_protocol::kStickBytes, "LWT L1 budget is too small");
 
     const size_t max_final_length = full_plan.output_length;
-    const uint32_t final_group_count = static_cast<uint32_t>(
-        std::max(ceil_div(max_final_length, static_cast<size_t>(device_protocol::kLwtGroupOutputElements)), size_t{1}));
+    const uint32_t final_group_count = static_cast<uint32_t>(std::max(
+        tt::div_up(max_final_length, static_cast<size_t>(device_protocol::kLwtGroupOutputElements)), size_t{1}));
     uint32_t chunk_count = std::min(final_group_count, core_limit);
     std::vector<LwtChunkPlan> chunks;
     uint32_t workspace_elements = 0;
@@ -570,7 +570,7 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
     }
 
     const uint32_t groups_per_chunk =
-        static_cast<uint32_t>(ceil_div(static_cast<size_t>(final_group_count), chunks.size()));
+        static_cast<uint32_t>(tt::div_up(static_cast<size_t>(final_group_count), chunks.size()));
     const auto max_dependency =
         std::max_element(chunks.begin(), chunks.end(), [](const LwtChunkPlan& lhs, const LwtChunkPlan& rhs) {
             return lhs.dependency_overhead < rhs.dependency_overhead;
