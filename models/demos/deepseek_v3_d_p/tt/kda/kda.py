@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -45,39 +44,6 @@ def _effective_qkv_channel_chunk_size(channels: int, configured_chunk_size: int)
     """Resolve a configured ceiling to an exact TP-local channel divisor."""
     return ttnn.TILE_SIZE * _largest_divisor_at_most(
         channels // ttnn.TILE_SIZE, configured_chunk_size // ttnn.TILE_SIZE
-    )
-
-
-def _output_projection_program_config(
-    sequence: int,
-    input_width: int,
-    output_width: int,
-    out_block_w_cap: int | None,
-    grid: tuple[int, int],
-) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
-    per_core_n = max(1, math.ceil(output_width / ttnn.TILE_SIZE / grid[0]))
-    # Keep two output tiles per block when possible to bound accumulation footprint.
-    out_block_w_limit = max(1, per_core_n // 2)
-    if out_block_w_cap is not None:
-        out_block_w_limit = min(out_block_w_limit, out_block_w_cap)
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=_largest_divisor_at_most(
-            input_width // ttnn.TILE_SIZE,
-            # Four input tiles balances reuse with the per-core L1 budget on Blackhole.
-            min(4, max(1, input_width // ttnn.TILE_SIZE // grid[0])),
-        ),
-        out_subblock_h=1,
-        out_subblock_w=1,
-        per_core_M=max(1, math.ceil(sequence / ttnn.TILE_SIZE / grid[1])),
-        per_core_N=per_core_n,
-        out_block_w=_largest_divisor_at_most(per_core_n, out_block_w_limit),
-        transpose_mcast=False,
-        fused_activation=None,
-        fuse_batch=False,
-        allowed_worker_cores=ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid[0] - 1, grid[1] - 1))}
-        ),
     )
 
 
@@ -141,9 +107,6 @@ class ttKDA:
         self.sequence_parallel_size = (
             tuple(mesh_device.shape)[self.sequence_parallel_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
         )
-        self.output_projection_out_block_w = program_config.output_projection_out_block_w
-        output_grid = mesh_device.compute_with_storage_grid_size()
-        self.output_projection_grid = (output_grid.x, output_grid.y)
         self.tp_ccl_topology = program_config.tp_ccl_topology
         self.gated_rms_output_dtype = program_config.gated_rms_output_dtype
         if weights is not None and state_dict is not None:
@@ -431,50 +394,28 @@ class ttKDA:
     def _project_output(
         self,
         output: ttnn.Tensor,
-        *,
-        batch: int,
-        sequence: int,
     ) -> ttnn.Tensor:
         """Project normalized heads and perform the required TP reduction."""
-        config, weights = self.config, self.weights
+        weights = self.weights
         assert output.dtype == self.gated_rms_output_dtype
+        output = ttnn.linear(
+            output,
+            weights.output_projection,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.output_projection_compute_config,
+        )
         if self.tensor_parallel_size > 1:
             assert self.tt_ccl is not None
-            output = ttnn.reshape(output, (1, batch, sequence, config.v_dim))
-            output = ttnn.linear(
-                output,
-                weights.output_projection,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                program_config=_output_projection_program_config(
-                    sequence,
-                    config.v_dim,
-                    weights.output_projection.shape[-1],
-                    self.output_projection_out_block_w,
-                    self.output_projection_grid,
-                ),
-                compute_kernel_config=self.output_projection_compute_config,
-            )
-            # The calibrated 1D SP1xTP8 path uses the axis-less CCL pool; 2D meshes target the TP axis.
             cluster_axis = None if self.sequence_parallel_size == 1 else self.tensor_parallel_axis
             output = ttnn.experimental.reduce_scatter_minimal_async(
                 output,
-                dim=3,
+                dim=-1,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                 num_links=self.tt_ccl.get_num_links(cluster_axis),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=self.tp_ccl_topology,
                 cluster_axis=cluster_axis,
-            )
-            output = ttnn.reshape(output, (batch, sequence, output.shape[-1]))
-        else:
-            # Single-device tests retain TTNN's default matmul selection; the tuned program config
-            # belongs to the distributed projection followed by reduce-scatter above.
-            output = ttnn.linear(
-                output,
-                weights.output_projection,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.output_projection_compute_config,
             )
         return output
 
@@ -491,7 +432,7 @@ class ttKDA:
         the hidden dimension; TP == 1 returns the full hidden dimension.
         """
         self._validate_forward(hidden_states, state)
-        batch, sequence = hidden_states.shape[0], hidden_states.shape[1]
+        sequence = hidden_states.shape[1]
         projected = self._project_inputs(hidden_states)
         q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution, sequence=sequence)
         inputs = self._compute_gates(
@@ -504,5 +445,5 @@ class ttKDA:
         )
         output, new_recurrent = self._kda_prefill(inputs, state.recurrent)
         output = self._kda_rms_norm(output, inputs.output_gate)
-        output = self._project_output(output, batch=batch, sequence=sequence)
+        output = self._project_output(output)
         return output, KdaState(recurrent=new_recurrent, convolution=new_convolution)
