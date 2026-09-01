@@ -211,11 +211,13 @@
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_vision_block.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_rope_tp.py
+    pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_generate_tp.py
   model: qwen3.6-27b
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      timeout: 28
+      timeout: 36
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
@@ -243,6 +245,50 @@
   skus:
     wh_n300:
       timeout: 33
+      tier: 3
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+
+# Full-depth HF parity for the 27B. Split out from the entry above because it
+# additionally loads the HuggingFace reference (Qwen3_5ForCausalLM, bf16) on the
+# host, so it is far heavier than the per-module PCC tests and is gated at tier 2.
+# These are the checklist's "prefill full depth logit pcc" / "decoder full depth
+# logit pcc" checks; thresholds live in tests/pcc_thresholds.json.
+- name: Qwen3.6 full-depth PCC tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
+    export MESH_DEVICE=P150x4
+    pytest --timeout 1800 models/demos/blackhole/qwen36/tests/unit/test_prefill.py
+    pytest --timeout 1800 models/demos/blackhole/qwen36/tests/unit/test_decode.py
+  model: qwen3.6-27b
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 40
+      tier: 2
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+
+# Single-device Blackhole (P150) coverage for the 9B -- the sibling of the wh_n300
+# entry above, which covers the same checkpoint on Wormhole (1,2). Nothing exercised
+# the P150 single-device path in CI; every other Qwen3.5/3.6 entry ran on a (1,4) mesh.
+# These are the tests/unit/ component PCC suite plus the pure-CPU mapping test.
+- name: Qwen3.5-9B P150 unit tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.5-9B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.5-9B
+    export MESH_DEVICE=P150
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_weight_mapping.py
+    pytest --timeout 900 models/demos/blackhole/qwen36/tests/unit/ \
+      --ignore=models/demos/blackhole/qwen36/tests/unit/test_prefill.py \
+      --ignore=models/demos/blackhole/qwen36/tests/unit/test_decode.py
+    pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_prefill.py
+  model: qwen3.5-9b
+  model_family: Qwen
+  skus:
+    bh_p150:
+      timeout: 25
       tier: 3
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models

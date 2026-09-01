@@ -976,12 +976,22 @@ class TPAttention:
             if not tpc.wh_9b_n300(self.args):
                 k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
                 v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
-                ttnn.deallocate(k)
-                ttnn.deallocate(v)
                 k_sh = ttnn.to_memory_config(k_p, _kv_cfg)
                 v_sh = ttnn.to_memory_config(v_p, _kv_cfg)
                 ttnn.deallocate(k_p)
                 ttnn.deallocate(v_p)
+                # Free the pad's INPUT only after the reshard has consumed the pad's output --
+                # _WH_KV_PAD_NOTE's "dealloc late" ordering. Freeing k/v immediately after the pad
+                # hands that L1 back while the pad's write is still in flight, which measured
+                # B=32 10-13/32 users correct (B=8 was unaffected, which is why it hid here).
+                ttnn.deallocate(k)
+                ttnn.deallocate(v)
+                # This branch PREPARES k_sh/v_sh; it must still write them. Both sibling branches
+                # below issue their own write, so omitting it here silently skipped the KV update
+                # on every config except N300-9B -- decode then attended over a cache holding only
+                # the prefill tokens, with the new token's slot left at zero.
+                ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+                ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
             elif getattr(self.args, "kv_cache_write_fused_enabled", False):
                 # Fused K+V cache write (paged_fused_update_cache): needs K and V on DISJOINT shard
                 # grids. V is pointed at the NATURAL half -- the grid nlp_create_qkv_heads_decode
