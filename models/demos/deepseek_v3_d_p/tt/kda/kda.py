@@ -146,11 +146,8 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        # Every experimental KDA operation rejects packer_l1_acc=true: none of their compute
-        # kernels accumulate through L1, so the flag would be a silent no-op and the operations
-        # fail the configuration early rather than accept an untruthful contract. Keep this
-        # separate from self.compute_config, which configures the projection matmuls where the
-        # flag is both accepted and worth roughly 70% of layer wall time.
+        # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
+        # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
         self.kda_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -163,8 +160,6 @@ class ttKDA:
             program_config.recurrence,
             sequence_parallel_axis=(self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None),
         )
-        # Real-K3 component A/B: output-projection HiFi2 retained PCC >=0.999987 for every LoudBox
-        # layout and improved median component latency by 3.580%-5.165%.
         self.output_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=program_config.output_projection_math_fidelity,
@@ -377,7 +372,6 @@ class ttKDA:
     ) -> ttnn.Tensor:
         """Apply the KDA gated RMSNorm epilogue."""
         config, weights = self.config, self.weights
-        # Retained by real-K3 T=5120 component A/B: 92.72-93.92% faster at output PCC >=0.999990.
         return ttnn.experimental.kda.sigmoid_gated_rms_norm(
             output,
             output_gate,
@@ -386,8 +380,6 @@ class ttKDA:
             epsilon=config.norm_eps,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.kda_compute_config,
-            # Real-K3 component A/B: direct BF16 output retained PCC 1.0 for every LoudBox layout
-            # and improved median component latency by 0.655%-1.339%.
             output_dtype=self.gated_rms_output_dtype,
         )
 

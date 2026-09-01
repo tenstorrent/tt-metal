@@ -19,7 +19,6 @@ KDA_SCAN_OUTPUT_DTYPE = ttnn.bfloat16
 KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
 KDA_PREPARATION_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
-# DRAM is the calibrated T=5120 distributed-scan placement; keep it distinct from the local L1 path.
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
@@ -66,15 +65,12 @@ class KDAProgramConfig:
 
 
 def kimi_k3_program_config(*, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
-    """Return measured K3 tuning with caller-owned per-axis CCL topology."""
+    """Return the production K3 program configuration with caller-owned per-axis CCL topology."""
     return KDAProgramConfig(
-        # Scan policy is fixed when the layer is constructed, not selected from runtime T. For the Blackhole K3
-        # TP8 geometry at T=5120 (160 chunks, 8 groups/head), grouped scan measured 1.697 ms versus 1.854 ms direct
-        # (9.25% faster). Choose direct for a fixed short-sequence deployment; choose grouped when its N/P local
-        # scans plus log2(P) prefix amortize summary overhead and batch_heads*P fits the device owner capacity.
+        # Scan policy is fixed at construction. Direct scan avoids summary overhead for shorter fixed
+        # sequences; grouped scan trades P local scans of N/P chunks plus a log2(P) prefix for summary
+        # overhead and requires batch_heads * P worker owners. K3 at T=5120 uses grouped scan.
         recurrence=KDARecurrenceProgramConfig(local_scan_strategy="grouped", summary_group_chunks=20),
-        # Exact K3 T=5120 QKV median versus 768: 512 was 0.88% slower on SP1xTP8, 1.09% faster on
-        # SP2xTP4, and 2.28% faster on SP4xTP2; end-to-end deltas were within 0.08% at identical PCC.
         qkv_channel_chunk_size=512,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
