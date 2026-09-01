@@ -63,27 +63,48 @@ def _run_case(
     grid_yx=None,  # (y, x) core grid for block/width sharding
     pool="max",  # "max" | "avg" (avg cases use padding=0 to sidestep count_include_pad semantics)
     pattern=None,  # input pattern override (default: module-level PATTERN)
+    dilation=(1, 1),  # max pool only
+    ceil_mode=False,
+    dtype="bf16",  # "bf16" | "bf8b" (bf8b forces TILE layout; golden runs on the quantized input)
     perf_label=None,  # perf mode: skip the golden check, run PERF_ITERS labeled iterations instead
 ):
     pattern = pattern or PATTERN
-    kernel, stride, padding = list(kernel), list(stride), list(padding)
-    out_h = (in_h - kernel[0] + 2 * padding[0]) // stride[0] + 1
+    kernel, stride, padding, dilation = list(kernel), list(stride), list(padding), list(dilation)
+    out_h = (in_h - kernel[0] + 2 * padding[0]) // stride[0] + 1  # perf mode only; golden shape wins below
     out_w = (in_w - kernel[1] + 2 * padding[1]) // stride[1] + 1
     tensor_height = batch * in_h * in_w
     assert tensor_height % 32 == 0, f"N*H*W={tensor_height} must be a multiple of 32"
-    tiled_input = channels % 32 == 0
+    tiled_input = channels % 32 == 0 or dtype == "bf8b"
 
     x_nhwc = _build_input(pattern, batch, in_h, in_w, channels, SEED, 0).to(torch.bfloat16)
+    if dtype == "bf8b":
+        assert channels % 32 == 0, "bf8b needs TILE layout (C % 32 == 0)"
+        # golden must see the block-fp quantized values the device sees
+        x_nhwc = ttnn.to_torch(
+            ttnn.from_torch(
+                x_nhwc.reshape(1, 1, tensor_height, channels), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+            )
+        ).reshape(batch, in_h, in_w, channels)
     input_max = x_nhwc.float().max().item()
     if perf_label is None:
         if pool == "max":
             golden_nchw = torch.nn.functional.max_pool2d(
-                x_nhwc.permute(0, 3, 1, 2).float(), kernel_size=kernel, stride=stride, padding=padding
+                x_nhwc.permute(0, 3, 1, 2).float(),
+                kernel_size=kernel,
+                stride=stride,
+                padding=padding,
+                dilation=dilation,
+                ceil_mode=ceil_mode,
             )
         else:
             golden_nchw = torch.nn.functional.avg_pool2d(
-                x_nhwc.permute(0, 3, 1, 2).float(), kernel_size=kernel, stride=stride, padding=padding
+                x_nhwc.permute(0, 3, 1, 2).float(),
+                kernel_size=kernel,
+                stride=stride,
+                padding=padding,
+                ceil_mode=ceil_mode,
             )
+        out_h, out_w = golden_nchw.shape[2], golden_nchw.shape[3]  # exact for ceil_mode/dilation
         golden = golden_nchw.permute(0, 2, 3, 1).reshape(batch * out_h * out_w, channels).contiguous()
 
     grid = device.compute_with_storage_grid_size()
@@ -113,13 +134,16 @@ def _run_case(
     print(
         f"\nQPOOL-MATRIX: {pool} C={channels} in={batch}x{in_h}x{in_w} k={kernel} s={stride} p={padding} "
         f"{core_desc} layout={'TILE' if tiled_input else 'ROW_MAJOR'}"
-        + (f" pattern={pattern}" if pattern != PATTERN else ""),
+        + (f" pattern={pattern}" if pattern != PATTERN else "")
+        + (f" d={dilation}" if dilation != [1, 1] else "")
+        + (" ceil" if ceil_mode else "")
+        + (f" {dtype}" if dtype != "bf16" else ""),
         flush=True,
     )
 
     x = ttnn.from_torch(
         x_nhwc.reshape(1, 1, tensor_height, channels),
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b if dtype == "bf8b" else ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT if tiled_input else ttnn.ROW_MAJOR_LAYOUT,
     )
     x = x.to(device, mem_config)
@@ -135,7 +159,8 @@ def _run_case(
             kernel_size=kernel,
             stride=stride,
             padding=padding,
-            **(dict(dilation=[1, 1]) if pool == "max" else {}),  # avg_pool2d takes no dilation
+            ceil_mode=ceil_mode,
+            **(dict(dilation=dilation) if pool == "max" else {}),  # avg_pool2d takes no dilation
         )
         ttnn.synchronize_device(device)
         return out
@@ -247,9 +272,107 @@ MATRIX_CASES = [
 ]
 
 
+# Special-case axes from the regular WH/BH unit test (tests/.../pool/test_maxpool2d.py) at
+# craq-sim-feasible sizes: the unit test's shapes are model-scale (600x600, C=32768), far beyond
+# the functional sim, so each AXIS is kept and the geometry shrunk (single-core, NHW % 32 == 0,
+# out sticks % 4 == 0 — NOTE: the unit test's ceil_mode shapes often produce stick counts that do
+# NOT divide num_threads=4 and would hit the factory divisibility TT_FATAL; those are resized).
+# All 12 cases pass exact-PCC on WH silicon (2026-09-01). sim_skip evidence: HANG/MISMATCH is
+# bit-identical at num_threads=1 (threading exonerated); bf8b is a Metal-2.0 runtime gap on the
+# quasar path (program_spec.cpp:1731 is_data_format_supported TT_FATAL), fine on WH.
+UNIT_CASES = [
+    ("ceil_k3x3_s2_b4", dict(batch=4, in_h=8, in_w=4, stride=(2, 2), ceil_mode=True, cores=1)),
+    (
+        "ceil_edge_k4x3_s6x5",
+        dict(batch=2, channels=32, kernel=(4, 3), stride=(6, 5), padding=(2, 1), ceil_mode=True, cores=1),
+    ),
+    ("dil2_k3x3", dict(in_h=16, in_w=16, stride=(1, 1), padding=(0, 0), dilation=(2, 2), cores=1)),
+    (
+        "ceil_dil_k3x5_s4x2",
+        dict(
+            in_h=16,
+            in_w=16,
+            kernel=(3, 5),
+            stride=(4, 2),
+            dilation=(2, 1),
+            ceil_mode=True,
+            cores=1,
+            sim_skip="craq-sim HANG (T=1-identical)",
+        ),
+    ),
+    ("asym_k3x5_s2x1", dict(kernel=(3, 5), stride=(2, 1), padding=(1, 2), cores=1)),
+    (
+        "uneven_pad_k8_s4",
+        dict(
+            in_h=16,
+            in_w=16,
+            kernel=(8, 8),
+            stride=(4, 4),
+            padding=(3, 1),
+            cores=1,
+            sim_skip="craq-sim HANG (T=1-identical)",
+        ),
+    ),
+    (
+        "k15x15_s2_8chunks",
+        dict(
+            in_h=16,
+            in_w=16,
+            kernel=(15, 15),
+            stride=(2, 2),
+            padding=(7, 7),
+            cores=1,
+            sim_skip="craq-sim HANG (T=1-identical)",
+        ),
+    ),
+    (
+        "k1x8_row",
+        dict(
+            in_h=8,
+            in_w=8,
+            kernel=(1, 8),
+            stride=(1, 1),
+            padding=(0, 0),
+            cores=1,
+            sim_skip="craq-sim artifact (tiny-window class, T=1-identical)",
+        ),
+    ),
+    (
+        "k8x1_col",
+        dict(
+            in_h=8,
+            in_w=8,
+            kernel=(8, 1),
+            stride=(1, 1),
+            padding=(0, 0),
+            cores=1,
+            sim_skip="craq-sim artifact (tiny-window class, T=1-identical)",
+        ),
+    ),
+    ("c24_k3x3", dict(channels=24, cores=1)),
+    ("bf8b_k3x3", dict(dtype="bf8b", cores=1, sim_skip="Metal-2.0 DFB bfp8 unsupported (program_spec.cpp:1731)")),
+    (
+        "bf8b_k7x7_large",
+        dict(
+            dtype="bf8b",
+            kernel=(7, 7),
+            stride=(2, 2),
+            padding=(3, 3),
+            cores=1,
+            sim_skip="Metal-2.0 DFB bfp8 unsupported (program_spec.cpp:1731)",
+        ),
+    ),
+]
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_qpool_matrix(mesh_device):
     _run_cases(mesh_device, MATRIX_CASES)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_qpool_unit_cases(mesh_device):
+    _run_cases(mesh_device, UNIT_CASES)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

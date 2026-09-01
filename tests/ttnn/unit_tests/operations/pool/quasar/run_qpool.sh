@@ -4,8 +4,10 @@
 #   ./run_qpool.sh              debug: ONE hand-picked trace (test_qpool_debug.py CONFIG block);
 #                               300s timeout doubles as the hang detector
 #   ./run_qpool.sh sweep        channel-width sweep (test_qpool_sweep.py), per-case verdicts
-#   ./run_qpool.sh matrix       kernel/geometry/forced-wide/sharding matrix (test_qpool_matrix),
+#   ./run_qpool.sh matrix       kernel/geometry/wide/sharding matrix (test_qpool_matrix),
 #                               per-case verdicts; QPOOL_ONLY=name1,name2 runs a subset
+#   ./run_qpool.sh units        special-case axes from the regular WH/BH maxpool unit test at
+#                               sim-feasible sizes (ceil/dilation/asym/uneven-pad/15x15/bf8b)
 #   ./run_qpool.sh span         span(T) = prologue + marginal*T fit at the tree's current
 #                               num_threads (test_qpool_span.py + qpool_span_report.py)
 #   ./run_qpool.sh perf-ab      per-case threads A/B over the coverage-matrix configs
@@ -145,6 +147,17 @@ matrix)
     sim_env
     set +e
     timeout --foreground "$TIMEOUT_SWEEP_S" pytest -q -s -k test_qpool_matrix "$SCRIPT_DIR/test_qpool_sweep.py" "$@"
+    rc=$?
+    set -e
+    if [[ $rc -eq 124 ]]; then
+        echo "run_qpool: TIMED OUT after ${TIMEOUT_SWEEP_S}s — the last 'QPOOL-MATRIX:' banner names the hung case."
+    fi
+    exit $rc
+    ;;
+units)
+    sim_env
+    set +e
+    timeout --foreground "$TIMEOUT_SWEEP_S" pytest -q -s -k test_qpool_unit_cases "$SCRIPT_DIR/test_qpool_sweep.py" "$@"
     rc=$?
     set -e
     if [[ $rc -eq 124 ]]; then
