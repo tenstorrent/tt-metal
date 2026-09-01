@@ -144,8 +144,8 @@ void bind_semaphore(m2::KernelSpec& kernel, const m2::SemaphoreSpecName& semapho
     });
 }
 
-// Make the two members of a legacy two-index circular buffer into an alias clique. Both members
-// must name each other, which is what makes the group legal.
+// Make an arbitrary group of circular buffers into an alias clique. Every member must name every
+// other member for the group to be legal.
 void alias_group(m2::ProgramSpec& spec, const std::vector<m2::DFBSpecName>& group) {
     for (auto& dfb : spec.dataflow_buffers) {
         if (std::find(group.begin(), group.end(), dfb.unique_id) == group.end()) {
