@@ -212,16 +212,23 @@ class DecoderLayer(LightweightModule):
                 memory_config=ln_in_memcfg,
             )
         elif prefill_path:
-            # Width-sharded LN. For M>1 tile, S2I so QKV runs L1 interleaved
-            # (in0_block_w can be >1; width-sharded QKV was slower). Seq<=32
-            # stays sharded for the DRAM-sharded QKV path.
-            x_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
+            # Width-sharded LN. Skip I2S when the previous layer's residual add
+            # already wrote this shard spec. For M>1 tile, S2I so QKV runs L1
+            # interleaved (width-sharded QKV was slower). Seq<=32 stays
+            # sharded for the DRAM-sharded QKV path.
+            if x.memory_config() == ln_in_memcfg:
+                x_sharded = x
+                _own_x_sharded = False
+            else:
+                x_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
+                _own_x_sharded = True
             x = self.input_layernorm(
                 x_sharded,
                 program_config=ln_progcfg,
                 memory_config=ln_in_memcfg,
             )
-            ttnn.deallocate(x_sharded)
+            if _own_x_sharded:
+                ttnn.deallocate(x_sharded)
             if seq_len_at_entry > SHORT_SEQ_LIMIT:
                 x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(x)
@@ -263,24 +270,35 @@ class DecoderLayer(LightweightModule):
             ttnn.deallocate(residual)
             return x_out, updated_kv_cache
 
-        # First residual add: result feeds the post_attention_layernorm + MLP. Force L1
-        # so we don't pay a DRAM write+read for the intermediate. Without this override,
-        # ttnn.add inherits DRAM from `residual` (which is the DRAM-backed layer input).
+        # First residual add: result feeds the post_attention_layernorm + MLP.
         if residual_sharded is not None:
             ttnn.deallocate(residual_sharded)
+        if prefill_path:
+            # Write the sum in the LN shard spec so post-attn LN (and the next
+            # layer's input LN) skip I2S. Decode already does this; BinaryNg
+            # output layout is independent of the addends.
+            attn_out = x
+            x = ttnn.add(residual, attn_out, memory_config=ln_in_memcfg)
+            ttnn.deallocate(attn_out)
+            residual = x
+            x = self.post_attention_layernorm(
+                x,
+                program_config=ln_progcfg,
+                memory_config=ln_in_memcfg,
+            )
+            x = self.mlp(x, mode=mode)
+            mlp_out = x
+            x = ttnn.add(residual, mlp_out, memory_config=ln_in_memcfg)
+            ttnn.deallocate(mlp_out)
+            ttnn.deallocate(residual)
+            return x, updated_kv_cache
+
+        # Non-bucket prefill: force L1 so we don't inherit DRAM from residual.
         x = ttnn.add(residual, x, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Pre-norm MLP
         residual = x  # now in L1
         if decode_path:
-            x_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
-            x = self.post_attention_layernorm(
-                x_sharded,
-                program_config=ln_progcfg,
-                memory_config=ln_in_memcfg,
-            )
-            ttnn.deallocate(x_sharded)
-        elif prefill_path:
             x_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
             x = self.post_attention_layernorm(
                 x_sharded,
