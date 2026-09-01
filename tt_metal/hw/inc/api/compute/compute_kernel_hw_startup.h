@@ -124,9 +124,9 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) { compute_kerne
 // clang-format on
 #ifndef ARCH_QUASAR
 ALWI void enable_fp32_dest_acc() {
-    UNPACK((llk_unpack_set_fp32_dest_acc(true)));
+    UNPACK((llk_unpack_wait_fp32_dest_acc()));
     MATH((llk_math_set_fp32_dest_acc(true)));
-    PACK((llk_pack_set_fp32_dest_acc(true)));
+    PACK((llk_pack_wait_fp32_dest_acc()));
 }
 #endif
 
@@ -150,9 +150,9 @@ ALWI void enable_fp32_dest_acc() {
 // clang-format on
 #ifndef ARCH_QUASAR
 ALWI void disable_fp32_dest_acc() {
-    UNPACK((llk_unpack_set_fp32_dest_acc(false)));
+    UNPACK((llk_unpack_wait_fp32_dest_acc()));
     MATH((llk_math_set_fp32_dest_acc(false)));
-    PACK((llk_pack_set_fp32_dest_acc(false)));
+    PACK((llk_pack_wait_fp32_dest_acc()));
 }
 #endif
 

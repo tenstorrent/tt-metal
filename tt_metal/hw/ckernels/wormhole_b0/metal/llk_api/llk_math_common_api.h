@@ -35,7 +35,7 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
  * Programs ALU_ACC_CTRL and PCK_DEST_RD_CTRL after Unpack and Pack have drained.
  *
  * @param enable True to enable FP32 dest accumulation, false to disable.
- * @note Must be called together with llk_unpack_set_fp32_dest_acc and llk_pack_set_fp32_dest_acc.
+ * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_pack_wait_fp32_dest_acc.
  */
 inline void llk_math_set_fp32_dest_acc(bool enable) { _llk_set_fp32_dest_acc_<ThreadId::MathThreadId>(enable); }
 

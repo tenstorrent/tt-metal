@@ -25,11 +25,11 @@ using namespace ckernel;
  *      writes are visible.
  *
  * @tparam thread_id: TRISC thread compiling this specialization, values = <UnpackThreadId/MathThreadId/PackThreadId>
- * @param enable: True to enable FP32 dest accumulation, false to disable.
+ * @param enable: MATH only. True to enable FP32 dest accumulation, false to disable.
  * @note All three TRISC threads must call their specialization together. Not supported on Quasar.
  */
 template <ThreadId thread_id>
-inline void _llk_set_fp32_dest_acc_([[maybe_unused]] bool enable)
+inline void _llk_set_fp32_dest_acc_(bool enable = false)
 {
     static_assert(
         (thread_id == ThreadId::MathThreadId) || (thread_id == ThreadId::UnpackThreadId) || (thread_id == ThreadId::PackThreadId),
@@ -42,16 +42,13 @@ inline void _llk_set_fp32_dest_acc_([[maybe_unused]] bool enable)
     if constexpr (thread_id == ThreadId::UnpackThreadId || thread_id == ThreadId::PackThreadId)
     {
         mailbox_write(ThreadId::MathThreadId, 1);
-        const std::uint32_t config_issued = mailbox_read(ThreadId::MathThreadId);
-        (void)config_issued;
+        mailbox_read(ThreadId::MathThreadId);
         TTI_STALLWAIT(dest_acc_stall, p_stall::TRISC_CFG);
     }
     else
     {
-        const std::uint32_t unpack_here = mailbox_read(ThreadId::UnpackThreadId);
-        const std::uint32_t pack_here   = mailbox_read(ThreadId::PackThreadId);
-        (void)unpack_here;
-        (void)pack_here;
+        mailbox_read(ThreadId::UnpackThreadId);
+        mailbox_read(ThreadId::PackThreadId);
 
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(enable);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(enable);

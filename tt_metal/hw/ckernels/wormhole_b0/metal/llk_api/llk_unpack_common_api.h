@@ -83,12 +83,11 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand) {
 /**
  * Unpack-thread half of a mid-kernel FP32 dest-acc reconfiguration.
  *
- * @param enable True to enable FP32 dest accumulation, false to disable.
- * @note Must be called together with llk_math_set_fp32_dest_acc and llk_pack_set_fp32_dest_acc.
+ * Drains the unpacker FIFO, waits for MATH to program dest-acc CFG, then STALLWAITs.
+ *
+ * @note Must be called together with llk_math_set_fp32_dest_acc and llk_pack_wait_fp32_dest_acc.
  */
-inline void llk_unpack_set_fp32_dest_acc(bool enable) {
-    _llk_set_fp32_dest_acc_<ThreadId::UnpackThreadId>(enable);
-}
+inline void llk_unpack_wait_fp32_dest_acc() { _llk_set_fp32_dest_acc_<ThreadId::UnpackThreadId>(); }
 
 /**
  * Determine whether the unpacker must be reconfigured when switching operands, i.e. whether the

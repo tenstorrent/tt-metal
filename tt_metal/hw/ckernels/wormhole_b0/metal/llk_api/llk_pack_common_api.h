@@ -19,11 +19,12 @@
 /**
  * Pack-thread half of a mid-kernel FP32 dest-acc reconfiguration.
  *
- * @param enable When true, dest-acc is programmed for 32-bit destination reads. MATH owns the CFG
- *               writes, including PCK_DEST_RD_CTRL.
- * @note Must be called together with llk_unpack_set_fp32_dest_acc and llk_math_set_fp32_dest_acc.
+ * Drains the packer FIFO, waits for MATH to program dest-acc CFG (including PCK_DEST_RD_CTRL),
+ * then STALLWAITs.
+ *
+ * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_math_set_fp32_dest_acc.
  */
-inline void llk_pack_set_fp32_dest_acc(bool enable) { _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(enable); }
+inline void llk_pack_wait_fp32_dest_acc() { _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(); }
 
 /**
  * Configure the packer hardware for the given output operand.
