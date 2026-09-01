@@ -18,37 +18,43 @@ namespace cfg
 // PACKER
 // ============================================================
 
-struct Pck0AddrCtrlXyReg0
-{                                                                                  // Packer Address control register 0
+class Pck0AddrCtrlXyReg0
+{ // Packer Address control register 0
+public:
     static constexpr Field Xstride {RegisterFile::State, 32, 12, 0, 0, 16, 1, 0};  // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
     static constexpr Field Ystride {RegisterFile::State, 32, 12, 0, 16, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
 };
 
-struct Pck0AddrCtrlZwReg0
-{                                                                                  // Packer Address control register 0
+class Pck0AddrCtrlZwReg0
+{ // Packer Address control register 0
+public:
     static constexpr Field Zstride {RegisterFile::State, 32, 13, 0, 0, 16, 1, 0};  // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
     static constexpr Field Wstride {RegisterFile::State, 32, 13, 0, 16, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
 };
 
-struct Pck0AddrCtrlXyReg1
-{                                                                                  // Packer Address control register 1
+class Pck0AddrCtrlXyReg1
+{ // Packer Address control register 1
+public:
     static constexpr Field Xstride {RegisterFile::State, 32, 14, 0, 0, 16, 1, 0};  // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
     static constexpr Field Ystride {RegisterFile::State, 32, 14, 0, 16, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
 };
 
-struct Pck0AddrCtrlZwReg1
-{                                                                                  // Packer Address control register 1
+class Pck0AddrCtrlZwReg1
+{ // Packer Address control register 1
+public:
     static constexpr Field Zstride {RegisterFile::State, 32, 15, 0, 0, 16, 1, 0};  // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
     static constexpr Field Wstride {RegisterFile::State, 32, 15, 0, 16, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
 };
 
-struct Pck0AddrBaseReg0
-{                                                                              // Packer address space base register 0
+class Pck0AddrBaseReg0
+{ // Packer address space base register 0
+public:
     static constexpr Field Base {RegisterFile::State, 32, 16, 0, 0, 18, 1, 0}; // Base 0 (of 0-8) used in X-Y addressing (18b)
 };
 
-struct Pck0AddrBaseReg1
-{                                                                              // Packer address space base register 1
+class Pck0AddrBaseReg1
+{ // Packer address space base register 1
+public:
     static constexpr Field Base {RegisterFile::State, 32, 17, 0, 0, 18, 1, 0}; // Base 0 (of 0-8) used in X-Y addressing (18b)
 };
 
@@ -58,15 +64,16 @@ enum class PackerReg : std::uint8_t
     Reg1,
 };
 
-struct PackerAddrCtrlEntry
+class PackerAddrCtrlEntry
 {
+public:
     const Field& Xstride;
     const Field& Ystride;
     const Field& Zstride;
     const Field& Wstride;
 };
 
-struct PackerAddrCtrlFields
+class PackerAddrCtrlFields
 {
 private:
     template <std::uint32_t RegIndex>
@@ -122,7 +129,7 @@ public:
     }
 };
 
-struct PackerAddrBaseFields
+class PackerAddrBaseFields
 {
 private:
     template <std::uint32_t RegIndex>
@@ -168,13 +175,14 @@ public:
     }
 };
 
-struct PackerEntry
+class PackerEntry
 {
+public:
     PackerAddrCtrlFields AddrCtrl;
     PackerAddrBaseFields AddrBase;
 };
 
-struct PackerFields
+class PackerFields
 {
 private:
     [[noreturn]] static PackerEntry invalid_index()
@@ -214,8 +222,9 @@ public:
  */
 inline constexpr PackerFields Packer {};
 
-struct PckDestRdCtrl
-{                                                                                      // Packer dest regs read control
+class PckDestRdCtrl
+{ // Packer dest regs read control
+public:
     static constexpr Field Read_32b_data {RegisterFile::State, 32, 18, 0, 0, 1, 1, 0}; // Read 32bit data from dest (fp32 or int32) (1b)
     static constexpr Field Read_unsigned {RegisterFile::State, 32, 18, 0, 1, 1, 1, 0}; // Read unsigned data (applicable with int8 read only) (1b)
     static constexpr Field Read_int8 {RegisterFile::State, 32, 18, 0, 2, 1, 1, 0};     // Read int8 data, produced by SFPU (1b)
@@ -223,20 +232,23 @@ struct PckDestRdCtrl
         RegisterFile::State, 32, 18, 0, 3, 1, 1, 0}; // Packer gasket rounds to 10b mantissa, regardless of fp_pack format (1b)
 };
 
-struct PckEdgeTileFaceSetSelect
-{                                                                               // Packer face set mapping select and enable - 4 reg sets
+class PckEdgeTileFaceSetSelect
+{ // Packer face set mapping select and enable - 4 reg sets
+public:
     static constexpr Field select {RegisterFile::State, 32, 19, 0, 0, 8, 1, 0}; // Select: (8b)
     static constexpr Field enable {RegisterFile::State, 32, 19, 0, 8, 1, 1, 0}; // Enable per face set mapping (1b)
 };
 
-struct TileRowSetMappingRow
+class TileRowSetMappingRow
 {
+public:
     std::uint32_t mapping_index;
 
 private:
     template <std::uint32_t MappingIndex, std::uint32_t SetIndex>
-    struct Fields
+    class Fields
     {
+    public:
         static_assert(MappingIndex < 4, "tile row-set mapping index out of range");
         static_assert(SetIndex < 16, "tile row-set set index out of range");
 
@@ -289,7 +301,7 @@ public:
     }
 };
 
-struct TileRowSetMappingFields
+class TileRowSetMappingFields
 {
 private:
     [[noreturn]] static TileRowSetMappingRow invalid_index()
@@ -340,39 +352,46 @@ public:
  */
 inline constexpr TileRowSetMappingFields TileRowSetMapping {};
 
-struct PckEdgeOffsetSec0
-{                                                                              // Packer edge offset masks
+class PckEdgeOffsetSec0
+{ // Packer edge offset masks
+public:
     static constexpr Field mask {RegisterFile::State, 32, 24, 0, 0, 16, 1, 0}; // Row mask (16b)
 };
 
-struct PckEdgeMode
-{                                                                              // Packer edge offset mode
+class PckEdgeMode
+{ // Packer edge offset mode
+public:
     static constexpr Field mode {RegisterFile::State, 32, 24, 0, 16, 1, 1, 0}; // Mode: (1b)
 };
 
-struct PckEdgeTileRowSetSelect
-{                                                                                // Packer row set mapping select - 4 reg sets
+class PckEdgeTileRowSetSelect
+{ // Packer row set mapping select - 4 reg sets
+public:
     static constexpr Field select {RegisterFile::State, 32, 24, 0, 17, 8, 1, 0}; // Select: (8b)
 };
 
-struct PckEdgeOffsetSec1
-{                                                                              // Packer edge offset masks
+class PckEdgeOffsetSec1
+{ // Packer edge offset masks
+public:
     static constexpr Field mask {RegisterFile::State, 32, 25, 0, 0, 16, 1, 0}; // Row mask (16b)
 };
 
-struct PckEdgeOffsetSec2
-{                                                                              // Packer edge offset masks
+class PckEdgeOffsetSec2
+{ // Packer edge offset masks
+public:
     static constexpr Field mask {RegisterFile::State, 32, 26, 0, 0, 16, 1, 0}; // Row mask (16b)
 };
 
-struct PckEdgeOffsetSec3
-{                                                                              // Packer edge offset masks
+class PckEdgeOffsetSec3
+{ // Packer edge offset masks
+public:
     static constexpr Field mask {RegisterFile::State, 32, 27, 0, 0, 16, 1, 0}; // Row mask (16b)
 };
 
-struct PackCounters
+class PackCounters
 { // These registers are used to control Z-mask calculatios, auto-generated 'last word' bit, and tile position generator, which, in turn, controls bias and edge
-  // masking.
+public:
+    // masking.
     static constexpr Field pack_per_xy_plane {RegisterFile::State, 32, 28, 0, 0, 8, 4, 32}; // Number of pack instructions per one XY plane (8b)
     static constexpr Field pack_reads_per_xy_plane {
         RegisterFile::State, 32, 28, 0, 8, 8, 4, 32}; // Number of pack reads from destination registers per XY plane (8b)
@@ -382,19 +401,22 @@ struct PackCounters
         RegisterFile::State, 32, 28, 0, 24, 8, 4, 32}; // Number of xy planes after which Packer context flops will  be incremented (8b)
 };
 
-struct PackConcatMask
+class PackConcatMask
 { // Concat mask per xy plane for blob packing Pack per face edge mask select mapping
+public:
     static constexpr Field pack_concat_mask {RegisterFile::State, 32, 32, 0, 0, 16, 4, 32}; // Concat mask per xy plane (16b)
 };
 
-struct TileFaceSetMappingRow
+class TileFaceSetMappingRow
 {
+public:
     std::uint32_t mapping_index;
 
 private:
     template <std::uint32_t MappingIndex, std::uint32_t SetIndex>
-    struct Fields
+    class Fields
     {
+    public:
         static_assert(MappingIndex < 4, "tile face-set mapping index out of range");
         static_assert(SetIndex < 16, "tile face-set set index out of range");
 
@@ -447,7 +469,7 @@ public:
     }
 };
 
-struct TileFaceSetMappingFields
+class TileFaceSetMappingFields
 {
 private:
     [[noreturn]] static TileFaceSetMappingRow invalid_index()
@@ -498,8 +520,9 @@ public:
  */
 inline constexpr TileFaceSetMappingFields TileFaceSetMapping {};
 
-struct PackGlobalCfgCtl
+class PackGlobalCfgCtl
 { // Global packer config control across all contexts
+public:
     static constexpr Field pack_disable_fast_tile_end_drain {
         RegisterFile::State, 32, 40, 0, 0, 1, 1, 0}; // Disable fast tile end drain for PackerConcat mask per xy plane for blob packing (1b)
 };

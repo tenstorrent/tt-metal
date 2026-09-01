@@ -44,8 +44,9 @@ enum class Sec : std::uint8_t
 // itself — no register type is named alongside it. Storing the stride in bits
 // lets bit-packed sections (several sections sharing one word) use the same
 // formula as word-strided ones.
-struct Field
+class Field
 {
+public:
     RegisterFile file;      // Thread = 16-bit thread CFG, State = 32-bit state CFG
     std::uint32_t wbits;    // config word size: 16 (Thread) or 32 (State)
     std::uint32_t base;     // SEC0 register base word
