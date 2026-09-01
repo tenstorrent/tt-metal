@@ -22,14 +22,16 @@ inline constexpr std::uint32_t DynamicGprIndex = 0xffffffffu;
  * @tparam Index: Compile-time GPR index, or the internal runtime-index sentinel.
  */
 template <std::uint32_t Index>
-struct Gpr
+class Gpr
 {
+public:
     static constexpr std::uint32_t index = Index;
 };
 
 template <>
-struct Gpr<detail::DynamicGprIndex>
+class Gpr<detail::DynamicGprIndex>
 {
+public:
     std::uint32_t index;
 };
 

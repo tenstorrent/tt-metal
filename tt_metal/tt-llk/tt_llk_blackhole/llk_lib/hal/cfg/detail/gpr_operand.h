@@ -21,16 +21,18 @@ inline constexpr std::uint32_t DynamicGprIndex = hal::detail::DynamicGprIndex;
  * allowing read()/write() to select TTI_* or TT_* with if constexpr.
  */
 template <std::uint32_t Index, GprTransferSize Size, WrcfgCompletion Completion>
-struct GprOperand : hal::Gpr<Index>
+class GprOperand : public hal::Gpr<Index>
 {
+public:
     static constexpr std::uint32_t index        = Index;
     static constexpr GprTransferSize size       = Size;
     static constexpr WrcfgCompletion completion = Completion;
 };
 
 template <GprTransferSize Size, WrcfgCompletion Completion>
-struct GprOperand<DynamicGprIndex, Size, Completion> : hal::Gpr<DynamicGprIndex>
+class GprOperand<DynamicGprIndex, Size, Completion> : public hal::Gpr<DynamicGprIndex>
 {
+public:
     constexpr explicit GprOperand(const std::uint32_t index) : hal::Gpr<DynamicGprIndex> {index}
     {
     }
