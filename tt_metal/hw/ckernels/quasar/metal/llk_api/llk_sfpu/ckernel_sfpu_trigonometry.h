@@ -286,7 +286,7 @@ inline void calculate_cosine() {
 
         // At this point, the mantissa bits of j contain the rounded integer.
         // Store for later; the LSB tracks quadrant parity for sign selection.
-        // // #55065: sfpi::round should offer no int debiasing
+        // #55065: sfpi::round should offer no int debiasing
         sfpi::vInt q = sfpi::as<sfpi::vInt>(j);
 
         j = j - rounding_bias;
