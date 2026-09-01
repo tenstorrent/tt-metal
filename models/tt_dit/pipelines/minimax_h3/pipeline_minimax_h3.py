@@ -954,11 +954,14 @@ class MiniMaxH3Pipeline:
         for _, module in named_modules(model):
             if isinstance(module, LoRAMixin):
                 module.set_lora_cache_capacity(1)
-        device_entries = [entry for entry in self._lora_adapter_entries() if not is_host_path(entry.path)]
+        # The split belongs to `apply_entries`, not to this caller: filtering first would leave the
+        # report silent about the host half, and the report is what a caller checks to confirm the
+        # whole adapter is accounted for.
         self._lora_report = apply_entries(
             model,
-            device_entries,
+            self._lora_adapter_entries(),
             groups=minimax_h3_fusion_groups(model),
+            is_host=is_host_path,
             strength=self.lora_strength,
             name=self.lora_path.name,
         )
