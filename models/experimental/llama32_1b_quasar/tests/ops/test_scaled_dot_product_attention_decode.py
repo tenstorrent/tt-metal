@@ -82,7 +82,7 @@ def test_scaled_dot_product_attention_decode(ttnn_mesh_device, reset_seeds, batc
         packer_l1_acc=False,
     )
 
-    out = ttnn.transformer.scaled_dot_product_attention_decode(
+    out = ttnn.experimental.quasar.transformer.scaled_dot_product_attention_decode(
         q,
         k,
         v,

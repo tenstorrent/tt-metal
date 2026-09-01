@@ -833,7 +833,7 @@ class Attention1D(LightweightModule):
     def _sdpa_decode_paged(self, q_heads, keys, values, current_pos, page_table) -> ttnn.Tensor:
         """Paged SDPA decode - uses page_table for KV cache lookup."""
         cfg = self.config
-        return ttnn.transformer.paged_scaled_dot_product_attention_decode(
+        return ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode(
             q_heads,
             keys,
             values,
@@ -849,7 +849,7 @@ class Attention1D(LightweightModule):
     def _sdpa_decode_non_paged(self, q_heads, keys, values, current_pos, page_table) -> ttnn.Tensor:
         """Non-paged SDPA decode - contiguous KV cache (page_table ignored)."""
         cfg = self.config
-        return ttnn.transformer.scaled_dot_product_attention_decode(
+        return ttnn.experimental.quasar.transformer.scaled_dot_product_attention_decode(
             q_heads,
             keys,
             values,

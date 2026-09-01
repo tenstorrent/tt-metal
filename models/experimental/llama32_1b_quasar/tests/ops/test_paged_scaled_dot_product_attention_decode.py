@@ -102,7 +102,7 @@ def test_paged_scaled_dot_product_attention_decode(ttnn_mesh_device, reset_seeds
         packer_l1_acc=False,
     )
 
-    out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+    out = ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode(
         q,
         k,
         v,
