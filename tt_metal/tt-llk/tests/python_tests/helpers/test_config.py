@@ -1195,6 +1195,12 @@ class TestConfig:
 
         pytest.skip()
 
+    def _barrier_reservation_include(self) -> str:
+        """First in the unit, so barrier.h's reservation covers the driver whatever it includes first."""
+        if self.profiler_build != ProfilerBuild.Yes:
+            return ""
+        return '#include "barrier.h"\n'
+
     def _kernel_source_include(self) -> str:
         """C++ snippet that pulls in this variant's driver.
 
@@ -1779,7 +1785,10 @@ class TestConfig:
                 run_shell_command(  # %.elf : path/to/kernel/test.cpp trisc.cpp [coverage.o libgcov.a]
                     compile_command,
                     TestConfig.TESTS_WORKING_DIR,
-                    (f"{self._kernel_source_include()}#include  <trisc.cpp>\n"),
+                    (
+                        f"{self._barrier_reservation_include()}"
+                        f"{self._kernel_source_include()}#include  <trisc.cpp>\n"
+                    ),
                 )
 
             with ThreadPoolExecutor(

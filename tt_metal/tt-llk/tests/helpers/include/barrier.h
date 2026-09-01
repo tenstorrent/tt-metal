@@ -51,9 +51,11 @@ constexpr bool is_action_thread()
 
 #if !defined(ARCH_QUASAR)
 
-// The only two indices no LLK op uses, and profiler builds are the only ones that compile this.
+// The only two indices no LLK op uses. Reserved below for the rest of the translation unit, because
+// the arrival drain would eat the token of any driver that also posted one.
 constexpr std::uint8_t ARRIVE_SEM  = ckernel::semaphore::PACK_DONE;
 constexpr std::uint8_t RELEASE_SEM = ckernel::semaphore::UNPACK_OPERAND_SYNC;
+#pragma GCC poison PACK_DONE UNPACK_OPERAND_SYNC
 
 // A consumed token, not a level to observe, so a peer that samples late still finds its release.
 template <typename Action>

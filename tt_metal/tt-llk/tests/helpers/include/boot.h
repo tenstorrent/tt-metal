@@ -123,8 +123,14 @@ TT_ALWAYS_INLINE void device_setup()
     // Initialize tensix semaphores
     ckernel::t6_semaphore_init(ckernel::semaphore::UNPACK_TO_DEST, 0, 1);
     ckernel::t6_semaphore_init(ckernel::semaphore::MATH_DONE, 0, 1);
+#if defined(LLK_BARRIER_ON_TRISC)
+    // barrier.h is already in scope and has reserved the raw names, so go through its own.
+    ckernel::t6_semaphore_init(llk_barrier::ARRIVE_SEM, 0, 1);
+    ckernel::t6_semaphore_init(llk_barrier::RELEASE_SEM, 0, 1);
+#else
     ckernel::t6_semaphore_init(ckernel::semaphore::PACK_DONE, 0, 1);
-    ckernel::t6_semaphore_init(ckernel::semaphore::UNPACK_OPERAND_SYNC, 0, 1); // llk_barrier release
+    ckernel::t6_semaphore_init(ckernel::semaphore::UNPACK_OPERAND_SYNC, 0, 1);
+#endif
 #endif
 }
 
