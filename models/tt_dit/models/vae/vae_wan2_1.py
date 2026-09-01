@@ -180,14 +180,23 @@ class WanAttentionBlock(Module):
         assert x_BTHWC.layout == ttnn.TILE_LAYOUT
         residual_BTHWC = x_BTHWC
 
-        # Gather height and width for replicated attention
+        # Gather height and width for replicated attention.
+        # Non-persistent + barrier: one output buffer per gather instead of a DRAM ping-pong pair.
         if self.parallel_config.height_parallel.factor > 1:
-            x_BTHWC = self.ccl_manager.all_gather_persistent_buffer(
-                x_BTHWC, dim=2, mesh_axis=self.parallel_config.height_parallel.mesh_axis
+            x_BTHWC = self.ccl_manager.all_gather(
+                x_BTHWC,
+                dim=2,
+                mesh_axis=self.parallel_config.height_parallel.mesh_axis,
+                use_hyperparams=False,
+                use_persistent_buffer=False,
             )
         if self.parallel_config.width_parallel.factor > 1:
-            x_BTHWC = self.ccl_manager.all_gather_persistent_buffer(
-                x_BTHWC, dim=3, mesh_axis=self.parallel_config.width_parallel.mesh_axis
+            x_BTHWC = self.ccl_manager.all_gather(
+                x_BTHWC,
+                dim=3,
+                mesh_axis=self.parallel_config.width_parallel.mesh_axis,
+                use_hyperparams=False,
+                use_persistent_buffer=False,
             )
 
         x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
@@ -251,9 +260,13 @@ class WanAttentionBlock(Module):
 
         # Gather T back before layout conversion (all-gather requires TILE)
         if split_t:
-            out_TND = self.ccl_manager.all_gather_persistent_buffer(out_TND, dim=0, mesh_axis=w_axis)
+            out_TND = self.ccl_manager.all_gather(
+                out_TND, dim=0, mesh_axis=w_axis, use_hyperparams=False, use_persistent_buffer=False
+            )
             if not w_only:
-                out_TND = self.ccl_manager.all_gather_persistent_buffer(out_TND, dim=0, mesh_axis=h_axis)
+                out_TND = self.ccl_manager.all_gather(
+                    out_TND, dim=0, mesh_axis=h_axis, use_hyperparams=False, use_persistent_buffer=False
+                )
             if padded_BT > BT:
                 out_TND = out_TND[:BT, :, :]
 
@@ -461,7 +474,9 @@ class WanCausalConv3d(Module):
                 if h_pad_needed and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
                 else 0
             )
-            x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
+            # Non-persistent + barrier: allocate one output instead of a DRAM ping-pong pair.
+            # NP already startup-barriers even with a persistent buffer, so the extra buffer is wasted.
+            x_BTHWC = self.ccl_manager.neighbor_pad(
                 x_BTHWC,
                 dims=dims,
                 pad_left=pad_left,
@@ -470,6 +485,7 @@ class WanCausalConv3d(Module):
                 axes=axes,
                 neighbor_sems=neighbor_sems,
                 num_links=links,
+                use_persistent_buffer=False,
                 logical_h=fused_logical_h,
                 t_front_pad=t_front_padding if fuse_t_front_pad else 0,
             )
@@ -874,7 +890,9 @@ class WanConv2d(Module):
                 if h_pad_needed and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
                 else 0
             )
-            x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
+            # Non-persistent + barrier: allocate one output instead of a DRAM ping-pong pair.
+            # NP already startup-barriers even with a persistent buffer, so the extra buffer is wasted.
+            x_BTHWC = self.ccl_manager.neighbor_pad(
                 x_BTHWC,
                 dims=dims,
                 pad_left=pad_left,
@@ -883,6 +901,7 @@ class WanConv2d(Module):
                 axes=axes,
                 neighbor_sems=neighbor_sems,
                 num_links=links,
+                use_persistent_buffer=False,
                 logical_h=fused_logical_h,
             )
 
