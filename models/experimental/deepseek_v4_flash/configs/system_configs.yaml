@@ -217,9 +217,9 @@ profiles:
   # galaxy32 -- 32x Blackhole (Galaxy). STARTING POINT, NOT A MEASURED TUNE.
   #
   # The 32-chip decode demo / CLI default to eight 1x4 tensor-parallel stages
-  # (tp_size=4). Under that layout, q_a and kv stay unfused: each is N-sharded
-  # across the four ranks, all-gathered, and left resident in L1 (see
-  # ``attention`` below). Expert-parallel sharding of the 256 routed experts
+  # (tp_size=4). Under that layout, q_a and kv stay unfused and replicated on
+  # every rank; ``q_b`` stays head-sharded TP4 (see ``attention`` below).
+  # Expert-parallel sharding of the 256 routed experts
   # (64 per chip of a stage) is still not here; when it is, it belongs as an
   # ``expert_parallel`` block rather than as new hardcoded constants.
   #
@@ -258,14 +258,13 @@ profiles:
       experts_block_size: 2
 
     attention:
-      # Unfused q_a and kv, each N-sharded across the stage's 4 TP ranks
-      # (q_a [4096, 256] on 8x8 cores, kv [4096, 128] on 16x4, both 64 B cores)
-      # with an all-gather before the replicated RMSNorm. Prefetched through
-      # HC_FN_GCB (8-tile page); they cannot join the shared 32-tile decode ring.
+      # Unfused q_a and kv, replicated full-width on every rank of the 1x4 stage
+      # (q_a [4096, 1024] k=2 n=32, kv [4096, 512] k=4 n=16) and prefetched
+      # through the shared 32-tile decode GCB. ``q_b`` stays N-sharded TP4.
       # Fusion is off: a concatenated 1536-wide matmul cannot share a
       # page size with the decode GCB.
       fuse_qa_kv_proj: false
-      qkv_tp_strategy: balanced
+      qkv_tp_strategy: replicated
       keep_qa_kv_weights_in_l1: false
 
     decode:
