@@ -263,7 +263,7 @@ BLAZE_RELEVANT_CHANGED=false
 while IFS= read -r FILE; do
     case "$FILE" in
         # LLK engine + device-kernel headers: compiled into blaze kernels.
-        tt_metal/tt-llk/**|tt_metal/hw/**)
+        tt_stl/**|tt_metal/tt-llk/**|tt_metal/hw/**)
             BLAZE_RELEVANT_CHANGED=true
             ;;
         # Fabric: blaze's multi-device sockets and CCL ride on it.
