@@ -53,10 +53,10 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
     [
         pytest.param(
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4-2link and layer3 and gate_device and no_ref and isl_1280' --wrapper-invocation",
-            10_963_542,  # Measured 2026-08-27 at 640 tokens/chip on the CI LoudBox (bh_loudbox, 8xP150),
-            # reproduced there at 10_938_722 (-0.23%). Supersedes 14_179_641, a 14-run mean on
-            # bh-lb-15 (8xp150b); that 23% gap is specific to this gate -- the MoE LoudBox proxies
-            # agree within 2.3% across the same two boxes -- so cut it on the CI runner.
+            10_405_747,  # Re-cut 2026-08-28 on the CI LoudBox (bh_loudbox, 8xP150), run 33194029504.
+            # One sample, superseding 10_963_542: the 2D matmul program configs drop the Matmul
+            # bucket 1,800,354 -> 1,301,974 ns against main while Other holds within 0.06%. Keep
+            # cutting this gate on the CI runner -- bh-lb-15 read the old value 23% high.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe_fabric2d",
             1,

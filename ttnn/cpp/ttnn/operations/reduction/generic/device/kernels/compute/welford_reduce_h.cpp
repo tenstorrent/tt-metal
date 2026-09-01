@@ -14,6 +14,7 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 #ifdef WELFORD_POST_MUL
 // SFPU multiply-by-scalar (mul_unary_tile) applied to the reduced output. See issue #45222.
@@ -23,37 +24,31 @@
 void kernel_main() {
     // Runtime arg: number of independent column-reductions this core must perform.
     // Each column-reduction processes Ht tiles vertically and produces one output tile.
-    uint32_t NCWt = get_arg_val<uint32_t>(0);
+    uint32_t NCWt = get_arg(args::NCWt);
 
     // Compile-time args:
     // Number of tiles along the H (reduction) dimension.
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
+    constexpr auto Ht = get_arg(args::Ht);
     // The actual number of elements along H (before padding).
-    constexpr uint32_t H = get_compile_time_arg_val(1);
+    constexpr auto H = get_arg(args::H);
     // Number of elements per tile in the H dimension (typically 32).
-    constexpr uint32_t tile_height = get_compile_time_arg_val(2);
+    constexpr auto tile_height = get_arg(args::tile_height);
 #ifdef WELFORD_POST_MUL
     // Packed fp32 post-multiplier applied to the reduced output via mul_unary_tile (SFPU).
     // For var this is scalar^2, for std it is |scalar| (see welford_reduce_program_factory).
-    constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
+    constexpr auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
 #endif
     // Whether to compute standard deviation (sqrt of variance) instead of variance.
-    constexpr bool is_std = get_compile_time_arg_val(4) != 0;
-    constexpr uint32_t two_pass_mean_reciprocal = get_named_compile_time_arg_val("two_pass_mean_reciprocal");
-    constexpr uint32_t two_pass_variance_reciprocal =
-        get_named_compile_time_arg_val("two_pass_variance_reciprocal");
+    constexpr bool is_std = get_arg(args::is_std) != 0;
+    constexpr auto two_pass_mean_reciprocal = get_arg(args::two_pass_mean_reciprocal);
+    constexpr auto two_pass_variance_reciprocal = get_arg(args::two_pass_variance_reciprocal);
 
     constexpr uint32_t onetile = 1;
 
-    // Circular buffer that the reader kernel fills with input tiles.
-    // For FP32 input c_0 is flagged UnpackToDestFp32 by the program factory so copy_tile
-    // preserves the FP32 mantissa into DEST for the statistics SFPU consumer. BF16 input: Default.
-    constexpr auto dfb_in = tt::CBIndex::c_0;
-    // Circular buffer where the final variance/std output tile is written.
-    constexpr auto dfb_out = tt::CBIndex::c_16;
-
-    DataflowBuffer dfb_in_obj(dfb_in);
-    DataflowBuffer dfb_out_obj(dfb_out);
+    // For FP32 input dfb::in is flagged UnpackToDest by the program factory so copy_tile
+    // preserves the FP32 mantissa into DEST for the statistics SFPU consumer. BF16 input: UnpackToSrc.
+    DataflowBuffer dfb_in(dfb::in);
+    DataflowBuffer dfb_out(dfb::out);
 
     // Destination register indices inside the Tensix DST register file.
     // The statistics LLK uses three adjacent dst registers:
@@ -69,24 +64,24 @@ void kernel_main() {
     // The statistics LLK processes rows naturally, so skip padding rows in the last tile.
     constexpr uint32_t last_tile_rows = ((H % tile_height) == 0) ? tile_height : (H % tile_height);
 
-    compute_kernel_hw_startup(dfb_in, dfb_out);
-    pack_reconfig_data_format(dfb_out);
+    compute_kernel_hw_startup(dfb::in, dfb::out);
+    pack_reconfig_data_format(dfb::out);
 
     for (uint32_t ncwt = 0; ncwt < NCWt; ncwt++) {
-        copy_init(dfb_in);
+        copy_init(dfb::in);
         tile_regs_acquire();
         two_pass_stats_init_shifted();
 
         for (uint32_t ht = 0; ht < Ht; ++ht) {
 #ifdef WELFORD_TWO_PASS_L1_REPLAY
-            dfb_in_obj.wait_front(ht + 1);
-            copy_tile(dfb_in, ht, input_dst);
+            dfb_in.wait_front(ht + 1);
+            copy_tile(dfb::in, ht, input_dst);
             constexpr uint32_t stats_input_dst = input_dst;
 #else
-            dfb_in_obj.wait_front(onetile);
+            dfb_in.wait_front(onetile);
             const uint32_t stats_input_dst = ht < 3 ? (ht == 0 ? retained_input_dst : ht) : input_dst;
-            copy_tile(dfb_in, 0, stats_input_dst);
-            dfb_in_obj.pop_front(onetile);
+            copy_tile(dfb::in, 0, stats_input_dst);
+            dfb_in.pop_front(onetile);
 #endif
             if (ht == 0) {
                 two_pass_stats_update_shifted_rows<false, true>(
@@ -100,10 +95,10 @@ void kernel_main() {
 
 #ifdef WELFORD_TWO_PASS_L1_REPLAY
         for (uint32_t ht = 0; ht < Ht; ++ht) {
-            copy_tile(dfb_in, ht, input_dst);
+            copy_tile(dfb::in, ht, input_dst);
             two_pass_stats_update_rows<true>(input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
         }
-        dfb_in_obj.pop_front(Ht);
+        dfb_in.pop_front(Ht);
 #else
         constexpr uint32_t num_front_retained = Ht < 3 ? Ht : 3;
         for (uint32_t ht = 0; ht < num_front_retained; ++ht) {
@@ -112,9 +107,9 @@ void kernel_main() {
         }
         if constexpr (Ht > num_front_retained) {
             for (uint32_t ht = num_front_retained; ht < Ht - 1; ++ht) {
-                dfb_in_obj.wait_front(onetile);
-                copy_tile(dfb_in, 0, retained_input_dst);
-                dfb_in_obj.pop_front(onetile);
+                dfb_in.wait_front(onetile);
+                copy_tile(dfb::in, 0, retained_input_dst);
+                dfb_in.pop_front(onetile);
                 two_pass_stats_update_rows<true>(retained_input_dst, 0, tile_height);
             }
             two_pass_stats_update_rows<true>(input_dst, 0, last_tile_rows);
@@ -134,11 +129,11 @@ void kernel_main() {
         // Pack variance/std directly to output -- no transpose needed for H reduction
         // because the statistics LLK produces results in row orientation, which matches
         // the desired output layout (one row of results per column of input).
-        dfb_out_obj.reserve_back(onetile);
+        dfb_out.reserve_back(onetile);
         tile_regs_wait();
-        pack_reconfig_data_format(dfb_out);
-        pack_tile(var_dst, dfb_out);
+        pack_reconfig_data_format(dfb::out);
+        pack_tile(var_dst, dfb::out);
         tile_regs_release();
-        dfb_out_obj.push_back(onetile);
+        dfb_out.push_back(onetile);
     }
 }

@@ -17,6 +17,8 @@ namespace ttml::metal {
 // cos_cache / sin_cache: [1, 1, S, qk_rope_dim]
 // trans_mat: [1, 1, 32, 32]
 // Requires qk_rope_dim <= 128 (fp32 dest accumulation, same as rotary_embedding_llama precise).
+// Training additionally requires qk_rope_dim <= 96: mla_qkv_assemble_bw needs qk_rope_dim/32 + 1
+// DST slots and rejects larger dims at program creation.
 ttnn::Tensor mla_q_rope(
     const ttnn::Tensor& q_in,
     const ttnn::Tensor& cos_cache,

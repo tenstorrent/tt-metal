@@ -80,8 +80,9 @@ std::set<ProcessorClassType> GetProcessorsPerClusterQuasar(
         }
     }
 
-    const uint32_t programmable_core_type_index =
-        MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
+    const uint32_t programmable_core_type_index = MetalContext::instance(program.impl().get_context_id())
+                                                      .hal()
+                                                      .get_programmable_core_type_index(programmable_core_type);
     std::unordered_set<const KernelGroup*> kernel_groups;
     for (const CoreRange& core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {

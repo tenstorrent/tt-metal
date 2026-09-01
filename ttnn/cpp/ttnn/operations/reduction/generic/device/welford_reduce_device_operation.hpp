@@ -10,7 +10,7 @@
 #include "tt_stl/reflection.hpp"
 
 #include "welford_reduce_device_operation_types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::prim {
 
@@ -23,7 +23,7 @@ struct WelfordReduceDeviceOperation {
     struct WelfordReduceProgramFactory {
         static bool use_l1_replay(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);

@@ -11,6 +11,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 #ifdef WELFORD_POST_MUL
 // SFPU multiply-by-scalar (mul_unary_tile) applied to the reduced output. See issue #45222.
@@ -21,45 +22,33 @@ void kernel_main() {
     // Runtime args:
     // Total number of outer-loop iterations (N * C * Ht),
     // i.e. how many independent row-reductions this core must perform.
-    uint32_t NCHt = get_arg_val<uint32_t>(0);
+    uint32_t NCHt = get_arg(args::NCHt);
 
     // Compile-time args:
     // Number of tiles along the W (reduction) dimension.
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr auto Wt = get_arg(args::Wt);
     // The actual number of elements along W (before tiling).
-    constexpr uint32_t W = get_compile_time_arg_val(1);
+    constexpr auto W = get_arg(args::W);
     // Number of elements per tile in the W dimension
     // (typically 32, but can be smaller for narrow tiles).
-    constexpr uint32_t tile_width = get_compile_time_arg_val(2);
+    constexpr auto tile_width = get_arg(args::tile_width);
 #ifdef WELFORD_POST_MUL
     // Packed fp32 post-multiplier applied to the reduced output via mul_unary_tile (SFPU).
     // For var this is scalar^2, for std it is |scalar| (see welford_reduce_program_factory).
-    constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
+    constexpr auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
 #endif
     // Whether to compute standard deviation (sqrt of variance) instead of variance.
-    constexpr bool is_std = get_compile_time_arg_val(4) != 0;
+    constexpr bool is_std = get_arg(args::is_std) != 0;
 
     constexpr uint32_t onetile = 1;
 
-    // Circular buffer that the reader kernel fills with input tiles.
-    // For FP32 input c_0 is flagged UnpackToDestFp32 by the program factory so the statistics SFPU
-    // intake (transpose_tile) reads with full FP32 precision. For BF16 input c_0 is Default.
-    constexpr auto dfb_in = tt::CBIndex::c_0;
-    constexpr uint32_t two_pass_mean_reciprocal = get_named_compile_time_arg_val("two_pass_mean_reciprocal");
-    constexpr uint32_t two_pass_variance_reciprocal =
-        get_named_compile_time_arg_val("two_pass_variance_reciprocal");
-    // Circular buffer where the final variance output tile is written
-    // for the writer kernel to consume.
-    constexpr auto dfb_out = tt::CBIndex::c_16;
-    // Scratch circular buffer used to hold the variance tile between
-    // the two transpose steps (Welford produces row-oriented results;
-    // we transpose back to column orientation via this buffer,
-    // and transpose operation can't take data from the DST register).
-    constexpr auto dfb_var = tt::CBIndex::c_19;
-
-    DataflowBuffer dfb_in_obj(dfb_in);
-    DataflowBuffer dfb_out_obj(dfb_out);
-    DataflowBuffer dfb_var_obj(dfb_var);
+    // For FP32 input dfb::in is flagged UnpackToDest by the program factory so the statistics SFPU
+    // intake (transpose_tile) reads with full FP32 precision. For BF16 input it is UnpackToSrc.
+    constexpr auto two_pass_mean_reciprocal = get_arg(args::two_pass_mean_reciprocal);
+    constexpr auto two_pass_variance_reciprocal = get_arg(args::two_pass_variance_reciprocal);
+    DataflowBuffer dfb_in(dfb::in);
+    DataflowBuffer dfb_out(dfb::out);
+    DataflowBuffer dfb_var(dfb::var);
 
     // Destination register indices inside the Tensix DST register file.
     // The statistics LLK uses three adjacent dst registers:
@@ -76,12 +65,12 @@ void kernel_main() {
     // we want to skip some columns from getting processed.
     constexpr uint32_t last_tile_rows = ((W % tile_width) == 0) ? tile_width : (W % tile_width);
 
-    compute_kernel_hw_startup(dfb_in, dfb_out);
-    pack_reconfig_data_format(dfb_out);
+    compute_kernel_hw_startup(dfb::in, dfb::out);
+    pack_reconfig_data_format(dfb::out);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        reconfig_data_format_srca(dfb_in);
-        transpose_init(dfb_in);
+        reconfig_data_format_srca(dfb::in);
+        transpose_init(dfb::in);
         tile_regs_acquire();
         two_pass_stats_init_shifted();
 
@@ -89,11 +78,11 @@ void kernel_main() {
 #ifdef WELFORD_TWO_PASS_L1_REPLAY
             // Do not pop pass-one tiles: the enlarged CB holds the complete
             // reduction row so pass two can index the same L1 pages directly.
-            dfb_in_obj.wait_front(wt + 1);
-            transpose_tile(dfb_in, wt, input_dst);
+            dfb_in.wait_front(wt + 1);
+            transpose_tile(dfb::in, wt, input_dst);
             constexpr uint32_t stats_input_dst = input_dst;
 #else
-            dfb_in_obj.wait_front(onetile);
+            dfb_in.wait_front(onetile);
 #ifdef WELFORD_TWO_PASS_BFP8_INPUT
             // Keep var_dst clean: finalization writes only the variance row,
             // and stale large values elsewhere would coarsen BFP8 block packing.
@@ -101,8 +90,8 @@ void kernel_main() {
 #else
             const uint32_t stats_input_dst = wt < 3 ? (wt == 0 ? retained_input_dst : wt) : input_dst;
 #endif
-            transpose_tile(dfb_in, 0, stats_input_dst);
-            dfb_in_obj.pop_front(onetile);
+            transpose_tile(dfb::in, 0, stats_input_dst);
+            dfb_in.pop_front(onetile);
 #endif
             if (wt == 0) {
                 two_pass_stats_update_shifted_rows<false, true>(
@@ -116,10 +105,10 @@ void kernel_main() {
 
 #ifdef WELFORD_TWO_PASS_L1_REPLAY
         for (uint32_t wt = 0; wt < Wt; ++wt) {
-            transpose_tile(dfb_in, wt, input_dst);
+            transpose_tile(dfb::in, wt, input_dst);
             two_pass_stats_update_rows<true>(input_dst, 0, wt == Wt - 1 ? last_tile_rows : tile_width);
         }
-        dfb_in_obj.pop_front(Wt);
+        dfb_in.pop_front(Wt);
 #else
         // Keep the first two or three tiles in otherwise idle DEST slots and the final
         // pass-one tile in input_dst. BFP8 retains one fewer tile so var_dst
@@ -137,9 +126,9 @@ void kernel_main() {
         }
         if constexpr (Wt > num_front_retained) {
             for (uint32_t wt = num_front_retained; wt < Wt - 1; ++wt) {
-                dfb_in_obj.wait_front(onetile);
-                transpose_tile(dfb_in, 0, retained_input_dst);
-                dfb_in_obj.pop_front(onetile);
+                dfb_in.wait_front(onetile);
+                transpose_tile(dfb::in, 0, retained_input_dst);
+                dfb_in.pop_front(onetile);
                 two_pass_stats_update_rows<true>(retained_input_dst, 0, tile_width);
             }
             two_pass_stats_update_rows<true>(input_dst, 0, last_tile_rows);
@@ -149,18 +138,18 @@ void kernel_main() {
         tile_regs_commit();
 
         // Pack variance and transpose back to column format
-        dfb_var_obj.reserve_back(onetile);
+        dfb_var.reserve_back(onetile);
         tile_regs_wait();
-        pack_reconfig_data_format(dfb_var);
-        pack_tile(var_dst, dfb_var);
+        pack_reconfig_data_format(dfb::var);
+        pack_tile(var_dst, dfb::var);
         tile_regs_release();
-        dfb_var_obj.push_back(onetile);
+        dfb_var.push_back(onetile);
 
-        dfb_var_obj.wait_front(onetile);
-        reconfig_data_format_srca(dfb_var);
-        transpose_init(dfb_var);
+        dfb_var.wait_front(onetile);
+        reconfig_data_format_srca(dfb::var);
+        transpose_init(dfb::var);
         tile_regs_acquire();
-        transpose_tile(dfb_var, 0, var_dst);
+        transpose_tile(dfb::var, 0, var_dst);
         if constexpr (is_std) {
             sqrt_tile_init();
             sqrt_tile(var_dst);
@@ -172,15 +161,15 @@ void kernel_main() {
         mul_unary_tile(var_dst, post_mul_scaler_bits);
 #endif
         tile_regs_commit();
-        dfb_var_obj.pop_front(onetile);
+        dfb_var.pop_front(onetile);
 
         // Pack transposed variance to output
-        dfb_out_obj.reserve_back(onetile);
+        dfb_out.reserve_back(onetile);
         tile_regs_wait();
-        pack_reconfig_data_format(dfb_out);
-        pack_tile(var_dst, dfb_out);
+        pack_reconfig_data_format(dfb::out);
+        pack_tile(var_dst, dfb::out);
         tile_regs_release();
-        dfb_out_obj.push_back(onetile);
+        dfb_out.push_back(onetile);
 
     }  // NCHt loop
 }

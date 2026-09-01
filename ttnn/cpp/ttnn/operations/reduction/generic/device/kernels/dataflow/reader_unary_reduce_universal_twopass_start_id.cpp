@@ -6,24 +6,23 @@
 
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    std::uint32_t src_addr = get_arg_val<std::uint32_t>(0);
-    std::uint32_t num_tiles = get_arg_val<std::uint32_t>(1);
-    std::uint32_t start_id = get_arg_val<std::uint32_t>(2);
+    std::uint32_t num_tiles = get_arg(args::num_tiles);
+    std::uint32_t start_id = get_arg(args::start_id);
 
-    constexpr std::uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr auto tensor_args = TensorAccessorArgs<1>();
+    constexpr std::uint32_t Wt = get_arg(args::Wt);
 
-    constexpr std::uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr std::uint32_t max_read_batch = WELFORD_TWO_PASS_STREAMING_CB_TILES;
-    const std::uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb::in0);
+    const std::uint32_t tile_bytes = dfb_in0.get_tile_size();
 
-    auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
+    auto tensor_accessor = TensorAccessor(tensor::src);
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
 
 #ifndef WELFORD_TWO_PASS_L1_REPLAY
     std::uint32_t stream_write_page = 0;
@@ -37,17 +36,17 @@ void kernel_main() {
         // indexes it twice, so DRAM is traversed only once.
         for (std::uint32_t wt_base = 0; wt_base < Wt; wt_base += max_read_batch) {
             const std::uint32_t read_batch = std::min(max_read_batch, Wt - wt_base);
-            cb_in0.reserve_back(read_batch);
+            dfb_in0.reserve_back(read_batch);
             for (std::uint32_t wt = 0; wt < read_batch; ++wt) {
                 noc.async_read(
                     tensor_accessor,
-                    cb_in0,
+                    dfb_in0,
                     tile_bytes,
                     {.page_id = row_start_id + wt_base + wt},
                     {.offset_bytes = wt * tile_bytes});
             }
             noc.async_read_barrier();
-            cb_in0.push_back(read_batch);
+            dfb_in0.push_back(read_batch);
         }
 #else
 #ifdef WELFORD_TWO_PASS_BFP8_INPUT
@@ -66,17 +65,17 @@ void kernel_main() {
                 const std::uint32_t contiguous_pages = max_read_batch - stream_write_page;
                 const std::uint32_t read_batch =
                     std::min(std::min(max_read_batch, pass_end - wt_base), contiguous_pages);
-                cb_in0.reserve_back(read_batch);
+                dfb_in0.reserve_back(read_batch);
                 for (std::uint32_t wt = 0; wt < read_batch; ++wt) {
                     noc.async_read(
                         tensor_accessor,
-                        cb_in0,
+                        dfb_in0,
                         tile_bytes,
                         {.page_id = row_start_id + wt_base + wt},
                         {.offset_bytes = wt * tile_bytes});
                 }
                 noc.async_read_barrier();
-                cb_in0.push_back(read_batch);
+                dfb_in0.push_back(read_batch);
                 wt_base += read_batch;
                 stream_write_page = (stream_write_page + read_batch) % max_read_batch;
             }

@@ -26,6 +26,7 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 #ifdef WELFORD_SFPU_LEAF_COMBINE
 #include "api/compute/compute_kernel_api.h"
@@ -41,43 +42,34 @@
 
 void kernel_main() {
     // Runtime arg: total number of NC slices this core must process.
-    std::uint32_t NC_per_core = get_arg_val<std::uint32_t>(0);
+    std::uint32_t NC_per_core = get_arg(args::NC_per_core);
 
     // Compile-time args:
-    constexpr std::uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr std::uint32_t H = get_compile_time_arg_val(1);
-    constexpr std::uint32_t tile_height = get_compile_time_arg_val(2);
-    constexpr std::uint32_t Wt = get_compile_time_arg_val(3);
+    constexpr auto Ht = get_arg(args::Ht);
+    constexpr auto H = get_arg(args::H);
+    constexpr auto tile_height = get_arg(args::tile_height);
+    constexpr auto Wt = get_arg(args::Wt);
 #ifdef WELFORD_POST_MUL
     // Packed fp32 post-multiplier applied to the reduced output via mul_unary_tile (SFPU).
     // For var this is scalar^2, for std it is |scalar| (see welford_reduce_program_factory).
-    constexpr std::uint32_t post_mul_scaler_bits = get_compile_time_arg_val(4);
+    constexpr auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
 #endif
-    constexpr std::uint32_t reduce_batch_size = get_compile_time_arg_val(5);
-    constexpr bool is_std = get_compile_time_arg_val(6) != 0;
-    constexpr std::uint32_t two_pass_mean_reciprocal = get_named_compile_time_arg_val("two_pass_mean_reciprocal");
-    constexpr std::uint32_t two_pass_variance_reciprocal =
-        get_named_compile_time_arg_val("two_pass_variance_reciprocal");
+    constexpr auto reduce_batch_size = get_arg(args::reduce_batch_size);
+    constexpr bool is_std = get_arg(args::is_std) != 0;
+    constexpr auto two_pass_mean_reciprocal = get_arg(args::two_pass_mean_reciprocal);
+    constexpr auto two_pass_variance_reciprocal = get_arg(args::two_pass_variance_reciprocal);
 #ifdef WELFORD_SFPU_LEAF_COMBINE
-    constexpr std::uint32_t welford_leaf_reciprocal = get_named_compile_time_arg_val("welford_leaf_reciprocal");
+    constexpr auto welford_leaf_reciprocal = get_arg(args::welford_leaf_reciprocal);
 #endif
 
     constexpr std::uint32_t onetile = 1;
 
-    // dfb_in: For FP32 input it is flagged UnpackToDestFp32 (program factory), preserving FP32
-    // mantissa for the copy_tile -> welford SFPU consumer path. BF16 input: Default.
-    constexpr auto dfb_in = tt::CBIndex::c_0;
-    // Final output CB (output data format), consumed by the writer for NOC write.
-    constexpr auto dfb_out = tt::CBIndex::c_16;
-    // Intermediate CB for mean+var tile pairs, consumed by writer kernel.
-    constexpr auto dfb_partial = tt::CBIndex::c_21;
-    // Combined scalar result from the writer kernel (Float32).
-    constexpr auto dfb_combined = tt::CBIndex::c_22;
-
-    DataflowBuffer dfb_in_obj(dfb_in);
-    DataflowBuffer dfb_out_obj(dfb_out);
-    DataflowBuffer dfb_partial_obj(dfb_partial);
-    DataflowBuffer dfb_combined_obj(dfb_combined);
+    // For FP32 input dfb::in is flagged UnpackToDest (program factory), preserving FP32
+    // mantissa for the copy_tile -> statistics SFPU consumer path. BF16 input: UnpackToSrc.
+    DataflowBuffer dfb_in(dfb::in);
+    DataflowBuffer dfb_out(dfb::out);
+    DataflowBuffer dfb_partial(dfb::partial);
+    DataflowBuffer dfb_combined(dfb::combined);
 
     constexpr std::uint32_t input_dst = 0;
     constexpr std::uint32_t mean_dst = 1;
@@ -87,32 +79,32 @@ void kernel_main() {
     // Valid rows in the last H tile (for padding exclusion).
     constexpr std::uint32_t last_tile_rows = ((H % tile_height) == 0) ? tile_height : (H % tile_height);
 
-    compute_kernel_hw_startup(dfb_in, dfb_partial);
-    pack_reconfig_data_format(dfb_partial);
+    compute_kernel_hw_startup(dfb::in, dfb::partial);
+    pack_reconfig_data_format(dfb::partial);
 
     std::uint32_t num_outputs = NC_per_core / reduce_batch_size;
 
     for (std::uint32_t out = 0; out < num_outputs; ++out) {
         // --- Phase 1: H-reduce all columns for reduce_batch_size NC slices ---
-        // Restore unpacker to dfb_in's format after Phase 2 set it to
-        // dfb_combined (Float32).
-        reconfig_data_format_srca(dfb_in);
+        // Restore unpacker to dfb::in's format after Phase 2 set it to
+        // dfb::combined (Float32).
+        reconfig_data_format_srca(dfb::in);
         for (std::uint32_t b = 0; b < reduce_batch_size; ++b) {
             for (std::uint32_t wt = 0; wt < Wt; ++wt) {
-                copy_init(dfb_in);
+                copy_init(dfb::in);
                 tile_regs_acquire();
                 two_pass_stats_init_shifted();
 
                 for (std::uint32_t ht = 0; ht < Ht; ++ht) {
 #ifdef WELFORD_TWO_PASS_L1_REPLAY
-                    dfb_in_obj.wait_front(ht + 1);
-                    copy_tile(dfb_in, ht, input_dst);
+                    dfb_in.wait_front(ht + 1);
+                    copy_tile(dfb::in, ht, input_dst);
                     constexpr std::uint32_t stats_input_dst = input_dst;
 #else
-                    dfb_in_obj.wait_front(onetile);
+                    dfb_in.wait_front(onetile);
                     const std::uint32_t stats_input_dst = ht < 3 ? (ht == 0 ? retained_input_dst : ht) : input_dst;
-                    copy_tile(dfb_in, 0, stats_input_dst);
-                    dfb_in_obj.pop_front(onetile);
+                    copy_tile(dfb::in, 0, stats_input_dst);
+                    dfb_in.pop_front(onetile);
 #endif
                     if (ht == 0) {
                         two_pass_stats_update_shifted_rows<false, true>(
@@ -126,10 +118,10 @@ void kernel_main() {
 
 #ifdef WELFORD_TWO_PASS_L1_REPLAY
                 for (std::uint32_t ht = 0; ht < Ht; ++ht) {
-                    copy_tile(dfb_in, ht, input_dst);
+                    copy_tile(dfb::in, ht, input_dst);
                     two_pass_stats_update_rows<true>(input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
                 }
-                dfb_in_obj.pop_front(Ht);
+                dfb_in.pop_front(Ht);
 #else
                 constexpr std::uint32_t num_front_retained = Ht < 3 ? Ht : 3;
                 for (std::uint32_t ht = 0; ht < num_front_retained; ++ht) {
@@ -138,9 +130,9 @@ void kernel_main() {
                 }
                 if constexpr (Ht > num_front_retained) {
                     for (std::uint32_t ht = num_front_retained; ht < Ht - 1; ++ht) {
-                        dfb_in_obj.wait_front(onetile);
-                        copy_tile(dfb_in, 0, retained_input_dst);
-                        dfb_in_obj.pop_front(onetile);
+                        dfb_in.wait_front(onetile);
+                        copy_tile(dfb::in, 0, retained_input_dst);
+                        dfb_in.pop_front(onetile);
                         two_pass_stats_update_rows<true>(retained_input_dst, 0, tile_height);
                     }
                     two_pass_stats_update_rows<true>(input_dst, 0, last_tile_rows);
@@ -175,34 +167,34 @@ void kernel_main() {
                 tile_regs_commit();
 
                 // Pack mean (DST[1]) and var (DST[2]) tiles to dfb_partial.
-                dfb_partial_obj.reserve_back(2);
+                dfb_partial.reserve_back(2);
                 tile_regs_wait();
-                pack_reconfig_data_format(dfb_partial);
+                pack_reconfig_data_format(dfb::partial);
 #ifdef WELFORD_SFPU_LEAF_COMBINE
-                pack_tile(retained_input_dst, dfb_partial);
-                pack_tile(var_dst, dfb_partial);
+                pack_tile(retained_input_dst, dfb::partial);
+                pack_tile(var_dst, dfb::partial);
 #else
-                pack_block(mean_dst, dfb_partial, 2);
+                pack_block(mean_dst, dfb::partial, 2);
 #endif
                 tile_regs_release();
-                dfb_partial_obj.push_back(2);
+                dfb_partial.push_back(2);
             }
         }
 
         // --- Phase 2: Read combined scalar from writer, apply sqrt if std, post-mul, repack ---
         // The writer W-combines all per-column partials from Phase 1 into a
-        // single Float32 scalar tile in dfb_combined (with Bessel's correction
+        // single Float32 scalar tile in dfb::combined (with Bessel's correction
         // already applied).  We unpack it, apply sqrt_tile for std, apply the
-        // user scalar, and re-pack into dfb_out using the packer, which converts
+        // user scalar, and re-pack into dfb::out using the packer, which converts
         // to the output data format (handles BFLOAT8_B and all other formats).
-        dfb_combined_obj.wait_front(onetile);
+        dfb_combined.wait_front(onetile);
         // Explicit srca reconfig is required because the unpacker was last
-        // configured for dfb_in's format (e.g. Float16_b) during Phase 1.
-        // dfb_combined uses Float32, so the unpacker must be reconfigured.
-        reconfig_data_format_srca(dfb_combined);
+        // configured for dfb::in's format (e.g. Float16_b) during Phase 1.
+        // dfb::combined uses Float32, so the unpacker must be reconfigured.
+        reconfig_data_format_srca(dfb::combined);
         tile_regs_acquire();
-        copy_init(dfb_combined);
-        copy_tile(dfb_combined, 0, input_dst);
+        copy_init(dfb::combined);
+        copy_tile(dfb::combined, 0, input_dst);
         if constexpr (is_std) {
             sqrt_tile_init();
             sqrt_tile(input_dst);
@@ -214,13 +206,13 @@ void kernel_main() {
         mul_unary_tile(input_dst, post_mul_scaler_bits);
 #endif
         tile_regs_commit();
-        dfb_combined_obj.pop_front(onetile);
+        dfb_combined.pop_front(onetile);
 
-        dfb_out_obj.reserve_back(onetile);
+        dfb_out.reserve_back(onetile);
         tile_regs_wait();
-        pack_reconfig_data_format(dfb_out);
-        pack_tile(input_dst, dfb_out);
+        pack_reconfig_data_format(dfb::out);
+        pack_tile(input_dst, dfb::out);
         tile_regs_release();
-        dfb_out_obj.push_back(onetile);
+        dfb_out.push_back(onetile);
     }
 }
