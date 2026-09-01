@@ -34,10 +34,7 @@ void kernel_main() {
         ckl::unary<
             ckl::Recip<D::D0>,
             ckl::input(
-                dfb::divisor,
-                ckl::WaitPolicy::Upfront,
-                ckl::PopPolicy::AtEnd,
-                ckernel::moreh_data_format_reconfig),
+                dfb::divisor, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckernel::moreh_data_format_reconfig),
             ckl::output(
                 dfb::divisor_recip,
                 ckl::ReservePolicy::PerTile,
@@ -69,10 +66,7 @@ void kernel_main() {
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Mul,
                 ckl::input(
-                    dfb::tmp1,
-                    ckl::WaitPolicy::PerTile,
-                    ckl::PopPolicy::PerTile,
-                    ckernel::moreh_data_format_reconfig),
+                    dfb::tmp1, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckernel::moreh_data_format_reconfig),
                 ckl::input(
                     dfb::tmp_weight,
                     ckl::BroadcastDim::None,

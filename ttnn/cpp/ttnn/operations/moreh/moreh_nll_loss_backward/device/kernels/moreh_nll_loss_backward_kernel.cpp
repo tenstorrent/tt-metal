@@ -26,16 +26,10 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb::divisor, dfb::tmp1);
     ckl::unary<
         ckl::Recip<D::D0>,
-        ckl::input(
-            dfb::divisor,
-            ckl::WaitPolicy::Upfront,
-            ckl::PopPolicy::AtEnd,
-            ckernel::moreh_data_format_reconfig),
+        ckl::input(dfb::divisor, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckernel::moreh_data_format_reconfig),
         ckl::output(
-            dfb::tmp1,
-            ckl::ReservePolicy::PerTile,
-            ckl::PushPolicy::PerTile,
-            ckernel::moreh_data_format_reconfig)>(ckl::IterationShape::one_tile());
+            dfb::tmp1, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckernel::moreh_data_format_reconfig)>(
+        ckl::IterationShape::one_tile());
 
     dfb_tmp1_obj.wait_front(1);
     dfb_output_grad_obj.wait_front(1);
@@ -44,7 +38,11 @@ void kernel_main() {
             ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Mul,
-                ckl::input(dfb::tmp_weight, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckernel::moreh_data_format_reconfig),
+                ckl::input(
+                    dfb::tmp_weight,
+                    ckl::WaitPolicy::PerTile,
+                    ckl::PopPolicy::PerTile,
+                    ckernel::moreh_data_format_reconfig),
                 ckl::input(
                     dfb::output_grad,
                     ckl::BroadcastDim::Scalar,
@@ -59,7 +57,8 @@ void kernel_main() {
                 ckl::PushPolicy::PerTile,
                 ckernel::moreh_data_format_reconfig)>{});
         ckl::mul<
-            ckl::input(dfb::tmp2, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckernel::moreh_data_format_reconfig),
+            ckl::input(
+                dfb::tmp2, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckernel::moreh_data_format_reconfig),
             ckl::input(
                 dfb::tmp1,
                 ckl::BroadcastDim::Scalar,
@@ -84,7 +83,11 @@ void kernel_main() {
             ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Mul,
-                ckl::input(dfb::tmp_weight, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckernel::moreh_data_format_reconfig),
+                ckl::input(
+                    dfb::tmp_weight,
+                    ckl::WaitPolicy::PerTile,
+                    ckl::PopPolicy::PerTile,
+                    ckernel::moreh_data_format_reconfig),
                 ckl::input(
                     dfb::output_grad,
                     ckl::BroadcastDim::Scalar,
