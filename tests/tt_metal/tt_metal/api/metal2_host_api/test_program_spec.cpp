@@ -4026,6 +4026,33 @@ static_assert(tensor::get_binding_if_present<"not_a_tensor">() == nullptr);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
+TEST_F(ProgramSpecTestGen1, CPU_GetBindingIfPresentReturnsNullptrWhenNoBindingsJITSmoke) {
+    // The lookup is emitted even when a kernel has no bindings of a given kind, so a kernel can
+    // probe for an optional resource without the host having to inject a dummy token. This is the
+    // empty-namespace path (no DFB / tensor / scratchpad / semaphore bindings at all); the
+    // present-plus-absent case is covered by the per-category JIT smokes above.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "binding_lookup_empty";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    static_assert(dfb::get_binding_if_present<"missing">() == nullptr);
+    static_assert(tensor::get_binding_if_present<"missing">() == nullptr);
+    static_assert(scratch::get_binding_if_present<"missing">() == nullptr);
+    static_assert(sem::get_binding_if_present<"missing">() == nullptr);
+}
+)"};
+
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
 // ============================================================================
 // TensorBindingSequence: validation + JIT smoke (compile-only, no hardware loop)
 // ============================================================================
