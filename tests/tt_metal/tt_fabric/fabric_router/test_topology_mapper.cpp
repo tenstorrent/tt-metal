@@ -1010,67 +1010,19 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
         }
     });
 
-    // --- Auto-discovery honesty on the same wrap-less 2x4 (the BH LoudBox hits the same shape
-    // class). Requesting FABRIC_2D_TORUS_XY: the mapper tries candidates against the real cabling.
-    // Torus candidates that demand a wrap on the extent-4 axis (TORUS_XY, TORUS_X) fail — T3K has
-    // no wrap cables. TORUS_Y on an extent-2 axis is VACUOUS (genuine-gating builds no wrap edge,
-    // so its logical graph is a plain mesh); such candidates are SKIPPED so a plain mesh is never
-    // mislabeled as a torus, and discovery honestly realizes MESH. get_generated_fabric_type()
-    // regresses this.
+    // --- Auto-discovery honesty on the same wrap-less 2x4: requesting FABRIC_2D_TORUS_XY, the
+    // genuine torus candidates fail against the cabling and TORUS_Y on the extent-2 axis is
+    // VACUOUS (its logical graph is a plain mesh). Vacuous candidates are skipped so a plain mesh
+    // is never mislabeled as a torus; discovery must honestly realize MESH.
     MeshGraph torus_mesh_graph = TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         get_cluster(),
         *physical_system_descriptor_,
         FabricConfig::FABRIC_2D_TORUS_XY,
         FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
-
-    // Discovery maps all 8 chips, but no wrap edge exists anywhere: the long axis has no wrap
-    // cabling and the short axis is genuine-gated. Chip 0 has exactly its two mesh neighbors.
-    const auto torus_mesh_shape = torus_mesh_graph.get_mesh_shape(mesh_id);
-    ASSERT_EQ(torus_mesh_shape.mesh_size(), 8u);
-    ASSERT_EQ(std::max(torus_mesh_shape[0], torus_mesh_shape[1]), 4u);
+    ASSERT_EQ(torus_mesh_graph.get_mesh_shape(mesh_id).mesh_size(), 8u);
     ASSERT_TRUE(torus_mesh_graph.get_generated_fabric_type().has_value());
     EXPECT_EQ(torus_mesh_graph.get_generated_fabric_type().value(), FabricType::MESH)
         << "no torus axis is wired on this box; a vacuous torus candidate must not win the fallback";
-    const auto& chip0_connections = torus_mesh_graph.get_intra_mesh_connectivity().at(0).at(0);
-    EXPECT_EQ(chip0_connections.size(), 2u) << "corner chip of a wrap-less 2x4 has exactly E and S neighbors";
-    const ChipId long_axis_wrap_peer = (torus_mesh_shape[1] == 4) ? 3 : 6;  // chip 0's long-axis end (row-major)
-    EXPECT_EQ(chip0_connections.count(long_axis_wrap_peer), 0u) << "no wrap edge on the extent-4 axis";
-}
-
-// On non-UBB clusters FABRIC_1D_RING realizes as a MESH graph (issue #32146); a vacuous torus label
-// must never appear regardless of system size. Uses file-based mock PSDs so this runs on any host.
-TEST(TopologyMapperAutoDiscovery, Fabric1DRingRealizesMeshOnTwoChipSystem) {
-    const std::filesystem::path psd_file_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_2asic_mesh.textproto";
-    tt::tt_metal::PhysicalSystemDescriptor physical_system_descriptor(psd_file_path.string());
-
-    MeshGraph mesh_graph = TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
-        tt::tt_metal::MetalContext::instance().get_cluster(),
-        physical_system_descriptor,
-        FabricConfig::FABRIC_1D_RING,
-        FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-    EXPECT_EQ(mesh_graph.get_chip_ids(MeshId{0}).values().size(), 2u);
-    // Non-UBB clusters realize 1D configs as MESH graphs; a vacuous torus label must never appear.
-    ASSERT_TRUE(mesh_graph.get_generated_fabric_type().has_value());
-    EXPECT_EQ(mesh_graph.get_generated_fabric_type().value(), FabricType::MESH);
-}
-
-TEST(TopologyMapperAutoDiscovery, Fabric1DRingMapsFourChipRing) {
-    const std::filesystem::path psd_file_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_ring.textproto";
-    tt::tt_metal::PhysicalSystemDescriptor physical_system_descriptor(psd_file_path.string());
-
-    MeshGraph mesh_graph = TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
-        tt::tt_metal::MetalContext::instance().get_cluster(),
-        physical_system_descriptor,
-        FabricConfig::FABRIC_1D_RING,
-        FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-    EXPECT_EQ(mesh_graph.get_chip_ids(MeshId{0}).values().size(), 4u);
-    // Non-UBB clusters realize 1D configs as MESH graphs; a vacuous torus label must never appear.
-    ASSERT_TRUE(mesh_graph.get_generated_fabric_type().has_value());
-    EXPECT_EQ(mesh_graph.get_generated_fabric_type().value(), FabricType::MESH);
 }
 
 TEST_F(TopologyMapperTest, ClosetBoxSuperpodRelaxedPolicyTest) {

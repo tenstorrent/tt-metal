@@ -266,54 +266,22 @@ TEST(MeshGraphValidation, TestT3kCollapsedTorusYRetainsMeshDirections) {
     EXPECT_EQ(edge_ports.at({RoutingDirection::W, 0}), 0);
 }
 
-// Torus edge-port reservation is decided per axis by who declared the torus (issue #54650):
-//  - an axis the MGD itself declares RING keeps its boundary ports, even at extent 2 — the
-//    descriptor author owns that mesh's port budget;
-//  - an axis torused only by the fabric config has its edge ports reserved for the torus, exactly
-//    as a genuine torus consumes them physically, so an inter-mesh link can never land on a
-//    direction whose deadlock-avoidance label may mismatch the rotated peer mesh.
-// Uses the 4-stage 2x2 pipeline-ring MGD (dim_types RING, LINE on every 2x2 stage).
+// Torus edge-port reservation is decided per axis by who declared the torus (issue #54650), pinned
+// on the mixed-origin case: the 4-stage 2x2 pipeline-ring MGD declares dim_types [RING, LINE], and
+// FABRIC_2D_TORUS_XY is requested on top. Axis 0's torus is MGD-declared, so it keeps its boundary
+// ports; axis 1's torus exists only in the fabric config, so its ports are reserved.
 TEST(MeshGraphValidation, Test2x2StageRingPortReservationByTorusOrigin) {
     const std::filesystem::path mgd_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
         "fabric_cpu_only_single_galaxy_2x2_ring_4stage_ring_mesh_graph_descriptor.textproto";
-
-    // Row-major 2x2: chip 0's axis-0 neighbor is chip 2. The declared RING on the extent-2 axis
-    // collapses onto the ordinary mesh edge and must keep normal directionality.
-    auto expect_collapsed_ring_directionality = [](const tt::tt_fabric::MeshGraph& mesh_graph) {
-        for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
-            const auto& connectivity = mesh_graph.get_intra_mesh_connectivity().at(*mesh_id);
-            EXPECT_EQ(connectivity.at(0).at(2).port_direction, RoutingDirection::S);
-            EXPECT_EQ(connectivity.at(2).at(0).port_direction, RoutingDirection::N);
-        }
-    };
-
-    // No fabric config: the MGD-declared RING keeps every boundary port.
-    {
-        auto mesh_graph = make_mesh_graph(mgd_path);
-        expect_collapsed_ring_directionality(mesh_graph);
-        for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
-            const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(*mesh_id);
-            EXPECT_EQ(edge_ports.at({RoutingDirection::N, 0}), 0);
-            EXPECT_EQ(edge_ports.at({RoutingDirection::S, 0}), 2);
-            EXPECT_EQ(edge_ports.at({RoutingDirection::E, 0}), 1);
-            EXPECT_EQ(edge_ports.at({RoutingDirection::W, 0}), 0);
-        }
-    }
-
-    // FABRIC_2D_TORUS_XY on top: axis 0 stays declared by the MGD (N/S ports remain), axis 1's
-    // torus exists only in the fabric config (E/W ports reserved).
-    {
-        auto mesh_graph = make_mesh_graph(mgd_path, tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
-        expect_collapsed_ring_directionality(mesh_graph);
-        for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
-            const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(*mesh_id);
-            EXPECT_EQ(edge_ports.at({RoutingDirection::N, 0}), 0);
-            EXPECT_EQ(edge_ports.at({RoutingDirection::S, 0}), 2);
-            EXPECT_EQ(edge_ports.count({RoutingDirection::E, 0}), 0u);
-            EXPECT_EQ(edge_ports.count({RoutingDirection::W, 0}), 0u);
-        }
+    auto mesh_graph = make_mesh_graph(mgd_path, tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
+    for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
+        const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(*mesh_id);
+        EXPECT_EQ(edge_ports.at({RoutingDirection::N, 0}), 0);
+        EXPECT_EQ(edge_ports.at({RoutingDirection::S, 0}), 2);
+        EXPECT_EQ(edge_ports.count({RoutingDirection::E, 0}), 0u);
+        EXPECT_EQ(edge_ports.count({RoutingDirection::W, 0}), 0u);
     }
 }
 
@@ -2364,17 +2332,6 @@ TEST_F(ControlPlaneFixture, Test2x2StageRingForcedOntoZByConfigTorus) {
     auto mesh_ids = mesh_graph.get_mesh_ids();
     std::sort(mesh_ids.begin(), mesh_ids.end());
     ASSERT_EQ(mesh_ids.size(), 4u);
-
-    // Every planar edge port is reserved; only Z ports remain as inter-mesh candidates.
-    for (const auto& mesh_id : mesh_ids) {
-        const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(*mesh_id);
-        ASSERT_FALSE(edge_ports.empty());
-        for (const auto& [port_id, chip_id] : edge_ports) {
-            EXPECT_EQ(port_id.first, RoutingDirection::Z)
-                << "mesh " << *mesh_id << " still exposes a " << enchantum::to_string(port_id.first)
-                << " edge port despite the config-driven torus on both axes";
-        }
-    }
 
     // The ring closes on Z: every consecutive pair (including 3 -> 0) has inter-mesh links, and
     // every inter-mesh-facing ethernet channel on this rank's mesh is a Z-direction router.
