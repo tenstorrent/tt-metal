@@ -1403,7 +1403,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         //   - BLOCKED -> BLOCKED is allowed
         //   - BLOCKED-producer -> ALL-consumer is allowed
         //   - BLOCKED-producer -> STRIDED-consumer is allowed
-        //   - Any non-BLOCKED producer feeding a BLOCKED consumer is not allowed.
+        //   - STRIDED-producer -> BLOCKED-consumer is allowed
+        //   - An ALL producer feeding a BLOCKED consumer is not allowed.
         //
         // BLOCKED -> BLOCKED also requires matching block_size and an integer
         // producer/consumer thread-count ratio.
@@ -1431,11 +1432,27 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                         cons.kernel->unique_id,
                         cons_threads);
                 }
-                if (!blocked_to_all && !blocked_to_strided) {
+                const bool strided_to_blocked =
+                    cons_blocked && prod.binding->access_pattern == DFBAccessPattern::STRIDED;
+                if (strided_to_blocked) {
+                    const uint32_t prod_threads = prod.kernel->num_threads;
+                    TT_FATAL(
+                        prod_threads > 0 && cons.binding->block_size % prod_threads == 0,
+                        "DFB '{}': STRIDED-producer->BLOCKED-consumer requires the producer thread count "
+                        "to divide block_size (consumer '{}' block_size = {}, producer '{}' num_threads = "
+                        "{}); otherwise a block cannot be filled evenly by the producers.",
+                        dfb.unique_id,
+                        cons.kernel->unique_id,
+                        cons.binding->block_size,
+                        prod.kernel->unique_id,
+                        prod_threads);
+                }
+                if (!blocked_to_all && !blocked_to_strided && !strided_to_blocked) {
                     TT_FATAL(
                         prod_blocked && cons_blocked,
                         "DFB '{}': a BLOCKED endpoint must pair as BLOCKED->BLOCKED, "
-                        "BLOCKED-producer->ALL-consumer, or BLOCKED-producer->STRIDED-consumer (producer '{}' is "
+                        "BLOCKED-producer->ALL-consumer, BLOCKED-producer->STRIDED-consumer, or "
+                        "STRIDED-producer->BLOCKED-consumer (producer '{}' is "
                         "{}, consumer '{}' is {}); other mixed-BLOCKED combinations are not yet supported.",
                         dfb.unique_id,
                         prod.kernel->unique_id,

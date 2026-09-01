@@ -169,6 +169,41 @@ INSTANTIATE_TEST_SUITE_P(
         run_single_dfb_program_2_0(this->device(), params);                      \
     }
 
+// --- STRIDED→BLOCKED: strided producers fill each block an equal share (num_producers must
+// divide block_size); the DM consumer takes each of its blocks in one whole-block read whose
+// credits split across its counters; a Tensix consumer takes them tile by tile. ---
+#define DFB_STRIDED_TO_BLOCKED_TEST_2_0(suffix, p_type, c_type, num_p, num_c, cblk, entries, impl) \
+    TEST_F(UnitMeshFixture, suffix##_2_0) {                                                        \
+        M2SingleDFBParams params{                                                                  \
+            .producer_type = M2PorCType::p_type,                                                   \
+            .consumer_type = M2PorCType::c_type,                                                   \
+            .num_producers = (num_p),                                                              \
+            .num_consumers = (num_c),                                                              \
+            .pap = m2::DFBAccessPattern::STRIDED,                                                  \
+            .cap = m2::DFBAccessPattern::BLOCKED,                                                  \
+            .implicit_sync = (impl),                                                               \
+            .num_entries = (entries),                                                              \
+            .block_size = (cblk),                                                                  \
+        };                                                                                         \
+        run_single_dfb_program_2_0(this->device(), params);                                        \
+    }
+
+// STRIDED->BLOCKED, DM->DM with data verification.
+DFB_STRIDED_TO_BLOCKED_TEST_2_0(DMTest1xDFB1Sx1B4, DM, DM, 1, 1, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST_2_0(DMTest1xDFB2Sx2B4, DM, DM, 2, 2, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST_2_0(DMTest1xDFB2Sx1B4, DM, DM, 2, 1, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST_2_0(DMTest1xDFB4Sx1B4, DM, DM, 4, 1, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST_2_0(DMTest1xDFB1Sx2B4, DM, DM, 1, 2, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST_2_0(DMTest1xDFB2Sx2B2, DM, DM, 2, 2, 2, 16, false)
+// STRIDED->BLOCKED, Tensix producers -> DM consumers (data verified via the prefilled ring).
+DFB_STRIDED_TO_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Sx1B4, TENSIX, DM, 1, 1, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST_2_0(TensixDMTest1xDFB2Sx2B4, TENSIX, DM, 2, 2, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST_2_0(TensixDMTest1xDFB2Sx1B4, TENSIX, DM, 2, 1, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST_2_0(TensixDMTest1xDFB4Sx1B4, TENSIX, DM, 4, 1, 4, 16, false)
+// STRIDED->BLOCKED, DM producers -> Tensix consumers (runs + credits; data via the A1 pipeline).
+DFB_STRIDED_TO_BLOCKED_TEST_2_0(DMTensixTest1xDFB1Sx1B4, DM, TENSIX, 1, 1, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST_2_0(DMTensixTest1xDFB2Sx2B4, DM, TENSIX, 2, 2, 4, 16, false)
+
 // --- BLOCKED→BLOCKED (DM→DM, explicit sync: one NoC burst per block) ---
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk4, DM, DM, 1, 1, 4, 16, false)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk2, DM, DM, 1, 1, 2, 16, false)

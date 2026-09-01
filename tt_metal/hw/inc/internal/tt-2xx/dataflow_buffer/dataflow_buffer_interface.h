@@ -124,8 +124,9 @@ struct LocalDFBInterface {
 
     uint16_t num_entries;
     uint16_t block_size;       // entries in one block; 1 unless the ring is BLOCKED
-    uint16_t split_tc;         // Blocked->Strided producer: a transaction spans all its TCs, so give
-                               // each TC its share instead of one TC everything
+    uint16_t split_tc;         // Blocked->Strided producer / Strided->Blocked DM consumer: a
+                               // transaction spans all its TCs, so give each TC its share
+                               // instead of one TC everything
     uint16_t tiles_collected;  // tiles taken from the current counter so far
     uint32_t jump;             // cursor jump in bytes, taken on each TC rotation
 

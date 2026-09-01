@@ -373,7 +373,8 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             CONSUMER,
             "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer_2_0.cpp",
             static_cast<uint8_t>(p.num_consumers));
-        const bool consumer_batches_credits = consumer_blocked && p.num_producers <= p.num_consumers;
+        const bool consumer_batches_credits =
+            consumer_blocked && producer_blocked && p.num_producers <= p.num_consumers;
         consumer.compile_time_args = {
             {"num_entries_per_consumer", num_entries_per_consumer},
             {"block_size", consumer_batches_credits ? p.block_size : 1u}};
@@ -866,7 +867,8 @@ inline void run_a1_fanout_blocked_pipeline(
     uint32_t block_size,
     uint32_t num_entries,
     bool implicit = false,
-    m2::DFBAccessPattern cap_in = m2::DFBAccessPattern::BLOCKED) {
+    m2::DFBAccessPattern cap_in = m2::DFBAccessPattern::BLOCKED,
+    m2::DFBAccessPattern pap_in = m2::DFBAccessPattern::BLOCKED) {
     if (mesh_device.arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
     }
@@ -897,17 +899,27 @@ inline void run_a1_fanout_blocked_pipeline(
         .num_entries = num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b};
 
+    const bool prod_blocked = pap_in == m2::DFBAccessPattern::BLOCKED;
     auto producer = make_dm_kernel(
-        PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer.cpp", /*num_threads=*/1);
+        PRODUCER,
+        prod_blocked ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer.cpp"
+                     : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp",
+        /*num_threads=*/1);
     producer.dfb_bindings = {
         {.dfb_spec_name = DFB_IN,
          .accessor_name = "out",
          .endpoint_type = m2::DFBEndpointType::PRODUCER,
-         .access_pattern = m2::DFBAccessPattern::BLOCKED,
-         .block_size = block_size}};
+         .access_pattern = pap_in,
+         .block_size = prod_blocked ? block_size : 0u}};
     producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
-    producer.compile_time_args = {
-        {"num_entries_per_producer", num_entries}, {"block_size", block_size}, {"implicit_sync", implicit ? 1u : 0u}};
+    if (prod_blocked) {
+        producer.compile_time_args = {
+            {"num_entries_per_producer", num_entries},
+            {"block_size", block_size},
+            {"implicit_sync", implicit ? 1u : 0u}};
+    } else {
+        producer.compile_time_args = {{"num_entries_per_producer", num_entries}, {"implicit_sync", implicit ? 1u : 0u}};
+    }
     producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     auto compute = make_compute_kernel(
