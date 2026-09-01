@@ -31,42 +31,34 @@ public:
 
 class SrcASelector
 {
-public:
 };
 
 class SrcBSelector
 {
-public:
 };
 
 class SrcSelector
 {
-public:
 };
 
 class DestSelector
 {
-public:
 };
 
 class FidelitySelector
 {
-public:
 };
 
 class BiasSelector
 {
-public:
 };
 
 class YSelector
 {
-public:
 };
 
 class ZSelector
 {
-public:
 };
 
 inline constexpr SrcASelector SrcA {};
