@@ -130,6 +130,23 @@ constexpr bool is_32bit_format(DataFormat f) {
 }
 
 /**
+ * (internal) True iff `f` is a block-float register format (Bfp8/Bfp4/Bfp2, a- and b-exponent families).
+ * The BH compute datapath only handles FULL-height (32-row) block-float tiles; partial-height block floats
+ * are rejected at the copy/pack surfaces (silent-garbage otherwise). Typed sibling of the IS_BFP_FORMAT macro.
+ */
+constexpr bool is_block_float_format(DataFormat f) {
+    return f == DataFormat::Bfp8 || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4 || f == DataFormat::Bfp4_b ||
+           f == DataFormat::Bfp2 || f == DataFormat::Bfp2_b;
+}
+
+/**
+ * (internal) True iff the tile has fewer than 32 rows (partial tile height). For block-float formats a
+ * partial-height tile does not flow correctly through the BH compute datapath; use with is_block_float_format
+ * to reject that combination at compile time.
+ */
+constexpr bool is_partial_height(TensorShape s) { return s.total_row_dim() < TILE_R_DIM; }
+
+/**
  * (internal) True iff two operands carry the same tile geometry (a two-input op requires matching shapes).
  * Used by the binary-op static_asserts (PART D). `a`, `b`: the two tile geometries to compare.
  */

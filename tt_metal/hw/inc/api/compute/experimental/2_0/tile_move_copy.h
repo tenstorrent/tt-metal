@@ -30,12 +30,10 @@ namespace experimental {
  * Blackhole this matches the legacy copy_init unpacker + math datacopy re-init. No CB id, no register format on
  * the API surface. Legacy ckernel::copy_tile_init is untouched.
  *
- * LIMITATION (compile-time enforced): fp8 source formats (Fp8_e4m3 / Lf8 e5m2) are NOT supported yet. Legacy
- * copy_init additionally programs the Src zero-substitution flag by format -- flushing fp8 zeros whose SrcA
- * residual would otherwise read back nonzero. That flag config is not wired into the 2.0 path yet (and cannot
- * be validated through the current golden harness, since it affects the DST value an SFPU op reads, not the
- * packed L1 output). Until it is, fp8 datacopy must use the legacy CB-id copy path; a static_assert here
- * rejects an fp8 LLKOperand rather than silently producing wrong near-zero fp8 results.
+ * fp8 (Fp8_e4m3 / Lf8 e5m2) IS supported: copy_init programs the format-driven Src zero-substitution flag
+ * exactly as legacy copy_init does (ckernel::math::_configure_copy_zero_flag_state_) -- it flushes fp8 zeros
+ * (whose SrcA residual would otherwise read back nonzero) and preserves the residual for all other formats
+ * (e.g. bf16 -0.0 / 16b-int). The flag is derived id-free from the register format (infer_unpack_dst_format).
  *
  * PARITY: transpose / transpose_within_16x16_face restore the copy-with-transpose capability legacy copy_init
  * exposes; they were dropped when this id-free path was first authored (the authoring agent only exercised the
@@ -56,9 +54,9 @@ ALWI void copy_init(
         is_legal_tile_shape(Shape),
         "copy_init: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
     static_assert(
-        Format != DataFormat::Fp8_e4m3 && Format != DataFormat::Lf8,
-        "copy_init: fp8 source (Fp8_e4m3/Lf8) is not supported in the 2.0 datacopy path yet -- it requires "
-        "the legacy copy_init src zero-flag flush, which is not wired in here. Use the legacy CB-id copy path.");
+        !(is_block_float_format(Format) && is_partial_height(Shape)),
+        "copy: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath "
+        "(they produce garbage even at tile 0); use a full 32-row tile.");
     UNPACK((llk_unpack_A_init<
             LLKOperand<Format, Shape>::descriptor,
             DST_ACCUM_MODE,
@@ -71,6 +69,12 @@ ALWI void copy_init(
           DataCopyType::A2D,
           DST_ACCUM_MODE,
           BroadcastType::NONE>()));
+    // Src zero-substitution flag, chosen by the derived register format (id-free equivalent of legacy
+    // copy_init's ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))): preserve
+    // bf16 -0.0 / 16b-int residuals, but flush fp8 (e4m3/e5m2) whose zero widens to a nonzero SrcA residual
+    // and must read back as 0. MATH-only config; records no format-reconfig diff. The fn masks to 0x1F.
+    MATH((ckernel::math::_configure_copy_zero_flag_state_(
+        static_cast<std::uint32_t>(ckernel::infer_unpack_dst_format(Format, DST_ACCUM_MODE)))));
 }
 
 // clang-format off
@@ -91,6 +95,10 @@ ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_index)
     static_assert(
         is_legal_tile_shape(Shape),
         "copy_tile: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
+    static_assert(
+        !(is_block_float_format(Format) && is_partial_height(Shape)),
+        "copy: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath "
+        "(they produce garbage even at tile 0); use a full 32-row tile.");
     UNPACK((llk_unpack_A<
             LLKOperand<Format, Shape>::descriptor,
             DST_ACCUM_MODE,
@@ -132,6 +140,10 @@ ALWI void copy_block(
     static_assert(
         is_legal_tile_shape(Shape),
         "copy_block: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
+    static_assert(
+        !(is_block_float_format(Format) && is_partial_height(Shape)),
+        "copy: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath "
+        "(they produce garbage even at tile 0); use a full 32-row tile.");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         copy_tile(
             LLKOperand<Format, Shape>(detail::tile_address(src, start_in_tile_index + i)), start_dst_tile_index + i);

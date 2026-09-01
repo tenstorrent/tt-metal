@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
+#include "data_format_derive.h"  // ckernel::infer_unpack_dst_format
 
 #ifdef TRISC_MATH
 #include "experimental/2_0/llk_math_unary_datacopy.h"
@@ -29,8 +30,10 @@
 //   * BroadcastType::NONE is a pass-through and uses DataCopyType::A2D (the tile stays in SrcA; reading it
 //     back with B2D would copy zeros and hang the unpacker).
 //   * ROW / COL / SCALAR broadcasts leave the tile in SrcB and use DataCopyType::B2D.
-//   * 32-bit formats (Float32/UInt32/Int32) take the unpack-to-dest A2D path (SrcB is only 19 bits wide);
-//     this is derived at COMPILE time from the LLKOperand's Format (legacy derives it at runtime from the CB).
+//   * 32-bit register formats (Float32/UInt32/Int32) take the unpack-to-dest A2D path (SrcB is only 19 bits
+//     wide); this is derived at COMPILE time from the DERIVED REGISTER format via infer_unpack_dst_format,
+//     which accounts for the fp32-dest-acc rebias (matching legacy get_operand_dst_format and transpose.h),
+//     so a 16-bit L1 format under fp32 dest-acc correctly takes the 32-bit unpack-to-dest path.
 // Blackhole only. The Quasar-specific paths and the deprecated CB-id (icb, ocb) full inits are not carried over.
 // =====================================================================================================
 
@@ -40,12 +43,21 @@ namespace experimental {
 #ifdef ARCH_BLACKHOLE
 
 namespace detail {
-// A2D/B2D data-copy direction for the unary broadcast, folded to a constant: 32-bit formats (which take the
-// unpack-to-dest path) and the NONE pass-through use A2D; a real ROW/COL/SCALAR broadcast of a non-32-bit
-// format uses B2D. Shared by unary_bcast_init / unary_bcast so the policy is spelled once.
+// Whether the unary broadcast takes the unpack-to-dest path, decided from the DERIVED REGISTER format
+// (not the raw L1 Format): infer_unpack_dst_format applies the fp32-dest-acc rebias, so a 16-bit L1 format
+// under fp32 dest-acc resolves to a 32-bit register format. Mirrors transpose.h's transpose_unpack_to_dest.
+template <DataFormat Format>
+constexpr bool unary_bcast_unpack_to_dest() {
+    return is_32bit_format(ckernel::infer_unpack_dst_format(Format, DST_ACCUM_MODE));
+}
+
+// A2D/B2D data-copy direction for the unary broadcast, folded to a constant: 32-bit register formats (which
+// take the unpack-to-dest path) and the NONE pass-through use A2D; a real ROW/COL/SCALAR broadcast of a
+// non-32-bit register format uses B2D. Shared by unary_bcast_init / unary_bcast so the policy is spelled once.
 template <BroadcastType bcast_type, DataFormat Format>
 constexpr DataCopyType unary_bcast_dcopy() {
-    return (is_32bit_format(Format) || bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
+    return (unary_bcast_unpack_to_dest<Format>() || bcast_type == BroadcastType::NONE) ? DataCopyType::A2D
+                                                                                       : DataCopyType::B2D;
 }
 }  // namespace detail
 
@@ -69,8 +81,9 @@ ALWI void unary_bcast_init(LLKOperand<Format, Shape> /*src*/) {
     static_assert(
         is_legal_tile_shape(Shape),
         "unary_bcast_init: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
-    // 32-bit formats use the unpack-to-dest A2D path (SrcB is only 19 bits wide); folds to a constant.
-    constexpr bool enable_unpack_to_dest = is_32bit_format(Format);
+    // 32-bit register formats use the unpack-to-dest A2D path (SrcB is only 19 bits wide); the decision is
+    // from the derived register format (fp32-dest-acc rebias aware), not the raw L1 Format. Folds to a constant.
+    constexpr bool enable_unpack_to_dest = detail::unary_bcast_unpack_to_dest<Format>();
     constexpr DataCopyType dcopy = detail::unary_bcast_dcopy<bcast_type, Format>();
     UNPACK((llk_unpack_A_init<
             LLKOperand<Format, Shape>::descriptor,
@@ -106,7 +119,7 @@ ALWI void unary_bcast(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_inde
     static_assert(
         is_legal_tile_shape(Shape),
         "unary_bcast: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
-    constexpr bool enable_unpack_to_dest = is_32bit_format(Format);
+    constexpr bool enable_unpack_to_dest = detail::unary_bcast_unpack_to_dest<Format>();
     constexpr DataCopyType dcopy = detail::unary_bcast_dcopy<bcast_type, Format>();
     UNPACK((llk_unpack_A<
             LLKOperand<Format, Shape>::descriptor,
@@ -139,7 +152,7 @@ ALWI void unary_bcast(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_inde
 // clang-format on
 template <BroadcastType bcast_type, DataFormat Format, TensorShape Shape>
 ALWI void unary_bcast_uninit(LLKOperand<Format, Shape> /*src*/) {
-    constexpr bool enable_unpack_to_dest = is_32bit_format(Format);
+    constexpr bool enable_unpack_to_dest = detail::unary_bcast_unpack_to_dest<Format>();
     UNPACK((llk_unpack_A_uninit<bcast_type>()));
     MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, enable_unpack_to_dest>()));
 }

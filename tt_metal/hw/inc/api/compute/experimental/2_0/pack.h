@@ -30,6 +30,10 @@ namespace experimental {
 template <DataFormat Format, TensorShape Shape>
 ALWI void pack_init(LLKOperand<Format, Shape> /*out*/) {
     static_assert(is_legal_tile_shape(Shape), "pack_init: illegal output tile shape.");
+    static_assert(
+        !(is_block_float_format(Format) && is_partial_height(Shape)),
+        "pack: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath; "
+        "use a full 32-row tile.");
     PACK((llk_pack_init<LLKOperand<Format, Shape>::descriptor, DST_ACCUM_MODE>()));
 }
 
@@ -55,6 +59,10 @@ ALWI void pack_init(LLKOperand<Format, Shape> /*out*/) {
 template <DataFormat Format, TensorShape Shape>
 ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst) {
     static_assert(is_legal_tile_shape(Shape), "pack_tile: illegal output tile shape.");
+    static_assert(
+        !(is_block_float_format(Format) && is_partial_height(Shape)),
+        "pack: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath; "
+        "use a full 32-row tile.");
     // out_of_order_output=true: pack to the absolute address in the LLKOperand (no fifo_wr_tile_ptr bump).
     PACK((llk_pack<
           LLKOperand<Format, Shape>::descriptor,
@@ -88,6 +96,10 @@ template <DataFormat Format, TensorShape Shape>
 ALWI void pack_block(
     LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst, std::uint32_t ntiles, std::uint32_t start_out_tile = 0) {
     static_assert(is_legal_tile_shape(Shape), "pack_block: illegal output tile shape.");
+    static_assert(
+        !(is_block_float_format(Format) && is_partial_height(Shape)),
+        "pack: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath; "
+        "use a full 32-row tile.");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         // pack_tile is itself PACK()-wrapped, so the engine calls stay on the packer thread. Per-tile output
         // slot via the shared tile_address helper (stride folds to a compile-time constant; matches the CB
@@ -122,6 +134,10 @@ ALWI void pack_block(
 template <DataFormat Format, TensorShape Shape>
 ALWI void pack_rows(LLKOperand<Format, Shape> out, std::uint32_t idst) {
     static_assert(is_legal_tile_shape(Shape), "pack_rows: illegal output tile shape.");
+    static_assert(
+        !(is_block_float_format(Format) && is_partial_height(Shape)),
+        "pack: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath; "
+        "use a full 32-row tile.");
     PACK((llk_pack_rows<LLKOperand<Format, Shape>::descriptor>(idst, out.l1_address)));
 }
 
@@ -146,6 +162,10 @@ ALWI void pack_rows(LLKOperand<Format, Shape> out, std::uint32_t idst) {
 template <DataFormat Format, TensorShape Shape>
 ALWI void pack_rows_init(LLKOperand<Format, Shape> /*out*/, std::uint32_t num_rows) {
     static_assert(is_legal_tile_shape(Shape), "pack_rows_init: illegal output tile shape.");
+    static_assert(
+        !(is_block_float_format(Format) && is_partial_height(Shape)),
+        "pack: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath; "
+        "use a full 32-row tile.");
     PACK((llk_pack_rows_init(num_rows)));
 }
 
@@ -168,6 +188,10 @@ ALWI void pack_rows_init(LLKOperand<Format, Shape> /*out*/, std::uint32_t num_ro
 template <DataFormat Format, TensorShape Shape>
 ALWI void pack_rows_uninit(LLKOperand<Format, Shape> /*out*/) {
     static_assert(is_legal_tile_shape(Shape), "pack_rows_uninit: illegal output tile shape.");
+    static_assert(
+        !(is_block_float_format(Format) && is_partial_height(Shape)),
+        "pack: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath; "
+        "use a full 32-row tile.");
     PACK((llk_pack_rows_uninit()));
 }
 
