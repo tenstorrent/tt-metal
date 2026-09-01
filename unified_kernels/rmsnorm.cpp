@@ -55,14 +55,14 @@ void kernel_main() {
 
     u::compute_init(kDfbX, kDfbOut);
 
+    // Only the buffers a DATAFLOW call names still need a Storage of their own: the two
+    // noc_loads, the two scaler fills, and the noc_store. Every pure-compute intermediate
+    // names its buffer in its own declaration -- u::ComputeBlock<Shape, dfb> -- so the
+    // initialiser is nothing but the expression.
     u::Storage<X> x_storage(kDfbX);
     u::Storage<W> w_storage(kDfbW);
     u::Storage<One> eps_storage(kDfbEps);
     u::Storage<One> inv_n_storage(kDfbInvN);
-    u::Storage<X> sq_storage(kDfbSq);
-    u::Storage<Vec> mean_storage(kDfbMean);
-    u::Storage<Vec> rsqrt_storage(kDfbRsqrt);
-    u::Storage<X> normed_storage(kDfbNormed);
     u::Storage<X> out_storage(kDfbOut);
 
     const auto x_acc = TensorAccessor(tensor::x);
@@ -92,16 +92,16 @@ void kernel_main() {
         u::ComputeBlock x = u::noc_load<0>(x_storage, x_acc, i).wait();
 
         // x^2, as an ordinary two-leaf SFPU tree whose leaves happen to be the same buffer.
-        u::ComputeBlock sq = sq_storage.store(x * x);
+        u::ComputeBlock<X, kDfbSq> sq = x * x;
 
-        u::ComputeBlock mean = mean_storage.store(u::reduce_mean<kAxis>(sq, inv_n));
+        u::ComputeBlock<Vec, kDfbMean> mean = u::reduce_mean<kAxis>(sq, inv_n);
 
         // (mean + eps)^-1/2, the reciprocal square root riding the broadcast's epilogue so
         // the epsilon and the rsqrt are one pass.
-        u::ComputeBlock inv_rms = rsqrt_storage.store((mean + u::bcast<u::Axis::Both>(eps)).rsqrt());
+        u::ComputeBlock<Vec, kDfbRsqrt> inv_rms = (mean + u::bcast<u::Axis::Both>(eps)).rsqrt();
 
         // Cols: one value per ROW, replicated across that row's columns.
-        u::ComputeBlock normed = normed_storage.store(x * u::bcast<kAxis>(inv_rms));
+        u::ComputeBlock<X, kDfbNormed> normed = x * u::bcast<kAxis>(inv_rms);
 
         // Rows: one value per COLUMN, replicated down the rows. The other axis, in the same
         // kernel, which is what makes this more than a second reduction test.

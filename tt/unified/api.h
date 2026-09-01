@@ -32,7 +32,13 @@ namespace unified {
 
 template <typename S>
 struct Block;
-template <typename S>
+// kNoDfb -- "this block was handed to me; I did not choose its buffer". A
+// ComputeBlock<S, DfbId> names its own buffer and fuses an expression into it, and
+// DERIVES from ComputeBlock<S, kNoDfb>, so it decays to a plain block everywhere the
+// library already takes one. That is what keeps every signature below single-parameter.
+constexpr uint32_t kNoDfb = ~0u;
+
+template <typename S, uint32_t DfbId = kNoDfb>
 class ComputeBlock;
 
 // ---------------------------------------------------------------------------
@@ -491,7 +497,7 @@ private:
 // ---------------------------------------------------------------------------
 
 template <typename S>
-class ComputeBlock : public expr::Fluent<ComputeBlock<S>> {
+class ComputeBlock<S, kNoDfb> : public expr::Fluent<ComputeBlock<S, kNoDfb>> {
 public:
     using shape = S;
 
@@ -510,6 +516,53 @@ private:
     uint32_t dfb_id;
     static constexpr uint32_t num_entries = S::num_entries;
 };
+
+// A coarse "could store() take this at all" gate: node_shape defaults to Node::shape, so
+// this admits every expression node AND anything else carrying a shape -- a Block, a
+// Storage, an Accumulator. It is enough to keep an unrelated type out of the shim's
+// constructor below, and NOT enough to keep a Block out, which is why that case is
+// deleted explicitly rather than left to this.
+template <typename T, typename = void>
+struct is_storable : std::false_type {};
+template <typename T>
+struct is_storable<T, std::void_t<node_shape_t<T>>> : std::true_type {};
+
+// The DfbId form. It adds no state and no behaviour -- it is a CONSTRUCTOR, spelled as a
+// type so that the buffer is named on the declaration side and the initialiser is nothing
+// but the expression:
+//
+//     u::ComputeBlock<X, kDfbSq> sq = x * x;          // vs. sq_storage.store(x * x)
+//
+// The shape must still be written out; C++17 cannot deduce one class template argument
+// while another is supplied. It is checked against the expression by Storage::store's
+// static_assert, so a wrong one is a compile error rather than a silent mis-size.
+template <typename S, uint32_t DfbId>
+class ComputeBlock : public ComputeBlock<S, kNoDfb> {
+public:
+    template <typename Node, typename = std::enable_if_t<is_storable<Node>::value>>
+    ComputeBlock(const Node& node) : ComputeBlock<S, kNoDfb>(Storage<S>(DfbId).store(node)) {}
+
+    // A Block is a pushed obligation waiting for its one consumer, not an expression.
+    // is_storable does not exclude it (a Block has a `shape`), so without this the
+    // constructor above accepts one and STORES it: a silent copy into this buffer, with
+    // the original's pages still unconsumed and still waiting. Non-template, so it wins
+    // the match outright and the error names the mistake. To consume a Block, declare a
+    // plain ComputeBlock<S> over it.
+    ComputeBlock(Block<S>) = delete;
+};
+
+// as_node, copy, bcast, the reduces and the SFPU adaptors are all OVERLOADS taking
+// ComputeBlock<S> by const reference, so derived-to-base deduction reaches them
+// untouched. is_operand is a SPECIALISATION, and specialisations are not inherited --
+// this is the one hook the shim has to restate.
+template <typename S, uint32_t D>
+struct is_operand<ComputeBlock<S, D>> : std::true_type {};
+
+// CTAD reads deduction guides off the PRIMARY template only, and the Block-consuming
+// constructor now lives in the kNoDfb specialisation. Without this stated explicitly,
+// every `u::ComputeBlock x = u::noc_load<0>(...).wait();` in every kernel stops deducing.
+template <typename S>
+ComputeBlock(Block<S>) -> ComputeBlock<S, kNoDfb>;
 
 // ---------------------------------------------------------------------------
 // Adaptors letting a ComputeBlock stand in for an expression leaf. These are the

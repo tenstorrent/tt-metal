@@ -429,7 +429,7 @@ void Accumulator<S, Mode>::clear() {
 // --- ComputeBlock ---
 
 template <typename S>
-ComputeBlock<S>::ComputeBlock(Block<S> block) : dfb_id(block.dfb_id) {
+ComputeBlock<S, kNoDfb>::ComputeBlock(Block<S> block) : dfb_id(block.dfb_id) {
     block.consume();
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
     buffer(dfb_id).wait_front(num_entries);
@@ -437,7 +437,7 @@ ComputeBlock<S>::ComputeBlock(Block<S> block) : dfb_id(block.dfb_id) {
 }
 
 template <typename S>
-ComputeBlock<S>::~ComputeBlock() {
+ComputeBlock<S, kNoDfb>::~ComputeBlock() {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
     buffer(dfb_id).pop_front(num_entries);
 #endif

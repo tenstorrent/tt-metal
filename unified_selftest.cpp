@@ -807,6 +807,111 @@ void example_syntax_method() {
     }
 }
 
+// ---------------------------------------------------------------------------------------
+// The DfbId shim: u::ComputeBlock<Shape, dfb> naming its own buffer.
+//
+// Two questions, and the compile-time half cannot be asked of a trace. The shim is a
+// PARTIAL SPECIALISATION deriving from ComputeBlock<S, kNoDfb>, and that derivation is the
+// only reason the ~20 single-parameter signatures in impl.hpp still match it. Break the
+// derivation and most of these keep compiling while binding the wrong thing, so each one
+// names the property it is standing on.
+using ShimS = Shape<1, 2>;
+using ShimPlain = ComputeBlock<ShimS>;
+using Shim = ComputeBlock<ShimS, 4>;
+
+static_assert(
+    std::is_base_of<ShimPlain, Shim>::value,
+    "the DfbId form must DECAY to a plain ComputeBlock -- that derivation is what lets every "
+    "library signature stay single-parameter");
+static_assert(!std::is_same<ShimPlain, Shim>::value, "and stay a distinct type, or there is nothing to decay");
+static_assert(
+    is_operand<Shim>::value,
+    "is_operand is a SPECIALISATION, and specialisations are not inherited -- api.h has to restate "
+    "it for the shim or `sq * y` silently stops resolving");
+static_assert(
+    std::is_same<decltype(as_node(std::declval<const Shim&>())), TileSource<ShimS>>::value,
+    "derived-to-base deduction must reach as_node, which is how every other adaptor is reached too");
+static_assert(
+    std::is_same<node_shape_t<decltype(std::declval<const Shim&>() * std::declval<const ShimPlain&>())>, ShimS>::value,
+    "a shim and a plain block must compose in ONE expression -- they are different types");
+// is_storable is deliberately NOT sharp enough to reject this on its own -- node_shape
+// defaults to Node::shape and a Block has one -- so api.h deletes the constructor instead.
+// Asserted here because the failure it prevents is silent: storing a Block COPIES it into
+// the shim's buffer and leaves the original's pages unconsumed.
+static_assert(
+    !std::is_constructible<Shim, Block<ShimS>>::value,
+    "a shim must REFUSE a Block. A Block is a pushed obligation, not an expression -- consuming "
+    "one is what a plain ComputeBlock<S> is for");
+static_assert(std::is_constructible<ShimPlain, Block<ShimS>>::value, "while the plain form is exactly the consumer");
+static_assert(
+    std::is_same<decltype(ComputeBlock(std::declval<Block<ShimS>>())), ShimPlain>::value,
+    "CTAD must still deduce the plain form from a Block. Guides come off the PRIMARY template only, "
+    "and the Block-consuming constructor now lives in the specialisation, so api.h states this "
+    "explicitly -- without it every `ComputeBlock x = ...wait();` in every kernel stops deducing");
+
+// And the runtime half: the shim is a CONSTRUCTOR spelled as a type, so it must emit exactly
+// what the Storage spelling emits -- same buffers, same order, same instructions. report_same()
+// is what makes that true rather than intended; keep the pair in lockstep.
+//
+// Only COMPUTE can catch a divergence in the fused arithmetic, for the same reason the
+// free-vs-method probe notes: the SFPU calls emit nothing on a data-movement thread. The dfb
+// reserve/push/wait/pop sequence does differ per projection, and that part is compared on all
+// three.
+void example_shim_storage() {
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t2 = TensorAccessor(FakeArgs{2}, 0);
+    using In = Shape<2, 3>;
+    using Col = reduce_shape<In, Axis::Cols>;
+    using Sq = Shape<2, 2>;
+
+    Storage<In> x_storage(0), out_storage(2);
+    Storage<Shape<1, 1>> one_storage(3);
+    Storage<Sq> mm_a(5), mm_b(6), mm_out(7);
+
+    Storage<In> sq_storage(8);  // the three intermediates, the OLD way
+    Storage<Col> m_storage(9);
+    Storage<Sq> mm_i_storage(10);
+
+    ComputeBlock one = fill_reduce_scaler<1>(one_storage);
+    ComputeBlock x = noc_load<1>(x_storage, t0, 0).wait();
+
+    ComputeBlock sq = sq_storage.store(x * x);
+    ComputeBlock m = m_storage.store(reduce_max<Axis::Cols>(sq, one));
+    noc_store<0>(out_storage.store((sq - bcast<Axis::Cols>(m)).exp()), t2, 0);
+
+    ComputeBlock a = noc_load<1>(mm_a, t0, 0).wait();
+    ComputeBlock b = noc_load<1>(mm_b, t0, 0).wait();
+    ComputeBlock mm_i = mm_i_storage.store(matmul(a, b));
+    noc_store<0>(mm_out.store(mm_i.rsqrt()), t2, 0);
+}
+
+void example_shim_decl() {
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t2 = TensorAccessor(FakeArgs{2}, 0);
+    using In = Shape<2, 3>;
+    using Col = reduce_shape<In, Axis::Cols>;
+    using Sq = Shape<2, 2>;
+
+    Storage<In> x_storage(0), out_storage(2);
+    Storage<Shape<1, 1>> one_storage(3);
+    Storage<Sq> mm_a(5), mm_b(6), mm_out(7);
+
+    ComputeBlock one = fill_reduce_scaler<1>(one_storage);
+    ComputeBlock x = noc_load<1>(x_storage, t0, 0).wait();
+
+    // Same three buffers, same ids, named on the declaration instead. Each one also exercises
+    // a different way the shim has to decay: .rsqrt() reaches Fluent through the real base,
+    // reduce_max and bcast take it as an operand, and matmul deduces S from a derived class.
+    ComputeBlock<In, 8> sq = x * x;
+    ComputeBlock<Col, 9> m = reduce_max<Axis::Cols>(sq, one);
+    noc_store<0>(out_storage.store((sq - bcast<Axis::Cols>(m)).exp()), t2, 0);
+
+    ComputeBlock a = noc_load<1>(mm_a, t0, 0).wait();
+    ComputeBlock b = noc_load<1>(mm_b, t0, 0).wait();
+    ComputeBlock<Sq, 10> mm_i = matmul(a, b);
+    noc_store<0>(mm_out.store(mm_i.rsqrt()), t2, 0);
+}
+
 // Single-shot matmul: one k-block straight through Storage::store(), no
 // accumulation buffer.
 void example_matmul_single() {
@@ -1050,6 +1155,10 @@ int main() {
     tt::unified::example_peer_hop();
     ok &= report("peer_hop");
     ok &= report_same("syntax: free vs method", tt::unified::example_syntax_free, tt::unified::example_syntax_method);
+    tt::unified::example_shim_decl();
+    ok &= report("shim: ComputeBlock<Shape, dfb>");
+    ok &= report_same(
+        "shim: declaration vs Storage::store", tt::unified::example_shim_storage, tt::unified::example_shim_decl);
     printf("\n%s: %s\n", TT_LABEL, ok ? "ALL BALANCED" : "FAILURES PRESENT");
     return ok ? 0 : 1;
 }
