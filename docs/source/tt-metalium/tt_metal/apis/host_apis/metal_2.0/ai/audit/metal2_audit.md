@@ -168,7 +168,7 @@ The second hard prerequisite is the op's **TTNN-side shape**: is it on a factory
 | Any entry in **`Known op issues`** | A free-text column reserved for problems that must be cleared before a port. Usually an ops-team fix; occasionally a Metal 2.0 feature. | Read the cell and route to whoever it names |
 | **`TensorParameter relaxation`** != `none` | The op needs a relaxation of the strict `TensorSpec` match, which this recipe does not handle yet. | **Ops team** (see [TensorParameter relaxations](#tensorparameter-relaxations)) |
 | `Concept` == `legacy device-op` | Not on the `ProgramDescriptor` API yet — the **expected** outcome for a legacy op, not an alarm. | **TTNN / PD-migration team**; unblocks when that op's PD migration lands |
-| `Concept` == `WorkloadDescriptor` and **not** secretly SPMD | Genuine multi-program; the single-program adapter can't express it. | Framework work, tracked separately |
+| `Concept` == `WorkloadDescriptor` and **not** secretly SPMD | Genuine multi-program; neither single-program concept covers it. Whether a mesh-workload concept now does is the sheet's call, not this table's — [TTNN porting shape](#ttnn-porting-shape) has the lookup. | Framework work, tracked separately |
 
 **Three columns you will check that do *not* block.** All are worth recording, and none is a reason to RED an op:
 
@@ -211,6 +211,7 @@ Once the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite)
 
 - **`descriptor`** → **`ProgramSpecFactoryConcept`**. A `descriptor` op has **no** op-owned tensors — the `ProgramDescriptorFactoryConcept` doesn't support them (see below).
 - **`WorkloadDescriptor` + SPMD** → **`ProgramSpecFactoryConcept`**. The SPMD MeshWorkload collapses to the single-program concept; if the op has **op-owned tensors** (`Op-owned tensors? == "yes"`), `ProgramSpecFactoryConcept` carries them natively.
+- **`WorkloadDescriptor` + genuine multi-program** → neither single-program concept fits, and the gate has already spoken: a `no` blocked the op above, a `yes` means the framework side is cleared. Don't re-adjudicate it — look the target concept up in the header per [ttnn_factory — Multi-program](../shared/ttnn_factory.md#multi-program-the-sheet-gates-you-name-the-target), and record **target concept: none yet** if the lookup finds none.
 
 **Op-owned tensors force `WorkloadDescriptor`.** The `descriptor` form — a `create_descriptor` returning a `ProgramDescriptor` — can't carry op-owned tensors, so an op that needs them must define `create_workload_descriptor` instead, where it is expressed as an SPMD workload *purely* to unlock the op-owned-tensor feature. So **`Op-owned tensors? == "yes"` always co-occurs with `Concept == WorkloadDescriptor` (and SPMD)**; a `descriptor` op with op-owned tensors is not a real state. (A quirky design: every op that needs op-owned tensors is morally single-program, yet has to wear the SPMD-workload shape to get them.)
 
@@ -557,7 +558,7 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 | *Feature Support* — Variadic-CTA | Ok / Unsupported |
 | *TTNN Readiness* — `Is able to port?` (the gate) | Yes / No: `<failing conjunct>` / No: **unattributed** (no blocking column explains it; primary cross-check clean) |
 | *TTNN Readiness* — Concept (current) | `descriptor` / `WorkloadDescriptor` / `legacy device-op` / `MetalV2` (already ported) |
-| *TTNN Readiness* — Secretly SPMD (WorkloadDescriptor only) | N/A / Yes / No (genuine multi-program → gate) |
+| *TTNN Readiness* — Secretly SPMD (WorkloadDescriptor only) | N/A / Yes / No (genuine multi-program — the sheet gates it; record the target-concept lookup) |
 | *TTNN Readiness* — Custom hash | No / Yes (not a gate; port leaves it intact): `<site>` |
 | *TTNN Readiness* — `get_dynamic_runtime_args` | No / Yes (gate → TTNN; deprecated hook): `<device-op site; factories it fires for>` |
 | *TTNN Readiness* — `override_runtime_arguments` | No / Yes (not a gate; selects CustomProgramSpecFactoryConcept): `<factory + site>` |
