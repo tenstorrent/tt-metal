@@ -708,6 +708,19 @@ void device_module(nb::module_& m_device) {
         Experimental: If Slow Dispatch is enabled, this function enables running multiple non-overlapping programs concurrently on the same device.
         )doc");
     m_device.def(
+        "set_configure_only",
+        [](tt::tt_metal::distributed::MeshDevice* device, bool enable) {
+            tt::tt_metal::experimental::DispatchContext::get().set_configure_only(device, enable);
+        },
+        nb::arg("device"),
+        nb::arg("enable"),
+        R"doc(
+        Experimental (Slow Dispatch only): while enabled, dispatching a program writes its kernel
+        binaries, circular-buffer configs, runtime args and launch message to L1 but never sends the
+        go signal -- so nothing runs. Used to capture a reloadable image off L1 without executing it,
+        and therefore without tearing the pipeline down to do it.
+        )doc");
+    m_device.def(
         "disable_asynchronous_slow_dispatch",
         [](tt::tt_metal::distributed::MeshDevice* device) {
             tt::tt_metal::experimental::DispatchContext::get().disable_asynchronous_slow_dispatch(device);
