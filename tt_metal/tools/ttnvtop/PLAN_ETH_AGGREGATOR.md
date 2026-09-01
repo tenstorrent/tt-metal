@@ -2296,7 +2296,44 @@ The feed now owns those fields on any chip with `journal_active`.
   NOC and DRAM work, not FPU math: DRAM read 33 GB/s per chip, 12% of 288) but is not the
   same thing as having been validated against a known-utilization kernel.
 
-## 5w. CALIBRATED: FPU and DRAM are true, SFPU is a DUPLICATE of FPU -- 2026-08-31
+## 5w. ~~CALIBRATED: FPU and DRAM are true, SFPU is a DUPLICATE of FPU~~ -- RETRACTED IN PART 2026-08-31
+
+> **RETRACTION BANNER -- added 2026-08-31 by gate A2b. Read this before any number below.**
+>
+> Every PER-CORE column in this section was produced by `scripts/shm_probe.py` reading
+> `PerCoreView` with a wrong `struct` format string, so three of the four result tables
+> describe a different field than their label. `git log --follow` shows the probe was
+> introduced in exactly ONE commit -- **`f6851e1a746`** *("ttnvtop: calibrate the readings --
+> FPU and DRAM are true, SFPU is a duplicate")*, the very commit that recorded these results
+> -- **with `V = struct.Struct("<IIHHHHIIIIII")` already present**. There has never been a
+> correct version of the probe, so there is no earlier good run to fall back on and no
+> intermediate commit to bisect to.
+>
+> That format string is ALSO exactly 40 bytes, so the `assert V.size == 40` that was supposed
+> to catch this passed, and every field from byte 4 on was read at the wrong offset. Actual
+> mapping of the columns printed below:
+>
+> | column printed here | `PerCoreView` field actually read | consequence |
+> |---|---|---|
+> | **F** = `v[2]`, bytes 8-9   | `dispatch_busy_p1000` | the "FPU" tables are DISPATCH OCCUPANCY |
+> | **S** = `v[3]`, bytes 10-11 | `compute_busy_p1000`  | the "SFPU" tables are the REAL FPU |
+> | **D** = `v[4]`, bytes 12-13 | `unpack_busy_p1000`   | a field the collector never writes -> constant 0 |
+> | (none)                      | `sfpu_busy_p1000`, bytes 6-7 | NEVER SAMPLED in this run |
+>
+> **Consequence worth stating on its own: this section contains no valid dispatch measurement
+> at all.** Its `D` column was a hardcoded zero in disguise. Any later claim of the form
+> "dispatch occupancy was X in 5w" is unsupported.
+>
+> The CHIP-LEVEL header reads were NOT affected -- `last_update_us` (`h[7]`), `aiclk_mhz`
+> (`h[11]`) and `dram_rd/wr_mbps` (`h[12]`/`h[13]`) were all at their correct tuple indices in
+> the broken version too. So the CONSISTENCY table and the DRAM table below STAND unchanged.
+> The three per-core tables do not.
+>
+> Fix, guard, and negative proofs: `alex-notes/tenstorrent/n300-util-telemetry/evidence/A2b/`
+> (layout proof against the C++ compiler: `.../evidence/A2/`). The superseding measurement is
+> gate **B1**. Until B1 lands, do NOT regress anything against the slopes below -- a B1
+> regression judged against them would be comparing FPU against dispatch occupancy.
+
 
 Everything before this measured whether the monitor crashed, perturbed a workload, or
 stayed fresh. None of it measured whether the NUMBER is true. Under a CCL workload F and S
@@ -2331,7 +2368,16 @@ after the fact, because the phase file only exists once the workload has exited.
 16,912 samples, 8 chips, zero stalls, zero AICLK dropouts -- chip 7 included, which was the
 chip reported as stalling. This is the host-drain path (no aggregator in this run).
 
-### FPU: linear, and absolutely right
+### ~~FPU: linear, and absolutely right~~ -- RETRACTED: this column is `dispatch_busy_p1000`
+
+> **RETRACTED 2026-08-31 (A2b).** The table and the fit below are the `F` column, which the
+> probe read from bytes 8-9 = `dispatch_busy_p1000`. They are a measurement of DISPATCH
+> OCCUPANCY versus host busy fraction, not of the FPU. ~~slope 0.210-0.231, intercept
+> -0.40..+0.12, R^2 0.990-0.996~~ are dispatch-occupancy slopes and must not be used as the
+> FPU reference. The numbers themselves are real data honestly recorded -- only the label is
+> wrong -- so they are kept here, but they answer a question nobody asked. Note also that
+> dispatch occupancy tracking host busy fraction linearly is close to tautological (the host
+> is issuing programs the whole time it is busy), which is part of why the fit looked so good.
 
      host busy |   0     1     2     3     4     5     6     7
          0.0%  | 0.00  0.00  0.00  0.00  0.00  0.00  0.00  0.00
@@ -2350,34 +2396,85 @@ FPU is issuing ~22% of cycles, and an INDEPENDENT path confirms that is the trut
       40.0   25430            10.92         9.94              109.9
       99.7   64220            27.58        21.93              125.8
 
-27.58 TFLOP/s achieved at full load divided by the monitor's 21.93% implies a bf16 peak of
+~~27.58 TFLOP/s achieved at full load divided by the monitor's 21.93% implies a bf16 peak of
 125.8 TFLOP/s per ASIC, which is the right order for Wormhole b0. The implied peak is
 roughly constant across duties (the 8.7% phase reads 181, where the signal is weakest and
 host timing noise dominates), which is what a true duty-cycle fraction looks like. So the
 FPU reading is trustworthy in absolute terms, and the near-zero readings under CCL were
-CORRECT -- collectives really do almost no FPU math.
+CORRECT -- collectives really do almost no FPU math.~~
+
+> **CITED TO THE WRONG EVIDENCE -- 2026-08-31 (A2b).** The `monitor F%` denominator in this
+> cross-check is dispatch occupancy, so 27.58 / 0.2193 = 125.8 divides a FLOP rate by an
+> occupancy that has no FLOP interpretation. **The conclusion is not asserted here either way.**
+>
+> What can be said without new hardware: redoing the same arithmetic against the column that
+> really is the FPU (the `S` column of the next subsection, `compute_busy_p1000`) gives
+> 27.58 / 0.2099 = **131.4** TFLOP/s at 99.7% and 5.17 / 0.0385 = **134.3** at 19.2%. Those are
+> still the right order for Wormhole b0, and they are in fact more consistent with each other
+> than 133.7 / 109.9 / 125.8 were. So the qualitative conclusion may well survive and may even
+> strengthen. But this is arithmetic on a table recorded by a mis-strided probe, not a
+> measurement: the 40.0% phase has no `S` row to check, and the `S` column has its own
+> unexplained anomaly (see below). **The implied-peak cross-check is therefore OPEN, and the
+> figure 125.8 TFLOP/s should not be quoted.** B1 re-derives it.
 
 A hypothesis worth recording as DISPROVEN: I expected the chip average to be diluted by
 inactive cores (an earlier sample showed `F:nz=14` of 64). At full duty all 64 cores are
 nonzero and the average over active cores equals the chip average, 21.9%. Not dilution.
 
-### SFPU: INVALID -- it is a copy of the FPU signal
+### ~~SFPU: INVALID -- it is a copy of the FPU signal~~ -- RETRACTED: this column is `compute_busy_p1000`, the REAL FPU
 
-The workload runs NO SFPU ops (`--sfpu` not passed; `ttnn.exp` never called). SFPU must
-therefore read ~0. It does not:
+> **RETRACTED 2026-08-31 (A2b).** The `S` column was read from bytes 10-11 =
+> `compute_busy_p1000`, which is the FPU / MATH pipe. `sfpu_busy_p1000` (bytes 6-7) was never
+> sampled in this run at all.
+>
+> Therefore **the "SFPU is a duplicate of FPU" conclusion has zero supporting evidence** -- not
+> weak evidence, none. It was drawn from a comparison of `dispatch_busy_p1000` against
+> `compute_busy_p1000`, neither of which is the SFPU. The SFPU axis is at this point
+> UNMEASURED: not validated, and also not shown to be broken. The counter_sel hypothesis in
+> the paragraph below is likewise unsupported by anything in this section; it may still be
+> true, but nothing here bears on it.
+>
+> The genuine, and different, observation the data supports is:
+> **`compute_busy_p1000` ~= `dispatch_busy_p1000` for this matmul workload** (21.9% vs 21.0%
+> chip-mean at 99.7% host busy). That is an unexamined claim. It is plausible for a
+> back-to-back matmul that saturates the MATH pipe whenever a program is resident, and it is
+> also exactly what a wiring bug that fed one counter into both fields would look like. 5v
+> records a publish-loop defect of precisely that shape ("the unmeasured pipe got clobbered
+> with a stale EWMA"). **Distinguishing the two needs a workload where the two must diverge --
+> e.g. a dispatch-heavy, math-light kernel. Added to B1.**
+>
+> **Anomaly carried forward:** the low-duty rows below are identical across all eight chips to
+> two decimal places (1.47 at 8.7%, 3.85/3.84 at 19.2%). That observation now attaches to the
+> REAL FPU column, i.e. to the field B1 intends to trust. Eight independent ASICs agreeing to
+> 2 d.p. is not what an independent per-chip measurement looks like. B1 must check whether one
+> chip's value is being broadcast to the others at low signal levels.
+
+The workload runs NO SFPU ops (`--sfpu` not passed; `ttnn.exp` never called). ~~SFPU~~ *(what
+was actually sampled: `compute_busy_p1000`)* must therefore read ~0. It does not:
 
      host busy |     0     1     2     3     4     5     6     7
          8.7%  |  1.47  1.47  1.47  1.47  1.47  1.47  1.47  1.47
         19.2%  |  3.85  3.85  3.85  3.85  3.85  3.85  3.85  3.84
         99.7%  | 21.54 21.32 21.50 21.19 21.35 20.68 20.18 20.12
 
-It tracks the duty cycle at almost exactly the FPU's magnitude, and at the low phases it is
+~~It tracks the duty cycle at almost exactly the FPU's magnitude, and at the low phases it is
 identical to three decimal places across all eight chips -- which is not a physical
 measurement. FPU and SFPU share one counter block (counter_sel 0 = FPU, 1 = SFPU), so the
 defect is in that selection or in the attribution of the result: the same count is landing
-in both fields. Until this is fixed the SFPU axis must not be trusted or shown.
+in both fields. Until this is fixed the SFPU axis must not be trusted or shown.~~
+*(Retracted with the heading above: the two columns compared were `dispatch_busy_p1000` and
+`compute_busy_p1000`. The cross-chip-identity observation is real and is carried forward as
+an anomaly against `compute_busy_p1000`; the counter_sel diagnosis is not supported by this
+run. Keeping the SFPU axis hidden remains the right default -- it is unmeasured -- but for a
+different reason than the one given here.)*
 
-### DRAM: exact
+### DRAM: exact -- **UNAFFECTED by the A2b retraction. This result STANDS.**
+
+> **Explicitly confirmed sound, 2026-08-31 (A2b).** `dram_rd_mbps` / `dram_wr_mbps` are
+> CHIP-level fields in `UtilShmHeader`, not per-core fields, and the probe read them from
+> header tuple indices 12 and 13, which were correct in the broken version as well -- the
+> mis-stride was entirely inside `PerCoreView`. Do not discard this table while cleaning up
+> after the retraction; re-deriving it is not necessary and B1 does not supersede it.
 
      host%   iters  expect GB/s   monitor GB/s   ratio
       8.7    4648          2.9            2.9    1.00
@@ -2390,10 +2487,22 @@ agree to 1.00 at all four load levels. Nothing to fix.
 
 ### What is validated, and what is not
 
-  - FPU%: linear, zero intercept, absolutely correct. TRUSTED.
-  - DRAM GB/s: exact at four load levels. TRUSTED.
-  - Publish freshness: 0 stalls in 16,912 samples across 8 chips. TRUSTED.
-  - SFPU%: reads the FPU signal. BROKEN, do not display.
+  - ~~FPU%: linear, zero intercept, absolutely correct. TRUSTED.~~
+    **RETRACTED (A2b): that column was `dispatch_busy_p1000`. The FPU is UNVALIDATED as of
+    this section; the real FPU column exists in the SFPU table above but was never fitted,
+    and it carries an unexplained cross-chip-identity anomaly. Gate B1 supplies the
+    reference.**
+  - DRAM GB/s: exact at four load levels. TRUSTED. **(A2b: re-confirmed, header-sourced,
+    unaffected by the mis-stride.)**
+  - Publish freshness: 0 stalls in 16,912 samples across 8 chips. TRUSTED. **(A2b:
+    unaffected -- `last_update_us` was read from the correct header index `h[7]`.)**
+  - ~~SFPU%: reads the FPU signal. BROKEN, do not display.~~
+    **RETRACTED (A2b): `sfpu_busy_p1000` was never sampled in this run, so it is neither
+    known-broken nor known-good -- it is UNMEASURED. Keep it hidden by default, but record
+    it as untested rather than as a known defect.**
+  - **Dispatch%: NOT MEASURED IN THIS SECTION AT ALL (A2b). The `D` column read
+    `unpack_busy_p1000`, which the collector never writes, so it was a constant zero
+    throughout.**
   - CCL/fabric: coexistence measured (5u/5v, 2.9% slowdown), but the monitor exposes no
     ethernet-link metric, so there is nothing to calibrate against the fabric goldens in
     tests/tt_metal/tt_fabric/test_infra/golden/. The fabric axis is absent, not wrong.
@@ -2433,6 +2542,11 @@ number would have passed all of 5w. The uniform-across-64-cores appearance is st
 unexplained and is now the open question; `Fnz` from 5w (41.9 of 64 nonzero at 8.7% duty)
 says the host path does differentiate cores, so the uniformity may be the frozen frame
 rather than a real mapping defect -- but that is a hypothesis, not a measurement.
+
+> **A2b note (2026-08-31):** `Fnz` counted cores with a nonzero **`dispatch_busy_p1000`**,
+> not FPU -- see the 5w retraction banner. "The host path differentiates cores" therefore
+> still holds, but only for the dispatch field. Whether `compute_busy_p1000` is localized
+> per core is untested, and 5w's own cross-chip-identity anomaly points the other way. B1.
 
 ### AICLK dropouts were self-inflicted blanking
 
@@ -2531,6 +2645,9 @@ The compute+fabric saturation run did NOT meet its bar and is not evidence of an
   - But compute was NOT saturated: F_avg ~0.5% and DRAM ~23.6 GB/s, against the 5w
     calibration markers of ~22% and ~40 GB/s for 100% duty. `--ccl 4` is fabric-heavy and
     compute-light; the all-gathers dominate wall time.
+    **A2b (2026-08-31): the ~22% marker is RETRACTED -- it is 5w's `F` column, i.e.
+    dispatch occupancy. The DRAM ~40 GB/s marker stands. The conclusion "compute was not
+    saturated" is not in doubt at 0.5%, but re-cite it against B1 once B1 exists.**
   - And LOSS WAS NOT MEASURED AT ALL: `--fidelity-probe` produced no output, because as a
     fourth process it could not finish topology discovery against workload + collector +
     tt-mgmt. The loss metric must come from the ALREADY-ATTACHED collector, which tracks

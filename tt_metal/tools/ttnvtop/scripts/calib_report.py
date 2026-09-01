@@ -5,16 +5,54 @@
 # Joins shm_probe.py --raw output against calib_duty.py phase boundaries. Separate from the
 # probe because the phase file only exists once the workload has finished, so the live
 # probe cannot align to it -- it has to be done after the fact, off the recorded samples.
+#
+# Usage: calib_report.py RAW.jsonl PHASES.json [metric]
+#
+# The metric names are the C field names from PerCoreView (common/shm_schema.hpp:72),
+# not the old single letters. Raw files recorded before 2026-08-31 carry "F"/"S"/"D"
+# keys whose LABELS DO NOT MATCH THEIR FIELDS (shm_probe.py used a same-size but wrong
+# struct format), so this deliberately refuses to read them rather than silently
+# reproducing the mislabelled slope.
 
 import json
 import sys
 from collections import defaultdict
 
+# probe key -> the PerCoreView field it actually reads
+METRICS = {
+    "fpu": "compute_busy_p1000 (FPU / MATH pipe)",
+    "sfpu": "sfpu_busy_p1000 (vector pipe)",
+    "dispatch": "dispatch_busy_p1000 (go_msg occupancy)",
+}
+LEGACY_KEYS = ("F", "S", "D", "Fnz", "dram_rd", "dram_wr")
+
 
 def main() -> int:
-    raw_path, ph_path = sys.argv[1], sys.argv[VI["compute_busy_p1000"]]
-    metric = sys.argv[VI["sfpu_busy_p1000"]] if len(sys.argv) > 3 else "F"
+    raw_path, ph_path = sys.argv[1], sys.argv[2]
+    metric = sys.argv[3] if len(sys.argv) > 3 else "fpu"
+    if metric not in METRICS:
+        print(f"unknown metric {metric!r}; choose one of {', '.join(sorted(METRICS))}", file=sys.stderr)
+        return 2
     rows = [json.loads(l) for l in open(raw_path) if l.strip()]
+    # An empty or blank-only raw file used to produce a structurally normal, entirely
+    # data-free report and exit 0. A gate script that checks only the exit code would
+    # then pass on NO DATA, which is the same class of silent-success failure that let
+    # the mislabelled 5w slopes through. Refuse instead.
+    if not rows:
+        print(f"{raw_path} contains no samples -- nothing to report (was the probe running?)", file=sys.stderr)
+        return 3
+    if metric not in rows[0]:
+        stale = [k for k in LEGACY_KEYS if k in rows[0]]
+        if stale:
+            print(
+                f"{raw_path} was recorded by the pre-fix shm_probe.py (keys {stale}). Those\n"
+                f"samples are mislabelled at the source -- 'F' is dispatch_busy_p1000 and 'D' is\n"
+                f"a field the collector never writes. Re-record with the corrected probe.",
+                file=sys.stderr,
+            )
+        else:
+            print(f"{raw_path} has no {metric!r} key (keys: {sorted(rows[0])})", file=sys.stderr)
+        return 2
     ph = json.load(open(ph_path))
     per = defaultdict(list)
     for r in rows:
@@ -30,7 +68,7 @@ def main() -> int:
             f"{sum(1 for a in ages if a > 1.0):10d} {sum(1 for r in rs if r['aiclk']==0):8d}"
         )
 
-    print(f"\n=== ACCURACY: monitor {metric} vs host-measured busy % (matmul {ph.get('size')}) ===")
+    print(f"\n=== ACCURACY: monitor {metric} [{METRICS[metric]}] vs host-measured busy % (matmul {ph.get('size')}) ===")
     hdr = f"{'target':>7s} {'host':>7s} |"
     for name in sorted(per):
         hdr += f" {name.split('_')[2]:>6s}"
@@ -75,6 +113,18 @@ def main() -> int:
         else:
             verdict = "responds but NOT linear"
         print(f"{name:22s} {slope:8.3f} {icept:10.2f} {r2:7.3f}   {verdict}")
+
+    # Same reasoning as the empty-file case: a report whose ACCURACY table is entirely
+    # "-" is not a result. If no chip yielded enough in-phase samples to fit, say so and
+    # exit non-zero rather than printing an empty LINEARITY table and returning success.
+    fitted = [n for n in fits if len(fits[n]) >= 3]
+    if not fitted:
+        print(
+            f"\nNO FIT: no chip had >=3 phases with samples in range. The probe run and the\n"
+            f"phase file ({ph_path}) do not overlap, or the probe saw no SHM files.",
+            file=sys.stderr,
+        )
+        return 4
     return 0
 
 

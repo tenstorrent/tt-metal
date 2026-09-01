@@ -68,10 +68,16 @@ def _read_chip(path: str):
     with open(path, "rb") as f:
         data = f.read()
     hdr = struct.unpack(HEADER_FMT, data[:HEADER_SIZE])
-    # hdr layout (mirrors UtilShmHeader): magic, version, struct_size, asic_id,
-    # arch_id, ?, last_update_us, epoch_us, num_cores, ?, ?, aiclk_mhz, reserved[4]
+    # hdr layout (mirrors UtilShmHeader, common/shm_schema.hpp:42):
+    #   0 magic, 1 version, 2 struct_size, 3 asic_id, 4 arch_id, 5 signal_sources,
+    #   6 epoch_us, 7 last_update_us, 8 num_cores, 9 host_assigned_id, 10 collector_pid,
+    #   11 aiclk_mhz, 12 dram_rd_mbps, 13 dram_wr_mbps, 14 dram_peak_mbps, 15 reserved[0]
+    # D6: this comment used to list epoch_us and last_update_us in the wrong order and
+    # the read below took hdr[6] (epoch_us, fixed at collector start) for last_update_us,
+    # which would have made every staleness/age figure read as a constant "seconds since
+    # the collector started". Same shape as the shm_probe.py:27 mislabelling.
     asic_id = hdr[3]
-    last_update_us = hdr[6]
+    last_update_us = hdr[7]
     n_cores = hdr[8]
     aiclk_mhz = hdr[11]
     rows = []
