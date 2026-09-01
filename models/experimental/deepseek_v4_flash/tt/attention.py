@@ -963,10 +963,10 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     ``tp_size > 1`` expects a 1xTP mesh and replicated hidden/KV inputs.
     ``qkv_tp_strategy`` controls the two small input projections (from the
     constructor, else ``attention.qkv_tp_strategy`` in the system profile).
-    Galaxy32 uses ``balanced``: q_a and kv stay separate, each N-sharded across
-    the TP ranks, then all-gathered, with the per-rank weights left in L1.
-    ``fused_replicated_full`` (one concatenated matmul, replicated) remains the
-    profile default elsewhere; dedicated ranks are still available for
+    Galaxy32 uses ``replicated``: q_a and kv stay unfused and full-width on every
+    rank (no all-gather), while ``q_b`` stays head-sharded TP4. ``balanced``
+    (N-shard then all-gather) and ``fused_replicated_full`` (one concatenated
+    matmul, replicated) remain available; dedicated ranks are still there for
     comparisons. Query heads and complete output groups are sharded across the
     mesh. By default, each local output group uses an ordinary matmul and
     ``o_b`` is row-parallel: it consumes those local groups directly and
@@ -1158,6 +1158,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 layout["K"] //= tp_size
                 mapper = ttnn.ShardTensorToMesh(device, dim=-2)
                 cache_name = f"{name}.tp{tp_size}.row"
+            elif tp_size > 1 and name in ("q_a_proj", "kv_proj") and not self.dedicated_qkv_ranks:
+                # Full-width replica on every rank (galaxy32 ``replicated``). q_b stays
+                # in the shard branch above.
+                mapper = ttnn.ReplicateTensorToMesh(device)
+                cache_name = f"{name}.tp{tp_size}.{self.qkv_tp_strategy}"
             # Resident L1 for the unfused q_a/kv pair when the profile asks for
             # it and they are *not* prefetched. Packed weights are already L1-resident;
             # the prefetcher streams into in1 and never holds an L1 tensor.
