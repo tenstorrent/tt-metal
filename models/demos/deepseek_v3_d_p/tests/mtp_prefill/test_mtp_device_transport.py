@@ -7,12 +7,14 @@
 The runner moves MTP's K token windows from the producer to the rank that runs the levels without a
 host round trip anywhere. Four hardware claims carry it:
 
-1. **The lookahead ids ride the trunk's own H2D row, and cut back off it exactly.** The producer
-   pushes chip ``c`` the single row ``stream[c*L : c*L + L + overhang]``; the runner cuts it at ``L``.
-   The trunk half must come back byte-identical to the row an MTP-*off* run sends, and the tail half
-   must be the ``overhang`` ids that immediately follow it -- otherwise level ``k``'s window is off by
-   a chip's worth of positions. Both ends are the PRODUCTION functions (``producer._h2d_rows``,
-   ``prefill_runner._cut_h2d_row``), so the two ends cannot agree here and disagree in production.
+1. **The lookahead ids ride the trunk's own H2D row and arrive as their own tensor.** The producer
+   pushes chip ``c`` the single row ``stream[c*L : c*L + L + overhang]`` through ONE H2D socket, and
+   ``inbound_socket_service_sync`` splits it as it copies it out: ``tt_ids`` is the leading ``L`` ids,
+   ``tt_overhang`` the trailing ``overhang``. The trunk tensor must come back byte-identical to the
+   row an MTP-*off* run sends, and the tail must be the ``overhang`` ids that immediately follow it --
+   otherwise level ``k``'s window is off by a chip's worth of positions. This goes through a REAL
+   ``H2DStreamService`` and the real op, with the real ``producer._h2d_rows`` on the far end, so the
+   two ends cannot agree here and disagree in production.
 2. **Two gathers, and the trunk gather IS the model's input.** The union is embedded as two blocks,
    never as one rejoined id row, so the trunk block can be handed to the transformer directly
    (``input_is_embedded``) instead of gathering the same ``L`` rows a second time. The 32-row
@@ -31,21 +33,22 @@ the one failure this file exists to catch. That identity is also what lets the t
 the model input, and why the ids never need a codec to survive a bf16 wire -- which is why the vocab
 size, once the whole problem, is now irrelevant to transport and is kept small here.
 
-No fabric: concat, embedding, slice and to_layout are all per-chip, so the mesh opens with
-``FabricConfig.DISABLED`` and this needs no cabling-certified descriptor.
+Claims 2-4 are per-chip ops (concat, embedding, slice, to_layout) and need no fabric; claim 1 drives
+a real H2D socket, so the mesh opens on the same torus-xy profile ``test_h2d_socket_sync.py`` uses.
 """
 
 from __future__ import annotations
 
 import os
+import struct
 
 import pytest
 import torch
 
 import ttnn
 from models.demos.common.prefill.runners import prefill_producer as producer
-from models.demos.common.prefill.runners import prefill_runner as runner
 from models.demos.common.prefill.runners.runner_utils import h2d_row_len, mtp_overhang, mtp_union_rows
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPUnionEmbedding
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 
@@ -64,12 +67,15 @@ L = h2d_row_len(CHUNK, SP)
 OVERHANG = mtp_overhang(K)
 UNION_ROWS = mtp_union_rows(CHUNK, SP, K)
 
+METADATA_SIZE_BYTES = 12
+"""3 x uint32 [slot_id, actual_start, actual_end] -- what prefill_runner sends."""
+
 MESH = [
     pytest.param(
         (SP, TP),
-        # Local ops only (concat/embedding/slice/to_layout); no fabric. State it explicitly: a param
-        # with no device_params leaves fabric_config=None, which conftest skips everywhere.
-        {"fabric_config": ttnn.FabricConfig.DISABLED},
+        # Claim 1 drives a real H2D socket, so the mesh needs the same profile the plain
+        # h2d-socket-sync gate runs on. Claims 2-4 are local ops and are indifferent to it.
+        torus_xy_device_params(),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(SP, TP), topology="mesh-8x4"),
         id="8x4",
     )
@@ -111,19 +117,6 @@ def stream() -> torch.Tensor:
     return torch.randint(0, VOCAB, (CHUNK + OVERHANG,), dtype=torch.int64)
 
 
-def _upload_ids(rows, mesh_device) -> ttnn.Tensor:
-    """One producer host array onto the mesh the way its H2D socket delivers it: SP-sharded on axis 0,
-    TP-replicated, uint32 ROW_MAJOR DRAM."""
-    return ttnn.from_torch(
-        torch.from_numpy(rows.astype("int64")).to(torch.int32),
-        device=mesh_device,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=tuple(mesh_device.shape)),
-    )
-
-
 def _embed_fn(mesh_device, table: torch.Tensor):
     """The trunk's own gather, spelled exactly as ``TtPrefillTransformer.mtp_embed_ids`` spells it --
     a real ``TtParallelEmbedding`` over a random table, not a stand-in. Because it IS that call, the
@@ -159,12 +152,46 @@ def _assert_rows(tt, want_ids: torch.Tensor, table: torch.Tensor, shift: int, ro
         )
 
 
-def _cut_stream(stream: torch.Tensor, mesh_device):
-    """One producer push through the runner's own cut: ``(trunk ids, overhang ids, want_ids grid)``."""
-    tt_row = _upload_ids(_producer_rows(stream.tolist(), K), mesh_device)
-    # A socket/mesh tensor reports its LOCAL extent — what the cut's bounds rely on.
-    assert list(tt_row.shape) == [1, 1, UNION_ROWS], f"expected a per-chip [1,1,{UNION_ROWS}] row, got {tt_row.shape}"
-    tt_ids, tt_overhang = runner._cut_h2d_row(tt_row, OVERHANG)
+def _h2d_service(mesh_device):
+    """A real H2DStreamService shaped for one MTP4 chunk: ``[SP, 1, UNION_ROWS]`` uint32, one page per
+    chip, spelled exactly as ``runner_utils.build_h2d_service`` spells it."""
+    return ttnn.H2DStreamService(
+        mesh_device=mesh_device,
+        global_spec=ttnn.TensorSpec(
+            shape=ttnn.Shape([SP, 1, UNION_ROWS]),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            buffer_type=ttnn.BufferType.DRAM,
+        ),
+        # One page per chip = the whole row, which is what makes the op's split an intra-page split.
+        max_socket_page_size_bytes=UNION_ROWS * 4,
+        mapper=ttnn.create_mesh_mapper(
+            mesh_device, ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
+        ),
+        worker_cores=ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+        metadata_size_bytes=METADATA_SIZE_BYTES,
+    )
+
+
+def _cut_stream(stream: torch.Tensor, mesh_device, service=None):
+    """One producer push through a real H2D socket: ``(trunk ids, overhang ids, want_ids grid)``.
+
+    The op returns the three tensors; nothing here slices anything.
+    """
+    own = service is None
+    service = service or _h2d_service(mesh_device)
+    try:
+        rows = _producer_rows(stream.tolist(), K)
+        service.forward_to_tensor_bytes(
+            rows.astype("int32").reshape(SP, 1, UNION_ROWS).copy(), metadata=struct.pack("<III", 0, 0, CHUNK)
+        )
+        tt_ids, tt_overhang, tt_meta = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+            service, metadata_size_bytes=METADATA_SIZE_BYTES, overhang_size_bytes=OVERHANG * 4
+        )
+    finally:
+        if own:
+            service.barrier()
+    ttnn.deallocate(tt_meta)
     want_ids = torch.stack([stream[c * L : c * L + UNION_ROWS] for c in range(SP)])  # [SP, L+overhang]
     return tt_ids, tt_overhang, want_ids
 
@@ -176,8 +203,12 @@ def test_h2d_row_cuts_into_the_plain_trunk_and_its_lookahead(mesh_device, stream
     The trunk half is compared against the row a **plain** (MTP-off) producer pushes, built by the
     same function with ``PREFILL_MTP_LEVELS=0``. That is the promise the whole one-socket design makes:
     turning MTP on does not perturb a single id the model prefills.
+
+    Two pushes through ONE service, because the split is compiled into the program: the second must
+    hit the program cache rather than rebuild, and must land the same two tensors.
     """
-    tt_ids, tt_overhang, want_ids = _cut_stream(stream, mesh_device)
+    service = _h2d_service(mesh_device)
+    tt_ids, tt_overhang, want_ids = _cut_stream(stream, mesh_device, service)
     assert list(tt_ids.shape) == [1, 1, L], f"trunk is {tt_ids.shape}, expected the plain-path [1,1,{L}]"
     assert list(tt_overhang.shape) == [1, 1, OVERHANG], f"overhang row is {tt_overhang.shape}"
 
@@ -197,6 +228,21 @@ def test_h2d_row_cuts_into_the_plain_trunk_and_its_lookahead(mesh_device, stream
 
     for t in (tt_ids, tt_overhang):
         ttnn.deallocate(t)
+
+    # Second push: the split lives in compile-time args, so a cache miss here would mean the op
+    # rebuilds the program on every chunk of every request.
+    pre = mesh_device.num_program_cache_entries()
+    tt_ids, tt_overhang, _ = _cut_stream(stream, mesh_device, service)
+    assert mesh_device.num_program_cache_entries() == pre, "the split op recompiled instead of cache-hitting"
+    for d, (g_trunk, g_over) in enumerate(zip(_shards(tt_ids), _shards(tt_overhang))):
+        c = d // TP
+        assert torch.equal(g_trunk.flatten().to(torch.int64), want_ids[c, :L]), f"dev {d}: 2nd push trunk differs"
+        assert torch.equal(g_over.flatten().to(torch.int64), want_ids[c, L:]), f"dev {d}: 2nd push overhang differs"
+    for t in (tt_ids, tt_overhang):
+        ttnn.deallocate(t)
+
+    service.barrier()
+    del service
 
 
 @pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)

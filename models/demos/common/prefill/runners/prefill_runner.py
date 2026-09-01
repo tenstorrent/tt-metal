@@ -151,8 +151,10 @@ DFLASH_ENABLED = (
 MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0)) if ADAPTER.supports_mtp else 0
 assert MTP_LEVELS >= 0, f"PREFILL_MTP_LEVELS must be >= 0, got {MTP_LEVELS}"
 MTP_OVERHANG = mtp_overhang(MTP_LEVELS)
-"""Lookahead ids the H2D row carries past this chip's trunk shard; 0 with MTP off. The runner's
-cut point on receive, and the producer builds its rows to the same number."""
+"""Lookahead ids the H2D row carries past this chip's trunk shard; 0 with MTP off. The producer
+builds its rows to this number and the socket op splits them back off on receive."""
+TOKEN_ID_BYTES = 4
+"""uint32 token ids. Converts MTP_OVERHANG (ids) to the socket op's overhang_size_bytes."""
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
@@ -286,50 +288,30 @@ def _is_shutdown_sentinel(meta: dict) -> bool:
     )
 
 
-def _cut_h2d_row(tt_row: ttnn.Tensor, overhang: int) -> tuple:
-    """Cut an arriving H2D row into ``(trunk ids, overhang ids or None)``. Consumes ``tt_row`` when it
-    actually cuts; ``overhang == 0`` hands the row straight back.
-
-    With MTP the row is ``L + overhang`` ids -- chip c's contiguous ``stream[c*L : c*L + L + overhang]``
-    -- and it is cut HERE, so nothing downstream sees a widened trunk: the trunk is the same
-    ``[1, 1, L]`` uint32 tensor an MTP-off run delivers, byte for byte.
-
-    Both cuts are page-aligned at the production shape (2560 B and 128 B, 64 B alignment), and
-    ``ttnn.slice``'s ROW_MAJOR path handles a misaligned last-dim start anyway
-    (slice_program_factory_rm.cpp reads from the aligned address below and skips the remainder).
-    """
-    if not overhang:
-        return tt_row, None
-    # .shape on a socket/mesh tensor is the LOCAL (per-chip) extent, which is what the cut needs.
-    s = list(tt_row.shape)
-    trunk = s[-1] - overhang
-    assert trunk > 0, (
-        f"H2D row carries {s[-1]} ids/chip, too few to cut a {overhang}-id overhang off it. The "
-        "producer and this runner disagree on PREFILL_MTP_LEVELS."
-    )
-    tt_ids = ttnn.slice(tt_row, [0, 0, 0], [s[0], s[1], trunk])
-    tt_overhang = ttnn.slice(tt_row, [0, 0, trunk], [s[0], s[1], s[-1]])
-    ttnn.deallocate(tt_row)
-    return tt_ids, tt_overhang
-
-
 def _socket_next(h2d_service, overhang: int = 0) -> tuple:
     """Block on the next producer push and hand back what it carried: (tt_ids, tt_overhang_or_None,
     {slot_id, actual_start, actual_end}, tt_metadata). Used only by the unbounded request loop
     (rank 0 input). The device metadata tensor is returned rather than discarded so it can be
     propagated into the model's per-layer ack send.
 
-    ONE socket delivers all of it, the way the metadata already rides along with the tokens; the
-    MTP lookahead ids are cut off the row here (:func:`_cut_h2d_row`).
+    ONE socket, ONE op call, THREE tensors. The op splits each arriving row as it copies it out of
+    the socket's backing buffer, so ``tt_ids`` is the same ``[1, 1, L]`` uint32 tensor an MTP-off run
+    delivers -- byte for byte -- and ``tt_overhang`` is the ``[1, 1, overhang]`` lookahead tail that
+    level k's window reads past this chip's trunk shard. With ``overhang == 0`` the op emits no
+    second tensor at all and this is exactly the pre-MTP call.
     """
     import torch
 
-    tt_row, tt_metadata = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        h2d_service, metadata_size_bytes=METADATA_SIZE_BYTES
+    outs = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+        h2d_service, metadata_size_bytes=METADATA_SIZE_BYTES, overhang_size_bytes=overhang * TOKEN_ID_BYTES
     )
+    if overhang:
+        tt_ids, tt_overhang, tt_metadata = outs
+    else:
+        tt_overhang = None
+        tt_ids, tt_metadata = outs
     m = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
     meta = {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
-    tt_ids, tt_overhang = _cut_h2d_row(tt_row, overhang)
     return tt_ids, tt_overhang, meta, tt_metadata
 
 
@@ -822,7 +804,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
         # ONE socket, MTP or not. With MTP its row carries the trunk shard plus the lookahead ids
-        # that follow it; _socket_next cuts them apart on arrival.
+        # that follow it, and the sync op hands the two back as separate tensors (_socket_next).
         h2d_service = _open_h2d(make_h2d_spec(GLOBAL_MESH_SHAPE, CHUNK_SIZE, MTP_LEVELS), service_id)
 
     # D2D pipeline transport for num_ranks>1.
