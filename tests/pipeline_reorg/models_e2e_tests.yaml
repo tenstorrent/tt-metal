@@ -517,6 +517,46 @@
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
 
+# Long-context ISL coverage. The tier-1 entry above only exercises the 128-token
+# bucket, so the chunk-outer traced prefill path it shares with vLLM is never
+# driven past its first chunk. Tier 2 so a long-context regression does not gate
+# merges, and split from the tier-1 entry so a failure is attributable.
+# 128k/256k are deliberately excluded: they download the long-context corpus and
+# run well past this pipeline's budget -- run those by hand for release sign-off.
+- name: Qwen3.6-27B long-context e2e tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B MESH_DEVICE=P150x4
+    pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_4k or traced_8k"
+    pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "batched_4k_b8"
+  model: qwen3.6-27b
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 40
+      tier: 2
+      release_ready: false
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+
+# Teacher-forced accuracy trend: top-1/top-5 vs HF plus full-vocab logit PCC over
+# 128 steps. Loads the HF reference on the host, so it is slow and sits at tier 3.
+# This is the accuracy-regression detector the 5-step full-depth PCC tests
+# structurally cannot be -- it is what would catch the 27B trend documented in
+# the model README's "Open finding" moving.
+- name: Qwen3.6-27B teacher-forced accuracy
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B MESH_DEVICE=P150x4
+    pytest --timeout 3600 models/demos/blackhole/qwen36/tests/e2e/test_teacher_forcing_e2e.py
+  model: qwen3.6-27b
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 70
+      tier: 3
+      release_ready: false
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+
 # ── Gemma ──────────────────────────────────────────────────────────
 
 # Tier 3: accuracy-only e2e (ci-token-matching). Validated locally on N300
