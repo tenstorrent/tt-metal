@@ -460,7 +460,7 @@ inline void _llk_math_face_compressed_mm_(
         // Merge each face's split partial into its accumulation.
         constexpr std::int16_t partial = _llk_math_face_compressed_mm_split_acc_partial_rows_;
 
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD); // wait for both operands
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD); // wait for both operands
         // Move both partials into SrcB, face 0 at row 0 and face 1 at row 8.
         // ADDR_MOD_0 advances dest by one face between the two, and ADDR_MOD_2 resets it afterwards.
         TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, partial);

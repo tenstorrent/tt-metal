@@ -139,7 +139,7 @@ inline void _llk_math_custom_mm_reuse_dest_srcb_(
         "custom_mm_reuse_dest_srcb: in0 tile height must be 1, 2, 4 or 8");
 
     const std::uint32_t dest_buffer_base = get_dest_buffer_base();
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD | p_stall::WAIT_SFPU);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
 
     for (std::uint32_t i = 0; i < kt_dim; i++)
     {
