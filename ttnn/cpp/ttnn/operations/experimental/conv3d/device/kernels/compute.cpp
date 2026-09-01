@@ -150,8 +150,8 @@ void add_block_inplace_math(uint32_t inout_cb, uint32_t add_cb) {
 // running partial lives in `acc_cb` between iterations, remote partials arrive in `remote_cb`,
 // and all three CBs (local/remote/acc) are `UnpackToDestFp32`, so `copy_tile` +
 // `add_binary_tile` keep the sum exact end to end. The last iteration packs back into
-// `local_cb` for the bias/untilize tail. DST: 2 tiles; on Blackhole the dest remap must be
-// off while SFPU/datacopy address DST directly.
+// `local_cb` for the bias/untilize tail. DST: 2 tiles. Blackhole remap stays enabled: these
+// LLKs and the packer all use logical DST tile indices and observe the same row-address remap.
 template <uint32_t num_tiles>
 void reduce_block_fp32_sfpu(uint32_t local_cb, uint32_t remote_cb, uint32_t acc_cb, uint32_t num_workers) {
     CircularBuffer local_cb_obj(local_cb);
@@ -159,9 +159,6 @@ void reduce_block_fp32_sfpu(uint32_t local_cb, uint32_t remote_cb, uint32_t acc_
     CircularBuffer acc_cb_obj(acc_cb);
     constexpr uint32_t DST_ACC = 0;
     constexpr uint32_t DST_OPERAND = 1;
-#ifdef ARCH_BLACKHOLE
-    MATH((llk_math_reconfig_remap(false)));
-#endif
     for (uint32_t w = 0; w < num_workers; ++w) {
         const bool from_local = (w == 0);
         const bool to_local = (w + 1 == num_workers);
@@ -191,10 +188,6 @@ void reduce_block_fp32_sfpu(uint32_t local_cb, uint32_t remote_cb, uint32_t acc_
             tile_regs_release();
         }
     }
-#ifdef ARCH_BLACKHOLE
-    // Restore remap for the untilize/matmul that follows (their helpers assume it configured).
-    MATH((llk_math_reconfig_remap(true)));
-#endif
 }
 
 // fp32-exact bias add. `add_tiles_bcast_rows` would unpack the finished output through
@@ -211,9 +204,6 @@ void add_bias_inplace_sfpu(uint32_t inout_cb, uint32_t bias_cb) {
     constexpr uint32_t DST_OPERAND = 1;
     inout_cb_obj.wait_front(rows * cols);
     bias_cb_obj.wait_front(cols);
-#ifdef ARCH_BLACKHOLE
-    MATH((llk_math_reconfig_remap(false)));
-#endif
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
             tile_regs_acquire();
@@ -232,9 +222,6 @@ void add_bias_inplace_sfpu(uint32_t inout_cb, uint32_t bias_cb) {
             tile_regs_release();
         }
     }
-#ifdef ARCH_BLACKHOLE
-    MATH((llk_math_reconfig_remap(true)));
-#endif
     // Deliberately no bias pop: the caller pops it once per C_out block, matching add_bias_inplace.
 }
 
