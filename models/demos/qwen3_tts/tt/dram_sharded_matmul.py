@@ -85,6 +85,22 @@ def width_sharded_l1_memcfg(m_tiles: int, k_tiles: int, num_cores_x: int, num_co
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
+def decode_hidden_width_memcfg(device, hidden_size: int) -> ttnn.MemoryConfig:
+    """Width-shard [1, 1, 32, hidden] on the same rectangular grid decode RMSNorm uses.
+
+    Talker (hidden=2048) → 64 cores, 8×8, shard (32, 32). CodePredictor (1024) → 32 cores.
+    Used as the dest of padded-N slices so residual add / the next LN skip I2S.
+    """
+    dim_tiles = hidden_size // TILE
+    num_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if dim_tiles % c == 0)
+    cg = device.compute_with_storage_grid_size()
+    cols = min(cg.x, num_cores)
+    while num_cores % cols != 0:
+        cols -= 1
+    rows = num_cores // cols
+    return width_sharded_l1_memcfg(1, dim_tiles, cols, rows)
+
+
 def dram_sharded_program_config(
     m: int, k: int, n: int, num_cores: int, fused_activation=None
 ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:

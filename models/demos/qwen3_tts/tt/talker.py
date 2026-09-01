@@ -16,8 +16,11 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.attention import prepare_fused_sdpa_mask
 from models.demos.qwen3_tts.tt.decoder_layer import DecoderLayer
+from models.demos.qwen3_tts.tt.mesh_utils import is_n150
 from models.demos.qwen3_tts.tt.rmsnorm import RMSNorm
+from models.demos.qwen3_tts.tt.rope import shard_decode_rope_tables
 
 
 class Talker(LightweightModule):
@@ -359,6 +362,15 @@ class Talker(LightweightModule):
                     (hidden_states.shape[0], 1, hidden_states.shape[1], hidden_states.shape[2]),
                 )
 
+        # Decode RoPE tables + fused-SDPA mask: convert once, reuse across layers.
+        _own_rope = False
+        if mode == "decode" or int(hidden_states.shape[-2]) == 1:
+            cos, sin, _own_rope = shard_decode_rope_tables(cos, sin, self.config.head_dim)
+        _own_decode_mask = _own_prefill_mask = False
+        if is_n150(self.device):
+            decode_attn_mask, _own_decode_mask = prepare_fused_sdpa_mask(decode_attn_mask)
+            prefill_attn_mask, _own_prefill_mask = prepare_fused_sdpa_mask(prefill_attn_mask)
+
         # Apply decoder layers
         updated_kv_caches = [] if kv_caches is not None else None
         for i, layer in enumerate(self.layers):
@@ -378,6 +390,14 @@ class Talker(LightweightModule):
             )
             if updated_kv_caches is not None:
                 updated_kv_caches.append(updated_kv_cache)
+
+        if _own_rope:
+            ttnn.deallocate(cos)
+            ttnn.deallocate(sin)
+        if _own_decode_mask:
+            ttnn.deallocate(decode_attn_mask)
+        if _own_prefill_mask:
+            ttnn.deallocate(prefill_attn_mask)
 
         # Prefill layers return width-sharded residual; final RMSNorm is interleaved.
         if hidden_states.is_sharded():
