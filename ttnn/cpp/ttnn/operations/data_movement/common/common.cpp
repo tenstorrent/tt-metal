@@ -13,6 +13,9 @@
 #include <numeric>
 #include <tt-metalium/tt_align.hpp>
 
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+
 namespace ttnn::operations::data_movement {
 
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
@@ -787,6 +790,142 @@ uint32_t per_shard_page_size_bytes(const ttnn::Tensor& t, uint32_t row_bytes) {
         return static_cast<uint32_t>(t.buffer()->aligned_page_size());
     }
     return row_bytes;
+}
+
+tt::tt_metal::CoreRangeSet union_of(const tt::tt_metal::CoreRangeSet& a, const tt::tt_metal::CoreRangeSet& b) {
+    if (a.empty()) {
+        return b;
+    }
+    if (b.empty()) {
+        return a;
+    }
+    return a.merge(b);
+}
+
+void push_buffer_set(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const BlockBufferSet& set,
+    uint32_t input_single_tile_size,
+    uint32_t output_single_tile_size,
+    tt::DataFormat input_cb_data_format,
+    tt::DataFormat output_cb_data_format,
+    uint32_t dram_alignment,
+    uint32_t tile_height,
+    const std::optional<tt::tt_metal::TileDescriptor>& tile) {
+    // The staging buffer is used by the reader when the DRAM source row and the L1 destination have
+    // different alignment offsets: the reader rounds the source address down to a dram_alignment
+    // boundary, issues one noc_async_read of (row_bytes + dram_alignment) into this buffer, then
+    // copies the correctly-offset slice into the input buffer.
+    //   row_bytes  = tile_width * elt_size * block_tiles  (one row of a block)
+    //              = input_single_tile_size / tile_height * block_tiles
+    //   + dram_alignment    : tail bytes from rounding the DRAM read down to alignment
+    //   + dram_alignment    : headroom for aligning the L1 write pointer up to dram_alignment
+    //                         (get_write_ptr only guarantees L1 alignment, not DRAM alignment)
+    const uint32_t input_row_bytes = input_single_tile_size / tile_height;
+    const uint32_t temp_cb_size = input_row_bytes * set.block_tiles + 2 * dram_alignment;
+
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = temp_cb_size,
+        .core_ranges = set.core_ranges,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = set.staging_index,
+            .data_format = input_cb_data_format,
+            .page_size = temp_cb_size,
+        }}},
+    });
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = set.block_tiles * input_single_tile_size,
+        .core_ranges = set.core_ranges,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = set.input_index,
+            .data_format = input_cb_data_format,
+            .page_size = input_single_tile_size,
+            .tile = tile,
+        }}},
+    });
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = set.block_tiles * output_single_tile_size,
+        .core_ranges = set.core_ranges,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = set.output_index,
+            .data_format = output_cb_data_format,
+            .page_size = output_single_tile_size,
+            .tile = tile,
+        }}},
+    });
+}
+
+BlockPlan make_block_plan(
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    uint32_t input_single_tile_size,
+    uint32_t output_single_tile_size,
+    uint32_t tile_height,
+    uint32_t tile_width,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const tt::tt_metal::CoreCoord grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    const tt::tt_metal::CoreRangeSet default_grid(tt::tt_metal::CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
+    tt::tt_metal::CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
+
+    const auto& padded = output_tensor.padded_shape();
+    const uint32_t num_tiles_per_col = padded[-2] / tile_height;
+    const uint32_t num_tiles_per_row = padded[-1] / tile_width;
+    const uint32_t num_blocks = (padded[-1] * padded[-2]) / (tile_height * tile_width);
+
+    // Fold the staging buffer (bytes/tile + fixed) into the limit or the region overruns L1.
+    const uint32_t max_l1_size = get_max_l1_space(input_tensor);
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t staging_bytes_per_tile = input_single_tile_size / tile_height;
+    const uint32_t fixed_staging_bytes = 2 * dram_alignment;
+    const uint32_t budget_for_tiles = (max_l1_size > fixed_staging_bytes) ? (max_l1_size - fixed_staging_bytes) : 0;
+    const uint32_t bytes_per_tile_pair = input_single_tile_size + output_single_tile_size + staging_bytes_per_tile;
+    const uint32_t cb_block_size_limit = (bytes_per_tile_pair == 0) ? 0 : budget_for_tiles / bytes_per_tile_pair;
+
+    BlockPlan plan;
+    plan.split = ttnn::split_blocks_for_tilize_wh(
+        available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit);
+
+    // The work split hands out exactly two block widths, so there are exactly two buffer sets:
+    //
+    //   full     - `single_sub_block_size` tiles wide: the full-block cores, plus the cliff-*column*
+    //              cores (a short column still processes full-width blocks).
+    //   cliffrow - `single_block_size_cliff_row` tiles wide: the cores holding the narrow block at
+    //              the end of a row, plus the corner core that is both cliff-row and cliff-column.
+    //
+    // Each set gets its own indices and its own sizes, so no index is ever re-used at two different
+    // sizes. Either set may be empty for a given shape.
+    plan.full = BlockBufferSet{
+        .staging_index = static_cast<uint8_t>(tt::CBIndex::c_1),
+        .input_index = static_cast<uint8_t>(tt::CBIndex::c_0),
+        .output_index = static_cast<uint8_t>(tt::CBIndex::c_16),
+        .block_tiles = plan.split.single_sub_block_size,
+        .core_ranges = union_of(
+            plan.split.core_range,
+            plan.split.has_cliff_col ? plan.split.cliff_col_core_range : tt::tt_metal::CoreRangeSet{}),
+    };
+    plan.cliffrow = BlockBufferSet{
+        .staging_index = static_cast<uint8_t>(tt::CBIndex::c_3),
+        .input_index = static_cast<uint8_t>(tt::CBIndex::c_2),
+        .output_index = static_cast<uint8_t>(tt::CBIndex::c_17),
+        .block_tiles = plan.split.single_block_size_cliff_row,
+        .core_ranges = plan.split.has_cliff_row ? union_of(
+                                                      plan.split.cliff_row_core_range,
+                                                      plan.split.has_cliff_col ? plan.split.cliff_col_row_core_range
+                                                                               : tt::tt_metal::CoreRangeSet{})
+                                                : tt::tt_metal::CoreRangeSet{},
+    };
+    return plan;
+}
+
+const BlockBufferSet& buffer_set_for_core(const BlockPlan& plan, const tt::tt_metal::CoreCoord& core) {
+    const bool in_full = !plan.full.empty() && plan.full.core_ranges.contains(core);
+    const bool in_cliffrow = !plan.cliffrow.empty() && plan.cliffrow.core_ranges.contains(core);
+    TT_FATAL(
+        in_full != in_cliffrow,
+        "Core {} is covered by {} buffer sets; the work split must place every core in exactly one",
+        core.str(),
+        (in_full && in_cliffrow) ? "both" : "neither");
+    return in_cliffrow ? plan.cliffrow : plan.full;
 }
 
 }  // namespace ttnn::operations::data_movement

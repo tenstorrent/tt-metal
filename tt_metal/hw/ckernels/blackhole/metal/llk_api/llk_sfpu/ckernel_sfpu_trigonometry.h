@@ -281,6 +281,7 @@ inline void calculate_cosine() {
         // Force v * (1/PI) + 0.5 to compile as a single SFPMAD sequence for consistent instruction scheduling.
         sfpi::vFloat half = sfpi::sFloat16b(0.5f);
         sfpi::vFloat inv_pi = sfpi::vConstFloatPrgm2;
+        sfpi::vFloat neg_one = -1.0f;
 
         // Start from j = v * (1 / PI) + 0.5; after bias-round and 2*j - 1, j is an odd quadrant index.
         // ROUNDING_BIAS shifts mantissa bits to perform round-to-nearest.
@@ -298,7 +299,8 @@ inline void calculate_cosine() {
 
         j = j + NEG_ROUNDING_BIAS;
 
-        j = j * 2.0f - 1.0f;
+        sfpi::vFloat two = sfpi::sFloat16b(2.0f);
+        j = __builtin_rvtt_sfpmad(j.get(), two.get(), neg_one.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
         // Four-stage Cody-Waite reduction; a = v + j * -PI / 2.
         // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
