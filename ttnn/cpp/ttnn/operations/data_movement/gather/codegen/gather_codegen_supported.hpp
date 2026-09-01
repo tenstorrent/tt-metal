@@ -33,9 +33,9 @@ bool supported_execution_controls(
 // Perf gate consulted only by ttnn::gather()'s routing, and only when supported_by_codegen() is
 // true: true means fall back to native despite codegen support. Evaluated at the same pre-transform
 // point as supported_by_codegen() (same tensors/dim), matching the configurations any demotion
-// would be measured over. Currently demotes nothing -- no measured in-scope configuration loses to
-// the native prim -- but it stays in the routing expression so a future demotion has one place to
-// live and gather_force_codegen() is never affected by it.
+// would be measured over. Currently demotes nothing; the known ~2% single-logical-row regression is
+// deliberately accepted (see is_demoted()), but this hook remains the single place for future demotions.
+// gather_force_codegen() is never affected by it.
 bool is_demoted(const Tensor& input_tensor, int8_t dim, const Tensor& input_index_tensor);
 
 }  // namespace ttnn::operations::data_movement::gather
