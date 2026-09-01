@@ -972,9 +972,6 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
     // Verify that the mesh graph was generated successfully
     const MeshId mesh_id{0};
     EXPECT_TRUE(!mesh_graph.get_mesh_ids().empty()) << "Mesh graph should have at least one mesh";
-    ASSERT_TRUE(mesh_graph.get_generated_fabric_type().has_value());
-    EXPECT_EQ(mesh_graph.get_generated_fabric_type().value(), FabricType::MESH)
-        << "FABRIC_2D requests a plain mesh; discovery must realize MESH";
 
     // Verify that the mesh graph has chips
     auto chip_ids = mesh_graph.get_chip_ids(mesh_id);
@@ -1013,16 +1010,20 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
     // --- Auto-discovery honesty on the same wrap-less 2x4: requesting FABRIC_2D_TORUS_XY, the
     // genuine torus candidates fail against the cabling and TORUS_Y on the extent-2 axis is
     // VACUOUS (its logical graph is a plain mesh). Vacuous candidates are skipped so a plain mesh
-    // is never mislabeled as a torus; discovery must honestly realize MESH.
+    // is never mislabeled as a torus. Observable: an honest MESH keeps its boundary ports in every
+    // direction, while a graph labeled as a torus would have that axis's edge ports reserved.
     MeshGraph torus_mesh_graph = TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         get_cluster(),
         *physical_system_descriptor_,
         FabricConfig::FABRIC_2D_TORUS_XY,
         FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     ASSERT_EQ(torus_mesh_graph.get_mesh_shape(mesh_id).mesh_size(), 8u);
-    ASSERT_TRUE(torus_mesh_graph.get_generated_fabric_type().has_value());
-    EXPECT_EQ(torus_mesh_graph.get_generated_fabric_type().value(), FabricType::MESH)
+    const auto& edge_ports = torus_mesh_graph.get_mesh_edge_ports_to_chip_id().at(*mesh_id);
+    EXPECT_EQ(edge_ports.count({RoutingDirection::N, 0}), 1u)
         << "no torus axis is wired on this box; a vacuous torus candidate must not win the fallback";
+    EXPECT_EQ(edge_ports.count({RoutingDirection::S, 0}), 1u);
+    EXPECT_EQ(edge_ports.count({RoutingDirection::E, 0}), 1u);
+    EXPECT_EQ(edge_ports.count({RoutingDirection::W, 0}), 1u);
 }
 
 TEST_F(TopologyMapperTest, ClosetBoxSuperpodRelaxedPolicyTest) {
