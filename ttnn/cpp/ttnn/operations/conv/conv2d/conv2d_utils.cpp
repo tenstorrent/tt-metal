@@ -1047,8 +1047,17 @@ core_count_and_size calculate_L1_usage_for_conv_op(
     const uint32_t output_channels_padded = tt::round_up(out_channels, tt::constants::TILE_WIDTH);
     // Note: These are not exact shapes for weights as prepare_conv_weights will pad the weights depending on the
     // conv2d params, but these are good enough for L1 usage estimation.
+    // For grouped convolutions (groups > 1), each output channel only sees
+    // in_channels/groups input channels, so the weight tensor is
+    // out_channels * (in_channels/groups) * kh * kw — not the dense
+    // in_channels * kh * kw * out_channels. Without this correction the
+    // estimate overstates depthwise weight memory by a factor of `groups`
+    // (e.g. 838 MB vs 80 KB for C=10240, groups=10240), which guarantees
+    // the DRAM auto-slicer can never find a valid config.
+    const uint32_t weight_spatial_product = kernel_size[0] * kernel_size[1];
+    const uint32_t effective_in_channels = (groups > 1) ? (in_channels_aligned / groups) : in_channels_aligned;
     const ttnn::Shape weights_shape(
-        {1, 1, in_channels_aligned * kernel_size[0] * kernel_size[1], output_channels_padded});
+        {1, 1, effective_in_channels * weight_spatial_product, output_channels_padded});
 
     const ParallelConfig input_parallel_config = _halo_input_memory_config.has_value() ? ParallelConfig{
             .grid = _halo_input_memory_config->shard_spec().value().grid,
