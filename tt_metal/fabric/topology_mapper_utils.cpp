@@ -3922,6 +3922,27 @@ std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
         TopologyMappingSolverEngine::Auto,
         unique_shapes);
 
+    // Mirror the single-solve path (map_multi_mesh_to_physical): the minimal-host cap is best-effort —
+    // if the capped encoding is UNSAT, drop the hard cap (the SOFT minimize bias stays on) and re-solve,
+    // so an infeasible cap never turns a solvable enumeration into zero solutions (split-host meshes
+    // partition hosts into more same-rank groups than the chip-count k_min allows).
+    if (placements.empty() && inter_mesh_constraints.max_same_rank_groups_used() > 0) {
+        log_debug(
+            tt::LogFabric,
+            "map_multi_mesh_to_physical_n: hard host-group cap infeasible for this instance; retrying without it "
+            "(soft minimize stays on)");
+        inter_mesh_constraints.set_max_same_rank_groups_used(0);
+        placements = ::tt::tt_fabric::solve_topology_mapping_n(
+            mesh_logical_graph,
+            mesh_physical_graph,
+            inter_mesh_constraints,
+            /*max_solutions=*/max_solutions,
+            inter_mesh_validation_mode,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Auto,
+            unique_shapes);
+    }
+
     log_info(
         tt::LogFabric,
         "map_multi_mesh_to_physical_n: enumerated {} inter-mesh placement(s) (max_solutions={}, unique_shapes={})",
@@ -3929,44 +3950,70 @@ std::vector<TopologyMappingResult> map_multi_mesh_to_physical_n(
         max_solutions,
         unique_shapes);
 
-    // Hard host-group cap applies to EVERY enumerated solution, not just the single-solve path: the enumeration
-    // solver does not honor set_max_same_rank_groups_used, so drop any placement that occupies more than the cap.
-    const std::size_t host_group_cap = inter_mesh_constraints.max_same_rank_groups_used();
-
+    // Hard host-group cap applies to EVERY enumerated solution, not just the single-solve path: the DFS
+    // enumeration solver does not honor set_max_same_rank_groups_used, so drop any placement that occupies
+    // more than the cap.
     std::set<std::string> seen_signatures;
-    for (const auto& placement : placements) {
-        if (!placement.success) {
-            continue;
-        }
-        if (host_group_cap > 0 &&
-            inter_mesh_placement_occupied_host_groups(placement, inter_mesh_constraints) > host_group_cap) {
-            continue;  // enforce the hard host-group cap on this enumerated solution
-        }
+    const auto filter_placements = [&]() {
+        const std::size_t host_group_cap = inter_mesh_constraints.max_same_rank_groups_used();
+        for (const auto& placement : placements) {
+            if (!placement.success) {
+                continue;
+            }
+            if (host_group_cap > 0 &&
+                inter_mesh_placement_occupied_host_groups(placement, inter_mesh_constraints) > host_group_cap) {
+                continue;  // enforce the hard host-group cap on this enumerated solution
+            }
 
-        std::unordered_map<MeshId, MeshId> mesh_mappings(
-            placement.target_to_global.begin(), placement.target_to_global.end());
+            std::unordered_map<MeshId, MeshId> mesh_mappings(
+                placement.target_to_global.begin(), placement.target_to_global.end());
 
-        TopologyMappingResult full = complete_intra_mesh_for_placement(
-            mesh_mappings,
-            adjacency_map_logical,
-            adjacency_map_physical,
-            config,
+            TopologyMappingResult full = complete_intra_mesh_for_placement(
+                mesh_mappings,
+                adjacency_map_logical,
+                adjacency_map_physical,
+                config,
+                inter_mesh_validation_mode,
+                asic_id_to_mesh_rank,
+                fabric_node_id_to_mesh_rank);
+            if (!full.success) {
+                continue;
+            }
+
+            // Skip solutions whose full assignment we have already emitted.
+            if (!seen_signatures.insert(full_mapping_signature(full)).second) {
+                continue;
+            }
+
+            solutions.push_back(std::move(full));
+            if (max_solutions != 0 && solutions.size() >= max_solutions) {
+                break;
+            }
+        }
+    };
+    filter_placements();
+
+    // Every placement violated the best-effort host-group cap (or failed under it): mirror the single-solve
+    // policy — drop the cap (soft minimize stays on) and re-enumerate, so an infeasible cap never turns a
+    // solvable enumeration into zero solutions. With unique_shapes the capped enumeration may also have
+    // collapsed away all viable footprints, so the re-solve starts fresh.
+    if (solutions.empty() && inter_mesh_constraints.max_same_rank_groups_used() > 0) {
+        log_info(
+            tt::LogFabric,
+            "map_multi_mesh_to_physical_n: hard host-group cap (k={}) infeasible for this instance; retrying "
+            "without it (soft minimize stays on)",
+            inter_mesh_constraints.max_same_rank_groups_used());
+        inter_mesh_constraints.set_max_same_rank_groups_used(0);
+        placements = ::tt::tt_fabric::solve_topology_mapping_n(
+            mesh_logical_graph,
+            mesh_physical_graph,
+            inter_mesh_constraints,
+            /*max_solutions=*/max_solutions,
             inter_mesh_validation_mode,
-            asic_id_to_mesh_rank,
-            fabric_node_id_to_mesh_rank);
-        if (!full.success) {
-            continue;
-        }
-
-        // Skip solutions whose full assignment we have already emitted.
-        if (!seen_signatures.insert(full_mapping_signature(full)).second) {
-            continue;
-        }
-
-        solutions.push_back(std::move(full));
-        if (max_solutions != 0 && solutions.size() >= max_solutions) {
-            break;
-        }
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Auto,
+            unique_shapes);
+        filter_placements();
     }
 
     log_info(tt::LogFabric, "map_multi_mesh_to_physical_n: returning {} distinct solution(s)", solutions.size());
@@ -4012,18 +4059,63 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
             TopologyMappingSolverEngine::Auto,
             unique_shapes_);
         if (!placement.success) {
+            // Mirror the single-solve path (map_multi_mesh_to_physical): the minimal-host cap is
+            // best-effort — if the capped encoding is UNSAT, drop the hard cap (the SOFT minimize
+            // bias stays on) and re-encode a fresh session instead of reporting exhaustion, so an
+            // infeasible cap never turns a solvable enumeration into "no solutions" (split-host
+            // meshes partition hosts into more same-rank groups than the chip-count k_min allows).
+            // excluded_ carries every already-returned placement into the new encoding, so the
+            // relaxed session cannot re-emit them.
+            if (!host_cap_relaxed_ && inter_mesh_constraints_.max_same_rank_groups_used() > 0) {
+                log_info(
+                    tt::LogFabric,
+                    "Multi-solution enumeration: hard host-group cap (k={}) infeasible for this instance ({}); "
+                    "retrying without it (soft minimize stays on)",
+                    inter_mesh_constraints_.max_same_rank_groups_used(),
+                    placement.error_message);
+                inter_mesh_constraints_.set_max_same_rank_groups_used(0);
+                session_ = {};
+                host_cap_relaxed_ = true;
+                continue;
+            }
+            log_info(
+                tt::LogFabric,
+                "Multi-solution enumeration exhausted after {} solution(s) (cap_relaxed={}): {}",
+                emitted_,
+                host_cap_relaxed_,
+                placement.error_message);
             return std::nullopt;  // genuinely exhausted (real UNSAT) or a hard-encode failure
         }
 
         // Block this inter-mesh placement (by shape when unique_shapes) so the next warm solve returns a new one.
         excluded_.emplace_back(placement.target_to_global.begin(), placement.target_to_global.end());
 
-        // Hard host-group cap applies to every enumerated solution: the enumeration session does not honor
-        // set_max_same_rank_groups_used, so skip (but keep blocked, above) any placement over the cap and warm-solve
-        // for the next distinct one.
+        // Hard host-group cap applies to every enumerated solution: the DFS enumeration session does not honor
+        // set_max_same_rank_groups_used, so drop any placement over the cap post-hoc.
         if (const std::size_t host_group_cap = inter_mesh_constraints_.max_same_rank_groups_used();
             host_group_cap > 0 &&
             inter_mesh_placement_occupied_host_groups(placement, inter_mesh_constraints_) > host_group_cap) {
+            // Nothing emitted yet => every solution the solver can reach violates the best-effort cap
+            // (e.g. split-host meshes partition the hosts into more same-rank groups than the chip-count
+            // k_min allows). Mirror the single-solve policy: relax the cap and re-enumerate from scratch.
+            // The exclusions MUST be cleared: with unique_shapes the just-blocked placement blocks every
+            // other solution sharing its physical-mesh footprint — for a ring that uses all candidate
+            // meshes, that is ALL of them.
+            if (emitted_ == 0 && !host_cap_relaxed_) {
+                log_info(
+                    tt::LogFabric,
+                    "Multi-solution enumeration: hard host-group cap (k={}) infeasible for this instance "
+                    "(first placement occupies {} host groups); retrying without it (soft minimize stays on)",
+                    host_group_cap,
+                    inter_mesh_placement_occupied_host_groups(placement, inter_mesh_constraints_));
+                inter_mesh_constraints_.set_max_same_rank_groups_used(0);
+                excluded_.clear();
+                seen_signatures_.clear();
+                session_ = {};
+                host_cap_relaxed_ = true;
+                continue;
+            }
+            // Solutions were already emitted under the cap: keep the cap and skip (blocked above).
             continue;
         }
 

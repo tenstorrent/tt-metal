@@ -688,6 +688,9 @@ private:
     std::vector<std::map<MeshId, MeshId>> excluded_;  // found placements, blocked on subsequent next()
     std::set<std::string> seen_signatures_;
     std::size_t emitted_ = 0;
+    // One-shot relaxation of the hard minimal-host cap, mirroring the single-solve fallback: when the
+    // capped encoding is UNSAT, next() clears the cap and re-encodes a fresh session (see next()).
+    bool host_cap_relaxed_ = false;
 };
 
 /** Log inter-mesh and per-mesh intra-mesh degree histograms at INFO (one line each). */

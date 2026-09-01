@@ -726,6 +726,22 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${
     --recover-command 'true' \
     -- ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.SweepConsumer_SolutionSpansExpectedHosts:${GTEST_SUBTORUS_2X4_PIPELINE}"
 
+# Regression: multi-solution enumeration of SPLIT-HOST meshes (8x 4x4 torus meshes, two 2x4 host slices
+# each, on the SC4 quad mock — 128 chips / 32 per galaxy = 4 hosts). Split-host meshes partition the hosts
+# into more same-rank groups than the chip-count k_min host cap allows, so the capped enumeration is
+# infeasible — and with the solver's unique_shapes dedup the first cap-dropped placement's footprint blocks
+# every other solution (a ring over all candidate meshes has ONE footprint). Before the enumeration-side
+# host-cap fallback this yielded 0 solutions while the single-solve path mapped the same MGD fine.
+# Asserts >=1 solution enumerates (the driver fails on 0), spans exactly 4 hosts, and runs the pipeline.
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${RING_STRESS_TIMEOUT} SWEEP_EXPECTED_HOSTS=4 python3 tools/scaleout/sweep_rank_binding_solutions.py \
+    --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x4_pipeline_8stage_mesh_graph_descriptor.textproto" \
+    --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" \
+    --mpi-args "--allow-run-as-root --oversubscribe -x SWEEP_EXPECTED_HOSTS" \
+    --max-solutions 2 \
+    --per-solution-timeout ${RING_STRESS_TIMEOUT} \
+    --recover-command 'true' \
+    -- ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.SweepConsumer_SolutionSpansExpectedHosts:ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
+
 fi # bh-ring-stress
 
 ######################################
