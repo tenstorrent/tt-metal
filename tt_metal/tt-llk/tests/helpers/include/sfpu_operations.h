@@ -1783,10 +1783,23 @@ void call_binary_sfpu_operation_init()
     {
         SFPU_BINARY_INIT_FN(fmod_int32, fmod_int32_init, (APPROXIMATION_MODE));
     }
+    // isclose: the production kernel's Inf/NaN class fix-up reads
+    // vConstIntPrgm0 = 0x7FFFFFFF, programmed by isclose_init (mirrors the
+    // production isclose_binary_tile_init in tt_metal/hw/inc/api/compute/
+    // isclose.h). This harness used to route ISCLOSE through the no-init
+    // fallback below, so the hand leg ran with vConstIntPrgm0 == 0 and the
+    // fix-up could never fire: hand isclose(+Inf,+Inf) and (-Inf,-Inf)
+    // returned 0.0 where torch.isclose says True (laneJO finding JO-F1,
+    // sim-confirmed witnesses; booked stimuli carry no infinities, but the
+    // hand baseline was mis-initialized).
+    else if constexpr (BINOP == BinaryOp::ISCLOSE)
+    {
+        SFPU_BINARY_INIT_FN_NO_ARGS(isclose, isclose_init);
+    }
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
-        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK, ISCLOSE and LOGSIGMOID land here: those
+        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK and LOGSIGMOID land here: those
         // kernels need no per-op init beyond the standard binary addrmod configuration
         // (logsigmoid_init is a no-op).
         SFPU_BINARY_INIT(add1);
