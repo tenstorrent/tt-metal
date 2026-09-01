@@ -6262,3 +6262,61 @@ bandwidth to drain traffic. Do not quote this as the cause.
 2. **Bandwidth numbers measured under the profiler are not trustworthy above ~5 KB packets** at low
    link counts. Below that, and at 4 links, they are fine.
 3. The fabric sync hook is exonerated — this is the profiler's drain, not the sync.
+
+---
+
+## Sync-rate sweep: 20 / 100 / 500 Hz — 100 Hz is the operating point
+
+`test_tt_fabric --test_config fabric_1grp.yaml` (MeshMulticast, 72 cases), bh-31, FORCE_AICLK=1350,
+one `tt-smi -r` before each arm. Only `TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ` differs.
+
+| HZ  | rounds/link | partial/dropped/stray | samples | mean \|residual\| | overall geomean BW | golden failures |
+|-----|-------------|-----------------------|---------|-------------------|--------------------|-----------------|
+| 20  | 77          | 0 / 0 / 0             | 14,784  | 83 ns             | 1.0105             | 0               |
+| 100 | 371         | 0 / 0 / 0             | 71,376  | **44 ns**         | **1.0011**         | **0**           |
+| 500 | 1825        | 0 / 0 / 0             | 351,024 | 38 ns             | 0.9777             | 4 (rc=134)      |
+
+`residual` = paired FSYNC_ECHO (initiator lane, corrected) vs FSYNC_ECHO_RAW (responder lane, raw),
+first 5% of pairs discarded for warm-up; n = 1,232 / 5,936 / 29,200.
+
+### Losslessness holds at 25x the rate
+Every arm solved every round: 0 partial, 0 dropped, 0 stray, up to 351k samples. The drain, the
+L1 rings and the host receiver are not the limit anywhere in this range. Whatever caps the sync
+rate, it is not capacity.
+
+### The residual floor is ~40 ns and rate cannot break it
+83 -> 44 ns from 20 -> 100 Hz is real. 44 -> 38 ns from 100 -> 500 Hz is 25x the samples for 6 ns.
+Two mechanisms pin the floor, neither fixable by sampling faster:
+
+1. **Ring closure is systematically -47 ns, not scattered around 0.** Medians across arms are
+   -54.1 / -48.1 / -47.4 ns (n = 2 / 8 / 33). A consistent sign and magnitude at every rate is a
+   *bias*, not noise. Cristian's solve assumes the forward and return eth hops are symmetric; a
+   ~95 ns round-trip asymmetry produces exactly this. More samples average noise, never bias.
+2. **`publish_fabric_sync_corrections()` republishes on a fixed 40 ms timer** regardless of HZ.
+   At 500 Hz that is 20 solved rounds per published correction — 19 of them are discarded before
+   anything downstream can see them.
+
+CAUTION on closure as a metric: a single `[final]` closure value is one sample and cannot rank two
+arms. Reading `head -1` made 100 Hz (-20.0 ns) look better than 500 Hz (-38.5 ns) when their medians
+are -48.1 and -47.4 — statistically identical. Rank by the paired residual, which has thousands of
+pairs behind it; quote closure only as a distribution.
+
+### The cost of rate is fabric bandwidth, and 500 Hz overdraws it
+Overall geomean speedup 1.0105 -> 1.0011 -> 0.9777. The 20 -> 100 step costs 0.9% and stays inside
+the golden band; the 100 -> 500 step costs a further 2.3% and puts 4 of 72 cases under threshold.
+Per-NType at 500 Hz: NOC_UNICAST_SCATTER_WRITE 0.954, NOC_FUSED_UNICAST_ATOMIC_INC 0.975,
+NOC_UNICAST_WRITE 1.006 — the scatter/atomic paths, which do the most work per router iteration,
+absorb the most hook interference.
+
+**rc=134 at 500 Hz is SIGABRT from `TT_THROW` on golden bandwidth comparison** (test_tt_fabric.cpp:429),
+after all 72 tests executed and every sync round solved. It is a perf failure, not a wedge, hang,
+timeout or data corruption — the same class as the large-packet regression above, and it must not
+be reported as a crash.
+
+### Consequences
+1. **Ship 100 Hz.** It takes 88% of the available residual improvement (83->44 of 83->38) for no
+   measurable bandwidth cost and zero golden failures.
+2. **Going below ~40 ns needs a different lever, not a faster one:** measure and subtract the link
+   asymmetry, and/or decouple the correction republish from its 40 ms timer.
+3. 500 Hz remains useful as a *diagnostic* arm — it proved the drain is lossless at 351k samples.
+   It is not a production setting.
