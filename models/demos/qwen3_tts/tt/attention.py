@@ -11,6 +11,7 @@ This module handles the necessary dimension rearrangement.
 Supports both prefill mode (full sequence) and decode mode (single token with KV cache).
 """
 
+import os
 from typing import Optional, Tuple
 
 import torch
@@ -358,6 +359,15 @@ class Attention(LightweightModule):
             for m in PREFILL_SEQS
             if m > self.short_seq_limit
         }
+        # N300 override: o_proj is 1024x2048 at TP=2, and every 1D config swept is slower
+        # than plain auto-routing there (-5.8 % at seq=64, -14.7 % at seq=128 for auto).
+        # N150's o_proj is 2048x2048 and does not match, so it keeps the tuned config.
+        self._prefill_wo_auto_seqs = (
+            {m for m in PREFILL_SEQS if m > self.short_seq_limit}
+            if (self._local_hidden, hidden_size) == (1024, 2048)
+            and os.environ.get("QWEN3_TTS_N300_MM_OVERRIDE", "1") != "0"
+            else set()
+        )
         self._prefill_wo_progcfg = {
             m: make_linear_1d_program_config(m, self._local_hidden, hidden_size, _wo_gx, _wo_gy, _fp32_linear)
             for m in PREFILL_SEQS
@@ -577,7 +587,7 @@ class Attention(LightweightModule):
             wo_progcfg = self._decode_wo_progcfg
         elif seq_len in self._prefill_wqkv_progcfg:
             wqkv_progcfg = self._prefill_wqkv_progcfg[seq_len]
-            wo_progcfg = self._prefill_wo_progcfg[seq_len]
+            wo_progcfg = None if seq_len in self._prefill_wo_auto_seqs else self._prefill_wo_progcfg[seq_len]
         elif seq_len <= self.short_seq_limit:
             wqkv_progcfg = self._short_seq_wqkv_progcfg
             wo_progcfg = self._short_seq_wo_progcfg

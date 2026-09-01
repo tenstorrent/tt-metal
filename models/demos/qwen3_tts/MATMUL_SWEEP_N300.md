@@ -41,3 +41,55 @@ must emit that layout or pay an `InterleavedToSharded` (~2-5 us) that is not cou
 * **2D block-sharded never places.** M is only 2-4 tiles here, so the mcast grid cannot use the
   M axis — the usual encoder layout does not apply to these short prefill buckets.
 * Auto-routing with DRAM-interleaved activations is consistently ~12 % worse than L1.
+
+---
+
+## Round 2 — after the shared prefill tuning landed
+
+Upstream's Talker-prefill tuning (`find_1d_mcast_grid` + per-bucket 1D configs, ungated)
+superseded the wiring above. It is right on N150 and partly wrong on N300, because TP=2
+halves N and the two SKUs no longer share a shape:
+
+| gate/up | shape | grid | achieved |
+|---|---|---|---|
+| N150 | 2048x6144 | full 64 cores | 210 GB/s — **73 % of DRAM peak**, correct |
+| N300 | 2048x3072 | full 64 cores | 145 GB/s — 50 %, 19-26 us/matmul worse than auto |
+
+**The first sweep could not have found this.** It fed gate/up an L1-interleaved activation,
+but in prefill `decoder_layer` hands the MLP the *width-sharded* RMSNorm output directly. The
+round-2 sweep (`test_qwen3_tts_prefill_mm_sweep2_n300.py`) reproduces the deployed layout and
+puts any reshard a candidate needs inside the timed region, so the numbers are comparable to
+what the model would actually pay.
+
+Reference is the config the model builds today, not auto-routing:
+
+| N300 case | current | best bit-safe | win |
+|---|---:|---|---:|
+| gate/up seq=64 | 89.7 us | 1D 32 cores, ibw2, sb 2x1 | **-22.4 %** |
+| gate/up seq=128 | 105.8 us | 1D 32 cores, ibw2, sb 1x3 | **-24.7 %** |
+| o_proj seq=64 | 33.4 us | plain auto-routing | **-5.8 %** |
+| o_proj seq=128 | 49.8 us | plain auto-routing | **-14.7 %** |
+
+Both winners keep `fp32_dest_acc_en=True`. The gate/up figures are conservative: the sweep
+charges the in0 reshard to each matmul, but gate and up share one `x`, so in-model it is paid
+once for two.
+
+### Applied
+
+`mlp.py` overrides gate/up to 32 cores for the N300 shapes (resharding `x` once, before both
+matmuls); `attention.py` drops o_proj back to auto for the N300 shape. Both are keyed on the
+exact `(seq, K, N)` / `(K, N)`, so **N150 cannot match and is untouched by construction** —
+no device check needed.
+
+Per-layer Talker prefill matmul total on N300:
+
+| | pre-upstream (auto) | upstream as-is | with this override |
+|---|---:|---:|---:|
+| seq=64 | 302 us | 318 us | **272 us** |
+| seq=128 | 378 us | 413 us | **350 us** |
+
+vs upstream as-is: **-46 us/layer** at seq=64 and **-63 us/layer** at seq=128, i.e. -1.3 ms
+and -1.8 ms over 28 layers. Also better than the pre-upstream auto baseline by 30 / 28 us.
+
+N150 verified unchanged against a baseline taken before the edit: same 24 ops, every matmul
+within +-4 us, window 721 vs 722 us (seq=64) and 858 vs 855 us (seq=128).
