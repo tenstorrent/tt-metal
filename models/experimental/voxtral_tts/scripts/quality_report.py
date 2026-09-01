@@ -51,6 +51,15 @@ TOL = {
     # the tolerance its own percentage implies (0.5% of 864 measured codes ~ 4).
     "codes_real_pct": 0.5, "codes_real_n": 4,
     "wer_longform": 0, "mos_longform": 0.05,
+    # 0.01, not the 0.05 mos_longform carries. That figure covers the audio tier's three seeds and
+    # its case-order dependency (6.21); the per-language set runs one process in a fixed order and
+    # was MEASURED fully deterministic -- two independent generations produced 120 byte-identical
+    # wavs and MOS agreeing to four decimals. So this is insurance against a library update
+    # rounding differently, not a noise floor.
+    **{f"mos_lang_{l}": 0.01 for l in ("ar", "de", "en", "es", "fr", "hi", "it", "nl", "pt")},
+    "mos_lang_min": 0.01,
+    # A run that loses MOS entirely must not read as unchanged: 1 -> 0 is a regression to report.
+    "mos_available": 0,
     # 0.5 ms is not a guess: three identical audio-tier runs on unchanged HEAD spread 0.390 ms
     # (§6.63). ms_per_frame is the PRIMARY timing gate -- a block A/B is a screen only, because it
     # measures device time with dispatch overlapped and the real loop drains at 10 host crossings
@@ -68,15 +77,20 @@ EXPECTED = {
     "full": ["wiring_pcc", "prefill_pcc_last", "prefill_n_cases", "codec_pcc_t24",
              "decode_mean_pp", "decode_p90_pp", "decode_min_pcc"],
     "audio": ["audio_runs", "wer_longform", "wer_longform_words", "n_utterances", "clicks_total",
+              "mos_available",
               "clipped_max_pct", "terminated", "ms_per_frame", "rtf"],
 }
 MOS_KEYS = ["mos_mean", "mos_longform", "mos_min"]
+# Per-language MOS. Pooled MOS cannot see one language turning robotic while staying intelligible,
+# and WER cannot see naturalness at all, so this is the axis both other gates miss.
+MOS_LANGS = ("ar", "de", "en", "es", "fr", "hi", "it", "nl", "pt")
+MOS_LANG_KEYS = [f"mos_lang_{l}" for l in MOS_LANGS] + ["mos_lang_min"]
 
 
 # Reported but NOT gated -- STATUS.md 6.62. codes_synth_n is non-monotonic in precision (6.59) and
 # mos_mean/mos_min are dominated by short prompts, which 6.7 treats as seed noise. Tail risk is
 # measured by tests/probes/tail_probe.py instead, which counts failures over many seeds.
-REPORT_ONLY = ("codes_synth_n", "mos_mean", "mos_min")
+REPORT_ONLY = ("codes_synth_n", "mos_mean", "mos_min", "mos_lang_spread")
 
 
 def sh(cmd, timeout=3600, python=None):
@@ -200,6 +214,7 @@ def run_audio(res, log, tag, seeds):
         res["rtf"] = round(statistics.mean(r["rtf"] for r in lfr), 4)
 
     # ---- MOS, isolated venv ----
+    res["mos_available"] = 1 if os.path.exists(MOSVENV) else 0
     if os.path.exists(MOSVENV):
         log("MOS (DistillMOS, isolated venv)")
         o = sh([os.path.join(HERE, "tests", "probes", "mos_batch.py")] +
@@ -207,6 +222,17 @@ def run_audio(res, log, tag, seeds):
         res["mos_mean"] = grab(o, r"MOS_MEAN ([\d.]+)")
         res["mos_longform"] = grab(o, r"MOS_LONGFORM ([\d.]+)")
         res["mos_min"] = grab(o, r"MOS_MIN ([\d.]+)")
+
+        # Per language, on the sentences of ~20 words and up -- the medium and long WER bands, so
+        # the clips are the same text the WER cells score and the two axes compare directly.
+        log(f"per-language clips + MOS ({len(MOS_LANGS)} languages)")
+        sh([os.path.join(HERE, "scripts", "generate_language_set.py"), "--tag", tag], timeout=7200)
+        o = sh([os.path.join(HERE, "tests", "probes", "mos_perlang.py"), tag], timeout=3600,
+               python=MOSVENV)
+        for l in MOS_LANGS:
+            res[f"mos_lang_{l}"] = grab(o, rf"MOS_LANG_{l} ([\d.]+)")
+        res["mos_lang_min"] = grab(o, r"MOS_LANG_MIN ([\d.]+)")
+        res["mos_lang_spread"] = grab(o, r"MOS_LANG_SPREAD ([\d.]+)")
     else:
         res["mos_mean"] = None
         res["_mos_note"] = f"{MOSVENV} absent -- run tests/probes/mos_setup.sh"
@@ -289,7 +315,7 @@ def main():
     if a.tier == "audio":
         want += EXPECTED["audio"]
         if os.path.exists(MOSVENV):
-            want += MOS_KEYS
+            want += MOS_KEYS + MOS_LANG_KEYS
     missing = [k for k in want if res.get(k) is None]
     os.makedirs(GEN, exist_ok=True)
     dst = os.path.join(GEN, f"quality_{a.tag}.json")
