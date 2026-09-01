@@ -57,12 +57,10 @@ void kernel_main() {
     constexpr uint32_t sin_interm_dfb = dfb::sin_interm;
 
     // The in/out DFB identity is runtime-selected (q vs k), so these objects are constructed
-    // from the selected id (the dfb:: tokens carry the same ids).
+    // from the selected id (the dfb:: tokens carry the same ids). cos/sin/trans_mat carry no
+    // objects: they are consumed via raw LLK index calls only (as in the row-major variant).
     DataflowBuffer in_dfb_obj(in_dfb);
     DataflowBuffer out_dfb_obj(out_dfb);
-    DataflowBuffer cos_dfb_obj(cos_dfb);
-    DataflowBuffer sin_dfb_obj(sin_dfb);
-    DataflowBuffer trans_mat_dfb_obj(trans_mat_dfb);
     DataflowBuffer rotated_in_interm_dfb_obj(rotated_in_interm_dfb);
     DataflowBuffer cos_interm_dfb_obj(cos_interm_dfb);
     DataflowBuffer sin_interm_dfb_obj(sin_interm_dfb);

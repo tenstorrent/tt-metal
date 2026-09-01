@@ -98,4 +98,4 @@ No buffer-address RTAs, no `TensorAccessorArgs` plumbing, no page-size third-arg
 
 ## Deferred / Flagged
 
-- New findings during planning: none beyond the audit's. The row-major kernel variant has **no in-tree test coverage** (`run_test_row_major_rotary_embedding_llama` exists in the nightly test file but no test invokes it) — it converts together with the factory and is verified by compile + review only; recorded in the report.
+- New findings during planning: none beyond the audit's. The row-major kernel variant's in-tree coverage is **TG-only** (`run_test_row_major_rotary_embedding_llama(..., fuse_qk=True)` is invoked by the Galaxy tests `models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_ops.py:554` and `test_qwen_ops.py:554`, both requiring an (8, 4) mesh) — not runnable on this bench, so it converts together with the factory and is verified by compile + review here, with TG execution evidence deferred to CI / the op owner; recorded in the report.
