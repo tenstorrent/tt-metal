@@ -201,6 +201,8 @@ inline void _llk_math_sub_bcast_cols_compensated_init_()
 
 inline void _compensated_move_broadcast_col_to_dest_(const std::uint32_t src_row, const std::uint32_t dst_row)
 {
+    // Blackhole forces MOVB2D's effective SrcA format to TF32 when FP32 DEST accumulation is
+    // enabled. The move therefore writes 32-bit DEST rows without relying on implied source formats.
     TTI_MOVB2D(0, src_row + 0, ADDR_MOD_4, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 0);
     TTI_MOVB2D(0, src_row + 4, ADDR_MOD_4, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 4);
     TTI_MOVB2D(0, src_row + 8, ADDR_MOD_4, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 8);
