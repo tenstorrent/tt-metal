@@ -15,52 +15,64 @@ namespace cfg
 // THCON
 // ============================================================
 
-struct ThconReg0Selector
+class ThconReg0Selector
 {
+public:
 };
 
-struct ThconReg1Selector
+class ThconReg1Selector
 {
+public:
 };
 
-struct ThconReg2Selector
+class ThconReg2Selector
 {
+public:
 };
 
-struct ThconReg3Selector
+class ThconReg3Selector
 {
+public:
 };
 
-struct ThconReg4Selector
+class ThconReg4Selector
 {
+public:
 };
 
-struct ThconReg5Selector
+class ThconReg5Selector
 {
+public:
 };
 
-struct ThconReg6Selector
+class ThconReg6Selector
 {
+public:
 };
 
-struct ThconReg7Selector
+class ThconReg7Selector
 {
+public:
 };
 
-struct ThconReg8Selector
+class ThconReg8Selector
 {
+public:
 };
 
-struct ThconReg9Selector
+class ThconReg9Selector
 {
+public:
 };
 
-struct ThconReg10Selector
+class ThconReg10Selector
 {
+public:
 };
 
-struct ThconReg11Selector
+class ThconReg11Selector
 {
+public:
 };
 
 inline constexpr ThconReg0Selector Reg0 {};
@@ -76,8 +88,9 @@ inline constexpr ThconReg9Selector Reg9 {};
 inline constexpr ThconReg10Selector Reg10 {};
 inline constexpr ThconReg11Selector Reg11 {};
 
-struct ThconTileDescriptorFields
+class ThconTileDescriptorFields
 {
+public:
     static constexpr Field Raw {RegisterFile::State, 32, 64, 0, 0, 128, 2, 1536};           // Complete four-word descriptor
     static constexpr Field InDataFormat {RegisterFile::State, 32, 64, 0, 0, 4, 2, 1536};    // Unpacker input data format (4b)
     static constexpr Field Uncompressed {RegisterFile::State, 32, 64, 0, 4, 1, 2, 1536};    // Input tile is uncompressed (1b)
@@ -92,15 +105,17 @@ struct ThconTileDescriptorFields
     static constexpr Field DigestSize {RegisterFile::State, 32, 64, 3, 24, 8, 2, 1536};     // Digest size; unused (8b)
 };
 
-struct ThconReg0Fields
+class ThconReg0Fields
 {
+public:
     // cfg_defines.h exposes only the 128-bit anchor. Keep the physical layout
     // here so callers can name logical fields without masks, shifts, or word offsets.
     static constexpr ThconTileDescriptorFields TileDescriptor {};
 };
 
-struct ThconReg1Fields
+class ThconReg1Fields
 {
+public:
     static constexpr Field Row_start_section_size {
         RegisterFile::State, 32, 64, 4, 0, 16, 2, 1536}; // Packer row-start section size (aligned to 16B word) - regs sets 0/2 (16b)
     static constexpr Field Exp_section_size {
@@ -148,8 +163,9 @@ struct ThconReg1Fields
     static constexpr Field Exp_threshold {RegisterFile::State, 32, 64, 7, 24, 8, 2, 1536}; // Packer exp threshold - regs sets 0/2 (8b)
 };
 
-struct ThconReg2Fields
+class ThconReg2Fields
 {
+public:
     static constexpr Field Out_data_format {RegisterFile::State, 32, 64, 8, 0, 4, 2, 1536}; // Unpacker 0/1 out data format (4b)
     static constexpr Field Throttle_mode {
         RegisterFile::State, 32, 64, 8, 4, 2, 2, 1536}; // Unpacker 0/1 high perf mode (enable 512-bit unpacker l1 read interface (2b)
@@ -224,8 +240,9 @@ struct ThconReg2Fields
     static constexpr Field Unpack_fifo_size {RegisterFile::State, 32, 64, 11, 0, 17, 2, 1536}; // Unpacker 0/1 source/tile fifo size (17b)
 };
 
-struct ThconReg3Fields
+class ThconReg3Fields
 {
+public:
     static constexpr Field Base_address {
         RegisterFile::State, 32, 64, 12, 0, 32, 2, 1536}; // Unpacker 0/1 Source/Tile base/context 0 address for unpacker (aligned to 16B word) (32b)
     static constexpr Field Base_cntx1_address {
@@ -236,8 +253,9 @@ struct ThconReg3Fields
         RegisterFile::State, 32, 64, 15, 0, 32, 2, 1536}; // Unpacker 0 source/Tile context 3 address (aligned to 16B word) (32b)
 };
 
-struct ThconReg4Fields
+class ThconReg4Fields
 {
+public:
     static constexpr Field Base_cntx4_address {
         RegisterFile::State, 32, 64, 16, 0, 32, 2, 1536}; // Unpacker 0 source/Tile context 4 address (aligned to 16B word) (32b)
     static constexpr Field Base_cntx5_address {
@@ -248,8 +266,9 @@ struct ThconReg4Fields
         RegisterFile::State, 32, 64, 19, 0, 32, 2, 1536}; // Unpacker 0 source/Tile context 7 address (aligned to 16B word) (32b)
 };
 
-struct ThconReg5Fields
+class ThconReg5Fields
 {
+public:
     static constexpr Field Dest_cntx0_address {RegisterFile::State, 32, 64, 20, 0, 16, 2, 1536};  // Unpacker 0 dest srca context 0 address (16b)
     static constexpr Field Dest_cntx1_address {RegisterFile::State, 32, 64, 20, 16, 16, 2, 1536}; // Unpacker 0 dest srca context 1 address (16b)
     static constexpr Field Dest_cntx2_address {RegisterFile::State, 32, 64, 21, 0, 16, 2, 1536};  // Unpacker 0 dest srca context 2 address (16b)
@@ -260,8 +279,9 @@ struct ThconReg5Fields
     static constexpr Field Tile_x_dim_cntx3 {RegisterFile::State, 32, 64, 23, 16, 16, 2, 1536};   // Unpacker 0 tile context 3 x dim (16b)
 };
 
-struct ThconReg6Fields
+class ThconReg6Fields
 {
+public:
     static constexpr Field Source_address {RegisterFile::State, 32, 64, 24, 0, 32, 2, 1536};      // Mover 0 Source address, aligned to 16B (32b)
     static constexpr Field Destination_address {RegisterFile::State, 32, 64, 25, 0, 32, 2, 1536}; // Mover 0 Destination address, aligned to 16B (32b)
     static constexpr Field Buffer_size {RegisterFile::State, 32, 64, 26, 0, 30, 2, 1536};         // Mover 0 Buffer size in 16B chunks (max 64k) (30b)
@@ -272,8 +292,9 @@ struct ThconReg6Fields
                                                           // tile x_dim, 1-bit disable compression, 1-bit disable metadata reg override} (32b)
 };
 
-struct ThconReg7Fields
+class ThconReg7Fields
 {
+public:
     static constexpr Field Offset_address {RegisterFile::State, 32, 64, 28, 0, 16, 2, 1536};               // Unpacker 0/1 offset context 0 address (16b)
     static constexpr Field Unpack_data_format_cntx0 {RegisterFile::State, 32, 64, 28, 16, 4, 2, 1536};     // Unpacker 0/1 input data format for context 0 (4b)
     static constexpr Field Unpack_out_data_format_cntx0 {RegisterFile::State, 32, 64, 28, 20, 4, 2, 1536}; // Unpacker 0/1 output data format for context 0 (4b)
@@ -296,8 +317,9 @@ struct ThconReg7Fields
     static constexpr Field Unpack_out_data_format_cntx7 {RegisterFile::State, 32, 64, 31, 28, 4, 2, 1536}; // Unpacker 0 output data format for context 7 (4b)
 };
 
-struct ThconReg8Fields
+class ThconReg8Fields
 {
+public:
     static constexpr Field Row_start_section_size {
         RegisterFile::State, 32, 64, 32, 0, 16, 2, 1536}; // Packer row-start section size (aligned to 16B word) - regs sets 1/3 (16b)
     static constexpr Field Exp_section_size {
@@ -340,8 +362,9 @@ struct ThconReg8Fields
     static constexpr Field Exp_threshold {RegisterFile::State, 32, 64, 35, 24, 8, 2, 1536}; // Packer exp threshold - regs sets 1/3 (8b)
 };
 
-struct ThconReg9Fields
+class ThconReg9Fields
 {
+public:
     static constexpr Field Pack_0_2_limit_address {
         RegisterFile::State, 32, 64, 36, 0, 17, 2, 1536}; // Packer dest limit address used for wraparound. Wraparound address is computed based on the fifo
                                                           // size below - regs sets 0/2 (17b)
@@ -352,8 +375,9 @@ struct ThconReg9Fields
     static constexpr Field Pack_1_3_fifo_size {RegisterFile::State, 32, 64, 39, 0, 17, 2, 1536}; // Packer dest fifo size - regs sets 1/3 (17b)
 };
 
-struct ThconReg10Fields
+class ThconReg10Fields
 {
+public:
     static constexpr Field Unpack_limit_address {
         RegisterFile::State, 32, 64, 40, 0, 17, 2, 1536}; // Unpacker source/tile extra limit address used by cntx1 for wraparound ;  used when
                                                           // REG10_Unpack_limit_address_en is set. Wraparound address is computed based on the fifo size below.
@@ -365,8 +389,9 @@ struct ThconReg10Fields
     static constexpr Field Packer_Reg_Wr_Addr {RegisterFile::State, 32, 64, 43, 0, 24, 2, 1536};   // 4 sets of 12-bit addresses including both Sections (24b)
 };
 
-struct ThconReg11Fields
+class ThconReg11Fields
 {
+public:
     static constexpr Field Metadata_l1_addr {RegisterFile::State, 32, 64, 44, 0, 32, 2, 1536};    // Metadata Tile L1 addr (32b)
     static constexpr Field Metadata_limit_addr {RegisterFile::State, 32, 64, 45, 0, 32, 2, 1536}; // Metadata Limit addr (32b)
     static constexpr Field Metadata_fifo_size {RegisterFile::State, 32, 64, 46, 0, 32, 2, 1536};  // Metadata FIFO size (32b)
@@ -376,8 +401,9 @@ struct ThconReg11Fields
         RegisterFile::State, 32, 64, 47, 8, 8, 2, 1536}; // Metadata UNPACR count before switching context (8b)
 };
 
-struct ThconFields
+class ThconFields
 {
+public:
     constexpr ThconReg0Fields operator[](ThconReg0Selector) const
     {
         return {};
