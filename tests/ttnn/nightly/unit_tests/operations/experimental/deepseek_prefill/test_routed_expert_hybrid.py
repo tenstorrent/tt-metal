@@ -233,8 +233,9 @@ def _isl_params(active_sweep, only_models=None):
     A model with no threshold is dropped rather than run at `None`: that is the single-op path
     test_single_routed_expert already grades, and it would not exercise a split at all.
 
-    Kimi K3 is absent for the same reason as in test_single_routed_expert: its LatentMoE projects
-    7168 -> 3584 first, so EMB_SIZE would run it at 2x its real K. Its case is separate below.
+    Kimi K3 has no case in this file at all: it is not in SINGLE_EXPERT_MODELS (EMB_SIZE would run
+    it at 2x its real K, since LatentMoE projects 7168 -> 3584 first), and it does not enable the
+    split either, so there would be nothing here for it to grade.
     """
     params = []
     for name, config, extended in SINGLE_EXPERT_MODELS:
@@ -321,31 +322,4 @@ def test_tt_routed_expert_hybrid_isl_sweep(
         threshold,
         active_tokens=active_tokens,
         x_row_major=x_row_major,
-    )
-
-
-@pytest.mark.parametrize(
-    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
-)
-@pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
-@pytest.mark.parametrize(
-    "active_tokens, threshold",
-    [pytest.param(t, _threshold_of(KimiK3Config), id=f"t{t}") for t in _ISL_EXHAUSTIVE_SWEEP],
-)
-@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
-@pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU is Blackhole-only")
-def test_tt_routed_expert_hybrid_k3(
-    mesh_device, device_params, active_tokens: int, threshold: Optional[int], x_row_major: bool
-):
-    """Kimi K3: SiTU-GLU at the post-projection dims, so K is ROUTED_EXPERT_HIDDEN_SIZE. Its 768
-    threshold puts 512 and below in the fused band and 1024 and above in the composite's."""
-    run_routed_expert_hybrid(
-        mesh_device,
-        _ISL_ALLOCATED_TOKENS,
-        KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
-        KimiK3Config.MOE_INTERMEDIATE_SIZE,
-        threshold,
-        active_tokens=active_tokens,
-        x_row_major=x_row_major,
-        activation=ttnn.RoutedExpertActivation.SituGlu,
     )
