@@ -20,10 +20,12 @@ Priorities are stated per plan and do not follow the numbering: plan 2 is delibe
 ## Sequencing
 
 1. **Plan 1** — self-contained, no solver changes, immediate reduction in retry churn. Ship first.
-2. **Plan 3, §4(h)** — delete `kMaxPlacementsPerGrouping` and enumerate the complete candidate pool.
+2. **Plan 3, §5(h)** — delete `kMaxPlacementsPerGrouping` and enumerate the complete candidate pool.
    Small and independent of the rest of plan 3.
-3. **Plan 3** — the adjacency-guided search, behind a fallback to the existing path.
-4. **Plan 2** — needs the session-tightening fix in the solver bridge; its payoff shrinks once plans 1
+3. **Plan 3, §4(g)** — stop applying the seam-blind PGD orientation preference to meshes that have
+   seams. Also independent, and it needs neither the DFS nor plan 1.
+4. **Plan 3** — the adjacency-guided search, behind a fallback to the existing path.
+5. **Plan 2** — needs the session-tightening fix in the solver bridge; its payoff shrinks once plans 1
    and 3 have removed most retries. Do it for the encode-once win, not for correctness.
 
 ## How the plans relate
@@ -37,6 +39,12 @@ Plan 3 supersedes the earlier "seam check at the leaf of the packing DFS" approa
 the symptom: it filtered bad combinations out of a search whose tile boundaries were already frozen. The
 8-chip example in Plan 3 §2 shows an MGD that is unsatisfiable over those frozen tilings no matter what
 is checked downstream, which is why the fix moved upstream into placement itself.
+
+**Plan 3 does not delete the inter-mesh solve.** Plan 3 §4 settles the architecture: two coupled passes,
+where the DFS decides properties of the *region set* (footprint, disjointness, seam existence) and the
+inter-mesh solve keeps everything that depends on the *labelling* (which mesh sits where, exit nodes,
+rank bindings, intra-mesh fit). Plan 3 §4(c) and §4(e) are the in/out lists. That boundary is what keeps
+Plan 1 relevant: it constrains exactly the labelling freedom Plan 3 leaves behind.
 
 ## Validation MGDs
 
