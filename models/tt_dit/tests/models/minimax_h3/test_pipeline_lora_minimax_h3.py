@@ -52,11 +52,17 @@ EXPECTED_FORWARDS = NUM_INFERENCE_STEPS - 1
 
 SEED = 0
 ASPECT_RATIO = (16, 9)
-DURATION_S = 5
 PROMPT = CALIBRATED_FOX_PROMPT
 
-# The base model's numbers at this working point, for the log to sit beside. Not thresholds.
-BASE_MODEL_REFERENCE = "49 forwards, ~72.7 s compute on 4x8, CLIP mean 37.05"
+# Matches `test_pipeline_minimax_h3.py`'s sweep so the two are directly comparable at each point.
+DURATIONS_S = [5, 15]
+
+# Measured on this mesh and build at 49 forwards, seed 0, same prompt -- so the log carries its own
+# A/B rather than pointing at numbers from another day. Nothing here is a threshold.
+BASE_MODEL_REFERENCE = {
+    5: "49 forwards: 66.4 s compute (denoise 54.6 s), CLIP mean 37.31",
+    15: "49 forwards: see test_pipeline_minimax_h3.py at the same point",
+}
 
 # Structural only. Four forwards should be far inside this; it exists to fail a run that silently
 # fell back to the 49-forward schedule rather than to measure anything.
@@ -64,8 +70,9 @@ MAX_S_PER_VIDEO_SECOND = 40.0
 
 
 @pytest.mark.timeout(5400)
+@pytest.mark.parametrize("duration_s", DURATIONS_S, ids=[f"{d}s" for d in DURATIONS_S])
 @pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
-def test_t2va_lora_end_to_end(mesh_device, reset_seeds):
+def test_t2va_lora_end_to_end(mesh_device, reset_seeds, duration_s):
     lora_path = os.environ.get("MINIMAX_H3_LORA_PATH")
     if not lora_path:
         pytest.skip("set MINIMAX_H3_LORA_PATH to a FastH3 adapter safetensors file")
@@ -76,8 +83,8 @@ def test_t2va_lora_end_to_end(mesh_device, reset_seeds):
     pytest.importorskip("open_clip", reason="the CLIP measurement needs open_clip, which is not installed")
 
     height, width = resolve_canvas_size(*ASPECT_RATIO)
-    num_frames = align_num_frames(round(DURATION_S * MINIMAX_H3_FPS))
-    stem = f"t2va_lora_{width}x{height}_{DURATION_S}s_{EXPECTED_FORWARDS}fwd"
+    num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+    stem = f"t2va_lora_{width}x{height}_{duration_s}s_{EXPECTED_FORWARDS}fwd"
     logger.info(f"adapter {lora_path} at strength {strength}")
     logger.info(f"working point: {width}x{height}, {num_frames} frames, {EXPECTED_FORWARDS} forwards")
 
@@ -119,7 +126,7 @@ def test_t2va_lora_end_to_end(mesh_device, reset_seeds):
         stem,
         num_forwards=EXPECTED_FORWARDS,
         video_seconds=output.video_seconds,
-        extra=f"base model for comparison: {BASE_MODEL_REFERENCE}",
+        extra=f"base model for comparison: {BASE_MODEL_REFERENCE.get(duration_s, 'unmeasured')}",
     )
 
     expected_frames = align_num_frames(num_frames)
@@ -134,7 +141,8 @@ def test_t2va_lora_end_to_end(mesh_device, reset_seeds):
     alignment = clip_prompt_alignment(frames, PROMPT)
     logger.info(
         f"{stem} CLIP prompt alignment: mean={alignment['mean']:.2f} min={alignment['min']:.2f} "
-        f"max={alignment['max']:.2f}  (base model at this prompt: 37.05, RECORDED not gated)"
+        f"max={alignment['max']:.2f}  (RECORDED not gated; base at this point: "
+        f"{BASE_MODEL_REFERENCE.get(duration_s, 'unmeasured')})"
     )
 
     if "mp4" in paths and os.environ.get("RUN_VBENCH", "1") not in ("0", "false", "False"):
