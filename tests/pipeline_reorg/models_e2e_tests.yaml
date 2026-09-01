@@ -734,7 +734,7 @@
     bh_quietbox_2:
       timeout: 12
       tier: 3
-  owner_id: U08GEGWHQJF # Adam Roberge
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
 - name: Mixtral-8x7B e2e tests
