@@ -385,7 +385,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
-    std::size_t logical_n,
+    const LogicalLength& logical_n,
     operations::transformer::SDPAProgramConfig program_config,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -403,6 +403,18 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
     const std::optional<ttnn::Tensor> joint_v = drop_if_empty(joint_tensor_v);
 
+    // Tensor path: the scalar attribute becomes the worst-case placeholder (see ExpRingJointSDPAInputs).
+    const std::size_t ring_size =
+        (cluster_axis == 0) ? mesh_device.get_view().num_rows() : mesh_device.get_view().num_cols();
+    const std::size_t padded_ring_n = static_cast<std::size_t>(input_tensor_k.logical_shape()[2]) * ring_size;
+    std::size_t logical_n_scalar = padded_ring_n;
+    std::optional<ttnn::Tensor> logical_n_tensor;
+    if (const auto* scalar = std::get_if<std::size_t>(&logical_n)) {
+        logical_n_scalar = *scalar;
+    } else {
+        logical_n_tensor = std::get<ttnn::Tensor>(logical_n);
+    }
+
     auto output_tensors = ttnn::prim::exp_ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,  // AllGather input
@@ -413,7 +425,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
         persistent_output_buffer_k,  // AllGather output / RingAttention input
         persistent_output_buffer_v,  // AllGather output / RingAttention input
         joint_strategy,
-        logical_n,
+        logical_n_scalar,
         std::move(program_config),
         dim,
         multi_device_global_semaphore,
@@ -425,7 +437,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
         scale,
         compute_kernel_config,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        logical_n_tensor);
     return {
         output_tensors[prim::EXP_RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX],

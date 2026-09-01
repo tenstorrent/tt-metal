@@ -166,7 +166,9 @@ struct ExecuteExpRingJointAttention {
         ttnn::Tensor& persistent_output_buffer_k,
         ttnn::Tensor& persistent_output_buffer_v,
         const std::string& joint_strategy,
-        std::size_t logical_n,
+        // The tensor form transports the live length on-device so one captured trace replays at
+        // different lengths (its placeholder is the padded ring total).
+        const LogicalLength& logical_n,
         operations::transformer::SDPAProgramConfig program_config,
         int32_t dim,
         const std::vector<GlobalSemaphore>& multi_device_global_semaphore,

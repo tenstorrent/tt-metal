@@ -161,7 +161,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_p
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
-    std::size_t logical_n,
+    const ttnn::transformer::LogicalLength& logical_n,
     const SDPAProgramConfig& program_config,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,

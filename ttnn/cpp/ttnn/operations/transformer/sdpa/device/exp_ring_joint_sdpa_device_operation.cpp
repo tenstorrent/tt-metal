@@ -165,6 +165,23 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         N_global - args.logical_n,
         N_local);
 
+    if (tensor_args.has_logical_n_tensor()) {
+        const auto& t = tensor_args.logical_n_tensor.value();
+        TT_FATAL(
+            t.dtype() == DataType::UINT32 || t.dtype() == DataType::INT32,
+            "logical_n tensor must be UINT32 or INT32 (the kernels read element 0 as a raw 32-bit word). Got {}",
+            t.dtype());
+        TT_FATAL(t.storage_type() == StorageType::DEVICE, "logical_n tensor must be on device");
+        TT_FATAL(t.buffer() != nullptr, "logical_n tensor must be allocated on device");
+        TT_FATAL(
+            t.logical_volume() == 1,
+            "logical_n tensor must hold exactly one value (the kernels read page 0, element 0). Got volume {}",
+            t.logical_volume());
+        // Live-value range is a caller contract (unverifiable on host, as with kv_actual_isl): a live
+        // value violating (N_global - live_n) < N_local would empty a ring iteration, which the reader's
+        // credit/gate counts assume never happens.
+    }
+
     // Check shapes based on ring
     TT_FATAL(
         q_shape[2] * args.ring_size == k_shape[2],
@@ -462,7 +479,8 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
-    const uint32_t num_buffers_per_channel) {
+    const uint32_t num_buffers_per_channel,
+    const std::optional<ttnn::Tensor>& logical_n_tensor) {
     using OperationType = ttnn::prim::ExpRingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -508,7 +526,8 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
         .joint_k = joint_tensor_k,
         .joint_v = joint_tensor_v,
         .gathered_k = persistent_output_buffer_k,
-        .gathered_v = persistent_output_buffer_v};
+        .gathered_v = persistent_output_buffer_v,
+        .logical_n_tensor = logical_n_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
