@@ -676,7 +676,7 @@ class Qwen3VlAttention(Module):
         return cfg, worker_grid
 
     def _ring_attention(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
-        """Causal attention over a sequence sharded on the SP axis (FSDP-off configs only).
+        """Causal attention over a sequence sharded on the SP axis.
 
         `ring_joint_scaled_dot_product_attention(is_causal=True)` gathers k/v around the SP ring while
         streaming the softmax, so no device materializes the full `s x s` score matrix; the joint slots

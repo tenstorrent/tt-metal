@@ -337,8 +337,18 @@ class MiniMaxH3Pipeline:
             sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=self.sp_factor),
             cfg_parallel=None,
         )
+        # sequence_parallel: the decoder's [1, L, width] activations shard L across the SP axis
+        # instead of replicating the whole presentation on every device. TP-only, a ref2va
+        # presentation (~4.1k tokens per image reference at the 2048px canvas) costs ~0.5 GiB/device
+        # per image in decoder transients and OOMs the coresident deployment at 7 images
+        # (tt-inference-server#5044, reproduced by test_ref2va_reference_oom_minimax_h3.py).
+        # Decoder SP composes with FSDP -- weights shard the same axis, gathered before use -- and
+        # is PCC-gated against the HF golden by test_vision_conditioner_minimax_h3.py's sp cases.
         self.encoder_parallel_config = EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=self.tp_factor)
+            tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=self.tp_factor),
+            sequence_parallel=(
+                ParallelFactor(mesh_axis=sp_axis, factor=self.sp_factor) if self.sp_factor > 1 else None
+            ),
         )
         # Both VAEs are data-parallel over work units with *replicated* weights -- no tensor
         # parallelism at all -- so their cache key carries factor 1. Recording it as a config rather
@@ -797,6 +807,20 @@ class MiniMaxH3Pipeline:
             detail = f" ({int(type_ids.sum())} of them vision, {len(keyframes)} keyframe(s))"
         self._log(f"encoding {seq_len} presentation tokens on device" + detail)
 
+        # SP decoder alignment, done on HOST: the model pads the sequence to sp * 32 internally,
+        # but its device-side pad of the row-major [1, L] input_ids is single-core and blows L1 at
+        # ref2va presentation lengths (a 24k-token row is one ~100 KB page; the pad kernel's static
+        # buffers exceed the 1.5 MB L1). Padding the ids, type_ids and rope tables here makes the
+        # model's internal pad a no-op; the pad rows ride the causal tail (real rows never attend
+        # forward into them) and are sliced off the returned embeds below. Token 0 is an ordinary
+        # vocab entry, so the pad cannot extend a vision run.
+        true_seq_len = seq_len
+        sp_alignment = self.sp_factor * ttnn.TILE_SIZE
+        if self.sp_factor > 1 and seq_len % sp_alignment:
+            seq_len = ((seq_len + sp_alignment - 1) // sp_alignment) * sp_alignment
+            input_ids = torch.nn.functional.pad(input_ids, (0, seq_len - true_seq_len))
+            type_ids = torch.nn.functional.pad(type_ids, (0, seq_len - true_seq_len))
+
         encoder = self._prepare_text_encoder()
 
         # The vision tower, and the two ways its output enters the decoder. Run before the rope tables
@@ -894,7 +918,9 @@ class MiniMaxH3Pipeline:
             pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
             **vision_kwargs,
         )
-        embeds = local_device_to_torch(taps[0]).float()
+        # The SP alignment rows are causal-tail padding, not presentation; drop them so the return
+        # matches `tags` and the packed layout row for row.
+        embeds = local_device_to_torch(taps[0]).float()[:, :true_seq_len]
 
         return embeds, tags
 
