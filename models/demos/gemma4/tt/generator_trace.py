@@ -1033,44 +1033,51 @@ def warmup_gemma4_model_prefill(
     long-ISL request.
     """
     enable_trace = maybe_disable_pli_prefill_trace(enable_trace, generator.model[0])
-    if enable_trace:
-        warmup_gemma4_batched_prefill_traces(
-            generator,
-            kv_cache,
-            enable_trace=enable_trace,
-            can_sample_on_device=can_sample_on_device,
-            greedy_only=greedy_only,
-            prefill_forward_fn=prefill_forward_fn,
-        )
-        # Once-only: tt_transformers calls warmup_model_prefill on *every*
-        # prefill (warmup_prefill=True). The batched helper early-returns via
-        # already_warmed_up_prefill, but this 8192 sp1 capture used to re-run
-        # and add ~1.4s to every request TTFT.
-        if chunked_prefill_trace_enabled() and not getattr(generator, "_warmed_chunked_prefill_sp1", False):
-            chunk = int(getattr(generator.model_args[0], "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
-            chunk = min(chunk, GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN)
-            if chunk > 0:
-                # Two chunks → captures/replays sp0 then captures sp1 at ``chunk``.
-                multi_len = chunk * 2
-                logger.info(
-                    "Warming up traced multi-chunk prefill (sp1): {} tokens in {}-token chunks",
-                    multi_len,
-                    chunk,
-                )
-                prefill_forward = (
-                    prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
-                )
-                warmup_args = generator._mock_tokens(1, multi_len, kv_cache, 0)
-                prefill_forward(
-                    **warmup_args,
-                    kv_cache=kv_cache,
-                    enable_trace=True,
-                    model_id_warmup=0,
-                    sampling_params=None,
-                    warmup_prefill=False,
-                )
-            generator._warmed_chunked_prefill_sp1 = True
-        return
+    # Run the sweep in BOTH warmup phases, not only the capture phase. The
+    # plugin's two-phase warmup calls this first with enable_trace=False (the
+    # compile pass) and then with enable_trace=True (the capture pass). Gating
+    # the sweep on enable_trace skipped the compile pass for every batched
+    # combo, so batch-N consumption kernels (per-slot hidden/logits slices)
+    # first-compiled DURING the capture phase — program-cache allocations made
+    # while traces are live, the llama3_70b_galaxy #30187 corruption class. At
+    # runtime the same first-compile fired mid-serving and corrupted the
+    # concurrently-decoding user. TT_METAL_TRACE_ALLOC_TRACKING=1 catches it at
+    # boot; with this change the traceless pass compiles every variant first.
+    warmup_gemma4_batched_prefill_traces(
+        generator,
+        kv_cache,
+        enable_trace=enable_trace,
+        can_sample_on_device=can_sample_on_device,
+        greedy_only=greedy_only,
+        prefill_forward_fn=prefill_forward_fn,
+    )
+    # Once-only: tt_transformers calls warmup_model_prefill on *every*
+    # prefill (warmup_prefill=True). The batched helper early-returns via
+    # already_warmed_up_prefill, but this 8192 sp1 capture used to re-run
+    # and add ~1.4s to every request TTFT.
+    if chunked_prefill_trace_enabled() and not getattr(generator, "_warmed_chunked_prefill_sp1", False):
+        chunk = int(getattr(generator.model_args[0], "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
+        chunk = min(chunk, GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN)
+        if chunk > 0:
+            # Two chunks → captures/replays sp0 then captures sp1 at ``chunk``.
+            multi_len = chunk * 2
+            logger.info(
+                "Warming up traced multi-chunk prefill (sp1): {} tokens in {}-token chunks",
+                multi_len,
+                chunk,
+            )
+            prefill_forward = prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
+            warmup_args = generator._mock_tokens(1, multi_len, kv_cache, 0)
+            prefill_forward(
+                **warmup_args,
+                kv_cache=kv_cache,
+                enable_trace=True,
+                model_id_warmup=0,
+                sampling_params=None,
+                warmup_prefill=False,
+            )
+        generator._warmed_chunked_prefill_sp1 = True
+    return
 
     # Eager (non-traced) warmup for long-ISL demos (prefill trace gated off).
     # Skip the stock 32/128/512/1024/2048/4096 sweep — it only matters for

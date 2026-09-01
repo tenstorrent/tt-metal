@@ -1135,7 +1135,30 @@ class ChunkedPrefillPageTableGuardMixin:
         prev_decode_batch = getattr(self, "_prev_decode_batch", None)
         sampling_trace_key = (True, prev_decode_batch) if prev_decode_batch is not None else None
         if sampling_trace_key is None or not self.trace_inputs_decode[sampling_trace_key]:
-            return None
+            # No decode trace captured yet (the two-phase warmup's traceless
+            # pass). Hand back a persistent dummy of the real feedback buffer's
+            # spec instead of None: with None the warmup-phase-1 eager sample
+            # runs the no-output-tensor SamplingDeviceOperation variant, and
+            # the with-output variant then FIRST-COMPILES during phase 2 — a
+            # program-cache allocation while traces are live (#30187 class;
+            # TT_METAL_TRACE_ALLOC_TRACKING=1 flags it at decode warmup).
+            # Allocating this dummy pre-capture keeps its address safe and
+            # compiles the same op variant the runtime path replays.
+            dummy = getattr(self, "_g4_warmup_token_feedback_dummy", None)
+            if dummy is None:
+                dummy = ttnn.from_torch(
+                    torch.zeros(1, 1, 1, int(pad_w), dtype=torch.int64),
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.uint32,
+                    device=model.mesh_device,
+                    mesh_mapper=(
+                        ttnn.ReplicateTensorToMesh(model.mesh_device)
+                        if model.mesh_device.get_num_devices() > 1
+                        else None
+                    ),
+                )
+                self._g4_warmup_token_feedback_dummy = dummy
+            return dummy
         feedback = self._decode_token_feedback_buffer(model, self.trace_inputs_decode[sampling_trace_key][model_id])
         if feedback is None:
             return None
