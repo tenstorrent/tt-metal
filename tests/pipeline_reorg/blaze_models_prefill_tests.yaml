@@ -808,28 +808,9 @@
 
 
 - name: "high_bw_all_gather CCL perf + accuracy"
-  # A full 8x4 Blackhole-Galaxy Fabric2D XY-torus gate. The test initializes
-  # the full Fabric, then runs one 8-rank KV ring at 55K and 512K global rows
-  # and validates gathered output exactly.
-  cmd: |
-    export MESH_DEVICE=TG
-
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf -q
-    '
-  test_type: high_bw_all_gather_perf
-  test_tags: [ccl]
-  test_group: sdpa_perf
-  skus:
-    bh_sc1_high_power:
-      timeout: 3
-  owner_id: U085GDCAZTN # Pavle Josipovic
-  team: ttnn
-  sp_config: sc1
-
-
-- name: "high_bw_all_gather 32-rank snake-ring CCL perf + accuracy"
+  # A full 8x4 Blackhole-Galaxy Fabric2D XY-torus gate. Runs the 8-rank axis ring at
+  # 55K and 512K global rows, then the 32-rank snake ring: exact-output accuracy plus
+  # perf at matched per-device and matched global volume.
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -838,18 +819,18 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       rc=0
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_8x4_whole_mesh_ring_accuracy -q || rc=1
-      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_8x4_axis_ring_regression -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_ci_perf -q || rc=1
       exit $rc
     '
-  test_type: high_bw_all_gather_snake_perf
+  test_type: high_bw_all_gather_perf
   test_tags: [ccl]
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
-      timeout: 7
-  owner_id: U07N3CUUN05 # Iva Potkonjak
+      timeout: 10
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   sp_config: sc1
