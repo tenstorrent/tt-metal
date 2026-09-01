@@ -38,6 +38,26 @@ def get_tp_size(device) -> int:
     return max(rows, cols) if min(rows, cols) == 1 else cols
 
 
+def is_n300(device) -> bool:
+    """True only for a Wormhole 2-chip mesh, i.e. an N300 card opened as (1,2)/(2,1).
+
+    Gate for N300-specific fast paths: the shard grids and CCL trade-offs below are
+    picked for wormhole's 8x8 compute grid / 12 DRAM banks at tp_size=2, so N150
+    (1 chip), T3K (8 chips) and Blackhole all keep the generic path.
+    """
+    if not is_mesh_device(device):
+        return False
+    try:
+        if device.get_num_devices() != 2:
+            return False
+        if device.arch() != ttnn._ttnn.device.Arch.WORMHOLE_B0:
+            return False
+    except Exception:
+        return False
+    rows, cols = get_mesh_shape(device)
+    return min(rows, cols) == 1 and max(rows, cols) == 2
+
+
 def to_torch(t: ttnn.Tensor, device=None, **kwargs) -> "torch.Tensor":
     """Drop-in for ttnn.to_torch that handles multi-device meshes.
 
@@ -80,3 +100,34 @@ def tp_all_reduce(tensor: ttnn.Tensor, device, memory_config=None) -> ttnn.Tenso
     if memory_config is not None:
         kwargs["memory_config"] = memory_config
     return ttnn.all_reduce(tensor, **kwargs)
+
+
+def tp_all_reduce_2chip(tensor: ttnn.Tensor, device, memory_config=None) -> ttnn.Tensor:
+    """All-reduce across exactly 2 chips using one CCL op instead of two.
+
+    ``ttnn.all_reduce`` lowers to reduce_scatter + all_gather, and on N300 both are
+    dominated by fixed fabric setup rather than payload — a 1-tile CP activation pays
+    ~51 us to reduce 64 KB. With two chips we can instead all-gather the two partial
+    sums and add the halves locally: 34 us of CCL plus ~4 us of slice/add.
+
+    Two measured details, both worth keeping:
+      * Gather on the last dim. Width is tile-aligned for every CP/Talker activation,
+        whereas a size-1 outer dim or a 1-2-row height inside a 32-row tile pushes
+        all_gather onto its composite all-broadcast fallback (78 us vs 34 us).
+      * Leave ``num_links`` on auto. Forcing 2 links doubled the gather to 69 us: the
+        payload is far too small to amortise a second link's setup.
+    """
+    rows, cols = get_mesh_shape(device)
+    cluster_axis = 1 if rows == 1 else 0
+    mc = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
+    shape = list(tensor.shape)
+    w = shape[-1]
+
+    gathered = ttnn.all_gather(tensor, dim=-1, cluster_axis=cluster_axis, memory_config=mc)
+    lo = ttnn.slice(gathered, [0, 0, 0, 0], shape[:-1] + [w], memory_config=mc)
+    hi = ttnn.slice(gathered, [0, 0, 0, w], shape[:-1] + [2 * w], memory_config=mc)
+    ttnn.deallocate(gathered)
+    out = ttnn.add(lo, hi, memory_config=mc)
+    ttnn.deallocate(lo)
+    ttnn.deallocate(hi)
+    return out
