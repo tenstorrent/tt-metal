@@ -17,6 +17,7 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "ring_attention_all_gather_metadata.hpp"
 #include "ring_attention_rank_mapping.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <utility>
 
@@ -132,10 +133,14 @@ void kernel_main() {
         // silently clamp the gather to the wrong prefix.
         const uint32_t kv_actual = trace_metadata::read_metadata_scalar_u32(
             meta_noc, meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());  // kv_actual_isl (tile-aligned)
+        uint32_t cache_local_tile_rows = input_tensor_Ht[0];
+        for (uint32_t input_idx = 1; input_idx < num_inputs; ++input_idx) {
+            cache_local_tile_rows = std::min(cache_local_tile_rows, input_tensor_Ht[input_idx]);
+        }
         // Same formula the reader uses -- both MUST clamp to the same slab prefix or the cb_output
         // producer/consumer page counts drift (see the header's KEEP IN SYNC note).
-        const uint32_t gather_valid_Ht =
-            ring_attention_all_gather::compute_gather_valid_Ht(kv_actual, chunk_local_tiles, ring_size);
+        const uint32_t gather_valid_Ht = ring_attention_all_gather::compute_gather_valid_Ht(
+            kv_actual, chunk_local_tiles, ring_size, cache_local_tile_rows);
         ring_attention_all_gather::update_link_page_ranges_for_gather_extent(
             gather_valid_Ht,
             num_links,

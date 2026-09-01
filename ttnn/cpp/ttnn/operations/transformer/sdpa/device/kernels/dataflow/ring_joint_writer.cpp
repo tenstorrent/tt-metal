@@ -513,8 +513,10 @@ void kernel_main() {
 
     if constexpr (kv_pad_from_metadata) {
         CircularBuffer cb_meta_scratch(cb_out);
-        const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
+        uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
             noc, meta_args, get_common_arg_val<uint32_t>(0), cb_meta_scratch.get_write_ptr());
+        kv_actual_isl =
+            trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
         logical_nt = ring_joint::compute_logical_nt(kv_actual_isl, chunk_size_t * 32, 32);
         const auto masks = ring_joint::build_ring_work_masks_device<full_mesh_rank_mapping>(
             fused_op_receiver.seq.ring_index,

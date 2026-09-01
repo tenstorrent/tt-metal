@@ -75,6 +75,7 @@ void kernel_main() {
         const uint32_t kv_actual_isl_addr = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t q_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t halo_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t cache_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t source_device = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t baked_start_Ht = get_arg_val<uint32_t>(arg_idx++);
         Noc meta_noc;
@@ -89,7 +90,7 @@ void kernel_main() {
         const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
             meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
         const uint32_t tail_start_Ht = ring_attention_all_gather::compute_halo_tail_start_Ht(
-            kv_actual_isl, q_local_tile_rows, ring_size, halo_tile_rows, source_device);
+            kv_actual_isl, q_local_tile_rows, ring_size, halo_tile_rows, source_device, cache_local_tile_rows);
         for (uint32_t input = 0; input < num_inputs; ++input) {
             const uint32_t input_Wt = get_arg_val<uint32_t>(arg_idx++);
             ring_attention_all_gather::relocate_halo_range(

@@ -385,6 +385,11 @@ void ring_attention_neighbor_halo_exchange_helper(
         // Metadata block for the on-device halo relocation. Sits between the per-input descriptors and
         // the accessor args in BOTH kernels, so the host relocation's field offsets are unaffected.
         if (halo.derives_start_on_device()) {
+            uint32_t cache_local_tile_rows = input_tensors.front().padded_shape()[2] / tt::constants::TILE_HEIGHT;
+            for (const auto& input : input_tensors) {
+                cache_local_tile_rows = std::min(
+                    cache_local_tile_rows, static_cast<uint32_t>(input.padded_shape()[2] / tt::constants::TILE_HEIGHT));
+            }
             const auto append_halo_meta =
                 [&](KernelDescriptor::RTArgList& args, bool with_cache_batch, bool with_ring_size) {
                     if (with_cache_batch) {
@@ -395,6 +400,7 @@ void ring_attention_neighbor_halo_exchange_helper(
                     args.push_back(halo.kv_actual_isl->buffer());
                     args.push_back(halo.q_local_tile_rows);
                     args.push_back(halo.halo_tile_rows);
+                    args.push_back(cache_local_tile_rows);
                     args.push_back(halo.source_device);
                     args.push_back(halo.send_to_next_start_Ht);
                     if (with_ring_size) {
