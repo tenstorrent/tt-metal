@@ -263,6 +263,117 @@ def get_transformation_mat(head_dim: int, device) -> ttnn.Tensor:
     return trans_mat_ttnn
 
 
+_ROPE_DECODE_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+
+def _rope_decode_memcfg(width: int) -> ttnn.MemoryConfig:
+    """HEIGHT_SHARDED [TILE, width] on one core — the only layout decode-mode RoPE takes.
+
+    ``rotary_embedding_llama`` with ``is_decode_mode=True`` rejects interleaved and
+    width-sharded inputs for Q/K, cos, sin and the transformation matrix alike. Batch is
+    always 1 in Qwen3-TTS, so one core holds everything.
+    """
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_ROPE_DECODE_GRID, (ttnn.TILE_SIZE, width), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def get_decode_transformation_mat(device) -> ttnn.Tensor:
+    """Transformation matrix for decode-mode RoPE, in the sharded layout the op requires.
+
+    ``get_rot_transformation_mat`` ignores its ``dhead`` argument and always returns a
+    single 32x32 tile, so this is the *same* matrix :func:`get_transformation_mat` builds
+    for prefill — only the memory config differs. Build it once at module init so it is
+    allocated before any trace capture.
+    """
+    from models.tt_transformers.tt.common import get_rot_transformation_mat
+
+    return ttnn.from_torch(
+        get_rot_transformation_mat(dhead=ttnn.TILE_SIZE),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_rope_decode_memcfg(ttnn.TILE_SIZE),
+    )
+
+
+def apply_rope_qk(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    cos: ttnn.Tensor,
+    sin: ttnn.Tensor,
+    trans_mat: ttnn.Tensor,
+    *,
+    head_dim: int,
+    decode_trans_mat: Optional[ttnn.Tensor] = None,
+    compute_kernel_config=None,
+    memory_config=None,
+) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Rotate Q ``[1, n_q, seq, head_dim]`` and K ``[1, n_kv, seq, head_dim]``.
+
+    Single-token Q/K route to ``is_decode_mode=True``, which is far cheaper. The prefill
+    kernel loops once per head — measured on wormhole at ~9 us fixed + ~2 us/head, i.e.
+    41 us for 16 heads and 26 us for 8, regardless of memory config or math fidelity —
+    while the decode kernel rotates every head inside one tile in 3.4 us. Reaching that
+    layout costs one transpose in and one out at ~2 us each, so a 16-head Q goes
+    41 us -> 8 us and an 8-head Q 26 us -> 7 us. cos/sin are reshared once for Q and K.
+
+    The two kernels are bit-identical on the same input (max|diff| == 0; see
+    ``tests/test_qwen3_tts_rope_decode.py``), so this is a dispatch change with no
+    numerical effect, and it is a win on every wormhole SKU — hence no device gating.
+
+    Only ``seq == 1`` qualifies: decode mode applies one position to every row of the
+    tile, whereas a real multi-token sequence needs a distinct cos/sin row per position.
+    Callers that have no ``decode_trans_mat`` keep the prefill kernel.
+    """
+    mc = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
+
+    def _prefill(t):
+        return ttnn.experimental.rotary_embedding_llama(
+            t,
+            cos,
+            sin,
+            trans_mat,
+            is_decode_mode=False,
+            memory_config=mc,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+    if int(q.shape[-2]) != 1 or decode_trans_mat is None:
+        return _prefill(q), _prefill(k)
+
+    # Every head must land in one 32-row tile after the transpose.
+    if int(q.shape[1]) > ttnn.TILE_SIZE:
+        return _prefill(q), _prefill(k)
+
+    hd_memcfg = _rope_decode_memcfg(head_dim)
+    cos_s = ttnn.to_memory_config(cos, hd_memcfg)
+    sin_s = ttnn.to_memory_config(sin, hd_memcfg)
+    rotated = []
+    for t in (q, k):
+        # [1, n_heads, 1, head_dim] -> [1, 1, n_heads, head_dim]: packs all heads into
+        # the single tile the decode kernel wants. transpose writes the sharded layout
+        # directly, so no separate reshard is needed on either side.
+        t_d = ttnn.transpose(t, 1, 2, memory_config=hd_memcfg)
+        r = ttnn.experimental.rotary_embedding_llama(
+            t_d,
+            cos_s,
+            sin_s,
+            decode_trans_mat,
+            is_decode_mode=True,
+            memory_config=hd_memcfg,
+            compute_kernel_config=compute_kernel_config,
+        )
+        ttnn.deallocate(t_d)
+        rotated.append(ttnn.transpose(r, 1, 2, memory_config=mc))
+        ttnn.deallocate(r)
+    ttnn.deallocate(cos_s)
+    ttnn.deallocate(sin_s)
+    return rotated[0], rotated[1]
+
+
 def rearrange_to_interleaved(x: torch.Tensor) -> torch.Tensor:
     """
     Rearrange tensor from non-interleaved to interleaved RoPE format (PyTorch version).
