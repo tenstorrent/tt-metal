@@ -305,6 +305,12 @@ private:
     FabricSyncState* fabric_sync_ = nullptr;
     void install_fabric_sync_sink();  // before receiver start: decode threads relay PP_SYNC here
     void start_fabric_sync(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
+    // Walk the fabric-sync tree to express one chip's clock against the ROOT, using the directly
+    // measured offset of every linked eth pair. False until every edge on the path has solved.
+    bool fabric_sync_delta_for(uint32_t chip, int64_t& delta_out, double& rate_out) const;
+    // Anchor every non-root device off the root through measured eth links. Must run after the
+    // hook config is written and before the eth lanes are anchored.
+    void compose_device_anchors_from_root();
     void publish_fabric_sync_corrections();
     void log_fabric_sync_closure(bool final_report);
     // Draw the sync exchanges onto the eth lanes that carried them (initiator zone, responder marker).

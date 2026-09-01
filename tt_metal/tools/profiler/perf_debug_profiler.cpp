@@ -1012,7 +1012,10 @@ void PerfDebugProfiler::host_reanchor_after_boot(const std::shared_ptr<distribut
         if (ctx.core_virt.empty()) {
             continue;
         }
-        // ROOT ONLY. This function used to refit EVERY device independently, and that is where the
+        // ROOT ONLY for the HOST FIT. Non-root devices are composed from it below, off measured
+        // device<->device links -- see the loop after this one.
+        //
+        // This function used to refit EVERY device independently, and that is where the
         // four disagreeing anchors came from -- it runs after start(), so it overwrote whatever
         // start() had composed. Measured cost of those independent fits, as the gap between the two
         // ends of a link where the same instant is drawn twice: 3.5 us (1->2), 7.1 us (0->1),
@@ -2412,126 +2415,6 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
     // a Tracy context bakes its anchor in at CREATION, contexts are created lazily on a core's
     // first zone, and the only zones these eth lanes ever carry are the FSYNC ones drawn at
     // teardown (fabric routers carry no DeviceZoneScopedN of their own).
-    // ---- anchor the sync eth lanes: ONE host fit, everything else via device<->device ----
-    // Contexts are minted lazily on a core's first zone and bake their anchor in at creation, so this
-    // has to happen now (start), never at the teardown render.
-    //
-    // NOT a host fit per lane. Two eth cores on the SAME die, in the same reset domain -- whose true
-    // origins differ by ~nothing -- disagreed by 4-16 ms when each got its own fit (bh-31 chips 0..3:
-    // 7.263 / 11.365 / 4.029 / 15.791 ms). That spread IS the host<->device sync error, and it is
-    // ~5 orders of magnitude worse than the device<->device sync it would be competing with (ring
-    // closure -43.70 ns). Host fits are simply the wrong instrument for anything but the root.
-    //
-    // So: ONE host fit establishes the ETH-CLASS origin, and every other lane is that origin carried
-    // across by the tree -- the same rule the per-DEVICE anchors already follow (root gets the careful
-    // fit; everyone else is eth_sync_anchor_for + root_host_anchor_). The class origin does have to be
-    // measured once, because eth cores do NOT share the worker origin: using the worker anchor put
-    // these rows 10.4 s away from the workload they ran inside.
-    if (tracy_ != nullptr && root_sync_valid_ && root_freq_ghz_ > 0.0) {
-        std::vector<FabricSyncState::End*> ends;
-        for (auto& e : st->edges) {
-            ends.push_back(&e.init);
-            ends.push_back(&e.resp);
-        }
-        // Prefer a reference lane on the ROOT chip: then the class origin needs no carrying at all and
-        // the one remaining hop of composition disappears.
-        FabricSyncState::End* ref = nullptr;
-        for (auto* en : ends) {
-            if (en->chip == eth_sync_root_chip_) {
-                ref = en;
-                break;
-            }
-        }
-        if (ref == nullptr && !ends.empty()) {
-            ref = ends.front();
-        }
-
-        // Per-chip clock at the ROOT's host instant, from the anchors already composed off the root.
-        const int64_t h0 = root_host_anchor_;
-        auto chip_clock_at_h0 = [&](uint32_t chip, double& freq_out) -> std::optional<double> {
-            for (const auto& ctx : devices_) {
-                if (ctx.chip_id != chip) {
-                    continue;
-                }
-                if (!ctx.anchor_valid || ctx.freq_ghz <= 0.0) {
-                    return std::nullopt;
-                }
-                freq_out = ctx.freq_ghz;
-                return static_cast<double>(ctx.anchor_dev) + static_cast<double>(h0 - ctx.anchor_host) * ctx.freq_ghz;
-            }
-            return std::nullopt;
-        };
-
-        // THE one host fit. spacing_us=500 matches the root's own: the slope is baseline-limited, and
-        // at back-to-back spacing the fitted frequency carries ~1e-4 of error.
-        double f_ref = 0.0;
-        std::optional<double> ref_eth_at_h0, ref_chip_at_h0;
-        if (ref != nullptr) {
-            const PerfDebugSync rs = sync_device_clock(cluster, ref->chip, ref->virt, /*spacing_us=*/500);
-            double f_tmp = 0.0;
-            ref_chip_at_h0 = chip_clock_at_h0(ref->chip, f_tmp);
-            if (rs.valid && ref_chip_at_h0.has_value()) {
-                f_ref = f_tmp;
-                ref_eth_at_h0 =
-                    static_cast<double>(rs.device_at_anchor) + static_cast<double>(h0 - rs.host_anchor) * f_ref;
-                log_info(
-                    tt::LogMetal,
-                    "[perf-debug profiler] FABRIC SYNC: eth-class origin measured ONCE on chip {} "
-                    "(the only host<->device fit for these lanes); every other lane is carried across "
-                    "by the device<->device tree",
-                    ref->chip);
-            }
-        }
-
-        for (auto* en : ends) {
-            CoreCoord n0;
-            try {
-                n0 = cluster.get_physical_coordinate_from_logical_coordinates(
-                    en->chip, en->logical, CoreType::ETH, /*no_warn=*/true);
-            } catch (const std::exception&) {
-                continue;
-            }
-            double f_chip = 0.0;
-            const std::optional<double> chip_at_h0 = chip_clock_at_h0(en->chip, f_chip);
-            if (!ref_eth_at_h0.has_value() || !ref_chip_at_h0.has_value() || !chip_at_h0.has_value() || f_chip <= 0.0) {
-                log_warning(
-                    tt::LogMetal,
-                    "[perf-debug profiler] FABRIC SYNC: eth lane chip {} NOC0 ({},{}) has no route to the "
-                    "root anchor; its FSYNC rows would fall back to the worker anchor, so they are NOT drawn",
-                    en->chip,
-                    n0.x,
-                    n0.y);
-                continue;
-            }
-            // The eth-class origin, carried from the reference chip to this one by the chip-to-chip
-            // delta the device<->device sync measured. No second host fit anywhere.
-            const double dev = *ref_eth_at_h0 + (*chip_at_h0 - *ref_chip_at_h0);
-            tracy_->AddCore(en->chip, n0.x, n0.y, h0, dev, f_chip);
-            tracy_->RegisterEthCore(en->chip, n0.x, n0.y);
-            en->noc0_x = static_cast<uint32_t>(n0.x);
-            en->noc0_y = static_cast<uint32_t>(n0.y);
-            en->tracy_ok = true;
-            log_info(
-                tt::LogMetal,
-                "[perf-debug profiler] FABRIC SYNC: eth lane chip {} NOC0 ({},{}) VIRTUAL ({},{}) {} "
-                "anchored (host_anchor {}, device_at_anchor {:.0f} cy, {:.6f} GHz){}",
-                en->chip,
-                n0.x,
-                n0.y,
-                // The eth-wedge crash names a VIRTUAL core; whether that core was SENDING or only
-                // RECEIVING points at completely different causes, so log both the coord and the role.
-                en->virt.x,
-                en->virt.y,
-                // Role comes from the config body we just wrote (anchoring runs after write_cfg), so
-                // no need to reach back into the edge.
-                (en->cfg_valid && (en->cfg[0] & kFlagInitiator)) != 0 ? "INITIATOR(sends)" : "RESPONDER(recv)",
-                h0,
-                dev,
-                f_chip,
-                en == ref ? " [reference: the one host fit]" : " [carried by device<->device]");
-        }
-    }
-
     // ---- the aggregator thread ----
     const auto& ctx = receiver_->capture_context();
     st->th = std::thread([this, st, &ctx, &cluster, scratch_addr]() {
@@ -2755,6 +2638,137 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
             }
         }
     });
+    // ORDER MATTERS AND IS EASY TO GET WRONG (three attempts got it wrong before this one):
+    //   configs written -> AGGREGATOR RUNNING -> compose device anchors -> anchor the eth lanes.
+    // Composition waits for rounds to solve, and only the aggregator thread above solves them, so it
+    // must run after the thread exists -- an earlier version sat before it and could never succeed.
+    // The eth-lane anchoring then follows, because it reads ctx.anchor_* for every chip.
+    // All of this still completes long before any zone reaches Tracy: worker contexts are created
+    // lazily on their first zone during the workload, and the FSYNC rows are drawn at teardown.
+    // Compose the DEVICE anchors first: the eth-lane anchoring below reads ctx.anchor_*, so every
+    // non-root device must already be expressed against the root before we get there.
+    compose_device_anchors_from_root();
+
+    // ---- anchor the sync eth lanes: ONE host fit, everything else via device<->device ----
+    // Contexts are minted lazily on a core's first zone and bake their anchor in at creation, so this
+    // has to happen now (start), never at the teardown render.
+    //
+    // NOT a host fit per lane. Two eth cores on the SAME die, in the same reset domain -- whose true
+    // origins differ by ~nothing -- disagreed by 4-16 ms when each got its own fit (bh-31 chips 0..3:
+    // 7.263 / 11.365 / 4.029 / 15.791 ms). That spread IS the host<->device sync error, and it is
+    // ~5 orders of magnitude worse than the device<->device sync it would be competing with (ring
+    // closure -43.70 ns). Host fits are simply the wrong instrument for anything but the root.
+    //
+    // So: ONE host fit establishes the ETH-CLASS origin, and every other lane is that origin carried
+    // across by the tree -- the same rule the per-DEVICE anchors already follow (root gets the careful
+    // fit; everyone else is eth_sync_anchor_for + root_host_anchor_). The class origin does have to be
+    // measured once, because eth cores do NOT share the worker origin: using the worker anchor put
+    // these rows 10.4 s away from the workload they ran inside.
+    if (tracy_ != nullptr && root_sync_valid_ && root_freq_ghz_ > 0.0) {
+        std::vector<FabricSyncState::End*> ends;
+        for (auto& e : st->edges) {
+            ends.push_back(&e.init);
+            ends.push_back(&e.resp);
+        }
+        // Prefer a reference lane on the ROOT chip: then the class origin needs no carrying at all and
+        // the one remaining hop of composition disappears.
+        FabricSyncState::End* ref = nullptr;
+        for (auto* en : ends) {
+            if (en->chip == eth_sync_root_chip_) {
+                ref = en;
+                break;
+            }
+        }
+        if (ref == nullptr && !ends.empty()) {
+            ref = ends.front();
+        }
+
+        // Per-chip clock at the ROOT's host instant, from the anchors already composed off the root.
+        const int64_t h0 = root_host_anchor_;
+        auto chip_clock_at_h0 = [&](uint32_t chip, double& freq_out) -> std::optional<double> {
+            for (const auto& ctx : devices_) {
+                if (ctx.chip_id != chip) {
+                    continue;
+                }
+                if (!ctx.anchor_valid || ctx.freq_ghz <= 0.0) {
+                    return std::nullopt;
+                }
+                freq_out = ctx.freq_ghz;
+                return static_cast<double>(ctx.anchor_dev) + static_cast<double>(h0 - ctx.anchor_host) * ctx.freq_ghz;
+            }
+            return std::nullopt;
+        };
+
+        // THE one host fit. spacing_us=500 matches the root's own: the slope is baseline-limited, and
+        // at back-to-back spacing the fitted frequency carries ~1e-4 of error.
+        double f_ref = 0.0;
+        std::optional<double> ref_eth_at_h0, ref_chip_at_h0;
+        if (ref != nullptr) {
+            const PerfDebugSync rs = sync_device_clock(cluster, ref->chip, ref->virt, /*spacing_us=*/500);
+            double f_tmp = 0.0;
+            ref_chip_at_h0 = chip_clock_at_h0(ref->chip, f_tmp);
+            if (rs.valid && ref_chip_at_h0.has_value()) {
+                f_ref = f_tmp;
+                ref_eth_at_h0 =
+                    static_cast<double>(rs.device_at_anchor) + static_cast<double>(h0 - rs.host_anchor) * f_ref;
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] FABRIC SYNC: eth-class origin measured ONCE on chip {} "
+                    "(the only host<->device fit for these lanes); every other lane is carried across "
+                    "by the device<->device tree",
+                    ref->chip);
+            }
+        }
+
+        for (auto* en : ends) {
+            CoreCoord n0;
+            try {
+                n0 = cluster.get_physical_coordinate_from_logical_coordinates(
+                    en->chip, en->logical, CoreType::ETH, /*no_warn=*/true);
+            } catch (const std::exception&) {
+                continue;
+            }
+            double f_chip = 0.0;
+            const std::optional<double> chip_at_h0 = chip_clock_at_h0(en->chip, f_chip);
+            if (!ref_eth_at_h0.has_value() || !ref_chip_at_h0.has_value() || !chip_at_h0.has_value() || f_chip <= 0.0) {
+                log_warning(
+                    tt::LogMetal,
+                    "[perf-debug profiler] FABRIC SYNC: eth lane chip {} NOC0 ({},{}) has no route to the "
+                    "root anchor; its FSYNC rows would fall back to the worker anchor, so they are NOT drawn",
+                    en->chip,
+                    n0.x,
+                    n0.y);
+                continue;
+            }
+            // The eth-class origin, carried from the reference chip to this one by the chip-to-chip
+            // delta the device<->device sync measured. No second host fit anywhere.
+            const double dev = *ref_eth_at_h0 + (*chip_at_h0 - *ref_chip_at_h0);
+            tracy_->AddCore(en->chip, n0.x, n0.y, h0, dev, f_chip);
+            tracy_->RegisterEthCore(en->chip, n0.x, n0.y);
+            en->noc0_x = static_cast<uint32_t>(n0.x);
+            en->noc0_y = static_cast<uint32_t>(n0.y);
+            en->tracy_ok = true;
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] FABRIC SYNC: eth lane chip {} NOC0 ({},{}) VIRTUAL ({},{}) {} "
+                "anchored (host_anchor {}, device_at_anchor {:.0f} cy, {:.6f} GHz){}",
+                en->chip,
+                n0.x,
+                n0.y,
+                // The eth-wedge crash names a VIRTUAL core; whether that core was SENDING or only
+                // RECEIVING points at completely different causes, so log both the coord and the role.
+                en->virt.x,
+                en->virt.y,
+                // Role comes from the config body we just wrote (anchoring runs after write_cfg), so
+                // no need to reach back into the edge.
+                (en->cfg_valid && (en->cfg[0] & kFlagInitiator)) != 0 ? "INITIATOR(sends)" : "RESPONDER(recv)",
+                h0,
+                dev,
+                f_chip,
+                en == ref ? " [reference: the one host fit]" : " [carried by device<->device]");
+        }
+    }
+
     log_info(
         tt::LogMetal,
         "[perf-debug profiler] FABRIC SYNC: {} in-router link(s) at {} Hz -- t0/t1/t2 ride the profiler "
@@ -2764,6 +2778,149 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
 
 // Compose tree edges into per-chip (chip minus root) offsets at a common instant, convert to
 // anchor-relative corrections, ratchet, publish.
+// Compose one chip's clock offset against the ROOT by walking the fabric-sync tree: every LINKED ETH
+// PAIR is measured directly (~50 ns closure), and each chip reaches the root through its parent edge.
+// This is the same traversal publish_fabric_sync_corrections() already does for corrections -- lifted
+// out so ANCHORING can use it too, which is the whole point: one host fit at the root, every other
+// device reached through measured links, never its own host fit.
+//
+// Returns false if any edge on this chip's path has not solved a round yet, so the caller can wait
+// rather than anchor off a half-built tree.
+bool PerfDebugProfiler::fabric_sync_delta_for(uint32_t chip, int64_t& delta_out, double& rate_out) const {
+    auto* st = fabric_sync_;
+    if (st == nullptr) {
+        return false;
+    }
+    if (chip == st->root) {
+        delta_out = 0;
+        rate_out = 1.0;
+        return true;
+    }
+    int64_t d = 0;
+    double rate = 1.0;
+    uint32_t cur = chip;
+    int hops = 0;
+    while (cur != st->root && hops++ < 8) {
+        auto it = st->parent_edge.find(cur);
+        if (it == st->parent_edge.end() || !st->edges[it->second].have) {
+            return false;
+        }
+        const auto& e = st->edges[it->second];
+        // off_last is resp MINUS init, from the latest solved round on that link.
+        if (e.resp.chip == cur) {
+            d += e.off_last;
+            rate *= e.rate;
+            cur = e.init.chip;
+        } else {
+            d -= e.off_last;
+            rate /= (e.rate != 0.0 ? e.rate : 1.0);
+            cur = e.resp.chip;
+        }
+    }
+    if (cur != st->root) {
+        return false;
+    }
+    delta_out = d;
+    rate_out = rate;
+    return true;
+}
+
+// Express every non-root device's clock against the ROOT by walking measured eth links, and anchor
+// it there. The root is the only device that ever touches the host clock.
+//
+// MUST run AFTER start_fabric_sync() has written the hook config (so rounds can solve) and BEFORE the
+// eth lanes are anchored (they compose off ctx.anchor_*). Getting that order wrong is easy: an earlier
+// attempt put this in host_reanchor_after_boot(), which the log proved runs 1.5 s BEFORE the fabric
+// sync is even configured -- so the wait expired before there was anything to wait for.
+void PerfDebugProfiler::compose_device_anchors_from_root() {
+    //
+    // This is the whole design: sync every LINKED ETH PAIR (the in-router hook does, to ~50 ns), walk
+    // each device's path to the root through those links, and express its clock against the root's.
+    // The root is the ONLY device that ever touches the host clock. No device fits the host itself --
+    // independent fits disagree, measured here as 3.5 / 7.1 / 13.7 us between the two ends of a link
+    // where the same instant is drawn twice, constant across the run, against a link closure of
+    // -37..-57 ns.
+    //
+    // Sequencing: this runs right after start_fabric_sync(), so the hook is configured but has not
+    // solved a round yet -- hence the bounded wait. Anchors are still registered long before any zone
+    // reaches Tracy (worker contexts are created lazily on their first zone, during the workload), so
+    // waiting here is free in capture terms.
+    if (!root_sync_valid_ || fabric_sync_ == nullptr) {
+        return;
+    }
+    std::vector<uint32_t> pending;
+    for (const auto& ctx : devices_) {
+        if (ctx.chip_id != eth_sync_root_chip_) {
+            pending.push_back(ctx.chip_id);
+        }
+    }
+    if (pending.empty()) {
+        return;
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
+    std::unordered_map<uint32_t, std::pair<int64_t, double>> composed;
+    while (composed.size() < pending.size() && std::chrono::steady_clock::now() < deadline) {
+        for (uint32_t chip : pending) {
+            if (composed.count(chip) != 0) {
+                continue;
+            }
+            int64_t delta = 0;
+            double rate = 1.0;
+            if (fabric_sync_delta_for(chip, delta, rate)) {
+                composed[chip] = {delta, rate};
+            }
+        }
+        if (composed.size() < pending.size()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+
+    uint32_t n_comp = 0;
+    for (auto& ctx : devices_) {
+        auto it = composed.find(ctx.chip_id);
+        if (it == composed.end()) {
+            continue;
+        }
+        const auto [delta, rate] = it->second;
+        // delta is chip-clock MINUS root-clock at a common instant, so the chip's clock reading at the
+        // ROOT's host anchor is the root's reading plus delta. Same host anchor for every device --
+        // that is what makes them comparable.
+        const double dev_at_root_anchor = static_cast<double>(static_cast<int64_t>(root_dev_at_anchor_) + delta);
+        // SHARED SLOPE, own ORIGIN -- the same rule the DRISC contexts follow. Alignment is RELATIVE,
+        // so a common rate error is common-mode and invisible on a timeline, whereas a PER-CHIP rate
+        // makes the devices diverge linearly. Measured with per-chip rate applied: the pair started at
+        // 0 ns (composition nails the origin) and drifted to -6065 ns over 84 s, ~72 ppb of differential
+        // slope. `rate` stays a reported statistic only.
+        (void)rate;
+        ctx.freq_ghz = root_freq_ghz_;
+        ctx.clock_synced = true;
+        tracy_->AddDevice(ctx.chip_id, root_host_anchor_, dev_at_root_anchor, ctx.freq_ghz);
+        ctx.anchor_host = root_host_anchor_;
+        ctx.anchor_dev = static_cast<uint64_t>(dev_at_root_anchor);
+        ctx.anchor_valid = true;
+        n_comp++;
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] Device {} COMPOSED off root {} through measured eth links: "
+            "delta {:+} cy, {:.6f} GHz ({:+.2f} ppm vs root) -- no host fit on this device",
+            ctx.chip_id,
+            eth_sync_root_chip_,
+            delta,
+            ctx.freq_ghz,
+            (rate - 1.0) * 1e6);
+    }
+    if (n_comp != pending.size()) {
+        log_error(
+            tt::LogMetal,
+            "[perf-debug profiler] only {} of {} non-root device(s) could be composed off root {} within "
+            "1.5 s; the rest have NO anchor and will have no Tracy rows. A device is composable once every "
+            "link on its path to the root has solved a round.",
+            n_comp,
+            pending.size(),
+            eth_sync_root_chip_);
+    }
+}
+
 void PerfDebugProfiler::publish_fabric_sync_corrections() {
     auto* st = fabric_sync_;
     if (st == nullptr) {
