@@ -38,6 +38,26 @@ def get_tp_size(device) -> int:
     return max(rows, cols) if min(rows, cols) == 1 else cols
 
 
+def is_n150(device) -> bool:
+    """True for a single Wormhole chip: plain Device or a 1x1 mesh (N150).
+
+    Gate for N150-specific fast paths (8x8 compute / 12 DRAM banks at tp_size=1).
+    N300 (2 chips), T3K, and Blackhole keep the generic path. PCC tests open a
+    plain Device via ttnn.open_device and must take this path.
+    """
+    try:
+        if device.arch() != ttnn._ttnn.device.Arch.WORMHOLE_B0:
+            return False
+        if is_mesh_device(device) and device.get_num_devices() != 1:
+            return False
+    except Exception:
+        return False
+    if is_mesh_device(device):
+        rows, cols = get_mesh_shape(device)
+        return rows == 1 and cols == 1
+    return True
+
+
 def is_n300(device) -> bool:
     """True only for a Wormhole 2-chip mesh, i.e. an N300 card opened as (1,2)/(2,1).
 
