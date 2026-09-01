@@ -92,7 +92,17 @@ while IFS= read -r FILE; do
         .github/workflows/llk-*.yaml|.github/workflows/build-quasar-perf.yml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml)
             LLK_CI_CHANGED=true
             ;;
-        tt_metal/**/*.@(h|hpp|inl|c|cpp|cc|py))
+        # `*(*/)` (zero or more directory components), not `**/`: only extglob
+        # is enabled here, not globstar, so in case-pattern matching the literal
+        # '/' in `tt_metal/**/*.ext` REQUIRES at least one subdirectory and
+        # silently misses files sitting directly in tt_metal/. That is not
+        # hypothetical -- tt_metal/hal.cpp is in TT_METAL_SOURCES
+        # (tt_metal/sources.cmake), and while unmatched here a PR touching only
+        # it set neither tt-metalium-changed nor any-code-changed, so the
+        # artifact build itself was skipped. Same idiom as the clang-tidy scan
+        # below. Note `tt_metal/*.ext` would NOT be the fix: in a case pattern
+        # `*` matches '/' too, so that form silently matches every depth.
+        tt_metal/*(*/)*.@(h|hpp|inl|c|cpp|cc|py))
             TTMETALIUM_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
@@ -255,8 +265,9 @@ done <<< "$CHANGED_FILES"
 # dtype / mesh-distribution layer. It does NOT use TTNN ops -- it runs its own
 # kernels through ttnn.generic_op -- so ttnn/cpp/ttnn/operations/** is
 # deliberately absent below and op-only PRs skip the job. Audited against the
-# blaze tree: one ttnn.add, plus ttnn.experimental.disaggregation, which is
-# why that one experimental subtree IS listed.
+# blaze tree: no conventional TTNN op is called anywhere in it. The one
+# exception is ttnn.experimental.disaggregation, which is why that single
+# experimental subtree IS listed.
 # tests/**, models/**, tt-train/**, docs and examples are likewise absent:
 # nothing tt-blaze links against or JIT-compiles.
 BLAZE_RELEVANT_CHANGED=false
@@ -273,6 +284,15 @@ while IFS= read -r FILE; do
         # Metalium runtime proper. tt_metal/test, programming_examples,
         # python_env and third_party are excluded by omission.
         tt_metal/@(impl|llrt|jit_build|api|detail|common|hostdevcommon|distributed|core_descriptors|soc_descriptors)/**)
+            BLAZE_RELEVANT_CHANGED=true
+            ;;
+        # Runtime sources sitting directly in tt_metal/ with no subdirectory --
+        # today just hal.cpp, a TT_METAL_SOURCES file and squarely core runtime.
+        # The directory allowlist above cannot reach them, and `tt_metal/*.ext`
+        # would not be the fix: `*` matches '/' in a case pattern, so that form
+        # would also pull in tt_metal/test and programming_examples, which are
+        # excluded on purpose. `!(*/*)` is the depth-0-only form.
+        tt_metal/!(*/*).@(h|hpp|inl|c|cpp|cc|py))
             BLAZE_RELEVANT_CHANGED=true
             ;;
         # Pins the SFPI compiler that builds every device kernel.
