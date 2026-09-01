@@ -312,9 +312,17 @@ int main(int argc, char** argv) {
             if (ctx_markers != 0) {
                 printf("  markers: %zu\n", ctx_markers);
                 int shown = 0;
+                // TT_CTX_MARKERS: how many markers to dump per context (default 4, 0 = ALL). Needed to
+                // compare EARLY vs LATE markers on a lane -- a residual that is constant across the run
+                // means anchor disagreement, one that grows means drift, and 4 samples cannot tell them
+                // apart.
+                static const int kShowMax = [] {
+                    const char* e = std::getenv("TT_CTX_MARKERS");
+                    return (e != nullptr && *e != 0) ? atoi(e) : 4;
+                }();
                 for (const auto& td : c->threadData) {
                     for (const auto& m : td.second.markers) {
-                        if (shown++ >= 4) {
+                        if (kShowMax != 0 && shown++ >= kShowMax) {
                             break;
                         }
                         const auto& sl = worker.GetSourceLocation(m->srcloc);
