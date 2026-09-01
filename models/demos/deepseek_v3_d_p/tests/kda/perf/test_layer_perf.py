@@ -29,7 +29,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     make_kimi_k3_test_case,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 pytestmark = [
     run_for_blackhole(),
@@ -225,11 +225,31 @@ def _log_device_program_times(mesh_device: ttnn.MeshDevice, layer: ttKDA, hidden
         return result
 
     try:
-        (output, next_state), per_program = profile_realtime_program_merged(
+        (output, next_state), records = profile_realtime_program(
             mesh_device,
             run_profiled_forward,
+            collect_all=True,
             record_timeout_seconds=30.0,
         )
+        per_program: dict[int, dict[str, Any]] = {}
+        for record in records:
+            runtime_id = record["runtime_id"]
+            if not runtime_id:
+                continue
+            entry = per_program.setdefault(
+                runtime_id,
+                {
+                    "duration_ns": 0.0,
+                    "kernel_sources": record["kernel_sources"],
+                    "chip_ids": set(),
+                    "record_count": 0,
+                },
+            )
+            entry["duration_ns"] = max(entry["duration_ns"], record["duration_ns"])
+            entry["chip_ids"].add(record["chip_id"])
+            entry["record_count"] += 1
+        if not per_program:
+            raise RuntimeError("real-time profiler returned no KDA program records")
         expected_chip_count = mesh_device.get_num_devices()
         programs: list[dict[str, Any]] = [
             {
