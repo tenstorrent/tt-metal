@@ -82,33 +82,48 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      # 3-D matrix: 2 boards x 2 shapes x 5 shards = 20 cells off the ONE
-      # arch-agnostic build. include entries attach per-board (label, arch)
-      # and per-shape (perf_shape) — GitHub merges an include entry into every
-      # cell whose existing keys it matches, so `hw:` entries fan across all
-      # shapes/shards and `shape:` entries fan across all boards/shards.
-      # inputs.arch / inputs.runner-label are unused — boards are fixed here.
+      # 3-D matrix: 2 dtypes x 2 shapes x 5 shards = 20 cells off the ONE
+      # build. Everything runs on N150 now — the board axis (N150/P100a) and
+      # the 1024x1024 shape were traded for a dtype axis, keeping the same 20
+      # cells. include entries attach per-dtype (perf_dtype) and per-shape
+      # (perf_shape) — GitHub merges an include entry into every cell whose
+      # existing keys it matches, so `dtype:` entries fan across all
+      # shapes/shards and `shape:` entries across all dtypes/shards.
+      # inputs.arch / inputs.runner-label are unused — the board is fixed here.
+      #
+      # The dtype/shape VALUES are load-bearing: the dashboard globs the
+      # artifact name below to decide which combo directory a result lands in,
+      # and re-checks it against the metadata.perf_dtype/perf_shape the harness
+      # stamps from these env vars. They must stay in step with DTYPES/SHAPES
+      # in the dashboard's daily-eltwise-perf.yml.
       matrix:
-        hw: [N150, P100a]
-        shape: [small, large]
+        dtype: [bf16, fp32]
+        shape: [32x32, 256x256]
         shard: [1, 2, 3, 4, 5]
         include:
-          - hw: N150
+          # `label` is carried on BOTH dtype entries (so every cell gets it)
+          # rather than hard-coded at runs-on: the container block below keys
+          # off contains(matrix.label, ...) to pick the viommu paths — harbor
+          # image prefix, /nohugepages instead of /dev/hugepages-1G, and no
+          # /mnt/MLPerf. Dropping matrix.label would silently evaluate those to
+          # the non-viommu branch and mount paths that do not exist on the pod.
+          - dtype: bf16
+            perf_dtype: bfloat16
             label: tt-ubuntu-2204-N150-viommu-stable
-            arch: wormhole_b0
-          - hw: P100a
-            label: tt-ubuntu-2204-P100a-viommu-stable
-            arch: blackhole
-          - shape: small
+          - dtype: fp32
+            perf_dtype: float32
+            label: tt-ubuntu-2204-N150-viommu-stable
+          - shape: 32x32
             perf_shape: "1,1,32,32"
-          - shape: large
-            perf_shape: "1,1,1024,1024"
+          - shape: 256x256
+            perf_shape: "1,1,256,256"
     runs-on: ${{ matrix.label }}
     container:
       image: ${{ contains(matrix.label, 'tt-ubuntu-2204') && needs.check-harbor.outputs.harbor-prefix || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
       env:
-        ARCH_NAME: ${{ matrix.arch }}
+        ARCH_NAME: wormhole_b0                 # N150 only now
         PERF_SHAPE: ${{ matrix.perf_shape }}   # test_eltwise_operations.py reads this
+        PERF_DTYPE: ${{ matrix.perf_dtype }}   # ...and this (defaults to bfloat16 if unset)
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -181,7 +196,7 @@ jobs:
         with:
           # Per-board, per-shape, per-shard artifact so the combine job can
           # group by (board, shape).
-          name: eltwise-perf-results-${{ matrix.hw }}-${{ matrix.shape }}-shard-${{ matrix.shard }}
+          name: eltwise-perf-results-${{ matrix.dtype }}-${{ matrix.shape }}-shard-${{ matrix.shard }}
           path: /work/shard-${{ matrix.shard }}.json
           if-no-files-found: error
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
