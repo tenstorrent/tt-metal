@@ -8,6 +8,9 @@
 #                               per-case verdicts; QPOOL_ONLY=name1,name2 runs a subset
 #   ./run_qpool.sh span         span(T) = prologue + marginal*T fit at the tree's current
 #                               num_threads (test_qpool_span.py + qpool_span_report.py)
+#   ./run_qpool.sh perf-ab      per-case threads A/B over the coverage-matrix configs
+#                               (test_qpool_perf_matrix): measure at num_threads=4, rebuild at
+#                               1, measure, restore, report per-case delta%/speedup table.
 #   ./run_qpool.sh span-ab      full threads A/B: measure at num_threads=4, rebuild at 1,
 #                               measure, restore 4, rebuild, report marginal/span gains + T*.
 #                               Each leg DPRINT-verifies its live thread count (via a probe
@@ -68,21 +71,32 @@ run_pytest() {  # $1 = test file, $2 = timeout
     return $rc
 }
 
-span_leg() {  # $1 = output tsv name, $2 = expected get_num_threads() (empty = skip verification)
-    if [[ -n "${2:-}" ]]; then
-        # Live thread-count verification (mandatory for A/B): a silent sed/build miss otherwise
-        # produces a byte-identical A/B that LOOKS like a valid null result.
-        local seen
-        seen=$( (sim_env; TT_METAL_DPRINT_CORES='(0,0)' \
-            timeout --foreground "$TIMEOUT_SPAN_S" pytest -q -s "$SCRIPT_DIR/test_qpool_debug.py" 2>&1) |
-            grep -m1 -oE "qpool num_threads: [0-9]+" | grep -oE "[0-9]+$" || true)
-        if [[ "$seen" != "$2" ]]; then
-            echo "run_qpool: FATAL — leg expected num_threads=$2 but kernel reports '${seen:-none}'" >&2
-            exit 1
-        fi
+verify_threads() {  # $1 = expected get_num_threads() (empty = skip verification)
+    [[ -n "${1:-}" ]] || return 0
+    # Live thread-count verification (mandatory for A/B): a silent sed/build miss otherwise
+    # produces a byte-identical A/B that LOOKS like a valid null result.
+    local seen
+    seen=$( (sim_env; TT_METAL_DPRINT_CORES='(0,0)' \
+        timeout --foreground "$TIMEOUT_SPAN_S" pytest -q -s "$SCRIPT_DIR/test_qpool_debug.py" 2>&1) |
+        grep -m1 -oE "qpool num_threads: [0-9]+" | grep -oE "[0-9]+$" || true)
+    if [[ "$seen" != "$1" ]]; then
+        echo "run_qpool: FATAL — leg expected num_threads=$1 but kernel reports '${seen:-none}'" >&2
+        exit 1
     fi
+}
+
+span_leg() {  # $1 = output tsv name, $2 = expected get_num_threads() (empty = skip verification)
+    verify_threads "${2:-}"
     rm -f "$OUT_DIR/ttsim_perf_trace.tsv"
     (sim_env; span_trace_env; timeout --foreground "$TIMEOUT_SPAN_S" pytest -q -s "$SCRIPT_DIR/test_qpool_span.py")
+    mv "$OUT_DIR/ttsim_perf_trace.tsv" "$OUT_DIR/$1"
+}
+
+perf_leg() {  # $1 = output tsv name, $2 = expected get_num_threads() (empty = skip verification)
+    verify_threads "${2:-}"
+    rm -f "$OUT_DIR/ttsim_perf_trace.tsv"
+    (sim_env; span_trace_env; timeout --foreground "$TIMEOUT_SWEEP_S" \
+        pytest -q -s -k test_qpool_perf_matrix "$SCRIPT_DIR/test_qpool_sweep.py")
     mv "$OUT_DIR/ttsim_perf_trace.tsv" "$OUT_DIR/$1"
 }
 
@@ -144,6 +158,24 @@ span)
     python3 "$SCRIPT_DIR/qpool_span_report.py" "$OUT_DIR/span_current.tsv"
     echo "run_qpool: trace at $OUT_DIR/span_current.tsv"
     ;;
+perf-ab)
+    mkdir -p "$OUT_DIR"
+    restore() { sed -i 's/? 1 : 1;/? 4 : 1;/' "$PU"; probe_off; }
+    trap restore EXIT
+    probe_on
+    echo "run_qpool: perf-ab leg 1/2 — num_threads=4 (per-case matrix)"
+    ./build_metal.sh > "$OUT_DIR/build_perf_T4.log" 2>&1
+    perf_leg perf_T4.tsv 4
+    echo "run_qpool: perf-ab leg 2/2 — num_threads=1"
+    set_threads 4 1
+    ./build_metal.sh > "$OUT_DIR/build_perf_T1.log" 2>&1
+    perf_leg perf_T1.tsv 1
+    restore
+    trap - EXIT
+    ./build_metal.sh > "$OUT_DIR/build_perf_restore.log" 2>&1
+    python3 "$SCRIPT_DIR/qpool_perf_report.py" "$OUT_DIR/perf_T1.tsv" "$OUT_DIR/perf_T4.tsv" threads=1 threads=4
+    echo "run_qpool: traces at $OUT_DIR/perf_T{1,4}.tsv (tree restored to num_threads=4 and rebuilt)"
+    ;;
 span-ab)
     mkdir -p "$OUT_DIR"
     restore() { sed -i 's/? 1 : 1;/? 4 : 1;/' "$PU"; probe_off; }
@@ -163,7 +195,7 @@ span-ab)
     echo "run_qpool: traces at $OUT_DIR/span_T{1,4}.tsv (tree restored to num_threads=4 and rebuilt)"
     ;;
 *)
-    echo "run_qpool: unknown mode '$MODE' (debug|sweep|matrix|span|span-ab)" >&2
+    echo "run_qpool: unknown mode '$MODE' (debug|sweep|matrix|span|span-ab|perf-ab)" >&2
     exit 2
     ;;
 esac
