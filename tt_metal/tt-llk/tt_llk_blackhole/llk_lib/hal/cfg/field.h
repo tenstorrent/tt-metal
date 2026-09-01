@@ -26,7 +26,7 @@ enum class RegisterScope : std::uint8_t
     State
 };
 
-// Number of copies of the given register
+// Copy number of the given register.
 enum class Sec : std::uint8_t
 {
     S0,
@@ -75,6 +75,12 @@ public:
     std::uint32_t count;     // number of sections
     std::uint32_t sec_bits;  // section stride, in bits
 
+    // Whether the selected section exists for this field.
+    constexpr bool has(Sec s) const
+    {
+        return static_cast<std::uint32_t>(s) < count;
+    }
+
     // Absolute bit offset of the SEC0 field within its CFG scope.
     constexpr std::uint32_t abs0() const
     {
@@ -84,13 +90,13 @@ public:
     // CFG word address containing the field in the selected section.
     constexpr std::uint32_t addr32(Sec s) const
     {
-        return (abs0() + static_cast<std::uint32_t>(s) * sec_bits) / word_size;
+        return (abs0() + section_offset(s)) / word_size;
     }
 
     // Bit offset of the field within its selected section's CFG word.
     constexpr std::uint32_t shamt(Sec s) const
     {
-        return (abs0() + static_cast<std::uint32_t>(s) * sec_bits) % word_size;
+        return (abs0() + section_offset(s)) % word_size;
     }
 
     // Bit mask selecting the field within its selected section's CFG word.
@@ -103,6 +109,16 @@ public:
     constexpr std::uint32_t words() const
     {
         return (shamt0 + width + word_size - 1) / word_size;
+    }
+
+private:
+    constexpr std::uint32_t section_offset(Sec s) const
+    {
+        if (!has(s))
+        {
+            __builtin_trap();
+        }
+        return static_cast<std::uint32_t>(s) * sec_bits;
     }
 };
 

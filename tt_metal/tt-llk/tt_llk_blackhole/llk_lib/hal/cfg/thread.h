@@ -7,12 +7,21 @@
 
 #include <cstdint>
 
+#include "detail/for_each.h"
+#include "detail/invalid_index.h"
 #include "field.h"
 
 namespace hal
 {
 namespace cfg
 {
+namespace detail
+{
+
+inline constexpr std::uint32_t PerformanceCounterCount = 4;
+
+} // namespace detail
+
 // ============================================================
 // THREAD
 // ============================================================
@@ -381,10 +390,13 @@ public:
                                                         // (1b)
 };
 
+/**
+ * @brief A write to this register triggers pop from data and message FIFOs in NOC overlay to free up space. This register is written after last unpack
+ * instruction once data has been read by TDMA engine.
+ */
 class NocOverlayMsgClear
-{ // A write to this register triggers pop from data and message FIFOs in NOC overlay to free up space. This register is written after last unpack instruction
+{
 public:
-    // once data has been read by TDMA engine.
     static constexpr Field StreamId_0 {RegisterScope::Thread, 16, 42, 0, 0, 6, 1, 0}; // Noc overlay stream id for unpacker 0 (6b)
     static constexpr Field MsgNum_0 {RegisterScope::Thread, 16, 42, 0, 8, 3, 1, 0};   // Number of messages(tiles) to pop from message fifo for unpacker 0 (3b)
     static constexpr Field StreamId_1 {RegisterScope::Thread, 16, 42, 1, 0, 6, 1, 0}; // Noc overlay stream id unpacker 1 (6b)
@@ -409,18 +421,38 @@ public:
     template <std::uint32_t Index>
     static constexpr PerfCntCmdEntry make()
     {
-        static_assert(Index < 4, "performance counter index out of range");
+        static_assert(Index < detail::PerformanceCounterCount, "performance counter index out of range");
         return {Fields<Index>::Start, Fields<Index>::Stop};
     }
 };
 
-inline constexpr PerfCntCmdEntry PerfCntCmd[] = {
-    // Performance counter register
-    PerfCntCmdEntry::make<0>(),
-    PerfCntCmdEntry::make<1>(),
-    PerfCntCmdEntry::make<2>(),
-    PerfCntCmdEntry::make<3>(),
+class PerfCntCmdFields
+{
+public:
+    template <std::uint32_t Index>
+    constexpr PerfCntCmdEntry operator[](detail::CompileTimeIndex<Index>) const
+    {
+        return PerfCntCmdEntry::make<Index>();
+    }
+
+    constexpr PerfCntCmdEntry operator[](std::uint32_t index) const
+    {
+        return index == 0   ? PerfCntCmdEntry::make<0>()
+               : index == 1 ? PerfCntCmdEntry::make<1>()
+               : index == 2 ? PerfCntCmdEntry::make<2>()
+               : index == 3 ? PerfCntCmdEntry::make<3>()
+                            : detail::invalid_index<PerfCntCmdEntry>();
+    }
+
+    template <typename Function>
+    constexpr void forEach(Function&& function) const
+    {
+        detail::for_each_index<detail::PerformanceCounterCount>(static_cast<Function&&>(function));
+    }
 };
+
+// Performance counter register
+inline constexpr PerfCntCmdFields PerfCntCmd {};
 
 class EnableAccStats
 { // enable generating histogram of exponents
@@ -440,11 +472,14 @@ public:
     static constexpr Field Enable {RegisterScope::Thread, 16, 55, 0, 0, 1, 1, 0}; // When set, performs move ops like FP16A (1b)
 };
 
+/**
+ * @brief Selectively enable/disable hardware hazard detection between a TRISC and the Tensix core. The tt_tensix_trisc_sync (TTS) module works by snooping on
+ * accesses from the TRISC to either a register file or the instructios buffer. If a particular resource is "tracked" (by enabling the corresponding bit in
+ * this register), the TTS unit will maintain a shadow copy of all outstanding accesses to that resource.
+ */
 class TensixTriscSync
-{ // Selectively enable/disable hardware hazard detection between a TRISC and the Tensix core. The tt_tensix_trisc_sync (TTS) module works by snooping on
+{
 public:
-    // accesses from the TRISC to  either a register file or the instructios buffer. If a particular resource is "tracked"  (by enabling the corresponding bit
-    // in this register), the TTS unit will maintain a shadow  copy of all outstanding accesses to that resource.
     static constexpr Field TrackGlobalCfg {
         RegisterScope::Thread, 16, 56, 0, 0, 1, 1, 0}; // If 1, TRISC memory-mapped accesses to global config registers (in the CfgExu and also  including the
                                                        // so-called THCON register in tt_tdma) will be tracked. If Tensix  instructions are also tracked, then
