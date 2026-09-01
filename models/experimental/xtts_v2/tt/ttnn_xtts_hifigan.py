@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TTNN implementation of the XTTS-v2 HiFi-GAN vocoder generator (Block 4).
+TTNN implementation of the XTTS-v2 HiFi-GAN vocoder generator.
 
 Reference: models/experimental/xtts_v2/reference/xtts_hifigan_ref.py (PCC 1.0 vs coqui).
 
@@ -126,7 +126,7 @@ class TTNNHifiganGenerator:
         self.p = parameters
         self.cc = _compute_config()
         self.dtype = dtype  # activation dtype
-        self.weights_dtype = weights_dtype or dtype
+        self.weights_dtype = weights_dtype if weights_dtype is not None else dtype
         self._prepared_weights = {}  # device-prepared conv weights, keyed by (weight, input length)
         self._weight_layouts = {}  # (weight, content digest) -> the one tensor of that layout
 
