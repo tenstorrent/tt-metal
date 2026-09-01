@@ -4018,23 +4018,40 @@ def _recover_agent_auth() -> bool:
         return False
     if r.returncode != 0:
         return False
-    from agent.probes import detect_auth_failure
+    from agent.probes import detect_auth_failure, detect_quota_exhausted
 
-    return detect_auth_failure((r.stdout or "") + (r.stderr or "")) is None
+    # A VALID CREDENTIAL WITH NO BUDGET LEFT ANSWERS THIS PROBE. It is not refused for credentials,
+    # so the auth check alone reports a successful recovery, the round is retried, and the retry is
+    # refused again -- draining the budget over a problem renewing cannot touch.
+    _out = (r.stdout or "") + (r.stderr or "")
+    return detect_auth_failure(_out) is None and detect_quota_exhausted(_out) is None
+
+
+def _round_refusal(kernel_log, detector: str) -> str | None:
+    """The phrase this round's transcript used to refuse, per `detector`, or None if it was let in.
+
+    Reads the round's own transcript rather than re-deriving a cause: the client writes its refusal
+    there verbatim, and quoting it is what tells an operator which of several unrelated remedies
+    applies -- re-login, a key, an org allowlist, or waiting for a limit to reset.
+    """
+    try:
+        from agent import probes
+    except Exception:  # noqa: BLE001 -- a check that cannot load must not stop the run
+        return None
+    fn = getattr(probes, detector, None)
+    if fn is None:
+        return None
+    return fn("\n".join(_tail_lines(str(kernel_log) + ".agent.log", 60)))
 
 
 def _agent_auth_failure(kernel_log) -> str | None:
-    """The phrase the agent used to say it was refused, or None if this round was let in.
+    """The round was refused for want of CREDENTIALS -- renewing may fix it."""
+    return _round_refusal(kernel_log, "detect_auth_failure")
 
-    Reads the round's own transcript rather than re-deriving a cause: the client writes its refusal
-    there verbatim, and quoting it is what tells an operator whether to re-login, check an API key
-    or call their org -- three different actions this tool must not guess between.
-    """
-    try:
-        from agent.probes import detect_auth_failure
-    except Exception:  # noqa: BLE001 -- a check that cannot load must not stop the run
-        return None
-    return detect_auth_failure("\n".join(_tail_lines(str(kernel_log) + ".agent.log", 60)))
+
+def _agent_quota_exhausted(kernel_log) -> str | None:
+    """The round was refused for want of BUDGET -- renewing cannot fix it."""
+    return _round_refusal(kernel_log, "detect_quota_exhausted")
 
 
 def _tail_lines(path, n: int = 6) -> list:
@@ -5086,6 +5103,22 @@ def optimize_pipeline(
         # blip as after a wedge. The client renews an expired token from its own refresh token when
         # something asks it to, so asking is the whole recovery; a round is only lost when even that
         # is refused, and then the run stops rather than spending its remaining rounds being told no.
+        # BUDGET BEFORE CREDENTIALS, because the remedies are opposites. Renewing an account that is
+        # merely out of budget "succeeds" -- the credential is valid -- so the round is retried, the
+        # retry is refused again, and the run drains its recovery budget before reporting that it
+        # could not authenticate. Sending an operator to re-login over a spent quota is the wrong
+        # answer to the wrong question. Waiting is not this tool's call either: a reset can be hours
+        # away and the run holds the device throughout, so it stops and quotes the limit.
+        _spent = _agent_quota_exhausted(kernel_log)
+        if _spent:
+            print(
+                "  [optimize/cc] STOPPING: the agent is out of budget (%s), not out of credentials — "
+                "renewing cannot help and retrying only spends more. The remaining rounds are not run; "
+                "the measured baseline is kept, so restarting after the limit resets costs nothing." % _spent,
+                flush=True,
+            )
+            halted = True
+            break
         _auth = _agent_auth_failure(kernel_log)
         if _auth:
             print("  [optimize/cc] round %d was refused (%s) — recovering" % (rounds + 1, _auth), flush=True)

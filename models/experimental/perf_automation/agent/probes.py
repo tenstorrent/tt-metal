@@ -1006,6 +1006,45 @@ _AGENT_AUTH_FAILURES = (
 )
 
 
+# Being out of budget is not being unauthenticated: the credential is valid and renewing it changes
+# nothing, so the two must not share a remedy. Plain substrings for the same reason as above.
+_AGENT_EXHAUSTED = (
+    "usage limit reached",
+    "rate_limit_error",
+    "exceeded your usage",
+    "quota",
+    "Credit balance is too low",
+    "insufficient_quota",
+)
+
+
+def _first_phrase_in(log_text: str, phrases) -> str | None:
+    """The first of `phrases` present in `log_text`, or None. Shared by the detectors below."""
+    if not log_text:
+        return None
+    for phrase in phrases:
+        if phrase in log_text:
+            return phrase
+    return None
+
+
+def detect_quota_exhausted(log_text: str) -> str | None:
+    """The agent was refused for want of BUDGET, not credentials.
+
+    This is the failure auth handling gets wrong in the most expensive way. A rate or usage limit
+    produces the same shape as a refused credential -- a round that runs, writes a transcript and
+    does nothing -- but renewing is not the remedy: the credential is already valid, so a renewal
+    "succeeds", the round is retried, and the retry is refused again. The recovery budget drains,
+    the run is then reported as unable to authenticate, and the operator is sent to re-login over a
+    problem that re-logging in cannot touch.
+
+    Waiting is not this tool's call either: a reset can be hours away and the run holds the device
+    the whole time. So this is a hard stop with the reason quoted, which is the one thing that lets
+    an operator decide whether to wait or to raise the limit.
+    """
+    return _first_phrase_in(log_text, _AGENT_EXHAUSTED)
+
+
 def detect_auth_failure(log_text: str) -> str | None:
     """The agent could not authenticate, so nothing it was asked to do can have happened.
 
@@ -1018,12 +1057,7 @@ def detect_auth_failure(log_text: str) -> str | None:
     Returns the matched phrase so the caller can quote the agent verbatim instead of paraphrasing a
     cause it did not observe; None when the text carries no such failure.
     """
-    if not log_text:
-        return None
-    for phrase in _AGENT_AUTH_FAILURES:
-        if phrase in log_text:
-            return phrase
-    return None
+    return _first_phrase_in(log_text, _AGENT_AUTH_FAILURES)
 
 
 def _max_asic_temp(data) -> float | None:
