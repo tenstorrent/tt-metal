@@ -71,6 +71,50 @@ struct AluPassResult {
     uint32_t instret;
 };
 
+#if defined(ARCH_QUASAR)
+// Rocket HPM counters (mhpmcounter3..6 at 0xB03..0xB06, selected by mhpmevent3..6 at 0x323..0x326).
+// Selector = event set in bits[7:0], one-hot event mask in bits[N:8]. The event table these encodings
+// come from is UNVERIFIED against this build's RTL, which is what these passes are here to check: each
+// one has a known answer, so a counter that disagrees identifies a wrong encoding rather than a
+// surprising microarchitecture. Read outside the timed asm blocks -- at thousands of iterations per
+// pass the few cycles of skew are immaterial, unlike the short brackets in the FD benchmark.
+// A cache miss and an uncached access both increment dcache_miss, but they are distinguishable: a miss
+// blocks the D$ and does not interlock, an uncached access interlocks and does not block the D$. So
+// dcache_miss decomposes as long_lat/32 (uncached loads) + dcache_blocked/60 (real misses) + uncached
+// stores, and replay independently counts the first two terms. Earlier runs also validated INSN_LOAD
+// (exact) and STALL_LOAD_USE (~1 cyc/cached load, ~2 for a miss); both are dropped as answered.
+struct HpmSnapshot {
+    uint32_t dcache_miss;     // events
+    uint32_t dcache_blocked;  // cycles -- real cache-miss cost
+    uint32_t long_lat;        // cycles -- uncached-access cost
+    uint32_t replay;          // events -- one per miss and per uncached access
+};
+
+FORCE_INLINE void hpm_program() {
+    asm volatile("csrw 0x325, %0" ::"r"(0x201));    // set 1 bit 1: long-latency interlock
+    asm volatile("csrw 0x326, %0" ::"r"(0x10001));  // set 1 bit 8: replay
+    asm volatile("csrw 0x323, %0" ::"r"(0x202));    // set 2 bit 1: D$ miss
+    asm volatile("csrw 0x324, %0" ::"r"(0x1001));   // set 1 bit 4: D$ blocked
+}
+
+FORCE_INLINE HpmSnapshot hpm_read() {
+    HpmSnapshot s;
+    asm volatile("csrr %0, 0xB03" : "=r"(s.dcache_miss));
+    asm volatile("csrr %0, 0xB04" : "=r"(s.dcache_blocked));
+    asm volatile("csrr %0, 0xB05" : "=r"(s.long_lat));
+    asm volatile("csrr %0, 0xB06" : "=r"(s.replay));
+    return s;
+}
+
+FORCE_INLINE HpmSnapshot hpm_delta(const HpmSnapshot& a, const HpmSnapshot& b) {
+    return {
+        b.dcache_miss - a.dcache_miss,
+        b.dcache_blocked - a.dcache_blocked,
+        b.long_lat - a.long_lat,
+        b.replay - a.replay};
+}
+#endif
+
 // Self-contained: both CSR pairs are read inside the same asm block as the loop, so no
 // compiler-inserted instruction (spill, register move) can land inside the timed window. Clobbers
 // only caller-saved temporaries (t0-t6, a2-a7) -- none are callee-saved, so no prologue/epilogue
@@ -277,13 +321,42 @@ FORCE_INLINE void write_result(uint32_t result_addr, uint32_t idx, uint32_t valu
     results[idx] = value;
 }
 
+#if defined(ARCH_QUASAR)
+// Four consecutive words per pass, in HpmSnapshot field order.
+FORCE_INLINE void write_hpm(uint32_t result_addr, uint32_t idx, const HpmSnapshot& s) {
+    write_result(result_addr, idx + 0, s.dcache_miss);
+    write_result(result_addr, idx + 1, s.dcache_blocked);
+    write_result(result_addr, idx + 2, s.long_lat);
+    write_result(result_addr, idx + 3, s.replay);
+}
+#endif
+
 void kernel_main() {
     constexpr uint32_t result_addr = get_arg(args::result_addr);
     constexpr uint32_t load_src_addr = get_arg(args::load_src_addr);
 
+#if defined(ARCH_QUASAR)
+    hpm_program();
+    const HpmSnapshot hpm_t0 = hpm_read();
+#endif
     const AluPassResult pass0 = run_alu_pass(kIterationsPass0);
+#if defined(ARCH_QUASAR)
+    const HpmSnapshot hpm_t1 = hpm_read();
+#endif
     const AluPassResult pass1 = run_alu_pass(kIterationsPass1);
+#if defined(ARCH_QUASAR)
+    // Snapshots bracket ONE pass each. Anything between a pair -- another pass, a write_result (which
+    // stores through the uncached alias), a DEVICE_PRINT -- lands in that pass's counts.
+    const HpmSnapshot hpm_t1b = hpm_read();
+#endif
     const AluPassResult cached_pass = run_load_use_pass(kLoadUseIterations, load_src_addr);
+#if defined(ARCH_QUASAR)
+    const HpmSnapshot hpm_t2 = hpm_read();
+    // The null test: run_alu_pass has no loads at all, so every one of these must be 0. A nonzero value
+    // means that counter is not the event its encoding claims.
+    write_hpm(result_addr, 27, hpm_delta(hpm_t0, hpm_t1));
+    write_hpm(result_addr, 31, hpm_delta(hpm_t1b, hpm_t2));
+#endif
 
     write_result(result_addr, 0, kIterationsPass0);
     write_result(result_addr, 1, pass0.cycles);
@@ -320,7 +393,14 @@ void kernel_main() {
         multi_cached.instret);
 
 #if defined(ARCH_QUASAR)
+    const HpmSnapshot hpm_t2b = hpm_read();
     const AluPassResult uncached_pass = run_load_use_pass(kLoadUseIterations, load_src_addr + MEM_L1_UNCACHED_BASE);
+    const HpmSnapshot hpm_t3 = hpm_read();
+    // insn_load must be exactly kLoadUseIterations here and in the cached block, which validates the
+    // set-0 encoding. The interesting unknown is dcache_miss: ~0 means uncached accesses bypass the miss
+    // counter, ~kLoadUseIterations means they are counted as misses -- which would explain the ~312
+    // "misses" per FD command without any of them being real cache misses.
+    write_hpm(result_addr, 35, hpm_delta(hpm_t2b, hpm_t3));
     write_result(result_addr, 9, kLoadUseIterations);
     write_result(result_addr, 10, uncached_pass.cycles);
     write_result(result_addr, 11, uncached_pass.instret);
@@ -338,12 +418,18 @@ void kernel_main() {
     write_result(result_addr, 16, multi_uncached.cycles);
     write_result(result_addr, 17, multi_uncached.instret);
 
+    const HpmSnapshot hpm_t3b = hpm_read();
     // The candidate: one L2 line invalidate, then the same 4 reads cached.
     const AluPassResult inval_cached =
         run_invalidate_load_use_pass(kMultiLoadIterations, load_src_addr, L2_INVALIDATE_ADDR);
+    // Read before the write_results below, whose uncached stores would otherwise land in this pass.
+    // Each iteration does one MMIO invalidate store plus one line refill, so dcache_miss should read
+    // 2 * kMultiLoadIterations.
+    const HpmSnapshot hpm_t4 = hpm_read();
     write_result(result_addr, 18, kMultiLoadIterations);
     write_result(result_addr, 19, inval_cached.cycles);
     write_result(result_addr, 20, inval_cached.instret);
+    write_hpm(result_addr, 39, hpm_delta(hpm_t3b, hpm_t4));
 
     // Same invalidate with no loads after it, to split the above into primitive vs refetch cost.
     const AluPassResult inval_only = run_invalidate_only_pass(kMultiLoadIterations, load_src_addr, L2_INVALIDATE_ADDR);

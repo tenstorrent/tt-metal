@@ -30,7 +30,9 @@ constexpr uint32_t kLoadUseOpsPerIter = 4;
 constexpr uint32_t kMultiLoadOpsPerIter = 10;
 constexpr uint32_t kInvalLoadOpsPerIter = 13;
 constexpr uint32_t kInvalOnlyOpsPerIter = 5;  // fence + sd + fence + addi + bnez
-constexpr uint32_t kNumResultWords = 27;
+// 27 pass words, then 4 HPM blocks of 4 counters each (Quasar only; zero elsewhere).
+constexpr uint32_t kHpmBase = 27;
+constexpr uint32_t kNumResultWords = kHpmBase + 16;
 constexpr uint32_t kResultBytes = kNumResultWords * sizeof(uint32_t);
 constexpr uint32_t kLoadSrcBytes = 64;  // one cache line; contents unused, only the address matters
 
@@ -306,6 +308,43 @@ bool run_alu_loop_ipc_bench(const std::shared_ptr<distributed::MeshDevice>& mesh
                 full_per_iter,
                 inval_per_iter,
                 full_per_iter < inval_per_iter ? "FULL INVALIDATE CHEAPER" : "PER-LINE CHEAPER");
+        }
+
+        // HPM event calibration. Each pass has a known answer, so a counter that disagrees identifies a
+        // wrong event encoding rather than a surprising microarchitecture -- the encodings in
+        // alu_loop_ipc.cpp came from a header that was never checked against this build's RTL. The ALU
+        // pass is the decisive one: it touches no memory, so every load counter must read exactly 0.
+        // dcache_miss and replay are event counts; dcache_blocked and long_lat are cycles. A cache miss
+        // blocks the D$ without interlocking, an uncached access interlocks without blocking, so the two
+        // are separable: miss/iter should be dcache_blocked/60, uncached/iter should be long_lat/32, and
+        // replay should count one per each.
+        struct HpmBlock {
+            const char* name;
+            uint32_t idx;
+            uint32_t iterations;
+        };
+        const HpmBlock hpm_blocks[] = {
+            {"alu", kHpmBase, pass0.iterations},
+            {"cached_load", kHpmBase + 4, cached_load.iterations},
+            {"uncached_load", kHpmBase + 8, uncached_load.iterations},
+            {"inval_then_cached", kHpmBase + 12, inval_cached.iterations},
+        };
+        for (const HpmBlock& b : hpm_blocks) {
+            const double it = b.iterations == 0 ? 1.0 : static_cast<double>(b.iterations);
+            log_info(
+                tt::LogTest,
+                "ALU_HPM {} iterations={} dcache_miss={} ({:.2f}/iter) dcache_blocked={} ({:.2f} cyc/iter) "
+                "long_lat={} ({:.2f} cyc/iter) replay={} ({:.2f}/iter)",
+                b.name,
+                b.iterations,
+                result_data[b.idx + 0],
+                result_data[b.idx + 0] / it,
+                result_data[b.idx + 1],
+                result_data[b.idx + 1] / it,
+                result_data[b.idx + 2],
+                result_data[b.idx + 2] / it,
+                result_data[b.idx + 3],
+                result_data[b.idx + 3] / it);
         }
     }
 

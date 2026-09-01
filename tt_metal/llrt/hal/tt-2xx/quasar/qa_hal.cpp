@@ -97,7 +97,13 @@ public:
         // different basic block), which trips that check on essentially every kernel. Disable linker
         // relaxation so HI20/LO12 stay paired/adjacent. The assembler still emits R_RISCV_RELAX relocs
         // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
-        flags += "-Wl,--no-relax ";
+        //
+        // Dispatch is exempt: it loads Loading::CONTIGUOUS (qa_hal_dispatch.cpp), not CONTIGUOUS_XIP, so
+        // MakeExecuteInPlace() never runs on it and there is no HI20/LO12 pairing to preserve. Keeping
+        // relaxation there lets globals reach gp-relative addressing instead of a lui+lw pair.
+        if (params.core_type != HalProgrammableCoreType::DISPATCH) {
+            flags += "-Wl,--no-relax ";
+        }
         if (params.processor_class == HalProcessorClassType::DM) {
             const DeviceAddr dm_global_base = params.core_type == HalProgrammableCoreType::DISPATCH
                                                   ? MEM_DISPATCH_DM_GLOBAL_BASE

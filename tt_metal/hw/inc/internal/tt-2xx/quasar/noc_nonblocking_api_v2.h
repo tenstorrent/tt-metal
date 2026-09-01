@@ -822,6 +822,12 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, at_len);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, (uint64_t)incr);
+    // TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tags;
+    // tags.val = 0;
+    // tags.f.snoop_bit = 1;
+    // tags.f.flush_bit = 0;
+    // __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+    //     TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PACKET_TAGS_REG_OFFSET / 8, tags.val);
     __builtin_riscv_ttrocc_scmdbuf_issue_trans();
 
     if (!posted) {
