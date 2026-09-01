@@ -12,7 +12,7 @@ Values from HuggingFace config.json for Kimi-K3 (``text_config``), whose ``model
 the TT stack reads lives under ``text_config``.
 
 K3 is a **hybrid**: of its 93 layers only 24 are full-attention (MLA) layers, the rest are KDA
-linear-attention layers. Only the MLA side is modelled here.
+linear-attention layers. This module owns the text-tower constants shared by MLA, KDA, MoE, and FFN consumers.
 
 MLA deltas vs Kimi-K2.6:
   * 96 attention heads (K2.6: 64)
@@ -30,9 +30,6 @@ included, is plain bf16. Only the MoE routed experts are quantized.
 """
 
 import types
-from typing import Any
-
-from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 
 
 class KimiK3Config:
@@ -211,25 +208,3 @@ def kimi_k3_hf_config(max_seq: int = 8192):
         activation_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
         activation_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
     )
-
-
-def kimi_k3_model_config() -> dict[str, Any]:
-    """Return the HF JSON-shaped fields consumed by :class:`KDAConfig`."""
-    return {
-        "hidden_size": KimiK3Config.EMB_SIZE,
-        "num_hidden_layers": KimiK3Config.NUM_LAYERS,
-        "num_attention_heads": KimiK3Config.NUM_ATTENTION_HEADS,
-        "rms_norm_eps": KimiK3Config.RMS_NORM_EPS,
-        "linear_attn_config": {
-            "num_heads": KimiK3Config.KDA_NUM_HEADS,
-            "head_dim": KimiK3Config.KDA_HEAD_DIM,
-            "short_conv_kernel_size": KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE,
-            "use_full_rank_gate": KimiK3Config.KDA_USE_FULL_RANK_GATE,
-            "gate_lower_bound": KimiK3Config.KDA_GATE_LOWER_BOUND,
-        },
-    }
-
-
-def kimi_k3_kda_config() -> KDAConfig:
-    """Build the TT KDA configuration from the pinned Kimi-K3 constants."""
-    return KDAConfig.from_model_config(kimi_k3_model_config())
