@@ -37,9 +37,17 @@ uint32_t reduce_scatter_default_workers(
     uint32_t num_directions_per_link,
     uint32_t num_mux_cores_per_direction_per_link);
 
-// Returns the default chunks_per_sync value for the given topology and tile counts.
+// Returns the default chunks_per_sync value for the given topology and chunking geometry.
+//
+// Takes the per-worker tile range and the repeat count (the channel or batch loop trip count)
+// SEPARATELY rather than pre-multiplied: the kernels chunk each repeat independently, so the number
+// of chunks a step issues is repeats * ceil(tiles / granularity), which is not recoverable from the
+// product once the two have been multiplied together.
 uint32_t reduce_scatter_default_chunks_per_sync(
-    ttnn::ccl::Topology topology, uint32_t num_tiles_to_process_per_slice, uint32_t tile_granularity);
+    ttnn::ccl::Topology topology,
+    uint32_t tiles_per_worker_per_repeat,
+    uint32_t num_repeats,
+    uint32_t tile_granularity);
 
 // Sizing for the chunk-paged "contiguous" intermediate used by the ring reduce-scatter fast path.
 //

@@ -798,11 +798,11 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
                 // for dim 0 scatters we process each slice in batches
                 // for all other dims we process each slice in channels
-                uint32_t tiles_to_process_per_slice =
-                    (start_tiles_to_read - start_tiles_read) * (normalized_dim == 0 ? slice_B : slice_C);
+                uint32_t tiles_per_worker_per_repeat = start_tiles_to_read - start_tiles_read;
+                uint32_t num_repeats = (normalized_dim == 0) ? slice_B : slice_C;
                 uint32_t chunks_per_sync_val =
                     chunks_per_sync.value_or(ttnn::experimental::ccl::reduce_scatter_default_chunks_per_sync(
-                        topology, tiles_to_process_per_slice, tile_granularity));
+                        topology, tiles_per_worker_per_repeat, num_repeats, tile_granularity));
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 std::vector<uint32_t> reader_rt_args;
@@ -1521,11 +1521,11 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
 
                 // for dim 0 scatters we process each slice in batches
                 // for all other dims we process each slice in channels
-                uint32_t tiles_to_process_per_slice =
-                    (start_tiles_to_read - start_tiles_read) * (normalized_dim == 0 ? slice_B : slice_C);
+                uint32_t tiles_per_worker_per_repeat = start_tiles_to_read - start_tiles_read;
+                uint32_t num_repeats = (normalized_dim == 0) ? slice_B : slice_C;
                 uint32_t chunks_per_sync_val =
                     chunks_per_sync.value_or(ttnn::experimental::ccl::reduce_scatter_default_chunks_per_sync(
-                        topology, tiles_to_process_per_slice, tile_granularity));
+                        topology, tiles_per_worker_per_repeat, num_repeats, tile_granularity));
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 // Reader RT args

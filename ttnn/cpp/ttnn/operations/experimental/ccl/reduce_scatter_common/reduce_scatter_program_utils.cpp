@@ -11,6 +11,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
@@ -98,7 +99,10 @@ uint32_t reduce_scatter_default_workers(
 }
 
 uint32_t reduce_scatter_default_chunks_per_sync(
-    ttnn::ccl::Topology topology, uint32_t num_tiles_to_process_per_slice, uint32_t tile_granularity) {
+    ttnn::ccl::Topology topology,
+    uint32_t tiles_per_worker_per_repeat,
+    uint32_t num_repeats,
+    uint32_t tile_granularity) {
     // For Line, as early as 20 chunks per sync we get statistically significant performance improvements.
     // For Ring there is no statistically significant performance improvement until 80 chunks per sync.
     TT_FATAL(topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear, "Invalid topology");
@@ -106,7 +110,19 @@ uint32_t reduce_scatter_default_chunks_per_sync(
     constexpr uint32_t LINEAR_DEFAULT_CHUNKS_PER_SYNC = 20;
     uint32_t default_value =
         topology == ttnn::ccl::Topology::Ring ? RING_DEFAULT_CHUNKS_PER_SYNC : LINEAR_DEFAULT_CHUNKS_PER_SYNC;
-    uint32_t total_chunks = std::max(num_tiles_to_process_per_slice / tile_granularity / 2, (uint32_t)1);
+    // Count chunks the way the kernels actually issue them. Each repeat (a channel for dims 1-3, a
+    // batch for dim 0) is chunked on its own, so a repeat holding fewer than tile_granularity tiles
+    // still costs one whole chunk -- and one semaphore wait on the receiving side.
+    //
+    // The previous form divided the PRODUCT tiles*repeats by the granularity, which silently assumes
+    // every chunk is full. When a repeat is a partial chunk that floors toward zero and pins the
+    // result at 1, so the receiver stalls on every chunk and the read/add/send pipeline never fills.
+    // Measured on [8,8,256,256] scattering on dim 2 (2 tiles per worker over 8 channels): the old
+    // form yielded 1 and the op ran at 456us; the corrected count yields 4 and it runs at 252us.
+    // Dims 0 and 1 are unaffected -- their repeats already hold whole chunks.
+    const uint32_t chunks_per_repeat = tt::div_up(tiles_per_worker_per_repeat, tile_granularity);
+    const uint32_t chunks_per_step = num_repeats * chunks_per_repeat;
+    uint32_t total_chunks = std::max(chunks_per_step / 2, (uint32_t)1);
     return std::min(default_value, total_chunks);
 }
 
