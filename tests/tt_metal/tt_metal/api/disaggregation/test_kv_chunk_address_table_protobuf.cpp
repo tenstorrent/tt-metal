@@ -17,6 +17,8 @@
 #include "impl/internal/disaggregation/kv_chunk_address_table_protobuf.hpp"
 #include "protobuf/kv_chunk_address_table.pb.h"
 
+#include "kv_chunk_table_v1_golden.inc"  // golden artifact, embedded (same dir; see GoldenV1ArtifactReads)
+
 namespace tt::tt_metal::internal::disaggregation {
 namespace {
 
@@ -597,20 +599,11 @@ TEST(KvChunkAddressTableProtobuf, GoldenV1ArtifactReads) {
     // Genuine pre-compression artifact: written by the pre-change code (main @ fd3cf5f897c,
     // 2 layers x 2 slots x 96 chunks, affine rows, stride 0x10000 from per-row bases).
     // Freezes the v1 wire contract — any drift in how we read old files fails here.
-    namespace fs = std::filesystem;
-    // Resolution order: repo-root-relative (CI runs tests with cwd=$TT_METAL_HOME), then
-    // $TT_METAL_HOME, then __FILE__ (local non-container builds, where __FILE__ is real).
-    const fs::path rel = fs::path("tests/tt_metal/tt_metal/api/disaggregation/kv_chunk_table_v1_golden.pb");
-    fs::path path = rel;
-    if (!fs::exists(path)) {
-        if (const char* home = std::getenv("TT_METAL_HOME")) {
-            path = fs::path(home) / rel;
-        }
-    }
-    if (!fs::exists(path)) {
-        path = fs::path(__FILE__).parent_path() / "kv_chunk_table_v1_golden.pb";
-    }
-    auto restored = import_from_protobuf_file(path.string());
+    // Embedded via .inc (CI test runners ship binaries, not the source tree — no filesystem
+    // path can find a data file there). kv_chunk_table_v1_golden.pb alongside is the
+    // human-inspectable original; regenerate the .inc from it when regenerating the golden.
+    auto restored = import_from_protobuf(
+        std::string(reinterpret_cast<const char*>(kKvChunkTableV1GoldenPb), kKvChunkTableV1GoldenPbSize));
 
     ASSERT_EQ(restored.num_configs(), 1u);
     const auto& cfg = restored.config();
