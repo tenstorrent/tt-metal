@@ -602,8 +602,4 @@ void kernel_main() {
     // writes would otherwise land on the next program's memory (watcher-detected race otherwise).
     noc.async_write_barrier();
     noc_async_atomic_barrier(noc.get_noc_id());
-#if defined(VSA_PROBE) && VSA_PROBE == 9
-    const uint32_t t_total = VSA_TICK() - t_start;
-    DPRINT("VSAT w{} total={} spin={} drain={} ctrl={} pull={}\n", worker_index, t_total, t_spin, t_drain, t_ctrl, t_pull);
-#endif
 }

@@ -19,6 +19,10 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
+#if defined(VSA_PROBE) && VSA_PROBE == 9
+#include "api/debug/dprint.h"
+#define VSA_TICK() (*reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L))
+#endif
 #include "api/compute/tile_move_copy.h"
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
@@ -121,59 +125,366 @@ void kernel_main() {
     CircularBuffer(cb_neginf).wait_front(1);
 
 
-    // Lag-1 PV pipeline: each visit's PV is deferred to the start of the next visit (or to the
-    // next flush/window/pass boundary), so a visit's pack-thread exp overlaps the next visit's
-    // QK and reduce math instead of serializing against them. qk scratch ping-pongs between two
-    // regions so the deferred probs survive the next visit's QK packs.
-    struct PendingPV {
-        bool valid = false;
-        uint32_t row_slot = 0;
-        bool is_first = false;
-        uint32_t qk_base = 0;   // tile offset of the probs region
-        uint32_t qk_cols = 0;
-        uint32_t n_blocks = 0;
-        uint32_t slots[8];
+#if defined(VSA_PROBE) && VSA_PROBE == 9
+    // MATH-thread phase timers: elapsed wall clock between phase boundaries as seen by TRISC1.
+    uint32_t t_wait = 0, t_qk = 0, t_max = 0, t_corr = 0, t_pv = 0, t_exp = 0, t_flush = 0;
+    uint32_t n_visits = 0;
+    const uint32_t t_begin = VSA_TICK();
+    uint32_t tmark = t_begin;
+    const auto lap = [&](uint32_t& acc) {
+        const uint32_t now = VSA_TICK();
+        acc += now - tmark;
+        tmark = now;
     };
-    PendingPV pend;
-    uint32_t qk_region = 0;  // ping-pong: 0 or 1
+#else
+    const auto lap = [](...) {};
+    uint32_t t_wait = 0, t_qk = 0, t_max = 0, t_corr = 0, t_pv = 0, t_exp = 0, t_flush = 0;
+    (void)t_wait; (void)t_qk; (void)t_max; (void)t_corr; (void)t_pv; (void)t_exp; (void)t_flush;
+#endif
 
-    const auto drain_pending_pv = [&]() {
-        if (!pend.valid) {
+    // GROUP-MAJOR window engine: a window's visits are buffered and processed phase-major --
+    // QK for every visit, ONE s1 sync, maxes batched four visits per DEST acquire, ONE s2 sync,
+    // corr batched, ONE s3 sync, rescales, then exp -- instead of paying every sync and DEST
+    // round-trip per visit (measured: ~2600 cycles/visit of non-math at ~4600 cycles/visit).
+    // A window is processed in CHUNKS whose qk tiles fit one region of the double-buffered qk
+    // scratch; each chunk's PV is DEFERRED to the next chunk (or flush), overlapping its
+    // pack-thread exp with the next chunk's math, and the window's slot credits are stashed
+    // until the deferred PV has consumed its V tiles.
+    constexpr uint32_t kChunkCols = (stream_depth / 2) * Skt;         // qk region width in tiles
+    constexpr uint32_t kRegionTiles = kChunkCols * Sqt;               // qk region size in tiles
+    constexpr uint32_t kMaxVisits = 16;                               // >= rows per pass
+    struct Visit {
+        uint32_t row_slot;
+        uint32_t flags;  // ROW_IS_FIRST / ROW_PARITY as sent by the reader
+        uint32_t n;
+        uint32_t tile_base;  // dense sub-block base within the qk region (tiles)
+        uint32_t entries[stream_depth / 2 > 0 ? stream_depth / 2 : 1];
+    };
+    Visit vbuf[kMaxVisits];
+    uint32_t vn = 0;
+
+    // Deferred chunk: its probs live in the OTHER qk region; PV runs at the next chunk (or flush).
+    Visit pend_v[stream_depth / 2 > 0 ? stream_depth / 2 : 1];
+    uint32_t pend_n = 0;
+    uint32_t pend_qk_base = 0;
+    uint32_t pend_credits = 0;  // window credits held until the deferred PV consumed its V slots
+    uint32_t qk_region = 0;
+
+    const auto drain_pend = [&]() {
+        if (pend_n == 0) {
+            if (pend_credits != 0) {
+                free_cb.reserve_back(pend_credits);
+                free_cb.push_back(pend_credits);
+                pend_credits = 0;
+            }
             return;
         }
-        stream_pack_to_unpack_sync();  // probs of the pending visit must be visible (usually free)
+        stream_pack_to_unpack_sync();  // the chunk's probs must be visible (usually free by now)
         reconfig_data_format(cb_v_stream, cb_qk);
-        mm_no_mop_init_short(cb_qk, cb_v_stream, /*transpose=*/false, 1, Sqt, pend.qk_cols);
-        tile_regs_acquire();
-        for (uint32_t vd = 0; vd < vDHt; ++vd) {
-            for (uint32_t b = 0; b < pend.n_blocks; ++b) {
-                for (uint32_t inner = 0; inner < Skt; ++inner) {
-                    matmul_block_no_mop(
-                        cb_qk,
-                        cb_v_stream,
-                        /*in0=*/pend.qk_base + b * Skt + inner,
-                        /*in1=*/pend.slots[b] * v_tiles_per_block + inner * vDHt + vd,
-                        /*dst=*/vd * Sqt,
-                        /*transpose=*/false,
-                        /*w=*/1,
-                        /*h=*/Sqt,
-                        /*stride=*/pend.qk_cols);
+        for (uint32_t i = 0; i < pend_n; ++i) {
+            const Visit& v = pend_v[i];
+            const uint32_t qk_cols = v.n * Skt;
+            mm_no_mop_init_short(cb_qk, cb_v_stream, /*transpose=*/false, 1, Sqt, qk_cols);
+            tile_regs_acquire();
+            for (uint32_t vd = 0; vd < vDHt; ++vd) {
+                for (uint32_t b = 0; b < v.n; ++b) {
+                    const uint32_t slot = v.entries[b] & 0xff;
+                    for (uint32_t inner = 0; inner < Skt; ++inner) {
+                        matmul_block_no_mop(
+                            cb_qk,
+                            cb_v_stream,
+                            /*in0=*/pend_qk_base + v.tile_base + b * Skt + inner,
+                            /*in1=*/slot * v_tiles_per_block + inner * vDHt + vd,
+                            /*dst=*/vd * Sqt,
+                            /*transpose=*/false,
+                            /*w=*/1,
+                            /*h=*/Sqt,
+                            /*stride=*/qk_cols);
+                    }
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            const bool is_first = (v.flags & ROW_IS_FIRST) != 0;
+            const uint32_t o_base_p = v.row_slot * Sqt * vDHt;
+            configure_row_pack_width(cb_o_res, 1);
+            PACK((llk_pack_reconfig_l1_acc(is_first ? 0 : 1)));
+            for (uint32_t vd = 0; vd < vDHt; ++vd) {
+                for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                    pack_tile<true>(vd * Sqt + sr, cb_o_res, o_base_p + sr * vDHt + vd);
+                }
+            }
+            PACK((llk_pack_reconfig_l1_acc(0)));
+            tile_regs_release();
+        }
+        pend_n = 0;
+        if (pend_credits != 0) {
+            free_cb.reserve_back(pend_credits);
+            free_cb.push_back(pend_credits);
+            pend_credits = 0;
+        }
+    };
+
+    // Process one chunk of visits (sum of n over the chunk fits a qk region).
+    const auto process_chunk = [&](Visit* vs, uint32_t nv) {
+        const uint32_t qk_base = qk_region * kRegionTiles;
+        {
+            uint32_t off = 0;
+            for (uint32_t i = 0; i < nv; ++i) {
+                vs[i].tile_base = off;
+                off += Sqt * vs[i].n * Skt;
+            }
+        }
+
+        // Phase 1: QK for every visit (two blocks per DEST acquire), masks, ONE s1 sync.
+        reconfig_data_format(cb_k_stream, cb_q_res);
+        mm_no_mop_init_short(cb_q_res, cb_k_stream, /*transpose=*/true, 1, Sqt, DHt);
+        pack_reconfig_data_format(cb_qk);
+        configure_row_pack_width(cb_qk, 1);
+        for (uint32_t i = 0; i < nv; ++i) {
+            const Visit& v = vs[i];
+            const uint32_t qk_cols = v.n * Skt;
+            for (uint32_t b = 0; b < v.n; b += 2) {
+                const uint32_t nb = (v.n - b < 2) ? (v.n - b) : 2;
+                tile_regs_acquire();
+                for (uint32_t j = 0; j < nb; ++j) {
+                    const uint32_t slot = v.entries[b + j] & 0xff;
+                    for (uint32_t c = 0; c < Skt; ++c) {
+                        for (uint32_t inner = 0; inner < DHt; ++inner) {
+                            matmul_block_no_mop(
+                                cb_q_res, cb_k_stream, v.row_slot * Sqt * DHt + inner,
+                                slot * k_tiles_per_block + c * DHt + inner, j * Skt * Sqt + c * Sqt,
+                                /*transpose=*/true,
+                                /*w=*/1, /*h=*/Sqt, /*stride=*/DHt);
+                        }
+                    }
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                PACK((llk_pack_reconfig_l1_acc(0)));
+                for (uint32_t j = 0; j < nb; ++j) {
+                    for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                        for (uint32_t c = 0; c < Skt; ++c) {
+                            pack_tile<true>(
+                                j * Skt * Sqt + c * Sqt + sr, cb_qk,
+                                qk_base + v.tile_base + sr * qk_cols + (b + j) * Skt + c);
+                        }
+                    }
+                }
+                tile_regs_release();
+            }
+        }
+        for (uint32_t i = 0; i < nv; ++i) {
+            const Visit& v = vs[i];
+            const uint32_t qk_cols = v.n * Skt;
+            for (uint32_t b = 0; b < v.n; ++b) {
+                const uint32_t count = (v.entries[b] >> 8) & 0x7f;
+                if (count >= block_size) {
+                    continue;
+                }
+                const uint32_t slot = v.entries[b] & 0xff;
+                const uint32_t btile = count / keys_per_tile;
+                const uint32_t bcol = count % keys_per_tile;
+                uint32_t first_full = btile;
+                if (bcol != 0) {
+                    vsa_stamp_mask(cb_vmask, slot, cb_qk, qk_base + v.tile_base + b * Skt + btile, qk_cols, Sqt);
+                    first_full = btile + 1;
+                }
+                for (uint32_t kt = first_full; kt < Skt; ++kt) {
+                    vsa_stamp_mask(cb_neginf, 0, cb_qk, qk_base + v.tile_base + b * Skt + kt, qk_cols, Sqt);
                 }
             }
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        const uint32_t o_base_p = pend.row_slot * Sqt * vDHt;
-        configure_row_pack_width(cb_o_res, 1);
-        PACK((llk_pack_reconfig_l1_acc(pend.is_first ? 0 : 1)));
-        for (uint32_t vd = 0; vd < vDHt; ++vd) {
-            for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                pack_tile<true>(vd * Sqt + sr, cb_o_res, o_base_p + sr * vDHt + vd);
+        stream_pack_to_unpack_sync();  // s1: every visit's qk (+masks) visible
+        lap(t_qk);
+
+        // Phase 2: running maxes, FOUR visits per DEST acquire, ONE s2 sync.
+        reconfig_data_format(cb_qk, cb_scale);
+        for (uint32_t g = 0; g < nv; g += 4) {
+            const uint32_t ng = (nv - g < 4) ? (nv - g) : 4;
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < ng; ++i) {
+                const Visit& v = vs[g + i];
+                const uint32_t parity = (v.flags & ROW_PARITY) ? 1u : 0u;
+                const uint32_t old_st = (v.row_slot * 2 + (parity ^ 1u)) * Sqt;
+                if (!(v.flags & ROW_IS_FIRST)) {
+                    sdpa_reduce_copy_tile_to_dst_init_short(cb_max_res);
+                    for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                        copy_tile(cb_max_res, old_st + sr, i * Sqt + sr);
+                    }
+                }
+                const uint32_t qk_cols = v.n * Skt;
+                reduce_block_max_row_init_runtime(cb_max_res, qk_cols, cb_qk, cb_scale, false);
+                for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                    reduce_block_max_row_runtime(
+                        cb_qk, cb_scale, qk_base + v.tile_base + sr * qk_cols, i * Sqt + sr, false, false);
+                }
+                reduce_block_max_row_uninit_runtime(cb_qk, false, false);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            configure_single_tile_pack(cb_max_res);
+            PACK((llk_pack_reconfig_l1_acc(0)));
+            for (uint32_t i = 0; i < ng; ++i) {
+                const Visit& v = vs[g + i];
+                const uint32_t parity = (v.flags & ROW_PARITY) ? 1u : 0u;
+                const uint32_t new_st = (v.row_slot * 2 + parity) * Sqt;
+                for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                    pack_tile<true>(i * Sqt + sr, cb_max_res, new_st + sr);
+                }
+            }
+            tile_regs_release();
+        }
+        stream_pack_to_unpack_sync();  // s2: new maxes visible
+        lap(t_max);
+
+        // Phase 3: corr for every non-first visit, FOUR per acquire, ONE s3 sync (if any).
+        bool any_corr = false;
+        {
+            uint32_t done = 0;
+            exp_packthread_tile_init<EXP_APPROX_MODE>();
+            sub_init(cb_max_res, cb_max_res);
+            while (done < nv) {
+                uint32_t taken = 0;
+                tile_regs_acquire();
+                uint32_t members[4];
+                while (done < nv && taken < 4) {
+                    const Visit& v = vs[done];
+                    if (v.flags & ROW_IS_FIRST) {
+                        ++done;
+                        continue;
+                    }
+                    const uint32_t parity = (v.flags & ROW_PARITY) ? 1u : 0u;
+                    const uint32_t new_st = (v.row_slot * 2 + parity) * Sqt;
+                    const uint32_t old_st = (v.row_slot * 2 + (parity ^ 1u)) * Sqt;
+                    for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                        sub_tiles(cb_max_res, cb_max_res, old_st + sr, new_st + sr, taken * Sqt + sr);
+                    }
+                    members[taken] = done;
+                    ++taken;
+                    ++done;
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                if (taken > 0) {
+                    any_corr = true;
+                    for (uint32_t i = 0; i < taken * Sqt; ++i) {
+                        PACK((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(i)));
+                    }
+                    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                    configure_single_tile_pack(cb_corr);
+                    PACK((llk_pack_reconfig_l1_acc(0)));
+                    for (uint32_t i = 0; i < taken; ++i) {
+                        for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                            pack_tile<true>(i * Sqt + sr, cb_corr, members[i] * Sqt + sr);
+                        }
+                    }
+                }
+                tile_regs_release();
             }
         }
-        PACK((llk_pack_reconfig_l1_acc(0)));
-        tile_regs_release();
-        pend.valid = false;
+        if (any_corr) {
+            stream_pack_to_unpack_sync();  // s3: corrs visible
+        }
+
+        // The PREVIOUS chunk's deferred PV: its exp/packs overlapped every phase above. It must
+        // land (and be made visible) before rescale multiplies any O it accumulated into.
+        drain_pend();
+        stream_pack_to_unpack_sync();
+        lap(t_pv);
+
+        // Phase 4: rescale each non-first visit's O and sum by its corr.
+        if (any_corr) {
+            mul_bcast_cols_init(cb_o_res, cb_corr);
+            reconfig_data_format(cb_o_res, cb_corr);
+            for (uint32_t i = 0; i < nv; ++i) {
+                const Visit& v = vs[i];
+                if (v.flags & ROW_IS_FIRST) {
+                    continue;
+                }
+                const uint32_t parity = (v.flags & ROW_PARITY) ? 1u : 0u;
+                const uint32_t new_st = (v.row_slot * 2 + parity) * Sqt;
+                const uint32_t old_st = (v.row_slot * 2 + (parity ^ 1u)) * Sqt;
+                const uint32_t o_base = v.row_slot * Sqt * vDHt;
+                for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                    tile_regs_acquire();
+                    for (uint32_t j = 0; j < vDHt; ++j) {
+                        mul_tiles_bcast_cols(cb_o_res, cb_corr, o_base + sr * vDHt + j, i * Sqt + sr, j);
+                    }
+                    mul_tiles_bcast_cols(cb_sum_res, cb_corr, old_st + sr, i * Sqt + sr, vDHt);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    configure_row_pack_width(cb_o_res, 1);
+                    PACK((llk_pack_reconfig_l1_acc(0)));
+                    for (uint32_t j = 0; j < vDHt; ++j) {
+                        pack_tile<true>(j, cb_o_res, o_base + sr * vDHt + j);
+                    }
+                    configure_single_tile_pack(cb_sum_res);
+                    pack_tile<true>(vDHt, cb_sum_res, new_st + sr);
+                    tile_regs_release();
+                }
+            }
+        }
+        lap(t_corr);
+
+        // Phase 5: probs = exp((qk - new_max) * scale) in place per visit, in DEST-sized column
+        // batches; row sums L1-acc onto the NEW sum slot (overwrite on a first visit's first
+        // batch).
+        exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+        for (uint32_t i = 0; i < nv; ++i) {
+            const Visit& v = vs[i];
+            const bool is_first = (v.flags & ROW_IS_FIRST) != 0;
+            const uint32_t parity = (v.flags & ROW_PARITY) ? 1u : 0u;
+            const uint32_t new_st = (v.row_slot * 2 + parity) * Sqt;
+            const uint32_t qk_cols = v.n * Skt;
+            for (uint32_t kc = 0; kc < qk_cols; kc += 4) {
+                const uint32_t w = (qk_cols - kc < 4) ? (qk_cols - kc) : 4;
+                sub_bcast_cols_init_short_custom(cb_qk, cb_max_res, w);
+                reconfig_data_format(cb_qk, cb_max_res);
+                tile_regs_acquire();
+                for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                    sub_tiles_bcast_cols_custom(
+                        cb_qk, cb_max_res, qk_base + v.tile_base + sr * qk_cols + kc, new_st + sr, sr * w, w);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                PACK((llk_pack_relu_config(ReluConfig::zero())));
+                for (uint32_t t = 0; t < Sqt * w; ++t) {
+                    exp_packthread_tile<true, false, InputClamping::None, 32>(t, VectorMode::None);
+                }
+                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                configure_row_pack_width(cb_qk, 1);
+                PACK((llk_pack_reconfig_l1_acc(0)));
+                for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                    for (uint32_t c = 0; c < w; ++c) {
+                        pack_tile<true>(sr * w + c, cb_qk, qk_base + v.tile_base + sr * qk_cols + kc + c);
+                    }
+                }
+                configure_single_tile_pack(cb_sum_res);
+                for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                    for (uint32_t c = 0; c < w; ++c) {
+                        const bool overwrite = is_first && kc == 0 && c == 0;
+                        PACK((llk_pack_reconfig_l1_acc(overwrite ? 0 : 1)));
+                        pack_tile<true>(sr * w + c, cb_sum_res, new_st + sr);
+                    }
+                }
+                PACK((llk_pack_reconfig_l1_acc(0)));
+                PACK((llk_pack_relu_config(ReluConfig::none())));
+                tile_regs_release();
+            }
+        }
+        lap(t_exp);
+
+        // Defer this chunk's PV: its pack-thread exp overlaps the NEXT chunk's math.
+        for (uint32_t i = 0; i < nv; ++i) {
+            pend_v[i] = vs[i];
+        }
+        pend_n = nv;
+        pend_qk_base = qk_base;
+        qk_region ^= 1u;
+#if defined(VSA_PROBE) && VSA_PROBE == 9
+        n_visits += nv;
+#endif
     };
 
     uint32_t rows_done = 0;
@@ -184,12 +495,14 @@ void kernel_main() {
 
         uint32_t flushed = 0;
         while (flushed < pass_rows) {
+            lap(t_wait);
             ctrl_cb.wait_front(1);
             const uint32_t w0 = ckernel::read_tile_value(cb_ctrl, 0, 0);
             const uint32_t type = w0 & 0xff;
+            lap(t_wait);
 
             if (type == MSG_FLUSH) {
-                drain_pending_pv();
+                drain_pend();
                 const uint32_t row_slot = ckernel::read_tile_value(cb_ctrl, 0, 1);
                 const uint32_t parity = ckernel::read_tile_value(cb_ctrl, 0, 2);
                 ctrl_cb.pop_front(1);
@@ -240,219 +553,58 @@ void kernel_main() {
                 }
                 out_cb.push_back(Sqt * vDHt);
                 ++flushed;
+                lap(t_flush);
                 continue;
             }
 
             if (type == MSG_WINDOW) {
-                drain_pending_pv();  // the pending visit still reads this window's V slots
                 const uint32_t n_slots = ckernel::read_tile_value(cb_ctrl, 0, 1);
                 ctrl_cb.pop_front(1);
-                free_cb.reserve_back(n_slots);
-                free_cb.push_back(n_slots);
+                // Process the buffered visits in region-sized chunks. All but the final chunk's
+                // PV drains inside the loop; the final chunk's PV is deferred, so the window's
+                // slot credits ride with it (V slots stay pinned until that PV consumed them).
+                uint32_t i = 0;
+                while (i < vn) {
+                    uint32_t take = 0, cols = 0;
+                    while (i + take < vn && cols + vbuf[i + take].n * Skt <= kChunkCols) {
+                        cols += vbuf[i + take].n * Skt;
+                        ++take;
+                    }
+                    process_chunk(&vbuf[i], take);
+                    i += take;
+                }
+                vn = 0;
+                pend_credits += n_slots;
                 continue;
             }
 
-            // ---- VISIT: one resident row x n windowed blocks ----
-            const uint32_t n_blocks = w0 >> 16;
-            const uint32_t info = ckernel::read_tile_value(cb_ctrl, 0, 1);
-            uint32_t entries[16];
-            for (uint32_t b = 0; b < n_blocks; ++b) {
-                entries[b] = ckernel::read_tile_value(cb_ctrl, 0, 2 + b);
-            }
+            // ---- VISIT: buffer it; processing happens at MSG_WINDOW ----
+#if defined(VSA_PROBE) && VSA_PROBE == 1
             ctrl_cb.pop_front(1);
-#if defined(VSA_PROBE) && (VSA_PROBE == 1 || VSA_PROBE >= 3)
-            continue;  // probe 1/3: delivery floor -- consume the visit without any math
-#endif
-
-            const uint32_t row_slot = info & 0xff;
-            const bool is_first = (info & ROW_IS_FIRST) != 0;
-            const uint32_t parity = (info & ROW_PARITY) ? 1u : 0u;
-            const uint32_t new_st = (row_slot * 2 + parity) * Sqt;
-            const uint32_t old_st = (row_slot * 2 + (parity ^ 1u)) * Sqt;
-            const uint32_t o_base = row_slot * Sqt * vDHt;
-            const uint32_t qk_cols = n_blocks * Skt;
-            if (pend.valid && pend.row_slot == row_slot) {
-                drain_pending_pv();  // same row back-to-back: its O and probs must land first
-            }
-            const uint32_t qk_half_tiles = (stream_depth / 2) * Skt * Sqt;  // tiles per qk region
-            const uint32_t qk_base = qk_region * qk_half_tiles;
-
-            // Phase 1: QK per block into the row's qk scratch (+ ragged masks), then sync.
-            reconfig_data_format(cb_k_stream, cb_q_res);
-            exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
-            mm_no_mop_init_short(cb_q_res, cb_k_stream, /*transpose=*/true, 1, Sqt, DHt);
-            pack_reconfig_data_format(cb_qk);
-            configure_row_pack_width(cb_qk, 1);
-            for (uint32_t b = 0; b < n_blocks; ++b) {
-                const uint32_t slot = entries[b] & 0xff;
-                tile_regs_acquire();
-                for (uint32_t c = 0; c < Skt; ++c) {
-                    for (uint32_t inner = 0; inner < DHt; ++inner) {
-                        matmul_block_no_mop(
-                            cb_q_res, cb_k_stream, row_slot * Sqt * DHt + inner,
-                            slot * k_tiles_per_block + c * DHt + inner, c * Sqt, /*transpose=*/true,
-                            /*w=*/1, /*h=*/Sqt, /*stride=*/DHt);
-                    }
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                PACK((llk_pack_reconfig_l1_acc(0)));
-                for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    for (uint32_t c = 0; c < Skt; ++c) {
-                        pack_tile<true>(c * Sqt + sr, cb_qk, qk_base + sr * qk_cols + b * Skt + c);
-                    }
-                }
-                tile_regs_release();
-            }
-#if defined(VSA_PROBE) && VSA_PROBE == 2
-            // probe 2: math floor -- QK above and the deferred PV below, no softmax phases.
-            drain_pending_pv();
+            continue;  // probe 1: delivery floor -- consume the visit without any math
 #else
-            bool any_mask = false;
-            for (uint32_t b = 0; b < n_blocks; ++b) {
-                const uint32_t count = (entries[b] >> 8) & 0x7f;
-                if (count >= block_size) {
-                    continue;
-                }
-                const uint32_t slot = entries[b] & 0xff;
-                const uint32_t btile = count / keys_per_tile;
-                const uint32_t bcol = count % keys_per_tile;
-                uint32_t first_full = btile;
-                if (bcol != 0) {
-                    vsa_stamp_mask(cb_vmask, slot, cb_qk, qk_base + b * Skt + btile, qk_cols, Sqt);
-                    first_full = btile + 1;
-                }
-                for (uint32_t kt = first_full; kt < Skt; ++kt) {
-                    vsa_stamp_mask(cb_neginf, 0, cb_qk, qk_base + b * Skt + kt, qk_cols, Sqt);
-                }
-                any_mask = true;
-            }
-            (void)any_mask;
-            stream_pack_to_unpack_sync();  // s1: qk (+masks) visible
-
-            // Phase 2: one runtime-width row max over all n*Skt columns -> the NEW slot.
-            reconfig_data_format(cb_qk, cb_scale);
             {
-                tile_regs_acquire();
-                if (!is_first) {
-                    sdpa_reduce_copy_tile_to_dst_init_short(cb_max_res);
-                    for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                        copy_tile(cb_max_res, old_st + sr, sr);
-                    }
+                Visit& v = vbuf[vn];
+                v.n = w0 >> 16;
+                const uint32_t info = ckernel::read_tile_value(cb_ctrl, 0, 1);
+                v.row_slot = info & 0xff;
+                v.flags = info & (ROW_IS_FIRST | ROW_PARITY);
+                for (uint32_t b = 0; b < v.n; ++b) {
+                    v.entries[b] = ckernel::read_tile_value(cb_ctrl, 0, 2 + b);
                 }
-                reduce_block_max_row_init_runtime(cb_max_res, qk_cols, cb_qk, cb_scale, false);
-                for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    reduce_block_max_row_runtime(cb_qk, cb_scale, qk_base + sr * qk_cols, sr, false, false);
-                }
-                reduce_block_max_row_uninit_runtime(cb_qk, false, false);
-                tile_regs_commit();
-                tile_regs_wait();
-                configure_single_tile_pack(cb_max_res);
-                PACK((llk_pack_reconfig_l1_acc(0)));
-                for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    pack_tile<true>(sr, cb_max_res, new_st + sr);
-                }
-                tile_regs_release();
+                ctrl_cb.pop_front(1);
+                ++vn;
             }
-            stream_pack_to_unpack_sync();  // s2: new max visible
-
-            // Phase 3+4: corr and the O/sum rescale, once per batch (skipped on a first visit).
-            if (!is_first) {
-                exp_packthread_tile_init<EXP_APPROX_MODE>();
-                sub_init(cb_max_res, cb_max_res);
-                tile_regs_acquire();
-                for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    sub_tiles(cb_max_res, cb_max_res, old_st + sr, new_st + sr, sr);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    PACK((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(sr)));
-                }
-                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-                configure_single_tile_pack(cb_corr);
-                PACK((llk_pack_reconfig_l1_acc(0)));
-                for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    pack_tile<true>(sr, cb_corr, sr);
-                }
-                tile_regs_release();
-                stream_pack_to_unpack_sync();  // s3: corr visible
-
-                mul_bcast_cols_init(cb_o_res, cb_corr);
-                reconfig_data_format(cb_o_res, cb_corr);
-                for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    tile_regs_acquire();
-                    for (uint32_t j = 0; j < vDHt; ++j) {
-                        mul_tiles_bcast_cols(cb_o_res, cb_corr, o_base + sr * vDHt + j, sr, j);
-                    }
-                    mul_tiles_bcast_cols(cb_sum_res, cb_corr, old_st + sr, sr, vDHt);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    configure_row_pack_width(cb_o_res, 1);
-                    PACK((llk_pack_reconfig_l1_acc(0)));
-                    for (uint32_t j = 0; j < vDHt; ++j) {
-                        pack_tile<true>(j, cb_o_res, o_base + sr * vDHt + j);
-                    }
-                    configure_single_tile_pack(cb_sum_res);
-                    pack_tile<true>(vDHt, cb_sum_res, new_st + sr);
-                    tile_regs_release();
-                }
-            }
-
-            drain_pending_pv();  // previous visit's PV: its exp overlapped our math phases above
-
-            // Phase 5: probs = exp((qk - new_max) * scale) in place, in DEST-sized column batches;
-            // row sums L1-acc onto the NEW sum slot (overwrite on a first visit's first batch).
-            exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
-            for (uint32_t kc = 0; kc < qk_cols; kc += 4) {
-                const uint32_t w = (qk_cols - kc < 4) ? (qk_cols - kc) : 4;
-                sub_bcast_cols_init_short_custom(cb_qk, cb_max_res, w);
-                reconfig_data_format(cb_qk, cb_max_res);
-                tile_regs_acquire();
-                for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    sub_tiles_bcast_cols_custom(cb_qk, cb_max_res, qk_base + sr * qk_cols + kc, new_st + sr, sr * w, w);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                PACK((llk_pack_relu_config(ReluConfig::zero())));
-                for (uint32_t t = 0; t < Sqt * w; ++t) {
-                    exp_packthread_tile<true, false, InputClamping::None, 32>(t, VectorMode::None);
-                }
-                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-                configure_row_pack_width(cb_qk, 1);
-                PACK((llk_pack_reconfig_l1_acc(0)));
-                for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    for (uint32_t c = 0; c < w; ++c) {
-                        pack_tile<true>(sr * w + c, cb_qk, qk_base + sr * qk_cols + kc + c);
-                    }
-                }
-                configure_single_tile_pack(cb_sum_res);
-                for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    for (uint32_t c = 0; c < w; ++c) {
-                        const bool overwrite = is_first && kc == 0 && c == 0;
-                        PACK((llk_pack_reconfig_l1_acc(overwrite ? 0 : 1)));
-                        pack_tile<true>(sr * w + c, cb_sum_res, new_st + sr);
-                    }
-                }
-                PACK((llk_pack_reconfig_l1_acc(0)));
-                PACK((llk_pack_relu_config(ReluConfig::none())));
-                tile_regs_release();
-            }
-#endif  // !(VSA_PROBE == 2)
-            // No s4/s5 here: the PV of this visit is deferred to the next visit (or the next
-            // flush/window boundary), so this visit's pack-thread exp overlaps the next visit's
-            // QK and reduce math. drain_pending_pv() carries the probs-visibility sync.
-            pend.valid = true;
-            pend.row_slot = row_slot;
-            pend.is_first = is_first;
-            pend.qk_base = qk_base;
-            pend.qk_cols = qk_cols;
-            pend.n_blocks = n_blocks;
-            for (uint32_t b = 0; b < n_blocks; ++b) {
-                pend.slots[b] = entries[b] & 0xff;
-            }
-            qk_region ^= 1u;
+#endif
         }
         rows_done += pass_rows;
     }
+#if defined(VSA_PROBE) && VSA_PROBE == 9
+    MATH(({
+        const uint32_t t_total = VSA_TICK() - t_begin;
+        DPRINT(
+            "VSAC v={} total={} wait={} qk={} max={} corr={} pv={} exp={} flush={}\n",
+            n_visits, t_total, t_wait, t_qk, t_max, t_corr, t_pv, t_exp, t_flush);
+    }));
+#endif
 }
