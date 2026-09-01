@@ -5,14 +5,16 @@ baby RISC-V thread. Each statement lowers to that thread's half of the dataflow-
 protocol, and the halves that do not belong to a given thread compile away to nothing.
 
 ```
-  INPUT                   OUTPUT                   INTERMED
-       DM    Compute         DM    Compute            DM    Compute
-  reserve <- *               * -> reserve                   reserve
-    write                           write                     write
-     push ->    wait      wait <-    push                      push
-                read      read                                 wait
-        * <-     pop       pop -> *                            read
-                                                                pop
+       INPUT           |     OUTPUT             |     INTERMED
+-----------------------|------------------------|--------------------
+       DM    Compute   |     DM    Compute      |     DM    Compute
+-----------------------|------------------------|--------------------
+  reserve <- *         |     * -> reserve       |           reserve
+    write              |            write       |             write
+     push ->    wait   |  wait <-    push       |              push
+                read   |  read                  |              wait
+        * <-     pop   |   pop -> *             |              read
+                       |                        |               pop
 ```
 
 The model abstracts two things that a Metalium kernel normally spells by hand: the split
