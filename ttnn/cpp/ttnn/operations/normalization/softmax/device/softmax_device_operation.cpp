@@ -12,7 +12,6 @@
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
 
@@ -499,11 +498,7 @@ Tensor softmax(
             ttnn::operations::data_movement::pad_to_tile_shape(input_tensor_4D.padded_shape());
         auto formatted_input_tensor = input_tensor_4D;
         if (formatted_input_tensor.layout() != Layout::TILE) {
-            formatted_input_tensor = ttnn::tilize_with_val_padding(
-                input_tensor_4D,
-                input_pad_shape,
-                -std::numeric_limits<float>::infinity(),
-                input_tensor_4D.memory_config());
+            formatted_input_tensor = input_tensor_4D /* TODO(nuked-op tilize_with_val_padding): passthrough */;
         }
 
         // Attention optimized softmax
@@ -559,8 +554,7 @@ Tensor scale_mask_softmax(
     const ttnn::Shape input_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
     auto formatted_input_tensor = input_tensor;
     if (formatted_input_tensor.layout() != Layout::TILE) {
-        formatted_input_tensor = ttnn::tilize_with_val_padding(
-            input_tensor, input_pad_shape, -std::numeric_limits<float>::infinity(), input_tensor.memory_config());
+        formatted_input_tensor = input_tensor /* TODO(nuked-op tilize_with_val_padding): passthrough */;
     }
     const auto rank = formatted_input_tensor.logical_shape().size();
     const auto dim = rank - 1;
@@ -591,12 +585,11 @@ Tensor scale_mask_softmax(
                 i,
                 mask.value().padded_shape()[i]);
         }
-        const ttnn::Shape mask_pad_shape =
+        [[maybe_unused]] const ttnn::Shape mask_pad_shape =
             ttnn::operations::data_movement::pad_to_tile_shape(mask.value().padded_shape());
         auto formatted_mask = mask.value();
         if (formatted_mask.layout() != Layout::TILE) {
-            formatted_mask = ttnn::tilize_with_val_padding(
-                formatted_mask, mask_pad_shape, -std::numeric_limits<float>::infinity(), mask.value().memory_config());
+            /* TODO(nuked-op tilize_with_val_padding): passthrough */ (void)0;
         }
 
         // Operation
@@ -714,11 +707,7 @@ Tensor scale_mask_softmax_in_place(
         }
         const auto& mask_shape = mask->padded_shape();
         const ttnn::Shape flat_shape({mask_shape[0], 1, 1, mask_shape[-2] * mask_shape[-1]});
-        return ttnn::tilize_with_val_padding(
-            ttnn::reshape(*mask, flat_shape),
-            ttnn::operations::data_movement::pad_to_tile_shape(flat_shape),
-            -std::numeric_limits<float>::infinity(),
-            mask->memory_config());
+        return ttnn::reshape(*mask, flat_shape) /* TODO(nuked-op tilize_with_val_padding): passthrough */;
     }();
 
     // Operation

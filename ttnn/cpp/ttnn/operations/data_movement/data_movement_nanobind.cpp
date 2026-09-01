@@ -40,12 +40,8 @@
 #include "ttnn/operations/data_movement/split/split_nanobind.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze_nanobind.hpp"
 #include "ttnn/operations/data_movement/stack/stack_nanobind.hpp"
-#include "ttnn/operations/data_movement/tilize/tilize_nanobind.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_nanobind.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose_nanobind.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze_nanobind.hpp"
-#include "ttnn/operations/data_movement/untilize/untilize_nanobind.hpp"
-#include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding_nanobind.hpp"
 #include "ttnn/operations/data_movement/sort/sort_nanobind.hpp"
 #include "ttnn/operations/data_movement/gather/gather_nanobind.hpp"
 #include "ttnn/operations/data_movement/gather/tosa/gather_tosa_nanobind.hpp"
@@ -66,12 +62,7 @@ void py_module(nb::module_& mod) {
     detail::bind_slice(mod);
     detail::bind_slice_descriptor(mod);
     detail::bind_split(mod);
-    detail::bind_tilize(mod);
-    detail::bind_tilize_with_val_padding(mod);
-    detail::bind_tilize_with_zero_padding(mod);
     detail::bind_transpose(mod);
-    detail::bind_untilize(mod);
-    detail::bind_untilize_with_unpadding(mod);
     detail::bind_scatter(mod);
     detail::bind_scatter_add(mod);
     detail::bind_tosa_scatter(mod);
