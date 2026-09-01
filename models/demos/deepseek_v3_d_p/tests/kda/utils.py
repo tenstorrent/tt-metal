@@ -34,8 +34,7 @@ class KimiK3TestCase:
     config: KDAConfig
     state_dict: dict[str, torch.Tensor]
     hidden: torch.Tensor
-    checkpoint_dir: Path
-    checkpoint_identity: str
+    weights_identity: str
 
 
 def _mesh_coordinate(sp_rank: int, tp_rank: int, sp_axis: int) -> tuple[int, int]:
@@ -280,8 +279,26 @@ def make_kimi_k3_test_case(checkpoint_dir: Path, *, sequence: int) -> KimiK3Test
         config=config,
         state_dict=state_dict,
         hidden=hidden,
-        checkpoint_dir=checkpoint_dir,
-        checkpoint_identity=checkpoint_identity,
+        weights_identity=checkpoint_identity,
+    )
+
+
+def make_synthetic_kimi_k3_test_case(*, sequence: int) -> KimiK3TestCase:
+    """Build deterministic production-dimension Kimi-K3 inputs without a checkpoint."""
+    config = _kda_config_from_kimi_k3_constants()
+    state_dict = random_weights(config)
+    hidden = torch.randn(
+        1,
+        sequence,
+        config.hidden_size,
+        generator=torch.Generator().manual_seed(1607),
+        dtype=torch.bfloat16,
+    )
+    return KimiK3TestCase(
+        config=config,
+        state_dict=state_dict,
+        hidden=hidden,
+        weights_identity=kda_state_dict_sha256(state_dict),
     )
 
 
@@ -293,13 +310,12 @@ def make_kimi_k3_device_case(
     summary_group_chunks: int | None = None,
     program_config: KDAProgramConfig | None = None,
     weights: KDAWeights | None = None,
+    cache_weights: bool = True,
 ) -> tuple[ttKDA, ttnn.Tensor]:
-    """Construct the real-weight layer and sequence-parallel device input."""
+    """Construct a production-dimension Kimi-K3 layer and sequence-parallel input."""
     sequence_parallel_axis = 1 - tensor_parallel_axis
-    tensor_cache_path = kimi_k3_tensor_cache_path(
-        case.checkpoint_identity,
-        mesh_device,
-        tensor_parallel_axis,
+    tensor_cache_path = (
+        kimi_k3_tensor_cache_path(case.weights_identity, mesh_device, tensor_parallel_axis) if cache_weights else None
     )
     mesh_dims: list[int | None] = [None, None]
     mesh_dims[sequence_parallel_axis] = 1
@@ -342,16 +358,16 @@ def make_kimi_k3_device_case(
 
 
 def kimi_k3_tensor_cache_path(
-    checkpoint_identity: str,
+    weights_identity: str,
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> Path:
-    """Select TTNN model-cache storage for one checkpoint content identity and mesh placement."""
+    """Select TTNN model-cache storage for one weight content identity and mesh placement."""
     mesh_shape = tuple(mesh_device.shape)
-    if len(checkpoint_identity) != 64 or any(character not in "0123456789abcdef" for character in checkpoint_identity):
-        raise ValueError("checkpoint_identity must be a lowercase SHA-256 hex digest")
+    if len(weights_identity) != 64 or any(character not in "0123456789abcdef" for character in weights_identity):
+        raise ValueError("weights_identity must be a lowercase SHA-256 hex digest")
     layout = f"mesh{mesh_shape[0]}x{mesh_shape[1]}_tpaxis{tensor_parallel_axis}"
-    return Path(ttnn.CONFIG.model_cache_path) / "kimi_k3" / checkpoint_identity / layout
+    return Path(ttnn.CONFIG.model_cache_path) / "kimi_k3" / weights_identity / layout
 
 
 def make_config(

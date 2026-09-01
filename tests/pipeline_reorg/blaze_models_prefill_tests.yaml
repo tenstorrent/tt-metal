@@ -396,20 +396,16 @@
 
 # ===== Kimi-K3-2.8T ====================================================================================
 
-- name: "(Kimi-K3-2.8T) KDA layer-1 real-weight accuracy SP8xTP4"
+- name: "(Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4"
   fabric_profile: torus_xy
   cmd: |
-    export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3
-
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      test -f "$KIMI_K3_CKPT/config.json" || { echo "missing pinned Kimi-K3 config: $KIMI_K3_CKPT/config.json" >&2; exit 1; }
-      test -f "$KIMI_K3_CKPT/model.safetensors.index.json" || { echo "missing pinned Kimi-K3 safetensor index: $KIMI_K3_CKPT/model.safetensors.index.json" >&2; exit 1; }
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/model/test_real_weights.py -k "SP8xTP4" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/model/test_synthetic_kimi_k3.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP8xTP4" -vvv --tb=short
     '
   test_type: k3_kda
-  test_tags: [kimi_k3, kda]
+  test_tags: [kimi_k3, kda, determinism]
   test_group: module
   skus:
     bh_sc1:
@@ -460,17 +456,20 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K3-2.8T) MLA chunked perf 55k@5k"
+- name: "(Kimi-K3-2.8T) KDA perf 5k + MLA chunked perf 55k@5k"
   fabric_profile: torus_xy
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+      export KDA_GALAXY_PERF_CALIBRATE=1
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and torus-xy-8x4" -vvv --tb=short
     '
   test_type: k3_mla_perf
-  test_tags: [kimi_k3, mla]
+  test_tags: [kimi_k3, kda, mla, k3_kda_perf]
   test_group: module
   skus:
     bh_sc1_high_power:

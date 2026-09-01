@@ -13,17 +13,20 @@ Run every device test through `scripts/run_safe_pytest.sh`. A passing hardware r
 - `assert_equal` checks finite oracle/implementation tensors for identical shape, dtype, and values.
 - `assert_bit_identical` requires matching shape and dtype, finite values, and identical bit patterns across
   implementation repetitions without computing a CPU oracle.
-- Dedicated determinism tests run the implementation three times from identical inputs and state.
-  They do not compute a CPU reference; every output and final-state tensor must be bit-identical.
+- Matching accuracy and determinism cases share one three-run workload. They retain the first result
+  for the CPU oracle and reduce repeat mismatches on device before transferring scalar evidence.
 - CPU-reference determinism uses T=32 and compares two repetitions with the initial result.
 - Required performance acceptance is real Kimi-K3, B=1, T=5120 on SP1xTP8, SP2xTP4, and SP4xTP2.
-- LoudBox references, five-session dispersion, and regression limits live in `perf/perf_targets/bh_loudbox.json`.
+- LoudBox references and their symmetric 3% regression limits live beside the performance test.
 - Rebaseline only when the workload, hardware/runtime contract, or accepted baseline changes.
 - `model/test_real_weights.py` checks output and both states against the independent Torch reference.
+- `model/test_synthetic_kimi_k3.py` provides checkpoint-free production-dimension CI accuracy and
+  device-side determinism, with SP2xTP4 local validation and SP8xTP4 Blaze selection.
 - `perf/test_layer_perf.py` checks those endpoints on synchronized eager and trace-replay forwards,
   then gates the median of five warm trace-replay samples. Its 900-second item timeout covers a cold CPU-oracle cache.
   Timing repetitions are not accuracy or determinism samples. The SP2xTP4 case also logs a non-additive,
   overlap-aware per-device-program breakdown from one separate warm eager forward once after the five gated samples.
+  Its checkpoint-free SP8xTP4 case is initially calibration-only until a hosted high-power Galaxy baseline is recorded.
 - Use synchronized trace wall time for routine latency and Tracy only for targeted attribution.
 
 ## Catalogue
@@ -52,14 +55,12 @@ tests/
 │   │                                     trace replay, and bit-identical determinism.
 │   ├── test_real_weights.py            — Kimi-K3 layer-1 accuracy on all layouts
 │   │                                     against the independent Torch reference.
+│   ├── test_synthetic_kimi_k3.py       — Checkpoint-free production K3 accuracy and determinism.
 │   └── test_weights.py                 — TP placement and output-projection accuracy plus
 │                                         bit-identical projection determinism.
 └── perf/
-    ├── perf_targets/
-    │   ├── bh_loudbox.json             — T=5120 median trace-wall references, session dispersion,
-    │   │                                 provenance, and one-sided regression limits.
-    └── test_layer_perf.py              — T=5120 accuracy and trace-wall acceptance on
-                                          SP1xTP8, SP2xTP4, and SP4xTP2.
+    └── test_layer_perf.py              — T=5120 local real-weight acceptance plus checkpoint-free
+                                          SP8xTP4 Galaxy performance calibration/acceptance.
 ```
 
 Shared numeric assertion contract tests live at

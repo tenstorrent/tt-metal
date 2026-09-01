@@ -47,7 +47,7 @@ def test_kimi_k3_layer_1_real_weights_pcc(
 ) -> None:
     case = make_kimi_k3_test_case(kimi_k3_checkpoint_dir, sequence=sequence)
     golden_output, golden_state = kda_forward_reference(case.hidden, case.state_dict, case.config)
-    cache_path = kimi_k3_tensor_cache_path(case.checkpoint_identity, mesh_device, tensor_parallel_axis)
+    cache_path = kimi_k3_tensor_cache_path(case.weights_identity, mesh_device, tensor_parallel_axis)
     cache_prefix = f"layer_{KIMI_K3_FIRST_KDA_LAYER}.kda"
     if not KDAWeights.check_cache_complete(
         cache_path,
