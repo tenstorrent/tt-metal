@@ -10,7 +10,6 @@
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 #include "cmath_common.h"
-#include "sanitizer/api.h"
 
 using namespace ckernel::math;
 
@@ -42,8 +41,6 @@ inline void _llk_math_set_fp32_dest_acc_(bool enable)
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
-    llk::san::math_operand_configure(srca_data_format, srcb_data_format);
-
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
     std::uint32_t config_data       = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) |
@@ -149,8 +146,6 @@ inline void _llk_math_pack_sync_init_()
 template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
 inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_format)
 {
-    llk::san::math_operand_configure<true>(srca_data_format, llk::san::IGNORE);
-
     if constexpr (!skip_int8)
     {
         LLK_ASSERT(
@@ -189,8 +184,6 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
 template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
 inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_format)
 {
-    llk::san::math_operand_configure<true>(llk::san::IGNORE, srcb_data_format);
-
     if constexpr (!skip_int8)
     {
         LLK_ASSERT(
@@ -230,8 +223,6 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
 template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
 inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
-    llk::san::math_operand_configure<true>(srca_data_format, srcb_data_format);
-
     if constexpr (!skip_int8)
     {
         LLK_ASSERT(

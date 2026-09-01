@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include "sanitizer/api.h"
 #include <cstdint>
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_tilize.h"
@@ -21,6 +23,14 @@ inline void llk_unpack_tilize_init_impl(
     const std::uint32_t face_r_dim,
     const bool narrow_tile,
     const std::uint32_t num_faces) {
+    SAN_HOOK(init<OperationUnpackTilize>(
+        StateVal<OperationUnpackTilize::BlockCtDim>(ct_dim),
+        StateVal<OperationUnpackTilize::NarrowTile>(narrow_tile),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(src_format),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(dst_format),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces)));
+
     _llk_unpack_tilize_init_(src_format, dst_format, ct_dim, face_r_dim, narrow_tile, num_faces);
 }
 
@@ -33,6 +43,14 @@ inline void llk_unpack_tilize_impl(
     const std::uint32_t num_faces,
     const bool narrow_tile) {
     WAYPOINT("UPTW");
+    SAN_HOOK(execute<OperationUnpackTilize>(
+        StateVal<OperationUnpackTilize::NarrowTile>(narrow_tile),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(src_format),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(dst_format),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces),
+        StateDiscard<std::uint32_t>(tile_index)));
+
     _llk_unpack_tilize_(base_address, tile_index, src_format, dst_format, face_r_dim, num_faces, narrow_tile);
     WAYPOINT("UPTD");
 }
@@ -68,6 +86,11 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
  * @param operand Input circular buffer / operand index.
  */
 inline void llk_unpack_tilize_uninit_impl(const std::uint32_t dst_format, const ckernel::TensorShape tensor_shape) {
+    SAN_HOOK(uninit<OperationUnpackTilize>(
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(dst_format),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(tensor_shape.face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(tensor_shape.total_num_faces())));
+
     _llk_unpack_tilize_uninit_(dst_format, tensor_shape);
 }
 

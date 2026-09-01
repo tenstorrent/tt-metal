@@ -18,6 +18,9 @@
 
 // LLK_SAN_SETTING_INTERNAL : Only useful when debugging LLK LIB implementation, currently unimplemented. Default FALSE.
 
+// LLK_SAN_SETTING_HOST_DEPS : Take the out-of-sanitizer dependencies from deps/host.h instead of
+//                             deps/device.h, for host unit tests. Default FALSE.
+
 #pragma once
 
 #ifndef LLK_SAN_ENABLE
@@ -52,7 +55,17 @@
 #endif
 #define LLK_SAN_SETTING_INTERNAL 0
 
+#if defined(LLK_SAN_SETTING_HOST_DEPS)
+#error "llk::san | fault   | LLK_SAN_SETTING_HOST_DEPS is set but LLK_SAN_ENABLE is not defined"
+#endif
+#define LLK_SAN_SETTING_HOST_DEPS 0
+
 #else
+
+// The report method is implicit, so one of the two carriers has to be there to report through.
+#if !defined(ENABLE_LLK_ASSERT) && !defined(DEBUG_PRINT_ENABLED)
+#error "llk::san | fault   | LLK_SAN_ENABLE is set but neither ENABLE_LLK_ASSERT nor DEBUG_PRINT_ENABLED is defined"
+#endif
 
 #if !defined(LLK_SAN_SETTING_PEDANTIC)
 #define LLK_SAN_SETTING_PEDANTIC 0
@@ -76,6 +89,10 @@
 
 #if !defined(LLK_SAN_SETTING_INTERNAL)
 #define LLK_SAN_SETTING_INTERNAL 0
+#endif
+
+#if !defined(LLK_SAN_SETTING_HOST_DEPS)
+#define LLK_SAN_SETTING_HOST_DEPS 0
 #endif
 
 #endif
