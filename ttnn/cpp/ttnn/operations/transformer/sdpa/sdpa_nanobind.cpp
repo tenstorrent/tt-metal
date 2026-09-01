@@ -650,6 +650,18 @@ void bind_sdpa(nb::module_& mod) {
                 gathered joint K tensor [b x nhv x L x dv]. Allocated internally when omitted.
             persistent_output_buffer_joint_v (ttnn.Tensor, optional): Persistent buffer for the
                 gathered joint V tensor [b x nhv x L x dv]. Allocated internally when omitted.
+            slot_id (ttnn.Tensor, optional): Cache-user slot read on-device during trace replay.
+                Must be a one-element UINT32 ROW_MAJOR DRAM tensor on the same mesh device as Q.
+                Must be supplied together with kv_actual_isl_tensor. Defaults to None.
+            kv_actual_isl_tensor (ttnn.Tensor, optional): Prior valid global KV length read on-device
+                during trace replay. Has the same one-element UINT32 ROW_MAJOR DRAM contract as slot_id
+                and must be supplied together with it. Its value must be tile-aligned and leave enough
+                cache capacity for the current chunk. Defaults to None.
+            kv_cache_num_layers (int, optional): Number of layers packed into each cache-user slot.
+                None uses 1. The selected cache batch is
+                slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
+            kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
+                value must be less than kv_cache_num_layers.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -743,6 +755,18 @@ void bind_sdpa(nb::module_& mod) {
             kv_actual_isl (int, optional): Prior valid global KV length before this fixed-size chunk.
                 When passed, enables KV-pad-aware rotation and derives current valid tokens as
                 logical_n - kv_actual_isl.
+            slot_id (ttnn.Tensor, optional): Cache-user slot read on-device during trace replay.
+                Must be a one-element UINT32 ROW_MAJOR DRAM tensor on the same mesh device as Q.
+                Must be supplied together with kv_actual_isl_tensor. Defaults to None.
+            kv_actual_isl_tensor (ttnn.Tensor, optional): Prior valid global KV length read on-device
+                during trace replay. Has the same one-element UINT32 ROW_MAJOR DRAM contract as slot_id
+                and must be supplied together with it. Its value must be tile-aligned and leave enough
+                cache capacity for the current chunk. Defaults to None.
+            kv_cache_num_layers (int, optional): Number of layers packed into each cache-user slot.
+                None uses 1. The selected cache batch is
+                slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
+            kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
+                value must be less than kv_cache_num_layers.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor):
