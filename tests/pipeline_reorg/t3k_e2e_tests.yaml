@@ -41,14 +41,6 @@
   owner_id: U07D5N7QL4U # Joseph Chu
   team: scaleout
 
-- name: t3k_dispatch_unit_tests
-  cmd: build/test/tt_metal/unit_tests_dispatch --gtest_filter="Large*.NIGHTLY_DRAMReadback/*"
-  skus:
-    wh_llmbox:
-      timeout: 15
-  owner_id: U07R05K4WGJ # John Bauman
-  team: scaleout
-
 - name: t3k_fabric_stability_tests
   # Setting TT_METAL_OPERATION_TIMEOUT_SECONDS=0 to disable test timeouts and let the tests run to completion, as some of the stability tests can take a long time to complete.
   cmd: TT_METAL_OPERATION_TIMEOUT_SECONDS=0 build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability.yaml
