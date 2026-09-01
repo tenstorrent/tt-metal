@@ -1012,6 +1012,16 @@ void PerfDebugProfiler::host_reanchor_after_boot(const std::shared_ptr<distribut
         if (ctx.core_virt.empty()) {
             continue;
         }
+        // ROOT ONLY. This function used to refit EVERY device independently, and that is where the
+        // four disagreeing anchors came from -- it runs after start(), so it overwrote whatever
+        // start() had composed. Measured cost of those independent fits, as the gap between the two
+        // ends of a link where the same instant is drawn twice: 3.5 us (1->2), 7.1 us (0->1),
+        // 13.7 us (0->3), constant across the run, against a device<->device sync closing to
+        // -37..-57 ns. One host fit at the root, everything else composed off it -- never a fit per
+        // device.
+        if (ctx.chip_id != eth_sync_root_chip_) {
+            continue;
+        }
         const CoreCoord w{ctx.core_virt[0].first, ctx.core_virt[0].second};
         const PerfDebugSync s = sync_device_clock(cluster, ctx.chip_id, w, /*spacing_us=*/500);
         if (!s.valid) {
@@ -3936,7 +3946,9 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         }
 
         PerfDebugSync sync;
-        if (!derived && !ctx.core_virt.empty()) {
+        // ONLY THE ROOT MAY HOST-FIT. Every other device composes off it (see the branch below), so
+        // there is no reason to spend ~50 ms of MMIO measuring a fit we must not use.
+        if (!derived && ctx.chip_id == eth_sync_root_chip_ && !ctx.core_virt.empty()) {
             const CoreCoord w{ctx.core_virt[0].first, ctx.core_virt[0].second};
             // LONG BASELINE, deliberately: 100 samples x 500 us spans ~50 ms instead of ~360 us, cutting the
             // fitted-frequency error by the baseline ratio (~140x). This is the ONE frequency every context on
@@ -3945,6 +3957,29 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         }
         if (derived) {
             // already anchored from the root above
+        } else if (ctx.chip_id != eth_sync_root_chip_) {
+            // DELIBERATELY NO FALLBACK. A non-root device must NEVER take its own independent host
+            // fit: the whole design is one host sync at the root plus measured device<->device
+            // offsets, because independent per-device fits DISAGREE. Measured on bh-31, as the gap
+            // between the two ends of a link where the same instant is drawn twice:
+            //     link 1->2  3.5 us     link 0->1  7.1 us     link 0->3  13.7 us
+            // constant across the run (7131 ns at the first pair, 7101 ns at the last), against a
+            // device<->device sync that closes to -37..-57 ns. Falling back therefore does not
+            // "degrade gracefully" -- it silently injects microseconds of cross-device skew that
+            // looks like real data, and it did exactly that for the whole of this investigation.
+            //
+            // With no anchor, GetOrCreateContext returns nullptr and this device simply has no rows.
+            // That is the point: absent rows are debuggable, wrong rows are not.
+            log_error(
+                tt::LogMetal,
+                "[perf-debug profiler] Device {} could NOT be anchored from root {} (no measured "
+                "device<->device route). Refusing to fall back to an independent host fit -- that "
+                "injects us-scale cross-device skew. This device will have NO Tracy rows. Fix the "
+                "sync path (see: 'eth sync: 0 tree link(s)' means the init eth sync found no free "
+                "channel, because fabric claimed them all).",
+                ctx.chip_id,
+                eth_sync_root_chip_);
+            ctx.anchor_valid = false;
         } else if (sync.valid) {
             ctx.clock_synced = true;
             ctx.freq_ghz = sync.frequency;
@@ -3968,10 +4003,13 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
                 freq,
                 sync.device_at_anchor);
         } else if (!derived) {
-            log_warning(
+            // Root only -- non-root took the refusal branch above. A root with no host fit anchors
+            // nothing at all, so first-marker guessing is all that is left; it is loud on purpose.
+            log_error(
                 tt::LogMetal,
-                "[perf-debug profiler] Device {} clock sync FAILED; falling back to first-marker anchoring "
-                "(device zones will lag the host zones by the drain latency)",
+                "[perf-debug profiler] ROOT device {} clock sync FAILED; falling back to first-marker "
+                "anchoring. EVERY device composes off the root, so the whole capture's cross-device "
+                "alignment is now guesswork.",
                 ctx.chip_id);
             ctx.freq_ghz = freq;
             tracy_->AddDevice(ctx.chip_id, tracy::Profiler::GetTime(), 0.0, freq);
