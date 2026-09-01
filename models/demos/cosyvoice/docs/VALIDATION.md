@@ -227,9 +227,9 @@ buffers may be corrupted once a trace is executed."*
 
 **The remedy is known and is not in the tree.** Parking those four on the host between
 chunks (`to_torch` out, `from_torch` back) fixes the audio — verified on `p150a` and
-n300, and it also stopped `synthesize_streaming` hanging Wormhole. It is not landed
-because it **hangs `tests/perf/test_streaming_perf.py` on Blackhole**, where that test
-otherwise passes in 12.7 s; the A/B is one commit apart on one board. Also tried and
+n300. It is not landed because it **hangs `tests/perf/test_streaming_perf.py` on
+Blackhole**, where that test otherwise passes in 12.7 s; the A/B is one commit apart on
+one board. Also tried and
 rejected: draining the queue before the readback, and hoisting the synthesizer out of
 the traced region.
 
