@@ -590,7 +590,7 @@ def open_ring_joint_sdpa_runtime(
     topology: Topology = None,
     reserve_llk_kernel_config: bool = True,
     full_mesh: bool = False,
-    num_global_semaphores: int = 2,
+    num_global_semaphores: int = 3,
 ):
     if full_mesh:
         fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
