@@ -157,6 +157,19 @@ Targets (heaviest shard): 1.86 / 4.94 / 9.96 ms at 5 / 10 / 15 s.
 | v2 streaming | 25.0 ms | 15.7% | resident rows + one ascending-order union stream per core; still per-core DRAM pulls + per-visit flash overhead |
 | v3 leader-pull + fused visits | (measuring) | | head-group leader streams the head's blocks from DRAM once per pass; workers NoC-pull from leader L1; ping-pong max/sum state kills all state copies; phase-batched multi-row visits, 5 syncs/arrival |
 
+## vsa_sdpa optimization journal (60% goal, cont.)
+
+| version | 15s median | util | note |
+|---|---|---|---|
+| v3 + chunk-cyclic placement | 20.0 ms | ~19.7% | correlated (model) indices gave NO gain -> per-visit cost dominates, not per-arrival |
+| v4 windowed per-row batching | 19.2-20.4 ms | 19-23% | flash fixed costs proved minor; per-block exp serializes against next QK via the probs fence |
+| v5 lag-1 PV pipeline | (debugging) | | defer visit v's PV into v+1 so v's pack-thread exp overlaps v+1's QK/reduce math |
+
+Established floors (median 15s, 5900 visits/core): QK+PV+dataflow skeleton 10.7 ms (probe);
+softmax machinery +7.6 ms. Per-block irreducibles: 1024 cyc matmul (HiFi2) + ~1.1k cyc exp
+(SFPU, pack-thread) -> 60% needs exp/math overlap plus fixed-cost amortization; remaining levers
+after v5: leader-as-worker (+13% peak basis), conditional rescale, pack trims.
+
 ## Decisions log
 - **2026-08-31 machine setup**: 4x8 BH galaxy runs bare-metal (no docker): build_metal.sh with
   clang-20, create_venv.sh, pinned diffusers (abc5e9bf71) for the torch reference. Requires

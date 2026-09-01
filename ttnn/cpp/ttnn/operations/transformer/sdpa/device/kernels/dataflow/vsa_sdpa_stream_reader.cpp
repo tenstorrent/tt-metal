@@ -257,6 +257,13 @@ void kernel_main() {
     }
 
     // ---------------- WORKER ----------------
+    if (worker_index >= n_workers) {
+        return;  // idle spare core (outside the active group): it must NOT signal READY -- the
+                 // leader counts n_active incs, and an idle core's early inc would let publishing
+                 // start before an active worker finished zeroing its log ring (wiping its early
+                 // entries). An ACTIVE worker with zero rows still runs: it consumes arrivals as
+                 // skips and posts the progress the leader's slot gate counts.
+    }
     idx_cb.reserve_back(1);
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_cb.get_write_ptr());
     experimental::CB bitmap_cb(cb_bitmap);
