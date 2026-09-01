@@ -1,0 +1,14 @@
+{
+ "impl": "func",
+ "kind": "moe",
+ "mode": "decode (traced, warmed, batch 1, fixed position 1023)",
+ "context_depth": 1024,
+ "iterations": 32,
+ "wall_s": 0.049,
+ "ms_per_token": 1.532,
+ "tokens_per_s": 652.9,
+ "signposts": [
+  "PERF_DECODE_MOE_FUNC",
+  "PERF_DECODE_MOE_FUNC_END"
+ ]
+}

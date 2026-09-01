@@ -1,0 +1,13 @@
+{
+ "impl": "func",
+ "kind": "moe",
+ "mode": "prefill (warmed, non-traced)",
+ "seq_len": 2048,
+ "prefill_chunk_size": 1024,
+ "wall_s": 0.2683,
+ "tokens_per_s": 7634.6,
+ "signposts": [
+  "PERF_PREFILL_MOE_FUNC",
+  "PERF_PREFILL_MOE_FUNC_END"
+ ]
+}

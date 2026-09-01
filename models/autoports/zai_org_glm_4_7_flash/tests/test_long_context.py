@@ -22,9 +22,13 @@ FLOP on CPU), so the evidence ladder is:
    Evidence JSON: doc/functional_decoder/long_context_{moe,dense}.json.
 
 Run: pytest -q -s -m long models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py
+
+Set GLM47_DECODER=fused to run the identical evidence ladder against the
+fused decoder (tt/fused_decoder.py); JSON then goes to doc/fused_decoder/.
 """
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -35,7 +39,13 @@ import ttnn
 from models.autoports.zai_org_glm_4_7_flash.tests import utils
 from models.autoports.zai_org_glm_4_7_flash.tt.functional_decoder import FunctionalDecoder, PagedCacheConfig
 
-DOC_DIR = Path(__file__).resolve().parents[1] / "doc" / "functional_decoder"
+if os.environ.get("GLM47_DECODER", "functional") == "fused":
+    from models.autoports.zai_org_glm_4_7_flash.tt.fused_decoder import FusedDecoder as DecoderCls
+
+    DOC_DIR = Path(__file__).resolve().parents[1] / "doc" / "fused_decoder"
+else:
+    DecoderCls = FunctionalDecoder
+    DOC_DIR = Path(__file__).resolve().parents[1] / "doc" / "functional_decoder"
 PCC_BAR = 0.995
 FULL_CONTEXT = 202752
 
@@ -76,7 +86,7 @@ def test_prefill_8k_vs_hf(cfg):
     device = ttnn.open_device(device_id=0, l1_small_size=32768, trace_region_size=0)
     try:
         paged = PagedCacheConfig.for_context(16384, 1)
-        dec = FunctionalDecoder.from_state_dict(
+        dec = DecoderCls.from_state_dict(
             sd,
             hf_config=cfg,
             layer_idx=1,
@@ -144,7 +154,7 @@ def test_full_context_202k(cfg, kind):
     device = ttnn.open_device(device_id=0, l1_small_size=32768, trace_region_size=0)
     try:
         paged = PagedCacheConfig.for_context(FULL_CONTEXT, 1)
-        dec = FunctionalDecoder.from_state_dict(
+        dec = DecoderCls.from_state_dict(
             sd,
             hf_config=cfg,
             layer_idx=layer_idx,
@@ -305,7 +315,7 @@ def test_full_context_aligned_202752(cfg):
     device = ttnn.open_device(device_id=0, l1_small_size=32768, trace_region_size=0)
     try:
         paged = PagedCacheConfig.for_context(S, 1)
-        dec = FunctionalDecoder.from_state_dict(
+        dec = DecoderCls.from_state_dict(
             sd,
             hf_config=cfg,
             layer_idx=1,

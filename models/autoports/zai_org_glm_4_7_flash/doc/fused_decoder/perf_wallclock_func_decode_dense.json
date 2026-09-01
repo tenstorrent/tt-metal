@@ -1,0 +1,14 @@
+{
+ "impl": "func",
+ "kind": "dense",
+ "mode": "decode (traced, warmed, batch 1, fixed position 1023)",
+ "context_depth": 1024,
+ "iterations": 32,
+ "wall_s": 0.0323,
+ "ms_per_token": 1.008,
+ "tokens_per_s": 992.2,
+ "signposts": [
+  "PERF_DECODE_DENSE_FUNC",
+  "PERF_DECODE_DENSE_FUNC_END"
+ ]
+}

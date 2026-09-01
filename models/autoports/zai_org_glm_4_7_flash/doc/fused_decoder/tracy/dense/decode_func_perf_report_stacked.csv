@@ -1,0 +1,17 @@
+Total % [%],Op Code,Device Time Sum [μs],Op Count,Op Category,Min FLOPs [%],Max FLOPs [%],Mean FLOPs [%],Std FLOPs [%],Weighted Mean FLOPs [%]
+80.21,MatmulDeviceOperation (in0:dram_interleaved),23704.43,288,Compute,8.22,14.31,9.98,1.59,9.68
+5.65,LayerNormDeviceOperation (in0:dram_interleaved),1671.18,75,Compute,,,,,
+3.95,SdpaDecodeDeviceOperation (in0:dram_interleaved),1167.78,32,Compute,,,,,
+2.28,TransposeDeviceOperation (in0:dram_interleaved),673.17,284,TM,,,,,
+2.13,UntilizeCodegenDeviceOperation (in0:dram_interleaved),630.00,101,Other,,,,,
+1.29,TilizeWithValPaddingDeviceOperation (in0:dram_interleaved),379.86,89,TM,,,,,
+1.18,BinaryNgDeviceOperation (in0:dram_interleaved),349.70,96,Compute,,,,,
+1.07,ReshapeViewDeviceOperation (in0:dram_interleaved),315.16,64,TM,,,,,
+0.55,SliceDeviceOperation (in0:dram_interleaved),163.14,125,TM,,,,,
+0.53,UnaryDeviceOperation (in0:dram_interleaved),156.89,32,Compute,,,,,
+0.32,ConcatDeviceOperation (in0:dram_interleaved),93.89,64,TM,,,,,
+0.27,PagedUpdateCacheDeviceOperation (in0:dram_interleaved),80.22,18,DM,,,,,
+0.23,RotaryEmbeddingLlamaDeviceOperation (in0:height_sharded),68.89,37,Compute,,,,,
+0.14,EmbeddingsDeviceOperation (in0:dram_interleaved),42.24,38,Compute,,,,,
+0.13,InterleavedToShardedDeviceOperation (in0:dram_interleaved),37.92,75,DM,,,,,
+0.06,ShardedToInterleavedDeviceOperation (in0:height_sharded),19.03,37,DM,,,,,

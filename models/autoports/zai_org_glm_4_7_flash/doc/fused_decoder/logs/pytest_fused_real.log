@@ -1,0 +1,96 @@
+2026-08-31 19:39:04.426 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/stisi/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/stisi/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, anyio-4.14.2, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 23 items / 20 deselected / 3 selected
+
+models/autoports/zai_org_glm_4_7_flash/tests/test_fused_decoder.py::test_real_weights_prefill_decode[moe] 2026-08-31 19:39:05.116 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-08-31 19:39:05.116 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-08-31 19:39:05.117 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-31 19:39:05.117 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-31 19:39:05.128 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-08-31 19:39:05.129 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-31 19:39:05.163 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-31 19:39:05.163 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-08-31 19:39:05.163 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-08-31 19:39:05.163 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-08-31 19:39:05.165 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-08-31 19:39:05.409 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-08-31 19:39:05.510 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-08-31 19:39:05.510 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-08-31 19:39:05.510 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-31 19:39:05.511 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-08-31 19:39:05.511 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-08-31 19:39:05.551 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+[transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+[moe] fused REAL weights prefill S=512 PCC=0.999244
+[moe] decode steps: 512:0.99997, 513:0.99998, 514:0.97658, 515:0.99997, 516:0.99998, 517:0.99998, 518:0.99998, 519:0.99997 | agg=0.99702
+  pos 514 PCC 0.97658 exempted: sub-ulp router tie (gap=2.46e-04)
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_fused_decoder.py::test_real_weights_prefill_decode[dense] [dense] fused REAL weights prefill S=512 PCC=0.999993
+[dense] decode steps: 512:0.99999, 513:0.99999, 514:0.99999, 515:0.99999, 516:0.99999, 517:0.99999, 518:0.99999, 519:0.99999 | agg=0.99999
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_fused_decoder.py::test_expert_bf4_real [moe] fused REAL weights bf4 experts prefill S=512 PCC=0.997066
+[moe] decode steps: 512:0.99755, 513:0.99813, 514:0.97494, 515:0.99743, 516:0.99803, 517:0.99751, 518:0.99803, 519:0.99764 | agg=0.99489
+  pos 514 PCC 0.97494 exempted: sub-ulp router tie (gap=2.46e-04)
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/stisi/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+5.03s call     models/autoports/zai_org_glm_4_7_flash/tests/test_fused_decoder.py::test_real_weights_prefill_decode[moe]
+4.71s call     models/autoports/zai_org_glm_4_7_flash/tests/test_fused_decoder.py::test_expert_bf4_real
+1.29s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_fused_decoder.py::test_real_weights_prefill_decode[moe]
+0.70s call     models/autoports/zai_org_glm_4_7_flash/tests/test_fused_decoder.py::test_real_weights_prefill_decode[dense]
+0.27s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_fused_decoder.py::test_real_weights_prefill_decode[dense]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_fused_decoder.py::test_expert_bf4_real
+
+(3 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_fused_decoder.py::test_real_weights_prefill_decode[moe]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_fused_decoder.py::test_real_weights_prefill_decode[dense]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_fused_decoder.py::test_expert_bf4_real
+====================== 3 passed, 20 deselected in 12.22s =======================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7510522cebc8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x751051f0b8e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 253 functions!
+ - leaked function "__repr__"
+ - leaked function "__init__"
+ - leaked function "get_device_id"
+ - leaked function "buffer_aligned_page_size"
+ - leaked function "set_program_cache_misses_allowed"
+ - leaked function "get_submeshes"
+ - leaked function ""
+ - leaked function "worker_core_from_logical_core"
+ - leaked function "size"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-31 19:39:19.036 | info     |    BuildKernels | JIT cache stats: 465/465 hits (100.0%) [465 cached, 139 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-31 19:39:19.036 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-31 19:39:19.052 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-08-31 19:39:19.052 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-08-31 19:39:19.415 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-08-31 19:39:19.416 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-08-31 19:39:19.416 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

@@ -1,0 +1,14 @@
+{
+ "impl": "fused",
+ "kind": "moe",
+ "mode": "decode (traced, warmed, batch 1, fixed position 1023)",
+ "context_depth": 1024,
+ "iterations": 32,
+ "wall_s": 0.0331,
+ "ms_per_token": 1.035,
+ "tokens_per_s": 966.2,
+ "signposts": [
+  "PERF_DECODE_MOE_FUSED",
+  "PERF_DECODE_MOE_FUSED_END"
+ ]
+}

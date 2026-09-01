@@ -1,0 +1,41 @@
+{
+ "kind": "moe",
+ "prefill_seq_len": 202752,
+ "prefill_wall_s": 90.3,
+ "cache_pcc_vs_linear_ref": 0.9999886137333991,
+ "final_window": {
+  "rows": [
+   202720,
+   202751
+  ],
+  "pcc_all_rows": 0.9949191228960377,
+  "rows_at_bar": 28,
+  "explained": [
+   {
+    "row": 202721,
+    "pcc": 0.9691953946188421,
+    "tie": true,
+    "alt_expert_set_pcc": 0.9983068772537744
+   },
+   {
+    "row": 202731,
+    "pcc": 0.9724426789052246,
+    "tie": true,
+    "alt_expert_set_pcc": 0.9983074644661162
+   },
+   {
+    "row": 202739,
+    "pcc": 0.9726476014705892,
+    "tie": false,
+    "alt_expert_set_pcc": 0.9983413286674794
+   },
+   {
+    "row": 202746,
+    "pcc": 0.9665135569622674,
+    "tie": true,
+    "alt_expert_set_pcc": 0.9983242477629678
+   }
+  ],
+  "unexplained": []
+ }
+}

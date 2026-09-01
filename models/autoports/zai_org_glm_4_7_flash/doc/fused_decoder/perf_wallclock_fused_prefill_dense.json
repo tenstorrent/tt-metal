@@ -1,0 +1,13 @@
+{
+ "impl": "fused",
+ "kind": "dense",
+ "mode": "prefill (warmed, non-traced)",
+ "seq_len": 2048,
+ "prefill_chunk_size": 1024,
+ "wall_s": 0.0153,
+ "tokens_per_s": 133477.1,
+ "signposts": [
+  "PERF_PREFILL_DENSE_FUSED",
+  "PERF_PREFILL_DENSE_FUSED_END"
+ ]
+}

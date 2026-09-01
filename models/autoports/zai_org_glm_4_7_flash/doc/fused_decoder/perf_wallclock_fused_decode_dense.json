@@ -1,0 +1,14 @@
+{
+ "impl": "fused",
+ "kind": "dense",
+ "mode": "decode (traced, warmed, batch 1, fixed position 1023)",
+ "context_depth": 1024,
+ "iterations": 32,
+ "wall_s": 0.031,
+ "ms_per_token": 0.969,
+ "tokens_per_s": 1032.1,
+ "signposts": [
+  "PERF_DECODE_DENSE_FUSED",
+  "PERF_DECODE_DENSE_FUSED_END"
+ ]
+}

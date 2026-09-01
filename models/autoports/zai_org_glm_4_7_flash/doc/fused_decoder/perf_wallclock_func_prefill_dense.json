@@ -1,0 +1,13 @@
+{
+ "impl": "func",
+ "kind": "dense",
+ "mode": "prefill (warmed, non-traced)",
+ "seq_len": 2048,
+ "prefill_chunk_size": 1024,
+ "wall_s": 0.0195,
+ "tokens_per_s": 105249.8,
+ "signposts": [
+  "PERF_PREFILL_DENSE_FUNC",
+  "PERF_PREFILL_DENSE_FUNC_END"
+ ]
+}

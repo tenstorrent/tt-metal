@@ -1,0 +1,88 @@
+{
+ "kind": "moe",
+ "advertised_context": 202752,
+ "prefill_seq_len": 202751,
+ "prefill_wall_s": 90.3,
+ "prefill_tokens_per_s": 2245.6,
+ "cache_pcc_vs_linear_ref": 0.9999886137342999,
+ "windows": {
+  "start": {
+   "rows": [
+    0,
+    31
+   ],
+   "pcc_all_rows": 0.9994641170583205,
+   "pcc_min_ok_row": 0.9999391863033821,
+   "rows_at_bar": 31,
+   "explained": [
+    {
+     "row": 24,
+     "pcc": 0.9794442036776303,
+     "why": "routing flip (sub-ulp tie)",
+     "alt_expert_set_pcc": 0.9999647948089588
+    }
+   ],
+   "unexplained": []
+  },
+  "middle": {
+   "rows": [
+    101376,
+    101407
+   ],
+   "pcc_all_rows": 0.9989147667462596,
+   "pcc_min_ok_row": 0.9996962767291544,
+   "rows_at_bar": 31,
+   "explained": [
+    {
+     "row": 101398,
+     "pcc": 0.9745819666613056,
+     "why": "routing flip",
+     "alt_expert_set_pcc": 0.9997338977139093
+    }
+   ],
+   "unexplained": []
+  },
+  "end": {
+   "rows": [
+    202719,
+    202750
+   ],
+   "pcc_all_rows": 0.9949165874929745,
+   "pcc_min_ok_row": 0.9982263519129598,
+   "rows_at_bar": 28,
+   "explained": [
+    {
+     "row": 202721,
+     "pcc": 0.9691953946188421,
+     "why": "routing flip (sub-ulp tie)",
+     "alt_expert_set_pcc": 0.9983068772537744
+    },
+    {
+     "row": 202731,
+     "pcc": 0.9724426789052246,
+     "why": "routing flip (sub-ulp tie)",
+     "alt_expert_set_pcc": 0.9983074644661162
+    },
+    {
+     "row": 202739,
+     "pcc": 0.9726476016959864,
+     "why": "routing flip",
+     "alt_expert_set_pcc": 0.9983413286674794
+    },
+    {
+     "row": 202746,
+     "pcc": 0.9665135569622674,
+     "why": "routing flip (sub-ulp tie)",
+     "alt_expert_set_pcc": 0.9983242477629678
+    }
+   ],
+   "unexplained": []
+  }
+ },
+ "decode_max_position": {
+  "position": 202751,
+  "pcc": 0.9999787760659138,
+  "router_tie": false,
+  "first_call_wall_s": 0.024
+ }
+}

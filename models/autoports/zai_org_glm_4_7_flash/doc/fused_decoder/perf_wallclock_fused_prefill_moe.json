@@ -1,0 +1,13 @@
+{
+ "impl": "fused",
+ "kind": "moe",
+ "mode": "prefill (warmed, non-traced)",
+ "seq_len": 2048,
+ "prefill_chunk_size": 1024,
+ "wall_s": 0.21,
+ "tokens_per_s": 9751.5,
+ "signposts": [
+  "PERF_PREFILL_MOE_FUSED",
+  "PERF_PREFILL_MOE_FUSED_END"
+ ]
+}

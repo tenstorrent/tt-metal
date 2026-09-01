@@ -47,6 +47,53 @@
    }
   }
  },
+ "fused_decoder": {
+  "supported_context": 202752,
+  "max_valid_position": 202751,
+  "tested_prefill_context": 202751,
+  "tested_decode_position": 202751,
+  "tested_non_aligned_lengths": [
+   17,
+   65,
+   509,
+   1057,
+   3000,
+   8191,
+   202751
+  ],
+  "capability_reduction": "none",
+  "kv_cache_contract": "identical to functional_decoder (same paged latent cache ops, dtype, block size, allocation)",
+  "weight_footprint_delta": "adds a per-head copy of wq_b for prefill (+7.9 MB bf16 per layer, ~0.36 GiB over 47 layers); wqkv_a replaces wq_a+wkv_a and packed gate_up replaces gate+up at identical byte counts; full-model weights_bf4_experts_bf8_rest_gib_approx 18.5 -> ~18.9, still fits 32 GiB with the bf8 latent cache (5.8 GiB) at batch 1",
+  "long_context_evidence": {
+   "moe": {
+    "prefill_wall_s": 90.3,
+    "cache_pcc": 0.999989,
+    "window_agg_pcc": {
+     "start": 0.999464,
+     "middle": 0.998915,
+     "end": 0.994917
+    },
+    "below_bar_rows_all_proven_ties_or_routing_flips": true,
+    "decode_at_202751_pcc": 0.999979
+   },
+   "dense_control": {
+    "prefill_wall_s": 70.6,
+    "cache_pcc": 0.999988,
+    "window_agg_pcc": {
+     "start": 0.999989,
+     "middle": 0.999939,
+     "end": 0.999704
+    },
+    "all_rows_at_bar": true,
+    "decode_at_202751_pcc": 0.999995
+   }
+  },
+  "provenance": {
+   "stage": "fused-decoder",
+   "evidence": "doc/fused_decoder/README.md, doc/fused_decoder/long_context_{moe,dense}.json, doc/fused_decoder/long_context_aligned_202752.json",
+   "date": "2026-08-31"
+  }
+ },
  "kv_cache": {
   "kind": "paged compressed MLA latent",
   "entry_width": 576,

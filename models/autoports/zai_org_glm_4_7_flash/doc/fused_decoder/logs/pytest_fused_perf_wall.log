@@ -1,0 +1,131 @@
+2026-08-31 19:37:43.010 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/stisi/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/stisi/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, anyio-4.14.2, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 8 items
+
+models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_prefill_perf[moe-func] 2026-08-31 19:37:43.703 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-08-31 19:37:43.703 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-08-31 19:37:43.704 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-31 19:37:43.704 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-31 19:37:43.716 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-08-31 19:37:43.716 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-31 19:37:43.750 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-31 19:37:43.750 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-08-31 19:37:43.750 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-08-31 19:37:43.750 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-08-31 19:37:43.752 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-08-31 19:37:44.001 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-08-31 19:37:44.103 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-08-31 19:37:44.103 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-08-31 19:37:44.103 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-31 19:37:44.103 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-08-31 19:37:44.103 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-08-31 19:37:44.143 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-08-31 19:37:49.259 | INFO     | tracy:signpost:49 - PERF_PREFILL_MOE_FUNC
+2026-08-31 19:37:49.527 | INFO     | tracy:signpost:49 - PERF_PREFILL_MOE_FUNC_END
+wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/fused_decoder/perf_wallclock_func_prefill_moe.json: {'impl': 'func', 'kind': 'moe', 'mode': 'prefill (warmed, non-traced)', 'seq_len': 2048, 'prefill_chunk_size': 1024, 'wall_s': 0.2683, 'tokens_per_s': 7634.6, 'signposts': ['PERF_PREFILL_MOE_FUNC', 'PERF_PREFILL_MOE_FUNC_END']}
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_prefill_perf[moe-fused] 2026-08-31 19:37:55.492 | INFO     | tracy:signpost:49 - PERF_PREFILL_MOE_FUSED
+2026-08-31 19:37:55.702 | INFO     | tracy:signpost:49 - PERF_PREFILL_MOE_FUSED_END
+wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/fused_decoder/perf_wallclock_fused_prefill_moe.json: {'impl': 'fused', 'kind': 'moe', 'mode': 'prefill (warmed, non-traced)', 'seq_len': 2048, 'prefill_chunk_size': 1024, 'wall_s': 0.21, 'tokens_per_s': 9751.5, 'signposts': ['PERF_PREFILL_MOE_FUSED', 'PERF_PREFILL_MOE_FUSED_END']}
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_prefill_perf[dense-func] 2026-08-31 19:37:56.641 | INFO     | tracy:signpost:49 - PERF_PREFILL_DENSE_FUNC
+2026-08-31 19:37:56.661 | INFO     | tracy:signpost:49 - PERF_PREFILL_DENSE_FUNC_END
+wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/fused_decoder/perf_wallclock_func_prefill_dense.json: {'impl': 'func', 'kind': 'dense', 'mode': 'prefill (warmed, non-traced)', 'seq_len': 2048, 'prefill_chunk_size': 1024, 'wall_s': 0.0195, 'tokens_per_s': 105249.8, 'signposts': ['PERF_PREFILL_DENSE_FUNC', 'PERF_PREFILL_DENSE_FUNC_END']}
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_prefill_perf[dense-fused] 2026-08-31 19:37:57.549 | INFO     | tracy:signpost:49 - PERF_PREFILL_DENSE_FUSED
+2026-08-31 19:37:57.565 | INFO     | tracy:signpost:49 - PERF_PREFILL_DENSE_FUSED_END
+wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/fused_decoder/perf_wallclock_fused_prefill_dense.json: {'impl': 'fused', 'kind': 'dense', 'mode': 'prefill (warmed, non-traced)', 'seq_len': 2048, 'prefill_chunk_size': 1024, 'wall_s': 0.0153, 'tokens_per_s': 133477.1, 'signposts': ['PERF_PREFILL_DENSE_FUSED', 'PERF_PREFILL_DENSE_FUSED_END']}
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_decode_perf_traced[moe-func] 2026-08-31 19:38:01.619 | INFO     | tracy:signpost:49 - PERF_DECODE_MOE_FUNC
+2026-08-31 19:38:01.668 | INFO     | tracy:signpost:49 - PERF_DECODE_MOE_FUNC_END
+wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/fused_decoder/perf_wallclock_func_decode_moe.json: {'impl': 'func', 'kind': 'moe', 'mode': 'decode (traced, warmed, batch 1, fixed position 1023)', 'context_depth': 1024, 'iterations': 32, 'wall_s': 0.049, 'ms_per_token': 1.532, 'tokens_per_s': 652.9, 'signposts': ['PERF_DECODE_MOE_FUNC', 'PERF_DECODE_MOE_FUNC_END']}
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_decode_perf_traced[moe-fused] 2026-08-31 19:38:07.449 | INFO     | tracy:signpost:49 - PERF_DECODE_MOE_FUSED
+2026-08-31 19:38:07.482 | INFO     | tracy:signpost:49 - PERF_DECODE_MOE_FUSED_END
+wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/fused_decoder/perf_wallclock_fused_decode_moe.json: {'impl': 'fused', 'kind': 'moe', 'mode': 'decode (traced, warmed, batch 1, fixed position 1023)', 'context_depth': 1024, 'iterations': 32, 'wall_s': 0.0331, 'ms_per_token': 1.035, 'tokens_per_s': 966.2, 'signposts': ['PERF_DECODE_MOE_FUSED', 'PERF_DECODE_MOE_FUSED_END']}
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_decode_perf_traced[dense-func] 2026-08-31 19:38:08.420 | INFO     | tracy:signpost:49 - PERF_DECODE_DENSE_FUNC
+2026-08-31 19:38:08.452 | INFO     | tracy:signpost:49 - PERF_DECODE_DENSE_FUNC_END
+wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/fused_decoder/perf_wallclock_func_decode_dense.json: {'impl': 'func', 'kind': 'dense', 'mode': 'decode (traced, warmed, batch 1, fixed position 1023)', 'context_depth': 1024, 'iterations': 32, 'wall_s': 0.0323, 'ms_per_token': 1.008, 'tokens_per_s': 992.2, 'signposts': ['PERF_DECODE_DENSE_FUNC', 'PERF_DECODE_DENSE_FUNC_END']}
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_decode_perf_traced[dense-fused] 2026-08-31 19:38:09.378 | INFO     | tracy:signpost:49 - PERF_DECODE_DENSE_FUSED
+2026-08-31 19:38:09.409 | INFO     | tracy:signpost:49 - PERF_DECODE_DENSE_FUSED_END
+wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/fused_decoder/perf_wallclock_fused_decode_dense.json: {'impl': 'fused', 'kind': 'dense', 'mode': 'decode (traced, warmed, batch 1, fixed position 1023)', 'context_depth': 1024, 'iterations': 32, 'wall_s': 0.031, 'ms_per_token': 0.969, 'tokens_per_s': 1032.1, 'signposts': ['PERF_DECODE_DENSE_FUSED', 'PERF_DECODE_DENSE_FUSED_END']}
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/stisi/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+5.96s call     models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_prefill_perf[moe-fused]
+5.62s call     models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_decode_perf_traced[moe-fused]
+4.58s call     models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_prefill_perf[moe-func]
+3.94s call     models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_decode_perf_traced[moe-func]
+1.30s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_prefill_perf[moe-func]
+0.75s call     models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_decode_perf_traced[dense-fused]
+0.74s call     models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_decode_perf_traced[dense-func]
+0.73s call     models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_prefill_perf[dense-func]
+0.70s call     models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_prefill_perf[dense-fused]
+0.21s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_decode_perf_traced[dense-fused]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_prefill_perf[dense-func]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_prefill_perf[dense-fused]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_prefill_perf[moe-fused]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_decode_perf_traced[moe-func]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_decode_perf_traced[dense-func]
+0.19s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_decode_perf_traced[moe-fused]
+
+(8 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_prefill_perf[moe-func]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_prefill_perf[moe-fused]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_prefill_perf[dense-func]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_prefill_perf[dense-fused]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_decode_perf_traced[moe-func]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_decode_perf_traced[moe-fused]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_decode_perf_traced[dense-func]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py::test_decode_perf_traced[dense-fused]
+============================== 8 passed in 25.75s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7ed367b9b928 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7ed367f5ead8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 253 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "device"
+ - leaked function "unpad"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "pop_current_command_queue_id_for_thread"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-31 19:38:11.160 | info     |    BuildKernels | JIT cache stats: 579/579 hits (100.0%) [579 cached, 206 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-31 19:38:11.160 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-31 19:38:11.188 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-08-31 19:38:11.188 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-08-31 19:38:11.709 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-08-31 19:38:11.709 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-08-31 19:38:11.709 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)
