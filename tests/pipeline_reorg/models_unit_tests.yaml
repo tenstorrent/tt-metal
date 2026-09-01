@@ -1311,7 +1311,7 @@
 
 - name: TT-DiT Wan2.2-T2V-A14B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
@@ -1329,10 +1329,10 @@
     #   timeout: 150
     #   tier: 1
     wh_galaxy:
-      timeout: 155
+      timeout: 180
       tier: 1
     bh_quietbox_2:
-      timeout: 105
+      timeout: 180
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
