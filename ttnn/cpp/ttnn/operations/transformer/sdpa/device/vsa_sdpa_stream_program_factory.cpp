@@ -28,10 +28,10 @@ namespace ttnn::prim {
 namespace {
 using RtArgs = std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>;
 
-constexpr uint32_t kRMax = 17;         // resident rows per pass (bounded by L1; <= 32 for the bitmasks)
+constexpr uint32_t kRMax = 15;         // resident rows per pass (bounded by L1; <= 32 for the bitmasks)
 constexpr uint32_t kRowGroup = 8;      // rows fused per compute phase group
-constexpr uint32_t kStreamDepth = 6;   // KV blocks in flight per core
-constexpr uint32_t kLogDepth = 8;      // leader arrival-log ring (>= kStreamDepth + sentinel slack)
+constexpr uint32_t kStreamDepth = 12;  // KV blocks in flight (two window halves of 6)
+constexpr uint32_t kLogDepth = 16;     // leader arrival-log ring (> leader depth + sentinel slack)
 constexpr uint32_t kMaxWorkers = 16;   // leader runtime-arg array bound
 constexpr uint32_t kRowChunk = 4;      // contiguous rows per placement chunk (matches the kernels)
 
@@ -181,7 +181,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     cb(tile_bytes, 1, bf);                                     // cb_col_identity
     cb(tile_bytes, 1, bf);                                     // cb_recip_scratch
     cb(tile_bytes, 1, bf);                                     // cb_neginf
-    cb(tile_bytes, 4, bf);                                     // cb_vmask
+    cb(tile_bytes, kStreamDepth, bf);                          // cb_vmask (slot-indexed RAM)
     cb(ctrl_page_bytes, 8, bf);                                // cb_ctrl
     cb(16, kStreamDepth, bf);                                  // cb_kreq
     cb(16, kStreamDepth, bf);                                  // cb_kack

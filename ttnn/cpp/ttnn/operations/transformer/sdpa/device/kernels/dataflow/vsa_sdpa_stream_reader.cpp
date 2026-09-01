@@ -31,10 +31,10 @@
 
 constexpr uint32_t sentinel = 0xFFFFFFFFu;
 
-constexpr uint32_t MSG_VISIT = 0;
-constexpr uint32_t MSG_FLUSH = 1;
-constexpr uint32_t FLAG_HAS_VMASK = 1u << 8;
-// per-row info word: row_slot | parity << 8 | is_first << 9
+constexpr uint32_t MSG_VISIT = 0;   // {type | n_blocks<<16, rowinfo, (slot | count<<8 | vmask<<15) x n}
+constexpr uint32_t MSG_FLUSH = 1;   // {type, row_slot, parity}
+constexpr uint32_t MSG_WINDOW = 2;  // {type, n_slots}: compute returns n_slots stream credits
+// rowinfo word: row_slot | parity << 8 | is_first << 9
 constexpr uint32_t ROW_PARITY = 1u << 8;
 constexpr uint32_t ROW_IS_FIRST = 1u << 9;
 
@@ -222,9 +222,19 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* bitmaps = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bitmap_cb.get_write_ptr());
     volatile tt_l1_ptr uint32_t* log_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(log_l1);
 
-    // Per-row running state parity (bit) and first-visit flag, tracked across a pass.
+    // Per-row running state parity (bit) and first-visit flag, tracked across a pass, plus the
+    // window-pending block list per row: the blocks pulled within one window are freed together
+    // after the window's batched visits, so a row folds every block it lists in the window into
+    // ONE visit (real top-k sets cluster in runs of adjacent ids, so multi-block batches are
+    // common). The slot space is split into two window halves, double-buffered: the reader pulls
+    // window N+1 into the other half while compute chews window N, and waits for a half's credits
+    // only when coming back around to it.
     uint32_t row_parity_bits = 0;
     uint32_t row_seen_bits = 0;
+    constexpr uint32_t half_slots = stream_depth / 2;
+    uint32_t pending[32][half_slots > 0 ? half_slots : 1];
+    uint32_t n_pending[32];
+    uint32_t half_outstanding[2] = {0, 0};  // credits still owed by compute for each half
 
     // Progress mailbox: this worker's consumed-arrival count, staged locally (own ackbox word) and
     // posted to the leader's ackbox word for this worker. Monotonic single-writer, so unbarriered
@@ -240,9 +250,8 @@ void kernel_main() {
         noc_async_write(my_box_local, my_box_remote, 4, noc.get_noc_id());
     };
 
-    // The compute kernel hands out local stream-slot credits.
+    // Slot credits flow per window: compute returns a window's slots after consuming its visits.
     uint32_t log_n = 0;
-    uint32_t local_slot = 0;
     for (uint32_t pass = 0; pass < n_passes; ++pass) {
         const uint32_t pass_row_base = pass * R_MAX;
         const uint32_t pass_rows =
@@ -270,6 +279,58 @@ void kernel_main() {
         }
         row_parity_bits = 0;
         row_seen_bits = 0;
+        for (uint32_t r = 0; r < pass_rows; ++r) {
+            n_pending[r] = 0;
+        }
+        uint32_t half = 0;          // which slot half the open window fills
+        uint32_t window_slots = 0;  // pulled blocks in the open window
+
+        // Emit one batched visit per pending row, then a WINDOW message; compute returns the
+        // window's slot credits when it has consumed every visit.
+        const auto flush_window = [&]() {
+            if (window_slots == 0) {
+                return;
+            }
+            for (uint32_t r = 0; r < pass_rows; ++r) {
+                if (n_pending[r] == 0) {
+                    continue;
+                }
+                const uint32_t rbit = 1u << r;
+                uint32_t info = r;
+                if (!(row_seen_bits & rbit)) {
+                    info |= ROW_IS_FIRST;
+                    row_seen_bits |= rbit;
+                } else {
+                    row_parity_bits ^= rbit;
+                    if (row_parity_bits & rbit) {
+                        info |= ROW_PARITY;
+                    }
+                }
+                ctrl_cb.reserve_back(1);
+                {
+                    volatile tt_l1_ptr uint32_t* cp =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
+                    cp[0] = MSG_VISIT | (n_pending[r] << 16);
+                    cp[1] = info;
+                    for (uint32_t j = 0; j < n_pending[r]; ++j) {
+                        cp[2 + j] = pending[r][j];
+                    }
+                }
+                ctrl_cb.push_back(1);
+                n_pending[r] = 0;
+            }
+            ctrl_cb.reserve_back(1);
+            {
+                volatile tt_l1_ptr uint32_t* cp =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
+                cp[0] = MSG_WINDOW;
+                cp[1] = window_slots;
+            }
+            ctrl_cb.push_back(1);
+            half_outstanding[half] = window_slots;
+            window_slots = 0;
+            half ^= 1;
+        };
 
         while (true) {
             arrivals_sem.wait_min(log_n + 1);
@@ -278,6 +339,7 @@ void kernel_main() {
             const uint32_t leader_slot = log_ptr[entry_off + 1];
             ++log_n;
             if (b == sentinel) {
+                flush_window();
                 break;
             }
 
@@ -295,12 +357,17 @@ void kernel_main() {
                 continue;
             }
 
-            // Pull the block from the leader's stream slots into ours (same CB layout on all
-            // cores => the leader's slot address is our own CB base + the slot offset).
-            free_cb.wait_front(1);
-            free_cb.pop_front(1);
-            const uint32_t slot = local_slot;
-            local_slot = (local_slot + 1 == stream_depth) ? 0 : local_slot + 1;
+            // Claim a slot in the open window half, flushing first if the half is full and
+            // reclaiming the half's previous credits before its first reuse.
+            if (window_slots == half_slots) {
+                flush_window();
+            }
+            if (window_slots == 0 && half_outstanding[half] > 0) {
+                free_cb.wait_front(half_outstanding[half]);
+                free_cb.pop_front(half_outstanding[half]);
+                half_outstanding[half] = 0;
+            }
+            const uint32_t slot = half * half_slots + window_slots;
 
             // K rides the local writer (other NoC): send it the leader slot to pull from.
             kreq_cb.reserve_back(1);
@@ -327,39 +394,17 @@ void kernel_main() {
             const bool ragged = count < block_size;
             const bool needs_vmask = ragged && (count % keys_per_tile) != 0;
             if (needs_vmask) {
+                // Slot-indexed RAM tile (freed with the window): visits reference the window's
+                // blocks out of pull order, so a FIFO cannot serve them.
                 constexpr uint32_t mask_tile_bytes = get_tile_size(cb_vmask);
-                experimental::CB vmask_cb(cb_vmask);
-                vmask_cb.reserve_back(1);
-                fill_vertical_tile_bf16<mask_tile_bytes>(noc, cb_vmask, 0, count % keys_per_tile);
-                vmask_cb.push_back(1);
+                fill_vertical_tile_bf16<mask_tile_bytes>(noc, cb_vmask, slot, count % keys_per_tile);
             }
 
-            // One multi-row visit message: {flags|n_rows, slot, count, rowinfo...}.
-            ctrl_cb.reserve_back(1);
-            {
-                volatile tt_l1_ptr uint32_t* cp =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
-                cp[0] = MSG_VISIT | (needs_vmask ? FLAG_HAS_VMASK : 0) | (n_listing << 16);
-                cp[1] = slot;
-                cp[2] = count;
-                for (uint32_t i = 0; i < n_listing; ++i) {
-                    const uint32_t r = listing[i];
-                    const uint32_t rbit = 1u << r;
-                    uint32_t info = r;
-                    if (!(row_seen_bits & rbit)) {
-                        info |= ROW_IS_FIRST;
-                        row_seen_bits |= rbit;
-                        // first visit writes parity 0; leave parity bit clear
-                    } else {
-                        row_parity_bits ^= rbit;  // this visit writes the flipped slot
-                        if (row_parity_bits & rbit) {
-                            info |= ROW_PARITY;
-                        }
-                    }
-                    cp[3 + i] = info;
-                }
+            const uint32_t entry = slot | (count << 8) | (needs_vmask ? (1u << 15) : 0);
+            for (uint32_t i = 0; i < n_listing; ++i) {
+                pending[listing[i]][n_pending[listing[i]]++] = entry;
             }
-            ctrl_cb.push_back(1);
+            ++window_slots;
         }
 
         // FLUSH each pass row with its final state parity.
