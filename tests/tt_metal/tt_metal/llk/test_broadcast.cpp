@@ -37,6 +37,7 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "single_core_compute_runners.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -949,6 +950,74 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ComputeSubBcastColCustom) {
             break;
         }
     }
+}
+
+// ============================================================================
+// Id-free (2.0) binary broadcast MUL (rows / cols / scalar), validated against the gold_broadcast host golden
+// (not a legacy kernel). c_0 = A (full tile), c_1 = B (masked bcast tile), MUL-broadcast -> c_16. Both inputs
+// are tilized host-side (the device reads tiled operands); the golden broadcast is computed row-major then
+// tilized. Single Float16_b tile, is_close(rtol 0.0155). Runs on Blackhole (BH-only API).
+// ============================================================================
+namespace {
+// Map the test-side BroadcastDim to the kernel-side ckernel BroadcastType numeric value (COL=1, ROW=2,
+// SCALAR=3) passed as get_compile_time_arg_val(1) to the fused bcast_mul_2_0.cpp kernel.
+std::uint32_t bcast_type_arg(BroadcastDim dim) {
+    switch (dim) {
+        case BroadcastDim::ROW: return 2;
+        case BroadcastDim::COL: return 1;
+        case BroadcastDim::SCALAR: return 3;
+    }
+    return 0;
+}
+
+void expect_bcast_mul_matches_golden(distributed::MeshDevice& md, BroadcastDim dim) {
+    const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/compute/bcast_mul_2_0.cpp";
+    ::unit_tests::compute::GoldenConfig config{
+        .num_tiles_r_dim = 1, .num_tiles_c_dim = 1, .face_r_dim = 16, .face_c_dim = 16, .num_faces = 4};
+    auto in0_packed = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/2, /*seed=*/42, /*offset=*/-1.0f);
+    auto in1_packed = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/2, /*seed=*/7, /*offset=*/-1.0f);
+
+    auto in0_bf16 = unpack_vector<bfloat16, std::uint32_t>(in0_packed);
+    auto in1_bf16 = unpack_vector<bfloat16, std::uint32_t>(in1_packed);
+    // Zero the non-broadcast positions of B so device and golden read the same broadcast operand.
+    mask_src_b_for_broadcast(in1_bf16, {32, 32}, dim, /*row_idx=*/0);
+    auto golden_rm = gold_broadcast(in0_bf16, in1_bf16, {32, 32}, EltwiseOp::MUL, dim, /*row_idx=*/0);
+
+    auto c0_input = ::unit_tests::compute::gold_standard_tilize(in0_packed, config);
+    auto c1_input = ::unit_tests::compute::gold_standard_tilize(pack_vector<std::uint32_t, bfloat16>(in1_bf16), config);
+    auto golden_tiled =
+        ::unit_tests::compute::gold_standard_tilize(pack_vector<std::uint32_t, bfloat16>(golden_rm), config);
+
+    auto result = unit_tests::llk::single_core::run_binary(
+        md,
+        c0_input,
+        c1_input,
+        /*num_tiles=*/1,
+        kernel,
+        /*compute_defines=*/{},
+        /*cb_depth_tiles=*/1,
+        /*out_tiles=*/0,
+        /*extra_compile_args=*/{bcast_type_arg(dim)});
+
+    EXPECT_EQ(golden_tiled.size(), result.size());
+    bool close = is_close_packed_vectors<bfloat16, std::uint32_t>(
+        result, golden_tiled, [](const bfloat16& a, const bfloat16& b) { return is_close(a, b, k_broadcast_rtol); });
+    EXPECT_TRUE(close);
+}
+}  // namespace
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixBcastMulRowsIdFreeGolden) {
+    expect_bcast_mul_matches_golden(*this->devices_.at(0), BroadcastDim::ROW);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixBcastMulColsIdFreeGolden) {
+    expect_bcast_mul_matches_golden(*this->devices_.at(0), BroadcastDim::COL);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixBcastMulScalarIdFreeGolden) {
+    expect_bcast_mul_matches_golden(*this->devices_.at(0), BroadcastDim::SCALAR);
 }
 
 }  // namespace tt::tt_metal
