@@ -335,7 +335,9 @@ while IFS= read -r FILE; do
         # the occasional unrelated Loudbox run is cheaper than a silent miss.
         .github/workflows/blaze-merge-gate.yaml|\
         .github/workflows/merge-gate.yaml|\
-        .github/workflows/build-artifact.yaml)
+        .github/workflows/build-artifact.yaml|\
+        .github/scripts/utils/find-changed-files.sh|\
+        .github/actions/find-changed-files/action.yml)
             BLAZE_RELEVANT_CHANGED=true
             ;;
     esac
