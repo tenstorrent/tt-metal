@@ -578,9 +578,9 @@ def main() -> int:
                 add_comment_to_jira(
                     ticket_key=recovered_key,
                     body=(
-                        f"Fabric System Health Check passed on node {node} "
+                        f"*(/) Fabric System Health Check PASSED on node {node} "
                         f"(Slurm job {slurm_job_id}); the node has recovered. "
-                        f"Closing this ticket automatically.\n\n"
+                        f"Closing this ticket automatically.*\n\n"
                         + _build_recovery_body(
                             node=node,
                             slurm_job_id=slurm_job_id,

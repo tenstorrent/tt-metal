@@ -202,7 +202,7 @@ def add_comment_to_jira(
         "Content-Type": "application/json",
     }
 
-    log.info("Adding recurring-failure comment to %s ...", ticket_key)
+    log.info("Adding comment to %s ...", ticket_key)
     try:
         resp = requests.post(url, headers=headers, json={"body": body}, timeout=30)
     except requests.RequestException as exc:
