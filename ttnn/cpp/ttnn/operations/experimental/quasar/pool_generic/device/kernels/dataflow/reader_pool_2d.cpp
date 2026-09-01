@@ -145,18 +145,26 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                         in_cb.push_back(1);
                         in_cb.reserve_back(1);
                         write_offset = 0;
-                        // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
-                        // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
-                        // are guaranteed that the junk data remaining from chunk N-1 will fill the entire CB and
-                        // cannot contain values greater than the max value, and if we have N=1 chunks we already
-                        // initialized the entire CB with the init value, but for avg pool we need to fill the
-                        // entire CB with the init value since the junk data will contribute to the average.
-                        if constexpr (is_avg_pool) {
-                            // clear the in CB
-                            if ((total_elems_to_reduce - processed_sticks) < max_sticks_for_reduction &&
-                                processed_sticks != total_elems_to_reduce) {
-                                clear_out_tiles<clear_value_cb_id>(noc, in_cb, clear_cb, in_cb_ntiles);
-                            }
+                        // If the next chunk is PARTIAL, rows [remaining, max_sticks) keep the previous
+                        // ring occupant's rows — a DIFFERENT output stick's window (num_threads sticks
+                        // away under lanes), whose values can exceed THIS window's max. Fill the stale
+                        // tail with the pool identity for MAX and AVG alike. Direct CPU fill: the old
+                        // NoC self-loopback copy (clear_out_tiles) is unreliable on the sim.
+                        const uint32_t remaining_rows = total_elems_to_reduce - processed_sticks;
+                        if (remaining_rows > 0 && remaining_rows < max_sticks_for_reduction) {
+                            constexpr uint32_t row_stride_elems =
+                                wide_reduction ? (MAX_TILES_PER_REDUCTION * TILE_WIDTH) : (in_ntiles_c * TILE_WIDTH);
+                            const uint32_t tail_offset_bytes = remaining_rows * row_stride_elems * BYTES_PER_ELEM;
+                            const uint32_t tail_elems = (max_sticks_for_reduction - remaining_rows) * row_stride_elems;
+                            fill_with_val(
+                                in_cb.get_write_ptr() + tail_offset_bytes,
+                                tail_elems,
+                                static_cast<uint16_t>(bf16_init_value));
+#ifdef ARCH_QUASAR
+                            flush_l2_cache_range(
+                                static_cast<uintptr_t>(in_cb.get_write_ptr() + tail_offset_bytes),
+                                static_cast<size_t>(tail_elems) * 2);
+#endif
                         }
                     }
                 }

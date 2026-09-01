@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_utils.hpp"
+#include <cstdlib>
 #include <limits>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
@@ -191,6 +192,18 @@ FactoryParameters get_factory_parameters(
     // quasar op runs this pack path on WH silicon too.
     if (force_max_tiles_per_reduction_4) {
         MAX_TILES_PER_REDUCTION = 4;
+    }
+    // Debug/test override: lower the tiles-per-reduction cap so the wide-reduction path
+    // (in_nblocks_c > 1) is exercised at small C (host params and the kernels' resolved
+    // max_tiles_per_reduction compile arg stay coherent since both derive from this value).
+    if (const char* override_env = std::getenv("TT_POOL_MAX_TILES_OVERRIDE")) {
+        const uint32_t override_val = static_cast<uint32_t>(std::atoi(override_env));
+        TT_FATAL(
+            override_val >= 1 && override_val <= MAX_TILES_PER_REDUCTION,
+            "TT_POOL_MAX_TILES_OVERRIDE={} must be in [1, {}]",
+            override_val,
+            MAX_TILES_PER_REDUCTION);
+        MAX_TILES_PER_REDUCTION = override_val;
     }
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
