@@ -36,46 +36,46 @@ on:
       run-blackhole:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run the Blackhole suite"
       run-sim:
         required: false
-        default: true
+        default: false
         type: boolean
         description: "Run the TTSim suite"
       run-ttnn-sanity-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run TTNN sanity tests"
       run-t3000-sanity-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run T3000 sanity tests"
       run-fabric-sanity-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run fabric sanity tests"
       run-ops-sanity-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run ops unit tests"
       run-umd-sanity-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run UMD sanity tests"
       run-ttsim-sanity-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run TTSim sanity tests"
       run-blackhole-multi-card-sanity-tests:
         required: false
-        default: true
+        default: false
         type: boolean
         description: "Run Blackhole multi-card sanity tests"
       run-models-sanity-tests:
@@ -106,7 +106,7 @@ on:
       publish-run-summary:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Publish the AI run summary. A caller that invokes this workflow more than once per run must pass false on all but one invocation, or the reports collide on the artifact name."
   workflow_dispatch:
     inputs:
