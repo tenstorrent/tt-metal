@@ -27,6 +27,7 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/memory_tracking/buffer_allocation_observer.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include <internal/service/service_core_manager.hpp>
@@ -623,6 +624,10 @@ void Buffer::allocate_impl() {
     allocation_status_ = AllocationStatus::ALLOCATED;
 
     GraphTracker::instance().track_allocate(this);
+    // Memory tracking observes allocation here rather than through GraphTracker: it is an impl
+    // concern with an impl consumer, and GraphTracker's processor stack is thread_local, so an
+    // observer registered there would miss every buffer allocated on another thread.
+    notify_buffer_allocated(this);
 }
 
 void Buffer::deallocate() {
@@ -655,6 +660,7 @@ void Buffer::deallocate_impl() {
     if (device_->is_initialized() && size_ != 0) {
         // address_ is only modified from this thread, no sync required
         GraphTracker::instance().track_deallocate(this);
+        notify_buffer_deallocated(this);
         if (!GraphTracker::instance().hook_deallocate(this) && !hooked_allocation_) {
 #if defined(TRACY_ENABLE)
             if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))

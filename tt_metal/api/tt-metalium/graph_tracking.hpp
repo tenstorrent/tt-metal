@@ -15,8 +15,6 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
-#include <shared_mutex>
-#include <typeinfo>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
@@ -125,24 +123,9 @@ public:
 //     `push_processor` / capture / `pop_processor` sequence is scoped to the
 //     calling thread; ops dispatched on other threads are not observed by
 //     that capture.
-//   * `background_processors` is *process-wide* and guarded by
-//     `background_processors_mutex`. Registered once, unaffected by `clear()`,
-//     and reached from every thread -- which an always-on observer such as SHM
-//     memory tracking needs; per-thread storage missed every buffer allocated
-//     off the thread that initialized the device.
-//     Only track_allocate/track_deallocate reach them: the CB, dataflow-buffer
-//     and scratchpad hooks notify `processors` alone.
 //   * `hooked_buffers` is process-wide and guarded by `hooked_buffers_mutex`.
 //     This is the only piece of GraphTracker state that is shared across
 //     threads.
-class GraphTracker;
-
-namespace internal {
-// Defined in <internal/graph_tracking.hpp>; declared here only so GraphTracker can befriend it.
-bool register_background_processor_once(
-    const std::type_info& type, const std::function<std::shared_ptr<IGraphProcessor>()>& factory);
-}  // namespace internal
-
 class GraphTracker {
 public:
     GraphTracker(const GraphTracker&) = delete;
@@ -241,16 +224,6 @@ private:
     // Per-thread state. See the class-level threading contract above.
     static thread_local std::vector<std::shared_ptr<IGraphProcessor>> processors;
     static thread_local std::shared_ptr<IGraphHooks> hook;
-
-    // Process-wide, always-active observers. See the threading contract above. Registered
-    // through internal::register_background_processor_once(), which is where the only
-    // mutation of this vector lives; there is no public way to add one, because managing
-    // implementation-side observers is not part of this class's downstream contract.
-    mutable std::shared_mutex background_processors_mutex;
-    std::vector<std::shared_ptr<IGraphProcessor>> background_processors;
-
-    friend bool internal::register_background_processor_once(
-        const std::type_info& type, const std::function<std::shared_ptr<IGraphProcessor>()>& factory);
 
     std::mutex hooked_buffers_mutex;
     std::unordered_set<const Buffer*> hooked_buffers;
