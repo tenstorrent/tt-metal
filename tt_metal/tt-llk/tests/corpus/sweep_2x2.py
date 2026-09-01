@@ -426,7 +426,35 @@ ON_FLAGS = (
     # the pinned sim; touched board rows re-booked SAME-LEG on silicon;
     # KNOB_MODES flipped on-plus -> drop-one for both.
     "-mtt-tensix-optimize-park-ordering "
-    "-mtt-tensix-optimize-store-source-tier"
+    "-mtt-tensix-optimize-store-source-tier "
+    # PROMOTED 2026-09-01 (knob promotion round 4, lane KM; the installed
+    # pin-51 binary 77ce6392c080 — conf-only ceremony, sfpi-gcc untouched):
+    # the priced placement arbiter joins the reviewed ON set (36 -> 37).
+    #   priced-placement (lane KF, FABLE_GOES_BURR #13): the erfinv
+    #     fold-reserve fire is now MEASURED on silicon — the production
+    #     erfinv perf vehicle moves at ON+flag (fold 984 vs park 861
+    #     centislots, "1 reload(s) folded", 0 lreg-pressure-exceeded,
+    #     MATH_ISOLATE .text 3197 -> 2901 = the KF -296B on the perf TU)
+    #     and the KERNEL cell drops 376756 -> 370739 x3 (-1.60%); the
+    #     fresh sem arm is byte-identical (218425 both legs).
+    # Promotion gates (laneKM-evidence-20260901): R9 union witness added
+    # two-sided (fold-reserve fire line PRESENT at the ON-37 union,
+    # ABSENT at union-minus-flag where the arbiter prints only its
+    # neutral shadow spelling); the dst-ownership witness row upgraded
+    # to the fold's own fire line per its named successor (the 9>8
+    # refusal the old row keyed on is CLEARED by this promotion);
+    # ON-36-vs-ON-37 leg pair at the installed binary (store
+    # corpus-legs-laneKM, 3300/3300 both legs) delta = exactly the
+    # erfinv TU (the adjudicated vehicle, device-golden corr 3 reps x
+    # both legs + OFF); the KF stage-B board obligations discharged:
+    # softplus (production corr + generic perf + fresh corr/perf TUs)
+    # and ALL SIX pin-34 loss rows (ceil-fresh, ceil+seed, roundingops,
+    # roundingops+seed, rdiv, sqrt-fresh, softsign-fresh, i0-fitted)
+    # BYTE-IDENTICAL at ON+flag on every corr AND perf TU — the
+    # laneHY regression shape structurally cannot recur (no bytes, no
+    # cycles); softplus re-certifies at its +0.09 floor by bytes.
+    # KNOB_MODES flipped on-plus -> drop-one.
+    "-mtt-tensix-optimize-priced-placement"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
     # its only engagement channel was the trusted TTREGION source markers in
     # the LLK headers, and trusted source annotation of the consumed library
@@ -1675,11 +1703,14 @@ KNOB_MODES = {
     # a solo leg is structurally an A/A (the pass never runs on the
     # all-off base), so the booking A/B is (ON + flag) vs plain ON.
     "lreg-coalesce": "on-plus",
-    # priced-placement arbitrates the ON-set placement tiers
-    # (const-residency/pressure-park/park-ordering): a solo leg leaves
-    # every arbitrated decision point ungated, so the booking A/B is
-    # (ON + flag) vs plain ON.
-    "priced-placement": "on-plus",
+    # priced-placement PROMOTED into the ON set 2026-09-01 (lane KM,
+    # knob promotion round 4; R9 witness + dst-ownership witness upgrade
+    # + ON-36-vs-ON-37 adjudication in laneKM-evidence-20260901) —
+    # drop-one from here (was on-plus while a booking knob; see the
+    # ON_FLAGS promotion note).  The arbiter prices the ON-set placement
+    # tiers (const-residency/pressure-park/park-ordering), so the
+    # drop-one leg stays structurally meaningful on the ON pipeline.
+    "priced-placement": "drop-one",
     # cc-region-general opens admissions inside ON-set consumers
     # (ccmask, the invariant containment fact, the crossloop placement
     # walks): a solo leg is structurally weaker, so the booking A/B is
