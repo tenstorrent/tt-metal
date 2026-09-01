@@ -37,8 +37,17 @@ STORE_ROOT_ENV = "CLUSTER_HEALTH_STORE_ROOT"
 # setgid + sticky + owner/group rwx. mkdir is umask-masked (often 0755), so the
 # first writer of the day would otherwise lock out the store's group. Sticky
 # keeps non-owner writers from unlinking each other's records; as usual, the
-# directory owner can still unlink any entry. No other-write.
+# directory owner can still unlink any entry. No other-write unless the store
+# root is already other-writable (then date dirs follow that and stay sticky).
 STORE_DIR_MODE = 0o3770
+STORE_DIR_MODE_WORLD = 0o1777
+
+
+def date_dir_mode_for_root(root_mode: int) -> int:
+    """Match a world-writable store root so mixed uids can share the date dir."""
+    if root_mode & 0o002:
+        return STORE_DIR_MODE_WORLD
+    return STORE_DIR_MODE
 
 
 def dumps_compact(obj: dict[str, Any]) -> str:
@@ -564,23 +573,28 @@ def _existing_or_conflict(
 def _ensure_date_dir(root: Path, date_name: str) -> int:
     """Open today's directory securely and return a caller-owned descriptor.
 
-    Only the date directory gets STORE_DIR_MODE. It is the one directory this
-    tool owns per day, so a mistyped --store-root cannot loosen an unrelated
-    tree. ``mkdir`` cannot do this itself: its mode applies to the leaf only
+    Only the date directory is chmod'd. It is the one directory this tool owns
+    per day, so a mistyped --store-root cannot loosen an unrelated tree.
+    ``mkdir`` cannot do this itself: its mode applies to the leaf only
     and is masked by umask, which is how the first writer of the day used to
     leave a 0755 directory owned by their uid.
 
-    Descriptor-relative operations prevent a shared-root writer from replacing
-    the date path with a symlink or swapping it while a record is published.
-    chown runs before chmod because a non-privileged chown may drop setgid.
+    If the store root is other-writable, date dirs use STORE_DIR_MODE_WORLD
+    (sticky + rwxrwxrwx) instead of STORE_DIR_MODE so mixed uids can share a
+    0777 tree. Descriptor-relative operations prevent a shared-root writer
+    from replacing the date path with a symlink or swapping it while a record
+    is published. chown runs before chmod because a non-privileged chown may
+    drop setgid.
     """
     root.mkdir(parents=True, exist_ok=True)
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     root_fd = os.open(root, directory_flags)
     try:
-        root_gid = os.fstat(root_fd).st_gid
+        root_stat = os.fstat(root_fd)
+        root_gid = root_stat.st_gid
+        dir_mode = date_dir_mode_for_root(root_stat.st_mode)
         try:
-            os.mkdir(date_name, mode=STORE_DIR_MODE, dir_fd=root_fd)
+            os.mkdir(date_name, mode=dir_mode, dir_fd=root_fd)
         except FileExistsError:
             pass
         date_dir_fd = os.open(date_name, directory_flags, dir_fd=root_fd)
@@ -594,7 +608,7 @@ def _ensure_date_dir(root: Path, date_name: str) -> int:
             if os.fstat(date_dir_fd).st_gid != root_gid:
                 _warn(f"date directory group does not match store root group ({root_gid})")
         try:
-            os.fchmod(date_dir_fd, STORE_DIR_MODE)
+            os.fchmod(date_dir_fd, dir_mode)
         except OSError:
             pass
         return date_dir_fd
@@ -610,9 +624,10 @@ def publish_record(record: dict[str, Any], store_root: str) -> dict[str, Any]:
     content is treated as success; different content is left in place and the
     stdout-only record is returned. On I/O failure, warns and returns the
     stdout-only record (no record_id). The date directory is chmod'd to
-    STORE_DIR_MODE (setgid + sticky + group write) so a shared store stays
-    writable for the store root's group; record files themselves follow the
-    caller's umask.
+    STORE_DIR_MODE (setgid + sticky + group write), or STORE_DIR_MODE_WORLD
+    when the store root is already other-writable, so a shared store stays
+    writable for every uid that can write DIR; record files themselves follow
+    the caller's umask.
     """
     record_id = compute_record_id(
         record["test_type"],

@@ -34,6 +34,7 @@ from analyze_host_health_results import main as analyze_main  # noqa: E402
 from report_backfill import Leftover  # noqa: E402
 from report_cluster_health import (  # noqa: E402
     RecordRequest,
+    STORE_DIR_MODE_WORLD,
     _ensure_date_dir,
     _read_optional,
     build_record,
@@ -416,6 +417,33 @@ class TestStoreWrite(unittest.TestCase):
             on_disk = json.loads(dest.read_text(encoding="utf-8"))
             self.assertEqual(on_disk["record_id"], record["record_id"])
             _assert_shared_dir_mode(self, dest.parent)
+
+    def test_world_writable_store_root_keeps_other_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "store"
+            store.mkdir()
+            os.chmod(store, 0o777)
+            argv = [
+                "--test-type",
+                "physical",
+                "--hosts",
+                HOSTS,
+                "--analyzer-code",
+                "0",
+                "--artifact-dir",
+                fixtures.ARTIFACT_DIR,
+                "--ts",
+                TS,
+                "--store-root",
+                str(store),
+            ]
+            rc, out, err = _run(argv)
+            self.assertEqual(rc, 0, err)
+            date_dir = store / "2026-08-19"
+            mode = date_dir.stat().st_mode
+            self.assertEqual(mode & stat.S_IRWXO, stat.S_IRWXO)
+            self.assertTrue(mode & stat.S_ISVTX)
+            self.assertEqual(mode & 0o7777, STORE_DIR_MODE_WORLD)
 
     def test_date_dir_chmod_repairs_umask_masked_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
