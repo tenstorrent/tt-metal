@@ -9,8 +9,8 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::unary_backward::gelu_bw {
-namespace {
 
+namespace {
 // GELU_BW supports only floating-point dtypes.
 bool is_supported_dtype(DataType dtype) {
     return dtype == DataType::BFLOAT16 || dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT8_B ||
@@ -20,16 +20,14 @@ bool is_supported_dtype(DataType dtype) {
 void validate_tensor_contract(const Tensor& tensor, const std::string& name) {
     TT_FATAL(
         is_supported_dtype(tensor.dtype()),
-        "GELU_BW operation requires a floating-point {} (BFLOAT16, FLOAT32, BFLOAT8_B or BFLOAT4_B). {} data "
+        "GELU_BW operation only supports floating-point dtypes (bfloat16, float32, bfloat8_b, bfloat4_b). {} data "
         "type: {}",
-        name,
         name,
         static_cast<int>(tensor.dtype()));
 
     TT_FATAL(
         tensor.storage_type() == StorageType::DEVICE,
-        "GELU_BW operation requires {} to be on Device. {} storage type: {}",
-        name,
+        "GELU_BW operation requires {} to be on Device. Storage type: {}",
         name,
         static_cast<int>(tensor.storage_type()));
 
@@ -42,26 +40,23 @@ void validate_tensor_contract(const Tensor& tensor, const std::string& name) {
 
     TT_FATAL(
         tensor.layout() == Layout::TILE,
-        "GELU_BW operation requires {} to be in Tile layout. {} layout: {}",
-        name,
+        "GELU_BW operation requires {} to be in Tile layout. Layout: {}",
         name,
         static_cast<int>(tensor.layout()));
 
     TT_FATAL(
         tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "GELU_BW operation requires {} to have Interleaved memory layout. {} memory layout: {}",
-        name,
+        "GELU_BW operation requires {} to use Interleaved memory layout. Memory layout: {}",
         name,
         static_cast<int>(tensor.memory_config().memory_layout()));
 }
-
 }  // namespace
 
 void GeluBwDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& preallocated_input_grad = tensor_args.preallocated_input_grad;
     const auto& input_tensor = tensor_args.input;
-    const auto& grad_output = tensor_args.grad_output;
+    const auto& grad_output_tensor = tensor_args.grad_output;
     auto out_memory_config = args.output_memory_config;
     auto output_datatype = args.output_dtype;
 
@@ -69,18 +64,29 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
         output_datatype = input_tensor.dtype();
     }
 
+    TT_FATAL(
+        is_supported_dtype(input_tensor.dtype()),
+        "GELU_BW operation only supports floating-point dtypes (bfloat16, float32, bfloat8_b, bfloat4_b). Input data "
+        "type: {}",
+        static_cast<int>(input_tensor.dtype()));
+
+    validate_tensor_contract(grad_output_tensor, "Grad output");
+
+    TT_FATAL(
+        grad_output_tensor.logical_shape() == input_tensor.logical_shape(),
+        "GELU_BW operation requires grad_output and input to have the same logical shape. grad_output logical shape: "
+        "{}, input logical shape: {}",
+        grad_output_tensor.logical_shape(),
+        input_tensor.logical_shape());
+
+    TT_FATAL(
+        grad_output_tensor.device() == input_tensor.device(),
+        "GELU_BW operation requires grad_output and input to be on the same device.");
+
     if (preallocated_input_grad.has_value()) {
         out_memory_config = preallocated_input_grad->memory_config();
         output_datatype = preallocated_input_grad->dtype();
     }
-
-    TT_FATAL(
-        is_supported_dtype(input_tensor.dtype()),
-        "GELU_BW operation requires a floating-point input (BFLOAT16, FLOAT32, BFLOAT8_B or BFLOAT4_B). Input data "
-        "type: {}",
-        static_cast<int>(input_tensor.dtype()));
-
-    validate_tensor_contract(grad_output, "grad_output");
 
     TT_FATAL(
         output_datatype == input_tensor.dtype(),
@@ -118,26 +124,15 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.memory_config().memory_layout()));
 
     TT_FATAL(
-        grad_output.dtype() == input_tensor.dtype(),
+        grad_output_tensor.dtype() == input_tensor.dtype(),
         "GELU_BW operation requires grad_output and input data types to match. grad_output data type: {}, input data "
         "type: {}",
-        static_cast<int>(grad_output.dtype()),
+        static_cast<int>(grad_output_tensor.dtype()),
         static_cast<int>(input_tensor.dtype()));
-
-    TT_FATAL(
-        grad_output.logical_shape() == input_tensor.logical_shape(),
-        "GELU_BW operation requires grad_output and input to have the same logical shape. grad_output logical shape: "
-        "{}, input logical shape: {}",
-        grad_output.logical_shape(),
-        input_tensor.logical_shape());
-
-    TT_FATAL(
-        grad_output.device() == input_tensor.device(),
-        "GELU_BW operation requires grad_output and input to be on the same device.");
 
     if (preallocated_input_grad.has_value()) {
         const auto& preallocated = preallocated_input_grad.value();
-        validate_tensor_contract(preallocated, "preallocated input grad");
+        validate_tensor_contract(preallocated, "Preallocated input grad");
 
         TT_FATAL(
             preallocated.logical_shape() == input_tensor.logical_shape(),
