@@ -43,11 +43,8 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    // A full chunk's reads go out behind a single barrier instead of one barrier per tile, which
-    // would expose the whole read latency on every tile. The host sizes the input CB at two batches
-    // of tiles_per_batch, so a multi-tile reserve is only contiguous while the chunk is exactly that
-    // batch: a row_chunk the host did not predict (the SFPU path shortens it) stays per-tile.
-    constexpr bool batch_reads = row_chunk == tiles_per_batch;
+    // Batch only when row_chunk matches the host's tiles_per_batch; SFPU shortens the chunk.
+    constexpr bool batch_reads = (row_chunk == tiles_per_batch);
 
     Noc noc;
     // dfb::in0 is the reduce input pipe: this kernel fills it, the compute kernel drains it.
@@ -82,8 +79,8 @@ void kernel_main() {
         uint32_t reset_curr_id = curr_id;
         uint32_t reset_w = w;
         uint32_t reset_col_start = col_start_tile_id;
-        // The tail chunk is shorter than a batch, so it keeps the per-tile path.
-        const bool batch_chunk = batch_reads && (chunk_end - i) == row_chunk;
+        // Tail is shorter than the CB batch, so the reserve would not be contiguous.
+        const bool batch_chunk = batch_reads && ((chunk_end - i) == row_chunk);
 
         for (uint32_t j = 0; j < Ht; ++j) {
             w = reset_w;

@@ -103,7 +103,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     spec.name = "reduce_single_core_hw";
 
     // ---- Dataflow buffers ----
-    // One core streams the whole tensor here, so only a tensor smaller than a batch turns it off.
+    // One core owns every tile, so a tensor smaller than a batch stays unbatched.
     const uint32_t reader_tiles_per_batch = reduce_reader_batch(num_tensor_tiles);
     const uint32_t num_input_tiles = reduce_reader_input_cb_tiles(reader_tiles_per_batch);
     spec.dataflow_buffers.push_back(DataflowBufferSpec{

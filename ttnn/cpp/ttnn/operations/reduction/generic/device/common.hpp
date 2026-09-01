@@ -33,21 +33,14 @@ enum class ReduceOpParallelizationStrategy { MULTI_CORE_H, MULTI_CORE_W, MULTI_C
 
 namespace ttnn::prim {
 
-// Tiles the universal reduce reader fetches per NoC barrier. One read in flight leaves the whole
-// read latency exposed on every tile, which costs 12-16% on a read-bound reduce; 8 per barrier is
-// 2-3% slower than 4, so 4 is the peak.
+// Tiles the universal reduce reader fetches per NoC barrier.
 inline constexpr uint32_t kReduceReaderTilesPerBatch = 4;
 
-// Reader batch for a kernel whose smallest core streams min_tiles_per_core tiles: a core with fewer
-// tiles than a batch never reaches the batched loop, so the whole program reads unbatched instead of
-// leaving that core on a path the batch size does not fit. 1 is unbatched.
 inline uint32_t reduce_reader_batch(uint32_t min_tiles_per_core) {
     return min_tiles_per_core < kReduceReaderTilesPerBatch ? 1u : kReduceReaderTilesPerBatch;
 }
 
-// Input CB depth for that batch: two batches, so the reader fills one while compute drains the other,
-// and a whole number of them, since the CB write pointer only wraps at fifo_limit and a reserved
-// batch straddling the end would overrun it.
+// Depth is a multiple of the batch so a reserve never straddles fifo_limit.
 inline uint32_t reduce_reader_input_cb_tiles(uint32_t tiles_per_batch) { return 2 * tiles_per_batch; }
 
 // Identity element for the given reduction math op: -inf for MAX, +inf for MIN, 0 otherwise.
@@ -169,14 +162,8 @@ tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_compute_ct_args
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     const ttnn::Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);
 
-// Returns true if the fused-negate H reduce path's CBs fit in available L1.
-// The reduce_h_neg compute kernel pushes ntiles tiles per inner-loop iteration;
-// to make the FIFO write pointer wrap cleanly across all push sizes, c_4 (acc)
-// and c_5 (ineg) are each sized at Ht * lcm(Wt_per_core_g1, Wt_per_core_g2)
-// tiles.  For wide reductions this can exceed L1, in which case callers must
-// fall back to external negation around a non-fused (regular) reduce.
-// `output_mem_config` is needed because the per-core tile count depends on whether the H factory
-// selects its width-sharded fast path, which keys off both sides of the reduce.
+// True when fused-negate CBs (acc and ineg, each Ht * lcm of the two per-core Wts) fit in L1.
+// Per-core Wt depends on the H factory's width-sharded path, so output_mem_config is required.
 bool h_reduce_negate_fits_in_l1(
     const ttnn::Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
@@ -207,10 +194,8 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
     tt::tt_metal::ReduceOpDim reduce_dim,
     tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE);
 
-// Rejects a sharded input or output whose buffer type is neither L1 nor DRAM.  The rest of the
-// sharded contract lives elsewhere: `build_reduce_output_tensor_spec` rejects borrowing a shard
-// grid across buffer types, and tt_metal's `validate_buffer_parameters` enforces DRAM's 1D,
-// row-y=0 bank grid.  `op_name` (e.g. "reduce", "Std/Var reduction") labels the error.
+// Sharded I/O must be L1 or DRAM; DRAM BLOCK_SHARDED is unsupported.
+// Grid borrowing and DRAM's 1D bank grid are checked elsewhere.
 void validate_reduce_sharded_buffer_types(
     const tt::tt_metal::MemoryConfig& input_mem_config,
     const tt::tt_metal::MemoryConfig& output_mem_config,

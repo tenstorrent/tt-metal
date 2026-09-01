@@ -27,9 +27,19 @@ REDUCE_OPS = {
 }
 
 
-def test_reduce_dram_block_sharded_construction_is_impossible(device, expect_error):
-    """DRAM's 1D, row-y=0 bank address space cannot hold BLOCK_SHARDED's 2D shard grid, so no
-    positive DRAM BLOCK_SHARDED case exists to test - for reduce or any other op."""
+_DRAM_BLOCK_TENSOR_SHAPE = (1, 1, 32, 128)
+
+
+def _dram_block_sharded_memory_config(buffer_type):
+    """A one-row block grid: DRAM's single bank row caps a legacy block layout at one row of shards,
+    so this degenerate shape is the only DRAM BLOCK_SHARDED spec that constructs at all."""
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    shard_spec = ttnn.ShardSpec(shard_grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type, shard_spec)
+
+
+def test_reduce_dram_block_sharded_2d_grid_is_unconstructible(device, expect_error):
+    """A 2D block grid needs shard cores off row 0, which DRAM has no banks for."""
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
     shard_spec = ttnn.ShardSpec(shard_grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.DRAM, shard_spec)
@@ -41,8 +51,36 @@ def test_reduce_dram_block_sharded_construction_is_impossible(device, expect_err
         )
 
 
+@pytest.mark.parametrize("op_name", ["sum", "std"])
+@pytest.mark.parametrize("dram_side", ["input", "output"])
+def test_reduce_dram_block_sharded_is_rejected(device, expect_error, op_name, dram_side):
+    """The one-row DRAM block spec does construct, so reduce has to reject it itself: every op that
+    moves a tensor (interleaved_to_sharded, reshard, to_memory_config) refuses the layout, and a
+    reduce that produced one would hand back a tensor nothing else accepts."""
+    ttnn_op, _ = REDUCE_OPS[op_name]
+    input_buffer = ttnn.BufferType.DRAM if dram_side == "input" else ttnn.BufferType.L1
+    output_buffer = ttnn.BufferType.L1 if dram_side == "input" else ttnn.BufferType.DRAM
+
+    torch_input_tensor = torch.randn(_DRAM_BLOCK_TENSOR_SHAPE, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_dram_block_sharded_memory_config(input_buffer),
+    )
+
+    with expect_error(RuntimeError, "DRAM block sharding is not supported"):
+        ttnn_op(
+            input_tensor,
+            dim=-1,
+            keepdim=True,
+            memory_config=_dram_block_sharded_memory_config(output_buffer),
+        )
+
+
 # Geometries satisfying each layout's shard constraints (e.g. WIDTH_SHARDED needs shard height ==
-# full physical height) on a single-row DRAM bank grid. BLOCK_SHARDED is unconstructible on DRAM.
+# full physical height) on a single-row DRAM bank grid. BLOCK_SHARDED is rejected on DRAM.
 _DRAM_SHARD_GEOMETRY = {
     ttnn.TensorMemoryLayout.HEIGHT_SHARDED: {
         "tensor_shape": (1, 1, 416, 32),
@@ -344,13 +382,16 @@ def test_reduce_h_width_sharded_l1_and_dram_use_distinct_programs(device):
     device.clear_program_cache()
     l1_input = ttnn.interleaved_to_sharded(interleaved_input, l1_config)
     ttnn.sum(l1_input, dim=-2, keepdim=True, memory_config=l1_config)
-    entries_after_l1 = device.num_program_cache_entries()
 
     dram_input = ttnn.interleaved_to_sharded(interleaved_input, dram_config)
-    ttnn.sum(dram_input, dim=-2, keepdim=True, memory_config=dram_config)
-    entries_after_dram = device.num_program_cache_entries()
+    entries_before_dram_reduce = device.num_program_cache_entries()
 
-    assert entries_after_dram > entries_after_l1, "expected a new program cache entry for the DRAM-sharded case"
+    ttnn.sum(dram_input, dim=-2, keepdim=True, memory_config=dram_config)
+    entries_after_dram_reduce = device.num_program_cache_entries()
+
+    assert (
+        entries_after_dram_reduce > entries_before_dram_reduce
+    ), "expected a new program cache entry for the DRAM-sharded reduce"
 
 
 def test_reduce_dram_sharded_requires_explicit_output_shard_spec_across_buffer_types(device, expect_error):

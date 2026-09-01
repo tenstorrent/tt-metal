@@ -39,9 +39,8 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     uint32_t Wt = tt::div_up(W, tile_width);
     uint32_t Ht = tt::div_up(H, tile_height);
 
-    // Height-sharded fast path: each core reduces its own L1-resident shard locally instead of
-    // gathering tiles over the NoC. Needs matching shard grid, height and orientation, plus shards
-    // that tile the tensor exactly; anything else falls through to the generic path.
+    // Fast path: each core reduces its L1 shard locally. Needs matching grid/height/orientation
+    // and shards that tile the tensor; otherwise the generic path.
     const uint32_t shard_Ht = a.shard_spec().has_value() ? a.shard_spec()->shape[0] / tile_height : 0;
     const bool use_height_sharding = !rm_path && a.memory_config().is_l1() && output.memory_config().is_l1() &&
                                      a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
@@ -188,8 +187,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     const uint32_t min_rows_per_core = num_rows_per_core_group_2 == 0
                                            ? num_rows_per_core_group_1
                                            : std::min(num_rows_per_core_group_1, num_rows_per_core_group_2);
-    // The fused-negate kernel only profits from batching once a core owns several rows: with one
-    // row per core it measures 18-32% slower batched, and 6-8% faster with two or more.
+    // Fused-negate with one row per core is slower batched.
     const bool batch_reads = !rm_path && !use_height_sharding && !(use_fpu_negate && min_rows_per_core < 2);
     const uint32_t reader_tiles_per_batch = batch_reads ? reduce_reader_batch(min_rows_per_core * Wt) : 1u;
 

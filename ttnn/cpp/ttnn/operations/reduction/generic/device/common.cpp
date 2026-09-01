@@ -196,9 +196,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
                 "Sharded memory layout {} requires either nd_shard_spec or shard_spec to be set "
                 "on the output memory config or the input tensor",
                 mem_layout);
-            // DRAM shard grids are bank ids (1D, row y=0) and L1 shard grids are worker-core
-            // (x,y) coordinates, so borrowing the input's grid across buffer types would pair a
-            // buffer type with a grid from the wrong coordinate space.
+            // L1 worker grids and DRAM bank ids are disjoint; do not borrow a grid across buffer types.
             TT_FATAL(
                 output_mem_config.buffer_type() == input_mem_config.buffer_type(),
                 "Sharded memory layout {} on an output with buffer type {} requires an explicit "
@@ -239,8 +237,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
             "ND_SHARDED memory layout requires nd_shard_spec to be set "
             "on the output memory config or the input tensor");
         if (!nd_shard_spec.has_value()) {
-            // Same cross-buffer-type hazard as the legacy-sharding fallback above: an ND shard
-            // grid borrowed from the input is only valid for an output of the same buffer type.
+            // Same as the legacy fallback: do not borrow an ND shard grid across buffer types.
             TT_FATAL(
                 output_mem_config.buffer_type() == input_mem_config.buffer_type(),
                 "ND_SHARDED memory layout on an output with buffer type {} requires an explicit "
@@ -270,6 +267,17 @@ void validate_reduce_sharded_buffer_types(
     const tt::tt_metal::MemoryConfig& input_mem_config,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::string_view op_name) {
+    const auto is_dram_block_sharded = [](const tt::tt_metal::MemoryConfig& mem_config) {
+        return mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED && mem_config.is_dram();
+    };
+    TT_FATAL(
+        !is_dram_block_sharded(input_mem_config) && !is_dram_block_sharded(output_mem_config),
+        "{}: DRAM block sharding is not supported, got input layout {} on {}, output layout {} on {}",
+        op_name,
+        input_mem_config.memory_layout(),
+        input_mem_config.buffer_type(),
+        output_mem_config.memory_layout(),
+        output_mem_config.buffer_type());
     TT_FATAL(
         !output_mem_config.is_sharded() || output_mem_config.is_l1() || output_mem_config.is_dram(),
         "{}: sharded output memory layout {} is only supported with L1 or DRAM buffers, got buffer type {}",
@@ -304,9 +312,7 @@ bool h_reduce_negate_fits_in_l1(
     const uint32_t Ht = H / tile_height;
 
     auto* device = input_tensor.device();
-    // Must mirror the H factory's gate exactly: the shard-based CB sizing below only describes
-    // the program it actually builds when the width-sharded fast path is selected, which needs
-    // WIDTH_SHARDED L1 on both sides.
+    // Mirror the H factory: shard-based CB sizing is only valid on the width-sharded L1 path.
     const bool use_width_sharding = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
                                     output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
                                     input_tensor.memory_config().is_l1() && output_mem_config.is_l1();

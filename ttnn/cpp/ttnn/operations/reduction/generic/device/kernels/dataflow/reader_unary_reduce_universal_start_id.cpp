@@ -26,10 +26,7 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in0);
     uint32_t tile_bytes = dfb_in0.get_tile_size();
 
-    // Issue a whole batch of reads before the barrier so a core keeps that many tiles in flight;
-    // barriering per tile exposes the full read latency on every one of them. The host sizes the
-    // input CB at two batches, so a reservation is always contiguous: every full batch leaves the
-    // write pointer batch-aligned, and a short batch can only be the last one.
+    // One barrier per batch; a short final batch uses the same path.
     const uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id;) {
         const uint32_t batch = std::min(tiles_per_batch, end_id - i);

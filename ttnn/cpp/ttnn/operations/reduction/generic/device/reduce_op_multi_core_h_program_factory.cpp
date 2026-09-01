@@ -59,8 +59,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
 
     tt_metal::IDevice* device = &a.mutable_device();
 
-    // This path runs on the input's shard grid and aliases the input and output CBs onto the
-    // tensors' own buffers; CBs live in L1, so both sides must be width-sharded there.
+    // Fast path aliases I/O CBs onto the tensors; CBs are L1-only.
     bool use_width_sharding = a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
                               output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
                               a.memory_config().is_l1() && output.memory_config().is_l1();
@@ -151,8 +150,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     const TensorParamName INPUT_TENSOR{"input"};
     const TensorParamName OUTPUT_TENSOR{"output"};
 
-    // The column reader issues a whole chunk of columns behind one barrier, so batching needs a core
-    // that owns a full chunk.
+    // The column reader batches a dest chunk; a core that owns fewer columns stays unbatched.
     const uint32_t min_cols_per_core = num_cols_per_core_group_2 == 0
                                            ? num_cols_per_core_group_1
                                            : std::min(num_cols_per_core_group_1, num_cols_per_core_group_2);
