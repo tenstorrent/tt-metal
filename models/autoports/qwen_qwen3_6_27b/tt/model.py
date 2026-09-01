@@ -31,9 +31,7 @@ def _streaming_prefill_chunk_size(max_chunk: int, page_size: int) -> int:
     quantum = math.lcm(int(page_size), LINEAR_PREFILL_CHUNK_SIZE)
     chunk = (int(max_chunk) // quantum) * quantum
     if chunk < quantum:
-        raise ValueError(
-            f"streaming prefill alignment quantum {quantum} exceeds maximum chunk {max_chunk}"
-        )
+        raise ValueError(f"streaming prefill alignment quantum {quantum} exceeds maximum chunk {max_chunk}")
     return chunk
 
 
@@ -262,8 +260,20 @@ class Qwen36Model:
     def reset_cache(self):
         for layer in self.layers:
             for name in ("key", "value", "conv", "recurrent"):
-                if name in layer.caches:
-                    ttnn.multiply(layer.caches[name], 0.0, output_tensor=layer.caches[name])
+                if name not in layer.caches:
+                    continue
+                cache = layer.caches[name]
+                if cache.layout == ttnn.ROW_MAJOR_LAYOUT:
+                    # An in-place elementwise write rejects a preallocated
+                    # row-major output, and the fused KDA conv path stores its
+                    # state as a row-major user-major window. Zero out of place
+                    # and copy back, which keeps the persistent allocation (and
+                    # therefore any captured trace address) intact.
+                    zeroed = ttnn.multiply(cache, 0.0)
+                    ttnn.copy(zeroed, cache)
+                    ttnn.deallocate(zeroed)
+                else:
+                    ttnn.multiply(cache, 0.0, output_tensor=cache)
         # reset_cache is a public request boundary: cache invalidation must be
         # complete, not merely queued, when the method returns.
         ttnn.synchronize_device(self.mesh_device)
@@ -500,9 +510,7 @@ class Qwen36Model:
         if logit_positions is None:
             raise ValueError("long streaming prefill returns terminal prompt logits only")
         sequence = token_ids.shape[-1]
-        stack_chunk_size = _streaming_prefill_chunk_size(
-            self.PREFILL_STACK_CHUNK_SIZE, self.page_size
-        )
+        stack_chunk_size = _streaming_prefill_chunk_size(self.PREFILL_STACK_CHUNK_SIZE, self.page_size)
         terminal_rows = [None] * self.batch
         for start in range(0, sequence, stack_chunk_size):
             end = min(start + stack_chunk_size, sequence)

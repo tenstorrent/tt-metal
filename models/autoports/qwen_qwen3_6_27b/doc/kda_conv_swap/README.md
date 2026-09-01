@@ -67,6 +67,41 @@ has devices 0-3, `b={384}` and CCL ops from this same command — so traced
 multichip profiling did work before. Recorded, not diagnosed. The trace-replay
 median above is the metric the autoport's own multichip evidence uses.
 
+### Full model, batch 32, prefill + decode — the shipped shape
+
+64 layers, real Qwen3.8-27B weights, TP4, all 32 rows carrying a real 128-token
+prompt. `tests/full_model_perf_batch.py`, which had to be written: every other
+full-model test on this port pins the batch (1 in five of them, 2 in
+`full_model_mixed_slots.py`), so the shape the model actually ships in had no
+full-model measurement at all. The A/B is one word in the precision config --
+`base_policy.linear_attention` from `linear_final` to `linear_kda_conv`.
+
+| | control | candidate | |
+|---|---:|---:|---|
+| TTFT warm, all 32 rows in one prefill | 106693.9 ms | 106720.2 ms | 1.000x |
+| TTFT cold | 106857.4 ms | 106906.4 ms | 1.000x |
+| Decode, ms/token | 237.87 | 140.40 | **1.694x** |
+| **TSU** | 4.20 t/s/u | **7.12 t/s/u** | **1.694x** |
+| Total throughput | 134.5 t/s | **227.9 t/s** | **1.694x** |
+
+Both arms: 128 output tokens over a captured token-out trace, batch 32.
+
+Two things this settles that the per-layer numbers could not:
+
+- **The decode win survives at full-model scale**: 1.694x measured against 1.75x
+  predicted from `48 * linear + 16 * full` per-layer times. The shortfall is the
+  non-layer terms (final norm, LM head, sampling, trace replay), which do not
+  shrink.
+- **Prefill is untouched**, exactly 1.000x. Multichip prefill at batch 32 falls
+  back to the composite path, and the conv was never prefill's bottleneck
+  anyway. A serving benchmark at this batch is prefill-bound, so end-to-end it
+  would show far less than 1.694x until the prefill slot-scaling is addressed --
+  see `doc/vllm_rerun_on_new_base`.
+
+For reference, the same test at batch 1 (`full_model_perf_warm.py`): warm TTFT
+3612.3 ms, TSU 19.96 t/s/u, and KDA changes neither, because its decode path
+needs `K*B` tile-aligned and batch 1 keeps the composite.
+
 ### Prefill, batch 1, sequence 128 (four 32-token chunks)
 
 | | control | candidate | delta |
