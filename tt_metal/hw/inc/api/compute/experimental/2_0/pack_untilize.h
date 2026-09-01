@@ -34,6 +34,7 @@ namespace experimental {
  * is (re)configured here. Blackhole only.
  *
  * | Template | block_ct_dim/full_ct_dim | Block width / full input width in tiles | uint32_t | | False |
+ * | Template | is_fp32_dest_acc_en      | Whether DEST is in fp32 accumulation mode | bool     | | False |
  * | Function | in                       | Input operand (tilized; format+geometry) | LLKOperand | | True |
  * | Function | out                      | Output operand (row-major destination)   | LLKOperand | | True |
  */
@@ -41,6 +42,7 @@ namespace experimental {
 template <
     std::uint32_t block_ct_dim = 8,
     std::uint32_t full_ct_dim = block_ct_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     DataFormat InFormat,
     TensorShape InShape,
     DataFormat OutFormat,
@@ -54,7 +56,7 @@ ALWI void pack_untilize_init(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<Ou
     // UNPACK + MATH: configure the CB -> DEST datacopy (input format drives the SrcA/Dest register format).
     UNPACK((llk_unpack_A_init<
             LLKOperand<InFormat, InShape>::descriptor,
-            DST_ACCUM_MODE,
+            is_fp32_dest_acc_en,
             BroadcastType::NONE,
             false /*acc_to_dest*/,
             EltwiseBinaryReuseDestType::NONE,
@@ -62,7 +64,7 @@ ALWI void pack_untilize_init(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<Ou
     MATH((llk_math_eltwise_unary_datacopy_init<
           LLKOperand<InFormat, InShape>::descriptor,
           DataCopyType::A2D,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           BroadcastType::NONE,
           false /*is_int_en*/,
           PackMode::Default>()));
@@ -70,10 +72,10 @@ ALWI void pack_untilize_init(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<Ou
     // PACK: (re)configure BH DEST remap, program the packer output formats, then the untilize MOP/strides
     // and the untilize dest-offset registers.
     MATH((llk_math_reconfig_remap(true /*remap_enable*/)));
-    PACK((llk_pack_reconfig_data_format<LLKOperand<OutFormat, OutShape>::descriptor, DST_ACCUM_MODE>()));
+    PACK((llk_pack_reconfig_data_format<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en>()));
     PACK((llk_pack_untilize_init<
           LLKOperand<OutFormat, OutShape>::descriptor,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           block_ct_dim,
           full_ct_dim>()));
     PACK((_llk_init_packer_dest_offset_registers_<DST_SYNC_MODE>()));
@@ -89,6 +91,7 @@ ALWI void pack_untilize_init(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<Ou
  * the shipping untilize factories' one-tile CB page.
  *
  * | Template | block_ct_dim/full_ct_dim | Block width / full input width in tiles | uint32_t | | False |
+ * | Template | is_fp32_dest_acc_en | Whether DEST is in fp32 accumulation mode | bool | | False |
  * | Function | in            | Input operand (tilized; unpack base)          | LLKOperand | | True |
  * | Function | block_rt_dim  | Height of the block in tiles (rows to pack)   | uint32_t   | >= 1 | True |
  * | Function | out           | Output operand (first row-major tile address) | LLKOperand | | True |
@@ -98,6 +101,7 @@ ALWI void pack_untilize_init(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<Ou
 template <
     std::uint32_t block_ct_dim = 8,
     std::uint32_t full_ct_dim = block_ct_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     DataFormat InFormat,
     TensorShape InShape,
     DataFormat OutFormat,
@@ -121,7 +125,7 @@ ALWI void pack_untilize_block(
         for (std::uint32_t c = 0; c < block_ct_dim; ++c) {
             UNPACK((llk_unpack_A<
                     LLKOperand<InFormat, InShape>::descriptor,
-                    DST_ACCUM_MODE,
+                    is_fp32_dest_acc_en,
                     BroadcastType::NONE,
                     false /*acc_to_dest*/,
                     EltwiseBinaryReuseDestType::NONE,
@@ -129,15 +133,18 @@ ALWI void pack_untilize_block(
             MATH((llk_math_eltwise_unary_datacopy<
                   LLKOperand<InFormat, InShape>::descriptor,
                   DataCopyType::A2D,
-                  DST_ACCUM_MODE,
+                  is_fp32_dest_acc_en,
                   BroadcastType::NONE,
                   UnpackToDestEn>(c)));
         }
-        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+        MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
         PACK((llk_packer_wait_for_math_done()));
-        PACK((llk_pack_untilize<LLKOperand<OutFormat, OutShape>::descriptor, DST_ACCUM_MODE, block_ct_dim, full_ct_dim>(
-            1 /*block_rt_dim*/, out.l1_address, block_c_index)));
-        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+        PACK((llk_pack_untilize<
+              LLKOperand<OutFormat, OutShape>::descriptor,
+              is_fp32_dest_acc_en,
+              block_ct_dim,
+              full_ct_dim>(1 /*block_rt_dim*/, out.l1_address, block_c_index)));
+        PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
     }
 }
 
@@ -156,6 +163,7 @@ ALWI void pack_untilize_block(
  * | Template   | narrow_row    | Whether the provided input is narrow              | bool       | true/false                | False                 |
  * | Template   | row_num_datums| Number of datums per row                          | uint32_t   | >= 1                      | False                 |
  * | Template   | dense         | Packs two 2-face tiles in a single 4-face region  | bool       | true/false                | False (default false) |
+ * | Template   | is_fp32_dest_acc_en | Whether DEST is in fp32 accumulation mode   | bool       |                           | False                 |
  * | Function   | out           | Output operand (row-major destination; format+geometry) | LLKOperand |                     | True                  |
  */
 // clang-format on
@@ -166,6 +174,7 @@ template <
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
     bool dense = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     DataFormat OutFormat,
     TensorShape OutShape>
 ALWI void pack_untilize_dest_init(LLKOperand<OutFormat, OutShape> /*out*/) {
@@ -175,10 +184,10 @@ ALWI void pack_untilize_dest_init(LLKOperand<OutFormat, OutShape> /*out*/) {
         block_ct_dim > 0 && full_ct_dim % block_ct_dim == 0,
         "pack_untilize_dest_init: full_ct_dim must be a positive multiple of block_ct_dim.");
     MATH((llk_math_reconfig_remap(true /*remap_enable*/)));
-    PACK((llk_pack_reconfig_data_format<LLKOperand<OutFormat, OutShape>::descriptor, DST_ACCUM_MODE>()));
+    PACK((llk_pack_reconfig_data_format<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en>()));
     PACK((llk_pack_untilize_init<
           LLKOperand<OutFormat, OutShape>::descriptor,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           block_ct_dim,
           full_ct_dim,
           narrow_row,
@@ -247,14 +256,16 @@ ALWI void pack_untilize_dest(
 /**
  * Id-free pack-untilize uninit. Restores the packer Z stride (via the output descriptor's register format)
  * and resets the packer to Default mode so a subsequent op can reprogram it. Blackhole only.
+ *
+ * | Template | is_fp32_dest_acc_en | Whether DEST is in fp32 accumulation mode | bool | | False |
  */
 // clang-format on
-template <DataFormat OutFormat, TensorShape OutShape>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat OutFormat, TensorShape OutShape>
 ALWI void pack_untilize_uninit(LLKOperand<OutFormat, OutShape> /*out*/) {
-    PACK((llk_pack_untilize_uninit<LLKOperand<OutFormat, OutShape>::descriptor, DST_ACCUM_MODE>()));
+    PACK((llk_pack_untilize_uninit<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en>()));
     PACK((_llk_init_packer_dest_offset_registers_<DST_SYNC_MODE>()));
-    PACK((llk_pack_reconfig_data_format<LLKOperand<OutFormat, OutShape>::descriptor, DST_ACCUM_MODE>()));
-    PACK((llk_pack_init<LLKOperand<OutFormat, OutShape>::descriptor, DST_ACCUM_MODE, PackMode::Default>()));
+    PACK((llk_pack_reconfig_data_format<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en>()));
+    PACK((llk_pack_init<LLKOperand<OutFormat, OutShape>::descriptor, is_fp32_dest_acc_en, PackMode::Default>()));
 }
 
 #endif  // ARCH_BLACKHOLE

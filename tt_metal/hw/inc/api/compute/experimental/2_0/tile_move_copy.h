@@ -36,13 +36,14 @@ namespace experimental {
  *
  * Sub-32-row (partial-height) block-float tiles are not supported (compile-time rejected).
  *
+ * | Template | is_fp32_dest_acc_en         | fp32 dest-accumulate mode                                    | bool        |                                                                     | False |
  * | Template | Format                      | Buffer L1 data format (deduced from the LLKOperand argument) | DataFormat  |                                                                     | True  |
  * | Template | Shape                       | Tile geometry (deduced from the LLKOperand argument)         | TensorShape |                                                                     | True  |
  * | Function | transpose                   | Flag to perform transpose on SrcA                           | uint32_t    | Any positive value will indicate transpose is set                   | False |
  * | Function | transpose_within_16x16_face | Flag to perform transpose within 16x16 face                 | uint32_t    | Any positive value will indicate transpose within 16x16 face is set | False |
  */
 // clang-format on
-template <DataFormat Format, TensorShape Shape>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void copy_init(
     LLKOperand<Format, Shape> /*src*/, std::uint32_t transpose = 0, std::uint32_t transpose_within_16x16_face = 0) {
     static_assert(
@@ -54,7 +55,7 @@ ALWI void copy_init(
         "(they produce garbage even at tile 0); use a full 32-row tile.");
     UNPACK((llk_unpack_A_init<
             LLKOperand<Format, Shape>::descriptor,
-            DST_ACCUM_MODE,
+            is_fp32_dest_acc_en,
             BroadcastType::NONE,
             false,
             EltwiseBinaryReuseDestType::NONE,
@@ -62,14 +63,14 @@ ALWI void copy_init(
     MATH((llk_math_eltwise_unary_datacopy_init<
           LLKOperand<Format, Shape>::descriptor,
           DataCopyType::A2D,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           BroadcastType::NONE>()));
     // Src zero-substitution flag, chosen by the derived register format (id-free equivalent of legacy
     // copy_init's ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))): preserve
     // bf16 -0.0 / 16b-int residuals, but flush fp8 (e4m3/e5m2) whose zero widens to a nonzero SrcA residual
     // and must read back as 0. MATH-only config; records no format-reconfig diff. The fn masks to 0x1F.
     MATH((ckernel::math::_configure_copy_zero_flag_state_(
-        static_cast<std::uint32_t>(ckernel::infer_unpack_dst_format(Format, DST_ACCUM_MODE)))));
+        static_cast<std::uint32_t>(ckernel::infer_unpack_dst_format(Format, is_fp32_dest_acc_en)))));
 }
 
 // clang-format off
@@ -79,13 +80,14 @@ ALWI void copy_init(
  * Requires copy_init to have run, and the DST register to be acquired (tile_regs_acquire) before this call.
  * Sub-32-row (partial-height) block-float tiles are not supported (compile-time rejected).
  *
+ * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                          | bool        |         | False |
  * | Template | Format         | Buffer L1 data format (deduced from LLKOperand)   | DataFormat  |         | True |
  * | Template | Shape          | Tile geometry (deduced from LLKOperand)           | TensorShape |         | True |
  * | Function | src            | The source L1 operand (format+shape+address)      | LLKOperand  |         | True |
  * | Function | dst_tile_index | Tile index in the DST register                    | uint32_t    | 0 to 15 | True |
  */
 // clang-format on
-template <DataFormat Format, TensorShape Shape>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_index) {
     static_assert(
         is_legal_tile_shape(Shape),
@@ -96,7 +98,7 @@ ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_index)
         "(they produce garbage even at tile 0); use a full 32-row tile.");
     UNPACK((llk_unpack_A<
             LLKOperand<Format, Shape>::descriptor,
-            DST_ACCUM_MODE,
+            is_fp32_dest_acc_en,
             BroadcastType::NONE,
             false,
             EltwiseBinaryReuseDestType::NONE,
@@ -104,7 +106,7 @@ ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_index)
     MATH((llk_math_eltwise_unary_datacopy<
           LLKOperand<Format, Shape>::descriptor,
           DataCopyType::A2D,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           BroadcastType::NONE,
           UnpackToDestEn>(dst_tile_index)));
 }
@@ -119,6 +121,7 @@ ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_index)
  * Requires the same init as copy_tile (copy_init). Sub-32-row (partial-height) block-float tiles are not
  * supported (compile-time rejected).
  *
+ * | Template | is_fp32_dest_acc_en  | fp32 dest-accumulate mode                                    | bool        |         | False |
  * | Template | Format               | Buffer L1 data format (deduced from LLKOperand)             | DataFormat  |         | True |
  * | Template | Shape                | Tile geometry (deduced from LLKOperand)                    | TensorShape |         | True |
  * | Function | src                  | The source L1 operand (format+shape+base address)          | LLKOperand  |         | True |
@@ -127,7 +130,7 @@ ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_index)
  * | Function | ntiles               | Number of consecutive tiles to copy                         | uint32_t    | start_dst_tile_index + ntiles <= 16 | True |
  */
 // clang-format on
-template <DataFormat Format, TensorShape Shape>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void copy_block(
     LLKOperand<Format, Shape> src,
     std::uint32_t start_in_tile_index,
@@ -141,7 +144,7 @@ ALWI void copy_block(
         "copy: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath "
         "(they produce garbage even at tile 0); use a full 32-row tile.");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        copy_tile(
+        copy_tile<is_fp32_dest_acc_en>(
             LLKOperand<Format, Shape>(detail::tile_address(src, start_in_tile_index + i)), start_dst_tile_index + i);
     }
 }

@@ -41,6 +41,7 @@ namespace experimental {
  *
  * | Param Type | Name   | Description                                                   | Type        | Valid Range | Required |
  * |------------|--------|----------------------------------------------------------------|-------------|-------------|----------|
+ * | Template   | is_fp32_dest_acc_en | Whether DEST is in fp32 accumulation mode         | bool        | N/A         | False    |
  * | Template   | Format | Buffer L1 data format (deduced from the LLKOperand argument)   | DataFormat  | N/A         | True     |
  * | Template   | Shape  | Tile geometry (deduced from the LLKOperand argument)           | TensorShape | N/A         | True     |
  * | Function   | src    | The source L1 operand (format + shape; address unused here)   | LLKOperand  | N/A         | True     |
@@ -49,19 +50,19 @@ namespace experimental {
 namespace detail {
 // True iff transpose takes the unpack-to-dest (A2D) path: the operand's REGISTER format (after
 // infer_unpack_dst_format) is 32-bit. Shared by transpose_init / transpose_tile.
-template <DataFormat Format>
+template <DataFormat Format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 constexpr bool transpose_unpack_to_dest() {
-    return is_32bit_format(ckernel::infer_unpack_dst_format(Format, DST_ACCUM_MODE));
+    return is_32bit_format(ckernel::infer_unpack_dst_format(Format, is_fp32_dest_acc_en));
 }
 }  // namespace detail
 
-template <DataFormat Format, TensorShape Shape>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void transpose_init(LLKOperand<Format, Shape> /*src*/) {
     static_assert(
         is_legal_tile_shape(Shape),
         "transpose_init: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
 
-    constexpr bool enable_unpack_to_dest = detail::transpose_unpack_to_dest<Format>();
+    constexpr bool enable_unpack_to_dest = detail::transpose_unpack_to_dest<Format, is_fp32_dest_acc_en>();
     // Low-nibble compare intentionally matches both signed Int8 (14) and unsigned UInt8 (30 -> low nibble
     // 0xE): both 8-bit integer formats need the int-FPU (ELWADD) A2D reconstruct path.
     constexpr bool is_8bit_int =
@@ -70,7 +71,7 @@ ALWI void transpose_init(LLKOperand<Format, Shape> /*src*/) {
     if constexpr (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A_init<
                 LLKOperand<Format, Shape>::descriptor,
-                DST_ACCUM_MODE,
+                is_fp32_dest_acc_en,
                 BroadcastType::NONE,
                 false /*acc_to_dest*/,
                 EltwiseBinaryReuseDestType::NONE,
@@ -78,7 +79,7 @@ ALWI void transpose_init(LLKOperand<Format, Shape> /*src*/) {
         MATH((llk_math_eltwise_unary_datacopy_init<
               LLKOperand<Format, Shape>::descriptor,
               DataCopyType::A2D,
-              DST_ACCUM_MODE,
+              is_fp32_dest_acc_en,
               BroadcastType::NONE>()));
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else {
@@ -86,14 +87,14 @@ ALWI void transpose_init(LLKOperand<Format, Shape> /*src*/) {
         // datacopy init's is_int_fpu_en NTTP differs (true for 8-bit integer, false for default).
         UNPACK((llk_unpack_A_init<
                 LLKOperand<Format, Shape>::descriptor,
-                DST_ACCUM_MODE,
+                is_fp32_dest_acc_en,
                 BroadcastType::NONE,
                 true /*acc_to_dest*/,
                 EltwiseBinaryReuseDestType::NONE>(true /*transpose_of_faces*/, true /*within_face_16x16_transpose*/)));
         MATH((llk_math_eltwise_unary_datacopy_init<
               LLKOperand<Format, Shape>::descriptor,
               DataCopyType::A2D,
-              DST_ACCUM_MODE,
+              is_fp32_dest_acc_en,
               BroadcastType::NONE,
               is_8bit_int /*is_int_fpu_en*/>()));
     }
@@ -107,6 +108,7 @@ ALWI void transpose_init(LLKOperand<Format, Shape> /*src*/) {
  *
  * | Param Type | Name   | Description                                                  | Type        | Valid Range                                    | Required |
  * |------------|--------|---------------------------------------------------------------|-------------|-------------------------------------------------|----------|
+ * | Template   | is_fp32_dest_acc_en | Whether DEST is in fp32 accumulation mode        | bool        | N/A                                             | False    |
  * | Template   | Format | Buffer L1 data format (deduced from the LLKOperand argument)  | DataFormat  | N/A                                             | True     |
  * | Template   | Shape  | Tile geometry (deduced from the LLKOperand argument)          | TensorShape | N/A                                             | True     |
  * | Function   | src    | The source L1 operand (format + shape + base address)         | LLKOperand  | N/A                                             | True     |
@@ -114,19 +116,19 @@ ALWI void transpose_init(LLKOperand<Format, Shape> /*src*/) {
  * | Function   | idst   | Index of the tile in DST REG for the result B                 | uint32_t    | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-template <DataFormat Format, TensorShape Shape>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void transpose_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std::uint32_t idst) {
     static_assert(
         is_legal_tile_shape(Shape),
         "transpose_tile: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
 
-    constexpr bool enable_unpack_to_dest = detail::transpose_unpack_to_dest<Format>();
+    constexpr bool enable_unpack_to_dest = detail::transpose_unpack_to_dest<Format, is_fp32_dest_acc_en>();
     const std::uint32_t addr = detail::tile_address(src, itile);
 
     if constexpr (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A<
                 LLKOperand<Format, Shape>::descriptor,
-                DST_ACCUM_MODE,
+                is_fp32_dest_acc_en,
                 BroadcastType::NONE,
                 false /*acc_to_dest*/,
                 EltwiseBinaryReuseDestType::NONE,
@@ -135,20 +137,20 @@ ALWI void transpose_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std
         MATH((llk_math_eltwise_unary_datacopy<
               LLKOperand<Format, Shape>::descriptor,
               DataCopyType::A2D,
-              DST_ACCUM_MODE,
+              is_fp32_dest_acc_en,
               BroadcastType::NONE,
               UnpackToDestEn>(idst)));
         MATH((llk_math_transpose_dest<false, true>(idst)));
     } else {
         UNPACK((llk_unpack_A<
                 LLKOperand<Format, Shape>::descriptor,
-                DST_ACCUM_MODE,
+                is_fp32_dest_acc_en,
                 BroadcastType::NONE,
                 false /*acc_to_dest*/>(addr)));
         MATH((llk_math_eltwise_unary_datacopy<
               LLKOperand<Format, Shape>::descriptor,
               DataCopyType::A2D,
-              DST_ACCUM_MODE,
+              is_fp32_dest_acc_en,
               BroadcastType::NONE>(idst)));
     }
 }
@@ -163,6 +165,7 @@ ALWI void transpose_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std
  *
  * | Param Type | Name        | Description                                                      | Type        | Valid Range                                    | Required |
  * |------------|-------------|-------------------------------------------------------------------|-------------|-------------------------------------------------|----------|
+ * | Template   | is_fp32_dest_acc_en | Whether DEST is in fp32 accumulation mode                 | bool        | N/A                                             | False    |
  * | Template   | Format      | Buffer L1 data format (deduced from the LLKOperand argument)      | DataFormat  | N/A                                             | True     |
  * | Template   | Shape       | Tile geometry (deduced from the LLKOperand argument)              | TensorShape | N/A                                             | True     |
  * | Function   | src         | The source L1 operand (format + shape + base address)             | LLKOperand  | N/A                                             | True     |
@@ -171,14 +174,14 @@ ALWI void transpose_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std
  * | Function   | ntiles      | The number of consecutive tiles to transpose                      | uint32_t    | start_idst + ntiles <= acquired DST REG size   | True     |
  */
 // clang-format on
-template <DataFormat Format, TensorShape Shape>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void transpose_block(
     LLKOperand<Format, Shape> src, std::uint32_t start_itile, std::uint32_t start_idst, std::uint32_t ntiles) {
     static_assert(
         is_legal_tile_shape(Shape),
         "transpose_block: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        transpose_tile(src, start_itile + i, start_idst + i);
+        transpose_tile<is_fp32_dest_acc_en>(src, start_itile + i, start_idst + i);
     }
 }
 

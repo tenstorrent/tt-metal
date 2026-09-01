@@ -42,17 +42,18 @@ namespace experimental {
 namespace detail {
 // Whether the unary broadcast takes the unpack-to-dest path, decided from the DERIVED REGISTER format
 // (fp32-dest-acc rebias aware), not the raw L1 Format.
-template <DataFormat Format>
+template <DataFormat Format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 constexpr bool unary_bcast_unpack_to_dest() {
-    return is_32bit_format(ckernel::infer_unpack_dst_format(Format, DST_ACCUM_MODE));
+    return is_32bit_format(ckernel::infer_unpack_dst_format(Format, is_fp32_dest_acc_en));
 }
 
 // A2D/B2D data-copy direction for the unary broadcast, folded to a constant. Shared by unary_bcast_init /
 // unary_bcast so the policy is spelled once.
-template <BroadcastType bcast_type, DataFormat Format>
+template <BroadcastType bcast_type, DataFormat Format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 constexpr DataCopyType unary_bcast_dcopy() {
-    return (unary_bcast_unpack_to_dest<Format>() || bcast_type == BroadcastType::NONE) ? DataCopyType::A2D
-                                                                                       : DataCopyType::B2D;
+    return (unary_bcast_unpack_to_dest<Format, is_fp32_dest_acc_en>() || bcast_type == BroadcastType::NONE)
+               ? DataCopyType::A2D
+               : DataCopyType::B2D;
 }
 }  // namespace detail
 
@@ -64,22 +65,23 @@ constexpr DataCopyType unary_bcast_dcopy() {
  * | Param Type | Name      | Description                                                  | Type          | Valid Range           | Required |
  * |------------|-----------|--------------------------------------------------------------|---------------|-----------------------|----------|
  * | Template   | bcast_type| Broadcast mode (NONE pass-through / ROW / COL / SCALAR)       | BroadcastType | N/A                   | True     |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                            | bool          | N/A                   | False    |
  * | Template   | Format    | Buffer L1 data format (deduced from the LLKOperand argument)  | DataFormat    | N/A                   | True     |
  * | Template   | Shape     | Tile geometry (deduced from the LLKOperand argument)         | TensorShape   | N/A                   | True     |
  * | Function   | src       | The source L1 operand (format + shape; address unused here)  | LLKOperand    | N/A                   | True     |
  */
 // clang-format on
-template <BroadcastType bcast_type, DataFormat Format, TensorShape Shape>
+template <BroadcastType bcast_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void unary_bcast_init(LLKOperand<Format, Shape> /*src*/) {
     static_assert(
         is_legal_tile_shape(Shape),
         "unary_bcast_init: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
     // 32-bit register formats use the unpack-to-dest A2D path (SrcB is only 19 bits wide); folds to a constant.
-    constexpr bool enable_unpack_to_dest = detail::unary_bcast_unpack_to_dest<Format>();
-    constexpr DataCopyType dcopy = detail::unary_bcast_dcopy<bcast_type, Format>();
+    constexpr bool enable_unpack_to_dest = detail::unary_bcast_unpack_to_dest<Format, is_fp32_dest_acc_en>();
+    constexpr DataCopyType dcopy = detail::unary_bcast_dcopy<bcast_type, Format, is_fp32_dest_acc_en>();
     UNPACK((llk_unpack_A_init<
             LLKOperand<Format, Shape>::descriptor,
-            DST_ACCUM_MODE,
+            is_fp32_dest_acc_en,
             bcast_type,
             false /*acc_to_dest*/,
             EltwiseBinaryReuseDestType::NONE,
@@ -87,7 +89,7 @@ ALWI void unary_bcast_init(LLKOperand<Format, Shape> /*src*/) {
     MATH((llk_math_eltwise_unary_datacopy_init<
           LLKOperand<Format, Shape>::descriptor,
           dcopy,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           bcast_type>()));
 }
 
@@ -100,22 +102,23 @@ ALWI void unary_bcast_init(LLKOperand<Format, Shape> /*src*/) {
  * | Param Type | Name           | Description                                                 | Type          | Valid Range | Required |
  * |------------|----------------|-------------------------------------------------------------|---------------|-------------|----------|
  * | Template   | bcast_type     | Broadcast mode (NONE pass-through / ROW / COL / SCALAR)      | BroadcastType | N/A         | True     |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                               | bool          | N/A         | False    |
  * | Template   | Format         | Buffer L1 data format (deduced from the LLKOperand argument) | DataFormat    | N/A         | True     |
  * | Template   | Shape          | Tile geometry (deduced from the LLKOperand argument)        | TensorShape   | N/A         | True     |
  * | Function   | src            | The source L1 operand (format + shape + address)            | LLKOperand    | N/A         | True     |
  * | Function   | dst_tile_index | Tile index in the DST register for the result               | uint32_t      | 0 to 15     | True     |
  */
 // clang-format on
-template <BroadcastType bcast_type, DataFormat Format, TensorShape Shape>
+template <BroadcastType bcast_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void unary_bcast(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_index) {
     static_assert(
         is_legal_tile_shape(Shape),
         "unary_bcast: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
-    constexpr bool enable_unpack_to_dest = detail::unary_bcast_unpack_to_dest<Format>();
-    constexpr DataCopyType dcopy = detail::unary_bcast_dcopy<bcast_type, Format>();
+    constexpr bool enable_unpack_to_dest = detail::unary_bcast_unpack_to_dest<Format, is_fp32_dest_acc_en>();
+    constexpr DataCopyType dcopy = detail::unary_bcast_dcopy<bcast_type, Format, is_fp32_dest_acc_en>();
     UNPACK((llk_unpack_A<
             LLKOperand<Format, Shape>::descriptor,
-            DST_ACCUM_MODE,
+            is_fp32_dest_acc_en,
             bcast_type,
             false /*acc_to_dest*/,
             EltwiseBinaryReuseDestType::NONE,
@@ -123,7 +126,7 @@ ALWI void unary_bcast(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_inde
     MATH((llk_math_eltwise_unary_datacopy<
           LLKOperand<Format, Shape>::descriptor,
           dcopy,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           bcast_type,
           enable_unpack_to_dest>(dst_tile_index)));
 }
@@ -143,7 +146,7 @@ ALWI void unary_bcast(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_inde
 // clang-format on
 template <BroadcastType bcast_type, DataFormat Format, TensorShape Shape>
 ALWI void unary_bcast_uninit(LLKOperand<Format, Shape> /*src*/) {
-    constexpr bool enable_unpack_to_dest = detail::unary_bcast_unpack_to_dest<Format>();
+    constexpr bool enable_unpack_to_dest = detail::unary_bcast_unpack_to_dest<Format, DST_ACCUM_MODE>();
     UNPACK((llk_unpack_A_uninit<bcast_type>()));
     MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, enable_unpack_to_dest>()));
 }
@@ -199,6 +202,7 @@ ALWI void bcast_init(LLKOperand<AFormat, AShape> /*a*/) {
  * |------------|-----------------|--------------------------------------------------------|-------------------|-------------|----------|
  * | Template   | tBcastOp        | The binary op (ELWADD / ELWSUB / ELWMUL)               | EltwiseBinaryType | N/A         | True     |
  * | Template   | tBcastDim       | The broadcast dim (ROW / COL / SCALAR)                 | BroadcastType     | N/A         | True     |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                          | bool              | N/A         | False    |
  * | Template   | AFormat/AShape  | Operand A L1 format + geometry (deduced)               | DataFormat/TensorShape | N/A    | True     |
  * | Template   | BFormat/BShape  | Operand B L1 format + geometry (deduced)               | DataFormat/TensorShape | N/A    | True     |
  * | Function   | a / b           | Input operands (A -> SrcA, broadcast B -> SrcB)        | LLKOperand        | N/A         | True     |
@@ -210,6 +214,7 @@ ALWI void bcast_init(LLKOperand<AFormat, AShape> /*a*/) {
 template <
     EltwiseBinaryType tBcastOp,
     BroadcastType tBcastDim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     DataFormat AFormat,
     TensorShape AShape,
     DataFormat BFormat,
@@ -231,7 +236,7 @@ ALWI void any_tiles_bcast(
           LLKOperand<AFormat, AShape>::descriptor,
           tBcastOp,
           tBcastDim,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           (tBcastOp == EltwiseBinaryType::ELWMUL) ? MATH_FIDELITY : MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(idst, true /*clear_fp32_dst_acc*/)));
     UNPACK((llk_unpack_AB<LLKOperand<AFormat, AShape>::descriptor, tBcastDim, static_cast<std::uint8_t>(BFormat)>(
@@ -246,12 +251,19 @@ ALWI void any_tiles_bcast(
  * | Param Type | Name           | Description                              | Type          | Valid Range | Required |
  * |------------|----------------|------------------------------------------|---------------|-------------|----------|
  * | Template   | tBcastDim      | The broadcast dim (ROW / COL / SCALAR)   | BroadcastType | N/A         | True     |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode           | bool          | N/A         | False    |
  * | Function   | a / b          | Input operands                           | LLKOperand    | N/A         | True     |
  * | Function   | itile0 / itile1| Tile indices within A / B                | uint32_t      | N/A         | True     |
  * | Function   | idst           | DST register index for the result        | uint32_t      | 0 to 15     | True     |
  */
 // clang-format on
-template <BroadcastType tBcastDim, DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
+template <
+    BroadcastType tBcastDim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat AFormat,
+    TensorShape AShape,
+    DataFormat BFormat,
+    TensorShape BShape>
 ALWI void add_tiles_bcast(
     LLKOperand<AFormat, AShape> a,
     LLKOperand<BFormat, BShape> b,
@@ -259,7 +271,8 @@ ALWI void add_tiles_bcast(
     std::uint32_t itile1,
     std::uint32_t idst,
     std::uint32_t bcast_row_idx = 0) {
-    any_tiles_bcast<EltwiseBinaryType::ELWADD, tBcastDim>(a, b, itile0, itile1, idst, bcast_row_idx);
+    any_tiles_bcast<EltwiseBinaryType::ELWADD, tBcastDim, is_fp32_dest_acc_en>(
+        a, b, itile0, itile1, idst, bcast_row_idx);
 }
 
 // clang-format off
@@ -270,12 +283,19 @@ ALWI void add_tiles_bcast(
  * | Param Type | Name           | Description                              | Type          | Valid Range | Required |
  * |------------|----------------|------------------------------------------|---------------|-------------|----------|
  * | Template   | tBcastDim      | The broadcast dim (ROW / COL / SCALAR)   | BroadcastType | N/A         | True     |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode           | bool          | N/A         | False    |
  * | Function   | a / b          | Input operands                           | LLKOperand    | N/A         | True     |
  * | Function   | itile0 / itile1| Tile indices within A / B                | uint32_t      | N/A         | True     |
  * | Function   | idst           | DST register index for the result        | uint32_t      | 0 to 15     | True     |
  */
 // clang-format on
-template <BroadcastType tBcastDim, DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
+template <
+    BroadcastType tBcastDim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat AFormat,
+    TensorShape AShape,
+    DataFormat BFormat,
+    TensorShape BShape>
 ALWI void sub_tiles_bcast(
     LLKOperand<AFormat, AShape> a,
     LLKOperand<BFormat, BShape> b,
@@ -283,7 +303,8 @@ ALWI void sub_tiles_bcast(
     std::uint32_t itile1,
     std::uint32_t idst,
     std::uint32_t bcast_row_idx = 0) {
-    any_tiles_bcast<EltwiseBinaryType::ELWSUB, tBcastDim>(a, b, itile0, itile1, idst, bcast_row_idx);
+    any_tiles_bcast<EltwiseBinaryType::ELWSUB, tBcastDim, is_fp32_dest_acc_en>(
+        a, b, itile0, itile1, idst, bcast_row_idx);
 }
 
 // clang-format off
@@ -294,12 +315,19 @@ ALWI void sub_tiles_bcast(
  * | Param Type | Name           | Description                              | Type          | Valid Range | Required |
  * |------------|----------------|------------------------------------------|---------------|-------------|----------|
  * | Template   | tBcastDim      | The broadcast dim (ROW / COL / SCALAR)   | BroadcastType | N/A         | True     |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode           | bool          | N/A         | False    |
  * | Function   | a / b          | Input operands                           | LLKOperand    | N/A         | True     |
  * | Function   | itile0 / itile1| Tile indices within A / B                | uint32_t      | N/A         | True     |
  * | Function   | idst           | DST register index for the result        | uint32_t      | 0 to 15     | True     |
  */
 // clang-format on
-template <BroadcastType tBcastDim, DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
+template <
+    BroadcastType tBcastDim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat AFormat,
+    TensorShape AShape,
+    DataFormat BFormat,
+    TensorShape BShape>
 ALWI void mul_tiles_bcast(
     LLKOperand<AFormat, AShape> a,
     LLKOperand<BFormat, BShape> b,
@@ -307,7 +335,8 @@ ALWI void mul_tiles_bcast(
     std::uint32_t itile1,
     std::uint32_t idst,
     std::uint32_t bcast_row_idx = 0) {
-    any_tiles_bcast<EltwiseBinaryType::ELWMUL, tBcastDim>(a, b, itile0, itile1, idst, bcast_row_idx);
+    any_tiles_bcast<EltwiseBinaryType::ELWMUL, tBcastDim, is_fp32_dest_acc_en>(
+        a, b, itile0, itile1, idst, bcast_row_idx);
 }
 
 #endif  // ARCH_BLACKHOLE

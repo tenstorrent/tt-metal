@@ -112,12 +112,18 @@ ALWI void mul_init(LLKOperand<AFormat, AShape> a, bool acc_to_dest = true) {
  * Element-wise C = A [op] B for one tile pair, writing DST[idst]. Pair with the matching *_init. DST must
  * be acquired. itile0/itile1 index within A/B; idst indexes DST. Geometry (for MATH) comes from operand A.
  *
+ * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode           | bool       | | False |
  * | Function | a / b           | Input operands                      | LLKOperand | | True |
  * | Function | itile0 / itile1 | Tile indices within A / B           | uint32_t   | | True |
  * | Function | idst            | DST register index for the result   | uint32_t   | | True |
  */
 // clang-format on
-template <DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
+template <
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat AFormat,
+    TensorShape AShape,
+    DataFormat BFormat,
+    TensorShape BShape>
 ALWI void add_tiles(
     LLKOperand<AFormat, AShape> a,
     LLKOperand<BFormat, BShape> b,
@@ -132,7 +138,7 @@ ALWI void add_tiles(
           LLKOperand<AFormat, AShape>::descriptor,
           EltwiseBinaryType::ELWADD,
           BroadcastType::NONE,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(idst, true /*clear_fp32_dst_acc*/)));
 }
@@ -144,12 +150,18 @@ ALWI void add_tiles(
  *
  * | Param Type | Name            | Description                       | Type       | Valid Range | Required |
  * |------------|-----------------|-----------------------------------|------------|-------------|----------|
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode     | bool       |             | False    |
  * | Function   | a / b           | Input operands                    | LLKOperand | N/A         | True     |
  * | Function   | itile0 / itile1 | Tile indices within A / B         | uint32_t   | N/A         | True     |
  * | Function   | idst            | DST register index for the result | uint32_t   | N/A         | True     |
  */
 // clang-format on
-template <DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
+template <
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat AFormat,
+    TensorShape AShape,
+    DataFormat BFormat,
+    TensorShape BShape>
 ALWI void sub_tiles(
     LLKOperand<AFormat, AShape> a,
     LLKOperand<BFormat, BShape> b,
@@ -164,7 +176,7 @@ ALWI void sub_tiles(
           LLKOperand<AFormat, AShape>::descriptor,
           EltwiseBinaryType::ELWSUB,
           BroadcastType::NONE,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(idst, true /*clear_fp32_dst_acc*/)));
 }
@@ -176,12 +188,18 @@ ALWI void sub_tiles(
  *
  * | Param Type | Name            | Description                       | Type       | Valid Range | Required |
  * |------------|-----------------|-----------------------------------|------------|-------------|----------|
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode     | bool       |             | False    |
  * | Function   | a / b           | Input operands                    | LLKOperand | N/A         | True     |
  * | Function   | itile0 / itile1 | Tile indices within A / B         | uint32_t   | N/A         | True     |
  * | Function   | idst            | DST register index for the result | uint32_t   | N/A         | True     |
  */
 // clang-format on
-template <DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
+template <
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat AFormat,
+    TensorShape AShape,
+    DataFormat BFormat,
+    TensorShape BShape>
 ALWI void mul_tiles(
     LLKOperand<AFormat, AShape> a,
     LLKOperand<BFormat, BShape> b,
@@ -196,7 +214,7 @@ ALWI void mul_tiles(
           LLKOperand<AFormat, AShape>::descriptor,
           EltwiseBinaryType::ELWMUL,
           BroadcastType::NONE,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE>(idst, true /*clear_fp32_dst_acc*/)));
 }
@@ -214,9 +232,15 @@ ALWI void mul_tiles(
  * | Function   | start_itile1  | Index of the first source tile within B          | uint32_t   | N/A         | True     |
  * | Function   | start_idst    | Index of the first destination tile in DST       | uint32_t   | 0 to 15     | True     |
  * | Function   | ntiles        | Number of consecutive tile pairs to add          | uint32_t   | start_idst + ntiles <= 16 | True |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                  | bool       |             | False |
  */
 // clang-format on
-template <DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
+template <
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat AFormat,
+    TensorShape AShape,
+    DataFormat BFormat,
+    TensorShape BShape>
 ALWI void add_block(
     LLKOperand<AFormat, AShape> a,
     LLKOperand<BFormat, BShape> b,
@@ -227,7 +251,7 @@ ALWI void add_block(
     static_assert(is_legal_tile_shape(AShape), "add_block: illegal tile shape for operand A.");
     static_assert(same_tile_shape(AShape, BShape), "add_block: operands A and B must have the same tile shape.");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        add_tiles(a, b, start_itile0 + i, start_itile1 + i, start_idst + i);
+        add_tiles<is_fp32_dest_acc_en>(a, b, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
 }
 
@@ -244,9 +268,15 @@ ALWI void add_block(
  * | Function   | start_itile1  | Index of the first source tile within B          | uint32_t   | N/A         | True     |
  * | Function   | start_idst    | Index of the first destination tile in DST       | uint32_t   | 0 to 15     | True     |
  * | Function   | ntiles        | Number of consecutive tile pairs to subtract     | uint32_t   | start_idst + ntiles <= 16 | True |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                  | bool       |             | False |
  */
 // clang-format on
-template <DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
+template <
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat AFormat,
+    TensorShape AShape,
+    DataFormat BFormat,
+    TensorShape BShape>
 ALWI void sub_block(
     LLKOperand<AFormat, AShape> a,
     LLKOperand<BFormat, BShape> b,
@@ -257,7 +287,7 @@ ALWI void sub_block(
     static_assert(is_legal_tile_shape(AShape), "sub_block: illegal tile shape for operand A.");
     static_assert(same_tile_shape(AShape, BShape), "sub_block: operands A and B must have the same tile shape.");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        sub_tiles(a, b, start_itile0 + i, start_itile1 + i, start_idst + i);
+        sub_tiles<is_fp32_dest_acc_en>(a, b, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
 }
 
@@ -274,9 +304,15 @@ ALWI void sub_block(
  * | Function   | start_itile1  | Index of the first source tile within B          | uint32_t   | N/A         | True     |
  * | Function   | start_idst    | Index of the first destination tile in DST       | uint32_t   | 0 to 15     | True     |
  * | Function   | ntiles        | Number of consecutive tile pairs to multiply     | uint32_t   | start_idst + ntiles <= 16 | True |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                  | bool       |             | False |
  */
 // clang-format on
-template <DataFormat AFormat, TensorShape AShape, DataFormat BFormat, TensorShape BShape>
+template <
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat AFormat,
+    TensorShape AShape,
+    DataFormat BFormat,
+    TensorShape BShape>
 ALWI void mul_block(
     LLKOperand<AFormat, AShape> a,
     LLKOperand<BFormat, BShape> b,
@@ -287,7 +323,7 @@ ALWI void mul_block(
     static_assert(is_legal_tile_shape(AShape), "mul_block: illegal tile shape for operand A.");
     static_assert(same_tile_shape(AShape, BShape), "mul_block: operands A and B must have the same tile shape.");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        mul_tiles(a, b, start_itile0 + i, start_itile1 + i, start_idst + i);
+        mul_tiles<is_fp32_dest_acc_en>(a, b, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
 }
 

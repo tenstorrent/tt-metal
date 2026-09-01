@@ -48,13 +48,14 @@ ALWI void pack_init(LLKOperand<Format, Shape> /*out*/) {
  * pack_tile does -- the caller must supply the correct per-tile L1 address on every call. Sub-32-row
  * (partial-height) block-float tiles are not supported (compile-time rejected).
  *
+ * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                          | bool        |         | False |
  * | Template | Format    | Output buffer L1 data format (deduced from LLKOperand) | DataFormat  |         | True |
  * | Template | Shape     | Output tile geometry (deduced from LLKOperand)         | TensorShape |         | True |
  * | Function | out       | The output L1 operand (format+shape+write address)    | LLKOperand  |         | True |
  * | Function | ifrom_dst | Tile index in the DST register                         | uint32_t   | 0 to 15 | True |
  */
 // clang-format on
-template <DataFormat Format, TensorShape Shape>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst) {
     static_assert(is_legal_tile_shape(Shape), "pack_tile: illegal output tile shape.");
     static_assert(
@@ -64,7 +65,7 @@ ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst) {
     // out_of_order_output=true: pack to the absolute address in the LLKOperand (no fifo_wr_tile_ptr bump).
     PACK((llk_pack<
           LLKOperand<Format, Shape>::descriptor,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           /*out_of_order_output=*/true,
           PackMode::Default>(ifrom_dst, out.l1_address)));
 }
@@ -82,6 +83,7 @@ ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst) {
  *
  * | Param Type | Name          | Description                                                | Type        | Valid Range                          | Required |
  * |------------|---------------|------------------------------------------------------------|-------------|--------------------------------------|----------|
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                             | bool        |                                      | False    |
  * | Template   | Format        | Output buffer L1 data format (deduced from LLKOperand)     | DataFormat  |                                      | True     |
  * | Template   | Shape         | Output tile geometry (deduced from LLKOperand)            | TensorShape |                                      | True     |
  * | Function   | out           | The output L1 operand (format+shape+block base address)   | LLKOperand  |                                      | True     |
@@ -90,7 +92,7 @@ ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst) {
  * | Function   | start_out_tile| Starting output tile index (offset into the block base)   | uint32_t    | N/A                                  | False    |
  */
 // clang-format on
-template <DataFormat Format, TensorShape Shape>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void pack_block(
     LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst, std::uint32_t ntiles, std::uint32_t start_out_tile = 0) {
     static_assert(is_legal_tile_shape(Shape), "pack_block: illegal output tile shape.");
@@ -102,7 +104,7 @@ ALWI void pack_block(
         // pack_tile is itself PACK()-wrapped, so the engine calls stay on the packer thread. Per-tile output
         // slot via the shared tile_address helper (stride folds to a compile-time constant; matches the CB
         // one-tile page).
-        experimental::pack_tile(
+        experimental::pack_tile<is_fp32_dest_acc_en>(
             LLKOperand<Format, Shape>(detail::tile_address(out, start_out_tile + i)), ifrom_dst + i);
     }
 }

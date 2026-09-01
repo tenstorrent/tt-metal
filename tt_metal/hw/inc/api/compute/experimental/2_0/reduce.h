@@ -39,16 +39,24 @@ namespace experimental {
  *
  * | Template | reduce_type | SUM / AVG / MAX                                | PoolType  | | True |
  * | Template | reduce_dim  | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR       | ReduceDim | | True |
+ * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode              | bool       | | False |
  * | Function | data        | Input operand A (reduced); drives geometry    | LLKOperand | | True |
  * | Function | out         | Output operand (drives the packer edge mask)  | LLKOperand | | True |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim, DataFormat DF, TensorShape DS, DataFormat OF, TensorShape OS>
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat DF,
+    TensorShape DS,
+    DataFormat OF,
+    TensorShape OS>
 ALWI void reduce_init(LLKOperand<DF, DS> /*data*/, LLKOperand<OF, OS> /*out*/) {
     static_assert(is_legal_tile_shape(DS), "reduce_init: illegal data tile shape.");
     static_assert(is_legal_tile_shape(OS), "reduce_init: illegal output tile shape.");
     UNPACK((llk_unpack_AB_reduce_init_impl<reduce_type, reduce_dim>(DS)));
-    MATH((llk_math_reduce_init_impl<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(DS)));
+    MATH((llk_math_reduce_init_impl<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(DS)));
     PACK((llk_pack_reduce_mask_config_impl<reduce_dim, PackMode::Default>(OS.face_r_dim)));
 }
 
@@ -58,12 +66,20 @@ ALWI void reduce_init(LLKOperand<DF, DS> /*data*/, LLKOperand<OF, OS> /*out*/) {
  * itile / itile_scaler index within data / scaler. Per-tile input addresses are derived from each operand's
  * geometry via tile_stride_words (one-tile page; exp section included for block floats).
  *
+ * | Template | is_fp32_dest_acc_en    | fp32 dest-accumulate mode          | bool       | | False |
  * | Function | data / scaler          | Input operands                    | LLKOperand | | True |
  * | Function | itile / itile_scaler   | Tile indices within data / scaler | uint32_t   | | True |
  * | Function | idst                   | DST register index for the result | uint32_t   | | True |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim, DataFormat DF, TensorShape DS, DataFormat SF, TensorShape SS>
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat DF,
+    TensorShape DS,
+    DataFormat SF,
+    TensorShape SS>
 ALWI void reduce_tile(
     LLKOperand<DF, DS> data,
     LLKOperand<SF, SS> scaler,
@@ -78,7 +94,7 @@ ALWI void reduce_tile(
     static_assert(
         !(reduce_dim == ReduceDim::REDUCE_ROW && reduce_type != PoolType::MAX) || DF == SF,
         "reduce_tile: REDUCE_ROW (non-MAX) swaps SrcA/SrcB, so data and scaler must have the same data format.");
-    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, DS)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(idst, DS)));
     UNPACK((llk_unpack_AB_reduce_impl<reduce_type, reduce_dim>(
         detail::tile_address(data, itile), detail::tile_address(scaler, itile_scaler))));
 }
@@ -97,9 +113,17 @@ ALWI void reduce_tile(
  * | Function | itile_scaler  | Tile index within `scaler`                      | uint32_t   | | True |
  * | Function | start_idst    | DST register index for the first tile's result | uint32_t   | start_idst + ntiles <= DST size | True |
  * | Function | ntiles        | Number of consecutive data tiles to reduce     | uint32_t   | | True |
+ * | Template | is_fp32_dest_acc_en | fp32 dest-accumulate mode                 | bool       | | False |
  */
 // clang-format on
-template <PoolType reduce_type, ReduceDim reduce_dim, DataFormat DF, TensorShape DS, DataFormat SF, TensorShape SS>
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat DF,
+    TensorShape DS,
+    DataFormat SF,
+    TensorShape SS>
 ALWI void reduce_block(
     LLKOperand<DF, DS> data,
     LLKOperand<SF, SS> scaler,
@@ -110,7 +134,8 @@ ALWI void reduce_block(
     static_assert(is_legal_tile_shape(DS), "reduce_block: illegal data tile shape.");
     static_assert(is_legal_tile_shape(SS), "reduce_block: illegal scaler tile shape.");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        reduce_tile<reduce_type, reduce_dim>(data, scaler, start_itile + i, itile_scaler, start_idst + i);
+        reduce_tile<reduce_type, reduce_dim, is_fp32_dest_acc_en>(
+            data, scaler, start_itile + i, itile_scaler, start_idst + i);
     }
 }
 
