@@ -117,6 +117,8 @@ def multi_scale_deformable_attn_ttnn(
     sampling_grids = ttnn.to_layout(sampling_grids, layout=ttnn.ROW_MAJOR_LAYOUT)
     shape = (bs, num_heads, num_queries, num_points, head_dim)
     output = None
+    if use_signpost:
+        signpost(header=f"MSDA Fused Core Start, Q={num_queries} L={num_levels} P={num_points}")
     for level, (H_, W_) in enumerate(value_spatial_shapes):
         level_out = _fused_msda_level(
             value_list[level],
@@ -128,6 +130,9 @@ def multi_scale_deformable_attn_ttnn(
             shape,
         )
         output = level_out if output is None else ttnn.add(output, level_out)
+
+    if use_signpost:
+        signpost(header="MSDA Fused Core End")
 
     output = ttnn.reshape(output, (bs, num_heads, num_queries, head_dim))
     output = ttnn.to_layout(output, layout=ttnn.TILE_LAYOUT)
