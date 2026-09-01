@@ -8,7 +8,7 @@ import urllib.request
 
 import torch
 
-from models.demos.gemma4.demo import prefill_harness
+from models.demos.gemma4.demo import prefill_harness, prefill_runtime
 from models.demos.gemma4.demo.prefill_harness import submit_prefill
 from models.demos.gemma4.demo.prefill_runtime import (
     CacheSlotState,
@@ -51,6 +51,9 @@ class _FakeTokenizer:
 
     def apply_chat_template(self, *_args, **_kwargs):
         return _BatchEncodingLike(torch.tensor([[1, 2, 3]], dtype=torch.int64))
+
+    def decode(self, token_ids):
+        return f"token-{token_ids[0]}"
 
 
 def _get_json(url):
@@ -110,6 +113,58 @@ def test_prefill_tokenizer_accepts_batch_encoding():
     assert tokens.tolist() == [[1, 2, 3]]
 
 
+def test_prefill_returns_next_token_and_excludes_readback_from_latency(monkeypatch):
+    events = []
+
+    class FakeLogits:
+        def deallocate(self, force):
+            events.append(("deallocate", force))
+
+    class FakeModel:
+        def process_logits_after_prefill_trace(self, trace_output, last_token_idx):
+            events.append(("lm_head", trace_output, last_token_idx))
+            return FakeLogits()
+
+        def process_output_prefill(self, _logits, last_token_idx):
+            events.append(("readback", last_token_idx))
+            return torch.tensor([[[0.0, 1.0, 4.0, 2.0]]])
+
+    clock = iter((10.0, 12.0))
+
+    def perf_counter():
+        events.append(("clock",))
+        return next(clock)
+
+    runtime = TracedPrefillRuntime.__new__(TracedPrefillRuntime)
+    runtime.max_context_len = 4
+    runtime.chunk_size = 4
+    runtime.pad_token_id = 0
+    runtime._trace_id = 7
+    runtime._trace_output = "hidden-states"
+    runtime._generation = 0
+    runtime._slot_states = [CacheSlotState(slot=0)]
+    runtime.tokenizer = _FakeTokenizer()
+    runtime._tokenize = lambda _prompt: torch.tensor([[11, 12, 13]], dtype=torch.int32)
+    runtime._reserve_cache_slot = lambda _padded_tokens, _request_id: runtime._slot_states[0]
+    runtime._stage_page_table = lambda _cache_slot: None
+    runtime._stage = lambda *_args: None
+    runtime.model = FakeModel()
+
+    monkeypatch.setattr(prefill_runtime.time, "perf_counter", perf_counter)
+    monkeypatch.setattr(prefill_runtime.ttnn, "execute_trace", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(prefill_runtime.ttnn, "synchronize_device", lambda _device: None)
+    runtime.mesh_device = object()
+
+    result = runtime._prefill_serial("hello", "req-1")
+
+    assert result["next_token"] == 2
+    assert result["next_token_decoded"] == "token-2"
+    assert result["prefill_time_ms"] == 2000.0
+    assert events.index(("clock",)) < events.index(("readback", 2))
+    assert events[events.index(("lm_head", "hidden-states", 2)) + 1] == ("clock",)
+    assert events[-1] == ("deallocate", True)
+
+
 def test_page_table_row_maps_owned_blocks_and_pads_safely():
     page_table = _page_table_row(width=8, cache_blocks=(3, 7, 11))
 
@@ -154,6 +209,17 @@ def test_hybrid_page_tables_keep_full_and_sliding_slots_disjoint():
 
 
 def test_prefill_rotates_eight_cache_slots(monkeypatch):
+    class FakeLogits:
+        def deallocate(self, _force):
+            pass
+
+    class FakeModel:
+        def process_logits_after_prefill_trace(self, _trace_output, _last_token_idx):
+            return FakeLogits()
+
+        def process_output_prefill(self, _logits, _last_token_idx):
+            return torch.tensor([[[1.0]]])
+
     runtime = TracedPrefillRuntime.__new__(TracedPrefillRuntime)
     runtime.tokenizer = _FakeTokenizer()
     runtime.pad_token_id = 0
@@ -169,7 +235,9 @@ def test_prefill_rotates_eight_cache_slots(monkeypatch):
         for slot in range(8)
     ]
     runtime.mesh_device = object()
+    runtime.model = FakeModel()
     runtime._trace_id = 1
+    runtime._trace_output = object()
     staged_page_tables = []
     staged_chunks = []
     runtime._stage_page_table = staged_page_tables.append

@@ -40,7 +40,8 @@ class PrefillResult:
     cache_slot: int
     cache_generation: int
     cache_resident: bool
-    next_token: None = None
+    next_token: int
+    next_token_decoded: str
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -531,16 +532,30 @@ class TracedPrefillRuntime:
         slot_state = self._reserve_cache_slot(padded_tokens, request_id)
         cache_slot = slot_state.slot
         started = time.perf_counter()
+        logits = None
         try:
             self._stage_page_table(cache_slot)
             for chunk_idx in range(chunks):
                 self._stage(tokens, chunk_idx, cache_slot, prompt_tokens)
                 ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=False)
                 ttnn.synchronize_device(self.mesh_device)
+
+            last_token_idx = (prompt_tokens - 1) % self.chunk_size
+            logits = self.model.process_logits_after_prefill_trace(self._trace_output, last_token_idx)
+            ttnn.synchronize_device(self.mesh_device)
+            elapsed_s = time.perf_counter() - started
+
+            # End the measured prefill interval before reading logits back to the
+            # host. The returned tile starts at a 32-token boundary.
+            token_logits = self.model.process_output_prefill(logits, last_token_idx % 32)
+            next_token = int(token_logits.argmax(dim=-1).item())
+            next_token_decoded = self.tokenizer.decode([next_token])
         except Exception:
             self._release_cache_slot(slot_state)
             raise
-        elapsed_s = time.perf_counter() - started
+        finally:
+            if logits is not None:
+                logits.deallocate(True)
 
         self._generation += 1
         slot_state.request_id = request_id
@@ -557,6 +572,8 @@ class TracedPrefillRuntime:
             cache_slot=cache_slot,
             cache_generation=self._generation,
             cache_resident=True,
+            next_token=next_token,
+            next_token_decoded=next_token_decoded,
         ).to_dict()
 
     def info(self) -> dict:
@@ -578,7 +595,7 @@ class TracedPrefillRuntime:
             "resident_slots": resident_slots,
             "cache_resident": bool(resident_slots),
             "cache_generation": self._generation,
-            "next_token_enabled": False,
+            "next_token_enabled": True,
         }
 
     def close(self) -> None:
