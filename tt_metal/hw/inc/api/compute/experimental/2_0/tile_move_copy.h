@@ -23,23 +23,18 @@ namespace experimental {
 
 // clang-format off
 /**
- * Experimental id-free datacopy init. Takes an LLKOperand whose data format + tile geometry are NTTPs
- * (deduced from the argument). The op forwards LLKOperand<F,S>::descriptor to the LLK as an NTTP (folds);
- * the register format is derived INSIDE the LLK. It reprograms the unpacker + math datacopy for the operand's
- * format WITHOUT touching the packer dst-offset registers (those come from compute_kernel_hw_startup) -- on
- * Blackhole this matches the legacy copy_init unpacker + math datacopy re-init. No CB id, no register format on
- * the API surface. Legacy ckernel::copy_tile_init is untouched.
+ * Id-free datacopy init. Takes an LLKOperand whose data format + tile geometry are NTTPs (deduced from the
+ * argument); the register format is derived inside the LLK. Reprograms the unpacker and math datacopy for the
+ * operand's format without touching the packer dst-offset registers (those come from
+ * compute_kernel_hw_startup). Blackhole only.
  *
- * fp8 (Fp8_e4m3 / Lf8 e5m2) IS supported: copy_init programs the format-driven Src zero-substitution flag
- * exactly as legacy copy_init does (ckernel::math::_configure_copy_zero_flag_state_) -- it flushes fp8 zeros
- * (whose SrcA residual would otherwise read back nonzero) and preserves the residual for all other formats
- * (e.g. bf16 -0.0 / 16b-int). The flag is derived id-free from the register format (infer_unpack_dst_format).
+ * fp8 (Fp8_e4m3 / Lf8 e5m2) is supported: the format-driven Src zero-substitution flag is programmed so fp8
+ * zeros read back correctly, while other formats (e.g. bf16 -0.0 / 16b-int) keep their residual value.
  *
- * PARITY: transpose / transpose_within_16x16_face restore the copy-with-transpose capability legacy copy_init
- * exposes; they were dropped when this id-free path was first authored (the authoring agent only exercised the
- * plain, non-transpose copy). Both default OFF (0), so the default copy path is byte-identical; when nonzero they
- * drive the unpacker exactly as legacy copy_init does (transpose -> transpose_of_faces, transpose_within_16x16_face
- * -> within_face_16x16_transpose on the id-free llk_unpack_A_init, the same args transpose_init uses).
+ * transpose / transpose_within_16x16_face support copy-with-transpose; both default off (0), so the default
+ * copy path is unaffected.
+ *
+ * Sub-32-row (partial-height) block-float tiles are not supported (compile-time rejected).
  *
  * | Template | Format                      | Buffer L1 data format (deduced from the LLKOperand argument) | DataFormat  |                                                                     | True  |
  * | Template | Shape                       | Tile geometry (deduced from the LLKOperand argument)         | TensorShape |                                                                     | True  |
@@ -79,10 +74,10 @@ ALWI void copy_init(
 
 // clang-format off
 /**
- * Experimental id-free datacopy. Copies one tile from the L1 region described by the LLKOperand into DST.
- * Compile-time "what" = the LLKOperand NTTPs (Format + Shape, fold/DCE); runtime "where" = src.l1_address
- * (from the address seam). No CB id, no register format on the API. Precondition: the DST register must be
- * acquired (tile_regs_acquire) before the call, and copy_init must have run.
+ * Id-free datacopy. Copies one tile from the L1 region described by the LLKOperand into DST. Blackhole only.
+ *
+ * Requires copy_init to have run, and the DST register to be acquired (tile_regs_acquire) before this call.
+ * Sub-32-row (partial-height) block-float tiles are not supported (compile-time rejected).
  *
  * | Template | Format         | Buffer L1 data format (deduced from LLKOperand)   | DataFormat  |         | True |
  * | Template | Shape          | Tile geometry (deduced from LLKOperand)           | TensorShape |         | True |
@@ -116,12 +111,13 @@ ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t dst_tile_index)
 
 // clang-format off
 /**
- * Experimental id-free block datacopy. Copies `ntiles` consecutive tiles from the L1 region described by the
- * LLKOperand into consecutive DST register slots. Block/loop form of copy_tile: matches the legacy
- * copy_block semantics (tile start_in_tile_index+i lands in DST slot start_dst_tile_index+i). Reuses the
- * existing 2.0 copy_tile per tile; each tile's source address is the operand base offset by
- * (start_in_tile_index + i) * tile_stride_words(Format, Shape) 16-byte words (folds to a compile-time
- * constant). No CB id, no register format on the API. Requires the same init as copy_tile (copy_init).
+ * Id-free block datacopy. Copies `ntiles` consecutive tiles from the L1 region described by the LLKOperand
+ * into consecutive DST register slots (tile start_in_tile_index+i lands in DST slot start_dst_tile_index+i).
+ * Loop form of copy_tile; each tile's source address is offset by (start_in_tile_index + i) tile strides
+ * (folds to a compile-time constant). Blackhole only.
+ *
+ * Requires the same init as copy_tile (copy_init). Sub-32-row (partial-height) block-float tiles are not
+ * supported (compile-time rejected).
  *
  * | Template | Format               | Buffer L1 data format (deduced from LLKOperand)             | DataFormat  |         | True |
  * | Template | Shape                | Tile geometry (deduced from LLKOperand)                    | TensorShape |         | True |

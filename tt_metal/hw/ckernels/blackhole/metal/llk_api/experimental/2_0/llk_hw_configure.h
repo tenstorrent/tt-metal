@@ -15,7 +15,7 @@
  * Same function names as the CB-id hw_configure APIs, distinguished by taking LLKMemDescriptor NTTPs instead
  * of CB ids. src/dst formats, face geometry and per-tile size all come from the operand descriptors -- no CB
  * arrays, no runtime L1-format inference. The two source-register formats are reconciled to a common
- * exponent-width family via infer_unpack_dst_format_2op (C1): matching formats are unchanged, a Float32
+ * exponent-width family via infer_unpack_dst_format_2op: matching formats are unchanged, a Float32
  * operand rebiases to the other's width, and any other cross-family pairing is a hard compile error.
  *
  * This header is deliberately NOT included by the broadly-included *_common_api.h files: it pulls the

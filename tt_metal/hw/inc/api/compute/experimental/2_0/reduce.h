@@ -26,25 +26,21 @@ namespace experimental {
 #ifdef ARCH_BLACKHOLE
 
 // Id-free (2.0) reduce (data + scaler -> reduced). Takes one LLKOperand per input (data, scaler) and one for
-// the output. Reduce is FORMAT-FREE at the op level (formats set at compute_kernel_hw_startup); every LLK
-// core here consumes only geometry (data tile shape / output face_r_dim) + the two runtime input addresses, so
-// there is no id-free LLK header -- the compute op calls the api-level unified cores directly with the
-// descriptor-extracted values. Geometry (for MATH + unpack init) comes from the DATA operand, matching legacy.
-// Packing is separate (experimental::pack_tile); the packer edge mask is programmed here by reduce_init.
+// the output. Format-free at the op level (formats set at compute_kernel_hw_startup); every LLK core here
+// consumes only geometry (data tile shape / output face_r_dim) + the two runtime input addresses. Geometry
+// (for MATH + unpack init) comes from the DATA operand. Packing is separate (experimental::pack_tile); the
+// packer edge mask is programmed here by reduce_init.
 
 // clang-format off
 /**
- * Reduce init: programs UNPACK (AB reduce), MATH (reduce init), and the PACK edge-mask for the reduction.
- * compute_kernel_hw_startup(data_cb, scaler_cb, out_cb) must already have programmed the formats.
+ * Reduce init: programs UNPACK (AB reduce), MATH, and the PACK edge-mask. compute_kernel_hw_startup(data_cb,
+ * scaler_cb, out_cb) must already have programmed the formats. Uses only DATA geometry and OUT's face_r_dim;
+ * the scaler operand contributes nothing at init (it's passed to reduce_tile).
  *
  * | Template | reduce_type | SUM / AVG / MAX                                | PoolType  | | True |
  * | Template | reduce_dim  | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR       | ReduceDim | | True |
  * | Function | data        | Input operand A (reduced); drives geometry    | LLKOperand | | True |
  * | Function | out         | Output operand (drives the packer edge mask)  | LLKOperand | | True |
- *
- * NOTE (PART B): the init uses only the DATA geometry (unpack/math) and the OUT face_r_dim (packer edge
- * mask). The scaler operand contributes nothing to init, so it is not taken here; it is still passed to
- * reduce_tile (which needs its address + stride).
  */
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim, DataFormat DF, TensorShape DS, DataFormat OF, TensorShape OS>
@@ -82,7 +78,6 @@ ALWI void reduce_tile(
     static_assert(
         !(reduce_dim == ReduceDim::REDUCE_ROW && reduce_type != PoolType::MAX) || DF == SF,
         "reduce_tile: REDUCE_ROW (non-MAX) swaps SrcA/SrcB, so data and scaler must have the same data format.");
-    // Match legacy reduce_tile order: MATH then UNPACK.
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, DS)));
     UNPACK((llk_unpack_AB_reduce_impl<reduce_type, reduce_dim>(
         detail::tile_address(data, itile), detail::tile_address(scaler, itile_scaler))));
@@ -91,11 +86,9 @@ ALWI void reduce_tile(
 // clang-format off
 /**
  * Reduce `ntiles` consecutive data tiles (each combined with the scaler tile), writing each tile's reduction
- * to its OWN DST slot: data tile (start_itile + i) -> DST[start_idst + i]. Block/loop form of reduce_tile,
- * matching the legacy reduce_block N-in / N-out semantics (api/compute/reduce.h) exactly -- it is NOT a
- * cross-block accumulation into one slot (a caller wanting that loops reduce_tile at a fixed idst). Reuses the
- * existing 2.0 reduce_tile per tile; per-tile source addressing is inherited from reduce_tile (itile advances
- * by tile_stride_words internally). Pair with reduce_init. DST must be acquired.
+ * to its OWN DST slot: data tile (start_itile + i) -> DST[start_idst + i]. Loop form of reduce_tile (NOT a
+ * cross-block accumulation into one slot -- for that, loop reduce_tile at a fixed idst). Pair with
+ * reduce_init. DST must be acquired.
  *
  * | Template | reduce_type   | SUM / AVG / MAX                                 | PoolType   | | True |
  * | Template | reduce_dim    | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR        | ReduceDim  | | True |
@@ -123,12 +116,10 @@ ALWI void reduce_block(
 
 // clang-format off
 /**
- * Math-only reduction into DST[idst]. This is the MATH half of reduce_tile with NO unpack/pack: the source
- * tiles must ALREADY be in the source registers (typically staged by a preceding fused op, e.g. tilize). It
- * consumes NO operand -- pure DST math -- so it takes no LLKOperand; geometry is given by num_faces, which maps
- * to the naive row-major face layout (faces laid out row-wise first). Pair with reduce_init. DST must be
- * acquired. For a non-default face layout, use the TensorShape overload below. Reuses the same id-free MATH
- * core as reduce_tile (llk_math_reduce(idst, shape)).
+ * Math-only reduction into DST[idst]: the MATH half of reduce_tile with no unpack/pack. Source tiles must
+ * already be in the source registers (e.g. staged by a preceding fused op like tilize); takes no LLKOperand.
+ * Geometry comes from num_faces (row-major face layout). Pair with reduce_init. DST must be acquired. For a
+ * non-default face layout, use the TensorShape overload below.
  *
  * | Template | reduce_type | SUM / AVG / MAX                          | PoolType  | | True |
  * | Template | reduce_dim  | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR | ReduceDim | | True |
@@ -144,9 +135,8 @@ ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = MAX_NUM
 
 // clang-format off
 /**
- * Math-only reduction into DST[idst] with an explicit tile geometry. As above, the source tiles must ALREADY
- * be in the source registers and NO operand is consumed (pure DST math, no LLKOperand). Pair with reduce_init.
- * DST must be acquired. Reuses the same id-free MATH core as reduce_tile (llk_math_reduce(idst, shape)).
+ * Math-only reduction into DST[idst] with an explicit tile geometry. As above, source tiles must already be
+ * in the source registers; takes no LLKOperand. Pair with reduce_init. DST must be acquired.
  *
  * | Template | reduce_type  | SUM / AVG / MAX                          | PoolType             | | True |
  * | Template | reduce_dim   | REDUCE_ROW / REDUCE_COL / REDUCE_SCALAR | ReduceDim            | | True |

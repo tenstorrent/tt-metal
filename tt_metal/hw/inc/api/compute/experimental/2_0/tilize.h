@@ -27,10 +27,10 @@ namespace experimental {
 
 // clang-format off
 /**
- * Experimental id-free tilize init. Takes an input and an output LLKOperand (data format + tile geometry
- * as NTTPs, deduced from the arguments) instead of CB ids; register formats are derived INSIDE the LLK. The
- * tilize pack init needs the input format (8-bit tilize workaround) plus the output format/geometry, hence
- * both operands. `block` is the tilize block width (ct_dim) the unpacker MOP is configured for.
+ * Id-free tilize init. Takes an input and an output LLKOperand (data format + tile geometry as NTTPs,
+ * deduced from the arguments) instead of CB ids; register formats are derived inside the LLK. Both operands
+ * are required: the tilize pack init needs the input format as well as the output format/geometry. `block`
+ * is the tilize block width (ct_dim) the unpacker MOP is configured for. Blackhole only.
  *
  * | Template | InFormat/InShape   | Input buffer L1 format + geometry (deduced)  | DataFormat/TensorShape |  | True |
  * | Template | OutFormat/OutShape | Output buffer L1 format + geometry (deduced)  | DataFormat/TensorShape |  | True |
@@ -59,22 +59,14 @@ ALWI void tilize_init(
 
 // clang-format off
 /**
- * Experimental id-free tilize of one block. The op owns the block loop and self-syncs Dest per tile (no
- * kernel tile_regs). Runtime "where": in.l1_address (unpack base -- the LLK offsets by tile_index inside)
- * and out.l1_address (the block's first output tile).
+ * Id-free tilize of one block. Owns the block loop and self-syncs DEST per tile (no kernel tile_regs). Reads
+ * from in.l1_address (unpack base; the LLK offsets by tile index inside) and writes the block's tiles
+ * starting at out.l1_address. Requires both an input and output operand. Blackhole only.
  *
- * PER-TILE OUTPUT ADDRESSING vs the legacy BH tilize (fifo_page_size == one tile_size):
- *   Tile t is packed to out.l1_address + (output_tile_index + t) * <output tile stride>. The stride folds to a
- *   compile-time constant from the output descriptor via tile_stride_words(OutFormat, OutShape) (16B words):
- *     - linear formats (Float32/Float16/int): geometry-exact datum-count size (SCALE_DATUM_SIZE >> 4);
- *     - block floats (Bfp8/Bfp4/Bfp2): mantissa + shared-exponent section, both scaled by the tile geometry
- *       (matches tt_metal Tile::get_tile_size / the shipping CB page; see internal/llk_descriptor.h::tile_stride_words).
- *   The shipping tilize factories set the output CB page to exactly one tile (output_single_tile_size), so
- *   this matches fifo_page_size for every format the factories use. Remaining edge (no shipping op hits it):
- *   padded / multi-tile CB pages. A caller writing a block into a multi-tile output window may either fold the
- *   destination into out.l1_address (the id-free default) OR pass output_tile_index to shift the first slot;
- *   symmetrically input_tile_index shifts the unpack source (matches legacy tilize_block). Both default to 0,
- *   in which case tile t lands in slot t and the source base is in.l1_address (byte-identical to before).
+ * Per-tile output stride is one tile's L1 size, derived at compile time from the output descriptor's format
+ * and geometry -- this matches the shipping tilize factories' one-tile output CB page. input_tile_index and
+ * output_tile_index (both default 0) shift the unpack source / pack destination tile index; at their
+ * defaults, tile t lands in slot t and the source base is in.l1_address, byte-identical to the legacy op.
  *
  * | Function | in                | Input operand (unpack base; LLK offsets by input_tile_index + t) | LLKOperand |      | True  |
  * | Function | block             | Number of column tiles in the block                             | uint32_t   | > 0  | True  |
@@ -123,8 +115,8 @@ ALWI void tilize_block(
 
 // clang-format off
 /**
- * Experimental id-free tilize uninit. Restore the SrcA/tile config so a subsequent op can reprogram the
- * unpacker, and reset the packer to Default mode.
+ * Id-free tilize uninit. Restores the SrcA/tile config so a subsequent op can reprogram the unpacker, and
+ * resets the packer to Default mode. Blackhole only.
  */
 // clang-format on
 template <DataFormat InFormat, TensorShape InShape, DataFormat OutFormat, TensorShape OutShape>

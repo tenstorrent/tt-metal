@@ -26,13 +26,10 @@ namespace experimental {
 #ifdef ARCH_BLACKHOLE
 
 // Id-free (2.0) matmul: single-tile (matmul_init + matmul_tiles) and block (matmul_block_init + matmul_block).
-// Takes one LLKOperand per input; in0 -> SrcB and in1 -> SrcA (the matmul role swap). The role swap for the
-// register formats is applied by compute_kernel_hw_startup<SrcOrder::Reverse>(in0, in1, out) in the kernel;
-// matmul is FORMAT-FREE at the op level, so these ops forward only geometry (via the descriptors) + the two
-// per-tile L1 addresses (+ the runtime block dims for the block form). Packing is separate
-// (experimental::pack_tile). Dynamic (FW-controlled) throttle is NOT part of this surface: the block execute
-// reuses the plain (fixed MM_THROTTLE) legacy execute -- throttle only inserts dead math cycles, so output is
-// bit-identical to the legacy dynamic-throttle path.
+// Two LLKOperands (in0, in1); in0 -> SrcB, in1 -> SrcA (matmul role swap), applied via
+// compute_kernel_hw_startup<SrcOrder::Reverse>(in0, in1, out). Format-free at the op level -- these ops forward
+// only geometry (via the descriptors) and per-tile L1 addresses; packing is separate (experimental::pack_tile).
+// Throttle is fixed (MM_THROTTLE); dynamic throttle is not part of this surface.
 
 // clang-format off
 /**
@@ -76,7 +73,7 @@ ALWI void matmul_tiles(
     static_assert(is_legal_tile_shape(S1), "matmul_tiles: illegal tile shape for in1.");
     UNPACK((llk_unpack_AB_matmul<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor>(
         in0.l1_address, in1.l1_address, in0_tile_index, in1_tile_index)));
-    // Matmul math execute takes no operand id -> reuse the legacy (format-free) execute directly.
+    // Math execute takes no operand id; format-free.
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst)));
 }
 
@@ -144,9 +141,7 @@ ALWI void matmul_block(
     static_assert(is_legal_tile_shape(S1), "matmul_block: illegal tile shape for in1.");
     UNPACK((llk_unpack_AB_matmul<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor>(
         in0.l1_address, in1.l1_address, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
-    // Matmul math execute takes no operand id -> reuse the legacy (format-free) block execute directly.
-    // Plain (fixed MM_THROTTLE) execute, no dynamic throttle: throttle only inserts dead math cycles, so the
-    // arithmetic result is bit-identical to the legacy dynamic-throttle path (mirrors matmul_tiles above).
+    // Block execute takes no operand id; format-free, fixed MM_THROTTLE (no dynamic throttle).
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
 }
 

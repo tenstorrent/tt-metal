@@ -18,10 +18,12 @@
 //   * l1_address is the ONLY runtime member -- the "where". A runtime value cannot be an NTTP, so the split
 //     lives INSIDE the type (NTTP vs member).
 // Bundling keeps an address welded to its own descriptor (a wrong pairing is unrepresentable), and lets an op
-// derive per-tile addresses internally from the compile-time geometry (see tilize_block + tile_stride_words).
+// derive per-tile addresses internally from the compile-time geometry (see tile_stride_words).
 //
-// The source (CB / DataflowBuffer / Scratchpad) is NOT known here. Source -> operand is done at the call site
-// via the test-common CB helpers (cb_operand_helpers.h) or a future accessor's translator.
+// Namespace split: LLKOperand lives in ckernel::experimental (public); ckernel::experimental::detail holds
+// internal-only helpers built on it (tile_address). The source (CB / DataflowBuffer / Scratchpad) is NOT
+// known here -- source -> operand is done at the call site via the test-common CB helpers
+// (cb_operand_helpers.h) or a future accessor's translator.
 // =====================================================================================================
 
 namespace ckernel {

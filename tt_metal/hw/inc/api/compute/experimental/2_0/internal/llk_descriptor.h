@@ -41,13 +41,12 @@ constexpr std::uint32_t round_up_l1_words(std::uint32_t bytes) { return (bytes +
 // clang-format off
 /**
  * (internal) Per-tile L1 stride in 16-byte words, for absolute (out-of-order) tile addressing (base +
- * t*stride). The id-free stand-in for the CB's fifo_page_size, which the shipping factories set to one tile's
- * size. Geometry-exact for BOTH branches, so partial / tiny tiles stride correctly:
- *   * Block floats (Bfp8/Bfp4/Bfp2): a tile is [packed mantissas | shared-exponent section]. This mirrors
- *     tt_metal Tile::get_tile_size (impl/data_format/tile.cpp) scaled by the real geometry: mantissa =
- *     total_tensor_size() at the format's storage width (Bfp8 1 B/datum, Bfp4 1/2, Bfp2 1/4), exp section =
- *     round_up(face_r_dim * total_num_faces, 16). GET_L1_HEADERLESS_TILE_SIZE hard-codes the full-32x32 value
- *     and is WRONG for a partial BFP tile (fewer face rows / faces), so we compute the size here instead.
+ * t*stride). The id-free stand-in for the CB's fifo_page_size, which the shipping factories set to one
+ * tile's size. Geometry-exact for both branches, so partial / tiny tiles stride correctly:
+ *   * Block floats (Bfp8/Bfp4/Bfp2): a tile is [packed mantissas | shared-exponent section], scaled by
+ *     geometry to match tt_metal Tile::get_tile_size -- mantissa bytes scale with storage width (Bfp8
+ *     1 B/datum, Bfp4 1/2, Bfp2 1/4), exponent section is round_up(face_r_dim * total_num_faces, 16).
+ *     (GET_L1_HEADERLESS_TILE_SIZE assumes a full 32x32 tile and is unsafe for a partial BFP tile.)
  *   * Linear formats (Float32/Float16/int): the geometry-exact datum-count size (SCALE_DATUM_SIZE >> 4).
  *
  * | Param Type | Name   | Description                       | Type        | Valid Range | Required |
@@ -79,14 +78,13 @@ constexpr std::uint32_t tile_stride_words(DataFormat format, TensorShape shape) 
     return round_up_l1_words(mantissa_bytes + exp_bytes);
 }
 
-// NOTE (matmul partial_face): the id-free matmul derives partial_face inline at its two call sites, NOT via a
-// shared helper, because the UNPACK and MATH engines use DIFFERENT thresholds (inherited from the legacy CB-id
-// path, do not "unify"):
-//   * MATH  (llk_math_matmul.h):        partial_face = (shape.total_row_dim() < FACE_R_DIM)  -- == legacy math init.
-//   * UNPACK (llk_unpack_AB_matmul.h):  partial_face = (shape.total_row_dim() < TILE_R_DIM)  -- == the legacy
-//     host-side Tile::partial_face (tile height < TILE_HEIGHT) fed via get_operand_partial_face().
-// A one-face-high operand (total_row_dim() == 16) is thus partial-face to the unpacker (16 < 32) but full-face to
-// the math (16 == FACE_R_DIM, not < ).
+// NOTE (matmul partial_face): the id-free matmul computes partial_face inline at its two call sites, NOT via
+// a shared helper, because UNPACK and MATH use DIFFERENT thresholds:
+//   * MATH  (llk_math_matmul.h):       partial_face = (shape.total_row_dim() < FACE_R_DIM).
+//   * UNPACK (llk_unpack_AB_matmul.h): partial_face = (shape.total_row_dim() < TILE_R_DIM), matching the
+//     host-side Tile::partial_face (tile height < TILE_HEIGHT) via get_operand_partial_face().
+// A one-face-high operand (total_row_dim() == 16) is thus partial-face to the unpacker (16 < 32) but
+// full-face to the math (16 == FACE_R_DIM, not <).
 
 /**
  * (internal) Per-tile L1 size in 16B words (fifo_page_size units) for a matmul operand descriptor: geometry-exact
@@ -98,7 +96,7 @@ constexpr std::uint32_t matmul_tile_size(const LLKMemDescriptor& desc) {
 }
 
 // -----------------------------------------------------------------------------------------------------
-// Compile-time contract helpers (PART D). With no CB id, the legality the CB descriptor used to guarantee is
+// Compile-time contract helpers. With no CB id, the legality the CB descriptor used to guarantee is
 // re-established as static_asserts on the operand geometry NTTPs, firing at the user's call site.
 // -----------------------------------------------------------------------------------------------------
 
@@ -109,7 +107,7 @@ constexpr std::uint32_t matmul_tile_size(const LLKMemDescriptor& desc) {
  * runtime validator ckernel::validate_tensor_shape_tile_dependent_ops_ (tensor_shape.h): it adds the per-axis
  * face-grid bound the runtime validator omits, so shapes like {16,16,4,1} / {16,16,1,4} (a 64x16 / 16x64 tile
  * that exceeds the 32x32 limit yet has total_num_faces()==4) are rejected here rather than silently addressed.
- * constexpr so it is usable in the compute-op static_asserts (PART D). `s`: the tile geometry to check.
+ * constexpr so it is usable in the compute-op static_asserts. `s`: the tile geometry to check.
  */
 constexpr bool is_legal_tile_shape(TensorShape s) {
     const bool fr =
@@ -148,7 +146,7 @@ constexpr bool is_partial_height(TensorShape s) { return s.total_row_dim() < TIL
 
 /**
  * (internal) True iff two operands carry the same tile geometry (a two-input op requires matching shapes).
- * Used by the binary-op static_asserts (PART D). `a`, `b`: the two tile geometries to compare.
+ * Used by the binary-op static_asserts. `a`, `b`: the two tile geometries to compare.
  */
 constexpr bool same_tile_shape(TensorShape a, TensorShape b) {
     return a.face_r_dim == b.face_r_dim && a.face_c_dim == b.face_c_dim && a.num_faces_r_dim == b.num_faces_r_dim &&

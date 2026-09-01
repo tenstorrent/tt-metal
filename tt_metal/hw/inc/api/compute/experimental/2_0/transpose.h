@@ -20,14 +20,10 @@
 #endif
 
 // =====================================================================================================
-// Id-free (2.0) transpose (input transpose / transpose WH). Takes a single input LLKOperand whose data
-// format + tile geometry are NTTPs. Mirrors the legacy Blackhole transpose.h 3-way init split (unpack-to-dest
-// for 32-bit dst formats, the int-FPU A2D reconstruct path for 8-bit integer formats, default otherwise) --
-// but the split is resolved via `if constexpr` on the operand's compile-time Format instead of a runtime CB
-// format lookup, since there is no CB id here. The underlying LLKs (id-free llk_unpack_A / id-free
-// llk_math_eltwise_unary_datacopy, plus the format-free llk_math_transpose_dest reused as-is) are exactly
-// the ones tile_move_copy.h's copy_tile already uses. Blackhole only; the Quasar transpose path is a
-// completely separate LLK generation and is not ported here.
+// Id-free (2.0) transpose: transposes one input tile into DST. Takes a single input LLKOperand (format +
+// tile geometry as NTTPs). The init selects one of three unpack/math paths -- unpack-to-dest for 32-bit dst
+// formats, the int-FPU A2D reconstruct path for 8-bit integer formats, default otherwise -- entirely at
+// compile time via `if constexpr` on the operand's Format (no CB id / runtime lookup). Blackhole only.
 // =====================================================================================================
 
 namespace ckernel {
@@ -37,12 +33,11 @@ namespace experimental {
 
 // clang-format off
 /**
- * Paired init function for transpose_tile / transpose_block. Takes an LLKOperand whose data format + tile
- * geometry are NTTPs (deduced from the argument). Selects, entirely at compile time, among the three
- * unpack/math configurations the legacy Blackhole transpose_init selects at runtime from the CB's formats:
- * unpack-to-dest for 32-bit dst formats (Float32/UInt32/Int32), the int-FPU (ELWADD) A2D reconstruct path
- * for 8-bit integer formats (Int8/UInt8), and the default path for everything else. compute_kernel_hw_startup
- * must already have run once. No CB id, no register format on the API surface.
+ * Init for transpose_tile / transpose_block. Takes an LLKOperand whose data format + tile geometry are NTTPs
+ * (deduced from the argument). Selects, entirely at compile time, one of three unpack/math configurations:
+ * unpack-to-dest for 32-bit dst formats (Float32/UInt32/Int32), the int-FPU (ELWADD) A2D reconstruct path for
+ * 8-bit integer formats (Int8/UInt8), or the default path otherwise. compute_kernel_hw_startup must already
+ * have run once.
  *
  * | Param Type | Name   | Description                                                   | Type        | Valid Range | Required |
  * |------------|--------|----------------------------------------------------------------|-------------|-------------|----------|
@@ -52,9 +47,8 @@ namespace experimental {
  */
 // clang-format on
 namespace detail {
-// True iff transpose takes the unpack-to-dest (A2D) path: the operand's REGISTER format (after the datacopy
-// Float32-rebias via infer_unpack_dst_format) is 32-bit. Shared by transpose_init / transpose_tile. NOTE this
-// runs Format through infer_unpack_dst_format first, unlike the unary-bcast select which tests Format directly.
+// True iff transpose takes the unpack-to-dest (A2D) path: the operand's REGISTER format (after
+// infer_unpack_dst_format) is 32-bit. Shared by transpose_init / transpose_tile.
 template <DataFormat Format>
 constexpr bool transpose_unpack_to_dest() {
     return is_32bit_format(ckernel::infer_unpack_dst_format(Format, DST_ACCUM_MODE));
@@ -88,11 +82,8 @@ ALWI void transpose_init(LLKOperand<Format, Shape> /*src*/) {
               BroadcastType::NONE>()));
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else {
-        // Non-unpack-to-dest path (default + 8-bit integer). The unpack init is identical for both; the only
-        // difference is that 8-bit integer (Int8/UInt8) transpose needs the int-FPU (ELWADD) A2D reconstruct
-        // path, selected via the datacopy init's is_int_fpu_en NTTP (== is_8bit_int; false for the default
-        // path). Ideally the LLK layer would infer this from the data format. TODO: #46832 (same limitation as
-        // the legacy op).
+        // Non-unpack-to-dest path (default + 8-bit integer). Unpack init is identical for both; only the
+        // datacopy init's is_int_fpu_en NTTP differs (true for 8-bit integer, false for default).
         UNPACK((llk_unpack_A_init<
                 LLKOperand<Format, Shape>::descriptor,
                 DST_ACCUM_MODE,
@@ -165,14 +156,10 @@ ALWI void transpose_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std
 // clang-format off
 /**
  * Performs a 32x32 transpose operation *B[w,h] = A[h,w]* on `ntiles` consecutive tiles from the L1 region
- * described by the LLKOperand, writing each result to a consecutive DST register slot. Block/loop form of
- * transpose_tile: tile `start_itile+i` lands in DST slot `start_idst+i`. Reuses the existing 2.0
- * transpose_tile per tile. Requires the same init as transpose_tile (transpose_init). DST must be in the
- * acquired state. This call is blocking and is only available on the compute engine.
- *
- * NOTE: The loop implementation is transitional, matching the legacy transpose_block. In the future this
- * for-loop must be folded into a hardware MOP / REPLAY buffer so the whole block issues as a single packed
- * op; the blocking then lives in llk-lib without changing this signature.
+ * described by the LLKOperand, writing each result to a consecutive DST register slot: tile `start_itile+i`
+ * lands in DST slot `start_idst+i`. Requires the same init as transpose_tile (transpose_init). DST must be in
+ * the acquired state. This call is blocking and is only available on the compute engine. Currently
+ * implemented as a per-tile loop over transpose_tile.
  *
  * | Param Type | Name        | Description                                                      | Type        | Valid Range                                    | Required |
  * |------------|-------------|-------------------------------------------------------------------|-------------|-------------------------------------------------|----------|

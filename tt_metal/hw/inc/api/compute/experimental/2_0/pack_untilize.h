@@ -28,15 +28,10 @@ namespace experimental {
 
 // clang-format off
 /**
- * Experimental id-free pack-untilize init. Takes an input and an output LLKOperand (data format + tile
- * geometry as NTTPs) instead of CB ids. Initializes all three threads (UNPACK/MATH/PACK) to move tilized
- * tiles CB -> DEST (datacopy) and pack them out row-major. Register formats are derived INSIDE the LLK.
- *
- * Mirrors the legacy pack_untilize_init (3-thread) + pack_untilize_dest_init PACK sequence, with one
- * substitution: the legacy PACK path calls llk_pack_reconfig_data_format(ocb) to program the packer format
- * registers from CB metadata; the id-free path calls the LLKOperand overload of that same op (formats from
- * OUT). llk_pack_untilize_init itself only programs addrmod/MOP/z-stride, so this format program is
- * required. BH DEST remap is (re)configured here (llk_math_reconfig_remap), matching the default legacy init.
+ * Id-free pack-untilize init. Takes an input and an output LLKOperand (data format + tile geometry as NTTPs)
+ * instead of CB ids. Initializes all three threads (UNPACK/MATH/PACK) to move tilized tiles from the input
+ * into DEST (datacopy) and pack them out row-major; register formats are derived inside the LLK. DEST remap
+ * is (re)configured here. Blackhole only.
  *
  * | Template | block_ct_dim/full_ct_dim | Block width / full input width in tiles | uint32_t | | False |
  * | Function | in                       | Input operand (tilized; format+geometry) | LLKOperand | | True |
@@ -86,21 +81,12 @@ ALWI void pack_untilize_init(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<Ou
 
 // clang-format off
 /**
- * Experimental id-free pack-untilize of one block. The op owns the row/column loops and self-syncs DEST.
- * Runtime "where": in.l1_address (unpack base; the op offsets by the per-tile input stride derived from
- * InShape) and out.l1_address (the block's first row-major output tile).
+ * Id-free pack-untilize of one block. Owns the row/column loops and self-syncs DEST. Reads from in.l1_address
+ * (unpack base; offset per tile by InShape's stride) and writes the block's first row-major output tile to
+ * out.l1_address. Blackhole only.
  *
- * ADDRESSING vs the legacy BH pack_untilize (fifo_page_size == one tile_size):
- *   Legacy pack_untilize advances the packer write address across tile-rows by the CB's ACTUAL
- *   fifo_page_size (full_ct_dim * fifo_page_size, read from the CB interface). This id-free op has no CB
- *   handle, so llk_pack_untilize derives that per-row stride from the OUTPUT descriptor via
- *   tile_stride_words == one tile's L1 size; the input per-tile unpack base uses the same for InShape.
- *   The shipping untilize factories set both CB pages to one tile (in/out_single_tile_size), so this matches
- *   fifo_page_size for every format they use:
- *     - linear formats (Float32/Float16/int): geometry-exact datum-count size (SCALE_DATUM_SIZE >> 4);
- *     - block floats (Bfp8/Bfp4/Bfp2): mantissa + shared-exponent section, both scaled by the tile geometry
- *       (matches tt_metal Tile::get_tile_size / the shipping CB page; see internal/llk_descriptor.h::tile_stride_words).
- *   Remaining edge (no shipping op hits it): padded / multi-tile CB pages.
+ * Per-row output stride is one tile's L1 size, derived at compile time from the output descriptor -- matches
+ * the shipping untilize factories' one-tile CB page.
  *
  * | Template | block_ct_dim/full_ct_dim | Block width / full input width in tiles | uint32_t | | False |
  * | Function | in            | Input operand (tilized; unpack base)          | LLKOperand | | True |
@@ -157,13 +143,10 @@ ALWI void pack_untilize_block(
 
 // clang-format off
 /**
- * Experimental id-free pack-untilize DEST init (PACK thread only). Use this when the tiles to untilize are
- * ALREADY resident in the DEST register (placed by copy_tile/reduce_tile/etc.), so UNPACK and MATH are NOT
- * configured for a CB -> DEST datacopy here (contrast pack_untilize_init, which configures all three threads).
- * Takes only the OUTPUT LLKOperand (data format + tile geometry as NTTPs) instead of a CB id; the packer
- * register format is derived INSIDE the LLK from OUT. Mirrors the legacy pack_untilize_dest_init PACK path:
- * (re)configure BH DEST remap, program the packer output format, program the untilize MOP/strides, then the
- * untilize dest-offset registers. Pair with pack_untilize_dest / pack_untilize_uninit.
+ * Id-free pack-untilize DEST init (PACK thread only). Use when the tiles to untilize are already resident in
+ * DEST (placed by copy_tile/reduce_tile/etc.) -- UNPACK and MATH are not configured here, unlike
+ * pack_untilize_init. Takes only the output LLKOperand; the packer register format is derived inside the LLK
+ * from OUT. Pair with pack_untilize_dest / pack_untilize_uninit. Blackhole only.
  *
  * | Param Type | Name          | Description                                       | Type       | Valid Range               | Required              |
  * |------------|---------------|---------------------------------------------------|------------|---------------------------|-----------------------|
@@ -206,12 +189,13 @@ ALWI void pack_untilize_dest_init(LLKOperand<OutFormat, OutShape> /*out*/) {
 
 // clang-format off
 /**
- * Experimental id-free pack-untilize of a block whose source is the DEST register (not a CB). Packs
- * (untilizes) block_rt_dim tile-rows that are ALREADY in DEST out to the row-major output at out.l1_address.
- * There is NO input LLKOperand: the source is DEST (selected by tile_dst_ct_offset / tile_dst_rt_offset).
- * The caller owns DEST synchronization (tile_regs_acquire/commit/wait/release) and any CB flow control. The
- * per-tile-row output stride is derived from the OUTPUT descriptor (tile_stride_words == one tile's L1 size;
- * see the addressing note on pack_untilize_block). Pair with pack_untilize_dest_init.
+ * Id-free pack-untilize of a block whose source is DEST (not a CB). Packs (untilizes) block_rt_dim tile-rows
+ * already in DEST (selected by tile_dst_ct_offset / tile_dst_rt_offset) out to the row-major output at
+ * out.l1_address. Blackhole only.
+ *
+ * There is no input LLKOperand. The caller owns DEST synchronization (tile_regs_acquire/commit/wait/release)
+ * and any CB flow control. Per-tile-row output stride is derived from the output descriptor (one tile's L1
+ * size). Pair with pack_untilize_dest_init.
  *
  * | Param Type | Name               | Description                                                    | Type       | Valid Range                             | Required              |
  * |------------|--------------------|----------------------------------------------------------------|------------|-----------------------------------------|-----------------------|
@@ -261,9 +245,8 @@ ALWI void pack_untilize_dest(
 
 // clang-format off
 /**
- * Experimental id-free pack-untilize uninit. Restores the packer Z stride (via the output descriptor's
- * register format) and resets the packer to Default mode so a subsequent op can reprogram it. Mirrors the
- * legacy pack_untilize_uninit (BH path).
+ * Id-free pack-untilize uninit. Restores the packer Z stride (via the output descriptor's register format)
+ * and resets the packer to Default mode so a subsequent op can reprogram it. Blackhole only.
  */
 // clang-format on
 template <DataFormat OutFormat, TensorShape OutShape>

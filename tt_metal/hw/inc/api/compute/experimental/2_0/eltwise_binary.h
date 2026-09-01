@@ -23,26 +23,21 @@ namespace experimental {
 #ifdef ARCH_BLACKHOLE
 
 // Id-free (2.0) two-operand eltwise binary (add/sub/mul). Each op takes one LLKOperand per input
-// (A -> SrcA, B -> SrcB), format+geometry as NTTPs, L1 addresses the only runtime state. Binary is
-// FORMAT-FREE at the op level: the src/dst register formats are programmed at compute_kernel_hw_startup;
-// the op forwards only geometry (from operand A, mirroring legacy) + the two per-tile L1 addresses. Packing
-// is done separately via the id-free experimental::pack_tile. The two-operand ops are BroadcastType::NONE
-// only (broadcast lives in bcast.h); the dest-reuse (accumulation) variants ARE part of this surface -- see
-// the add/sub/mul_reuse_dest_* family further down.
+// (A -> SrcA, B -> SrcB); format+geometry are NTTPs, L1 addresses the only runtime state. Format-free at
+// the op level: src/dst register formats are programmed at compute_kernel_hw_startup; the op forwards only
+// geometry (from operand A) + the two per-tile L1 addresses. Packing is separate (experimental::pack_tile).
+// BroadcastType::NONE only (broadcast lives in bcast.h); dest-reuse (accumulation) variants are further down.
 
 // clang-format off
 /**
- * Paired init for a two-operand eltwise binary op. Always configures BOTH MATH and the AB unpacker (a full
- * init) from operand A's descriptor. Geometry is taken from operand A. compute_kernel_hw_startup(a_cb, b_cb,
- * out_cb) must already have programmed the formats.
+ * Paired init for a two-operand eltwise binary op. Configures MATH and the AB unpacker from operand A's
+ * descriptor; geometry comes from operand A. compute_kernel_hw_startup(a_cb, b_cb, out_cb) must already have
+ * programmed the formats. Operand B contributes nothing at init -- A.shape == B.shape is enforced at
+ * execute (add/sub/mul_tiles).
  *
  * | Template | eltwise_binary_type | ELWADD / ELWSUB / ELWMUL               | EltwiseBinaryType |  | True |
  * | Function | a                   | Operand A (A -> SrcA); drives geometry | LLKOperand       |  | True |
  * | Function | acc_to_dest         | Accumulate the result into DST         | bool             |  | False |
- *
- * NOTE (PART B): the init forwards ONLY operand A's descriptor (geometry + format), mirroring legacy which
- * inits from a single operand. Operand B contributes nothing to init, so it is not taken here; the
- * A.shape == B.shape requirement is enforced at the execute (add/sub/mul_tiles), which does see both.
  */
 // clang-format on
 template <EltwiseBinaryType eltwise_binary_type, DataFormat AFormat, TensorShape AShape>
@@ -114,9 +109,8 @@ ALWI void mul_init(LLKOperand<AFormat, AShape> a, bool acc_to_dest = true) {
 
 // clang-format off
 /**
- * Element-wise C = A [op] B for one tile pair, writing DST[idst]. Pair with the matching *_init. The DST
- * register must be acquired. itile0/itile1 index within operand A/B; idst indexes DST. Geometry (for MATH)
- * comes from operand A, matching the legacy op.
+ * Element-wise C = A [op] B for one tile pair, writing DST[idst]. Pair with the matching *_init. DST must
+ * be acquired. itile0/itile1 index within A/B; idst indexes DST. Geometry (for MATH) comes from operand A.
  *
  * | Function | a / b           | Input operands                      | LLKOperand | | True |
  * | Function | itile0 / itile1 | Tile indices within A / B           | uint32_t   | | True |
@@ -209,12 +203,9 @@ ALWI void mul_tiles(
 
 // clang-format off
 /**
- * Element-wise C = A + B over `ntiles` consecutive tile pairs, writing DST[start_idst + i]. Block/loop form of
- * add_tiles: a pure compute-layer loop over the existing 2.0 add_tiles (mirrors copy_block over copy_tile), so
- * it inherits add_tiles's semantics and requires the same init (add_init). Tile (start_itile0 + i) of A is
- * paired with tile (start_itile1 + i) of B; each per-tile source address is the operand base offset by
- * (start_i + i) * tile_stride_words(Format, Shape) 16-byte words (folds to a compile-time stride). No CB id, no
- * register format on the API. The DST register must be acquired; start_idst + ntiles <= DST size.
+ * Element-wise C = A + B over `ntiles` consecutive tile pairs, writing DST[start_idst + i]. Loop form of
+ * add_tiles (same semantics, same init: add_init). Tile (start_itile0 + i) of A pairs with tile
+ * (start_itile1 + i) of B. DST must be acquired; start_idst + ntiles <= DST size.
  *
  * | Param Type | Name          | Description                                       | Type       | Valid Range | Required |
  * |------------|---------------|--------------------------------------------------|------------|-------------|----------|
@@ -242,12 +233,9 @@ ALWI void add_block(
 
 // clang-format off
 /**
- * Element-wise C = A - B over `ntiles` consecutive tile pairs, writing DST[start_idst + i]. Block/loop form of
- * sub_tiles: a pure compute-layer loop over the existing 2.0 sub_tiles (mirrors copy_block over copy_tile), so
- * it inherits sub_tiles's semantics and requires the same init (sub_init). Tile (start_itile0 + i) of A is
- * paired with tile (start_itile1 + i) of B; each per-tile source address is the operand base offset by
- * (start_i + i) * tile_stride_words(Format, Shape) 16-byte words (folds to a compile-time stride). No CB id, no
- * register format on the API. The DST register must be acquired; start_idst + ntiles <= DST size.
+ * Element-wise C = A - B over `ntiles` consecutive tile pairs, writing DST[start_idst + i]. Loop form of
+ * sub_tiles (same semantics, same init: sub_init). Tile (start_itile0 + i) of A pairs with tile
+ * (start_itile1 + i) of B. DST must be acquired; start_idst + ntiles <= DST size.
  *
  * | Param Type | Name          | Description                                       | Type       | Valid Range | Required |
  * |------------|---------------|--------------------------------------------------|------------|-------------|----------|
@@ -275,12 +263,9 @@ ALWI void sub_block(
 
 // clang-format off
 /**
- * Element-wise C = A * B over `ntiles` consecutive tile pairs, writing DST[start_idst + i]. Block/loop form of
- * mul_tiles: a pure compute-layer loop over the existing 2.0 mul_tiles (mirrors copy_block over copy_tile), so
- * it inherits mul_tiles's semantics and requires the same init (mul_init). Tile (start_itile0 + i) of A is
- * paired with tile (start_itile1 + i) of B; each per-tile source address is the operand base offset by
- * (start_i + i) * tile_stride_words(Format, Shape) 16-byte words (folds to a compile-time stride). No CB id, no
- * register format on the API. The DST register must be acquired; start_idst + ntiles <= DST size.
+ * Element-wise C = A * B over `ntiles` consecutive tile pairs, writing DST[start_idst + i]. Loop form of
+ * mul_tiles (same semantics, same init: mul_init). Tile (start_itile0 + i) of A pairs with tile
+ * (start_itile1 + i) of B. DST must be acquired; start_idst + ntiles <= DST size.
  *
  * | Param Type | Name          | Description                                       | Type       | Valid Range | Required |
  * |------------|---------------|--------------------------------------------------|------------|-------------|----------|
@@ -308,12 +293,9 @@ ALWI void mul_block(
 
 // =====================================================================================================================
 // Dest-reuse (accumulation) binary ops: one operand is taken from the DST register instead of a second L1
-// buffer. This is the id-free successor to the legacy CB-id binary_reuse_dest API (the deprecated
-// binary_dest_reuse_tiles[_init] path is NOT ported). Only the L1 operand becomes an LLKOperand; the reused
-// operand IS the DST register, selected at runtime by dst_tile_index, so it carries no LLKOperand. The
-// EltwiseBinaryType and EltwiseBinaryReuseDestType template params are preserved exactly as legacy. Because
-// only a single operand is unpacked, this path uses llk_unpack_A (not llk_unpack_AB). BH accumulates the
-// unpacked operand into DST at the unpacker (acc_to_dest = true), mirroring the legacy detail path.
+// buffer, selected at runtime by dst_tile_index (so it carries no LLKOperand); only the other operand is an
+// LLKOperand. Because a single operand is unpacked, this path uses llk_unpack_A (not llk_unpack_AB). BH
+// accumulates the unpacked operand into DST at the unpacker (acc_to_dest = true).
 // =====================================================================================================================
 
 namespace detail {
@@ -337,7 +319,7 @@ template <
     TensorShape Shape>
 ALWI void binary_reuse_dest_init(LLKOperand<Format, Shape> /*in*/) {
     static_assert(is_legal_tile_shape(Shape), "binary_reuse_dest_init: illegal tile shape for the L1 operand.");
-    // BH: accumulate the unpacked operand into DST at the unpacker (acc_to_dest = true), matching legacy.
+    // BH: accumulate the unpacked operand into DST at the unpacker (acc_to_dest = true).
     UNPACK((llk_unpack_A_init<
             LLKOperand<Format, Shape>::descriptor,
             DST_ACCUM_MODE,

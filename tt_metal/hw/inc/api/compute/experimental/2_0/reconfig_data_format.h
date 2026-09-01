@@ -11,53 +11,34 @@
 #include "data_format_derive.h"  // ckernel::infer_unpack_dst_format -- register-format derivation (BH)
 
 #ifdef TRISC_UNPACK
-// p_dim_stride_target + the raw UNPACK cores _llk_unpack_reconfig_data_format_srca_impl_/_srcb_impl_ (via
-// the transitively-included llk_unpack_common.h). No id-free (LLKMemDescriptor-NTTP) unpack reconfig LLK
-// exists yet, so this file calls straight through to the raw cores with a compile-time-resolved register
-// format, bypassing the CB-id operand-array lookups the legacy llk_unpack_reconfig_data_format_srca(operand)
-// wrapper does.
+// Raw UNPACK cores (_llk_unpack_reconfig_data_format_srca_impl_/_srcb_impl_); no id-free unpack reconfig LLK
+// exists yet, so this file calls through directly with a compile-time-resolved register format.
 #include "llk_unpack_common_api.h"
 #endif
 
 #ifdef TRISC_MATH
-// The raw MATH cores _llk_math_reconfig_data_format_srca_/_srcb_ (via the transitively-included
-// llk_math_common.h). Same rationale as TRISC_UNPACK above -- no id-free MATH reconfig LLK exists yet.
+// Raw MATH cores (_llk_math_reconfig_data_format_srca_/_srcb_); no id-free MATH reconfig LLK exists yet either.
 #include "llk_math_common_api.h"
 #endif
 
 #ifdef TRISC_PACK
-// The id-free packer reconfig ALREADY EXISTS here: llk_pack_reconfig_data_format<LLKMemDescriptor, bool>().
-// This file only wraps it; no new PACK-side LLK code is written.
+// Id-free packer reconfig already exists (llk_pack_reconfig_data_format<LLKMemDescriptor, bool>()); this
+// file just wraps it.
 #include "experimental/2_0/llk_pack_tile.h"
 #endif
 
 // =====================================================================================================
-// Id-free (2.0) reconfig_data_format -- SINGLE-OPERAND CORE surfaces only. Ports the three 1-operand CORE
-// overloads of the legacy tt_metal/hw/inc/api/compute/reconfig_data_format.h to the id-free LLKOperand
-// pattern:
+// Id-free (2.0) reconfig_data_format -- single-operand surfaces only. Reprograms the srca / srcb / pack
+// register data format from a new operand's descriptor NTTP:
 //
-//   1. reconfig_data_format_srca(new_a)   -- always re-derives + programs the SrcA format
-//   2. reconfig_data_format_srcb(new_b)   -- always re-derives + programs the SrcB format
-//   3. pack_reconfig_data_format(new_out) -- wraps the EXISTING id-free
-//                                            llk_pack_reconfig_data_format<DESC,...>() from llk_pack_tile.h
+//   1. reconfig_data_format_srca(new_a)   -- reprograms the SrcA format
+//   2. reconfig_data_format_srcb(new_b)   -- reprograms the SrcB format
+//   3. pack_reconfig_data_format(new_out) -- wraps the existing id-free llk_pack_reconfig_data_format<...>()
 //
-// Each call unconditionally reprograms its operand's format -- the id-free surface deliberately keeps ONLY
-// the single-`LLKOperand` forms. The legacy 2-arg (old,new) "skip if format unchanged" variants and the
-// both-src reconfig_data_format(new_a,new_b)/(old_a,new_a,old_b,new_b) forms are intentionally NOT ported:
-// with compile-time NTTP formats a caller that would benefit from the skip simply omits the call, so the
-// old/new pairs and the two-operand exponent-width reconciliation add no value on the id-free surface.
-//
-// No id-free (LLKMemDescriptor-NTTP) UNPACK/MATH reconfig LLK exists yet (only the PACK side does, reused
-// by pack_untilize). For srcA/srcB this file therefore derives the register format itself (via
-// ckernel::infer_unpack_dst_format, data_format_derive.h) and calls the RAW per-arch cores directly
-// (_llk_unpack_reconfig_data_format_srca_impl_ / _srcb_impl_, and _llk_math_reconfig_data_format_srca_ /
-// _srcb_), bypassing the CB-id operand-array lookups the legacy llk_*_api.h wrappers do. No new llk_*_api.h
-// file is created.
-//
-// DEFERRED (not ported -- see handoff for the full list): the 2-arg (old,new) skip variants; both-src
-// reconfig_data_format; reconfig_full_operand[_srca/_srcb] (tile/face geometry); reconfig_tile_shape
-// [_srca/_srcb] (shape-only, no format); the *_skip_int8 surface; SrcOrder (matmul operand-swap
-// convenience); and all deprecated <bool,bool>/<to_from_int8,...> overloads.
+// Each call unconditionally reprograms its operand's format (format only; tile/face geometry is untouched).
+// Since formats are compile-time NTTPs, a caller that wants to skip a call simply omits it: the legacy 2-arg
+// (old,new) "skip if unchanged" variants and the both-src forms are not ported, nor are the geometry-aware
+// forms (reconfig_full_operand, reconfig_tile_shape) or the SrcOrder / deprecated overloads. Blackhole only.
 // =====================================================================================================
 
 namespace ckernel {
@@ -71,11 +52,9 @@ namespace experimental {
 
 // clang-format off
 /**
- * Reconfigures the SrcA unpacker/math data format for a new operand, always re-deriving the register format
- * from the new L1 format (id-free equivalent of legacy reconfig_data_format_srca(new_operand)). Derives the
- * SrcA register format from `Format` via infer_unpack_dst_format(Format, DST_ACCUM_MODE), then reprograms the
- * UNPACK tile descriptor/format registers (raw core, dim_stride_target = IGNORE -- geometry untouched,
- * matching the legacy reconfig_data_format family, not reconfig_full_operand) and the MATH INT8-enable bit.
+ * Reprograms the SrcA unpacker/math data format for a new operand. Derives the SrcA register format from
+ * `Format` via infer_unpack_dst_format, then reprograms the UNPACK format registers and the MATH INT8-enable
+ * bit. Tile/face geometry is not touched.
  *
  * | Param Type | Name  | Description                                   | Type       | Valid Range | Required |
  * |------------|-------|------------------------------------------------|------------|-------------|----------|
@@ -102,9 +81,8 @@ ALWI void reconfig_data_format_srca(LLKOperand<Format, Shape> /*new_a*/) {
 
 // clang-format off
 /**
- * Reconfigures the SrcB unpacker/math data format for a new operand, always re-deriving the register format
- * from the new L1 format (id-free equivalent of legacy reconfig_data_format_srcb(new_operand)). Mirrors
- * reconfig_data_format_srca for SrcB. Does not reprogram tile/face geometry.
+ * Reprograms the SrcB unpacker/math data format for a new operand. Mirrors reconfig_data_format_srca for
+ * SrcB; tile/face geometry is not touched.
  *
  * | Param Type | Name  | Description                                   | Type       | Valid Range | Required |
  * |------------|-------|------------------------------------------------|------------|-------------|----------|
@@ -133,10 +111,8 @@ ALWI void reconfig_data_format_srcb(LLKOperand<Format, Shape> /*new_b*/) {
 
 // clang-format off
 /**
- * Reconfigures the packer output data format for a new output operand. Always performs the reconfiguration
- * (id-free equivalent of legacy pack_reconfig_data_format(new_cb_id)); reprograms only src/dst format
- * registers + tile geometry, not tile-dimension addrmod state (is_tile_dim_reconfig_en is not ported --
- * deferred, see handoff).
+ * Reprograms the packer output data format for a new output operand. Updates src/dst format registers and
+ * tile geometry; does not reconfigure tile-dimension addrmod state (is_tile_dim_reconfig_en is not ported).
  *
  * | Param Type | Name    | Description                                    | Type       | Valid Range | Required |
  * |------------|---------|-------------------------------------------------|------------|-------------|----------|
