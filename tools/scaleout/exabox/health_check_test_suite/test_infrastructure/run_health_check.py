@@ -39,11 +39,12 @@ from pathlib import Path
 
 from utils.diag_execution import run_diag_subprocess
 from utils.jira_client import (
-    _build_failure_body,
     add_comment_to_jira,
     artifact_upload_name,
     attach_files_to_jira,
     attach_log_to_jira,
+    build_failure_body,
+    build_recovery_body,
     create_jira_ticket,
     find_open_ticket_for_node,
     transition_jira_ticket,
@@ -264,6 +265,16 @@ def _clean_version(value: str | None) -> str:
     return "" if value in (None, "", "N/A") else value
 
 
+def collect_run_artifacts(artifacts_dir: Path | None, *, node: str, slurm_job_id: str) -> tuple[list[Path], list[str]]:
+    """A run's result files plus the ``[^name]`` attachment names JIRA renders
+    inline, so the failure and recovery paths attach and name the same set."""
+    result_files: list[Path] = []
+    if artifacts_dir and artifacts_dir.is_dir():
+        result_files = sorted(p for p in artifacts_dir.rglob("*") if p.is_file())
+    attachment_names = [f"{node}-{slurm_job_id}.log"] + [artifact_upload_name(p, slurm_job_id) for p in result_files]
+    return result_files, attachment_names
+
+
 # ---------------------------------------------------------------------------
 # Main orchestration
 # ---------------------------------------------------------------------------
@@ -456,12 +467,7 @@ def main() -> int:
         else:
             # Files this run will reference with [^name] so JIRA renders them
             # inline with the comment/description.
-            result_files = []
-            if artifacts_dir and artifacts_dir.is_dir():
-                result_files = sorted(p for p in artifacts_dir.rglob("*") if p.is_file())
-            attachment_names = [f"{node}-{slurm_job_id}.log"] + [
-                artifact_upload_name(p, slurm_job_id) for p in result_files
-            ]
+            result_files, attachment_names = collect_run_artifacts(artifacts_dir, node=node, slurm_job_id=slurm_job_id)
 
             existing_key = find_open_ticket_for_node(
                 node=node,
@@ -476,7 +482,7 @@ def main() -> int:
                 comment_body = (
                     f"Fabric System Health Check failed again on node {node} "
                     f"(recurring failure).\n\n"
-                    + _build_failure_body(
+                    + build_failure_body(
                         node=node,
                         slurm_job_id=slurm_job_id,
                         exit_code=exit_code,
@@ -566,16 +572,47 @@ def main() -> int:
                     node,
                     recovered_key,
                 )
+                # Attach this passing run's artifacts so the closed ticket carries
+                # the recovery evidence (telemetry, Grafana, CSVs) next to the logs.
+                result_files, attachment_names = collect_run_artifacts(
+                    artifacts_dir, node=node, slurm_job_id=slurm_job_id
+                )
                 add_comment_to_jira(
                     ticket_key=recovered_key,
                     body=(
-                        f"Fabric System Health Check passed on node {node} "
+                        f"*(/) Fabric System Health Check PASSED on node {node} "
                         f"(Slurm job {slurm_job_id}); the node has recovered. "
-                        f"Closing this ticket automatically."
+                        f"Closing this ticket automatically.*\n\n"
+                        + build_recovery_body(
+                            node=node,
+                            slurm_job_id=slurm_job_id,
+                            versions=versions,
+                            telemetry_summary=prom_output,
+                            test_output=full_output,
+                            attachment_names=attachment_names,
+                            restart_count=restart_count,
+                            grafana_base_url=args.grafana_base_url,
+                        )
                     ),
                     jira_base_url=args.jira_base_url,
                     jira_bearer_token=jira_bearer_token,
                 )
+                attach_log_to_jira(
+                    ticket_key=recovered_key,
+                    test_output=full_output,
+                    node=node,
+                    slurm_job_id=slurm_job_id,
+                    jira_base_url=args.jira_base_url,
+                    jira_bearer_token=jira_bearer_token,
+                )
+                if result_files:
+                    attach_files_to_jira(
+                        ticket_key=recovered_key,
+                        files=result_files,
+                        slurm_job_id=slurm_job_id,
+                        jira_base_url=args.jira_base_url,
+                        jira_bearer_token=jira_bearer_token,
+                    )
                 transition_jira_ticket(
                     ticket_key=recovered_key,
                     jira_base_url=args.jira_base_url,
