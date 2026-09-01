@@ -190,6 +190,7 @@ def test_bw_gelu_grad_dtype_must_match_input(grad_dtype, input_dtype, device, ex
     assert ttnn.gelu_bw(grad_tensor, input_tensor)[0].dtype == input_dtype
 
 
+# Test gradients across program cache hits
 def test_bw_gelu_program_cache_regression(device):
     device.enable_program_cache()
     device.clear_program_cache()
