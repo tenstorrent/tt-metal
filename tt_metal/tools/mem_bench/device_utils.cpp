@@ -13,6 +13,7 @@
 #include "core_coord.hpp"
 #include "device_utils.hpp"
 #include "kernel_types.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 class Program;
@@ -26,7 +27,7 @@ std::vector<uint32_t> read_cores(distributed::MeshDevice* device, const CoreRang
     for (size_t xi = cores.start_coord.x; xi <= cores.end_coord.x; ++xi) {
         for (size_t yi = cores.start_coord.y; yi <= cores.end_coord.y; ++yi) {
             std::vector<uint32_t> single_data;
-            tt::tt_metal::detail::ReadFromDeviceL1(device, CoreCoord{xi, yi}, addr, sizeof(uint32_t), single_data);
+            slow_dispatch::ReadFromL1(*device, CoreCoord{xi, yi}, addr, sizeof(uint32_t), single_data);
             data.push_back(single_data[0]);
         }
     }
