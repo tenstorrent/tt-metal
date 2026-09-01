@@ -114,6 +114,8 @@ def run_model(
     shared_hidden_dim=None,
     latent_use_norm=True,
     rms_norm_eps=1e-5,
+    shared_output_pcc=0.997,
+    routed_output_pcc=0.96,
     final_output_pcc=0.982,
     routed_activation=ttnn.RoutedExpertActivation.Silu,
     shared_activation=ACTIVATION_SILU,
@@ -523,8 +525,8 @@ def run_model(
     # Dense tensor checks with PCC
     # fmt: off
     dense_checks = [
-        ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device), 0.997),
-        ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), 0.96),
+        ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device), shared_output_pcc),
+        ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), routed_output_pcc),
         ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), final_output_pcc),
     ]
     if use_latent:
@@ -834,6 +836,7 @@ def _run_moe_case(
     num_links,
     gate_fallback_mode,
     request,
+    **run_model_kwargs,
 ):
     """Resolve topology from the fabric config, then run_model. Keyword-only: run_model takes 16
     positional arguments, so the one place that lays them out in order is here."""
@@ -853,6 +856,7 @@ def _run_moe_case(
         per_axis_topology(device_params["fabric_config"]),
         gate_fallback_mode,
         request,
+        **run_model_kwargs,
     )
 
 
@@ -1116,4 +1120,10 @@ def test_mistral4_moe(
         num_links=num_links,
         gate_fallback_mode=gate_fallback_mode,
         request=request,
+        # Measured on this row, and identical at 5k and 25k to within 2e-5: shared 0.999761,
+        # routed 0.976144, final 0.994548. The inherited defaults (0.997 / 0.96 / 0.982) are
+        # DeepSeek-derived and leave enough slack here to pass a real regression through.
+        shared_output_pcc=0.998,
+        routed_output_pcc=0.972,
+        final_output_pcc=0.992,
     )

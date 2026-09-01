@@ -75,8 +75,9 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
     config_builder_overrides_checkpoint = True
     mla_pcc_threshold = 0.995
     # 0.971 was sized for the sigmoid gate, which measured 0.972458 -- a revert would have passed.
-    # The softmax gate measures 0.994563; 0.982 (DeepSeek's value) catches a regression with room.
-    moe_pcc_threshold = 0.982
+    # The softmax gate measures 0.994563 at 5k and 0.994544 at 25k, so 0.992 keeps ~0.0025 of
+    # headroom over both while still catching a regression.
+    moe_pcc_threshold = 0.992
     prefill_trace_layout = "single_file"
 
     # --- CPU reference ---------------------------------------------------------------------------

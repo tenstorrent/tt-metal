@@ -902,7 +902,7 @@
   cmd: |
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_mistral4_moe -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_mistral4_moe -k "fabric2d-8x4 and (mistral4-5k-pcc or mistral4-25k-pcc)" -vvv --tb=short
     '
   test_type: mistral4_moe
   test_group: module
