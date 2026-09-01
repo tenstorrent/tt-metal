@@ -129,7 +129,17 @@ PrepareChunkRecurrenceOperation::create_op_performance_model(
     const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
     using namespace kda_performance_model;
 
-    const auto work = prepare_chunk_recurrence_work(attrs.num_heads, attrs.num_chunks, attrs.key_dim, attrs.value_dim);
+    constexpr double chunk = tt::constants::TILE_HEIGHT;
+    constexpr double inverse_flops = chunk * (chunk - 1.0) * (chunk + 1.0) / 3.0;
+    const double instances = static_cast<double>(attrs.num_heads) * attrs.num_chunks;
+    const double key_dim = attrs.key_dim;
+    const double value_dim = attrs.value_dim;
+    const KdaFpuWork work{
+        .fpu_matrix_flops = instances * (4.0 * chunk * chunk * key_dim + inverse_flops),
+        .fpu_multiply_ops = instances * (10.0 * chunk * key_dim + chunk * value_dim),
+        .fpu_add_ops = instances * (2.0 * chunk + (chunk - 1.0) * key_dim + chunk * key_dim + chunk * chunk),
+        .fpu_reduction_ops = instances * 2.0 * chunk * (key_dim - 1.0),
+    };
     const std::array<const Tensor*, 5> inputs = {&in.q, &in.k, &in.v, &in.g, &in.beta};
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }

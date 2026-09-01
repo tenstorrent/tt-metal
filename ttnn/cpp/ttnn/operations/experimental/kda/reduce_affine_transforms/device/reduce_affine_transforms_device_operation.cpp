@@ -98,8 +98,13 @@ ReduceAffineTransformsOperation::create_op_performance_model(
     const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
     using namespace kda_performance_model;
 
-    const auto work =
-        reduce_affine_transforms_work(attrs.batch_heads, attrs.groups_per_head, attrs.key_dim, attrs.value_dim);
+    const double key_dim = attrs.key_dim;
+    const double value_dim = attrs.value_dim;
+    const double compositions = static_cast<double>(attrs.batch_heads) * (attrs.groups_per_head - 1.0);
+    const KdaFpuWork work{
+        .fpu_matrix_flops = compositions * (2.0 * key_dim * key_dim * key_dim + 2.0 * key_dim * key_dim * value_dim),
+        .fpu_add_ops = compositions * key_dim * value_dim,
+    };
     const std::array<const Tensor*, 2> inputs = {&in.a, &in.b};
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }

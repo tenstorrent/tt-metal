@@ -97,12 +97,19 @@ SigmoidGatedRmsNormOperation::tensor_return_value_t SigmoidGatedRmsNormOperation
     auto specs = compute_output_specs(attrs, in);
     return {create_device_tensor(specs[0], in.input.device())};
 }
+
 tt::tt_metal::operation::OpPerformanceModelGeneral<SigmoidGatedRmsNormOperation::tensor_return_value_t>
 SigmoidGatedRmsNormOperation::create_op_performance_model(
     const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
     using namespace kda_performance_model;
 
-    const auto work = sigmoid_gated_rms_norm_work(attrs.batch, attrs.num_heads, attrs.sequence, attrs.value_dim);
+    const double rows = static_cast<double>(attrs.batch) * attrs.num_heads * attrs.sequence;
+    const double elements = rows * attrs.value_dim;
+    const KdaFpuWork work{
+        .fpu_multiply_ops = 4.0 * elements,
+        .fpu_add_ops = rows,
+        .fpu_reduction_ops = rows * (attrs.value_dim - 1.0),
+    };
     const std::array<const Tensor*, 3> inputs = {&in.input, &in.gate, &in.weight};
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
