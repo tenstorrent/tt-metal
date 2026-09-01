@@ -12,8 +12,8 @@
 
 // Id-free (2.0) pack-untilize kernel, classic circular buffers. The ops take LLKOperand (data format + tile
 // geometry as NTTPs, L1 address the only runtime state). pack_untilize_block owns the row/column loops and
-// derives per-tile input/output addresses from the compile-time geometry (SCALE_DATUM_SIZE). Output must be
-// bit-identical to the legacy kernel pack_untilize_legacy.cpp. This run uses block_ct_dim/full_ct_dim/
+// derives per-tile input/output addresses from the compile-time geometry via tile_stride_words. Output must
+// be bit-identical to the legacy kernel pack_untilize_legacy.cpp. This run uses block_ct_dim/full_ct_dim/
 // block_rt_dim == 1 (one tile per CB slot).
 void kernel_main() {
     std::uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);

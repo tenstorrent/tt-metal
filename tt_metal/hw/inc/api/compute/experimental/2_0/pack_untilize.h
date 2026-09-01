@@ -198,13 +198,13 @@ ALWI void pack_untilize_dest_init(LLKOperand<OutFormat, OutShape> /*out*/) {
 
 // clang-format off
 /**
- * Id-free pack-untilize of a block whose source is DEST (not a CB). Packs (untilizes) block_rt_dim tile-rows
- * already in DEST (selected by tile_dst_ct_offset / tile_dst_rt_offset) out to the row-major output at
- * out.l1_address. Blackhole only.
+ * Id-free pack-untilize of a block whose source is DEST (not an L1 operand). Packs (untilizes)
+ * block_rt_dim tile-rows already in DEST (selected by tile_dst_ct_offset / tile_dst_rt_offset) out to the
+ * row-major output at out.l1_address. Blackhole only.
  *
- * There is no input LLKOperand. The caller owns DEST synchronization (tile_regs_acquire/commit/wait/release)
- * and any CB flow control. Per-tile-row output stride is derived from the output descriptor (one tile's L1
- * size). Pair with pack_untilize_dest_init.
+ * There is no input LLKOperand. The caller owns DEST synchronization (tile_regs_acquire/commit/wait/release).
+ * Per-tile-row output stride is derived from the output descriptor (one tile's L1 size). Pair with
+ * pack_untilize_dest_init.
  *
  * | Param Type | Name               | Description                                                    | Type       | Valid Range                             | Required              |
  * |------------|--------------------|----------------------------------------------------------------|------------|-----------------------------------------|-----------------------|

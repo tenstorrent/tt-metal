@@ -20,8 +20,8 @@
  *
  * This header is deliberately NOT included by the broadly-included *_common_api.h files: it pulls the
  * ckernel::experimental namespace in, which collides with metal's top-level ::experimental (kernel_args.h)
- * under `using namespace ckernel`. It is included ONLY by compute_kernel_hw_startup.h, whose id-free overload
- * is the sole consumer -- and which is never pulled into the legacy kernel_args-based kernels.
+ * under `using namespace ckernel`. It is included ONLY by experimental/2_0/hw_startup.h, whose id-free
+ * overload is the sole consumer -- and which is never pulled into the legacy kernel_args-based kernels.
  *************************************************************************/
 
 #ifdef TRISC_UNPACK

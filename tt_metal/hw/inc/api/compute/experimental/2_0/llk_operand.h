@@ -59,20 +59,8 @@ struct LLKOperand {
 };
 
 namespace detail {
-// clang-format off
-/**
- * (detail) Absolute per-tile L1 base for operand `op` at `tile_index` (16B words). The per-tile stride folds to
- * a compile-time constant from the operand geometry via tile_stride_words == one tile's L1 size (geometry-exact
- * for linear formats, exp section included for block floats). Shared by every block/absolute-addressing op
- * (copy/eltwise_binary/reduce/...), so tile stride arithmetic lives in ONE place.
- *
- * | Param Type | Name         | Description                            | Type                   | Valid Range | Required |
- * |------------|--------------|----------------------------------------|------------------------|-------------|----------|
- * | Template   | Format/Shape | Operand L1 format + geometry (deduced) | DataFormat/TensorShape | N/A         | True     |
- * | Function   | op           | The operand (base address + geometry)  | LLKOperand             | N/A         | True     |
- * | Function   | tile_index   | Tile index within the operand          | uint32_t               | N/A         | True     |
- */
-// clang-format on
+// Absolute per-tile L1 base for operand `op` at `tile_index` (16B words). Stride folds to a compile-time
+// constant via tile_stride_words (one tile's L1 size). Shared by every block/absolute-addressing op.
 template <DataFormat Format, TensorShape Shape>
 ALWI std::uint32_t tile_address(LLKOperand<Format, Shape> op, std::uint32_t tile_index) {
     constexpr std::uint32_t stride = tile_stride_words(Format, Shape);

@@ -31,7 +31,7 @@ namespace experimental {
 // clang-format off
 /**
  * Paired init for a two-operand eltwise binary op. Configures MATH and the AB unpacker from operand A's
- * descriptor; geometry comes from operand A. compute_kernel_hw_startup(a_cb, b_cb, out_cb) must already have
+ * descriptor; geometry comes from operand A. compute_kernel_hw_startup(a, b, out) must already have
  * programmed the formats. Operand B contributes nothing at init -- A.shape == B.shape is enforced at
  * execute (add/sub/mul_tiles).
  *
@@ -335,19 +335,9 @@ ALWI void mul_block(
 // =====================================================================================================================
 
 namespace detail {
-// clang-format off
-/**
- * (detail) Single source of truth for the id-free dest-reuse INIT. One source operand comes from DST, so only
- * the single L1 operand `in` is unpacked (llk_unpack_A). reuse_dest picks which source register the DST tile is
- * loaded into. compute_kernel_hw_startup(a, b, out) must already have programmed the formats.
- *
- * | Param Type | Name                | Description                                        | Type                       | Valid Range | Required |
- * |------------|---------------------|----------------------------------------------------|----------------------------|-------------|----------|
- * | Template   | eltwise_binary_type | ELWADD / ELWSUB / ELWMUL                            | EltwiseBinaryType          | N/A         | True     |
- * | Template   | reuse_dest          | Which source register the DST operand loads into    | EltwiseBinaryReuseDestType | non-NONE    | True     |
- * | Function   | in                  | The single L1 operand (drives geometry + address)   | LLKOperand                 | N/A         | True     |
- */
-// clang-format on
+// Dest-reuse INIT: one source is DST, so only the L1 operand `in` is unpacked (llk_unpack_A). reuse_dest
+// picks which source register the DST tile loads into. compute_kernel_hw_startup(a, b, out) must already
+// have programmed the formats.
 template <
     EltwiseBinaryType eltwise_binary_type,
     EltwiseBinaryReuseDestType reuse_dest,
@@ -370,21 +360,8 @@ ALWI void binary_reuse_dest_init(LLKOperand<Format, Shape> /*in*/) {
           reuse_dest>(0 /*acc_to_dest*/)));
 }
 
-// clang-format off
-/**
- * (detail) Single source of truth for the id-free dest-reuse EXECUTE. The DST[dst_tile_index] tile is loaded
- * into SrcA (DEST_TO_SRCA) or SrcB (DEST_TO_SRCB); the op runs on SrcA & SrcB and writes back to
- * DST[dst_tile_index]. Assumes a prior op populated DST[dst_tile_index], else it reads zeroes.
- *
- * | Param Type | Name                | Description                                          | Type                       | Valid Range | Required |
- * |------------|---------------------|------------------------------------------------------|----------------------------|-------------|----------|
- * | Template   | eltwise_binary_type | ELWADD / ELWSUB / ELWMUL                              | EltwiseBinaryType          | N/A         | True     |
- * | Template   | reuse_dest          | Which source register the DST operand loads into      | EltwiseBinaryReuseDestType | non-NONE    | True     |
- * | Function   | in                  | The single L1 operand (base address + geometry)       | LLKOperand                 | N/A         | True     |
- * | Function   | in_tile_index       | Tile index within the L1 operand                      | uint32_t                   | N/A         | True     |
- * | Function   | dst_tile_index      | DST tile used as the other operand and as the result  | uint32_t                   | < DST size  | True     |
- */
-// clang-format on
+// Dest-reuse EXECUTE: DST[dst_tile_index] loads into SrcA (DEST_TO_SRCA) or SrcB (DEST_TO_SRCB); the op
+// writes back to DST[dst_tile_index]. Assumes a prior op populated that slot, else it reads zeroes.
 template <
     EltwiseBinaryType eltwise_binary_type,
     EltwiseBinaryReuseDestType reuse_dest,

@@ -33,8 +33,8 @@ namespace experimental {
 
 // clang-format off
 /**
- * Reduce init: programs UNPACK (AB reduce), MATH, and the PACK edge-mask. compute_kernel_hw_startup(data_cb,
- * scaler_cb, out_cb) must already have programmed the formats. Uses only DATA geometry and OUT's face_r_dim;
+ * Reduce init: programs UNPACK (AB reduce), MATH, and the PACK edge-mask. compute_kernel_hw_startup(data,
+ * scaler, out) must already have programmed the formats. Uses only DATA geometry and OUT's face_r_dim;
  * the scaler operand contributes nothing at init (it's passed to reduce_tile).
  *
  * | Template | reduce_type | SUM / AVG / MAX                                | PoolType  | | True |
