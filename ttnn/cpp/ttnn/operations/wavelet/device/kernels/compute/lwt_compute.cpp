@@ -17,7 +17,6 @@
 
 // clang-format off
 #include "api/compute/common.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/dataflow/circular_buffer.h"
 #include "internal/compute/tile_move_copy.h"
 #include "ttnn/operations/wavelet/device/protocol/lwt_config.hpp"
@@ -184,19 +183,19 @@ WAVELET_1D_STEP_ATTRIBUTES void run_predict_update_step(
         tile_regs_acquire();
 
         input0_buffer.wait_front(2);
-        copy_tile_to_dst_init_short(cb_input0);
+        copy_init(cb_input0);
         ckernel::internal::copy_tile_to_dst_32x16(cb_input0, 0, kDstSource0);
         ckernel::internal::copy_tile_to_dst_32x16(cb_input0, 1, kDstSource1);
         input0_buffer.pop_front(2);
 
         input1_buffer.wait_front(2);
-        copy_tile_to_dst_init_short(cb_input1);
+        copy_init(cb_input1);
         ckernel::internal::copy_tile_to_dst_32x16(cb_input1, 0, kDstSource2);
         ckernel::internal::copy_tile_to_dst_32x16(cb_input1, 1, kDstSource3);
         input1_buffer.pop_front(2);
 
         base_buffer.wait_front(3);
-        copy_tile_to_dst_init_short(cb_base);
+        copy_init(cb_base);
         ckernel::internal::copy_tile_to_dst_32x16(cb_base, 0, kDstBase0);
         ckernel::internal::copy_tile_to_dst_32x16(cb_base, 1, kDstBase1);
         ckernel::internal::copy_tile_to_dst_32x16(cb_base, 2, kDstBase2);
@@ -247,7 +246,7 @@ inline void run_scale_step(
         output_buffer.reserve_back(kScaleTileCount);
 
         tile_regs_acquire();
-        copy_tile_to_dst_init_short(cb_input);
+        copy_init(cb_input);
         ckernel::internal::copy_tile_to_dst_32x16(cb_input, 0, kDstBase0);
         ckernel::internal::copy_tile_to_dst_32x16(cb_input, 1, kDstBase1);
         ckernel::internal::copy_tile_to_dst_32x16(cb_input, 2, kDstBase2);
@@ -418,6 +417,6 @@ void kernel_main() {
     constexpr uint32_t cb_base = get_compile_time_arg_val(2);
     constexpr uint32_t cb_output = get_compile_time_arg_val(3);
     compute_kernel_hw_startup(cb_base, cb_output);
-    init_sfpu(cb_base, cb_output);
+    copy_init(cb_base);
     ttnn::operations::wavelet::kernels::lwt_compute<WAVELET_1D_ACTIVE_SCHEME_TYPE>();
 }
