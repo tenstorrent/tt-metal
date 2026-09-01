@@ -966,6 +966,12 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             if (ne != nullptr && *ne != '\0' && *ne != '0') {
                 defines["FABRIC_ROUTER_SYNC_NO_ECHO"] = "1";
             }
+            // DIAGNOSTIC: send normally, emit NOTHING into the profiler ring. Separates
+            // packets-on-the-wire from records-in-the-ring, which every other arm varied together.
+            const char* nr = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_NO_RING");
+            if (nr != nullptr && *nr != 0 && *nr != (char)0x30) {
+                defines["FABRIC_ROUTER_SYNC_NO_RING"] = "1";
+            }
         }
     }
 

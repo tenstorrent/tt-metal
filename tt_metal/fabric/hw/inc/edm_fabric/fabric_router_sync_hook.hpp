@@ -113,6 +113,19 @@ inline volatile Blk* blk() {
 // One PP_SYNC packet (2 words + at most one 1-word sticky) into this erisc's SPSC lane, through
 // kernel_profiler's producer state. Callers reserve ring room for the whole round up front.
 inline void emit_sample(uint32_t which, uint32_t round, uint32_t idx, uint32_t hi, uint32_t lo) {
+#if defined(FABRIC_ROUTER_SYNC_NO_RING)
+    // DIAGNOSTIC: send exactly as normal, but write NOTHING into the profiler ring. Every arm so far
+    // has varied packets-on-the-wire and records-in-the-ring TOGETHER, so neither has been isolated.
+    // The crash symptom points at the ring: the link is physically UP at the wedge (Rx link up 0x1,
+    // retrain count 0), the erisc simply never returns to base FW to tick its heartbeat -- which is
+    // what a BLOCKED PRODUCER looks like, not a broken link.
+    (void)which;
+    (void)round;
+    (void)idx;
+    (void)hi;
+    (void)lo;
+    return;
+#endif
     kernel_profiler::ring_write_sticky_timer(hi);
     kernel_profiler::ring_write_word(kernel_profiler::ppfmt::w0(
         kernel_profiler::ppfmt::T_SYNC, kernel_profiler::spsc_sync_low27(which, round, idx)));
@@ -200,7 +213,16 @@ __attribute__((noinline)) void initiator_round(uint32_t n) {
         if (!wait_tag(&b->echo.tag, tag(kTagEcho, round, i), dl)) {
             publish_state(7);  // failed: echo never arrived
             ok = false;
+#if defined(FABRIC_ROUTER_SYNC_NO_ECHO)
+            // NO_ECHO is a VOLUME-MATCHED control, so it must not bail here. With the normal break,
+            // an initiator whose echo never comes sends exactly ONE ping per round instead of n --
+            // measured 103 packets/link against the enabled arm's 3168, ~31x less. A "clean" result
+            // at 1/31 the traffic says nothing about direction, only about volume. Keep sending the
+            // remaining samples so the comparison is one-directional-at-similar-volume.
+            continue;
+#else
             break;
+#endif
         }
         kernel_profiler::read_wall_clock(hi, lo);  // t2: immediately after the echo is seen
         emit_sample(kernel_profiler::SPSC_SYNC_T2, round, i, hi, lo);

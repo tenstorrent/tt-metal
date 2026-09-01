@@ -2503,11 +2503,18 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
             en->tracy_ok = true;
             log_info(
                 tt::LogMetal,
-                "[perf-debug profiler] FABRIC SYNC: eth lane chip {} NOC0 ({},{}) anchored (host_anchor {}, "
-                "device_at_anchor {:.0f} cy, {:.6f} GHz){}",
+                "[perf-debug profiler] FABRIC SYNC: eth lane chip {} NOC0 ({},{}) VIRTUAL ({},{}) {} "
+                "anchored (host_anchor {}, device_at_anchor {:.0f} cy, {:.6f} GHz){}",
                 en->chip,
                 n0.x,
                 n0.y,
+                // The eth-wedge crash names a VIRTUAL core; whether that core was SENDING or only
+                // RECEIVING points at completely different causes, so log both the coord and the role.
+                en->virt.x,
+                en->virt.y,
+                // Role comes from the config body we just wrote (anchoring runs after write_cfg), so
+                // no need to reach back into the edge.
+                (en->cfg_valid && (en->cfg[0] & kFlagInitiator)) != 0 ? "INITIATOR(sends)" : "RESPONDER(recv)",
                 h0,
                 dev,
                 f_chip,
