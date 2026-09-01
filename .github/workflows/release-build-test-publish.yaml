@@ -94,7 +94,10 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-wheel: true
       tracy: true
-      wheel-ref: ${{ format('refs/tags/{0}', inputs.tag-version) }}
+      # Dry-run does not create or move the version tag, so build from github.sha.
+      # A real release tags that SHA first, then builds the wheel from the tag.
+      # Equivalent to the guard main carries on its single build-artifact job (#53509).
+      wheel-ref: ${{ inputs.dry-run && github.sha || format('refs/tags/{0}', inputs.tag-version) }}
       fetch-depth: 0
       skip-tt-train: false
       enable-lto: false
@@ -114,7 +117,10 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-wheel: true
       tracy: false
-      wheel-ref: ${{ format('refs/tags/{0}', inputs.tag-version) }}
+      # Dry-run does not create or move the version tag, so build from github.sha.
+      # A real release tags that SHA first, then builds the wheel from the tag.
+      # Equivalent to the guard main carries on its single build-artifact job (#53509).
+      wheel-ref: ${{ inputs.dry-run && github.sha || format('refs/tags/{0}', inputs.tag-version) }}
       fetch-depth: 0
       skip-tt-train: false
       enable-lto: false
