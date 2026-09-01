@@ -1,7 +1,7 @@
 # Dependency and input-handling review
 
-> **For the maintainers / security owner:** three `torch` advisories are open and are
-> **not** closed by a version bump. The disposition being requested, the evidence
+> For the maintainers / security owner: three `torch` advisories are open and are
+> not closed by a version bump. The disposition being requested, the evidence
 > behind it, and what the alternatives cost are in the next section. Everything after
 > that is the full audit record.
 
@@ -18,19 +18,19 @@ every HIGH, are closed by removal or by a bump (see *Audit findings* below).
 | [CVE-2025-2999](https://nvd.nist.gov/vuln/detail/CVE-2025-2999) | `torch.nn.utils.rnn.unpack_sequence` | memory corruption | `2.9.1` |
 | [CVE-2025-2998](https://nvd.nist.gov/vuln/detail/CVE-2025-2998) | `torch.nn.utils.rnn.pad_packed_sequence` | memory corruption | none recorded; range ends at `<= 2.6.0` |
 
-All three are CVSS 4.0 base **4.8 MEDIUM**, `AV:L/AC:L/PR:L/UI:N` — local access with
+All three are CVSS 4.0 base 4.8 MEDIUM, `AV:L/AC:L/PR:L/UI:N` — local access with
 existing privileges, no user interaction. NVD's own text for CVE-2025-3730 adds "the
 real existence of this vulnerability is still doubted at the moment". Two of the three
 are memory corruption rather than DoS, which is worth stating plainly because an
 earlier revision of this document called all three "local DoS" and that was wrong.
 
-**What ships.** Nothing. `requirements-reference.txt` builds a host-only venv for
+What ships. Nothing. `requirements-reference.txt` builds a host-only venv for
 golden capture, weight export and WER/speaker scoring. Merging this demo installs
 none of it: `tt/`, `tests/` and `demo/` import only `torch`, `numpy`, `ttnn` and
 `loguru`, all of which tt-metal's `python_env` already carries. See *The port adds no
 runtime dependencies*.
 
-**Reachability, checked rather than asserted.** Each advisory names one function, so
+Reachability, checked rather than asserted. Each advisory names one function, so
 "does anything on the reference path call it" is a decidable question rather than a
 judgement:
 
@@ -43,7 +43,7 @@ judgement:
 | `torchaudio` | — | — | `models/tacotron2.py` |
 | `modelscope` | `trainers/audio/kws_utils` | — | `models/multi_modal/{mmr,prost}` |
 
-**Not one of those call sites is on the reference path.** The scoring script
+Not one of those call sites is on the reference path. The scoring script
 instantiates `WavLMForXVector` — a different class in the same file as `WavLMForCTC` —
 and never passes `labels`, so the `ctc_loss` branch is a training path that does not
 run. From `torchaudio` it calls `load`, `save` and `functional.resample`, not
@@ -58,29 +58,29 @@ grep -rl "ctc_loss\|unpack_sequence\|pad_packed_sequence" --include="*.py" \
   $COSYVOICE_ENV/lib/python3.10/site-packages
 ```
 
-**Why the pin does not simply move.** Not compatibility — that was re-measured on
+Why the pin does not simply move. Not compatibility — that was re-measured on
 2026-08-22 and every blocker previously recorded here turned out to be false (details
 below). The blocker is narrower and cannot be tested away:
 `torch.multinomial(probs, num_samples=1)` consumes the RNG stream differently in 2.8
 than in 2.6. The batched form, `topk` and `sort` are byte-identical, and so is the
 generator; model arithmetic survives the bump bit-exact. But the token drawn at decode
-step 2 changes, the utterance ends at 147 semantic tokens instead of 164, and **all 29
-goldens shift**. Every accuracy figure in `PERF.md` is measured against those goldens.
+step 2 changes, the utterance ends at 147 semantic tokens instead of 164, and all 29
+goldens shift. Every accuracy figure in `PERF.md` is measured against those goldens.
 
 So a bump is a re-baseline, not a numerical risk: regenerate the golden set, re-run
 the PCC suite on both architectures, and re-measure every figure derived from it. That
 is real work, and it buys nothing on the reachability table above.
 
-**The disposition being asked for.** One of:
+The disposition being asked for. One of:
 
-1. **Accept the risk and keep `torch==2.6.0+cpu`** — the recommendation. The findings
+1. Accept the risk and keep `torch==2.6.0+cpu` — the recommendation. The findings
    are local-privilege, MEDIUM, in functions no reference-path code calls, in a venv
    the merge does not install.
-2. **Require the bump** — in which case the golden set is regenerated and every
+2. Require the bump — in which case the golden set is regenerated and every
    accuracy figure re-measured before merge. `docs/security.md`'s *Reproducing*
    section is the procedure; budget a full re-run of `tests/pcc` and `tests/e2e` on
    both architectures.
-3. **Require the file's removal from the PR** — publishable, at the cost that the
+3. Require the file's removal from the PR — publishable, at the cost that the
    goldens and the WER/similarity scores stop being reproducible from this tree.
 
 If (1) is granted, please record it on the PR; this document will carry the decision
@@ -106,17 +106,17 @@ Everything that runs on device imports only what tt-metal already ships:
 | `demo/` | `torch`, `numpy`, `ttnn` | tt-metal `python_env` |
 | `scripts/` | `cosyvoice`, `hyperpyyaml`, `onnxruntime`, `transformers`, `whisper`, `torchaudio`, `zhconv` | **`cosyvoice_env` only** |
 
-All four of the first group are present in tt-metal's environment already. **Merging this demo
-installs nothing.**
+All four of the first group are present in tt-metal's environment already. Merging this demo
+installs nothing.
 
 `scripts/` is the reference side — golden capture, weight export, front-end preparation, WER/SIM
-scoring. It runs once, on a host, in its own venv, and never on device. That boundary is not a
+scoring. It runs once, on a host, in its own venv, and never on device. That split is not a
 convenience: installing whisper into tt-metal's `python_env` during early bring-up pulled a
 `triton` that broke `import torch` outright, which is what established the rule.
 
 ## Audit findings, and where they live
 
-**None of them ship.** Every advisory below is confined to the reference venv, which:
+None of them ship. Every advisory below is confined to the reference venv, which:
 
 - is not installed by anything in `models/demos/cosyvoice/`,
 - is not needed to run the model, the demo, or any test in `tests/pcc`, `tests/e2e` or `tests/perf`,
@@ -135,7 +135,7 @@ help. So the pins moved.
 | fixed by a version bump | 3 CRITICAL, 9 HIGH, 7 MODERATE | `torch`, `lightning`, `diffusers`, `pyarrow`, `protobuf`, `modelscope`, `gdown`, `transformers`, `hydra-core` |
 | **outstanding** | **3 MODERATE** | `torch` ×3 |
 
-**36 of 39 closed, including every CRITICAL and every HIGH.** The three that remain are
+36 of 39 closed, including every CRITICAL and every HIGH. The three that remain are
 the `torch` MEDIUMs dispositioned at the top of this document; see *Disposition
 requested* for their functions, their reachability and what a bump would cost.
 
@@ -156,12 +156,12 @@ is measured against. `requirements-reference.txt` carries the per-package detail
 One correction worth recording, because it changed the outcome. An earlier pass here reported
 `transformers` 5.x as incompatible — that `Qwen2ForCausalLM` was no longer importable from the
 top-level namespace. That was measured in an environment that also carried torch 2.9.1, and
-torch 2.9.1 breaks that same import by itself; `transformers` **4.53.0** fails identically
+torch 2.9.1 breaks that same import by itself; `transformers` 4.53.0 fails identically
 there. Re-tested against torch 2.6.0, `transformers` 5.5.0 imports cleanly and reproduces the
 goldens bit-for-bit, which closed three advisories that had been written up as unfixable.
 
 What made the bumps safe to take is that they are checked, not asserted: regenerating the full
-golden set on the new pins reproduces all 29 files at **PCC ≥ 0.9999993**, e2e waveform
+golden set on the new pins reproduces all 29 files at PCC ≥ 0.9999993, e2e waveform
 `max|diff|` 3.5e-04. Re-verified 2026-08-22 from a venv built clean from this file: worst PCC
 `0.9999993220`, e2e `max|diff|` `3.457e-04`. The reference the TTNN port is measured against did not move.
 
@@ -193,7 +193,7 @@ dependency advisories above.
 No `subprocess`, no `shell=True`, no `os.system`, no `eval()`, no `exec()`, no `pickle.load` and
 no bare `yaml.load` anywhere in the tree.
 
-* **No `subprocess`, by rule.** `gen_golden.py` records the CosyVoice commit by reading
+* No `subprocess`, by rule. `gen_golden.py` records the CosyVoice commit by reading
   `.git/HEAD` (and `packed-refs`, when the ref has been packed) rather than by calling `git`.
   The argv-list form is *not* sufficient grounds to reintroduce one: it rules out shell
   metacharacters, but the path arrives from `--cosyvoice-root`/`$COSYVOICE_REPO`, and `git`
@@ -202,7 +202,7 @@ no bare `yaml.load` anywhere in the tree.
 * `module.eval()` in `export_weights.py` and `eval_wer_sim.py` is `torch.nn.Module.eval()`, the
   training-mode switch, not Python's `eval`.
 * Every script takes paths through `argparse` and joins them with `os.path.join`.
-* Weight and golden files are read with `numpy.load` **without** `allow_pickle`, so a malformed
+* Weight and golden files are read with `numpy.load` without `allow_pickle`, so a malformed
   `.npz` cannot execute code.
 
 ## Reproducing

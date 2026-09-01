@@ -132,9 +132,9 @@ BLACKHOLE = {
     ),
 }
 
-# Wormhole figures are n300. A different Wormhole part (N150) has not been measured;
-# it will trip the band below rather than silently inherit n300's verdict, which is
-# the intended behaviour -- see the module docstring.
+# These figures are from n300 specifically. A different Wormhole part will trip the
+# band below rather than silently inherit n300's verdict, which is the intended
+# behaviour -- see the module docstring.
 WORMHOLE = {
     # End-to-end traced decode: 127.3 tok/s default, 130.6 with COSYVOICE_FF2_GRID,
     # 128.0 with the in-place KV cache made explicit. That last row measures the same
