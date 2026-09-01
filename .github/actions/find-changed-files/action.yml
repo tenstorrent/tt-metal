@@ -52,6 +52,8 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.llk-perf-changed }}
   llk-ci-changed:
     value: ${{ steps.find-changed-files.outputs.llk-ci-changed }}
+  blaze-relevant-changed:
+    value: ${{ steps.find-changed-files.outputs.blaze-relevant-changed }}
 
 runs:
   using: "composite"

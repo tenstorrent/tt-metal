@@ -110,6 +110,7 @@ jobs:
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
       tt-train-changed: ${{ steps.find-changes.outputs.tt-train-changed }}
       models-changed: ${{ steps.find-changes.outputs.models-changed }}
+      blaze-relevant-changed: ${{ steps.find-changes.outputs.blaze-relevant-changed }}
     steps:
       # Use the in-tree action (same as pr-gate.yaml) so the llk-* outputs above are
       # available; the previously-pinned @v0.63.0 predates the llk-unit-tests-changed flag.
@@ -657,11 +658,14 @@ jobs:
   # declines the same post-merge re-run in its own ci.yaml for the same reason.
   blaze-merge-gate:
     needs: [build, find-changes]
+    # Narrow on purpose: LLK, Metalium runtime, fabric and core TTNN only.
+    # An op-only or test-only PR cannot affect what tt-blaze links against or
+    # JIT-compiles, and this is the one merge-gate job that occupies a runner
+    # this repo does not own. See blaze-relevant-changed in
+    # .github/scripts/utils/find-changed-files.sh for the exact path set.
     if: ${{ github.event_name == 'workflow_dispatch' ||
             (github.event_name == 'merge_group' &&
-             (needs.find-changes.outputs.cmake-changed == 'true' ||
-              needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-              needs.find-changes.outputs.tt-nn-changed == 'true'))
+             needs.find-changes.outputs.blaze-relevant-changed == 'true')
         }}
     # TT_BLAZE_PAT — the default GITHUB_TOKEN cannot dispatch another repo.
     secrets: inherit

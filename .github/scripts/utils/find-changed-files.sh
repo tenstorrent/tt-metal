@@ -239,6 +239,81 @@ while IFS= read -r FILE; do
 done <<< "$CHANGED_FILES"
 # ----------------------------------------------------------------------------
 
+# --- blaze-relevant-changed: does this touch what tt-blaze consumes? --------
+# Gates the blaze-merge-gate job, which dispatches tt-blaze CI and waits on a
+# BH Loudbox that tt-blaze owns. That is the one merge-gate job outside this
+# repo's runner pool and time budget, so it is worth firing narrowly.
+#
+# Its own scan rather than new branches in the main loop above: that loop is
+# one `case` per file with `;;`, so a branch added there would STEAL files
+# from whichever flag currently claims them (a `tt_metal/fabric/**` branch
+# above the generic tt_metal catch-all would stop fabric changes setting
+# tt-metalium-changed). Same reasoning as the clang-tidy rescan above.
+#
+# What tt-blaze actually uses from this repo: Metalium runtime + fabric, the
+# LLK engine its JIT-compiled kernels are built from, and TTNN's tensor /
+# dtype / mesh-distribution layer. It does NOT use TTNN ops -- it runs its own
+# kernels through ttnn.generic_op -- so ttnn/cpp/ttnn/operations/** is
+# deliberately absent below and op-only PRs skip the job. Audited against the
+# blaze tree: one ttnn.add, plus ttnn.experimental.disaggregation, which is
+# why that one experimental subtree IS listed.
+# tests/**, models/**, tt-train/**, docs and examples are likewise absent:
+# nothing tt-blaze links against or JIT-compiles.
+BLAZE_RELEVANT_CHANGED=false
+while IFS= read -r FILE; do
+    case "$FILE" in
+        # LLK engine + device-kernel headers: compiled into blaze kernels.
+        tt_metal/tt-llk/**|tt_metal/hw/**)
+            BLAZE_RELEVANT_CHANGED=true
+            ;;
+        # Fabric: blaze's multi-device sockets and CCL ride on it.
+        tt_metal/fabric/**)
+            BLAZE_RELEVANT_CHANGED=true
+            ;;
+        # Metalium runtime proper. tt_metal/test, programming_examples,
+        # python_env and third_party are excluded by omission.
+        tt_metal/@(impl|llrt|jit_build|api|detail|common|hostdevcommon|distributed|core_descriptors|soc_descriptors)/**)
+            BLAZE_RELEVANT_CHANGED=true
+            ;;
+        # Pins the SFPI compiler that builds every device kernel.
+        tt_metal/sfpi-info.sh|tt_metal/sfpi-version)
+            BLAZE_RELEVANT_CHANGED=true
+            ;;
+        # Core TTNN: tensor, dtypes, mesh distribution, graph capture, and the
+        # kernel API blaze's generic_op path goes through.
+        ttnn/api/**|ttnn/core/**|ttnn/cpp/ttnn/@(kernel|kernel_lib|graph)/**)
+            BLAZE_RELEVANT_CHANGED=true
+            ;;
+        # The Python package blaze imports (bindings, tensor helpers).
+        ttnn/ttnn/**)
+            BLAZE_RELEVANT_CHANGED=true
+            ;;
+        # The single experimental op tree blaze calls into.
+        ttnn/cpp/ttnn/experimental/disaggregation/**)
+            BLAZE_RELEVANT_CHANGED=true
+            ;;
+        # Build definition, and the workflows that define this gate and produce
+        # the artifacts it hands tt-blaze. Listed explicitly so a workflow-only
+        # PR does not ride the blanket fallback below into occupying a Loudbox
+        # for an unrelated workflow edit.
+        CMakeLists.txt|**/CMakeLists.txt|**/*.cmake|*.cmake.in|**/*.cmake.in|CMakePresets.json)
+            BLAZE_RELEVANT_CHANGED=true
+            ;;
+        # merge-gate.yaml is here despite being the shared gate every team
+        # edits: the blaze job's needs/if and the with: block passing
+        # metal-run-id, metal-ref and blaze-ref all live there, so an edit can
+        # break or mis-target this gate without blaze-merge-gate.yaml being
+        # touched. Accepted knowingly -- that file changes rarely enough that
+        # the occasional unrelated Loudbox run is cheaper than a silent miss.
+        .github/workflows/blaze-merge-gate.yaml|\
+        .github/workflows/merge-gate.yaml|\
+        .github/workflows/build-artifact.yaml)
+            BLAZE_RELEVANT_CHANGED=true
+            ;;
+    esac
+done <<< "$CHANGED_FILES"
+# ----------------------------------------------------------------------------
+
 SUBMODULE_PATHS=$(git config --file .gitmodules --get-regexp path | awk '{print $2}')
 SUBMODULE_CHANGED=false
 for submodule_path in $SUBMODULE_PATHS; do
@@ -263,6 +338,16 @@ if [[ "$CPP_SOURCE_FOR_CLANG_TIDY_CHANGED" = true || \
       "$RAW_LLK_COMMON_CHANGED" = true || "$RAW_LLK_SFPI_CHANGED" = true || \
       "$SUBMODULE_CHANGED" = true || "$CLANG_TIDY_KEY_WORKFLOW_CHANGED" = true ]]; then
     RUN_CLANG_TIDY=true
+fi
+
+# A submodule bump (UMD, tt-llk, ...) changes what blaze links against and
+# JIT-compiles, so it counts. Folded in HERE, before the blanket fallback
+# below, for the same reason run-clang-tidy is: that fallback also forces
+# every shared flag true on any workflow-only PR, which would put this job on
+# a Loudbox for workflow edits that cannot affect tt-blaze. The explicit
+# workflow allowlist in the scan above is the intended path for that case.
+if [[ "$SUBMODULE_CHANGED" = true ]]; then
+    BLAZE_RELEVANT_CHANGED=true
 fi
 
 if [[ "$SUBMODULE_CHANGED" = true || "$WORKFLOWS_CHANGED" = true ]]; then
@@ -321,6 +406,7 @@ declare -A changes=(
     [llk-unit-tests-changed]=$LLK_UNIT_TESTS_CHANGED
     [llk-perf-changed]=$LLK_PERF_CHANGED
     [llk-ci-changed]=$LLK_CI_CHANGED
+    [blaze-relevant-changed]=$BLAZE_RELEVANT_CHANGED
 )
 
 for var in "${!changes[@]}"; do
