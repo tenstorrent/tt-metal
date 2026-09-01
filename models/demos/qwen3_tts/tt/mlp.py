@@ -12,6 +12,9 @@ Prefill (M>1 tile): 1D-mcast. When the activation is already width-sharded
 (piped from RMSNorm) the 1D kernel reads it in place — no S2I. DRAM-sharded
 matmul is decode-only (M must be one tile).
 """
+
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
@@ -170,6 +173,28 @@ class MLP(LightweightModule):
             for m in PREFILL_SEQS
             if m > self.short_seq_limit
         }
+        # N300 override. The full-grid choice above is right on N150, where gate/up is
+        # 2048x6144 and runs at 210 GB/s (73 % of DRAM peak). At TP=2 the same code sees
+        # 2048x3072, where 64 cores gives per_core_N=1.5 worth of work and only 145 GB/s —
+        # 19-26 us/matmul slower than the auto-routing it replaced. Swept on N300
+        # (test_qwen3_tts_prefill_mm_sweep2_n300.py): 32 cores with in0_block_w=2 recovers
+        # 22-25 %, net of the in0 reshard, with fp32 accumulate kept so it is numerically
+        # neutral. Keyed by exact (seq, K, N) so N150's shape cannot match.
+        _N300_GATE_UP = {
+            (64, 2048, 3072): (32, (2, 1)),
+            (128, 2048, 3072): (32, (1, 3)),
+        }
+        self._prefill_gate_up_n300 = {}
+        self._prefill_gate_up_in0_memcfg = {}
+        _n300_mm_override = os.environ.get("QWEN3_TTS_N300_MM_OVERRIDE", "1") != "0"
+        for (_m, _k, _n), (_cores, _sb) in _N300_GATE_UP.items() if _n300_mm_override else ():
+            if _k != hidden_size or _n != self.local_intermediate or _m not in self._prefill_gate_up_progcfg:
+                continue
+            _mc = width_sharded_l1_memcfg(_m // 32, _k // 32, min(_cores, grid.x), max(1, _cores // grid.x))
+            self._prefill_gate_up_n300[_m] = make_linear_1d_program_config(
+                _m, _k, _n, grid.x, grid.y, _fp32, num_cores=_cores, out_subblock=_sb
+            )
+            self._prefill_gate_up_in0_memcfg[_m] = _mc
         self._prefill_down_progcfg = {
             m: make_linear_1d_program_config(m, self.local_intermediate, hidden_size, _down_gx, _down_gy, _fp32)
             for m in PREFILL_SEQS
@@ -275,7 +300,7 @@ class MLP(LightweightModule):
             gate_up_progcfg = self._decode_gate_up_progcfg
             down_progcfg = self._decode_down_progcfg
         elif seq_len in self._prefill_gate_up_progcfg:
-            gate_up_progcfg = self._prefill_gate_up_progcfg[seq_len]
+            gate_up_progcfg = self._prefill_gate_up_n300.get(seq_len) or self._prefill_gate_up_progcfg[seq_len]
             down_progcfg = self._prefill_down_progcfg[seq_len]
         elif seq_len <= self.short_seq_limit:
             gate_up_progcfg = self._short_seq_gate_up_progcfg
@@ -369,7 +394,14 @@ class MLP(LightweightModule):
                 output = tp_all_reduce(output, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
             return output
 
-        # Prefill path: 1D-mcast. Width-sharded in0 (from RMSNorm) is consumed in place.
+        # Prefill path: 1D-mcast. Width-sharded in0 (from RMSNorm) is consumed in place —
+        # except on the N300 override, whose 32-core config needs a narrower in0 shard. That
+        # reshard is done once and shared by gate and up.
+        _gu_in0 = self._prefill_gate_up_in0_memcfg.get(seq_len) if not is_decode else None
+        _own_x = False
+        if _gu_in0 is not None and x.memory_config() != _gu_in0:
+            x = ttnn.to_memory_config(x, _gu_in0)
+            _own_x = True
         gate_out = ttnn.linear(
             x,
             self.gate_proj,
@@ -384,6 +416,8 @@ class MLP(LightweightModule):
             memory_config=mem_cfg,
             program_config=gate_up_progcfg,
         )
+        if _own_x:
+            ttnn.deallocate(x)
         hidden = ttnn.mul(
             gate_out,
             up_out,
