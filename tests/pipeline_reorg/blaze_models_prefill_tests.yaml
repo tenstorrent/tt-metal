@@ -740,7 +740,8 @@
     bh_sc4:
       # Measured test step 8.5 min at 50 chunks; headroom for the up-to-120s producer connect plus
       # model-load/NFS variance on a 4-galaxy run. Must match the shield/demo budget.
-      timeout: 15
+      # The extra 5 min covers the cold JIT of the torus router variants this leg's fabric mode adds.
+      timeout: 20
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   sp_config: sc4
