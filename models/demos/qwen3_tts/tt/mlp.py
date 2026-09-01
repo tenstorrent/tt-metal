@@ -3,10 +3,10 @@
 """
 SwiGLU MLP implementation for Qwen3-TTS.
 
-Decode (M=1): all three projections (gate, up, down) run through the
-DRAM-sharded matmul kernel (parallel weight reads across DRAM banks). The
-output of gate/up stays sharded into the SiLU·mul and feeds down_proj's
-sharded input directly — no L1_INTERLEAVED round-trip in the chain.
+Decode (M=1): down_proj is DRAM-sharded on every card. Gate/up is 1D mcast
+on N150 (DRAM-sharded pins those two to the 12 WH banks with in0_block_w=1)
+and DRAM-sharded elsewhere. Gate/up output stays sharded into the SiLU·mul
+and feeds down_proj's sharded input — no L1_INTERLEAVED round-trip.
 
 Prefill (M>1 tile): 1D-mcast. When the activation is already width-sharded
 (piped from RMSNorm) the 1D kernel reads it in place — no S2I. DRAM-sharded
@@ -25,6 +25,7 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     width_sharded_l1_memcfg,
 )
 from models.demos.qwen3_tts.tt.linear_1d_program_config import find_1d_mcast_grid, make_linear_1d_program_config
+from models.demos.qwen3_tts.tt.mesh_utils import is_n150
 from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS, SHORT_SEQ_LIMIT
 
 
@@ -244,6 +245,7 @@ class MLP(LightweightModule):
             self._decode_down_out_memcfg = width_sharded_l1_memcfg(
                 m_tiles=1, k_tiles=n_tiles_d, num_cores_x=cols_d, num_cores_y=rows_d
             )
+            self._n150_gate_up_1d = False
             return
 
         gate_w_kn = state_dict[f"{layer_prefix}.mlp.gate_proj.weight"].transpose(-2, -1).contiguous()
@@ -281,6 +283,19 @@ class MLP(LightweightModule):
         self._decode_down_out_memcfg = width_sharded_l1_memcfg(
             m_tiles=1, k_tiles=n_tiles_d, num_cores_x=cols_d, num_cores_y=rows_d
         )
+        # N150: 1D mcast on the full compute grid. DRAM-sharded gate/up is pinned
+        # to the WH bank count (12) with in0_block_w=1. Other cards keep that path.
+        self._n150_gate_up_1d = is_n150(device)
+        if self._n150_gate_up_1d:
+            self._decode_gate_up_1d_progcfg = make_linear_1d_program_config(
+                1,
+                hidden_size,
+                self.local_intermediate,
+                _cg.x,
+                _cg.y,
+                _fp32,
+                num_cores=rows_gu * cols_gu,
+            )
 
     def forward(self, x: ttnn.Tensor, mode: str = "prefill") -> ttnn.Tensor:
         """Apply SwiGLU MLP.
@@ -325,18 +340,25 @@ class MLP(LightweightModule):
             else:
                 x_sharded = ttnn.to_memory_config(x, self._decode_gate_up_in0_memcfg)
                 _own_x_sharded = True
+            # N150 gate/up: 1D mcast + interleaved weights. Down stays DRAM-sharded.
+            if self._n150_gate_up_1d:
+                gate_w, up_w = self.gate_proj, self.up_proj
+                gate_up_pc = self._decode_gate_up_1d_progcfg
+            else:
+                gate_w, up_w = self.gate_proj_dram_sharded, self.up_proj_dram_sharded
+                gate_up_pc = self._decode_gate_up_dramshard_progcfg
             gate_sharded = ttnn.linear(
                 x_sharded,
-                self.gate_proj_dram_sharded,
+                gate_w,
                 compute_kernel_config=self.compute_kernel_config,
-                program_config=self._decode_gate_up_dramshard_progcfg,
+                program_config=gate_up_pc,
                 memory_config=self._decode_gate_up_out_memcfg,
             )
             up_sharded = ttnn.linear(
                 x_sharded,
-                self.up_proj_dram_sharded,
+                up_w,
                 compute_kernel_config=self.compute_kernel_config,
-                program_config=self._decode_gate_up_dramshard_progcfg,
+                program_config=gate_up_pc,
                 memory_config=self._decode_gate_up_out_memcfg,
             )
             if _own_x_sharded:
