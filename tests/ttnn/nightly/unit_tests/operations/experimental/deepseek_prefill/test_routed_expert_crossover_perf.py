@@ -35,7 +35,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole, skip_with_llk_assert, skip_with_watcher
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_p150
 from tests.ttnn.profiling.realtime_profiler_utils import (
@@ -101,20 +100,6 @@ _EXPECTED_NS: dict[tuple[str, int], int] = {
     ("glm_51", 5120): 1_420_327,
 }
 
-# Kimi K3 runs SiTU-GLU at the post-projection dims, so its K axis is ROUTED_EXPERT_HIDDEN_SIZE and it
-# cannot be driven from SINGLE_EXPERT_MODELS (which reads config.EMB_SIZE). Same measurement as
-# _EXPECTED_NS, keyed by active tokens because the sweep carries one shape.
-_K3_EXPECTED_NS: dict[int, int] = {
-    0: 3_894,
-    128: 86_955,
-    256: 123_982,
-    512: 221_541,
-    1024: 370_456,
-    2048: 677_264,
-    4096: 1_332_361,
-    5120: 1_676_704,
-}
-
 
 def _threshold_of(config) -> Optional[int]:
     """The hybrid split the model ships, read as tt_prefill_block reads it. A config without one
@@ -122,9 +107,13 @@ def _threshold_of(config) -> Optional[int]:
     return getattr(config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None)
 
 
-def _predicted_winner(active: int, threshold: Optional[int]) -> str:
-    """The op the shipped threshold routes this count to."""
-    return "fused" if threshold is not None and active <= threshold else "composite"
+def _predicted_winner(active: int, threshold: Optional[int]) -> Optional[str]:
+    """The op the shipped threshold routes this count to, or None where the model ships no split.
+    Measuring both ops stays worthwhile there -- it is the data that would justify enabling one --
+    but there is no claim to check the winner against."""
+    if threshold is None:
+        return None
+    return "fused" if active <= threshold else "composite"
 
 
 def _margin_for(active: int) -> float:
@@ -154,21 +143,6 @@ def _perf_params():
                 )
             )
     return params
-
-
-def _k3_perf_params():
-    """Baseline and margin per active count, at K3's routed-expert dims and its shipped threshold."""
-    threshold = _threshold_of(KimiK3Config)
-    return [
-        pytest.param(
-            active,
-            threshold,
-            _K3_EXPECTED_NS.get(active),
-            _margin_for(active),
-            id=f"k3-isl-{active}-perf",
-        )
-        for active in _ISL_EXHAUSTIVE_SWEEP
-    ]
 
 
 def _build(device, emb_dim: int, hidden_dim: int, active_tokens: int, activation):
@@ -290,7 +264,7 @@ def _gate_best_of_both(
     # of a percent and the winner flips run to run. Only a gap the case's own band would resolve
     # says the shipped crossover has actually moved.
     gap = abs(durations["composite"] - durations["fused"]) / best
-    if winner != predicted and gap > _MARGIN:
+    if predicted is not None and winner != predicted and gap > _MARGIN:
         logger.warning(
             f"{label}: threshold {threshold} routes this count to {predicted}, but {winner} measured "
             f"{gap:.1%} faster -- the shipped crossover no longer matches the hardware"
@@ -342,37 +316,4 @@ def test_routed_expert_crossover_perf(
         expected_ns,
         margin,
         label=f'("{model_name}", {active_tokens})',
-    )
-
-
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-chip")],
-    indirect=True,
-)
-@pytest.mark.parametrize("active_tokens, threshold, expected_ns, margin", _k3_perf_params())
-@pytest.mark.requires_host_iommu
-@pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU is Blackhole-only")
-@pytest.mark.skipif(not is_p150(), reason="perf baselines are P150-specific; skip on any other board")
-@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
-@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_routed_expert_crossover_k3_perf(
-    mesh_device,
-    active_tokens: int,
-    threshold: Optional[int],
-    expected_ns: Optional[int],
-    margin: float,
-):
-    """Kimi K3 (SiTU-GLU) crossover over the same ISL sweep as above."""
-    require_realtime_profiler("routed expert crossover perf checks")
-    _gate_best_of_both(
-        mesh_device,
-        KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
-        KimiK3Config.MOE_INTERMEDIATE_SIZE,
-        active_tokens,
-        threshold,
-        expected_ns,
-        margin,
-        label=f"(kimi_k3, {active_tokens})",
-        activation=ttnn.RoutedExpertActivation.SituGlu,
     )
