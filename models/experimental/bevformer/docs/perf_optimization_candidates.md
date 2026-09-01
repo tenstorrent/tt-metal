@@ -704,7 +704,7 @@ each names the row it is priced from, so a miss is diagnosable.
 | # | change | site | expected | effort | risk |
 |--:|---|---|---:|---|---|
 | [5a](#5a-delete-the-key-permute) | delete the dead `key` permute | [sca:349-350](../tt/tt_spatial_cross_attention.py#L349-L350) | **landed: −18.1 ms (−4.0%) — [06](perf_reports/06-sca-key-permute-deleted.md)** | XS | **none** |
-| [5b](#5b-do-the-sampling-location-math-in-row_major) | sampling-location math in ROW_MAJOR | [msda:110-117](../tt/tt_ms_deformable_attention.py#L110-L117), [313-357](../tt/tt_ms_deformable_attention.py#L313-L357) | **−90 ms (−20%)** | M | low |
+| [5b](#5b-do-the-sampling-location-math-in-row_major) | sampling-location math in ROW_MAJOR | [msda:110-117](../tt/tt_ms_deformable_attention.py#L110-L117), [313-357](../tt/tt_ms_deformable_attention.py#L313-L357) | **landed: −82.2 ms (−18.8%) — [07](perf_reports/07-sampling-grid-in-row-major.md)** | M | low |
 | [5c](#5c-untilize-attn-once-not-per-level) | untilize `attn` once, slice in ROW_MAJOR | [msda:322-332](../tt/tt_ms_deformable_attention.py#L322-L332), [58-61](../tt/tt_ms_deformable_attention.py#L58-L61) | **−35 ms (−7.7%)** | S | low |
 | [5e](#5e-permute-grid-once-slice-after) | permute `grid` once above the loop | [msda:54-56](../tt/tt_ms_deformable_attention.py#L54-L56) | **−13 ms (−2.8%)** | S | low |
 | [5d](#5d-split-value-into-heads-in-row_major) | head-split `value` in ROW_MAJOR | [msda:296-305](../tt/tt_ms_deformable_attention.py#L296-L305), [50-52](../tt/tt_ms_deformable_attention.py#L50-L52) | **−10…−20 ms**, uncertain | M | med |
@@ -739,6 +739,12 @@ Fix: drop `key_reshaped` and read the length off `key` directly (`_, L, _, _ = k
 This is the cheapest item on the entire backlog and it should land before anything else in 5.
 
 #### 5b. Do the sampling-location math in ROW_MAJOR
+
+**Landed** — [stage 07](perf_reports/07-sampling-grid-in-row-major.md), −82.2 ms kernel against a
+predicted −90, PCC **improved** 0.999611 → 0.999651 (two bf16 rounding steps removed). `BinaryNg`
+went 49.3 → **2.3 ms**, confirming this entry's opening claim. It also **fixed the 200×200 DRAM OOM**
+and so reopens [1b](#1b-bound-max_len-statically) on the memory argument. Op count went *up* by 5
+while kernel fell 82 ms — padded bytes, not op count, is the metric.
 
 **The largest accidental group: 104.4 ms (22.9%) across SCA and TSA**, and essentially all of it is
 tile padding.
