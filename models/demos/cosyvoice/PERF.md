@@ -343,7 +343,8 @@ Scored with whisper `large-v3`; CER for CJK, WER for English.
 
 **Cantonese is a model limitation, not a port defect**: the PyTorch reference scores
 *worse* on the same text through the same ASR — `83.87 %` against this port's `64.52 %`
-zero-shot.
+zero-shot. Excluding Cantonese, the CJK mean is `3.90 %` zero-shot and `2.95 %`
+cross-lingual.
 
 `cross_lingual yue` also terminates early — 122 tokens for 2.44 s of audio against the
 reference's 387 for 7.73 s. RAS is stochastic and the model's Cantonese confidence is
@@ -453,6 +454,27 @@ construction. What is left here is the comparisons that would need a second tree
 | `rel_shift` → one slice at `T = 1` | seven ops become one. §1.2. |
 | QKV fusion | flow decoder `1.075 → 0.719 s`; the same change on the AR decoder was a wash, since the split op's data movement costs what it saves at `T = 1`. §1.2. |
 
+### The RTF journey, in order applied
+
+Each row adds one change to the row above it — the order the work actually happened
+in, not the ranking above:
+
+| | `p150a` | `p150b` | n300 |
+|---|---:|---:|---:|
+| explicit chain, no CFM cache | `0.533` | `0.584` | `0.950` |
+| + fused decode attention | `0.477` ✅ | `0.523` | `0.891` |
+| + cached CFM trace | *`0.367` projected* | `0.436` ✅ | — |
+| + in-place KV (`COSYVOICE_KV_INPLACE=1`) | `0.449` ✅ | `0.398` ✅ | `0.628` |
+| + permute-free GroupNorm (and, on n300, the conv fix) | — | `0.365` ✅ | `0.575` |
+
+The last row is a median over four runs on `p150b` and six on n300, not a single
+result — the flow stage varies ~5 % run to run on n300, and the first figure this row
+was written with was the best of the set rather than the middle of it. Rows above it
+are single runs, fine while changes were worth 10–20 % and not fine at this scale.
+`p150a` became unreachable partway through; its gaps are left empty rather than filled
+from the other board. `COSYVOICE_KV_INPLACE` becoming the architecture-aware default
+moved the last row's numbers again — §3.2 has the current ones.
+
 ## 1. The AR decode step
 
 The largest stage, and the one every remaining lever sits in.
@@ -465,6 +487,12 @@ bias**, which is exactly what
 `ttnn.transformer.scaled_dot_product_attention_decode` accepts as `attn_mask` with
 `is_causal=False`. So the score matmul, the bias add, the masked softmax and the
 context matmul collapse into one kernel that never materialises the score matrix.
+
+The bias must be pre-divided by SDPA's own `1/sqrt(d_k)`, because the fused kernel
+scales before it adds: passing the raw term as `attn_mask` yields plausible-looking
+attention that is wrong by a factor of 8 on this model.
+`tests/pcc/test_rel_pos_attention.py` asserts the pre-division directly, both
+directions, ahead of `test_device_fused_attention_matches_explicit` below.
 
 This was scoped up front as ~1500 lines of new C++ at high risk. None of it was
 needed, and the correction is the single largest performance change in the port.
