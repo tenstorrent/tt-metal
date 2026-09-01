@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -43,6 +44,56 @@ def _mesh_coordinate(sp_rank: int, tp_rank: int, sp_axis: int) -> tuple[int, int
 
 def _device_shards(tensor: ttnn.Tensor) -> list[torch.Tensor]:
     return [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(tensor)]
+
+
+def collect_mesh_accuracy_and_determinism_results(
+    run: Callable[[], Sequence[ttnn.Tensor]],
+    *,
+    count: int = 3,
+) -> tuple[tuple[ttnn.Tensor, ...], tuple[torch.Tensor, ...]]:
+    """Retain first mesh outputs and reduce exact repeat mismatches on device."""
+    if count <= 1:
+        raise ValueError("count must be greater than one")
+
+    reference_outputs = tuple(run())
+    if not reference_outputs:
+        raise ValueError("run must return at least one output")
+
+    mismatch_marker = None
+    for _ in range(1, count):
+        outputs = tuple(run())
+        if len(outputs) != len(reference_outputs):
+            for output in outputs:
+                ttnn.deallocate(output)
+            raise ValueError("run returned a different number of outputs")
+        for reference, output in zip(reference_outputs, outputs, strict=True):
+            if (
+                output.shape != reference.shape
+                or output.dtype != reference.dtype
+                or output.layout != reference.layout
+                or output.memory_config() != reference.memory_config()
+            ):
+                for repeat_output in outputs:
+                    ttnn.deallocate(repeat_output)
+                raise ValueError("run returned output with different metadata")
+            mismatch = ttnn.ne(reference, output, dtype=ttnn.bfloat16)
+            current_marker = ttnn.max(mismatch)
+            ttnn.deallocate(mismatch)
+            if mismatch_marker is None:
+                mismatch_marker = current_marker
+            else:
+                updated_marker = ttnn.maximum(mismatch_marker, current_marker)
+                ttnn.deallocate(mismatch_marker)
+                ttnn.deallocate(current_marker)
+                mismatch_marker = updated_marker
+        for output in outputs:
+            ttnn.deallocate(output)
+
+    assert mismatch_marker is not None
+    mismatch_marker_host = ttnn.from_device(mismatch_marker)
+    mismatch_markers = tuple(ttnn.to_torch(shard).clone() for shard in ttnn.get_device_tensors(mismatch_marker_host))
+    ttnn.deallocate(mismatch_marker)
+    return reference_outputs, mismatch_markers
 
 
 def reconstruct_sp_tp_tensor(

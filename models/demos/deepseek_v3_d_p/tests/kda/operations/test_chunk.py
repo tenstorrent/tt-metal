@@ -14,7 +14,10 @@ from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_recurrent_referen
 from models.demos.deepseek_v3_d_p.tests.kda.utils import compare_cpu_device
 from models.demos.deepseek_v3_d_p.tt.kda import ops
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    assert_accurate,
+    collect_accuracy_and_determinism_results,
+)
 
 pytestmark = [
     run_for_blackhole(),
@@ -134,6 +137,7 @@ def test_chunk_recurrence_rejects_nonproduction_contract(device: ttnn.Device, ex
         (32, 2, 32, 32, 8, "direct"),
         (64, 32, 128, 128, 8, "direct"),
         (256, 4, 128, 128, 8, "direct"),
+        (256, 2, 32, 32, 2, "grouped"),
         (512, 4, 128, 128, 8, "direct"),
         (2816, 12, 128, 128, 21, "grouped"),
         (5120, 2, 32, 32, 8, "grouped"),
@@ -165,23 +169,50 @@ def test_chunk_recurrence_pcc(
     golden_output = golden_output.to(torch.bfloat16)
     print(f"KDA_CPU_REFERENCE_SECONDS={time.perf_counter() - reference_start:.3f}", flush=True)
 
-    with ttnn.manage_config("throw_exception_on_fallback", True):
-        result = _run_recurrence(
-            device,
-            _to_device(q.reshape(1, sequence, heads * key_dim), device, ttnn.bfloat16),
-            _to_device(k.reshape(1, sequence, heads * key_dim), device, ttnn.bfloat16),
-            _to_device(v.reshape(1, sequence, heads * value_dim), device, ttnn.bfloat16),
-            _to_device(gate.reshape(1, sequence, heads * key_dim), device, ttnn.bfloat16),
-            _to_device(beta, device, ttnn.float32),
-            _to_device(state, device, ttnn.float32),
-            summary_group_chunks=summary_group_chunks,
-            local_scan_strategy=local_scan_strategy,
-        )
+    q_tt = _to_device(q.reshape(1, sequence, heads * key_dim), device, ttnn.bfloat16)
+    k_tt = _to_device(k.reshape(1, sequence, heads * key_dim), device, ttnn.bfloat16)
+    v_tt = _to_device(v.reshape(1, sequence, heads * value_dim), device, ttnn.bfloat16)
+    gate_tt = _to_device(gate.reshape(1, sequence, heads * key_dim), device, ttnn.bfloat16)
+    beta_tt = _to_device(beta, device, ttnn.float32)
+    state_tt = _to_device(state, device, ttnn.float32)
 
-    assert result.final_state.memory_config() == ttnn.DRAM_MEMORY_CONFIG
-    actual_output = ttnn.to_torch(result.output)
+    def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            result = _run_recurrence(
+                device,
+                q_tt,
+                k_tt,
+                v_tt,
+                gate_tt,
+                beta_tt,
+                state_tt,
+                summary_group_chunks=summary_group_chunks,
+                local_scan_strategy=local_scan_strategy,
+            )
+        return result.output, result.final_state
+
+    checks_determinism = (sequence, heads, key_dim, value_dim, summary_group_chunks, local_scan_strategy) == (
+        256,
+        2,
+        32,
+        32,
+        2,
+        "grouped",
+    )
+    if checks_determinism:
+        (
+            (output_tt, final_state_tt),
+            (actual_output, actual_state),
+            mismatch_marker,
+        ) = collect_accuracy_and_determinism_results(device, run)
+        assert mismatch_marker.item() == 0, "chunk recurrence output is not bit-identical across runs"
+    else:
+        output_tt, final_state_tt = run()
+        actual_output = ttnn.to_torch(output_tt)
+        actual_state = ttnn.to_torch(final_state_tt)
+
+    assert final_state_tt.memory_config() == ttnn.DRAM_MEMORY_CONFIG
     actual_output = actual_output.reshape(1, heads, sequence, value_dim).permute(0, 2, 1, 3)
-    actual_state = ttnn.to_torch(result.final_state)
     label = f"H={heads},K={key_dim},V={value_dim},T={sequence},group={summary_group_chunks}"
     _, output_failures = compare_cpu_device(
         f"{label} output",
@@ -255,40 +286,3 @@ def test_grouped_summary_preserves_weak_decay(device: ttnn.Device) -> None:
         pcc_threshold=0.9999,
     )
     assert_accurate(golden_state, ttnn.to_torch(result_eight.final_state), name=f"{label} grouped state")
-
-
-def test_chunk_recurrence_determinism(device: ttnn.Device) -> None:
-    sequence, heads, dim = 256, 2, 32
-    generator = torch.Generator().manual_seed(1401)
-    shape = (1, sequence, heads)
-    flat_shape = (1, sequence, heads * dim)
-    q_tt = _to_device(torch.randn(*shape, dim, generator=generator).reshape(flat_shape), device, ttnn.bfloat16)
-    k_tt = _to_device(torch.randn(*shape, dim, generator=generator).reshape(flat_shape), device, ttnn.bfloat16)
-    v_tt = _to_device(torch.randn(*shape, dim, generator=generator).reshape(flat_shape), device, ttnn.bfloat16)
-    gate_tt = _to_device(
-        (-0.02 * torch.rand(*shape, dim, generator=generator)).reshape(flat_shape), device, ttnn.bfloat16
-    )
-    beta_tt = _to_device(torch.sigmoid(torch.randn(*shape, generator=generator)), device, ttnn.float32)
-    state_tt = _to_device(0.02 * torch.randn(1, heads, dim, dim, generator=generator), device, ttnn.float32)
-
-    results = []
-    for _ in range(3):
-        with ttnn.manage_config("throw_exception_on_fallback", True):
-            result = _run_recurrence(
-                device,
-                q_tt,
-                k_tt,
-                v_tt,
-                gate_tt,
-                beta_tt,
-                state_tt,
-                summary_group_chunks=2,
-                local_scan_strategy="grouped",
-            )
-        ttnn.synchronize_device(device)
-        results.append((ttnn.to_torch(result.output), ttnn.to_torch(result.final_state)))
-
-    first_output, first_state = results[0]
-    for iteration, (output, final_state) in enumerate(results[1:], start=1):
-        assert_bit_identical(first_output, output, name=f"chunk recurrence output iteration {iteration}")
-        assert_bit_identical(first_state, final_state, name=f"chunk recurrence state iteration {iteration}")

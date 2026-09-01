@@ -11,7 +11,12 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.kda.utils import make_config, make_program_config, random_weights
+from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    collect_mesh_accuracy_and_determinism_results,
+    make_config,
+    make_program_config,
+    random_weights,
+)
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
@@ -52,9 +57,23 @@ def test_composed_layer_pcc(device: ttnn.Device) -> None:
     golden_output, golden_state = kda_forward_reference(hidden, weights, config)
 
     layer = ttKDA(device, config, weights)
-    actual_output, next_state = _forward(layer, hidden, layer.allocate_state())
-    actual_recurrent = ttnn.to_torch(next_state.recurrent)
-    actual_convolution = ttnn.to_torch(next_state.convolution)
+    hidden_tt = ttnn.from_torch(
+        hidden,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            output, state = layer.forward(hidden_tt, layer.allocate_state())
+        return output, state.recurrent, state.convolution
+
+    (output_tt, recurrent_tt, convolution_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
+    actual_output = ttnn.to_torch(output_tt)
+    actual_recurrent = ttnn.to_torch(recurrent_tt)
+    actual_convolution = ttnn.to_torch(convolution_tt)
     golden_convolution = torch.cat(
         (
             golden_state.q_convolution,
@@ -66,6 +85,7 @@ def test_composed_layer_pcc(device: ttnn.Device) -> None:
     assert_accurate(golden_output, actual_output, name=f"T={sequence} output", pcc_threshold=0.999)
     assert_accurate(golden_state.recurrent, actual_recurrent, name=f"T={sequence} recurrent state", pcc_threshold=0.999)
     assert_accurate(golden_convolution, actual_convolution, name=f"T={sequence} convolution state", pcc_threshold=0.999)
+    assert all(marker.item() == 0 for marker in mismatch_markers), "composed layer is not bit-identical across runs"
 
 
 def test_offline_cache_and_cache_only_layer_pcc(device: ttnn.Device, tmp_path: Path, expect_error) -> None:
@@ -242,23 +262,6 @@ def test_explicit_fp32_state_is_replaced_without_mutating_input(device: ttnn.Dev
         name="external BF16 convolution state",
         pcc_threshold=0.999,
     )
-
-
-def test_composed_layer_determinism(device: ttnn.Device) -> None:
-    config = make_config()
-    weights = random_weights(config)
-    hidden = torch.randn(1, 32, config.hidden_size, generator=torch.Generator().manual_seed(1741)).to(torch.bfloat16)
-    layer = ttKDA(device, config, weights)
-    results = []
-
-    for _ in range(3):
-        output, state = _forward(layer, hidden, layer.allocate_state())
-        results.append((output, ttnn.to_torch(state.recurrent), ttnn.to_torch(state.convolution)))
-
-    names = ("output", "recurrent state", "convolution state")
-    for iteration, result in enumerate(results[1:], start=1):
-        for name, expected, actual in zip(names, results[0], result):
-            assert_bit_identical(expected, actual, name=f"layer {name} iteration {iteration}")
 
 
 def test_composed_layer_immutable_state_trace_replay(device: ttnn.Device) -> None:

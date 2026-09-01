@@ -12,6 +12,7 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    collect_mesh_accuracy_and_determinism_results,
     random_weights,
     reconstruct_convolution_at_sp_rank,
     reconstruct_sp_tp_tensor,
@@ -20,7 +21,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.tt_transformers.tt.ccl import TT_CCL
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
 
 pytestmark = [
     run_for_blackhole(),
@@ -255,7 +256,7 @@ def test_sp_chunked_prefill_matches_one_shot(
 
 
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
-def test_sp_layer_determinism(
+def test_sp_layer_accuracy_and_determinism(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> None:
@@ -274,6 +275,10 @@ def test_sp_layer_determinism(
     hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(2421)).to(
         torch.bfloat16
     )
+    expected_output, expected_state = kda_forward_reference(hidden, weights, config)
+    expected_convolution = torch.cat(
+        (expected_state.q_convolution, expected_state.k_convolution, expected_state.v_convolution), dim=-1
+    ).to(torch.bfloat16)
     layer = ttKDA(
         mesh_device,
         config,
@@ -286,30 +291,38 @@ def test_sp_layer_determinism(
     hidden_tt = _to_sp_input(hidden, mesh_device, sp_axis)
     tp_size = tuple(mesh_device.shape)[tensor_parallel_axis]
     local_width = config.num_heads // tp_size * config.head_k_dim
-    results = []
 
-    for _ in range(3):
+    def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         state = layer.allocate_state(batch_size=1)
         with ttnn.manage_config("throw_exception_on_fallback", True):
             output_tt, state = layer.forward(hidden_tt, state)
-        ttnn.synchronize_device(mesh_device)
-        tensors = [reconstruct_sp_tp_tensor(output_tt, mesh_device, sp_axis, tensor_parallel_axis, tp_dim=2, sp_dim=1)]
-        for sp_rank in range(sp_size):
-            tensors.append(
-                reconstruct_state_at_sp_rank(state.recurrent, mesh_device, sp_axis, tensor_parallel_axis, sp_rank)
-            )
-            tensors.append(
-                reconstruct_convolution_at_sp_rank(
-                    state.convolution,
-                    mesh_device,
-                    sp_axis,
-                    tensor_parallel_axis,
-                    sp_rank,
-                    local_width,
-                )
-            )
-        results.append(tuple(tensors))
+        return output_tt, state.recurrent, state.convolution
 
-    for iteration, result in enumerate(results[1:], start=1):
-        for tensor_index, (expected, actual) in enumerate(zip(results[0], result)):
-            assert_bit_identical(expected, actual, name=f"SP layer tensor {tensor_index} iteration {iteration}")
+    (output_tt, recurrent_tt, convolution_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
+    actual_output = reconstruct_sp_tp_tensor(output_tt, mesh_device, sp_axis, tensor_parallel_axis, tp_dim=2, sp_dim=1)
+    assert_accurate(expected_output.to(actual_output.dtype), actual_output, name="SP layer output", pcc_threshold=0.999)
+    for sp_rank in range(sp_size):
+        actual_recurrent = reconstruct_state_at_sp_rank(
+            recurrent_tt, mesh_device, sp_axis, tensor_parallel_axis, sp_rank
+        )
+        actual_convolution = reconstruct_convolution_at_sp_rank(
+            convolution_tt,
+            mesh_device,
+            sp_axis,
+            tensor_parallel_axis,
+            sp_rank,
+            local_width,
+        )
+        assert_accurate(
+            expected_state.recurrent.to(actual_recurrent.dtype),
+            actual_recurrent,
+            name=f"SP layer recurrent sp_rank={sp_rank}",
+            pcc_threshold=0.999,
+        )
+        assert_accurate(
+            expected_convolution.to(actual_convolution.dtype),
+            actual_convolution,
+            name=f"SP layer convolution sp_rank={sp_rank}",
+            pcc_threshold=0.999,
+        )
+    assert all(marker.item() == 0 for marker in mismatch_markers), "SP layer is not bit-identical across runs"
