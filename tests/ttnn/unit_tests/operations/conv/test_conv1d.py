@@ -1065,3 +1065,91 @@ def test_conv1d_depthwise_default_route_long_seq(device):
         packer_l1_acc=True,
         pcc=0.999,
     )
+
+
+@pytest.mark.parametrize(
+    "shard_layout",
+    [ttnn.TensorMemoryLayout.WIDTH_SHARDED, None],
+    ids=["width_sharded", "auto"],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_conv1d_unchunked_c10240_width_sharded(device, shard_layout):
+    """Depthwise (groups == C == 10240) GDN prefill shape (K=4, T=12, pad=3) as a SINGLE
+    stock conv1d call on unmodified conv code: this tree has no channel-chunking in the
+    conv2d DRAM path, so a pass here is single-conv by construction.
+
+    The default HEIGHT_SHARDED layout cannot fit this shape on one core (the weight block
+    is width-independent; the auto-slicer fatals with "could not find valid slice
+    configuration"), but WIDTH_SHARDED spreads the 320 output-channel tiles across 80
+    cores, which fits per-core L1. The "auto" case (shard_layout unset) picks a fitting
+    layout automatically.
+
+    Perf caveat (measured on 2x p150a): the single WIDTH_SHARDED conv takes ~1.6 s at T=12
+    vs ~0.07 s for 32 channel chunks of 320 in HEIGHT_SHARDED, so chunked HEIGHT_SHARDED
+    remains the right choice for latency-sensitive callers (see the qwen36 GDN demo path);
+    this test records that the unchunked shape is *feasible*, not that it is faster.
+    """
+    C, K, T, PAD = 10240, 4, 12, 3
+    torch.manual_seed(0)
+    torch_input_ncl = torch.randn(1, C, T, dtype=torch.bfloat16).float()
+    torch_weight = torch.randn(C, 1, K, dtype=torch.bfloat16).float()
+    torch_bias = torch.randn(1, 1, 1, C, dtype=torch.bfloat16).float()
+    golden = torch.nn.functional.conv1d(
+        torch_input_ncl,
+        torch_weight,
+        bias=torch_bias.reshape(-1),
+        stride=1,
+        padding=PAD,
+        dilation=1,
+        groups=C,
+    )
+
+    input_tt = ttnn.from_torch(
+        torch_input_ncl.permute(0, 2, 1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    weight_tt = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    bias_tt = ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    conv_config_kwargs = {"weights_dtype": ttnn.bfloat16, "deallocate_activation": True}
+    if shard_layout is not None:
+        conv_config_kwargs["shard_layout"] = shard_layout
+    conv_config = ttnn.Conv1dConfig(**conv_config_kwargs)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    tt_out, out_length = ttnn.conv1d(
+        input_tensor=input_tt,
+        weight_tensor=weight_tt,
+        device=device,
+        in_channels=C,
+        out_channels=C,
+        bias_tensor=bias_tt,
+        kernel_size=K,
+        stride=1,
+        padding=PAD,
+        dilation=1,
+        batch_size=1,
+        input_length=T,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        groups=C,
+        dtype=ttnn.bfloat16,
+        return_output_dim=True,
+    )
+
+    out = ttnn.to_torch(tt_out).reshape(1, out_length, C).permute(0, 2, 1)
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(out, golden, pcc=0.999)
+    assert passing, pcc_msg
+    config_name = "WIDTH_SHARDED" if shard_layout is not None else "AUTO"
+    logger.info(
+        f"I_UNCHUNK: C=10240 groups=10240 K=4 T=12 pad=3 config={config_name} single-conv VERDICT: PASS"
+    )
+    logger.info(f"I_UNCHUNK_PCC: config={config_name} threshold=0.999 {pcc_msg}")
