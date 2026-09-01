@@ -128,6 +128,11 @@ constexpr std::uint32_t ODD_COLS_OFFSET             = 2; // addr +2 selects cols
 //   Uses LREG0..LREG7 transiently during SFPTRANSP phases. LREG6 is NOT
 //   preserved as a persistent mask (SFPTRANSP clobbers LREG4..LREG7 window);
 //   BCAST_ROW does not need the col-0 lane mask.
+//
+// BCAST_SCALAR normalize path:
+//   LREG6/LREG7 retain the scalar mean and inverse standard deviation for the
+//   tile traversal. This invalidates the BCAST_COL lane mask in LREG6, so a
+//   subsequent BCAST_COL operation must call sfpu_bcast_col_init() again.
 
 constexpr std::uint32_t LREG_BCAST = p_sfpu::LREG0;
 constexpr std::uint32_t LREG_TMP   = p_sfpu::LREG2;
@@ -610,8 +615,8 @@ inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
     const std::uint32_t out_base     = dst_index_out * DEST_TILE_SIZE_RAW;
 
     // The statistics are scalar and invariant across all eight row bands.
-    // Broadcast each once and retain the vectors in the otherwise-unused
-    // LREG6/LREG7 for the complete tile traversal.
+    // Broadcast each once and retain the vectors in LREG6/LREG7 for the
+    // complete tile traversal. LREG6 deliberately borrows the BCAST_COL mask.
     _broadcast_scalar_from_dest_(mean_addr);
     TTI_SFPMOV(0, LREG_BCAST, LREG_SCALAR_MEAN, 0);
     _broadcast_scalar_from_dest_(inv_std_addr);
