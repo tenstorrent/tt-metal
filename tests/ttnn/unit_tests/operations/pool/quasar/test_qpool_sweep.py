@@ -9,9 +9,9 @@ test_qpool_c_sweep : channel-width ladder (sub-face .. 768, partial-tile combos)
 regimes from WH/BH testing practice. C > 256 exercises the wide reduction (in_nblocks_c > 1).
 
 test_qpool_matrix  : kernel sizes (2x2 .. 9x9 — 7/8/9 are chunked large kernels, 9x9 = 3 chunks),
-stride 1, batch 2, tall/wide inputs, forced-wide combos via TT_POOL_MAX_TILES_OVERRIDE (cap 4
-makes C > 128 wide; cap 2 makes C > 64 wide; one chunks-x-blocks nested case), and block/width
-sharding. A craq-sim-sized subset of the WH/BH nightly pool coverage.
+stride 1, batch 2, tall/wide inputs, a natural wide-reduction case (C=280 = 9 tiles -> three
+3-tile c-blocks via largest_uniform_block_width), avg pool (basic + chunked large kernel), and
+block/width sharding. A craq-sim-sized subset of the WH/BH nightly pool coverage.
 
 Case constraints (asserted per case): N*H*W % 32 == 0; per-core output sticks % num_threads == 0
 (the factory TT_FATALs otherwise); torch golden needs padding <= kernel/2; total volume is kept
@@ -60,7 +60,7 @@ def _run_case(
     cores=None,  # None = grid-adaptive max divisor of the input height tiles; N pins N cores
     shard="height",  # "height" | "block" | "width"
     grid_yx=None,  # (y, x) core grid for block/width sharding
-    max_tiles_override=None,  # sets TT_POOL_MAX_TILES_OVERRIDE around the op call
+    pool="max",  # "max" | "avg" (avg cases use padding=0 to sidestep count_include_pad semantics)
 ):
     kernel, stride, padding = list(kernel), list(stride), list(padding)
     out_h = (in_h - kernel[0] + 2 * padding[0]) // stride[0] + 1
@@ -71,9 +71,14 @@ def _run_case(
 
     x_nhwc = _build_input(PATTERN, batch, in_h, in_w, channels, SEED, 0).to(torch.bfloat16)
     input_max = x_nhwc.float().max().item()
-    golden_nchw = torch.nn.functional.max_pool2d(
-        x_nhwc.permute(0, 3, 1, 2).float(), kernel_size=kernel, stride=stride, padding=padding
-    )
+    if pool == "max":
+        golden_nchw = torch.nn.functional.max_pool2d(
+            x_nhwc.permute(0, 3, 1, 2).float(), kernel_size=kernel, stride=stride, padding=padding
+        )
+    else:
+        golden_nchw = torch.nn.functional.avg_pool2d(
+            x_nhwc.permute(0, 3, 1, 2).float(), kernel_size=kernel, stride=stride, padding=padding
+        )
     golden = golden_nchw.permute(0, 2, 3, 1).reshape(batch * out_h * out_w, channels).contiguous()
 
     grid = device.compute_with_storage_grid_size()
@@ -101,35 +106,30 @@ def _run_case(
         core_desc = f"{gy}x{gx}x{shard.upper()}"
 
     print(
-        f"\nQPOOL-MATRIX: C={channels} in={batch}x{in_h}x{in_w} k={kernel} s={stride} p={padding} "
-        f"{core_desc} layout={'TILE' if tiled_input else 'ROW_MAJOR'}"
-        + (f" max_tiles_override={max_tiles_override}" if max_tiles_override else ""),
+        f"\nQPOOL-MATRIX: {pool} C={channels} in={batch}x{in_h}x{in_w} k={kernel} s={stride} p={padding} "
+        f"{core_desc} layout={'TILE' if tiled_input else 'ROW_MAJOR'}",
         flush=True,
     )
 
-    if max_tiles_override is not None:
-        os.environ["TT_POOL_MAX_TILES_OVERRIDE"] = str(max_tiles_override)
-    try:
-        x = ttnn.from_torch(
-            x_nhwc.reshape(1, 1, tensor_height, channels),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT if tiled_input else ttnn.ROW_MAJOR_LAYOUT,
-        )
-        x = x.to(device, mem_config)
-        out = ttnn.experimental.quasar.max_pool2d(
-            input_tensor=x,
-            batch_size=batch,
-            input_h=in_h,
-            input_w=in_w,
-            channels=channels,
-            kernel_size=kernel,
-            stride=stride,
-            padding=padding,
-            dilation=[1, 1],
-        )
-        ttnn.synchronize_device(device)
-    finally:
-        os.environ.pop("TT_POOL_MAX_TILES_OVERRIDE", None)
+    x = ttnn.from_torch(
+        x_nhwc.reshape(1, 1, tensor_height, channels),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT if tiled_input else ttnn.ROW_MAJOR_LAYOUT,
+    )
+    x = x.to(device, mem_config)
+    pool_op = ttnn.experimental.quasar.max_pool2d if pool == "max" else ttnn.experimental.quasar.avg_pool2d
+    out = pool_op(
+        input_tensor=x,
+        batch_size=batch,
+        input_h=in_h,
+        input_w=in_w,
+        channels=channels,
+        kernel_size=kernel,
+        stride=stride,
+        padding=padding,
+        **(dict(dilation=[1, 1]) if pool == "max" else {}),  # avg_pool2d takes no dilation
+    )
+    ttnn.synchronize_device(device)
     got = ttnn.to_torch(out).float().reshape(batch * out_h * out_w, channels)
     x.deallocate()
     out.deallocate()
@@ -197,8 +197,8 @@ def test_qpool_c_sweep(mesh_device):
 def test_qpool_matrix(mesh_device):
     cases = [
         # kernel-size ladder @ C=64 (7/8/9 are chunked large kernels; single-core to bound halo volume).
-        # sim_skip cases fail/hang identically at num_threads=1 on craq-sim but pass exact-PCC on WH
-        # silicon (verified 2026-09-01, full 15/15) — same open sim bug class as the C>=384 sweep skips.
+        # sim_skip cases fail identically at num_threads=1 on craq-sim but pass exact-PCC on WH
+        # silicon (verified 2026-09-01, full matrix) — same open sim bug class as the C>=384 sweep skips.
         ("k2x2_s2", dict(kernel=(2, 2), stride=(2, 2), padding=(0, 0), sim_skip="craq-sim artifact")),
         ("k3x3_s1", dict(in_h=8, in_w=8, kernel=(3, 3), stride=(1, 1), padding=(1, 1))),
         ("k5x5_s2", dict(kernel=(5, 5), stride=(2, 2), padding=(2, 2))),
@@ -209,28 +209,12 @@ def test_qpool_matrix(mesh_device):
         ("batch2", dict(batch=2, in_h=8, in_w=8)),
         ("tall_32x4", dict(in_h=32, in_w=4)),
         ("wide_4x32", dict(in_h=4, in_w=32)),
-        # forced-wide via TT_POOL_MAX_TILES_OVERRIDE (wide reduction at sim-safe C)
-        (
-            "wide_c160_cap4",
-            dict(channels=160, in_h=8, in_w=4, cores=1, max_tiles_override=4, sim_skip="craq-sim artifact"),
-        ),
-        ("wide_c256_cap4", dict(channels=256, in_h=8, in_w=4, cores=1, max_tiles_override=4, sim_skip="craq-sim HANG")),
-        ("wide_c96_cap2", dict(channels=96, in_h=8, in_w=4, cores=1, max_tiles_override=2)),
-        # nested: chunked large kernel x wide reduction
-        (
-            "wide_large_k7_c160",
-            dict(
-                channels=160,
-                in_h=8,
-                in_w=4,
-                kernel=(7, 7),
-                stride=(2, 2),
-                padding=(3, 3),
-                cores=1,
-                max_tiles_override=4,
-                sim_skip="craq-sim artifact (inherits wide_c160_cap4)",
-            ),
-        ),
+        # natural wide reduction: C=280 = 9 tiles > the 8-tile cap -> three 3-tile c-blocks
+        ("wide_c280_3blocks", dict(channels=280, in_h=8, in_w=4, cores=1)),
+        # avg pool: basic + chunked large kernel (7x7 window = 49 rows -> 32 + 17-row PARTIAL chunk,
+        # exercising the partial-chunk stale-tail fill on the avg path); padding=0 (see _run_case)
+        ("avg_k3x3_s1", dict(pool="avg", kernel=(3, 3), stride=(1, 1), padding=(0, 0), cores=1)),
+        ("avg_k7x7_s1_large", dict(pool="avg", kernel=(7, 7), stride=(1, 1), padding=(0, 0), cores=1)),
         # sharding layouts
         ("block_2x2", dict(shard="block", grid_yx=(2, 2))),
         ("width_1x2_c128", dict(channels=128, in_h=8, in_w=4, shard="width", grid_yx=(1, 2))),

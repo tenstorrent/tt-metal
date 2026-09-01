@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_utils.hpp"
-#include <cstdlib>
 #include <limits>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
@@ -131,7 +130,6 @@ FactoryParameters get_factory_parameters(
     uint32_t in_h,
     uint32_t in_w,
     const Layout& output_layout,
-    bool force_max_tiles_per_reduction_4,
     bool single_reader_stream) {
     uint32_t multi_buffering_factor = 2;
     bool split_reader = !single_reader_stream;
@@ -184,27 +182,6 @@ FactoryParameters get_factory_parameters(
         TT_FATAL(!is_avg_pool, "return_indices only applies for MaxPool");
     }
     uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
-    // Opt-in 4-tile cap (default false; no caller passes true today). Upstream #54284 root-caused
-    // the 0x19 fault this used to work around (a GPR read parked behind a MOP waiting on SrcAB
-    // dvalid; fixed by a larger CSR timeout) and retired the always-on cap — kernels now take a
-    // resolved max_tiles_per_reduction compile arg. Retained as a debug knob (e.g. forcing
-    // in_nblocks_c>1 at small C to exercise the wide path). Caller-keyed, not hal-arch: the
-    // quasar op runs this pack path on WH silicon too.
-    if (force_max_tiles_per_reduction_4) {
-        MAX_TILES_PER_REDUCTION = 4;
-    }
-    // Debug/test override: lower the tiles-per-reduction cap so the wide-reduction path
-    // (in_nblocks_c > 1) is exercised at small C (host params and the kernels' resolved
-    // max_tiles_per_reduction compile arg stay coherent since both derive from this value).
-    if (const char* override_env = std::getenv("TT_POOL_MAX_TILES_OVERRIDE")) {
-        const uint32_t override_val = static_cast<uint32_t>(std::atoi(override_env));
-        TT_FATAL(
-            override_val >= 1 && override_val <= MAX_TILES_PER_REDUCTION,
-            "TT_POOL_MAX_TILES_OVERRIDE={} must be in [1, {}]",
-            override_val,
-            MAX_TILES_PER_REDUCTION);
-        MAX_TILES_PER_REDUCTION = override_val;
-    }
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     return FactoryParameters{

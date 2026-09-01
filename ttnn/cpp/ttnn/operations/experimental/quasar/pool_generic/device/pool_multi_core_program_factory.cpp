@@ -582,11 +582,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         in_h,
         in_w,
         output_layout,
-        // The QSR force-4 pack cap was RETIRED upstream (#52966 / PR #54284): the 0x19 fault was
-        // root-caused to a CSR timeout, not a pack-bounds limit, so up to 8 tiles per reduction is
-        // now correct. Equal-width c-blocks are instead guaranteed by largest_uniform_block_width()
-        // below. Kept plumbed (defaulted false) so the cap can be re-armed from one call site.
-        /*force_max_tiles_per_reduction_4=*/false,
         // Symmetric lanes: one multi-threaded reader (not split readers) so STRIDED pairs reader
         // thread i with compute thread i. MPWI keeps its asymmetric reader0/reader1 structure.
         /*single_reader_stream=*/!return_indices);
