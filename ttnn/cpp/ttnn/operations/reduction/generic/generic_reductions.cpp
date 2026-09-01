@@ -13,7 +13,6 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/reduction/generic/device/welford_reduce_device_operation.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -453,8 +452,7 @@ static Tensor std_var_impl(
 
     if (input_tensor.layout() != Layout::TILE) {
         ttnn::Shape padded_shape = data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-        input_tensor = ttnn::tilize_with_val_padding(
-            input_tensor, padded_shape, 0.0f, memory_config, std::nullopt, /*use_multicore=*/true, sub_core_grids);
+        /* TODO(nuked-op tilize_with_val_padding): passthrough */ (void)0;
     }
 
     auto reduce_math = (reduce_type == reduction_common::ReduceType::Std) ? tt::tt_metal::ReduceOpMath::STD
@@ -511,8 +509,7 @@ Tensor non_height_width_reduce(
     auto tensor_to_reduce = input_tensor;
     if (tensor_to_reduce.layout() != Layout::TILE) {
         auto padded_shape = data_movement::pad_to_tile_shape(tensor_to_reduce.padded_shape());
-        tensor_to_reduce = ttnn::tilize_with_val_padding(
-            tensor_to_reduce, padded_shape, 0.0f, memory_config, std::nullopt, /*use_multicore=*/true, sub_core_grids);
+        /* TODO(nuked-op tilize_with_val_padding): passthrough */ (void)0;
     }
     Tensor output_tensor = ttnn::experimental::reduction::fast_reduce_nc(
         tensor_to_reduce,
