@@ -82,6 +82,7 @@ void kernel_main() {
     std::array<uint32_t, num_inputs> input_tile_id_end;
     std::array<uint32_t, num_inputs> input_valid_pages;
     std::array<uint32_t, num_inputs> worker_link;
+    std::array<uint32_t, num_inputs> input_cache_batch_extent;
     // Phase-1 input page base: nonzero only for single-slot gather (skip to the sliced input slot).
     // The slice is always emitted into output slot 0, whatever the output batch size.
     std::array<uint32_t, num_inputs> input_batch_base;
@@ -100,6 +101,7 @@ void kernel_main() {
         // counts and the ring slice protocol stay matched. Default (full input) leaves it unchanged.
         const uint32_t valid_pages = get_arg_val<uint32_t>(arg_idx++);
         worker_link[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_cache_batch_extent[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_valid_pages[input_idx] = valid_pages;
         const auto link_page_range =
             ring_attention_all_gather::compute_link_page_range(valid_pages, num_links, worker_link[input_idx]);
@@ -126,8 +128,9 @@ void kernel_main() {
         CircularBuffer cb_meta(cb_output_id);
         const uint32_t slot_id =
             trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, slot_id_addr, cb_meta.get_write_ptr());
-        const uint32_t cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx;
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+            const uint32_t cache_batch_idx = trace_metadata::bounded_cache_batch_idx(
+                slot_id, kv_cache_num_layers, kv_cache_layer_idx, input_cache_batch_extent[input_idx]);
             input_batch_base[input_idx] = cache_batch_idx * input_batch_head_count[input_idx] *
                                           input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
         }

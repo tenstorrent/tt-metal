@@ -334,6 +334,27 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
 
     validate_metadata_tensors(tensor_args);
+    if (tensor_args.has_metadata()) {
+        TT_FATAL(args.kv_cache_num_layers > 0, "kv_cache_num_layers must be greater than zero");
+        TT_FATAL(
+            args.kv_cache_layer_idx < args.kv_cache_num_layers,
+            "kv_cache_layer_idx={} must be less than kv_cache_num_layers={}",
+            args.kv_cache_layer_idx,
+            args.kv_cache_num_layers);
+        const auto validate_cache_layers = [&args](const Tensor& cache, const char* name) {
+            const auto cache_batch = cache.logical_shape()[0];
+            TT_FATAL(
+                cache_batch % args.kv_cache_num_layers == 0,
+                "{} cache batch={} must be divisible by kv_cache_num_layers={}",
+                name,
+                cache_batch,
+                args.kv_cache_num_layers);
+        };
+        validate_cache_layers(tensor_args.input_k, "K");
+        if (tensor_args.input_v.has_value()) {
+            validate_cache_layers(tensor_args.input_v.value(), "V");
+        }
+    }
 
     TT_FATAL(
         !args.sliding_window_size.has_value() || args.has_sliding_window(),

@@ -2641,6 +2641,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             {tensor_args.slot_id->buffer()->address(),  // smuggled-rta-ok: metadata tensor addr (on-device)
              args.kv_cache_num_layers,
              args.kv_cache_layer_idx,
+             std::min(
+                 tensor_args.input_k.logical_shape()[0],
+                 tensor_args.input_v.has_value() ? tensor_args.input_v->logical_shape()[0]
+                                                 : tensor_args.input_k.logical_shape()[0]),
              tensor_args.kv_actual_isl->buffer()->address()});  // smuggled-rta-ok: metadata tensor addr (on-device)
     }
 

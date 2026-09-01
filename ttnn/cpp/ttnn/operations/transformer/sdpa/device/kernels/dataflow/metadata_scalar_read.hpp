@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "api/debug/assert.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/core_local_mem.h"
@@ -37,6 +38,17 @@ inline uint32_t read_metadata_scalar_u32(
     noc.async_read_barrier();
     invalidate_l1_cache();
     return CoreLocalMem<volatile uint32_t>(dst_l1_addr)[0];
+}
+
+inline uint32_t bounded_cache_batch_idx(
+    uint32_t slot_id, uint32_t num_layers, uint32_t layer_idx, uint32_t cache_batch_extent) {
+    const bool static_args_valid = num_layers > 0 && layer_idx < num_layers;
+    const bool layer_fits_cache = layer_idx < cache_batch_extent;
+    const bool slot_fits_cache =
+        static_args_valid && layer_fits_cache && slot_id <= (cache_batch_extent - 1 - layer_idx) / num_layers;
+    ASSERT(slot_fits_cache);
+    // Device assertions are optional; keep the resulting NoC address inside the allocation when disabled.
+    return slot_fits_cache ? slot_id * num_layers + layer_idx : 0;
 }
 
 }  // namespace trace_metadata

@@ -103,6 +103,7 @@ void kernel_main() {
         // (full input) leaves the range unchanged.
         const uint32_t valid_pages = get_arg_val<uint32_t>(arg_idx++);
         worker_link[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        (void)get_arg_val<uint32_t>(arg_idx++);  // input_cache_batch_extent: reader-only
         input_valid_pages[input_idx] = valid_pages;
         const auto link_page_range =
             ring_attention_all_gather::compute_link_page_range(valid_pages, num_links, worker_link[input_idx]);

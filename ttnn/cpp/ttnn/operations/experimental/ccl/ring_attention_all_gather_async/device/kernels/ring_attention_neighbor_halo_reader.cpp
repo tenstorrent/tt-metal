@@ -54,12 +54,14 @@ void kernel_main() {
     std::array<uint32_t, num_inputs> input_tile_start;
     std::array<uint32_t, num_inputs> input_tile_end;
     std::array<uint32_t, num_inputs> input_batch_base;
+    std::array<uint32_t, num_inputs> input_cache_batch_extent;
     for (uint32_t input = 0; input < num_inputs; ++input) {
         input_stride_pages[input] = get_arg_val<uint32_t>(arg_idx++);
         input_batch_head_count[input] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_start[input] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_end[input] = get_arg_val<uint32_t>(arg_idx++);
         input_batch_base[input] = get_arg_val<uint32_t>(arg_idx++);
+        input_cache_batch_extent[input] = get_arg_val<uint32_t>(arg_idx++);
     }
 
     // Trace-safe metadata path. The halo's source group is linear in the chunk index, so on the scalar
@@ -79,8 +81,9 @@ void kernel_main() {
         CircularBuffer cb_meta(meta_cb_id);
         const uint32_t slot_id =
             trace_metadata::read_metadata_scalar_u32(meta_noc, slot_meta_args, slot_id_addr, cb_meta.get_write_ptr());
-        const uint32_t kv_cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx;
         for (uint32_t input = 0; input < num_inputs; ++input) {
+            const uint32_t kv_cache_batch_idx = trace_metadata::bounded_cache_batch_idx(
+                slot_id, kv_cache_num_layers, kv_cache_layer_idx, input_cache_batch_extent[input]);
             input_batch_base[input] = kv_cache_batch_idx * input_batch_head_count[input] * input_stride_pages[input];
         }
         const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
