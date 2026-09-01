@@ -212,6 +212,12 @@ class TPGatedDeltaNet:
         # Pre-allocated persistent slot buffers (rec_state + conv_states shaped). Verify copies state
         # INTO these fixed addresses (trace-safe + no per-call alloc) instead of fresh ttnn.clone.
         self._slot_bufs = None
+        # Fully-batched hybrid verify (_verify_fullbatch): no per-token loop at all. This is the
+        # production spec-decode verify — 2.3 ms/candidate vs ~15 ms for the per-token path — and is
+        # validated lossless + deterministic (test_spec_lossless.py, test_spec_determinism.py). The
+        # per-token loop below survives as this flag's False branch: an A/B reference for numerics
+        # work, flipped from python (no env), never from the demo.
+        self.use_fullbatch_verify = True
         # Batched-conv verify only: the [1, K-1+T, qkv_dim_tp] conv window stashed with ONE copy, from
         # which commit_verify_slot slices the accepted slot's shift-register. None => per-token slots.
         self._verify_win_buf = None
@@ -1340,10 +1346,10 @@ class TPGatedDeltaNet:
         # produces per-token q/k/v that we collect, then run the whole recurrence in a single call
         # that also emits the state AFTER every token (output_per_token_state) for slot acceptance.
         # Measured: verify marginal 18.0 -> 15.2 ms/candidate (the recurrence is only ~15% of it).
-        # QWEN36_GDN_FULL_BATCH=1: eliminate the per-token loop ENTIRELY (marginal -> 2.3 ms). The
-        # ~18 ms/candidate is ~50 device ops per token per GDN layer at a few us each — launch-bound
-        # with no hot spot — so the only fix is to stop launching them. Three pieces make that
-        # possible without any sliding-window slicing:
+        # self.use_fullbatch_verify (default True): eliminate the per-token loop ENTIRELY (marginal
+        # -> 2.3 ms). The ~18 ms/candidate is ~50 device ops per token per GDN layer at a few us each
+        # — launch-bound with no hot spot — so the only fix is to stop launching them. Three pieces
+        # make that possible without any sliding-window slicing:
         #   conv    -> the NATIVE depthwise ttnn.conv1d (_conv1d_prefill), the same op prefill uses,
         #              which takes all T rows at once and is trace-safe (weights prepared at warmup);
         #   q/k/v   -> sliced out of the batched conv output on the FEATURE dim (contiguous columns,
@@ -1351,7 +1357,7 @@ class TPGatedDeltaNet:
         #   beta/g  -> a_all/b_all are already [1,T,Nv], so the gating is one sigmoid / softplus pass;
         #   recur.  -> the C++ fused_recurrent_gated_delta_rule kernel consumes [B,T,Nv,D] for all T
         #              tokens in ONE dispatch and emits per-token state for slot acceptance.
-        if os.environ.get("QWEN36_GDN_FULL_BATCH", "0") == "1":
+        if self.use_fullbatch_verify:
             return self._verify_fullbatch(qkv_all, z_all, a_all, b_all, T, bucket, capture)
         # Per-token path: the taps below ARE the shift register (same contract as forward_decode).
         self.sync_conv_taps()
@@ -1512,7 +1518,7 @@ class TPGatedDeltaNet:
         return o_red
 
     def _verify_fullbatch(self, qkv_all, z_all, a_all, b_all, T, bucket, capture):
-        """Fully-batched hybrid verify: NO per-token loop. See the QWEN36_GDN_FULL_BATCH note.
+        """Fully-batched hybrid verify: NO per-token loop. See the use_fullbatch_verify note above.
 
         Inputs are the already-projected [1,T,*] tensors. Returns the same padded [1,1,bucket,dim]
         the per-token path returns, and advances conv_states / rec_state identically.
@@ -1647,11 +1653,11 @@ class TPGatedDeltaNet:
         copies state INTO these fixed addresses so a captured trace replays without allocating (clones
         would mint new addresses each call). Reallocated only if fewer than n slots exist."""
         mc = ttnn.DRAM_MEMORY_CONFIG
-        # Conv window buffer, ONLY for the (experimental, off) batched-conv path: [1, K-1+n,
-        # qkv_dim_tp], matching the concat that builds E. Allocated HERE (before the trace warmup) so
-        # the warmup and captured passes take the identical ttnn.copy branch — a lazy allocate-then-
-        # copy makes capture hit an uncompiled program. Gated so the default path allocates nothing.
-        if os.environ.get("QWEN36_GDN_FULL_BATCH", "0") == "1":
+        # Conv window buffer, ONLY for the fully-batched conv path: [1, K-1+n, qkv_dim_tp], matching
+        # the concat that builds E. Allocated HERE (before the trace warmup) so the warmup and
+        # captured passes take the identical ttnn.copy branch — a lazy allocate-then-copy makes
+        # capture hit an uncompiled program. Gated so the per-token A/B path allocates nothing.
+        if self.use_fullbatch_verify:
             _wrows = self.K - 1 + n
             if self._verify_win_buf is None or self._verify_win_buf.shape[-2] != _wrows:
                 if self._verify_win_buf is not None:
@@ -1752,8 +1758,8 @@ class TPGatedDeltaNet:
         COST NOTE. This is the one EAGER step of the spec iteration that scales with layer count: 48
         GDN layers x a handful of device ops, at this stack's ~35 us eager op cost. The ops move a
         few KB each — it is dispatch count, not data — so the only thing that matters here is how
-        many ttnn calls the loop makes. Under QWEN36_GDN_FULL_BATCH=1 it used to make ten per layer
-        (rec slice+copy, then K conv taps x slice+copy+deallocate) and cost ~17 ms, ~3x its fb=0
+        many ttnn calls the loop makes. On the fully-batched verify it used to make ten per layer
+        (rec slice+copy, then K conv taps x slice+copy+deallocate) and cost ~17 ms, ~3x its per-token
         self, whose trace had already materialised the per-token conv slots. Two changes took it to
         ~5 ms: the full-acceptance early-out below, and committing the conv shift register as ONE
         [1,K,qkv_dim_tp] buffer (_conv_win_buf) that the traced verify reads its carry from, instead

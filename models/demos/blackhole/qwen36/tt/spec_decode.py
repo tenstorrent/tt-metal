@@ -3,7 +3,7 @@
 """Speculative decoding for Qwen3.6-27B using the built-in MTP drafter head.
 
 The MTP head (models/demos/blackhole/qwen36/tt/mtp.py) drafts K tokens autoregressively; the base
-model verifies them in one masked-bucket chunk forward; accepted tokens are committed by pointing
+model verifies them in one traced K+1-token chunk forward; accepted tokens are committed by pointing
 the GDN recurrent state at the accepted slot.
 
 Iteration shape (anchor p; the base has consumed through p and we hold its hidden h_p):
@@ -38,12 +38,18 @@ from loguru import logger
 
 import ttnn
 
+# Prompt length above which the reseed goes back to the per-slot loop; see generate().
+EAGER_RESEED_PROMPT_LEN = 131072
+
 
 class SpeculativeDecoder:
     """Greedy MTP speculative decode. Reproduces the plain-decode greedy trajectory exactly.
 
-    Everything that is not a genuine tuning knob is fixed to its measured-best setting; the two
-    remaining env flags are QWEN36_SPEC_DRAFT_LEN (K) and QWEN36_SPEC_PROFILE (diagnostics).
+    This is the demo's DEFAULT decode path (QWEN36_SPEC=0 opts out). Everything that is not a genuine
+    tuning knob is fixed to its measured-best setting: the only env flags left are
+    QWEN36_SPEC_DRAFT_LEN (K override) and QWEN36_SPEC_TIMING / QWEN36_SPEC_PROFILE (diagnostics).
+    The A/B switches that used to be env vars are instance attributes instead — set them from python
+    (force_eager_reseed, read_verify_logits here; use_fullbatch_verify on the GDN layers).
     """
 
     # Field order of the QWEN36_SPEC_TIMING lines.
@@ -60,10 +66,11 @@ class SpeculativeDecoder:
         self.args = model.args
         self.vocab = model.args.vocab_size
         self.page_table = page_table_torch  # torch [1, num_blocks]
-        # K=3 is the measured optimum at today's verify cost (~18 ms per candidate): K=3 gives
-        # 27.5 tok/s vs 27.0 at K=6, because the extra candidates cost more verify than the extra
-        # acceptance returns. K=6 becomes the right default once the fully-batched GDN verify lands
-        # (2.3 ms per candidate) — see the FULL_BATCH note in gdn/tp.py.
+        # K=3 is the conservative library default, kept for callers that pass no draft_len (the
+        # correctness tests). The fully-batched GDN verify made verify cost ~flat in K (2.3 ms per
+        # candidate — see use_fullbatch_verify in gdn/tp.py), so the demo passes the ISL-aware policy
+        # instead: K=10 up to a 4k prompt, K=6 above it (_run_tp_spec_generation). QWEN36_SPEC_DRAFT_LEN
+        # overrides both.
         self.K = int(draft_len if draft_len is not None else os.environ.get("QWEN36_SPEC_DRAFT_LEN", 3))
         # QWEN36_SPEC_PROFILE=1: per-phase wall-clock (synchronize-bracketed) to see where time goes.
         self._prof = bool(int(os.environ.get("QWEN36_SPEC_PROFILE", "0")))
@@ -84,8 +91,14 @@ class SpeculativeDecoder:
             # verify and decode must share GDN math or near-tie argmax flips reduce acceptance
             gdn.use_fused_recurrent_decode = True
         self._vfy_captured = False
-        # QWEN36_SPEC_EAGER_RESEED=1: keep the per-slot reseed loop (A/B escape hatch).
-        self._batched_reseed = not bool(int(os.environ.get("QWEN36_SPEC_EAGER_RESEED", "0")))
+        # Read the full [T, vocab] verify logits back to host as well as the argmax ids. Greedy
+        # acceptance does not need them (the trace argmaxes on device), so this is off; the device
+        # path stays in model.verify_traced for whatever needs distributions (sampling, debug).
+        self.read_verify_logits = False
+        # None => generate() picks batched or eager from the prompt length (see the note there).
+        # Set True/False to force one, for A/B work.
+        self.force_eager_reseed = None
+        self._batched_reseed = True  # resolved in generate()
         # The batched reseed's scratch block (its padding rows' KV sink) is the EXTRA block the MTP
         # cache carries past the page table's span — _allocate_mtp_kv_cache allocates num_blocks + 1.
         # It must not be one of the sequence's own blocks: stealing the last one caps the sequence at
@@ -162,21 +175,11 @@ class SpeculativeDecoder:
         unpadded argmax returns byte-identical ids (K=3 lossless acceptance 2.57 either way) and the
         draft phase drops 35.1 -> 22.3 ms at K=10. The pad was pure traffic — [1,1,1,vocab] is
         ALREADY 32 rows physically, so padding it to 32 logical rows made untilize and argmax move
-        ~32x the bytes they need. QWEN36_SPEC_ARGMAX_PAD32=1 restores the old path for A/B.
+        ~32x the bytes they need, so the pad is gone.
         """
-        if os.environ.get("QWEN36_SPEC_ARGMAX_PAD32") != "1":
-            u = ttnn.untilize(logits, use_multicore=True)
-            out = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,1] uint32 RM
-            ttnn.deallocate(u)
-            return out
-        vocab_rows = 32
-        padded = ttnn.pad(logits, [(0, 0), (0, 0), (0, vocab_rows - 1), (0, 0)], value=0.0)
-        u = ttnn.untilize(padded, use_multicore=True)
-        ttnn.deallocate(padded)
-        idx = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,32] uint32 RM
+        u = ttnn.untilize(logits, use_multicore=True)
+        out = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,1] uint32 RM
         ttnn.deallocate(u)
-        out = ttnn.slice(idx, [0, 0, 0], [1, 1, 1])
-        ttnn.deallocate(idx)
         return out
 
     def _id_to_host(self, id_tt):
@@ -239,12 +242,14 @@ class SpeculativeDecoder:
         ``vhidden`` row i is the base hidden at slot0+i; tokens[i] is the token at slot0+i+1.
 
         One drafter DECODE step per slot. Superseded by _reseed_mtp_batched (one forward over all
-        slots at once, ~11 ms/iteration cheaper at K=10); kept behind QWEN36_SPEC_EAGER_RESEED=1 as
-        the A/B reference. Batching it does NOT go through the drafter's prefill path — that needs a
-        genuine prefill shape and neither candidate width works at an arbitrary mid-sequence slot0
-        (at one tile the stack silently picks DECODE matmuls while the norms stay in PREFILL mode, so
-        the fused fc is handed a fractured activation; at 128 rows the SDPA rejects the unaligned
-        chunk start). It goes through the DECODE path at B rows instead — see _reseed_mtp_batched.
+        slots at once, ~11 ms/iteration cheaper at K=10) except past EAGER_RESEED_PROMPT_LEN prompt
+        tokens, where generate() comes back here — see its reseed note.
+
+        Batching it does NOT go through the drafter's prefill path — that needs a genuine prefill
+        shape and neither candidate width works at an arbitrary mid-sequence slot0 (at one tile the
+        stack silently picks DECODE matmuls while the norms stay in PREFILL mode, so the fused fc is
+        handed a fractured activation; at 128 rows the SDPA rejects the unaligned chunk start). It
+        goes through the DECODE path at B rows instead — see _reseed_mtp_batched.
         """
         for i, tok in enumerate(tokens):
             row = ttnn.slice(vhidden, (0, 0, i, 0), (1, 1, i + 1, vhidden.shape[-1]))
@@ -361,7 +366,7 @@ class SpeculativeDecoder:
 
         Returns (per-position argmax ids, per-position hidden rows [1,1,len,dim/tp]).
         """
-        _lt, vhidden, ids = self.model.verify_traced(tokens, p + 1, self.page_table)
+        _lt, vhidden, ids = self.model.verify_traced(tokens, p + 1, read_logits=self.read_verify_logits)
         return ids, vhidden
 
     def _seed(self, first, p):
@@ -404,7 +409,7 @@ class SpeculativeDecoder:
         """``_verify``, with the device->host readback split out of the device time.
 
         ``model.verify_traced`` runs execute_trace + synchronize_device and only THEN pulls the ids
-        (and, under QWEN36_SPEC_READ_LOGITS=1, the logits) back via
+        (and, when read_verify_logits is set, the logits) back via
         ``ttnn.to_torch(ttnn.get_device_tensors(...)[0])``, so hooking ``ttnn.get_device_tensors``
         for the duration of the call marks the device/host boundary without editing model.py. The
         trailing sync flushes the small hidden-rows clone that follows the readback, which lands in
@@ -480,6 +485,17 @@ class SpeculativeDecoder:
         SpeculativeDecoder._gen_calls += 1
         self._gen_id = SpeculativeDecoder._gen_calls
         _t_start = time.perf_counter()
+
+        # Reseed shape, from the prompt length. Past EAGER_RESEED_PROMPT_LEN the batched reseed's B=K+1
+        # in-projection drifts enough bf16 near-ties to cost ~0.3 accepted drafts/iter (256k: 19.7 vs
+        # 20.9 tok/s), while its dispatch saving (~2 ms/iter) no longer covers that; the per-slot loop
+        # keeps spec >= plain at every ISL. force_eager_reseed overrides for A/B work.
+        eager_reseed = T > EAGER_RESEED_PROMPT_LEN if self.force_eager_reseed is None else self.force_eager_reseed
+        self._batched_reseed = not eager_reseed
+        logger.info(
+            f"[spec] gen={self._gen_id} T={T} K={self.K} reseed={'eager' if eager_reseed else 'batched'} "
+            f"max_new={max_new_tokens}"
+        )
 
         # Chunked prompt prefill (2048-token chunks + masked tail — the same path the demo uses, so
         # long prompts work). Each chunk's hidden warms the MTP drafter's KV in ONE forward before it
