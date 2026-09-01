@@ -1373,6 +1373,11 @@ class MiniMaxH3Pipeline:
                 latent_channels=config["latent_channels"],
                 num_attention_heads=config["num_attention_heads"],
                 mesh_device=self.mesh_device,
+                # Stereo L/R as batch data-parallelism across mesh axis 0: CCL-free (no halo, no
+                # gather) and numerically the unsharded computation on different devices. The
+                # encoder no-ops this on multi-host meshes, where its per-row readback cannot
+                # reach remote shards yet.
+                stereo_split_axis=0,
                 # One step off the accurate default, measured at the production 5.17 s shape:
                 # full/tap 796 ms @ mean PCC 99.9989% -> weight/tap 565 ms @ 99.9785% -- 20x
                 # inside the encode gate (0.99 / rel RMSE 0.12). Not further: audio condition
