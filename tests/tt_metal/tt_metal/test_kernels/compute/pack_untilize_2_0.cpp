@@ -11,10 +11,10 @@
 #include "api/compute/experimental/2_0/hw_startup.h"
 
 // Id-free (2.0) pack-untilize kernel, classic circular buffers. The ops take LLKOperand (data format + tile
-// geometry as NTTPs, L1 address the only runtime state). pack_untilize_block owns the row/column loops and
+// geometry as NTTPs, L1 address the only runtime state). pack_untilize_block owns the column loop and
 // derives per-tile input/output addresses from the compile-time geometry via tile_stride_words. Output must
-// be bit-identical to the legacy kernel pack_untilize_legacy.cpp. This run uses block_ct_dim/full_ct_dim/
-// block_rt_dim == 1 (one tile per CB slot).
+// be bit-identical to the legacy kernel pack_untilize_legacy.cpp. This run uses block_ct_dim/full_ct_dim == 1
+// (one tile per CB slot; block_rt_dim is an NTTP defaulting to 1).
 void kernel_main() {
     std::uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
@@ -37,7 +37,7 @@ void kernel_main() {
         cb16.reserve_back(1);
 
         experimental::pack_untilize_block<1 /*block_ct_dim*/, 1 /*full_ct_dim*/>(
-            InOp(in_cb.read_address()), 1 /*block_rt_dim*/, OutOp(out_cb.write_address()));
+            InOp(in_cb.read_address()), OutOp(out_cb.write_address()));
 
         cb0.pop_front(1);
         cb16.push_back(1);

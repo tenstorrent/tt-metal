@@ -81,17 +81,19 @@ ALWI void pack_untilize_init(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<Ou
 
 // clang-format off
 /**
- * Id-free pack-untilize of one block. Owns the row/column loops and self-syncs DEST. Reads from in.l1_address
- * (unpack base; offset per tile by InShape's stride) and writes the block's first row-major output tile to
- * out.l1_address. Blackhole only.
+ * Id-free pack-untilize of one block. Owns the column loop and self-syncs DEST. Reads from in.l1_address
+ * (unpack base; offset per column tile by InShape's stride) and writes the block's first row-major output
+ * tile to out.l1_address. Blackhole only.
  *
- * Per-row output stride is one tile's L1 size, derived at compile time from the output descriptor -- matches
- * the shipping untilize factories' one-tile CB page.
+ * block_rt_dim is an NTTP and must be 1: the loop does not stride in/out across rows (every r unpacks
+ * c = 0..ct-1 from the same base and packs to the same out.l1_address). Legacy hid this behind CB fifo
+ * auto-increment. When row stride is wired (tile_address(in, r * block_ct_dim + c) and a matching output
+ * stride), lift the static_assert.
  *
  * | Template | block_ct_dim/full_ct_dim | Block width / full input width in tiles | uint32_t | | False |
  * | Template | is_fp32_dest_acc_en | Whether DEST is in fp32 accumulation mode | bool | | False |
+ * | Template | block_rt_dim  | Height of the block in tiles (rows to pack)   | uint32_t   | 1 | False |
  * | Function | in            | Input operand (tilized; unpack base)          | LLKOperand | | True |
- * | Function | block_rt_dim  | Height of the block in tiles (rows to pack)   | uint32_t   | >= 1 | True |
  * | Function | out           | Output operand (first row-major tile address) | LLKOperand | | True |
  * | Function | block_c_index | Block column index (when full_ct_dim > block_ct_dim) | uint32_t | >= 0 | False |
  */
@@ -100,20 +102,22 @@ template <
     std::uint32_t block_ct_dim = 8,
     std::uint32_t full_ct_dim = block_ct_dim,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    std::uint32_t block_rt_dim = 1,
     DataFormat InFormat,
     TensorShape InShape,
     DataFormat OutFormat,
     TensorShape OutShape>
 ALWI void pack_untilize_block(
-    LLKOperand<InFormat, InShape> in,
-    std::uint32_t block_rt_dim,
-    LLKOperand<OutFormat, OutShape> out,
-    std::uint32_t block_c_index = 0) {
+    LLKOperand<InFormat, InShape> in, LLKOperand<OutFormat, OutShape> out, std::uint32_t block_c_index = 0) {
     static_assert(is_legal_tile_shape(InShape), "pack_untilize_block: illegal input tile shape.");
     static_assert(is_legal_tile_shape(OutShape), "pack_untilize_block: illegal output tile shape.");
     static_assert(
         block_ct_dim > 0 && full_ct_dim % block_ct_dim == 0,
         "pack_untilize_block: full_ct_dim must be a positive multiple of block_ct_dim.");
+    static_assert(
+        block_rt_dim == 1,
+        "pack_untilize_block: block_rt_dim > 1 is not supported (no in/out row stride; would re-read "
+        "and overwrite the first row).");
     // Per-tile input stride (16B words) == one tile's L1 size, folded to a compile-time constant via
     // tile_stride_words: geometry-exact for linear formats, exp section included for block floats.
     constexpr std::uint32_t in_tile_stride = tile_stride_words(InFormat, InShape);

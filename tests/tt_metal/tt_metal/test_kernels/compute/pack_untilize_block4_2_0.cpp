@@ -33,8 +33,7 @@ void kernel_main() {
 
     cb0.wait_front(BLOCK);
     cb16.reserve_back(BLOCK);
-    experimental::pack_untilize_block<BLOCK, BLOCK>(
-        InOp(in_cb.read_address()), 1 /*block_rt_dim*/, OutOp(out_cb.write_address()));
+    experimental::pack_untilize_block<BLOCK, BLOCK>(InOp(in_cb.read_address()), OutOp(out_cb.write_address()));
     cb0.pop_front(BLOCK);
     cb16.push_back(BLOCK);
 
