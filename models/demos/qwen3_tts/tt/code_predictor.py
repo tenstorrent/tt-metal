@@ -21,6 +21,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.rope import apply_rope_qk, get_decode_transformation_mat
 
 
 class CodePredictor(LightweightModule):
@@ -62,6 +63,9 @@ class CodePredictor(LightweightModule):
         self.num_kv_heads = config.num_key_value_heads // self.tp_size
         self.num_kv_groups = self.num_heads // self.num_kv_heads  # same ratio
         self.scale = 1.0 / (self.head_dim**0.5)
+        # Sharded transformation matrix for the decode-mode RoPE kernel — see
+        # rope.apply_rope_qk. Built at init so it predates any trace capture.
+        self._decode_trans_mat = get_decode_transformation_mat(device)
 
         DRAM = ttnn.DRAM_MEMORY_CONFIG
         L1 = ttnn.L1_MEMORY_CONFIG
@@ -514,28 +518,23 @@ class CodePredictor(LightweightModule):
             k_b = ttnn.typecast(k, dtype=ttnn.bfloat16)
             ttnn.deallocate(k)
             k = k_b
-        q_r = ttnn.experimental.rotary_embedding_llama(
+        # apply_rope_qk takes the decode-mode kernel at seq==1 — bit-identical output, but
+        # the prefill kernel costs ~2 us per head where decode costs 3.4 us for all of
+        # them. See rope.apply_rope_qk.
+        q_r, k_r = apply_rope_qk(
             q,
-            cos,
-            sin,
-            transformation_mat,
-            is_decode_mode=False,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.kcfg,
-        )
-        ttnn.deallocate(q)
-        q = q_r
-        k_r = ttnn.experimental.rotary_embedding_llama(
             k,
             cos,
             sin,
             transformation_mat,
-            is_decode_mode=False,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            head_dim=self.head_dim,
+            decode_trans_mat=self._decode_trans_mat,
             compute_kernel_config=self.kcfg,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        ttnn.deallocate(q)
         ttnn.deallocate(k)
-        k = k_r
+        q, k = q_r, k_r
 
         # KV cache write/read.
         if kv_cache is not None:
