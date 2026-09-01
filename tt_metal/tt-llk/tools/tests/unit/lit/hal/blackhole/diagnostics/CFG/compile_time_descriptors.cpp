@@ -14,8 +14,8 @@ namespace cfg = hal::cfg;
 static_assert(static_cast<std::uint32_t>(cfg::Access::MMIO) == 0);
 static_assert(static_cast<std::uint32_t>(cfg::Access::TensixCfgUnit) == 1);
 static_assert(static_cast<std::uint32_t>(cfg::Access::TensixScalarUnit) == 2);
-static_assert(static_cast<std::uint32_t>(cfg::RegisterFile::Thread) == 0);
-static_assert(static_cast<std::uint32_t>(cfg::RegisterFile::State) == 1);
+static_assert(static_cast<std::uint32_t>(cfg::RegisterScope::Thread) == 0);
+static_assert(static_cast<std::uint32_t>(cfg::RegisterScope::State) == 1);
 static_assert(static_cast<std::uint32_t>(cfg::Sec::S0) == 0);
 static_assert(static_cast<std::uint32_t>(cfg::Sec::S7) == 7);
 static_assert(static_cast<std::uint32_t>(cfg::ThreadTarget::Current) == 0);
@@ -27,7 +27,7 @@ static_assert(static_cast<std::uint32_t>(cfg::WrcfgCompletion::Deferred) == 1);
 
 // Field arithmetic: state/thread words, repeated sections, narrow/full-width
 // masks, and multi-word descriptors.
-constexpr cfg::Field state_field {cfg::RegisterFile::State, 32, 10, 1, 3, 5, 3, 40};
+constexpr cfg::Field state_field {cfg::RegisterScope::State, 32, 10, 1, 3, 5, 3, 40};
 static_assert(state_field.abs0() == 355);
 static_assert(state_field.addr32(cfg::Sec::S0) == 11);
 static_assert(state_field.addr32(cfg::Sec::S1) == 12);
@@ -35,12 +35,12 @@ static_assert(state_field.shamt(cfg::Sec::S1) == 11);
 static_assert(state_field.mask(cfg::Sec::S1) == 0xf800u);
 static_assert(state_field.words() == 1);
 
-constexpr cfg::Field full_word {cfg::RegisterFile::State, 32, 20, 0, 0, 32, 1, 0};
+constexpr cfg::Field full_word {cfg::RegisterScope::State, 32, 20, 0, 0, 32, 1, 0};
 static_assert(full_word.mask(cfg::Sec::S0) == 0xffffffffu);
 static_assert(full_word.words() == 1);
 static_assert(cfg::Thcon[cfg::Reg0].TileDescriptor.Raw.words() == 4);
 
-constexpr cfg::Field thread_field {cfg::RegisterFile::Thread, 16, 7, 0, 8, 4, 2, 16};
+constexpr cfg::Field thread_field {cfg::RegisterScope::Thread, 16, 7, 0, 8, 4, 2, 16};
 static_assert(thread_field.abs0() == 120);
 static_assert(thread_field.addr32(cfg::Sec::S1) == 8);
 static_assert(thread_field.shamt(cfg::Sec::S1) == 8);
@@ -199,14 +199,14 @@ static_assert(decltype(cfg_gpr)::size == cfg::GprTransferSize::Bits128);
 static_assert(decltype(cfg_gpr)::completion == cfg::WrcfgCompletion::Deferred);
 
 constexpr auto constant_assignment = cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0, 1>();
-static_assert(decltype(constant_assignment)::file == cfg::RegisterFile::State);
+static_assert(decltype(constant_assignment)::scope == cfg::RegisterScope::State);
 static_assert(decltype(constant_assignment)::addr == 1);
 static_assert(decltype(constant_assignment)::shift == 29);
 static_assert(decltype(constant_assignment)::mask == 0x20000000u);
 static_assert(decltype(constant_assignment)::value == 1);
 
 constexpr auto gpr_write = cfg::from_gpr<cfg::Thcon[cfg::Reg0].TileDescriptor.Raw, cfg::Sec::S1>(cfg_gpr);
-static_assert(decltype(gpr_write)::file == cfg::RegisterFile::State);
+static_assert(decltype(gpr_write)::scope == cfg::RegisterScope::State);
 static_assert(decltype(gpr_write)::addr == 112);
 static_assert(decltype(gpr_write)::words == 4);
 static_assert(decltype(gpr_write.source)::index == 16);
