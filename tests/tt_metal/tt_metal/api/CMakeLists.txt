@@ -8,14 +8,6 @@ include(sources.cmake)
 # Use target_sources to gather the necessary sources
 target_sources(unit_tests_api_lib PRIVATE ${UNIT_TESTS_API_SOURCES})
 
-# The KV chunk table protobuf serializer + its generated pb.h (compiled directly —
-# symbols are hidden in libtt_metal.so, same situation as fabric's FSD proto).
-target_sources(
-    unit_tests_api_lib
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/tt_metal/impl/internal/disaggregation/kv_chunk_address_table_protobuf.cpp
-)
-
 target_include_directories(
     unit_tests_api_lib
     BEFORE
@@ -32,7 +24,6 @@ target_link_libraries(
     unit_tests_api_lib
     PRIVATE
         test_metal_common_libs
-        protobuf::libprotobuf
         Boost::smart_ptr
 )
 

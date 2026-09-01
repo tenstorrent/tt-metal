@@ -84,7 +84,6 @@ set(UNIT_TESTS_API_SOURCES
     test_core_local_mem_api.cpp
     test_zero_memory_api.cpp
     disaggregation/test_kv_chunk_address_table.cpp
-    disaggregation/test_kv_chunk_address_table_protobuf.cpp
 )
 
 # tt-emule ASAN sanitizer tests. Their source list is emule-team-owned (see
