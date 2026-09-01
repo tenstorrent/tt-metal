@@ -29,6 +29,7 @@ from helpers.perf.core import (
     _ci_provenance,
     _prune_runs,
     _refresh_latest,
+    _reject_duplicate_keys,
     combine_perf_reports,
     postprocess_tile_loop,
 )
@@ -441,7 +442,8 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     # ...reachable through the stable `latest` path...
     assert (root / "perf_data" / "latest" / "perf_x" / "perf_x.csv").exists()
     # ...and a run-level Parquet batch alongside it.
-    parquet = run_dir / "testrun.parquet"
+    # Named from the run tag, not run_id: run_id is shared by every shard.
+    parquet = run_dir / "testrun-wormhole-0.parquet"
     assert parquet.exists()
     table = pq.read_table(parquet)
     assert table.schema.names == [c.name for c in DB_SCHEMA]
@@ -482,7 +484,8 @@ def test_combine_perf_reports_raises_on_unknown_parquet_columns(tmp_path, monkey
 
     run_dir = root / "perf_data" / "runs" / "testrun-wormhole-0"
     assert (run_dir / "perf_x" / "perf_x.csv").exists()
-    assert not (run_dir / "testrun.parquet").exists()
+    # Glob rather than a literal name: the batch is named from the run tag.
+    assert not list(run_dir.glob("*.parquet"))
 
 
 def _seed_worker_csv(workers, base, mean):
@@ -687,3 +690,37 @@ def test_latest_swap_leaves_no_debris_when_it_fails(tmp_path, monkeypatch):
 
     assert (perf_data / "latest").readlink() == Path("runs") / "run-1"
     assert not list(perf_data.glob(".latest.tmp.*"))
+
+
+def test_duplicate_sweep_key_is_rejected_not_averaged():
+    # Two rows with the same (sweep-params, marker) key make the measurement
+    # ambiguous, so the run must fail instead of averaging them into one row.
+    frame = pd.DataFrame(
+        {
+            "dest_acc": ["Yes", "Yes"],
+            "tile_cnt": [8, 8],
+            MARKER: ["TILE_LOOP", "TILE_LOOP"],
+            stat_column("L1_TO_L1", MEAN): [100.0, 140.0],
+        }
+    )
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        PerfSchemaError
+    ) as excinfo:
+        _reject_duplicate_keys(frame, "perf_example.csv")
+    message = str(excinfo.value)
+    assert "perf_example.csv" in message
+    assert "duplicate" in message
+
+
+def test_distinct_sweep_keys_pass_through_unchanged():
+    frame = pd.DataFrame(
+        {
+            "dest_acc": ["Yes", "No"],
+            "tile_cnt": [8, 8],
+            MARKER: ["TILE_LOOP", "TILE_LOOP"],
+            stat_column("L1_TO_L1", MEAN): [100.0, 140.0],
+        }
+    )
+    pd.testing.assert_frame_equal(
+        _reject_duplicate_keys(frame, "perf_example.csv"), frame
+    )

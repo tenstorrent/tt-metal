@@ -34,7 +34,7 @@ namespace ckernel {
  * - The scaler doesn't change for the duration of the whole block operation
  * - Operand and scaler data format is bfloat16_b
  * - Operand tile size is 32x32 (num_faces=4) or 16x32 (num_faces=2, a single face-row)
- * - Can work on both 16-bit or 32-bit DEST register modes based on DST_ACCUM_MODE
+ * - Can work on both 16-bit or 32-bit DEST register modes based on DST_ACCUM_MODE (Quasar: 16-bit DEST only for now)
  * - Does only MAX pool on ROW dimension
  *
  * This function should NOT be used as a substitute for the native reduce_init API.
@@ -53,7 +53,7 @@ namespace ckernel {
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
- * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
+ * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 127                                       | True     |
  * | Template   | respect_trigger           | Triggers MOP split optimization                                                         | bool      | {true, false}                                  | False    |
  * | Function   | tensor_shape              | Shape of the operand tile (4 faces for 32x32, 2 faces for a 16x32 tiny tile)            | ckernel::TensorShape | N/A                                 | True     |
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
@@ -69,7 +69,8 @@ ALWI void reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape, st
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4>
 ALWI void reduce_block_max_row_init(std::uint32_t ocb) {
-    reduce_block_max_row_init<block_ct_dim, respect_trigger>(ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb);
+    reduce_block_max_row_init<block_ct_dim, respect_trigger>(
+        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb);
 }
 
 // clang-format off
@@ -83,7 +84,7 @@ ALWI void reduce_block_max_row_init(std::uint32_t ocb) {
  * - The scaler doesn't change for the duration of the whole block operation
  * - Operand and scaler data format is bfloat16_b
  * - Operand tile size is 32x32 (num_faces=4) or 16x32 (num_faces=2, a single face-row)
- * - Can work on both 16-bit or 32-bit DEST register modes based on DST_ACCUM_MODE
+ * - Can work on both 16-bit or 32-bit DEST register modes based on DST_ACCUM_MODE (Quasar: 16-bit DEST only for now)
  * - Does only MAX pool on ROW dimension
  *
  * This function should NOT be used as a substitute for the native reduce_tile API.
@@ -102,7 +103,7 @@ ALWI void reduce_block_max_row_init(std::uint32_t ocb) {
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
- * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
+ * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 127                                       | True     |
  * | Template   | respect_trigger           | Triggers MOP split optimization                                                         | bool      | {true, false}                                  | False    |
  * | Function   | tensor_shape              | Shape of the operand tile (4 faces for 32x32, 2 faces for a 16x32 tiny tile)            | ckernel::TensorShape | N/A                                 | True     |
  * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
@@ -118,7 +119,14 @@ ALWI void reduce_block_max_row(
     std::uint32_t icb_scaler,
     std::uint32_t row_start_index,
     std::uint32_t idst) {
+#ifdef ARCH_QUASAR
+    // Quasar programs the unpack MOP at execute -- pass the caller tensor_shape so unpack and math share
+    // one source of truth for the tile geometry (WH/BH build the unpack MOP from this shape at init).
+    UNPACK((llk_unpack_AB_reduce_block_max_row<block_ct_dim, respect_trigger>(
+        icb, icb_scaler, row_start_index, tensor_shape)));
+#else
     UNPACK((llk_unpack_AB_reduce_block_max_row<block_ct_dim, respect_trigger>(icb, icb_scaler, row_start_index)));
+#endif
     MATH((llk_math_reduce_block_max_row<block_ct_dim, is_fp32_dest_acc_en>(idst, tensor_shape)));
 }
 
@@ -127,7 +135,11 @@ template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_
 ALWI void reduce_block_max_row(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t row_start_index, std::uint32_t idst) {
     reduce_block_max_row<block_ct_dim, respect_trigger>(
-        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), icb, icb_scaler, row_start_index, idst);
+        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces),
+        icb,
+        icb_scaler,
+        row_start_index,
+        idst);
 }
 
 #ifdef ARCH_BLACKHOLE
@@ -148,7 +160,7 @@ ALWI void reduce_block_max_row(
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
- * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
+ * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 127                                       | True     |
  * | Template   | respect_trigger           | Triggers MOP split optimization                                                         | bool      | {true, false}                                  | False    |
  * | Function   | tensor_shape              | Shape of the operand tile (4 faces for 32x32, 2 faces for a 16x32 tiny tile)            | ckernel::TensorShape | N/A                                 | True     |
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
@@ -199,8 +211,8 @@ ALWI void reduce_block_max_row_reinit_minimal_runtime(
     std::uint32_t ocb,
     std::uint32_t block_ct_dim,
     bool respect_trigger = false) {
-    UNPACK(
-        (llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(block_ct_dim, respect_trigger, tensor_shape)));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(
+        block_ct_dim, respect_trigger, tensor_shape)));
     MATH((llk_math_reduce_block_max_row_reinit_minimal_runtime()));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
@@ -222,8 +234,8 @@ ALWI void reduce_block_max_row_reinit_short_runtime(
     std::uint32_t ocb,
     std::uint32_t block_ct_dim,
     bool respect_trigger = false) {
-    UNPACK(
-        (llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(block_ct_dim, respect_trigger, tensor_shape)));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(
+        block_ct_dim, respect_trigger, tensor_shape)));
     MATH((llk_math_reduce_block_max_row_reinit_short_runtime<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
@@ -246,7 +258,7 @@ ALWI void reduce_block_max_row_reinit_short_runtime(
  * - The scaler doesn't change for the duration of the whole block operation
  * - Operand and scaler data format is bfloat16_b
  * - Operand tile size is 32x32
- * - Can work on both 16-bit or 32-bit DEST register modes based on clear_fp32_accumulation flag
+ * - Can work on both 16-bit or 32-bit DEST register modes based on clear_fp32_accumulation flag (Quasar: 16-bit DEST only for now)
  * - Does only MAX pool on ROW dimension
  *
  * This function should NOT be used as a substitute for the native reduce_uninit API.
@@ -272,6 +284,10 @@ template <bool respect_trigger = false>
 ALWI void reduce_block_max_row_uninit(std::uint32_t icb) {
 #ifdef ARCH_BLACKHOLE
     MATH((llk_math_reduce_uninit()));
+#elif defined(ARCH_QUASAR)
+    // The custom block reduce math uninit is a no-op (addrmods are reprogrammed by the next init).
+    (void)icb;
+    MATH((llk_math_reduce_block_max_row_uninit<DST_ACCUM_MODE>()));
 #else
     // Required because MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
     // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
@@ -282,24 +298,46 @@ ALWI void reduce_block_max_row_uninit(std::uint32_t icb) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_uninit<respect_trigger>()));
 }
 
-// Runtime variants - block_ct_dim and respect_trigger are runtime parameters.
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+// Runtime variants - block_ct_dim and respect_trigger are runtime parameters. The input CBs
+// (icb, icb_scaler) are bound at init: on Quasar this lets the unpack MOP -- which bakes the SrcA buffer
+// descriptor -- be programmed at init, like native Quasar reduce. WH/BH bind the operand at execute and
+// ignore the input CBs here.
 ALWI void reduce_block_max_row_init_runtime(
     const ckernel::TensorShape& tensor_shape,
     std::uint32_t ocb,
     std::uint32_t block_ct_dim,
+    std::uint32_t icb,
+    std::uint32_t icb_scaler,
     bool respect_trigger = false) {
+#ifdef ARCH_QUASAR
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(
+        block_ct_dim, respect_trigger, icb, icb_scaler, tensor_shape)));
+#else
+    // WH/BH bind the operand at execute (relative addressing), so the input CBs are unused at init.
+    (void)icb;
+    (void)icb_scaler;
     UNPACK(
-        (llk_unpack_AB_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(block_ct_dim, respect_trigger, tensor_shape)));
-    MATH((llk_math_reduce_block_max_row_init_runtime<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape)));
+        (llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger, tensor_shape)));
+#endif
+    MATH((llk_math_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, tensor_shape)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
 ALWI void reduce_block_max_row_init_runtime(
-    std::uint32_t ocb, std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4) {
+    std::uint32_t ocb,
+    std::uint32_t block_ct_dim,
+    std::uint32_t icb,
+    std::uint32_t icb_scaler,
+    bool respect_trigger = false,
+    std::uint32_t num_faces = 4) {
     reduce_block_max_row_init_runtime(
-        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb, block_ct_dim, respect_trigger);
+        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces),
+        ocb,
+        block_ct_dim,
+        icb,
+        icb_scaler,
+        respect_trigger);
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
@@ -311,8 +349,14 @@ ALWI void reduce_block_max_row_runtime(
     std::uint32_t idst,
     bool respect_trigger = false,
     bool overlap_first_half = false) {
+#ifdef ARCH_QUASAR
+    // Pass the caller tensor_shape so unpack and math share one source of truth for the tile geometry.
+    UNPACK((llk_unpack_AB_reduce_block_max_row_runtime(
+        icb, icb_scaler, row_start_index, tensor_shape, respect_trigger, overlap_first_half)));
+#else
     UNPACK((llk_unpack_AB_reduce_block_max_row_runtime(
         icb, icb_scaler, row_start_index, respect_trigger, overlap_first_half)));
+#endif
     MATH((llk_math_reduce_block_max_row_runtime<is_fp32_dest_acc_en>(idst, tensor_shape)));
 }
 
@@ -339,6 +383,10 @@ ALWI void reduce_block_max_row_uninit_runtime(
     std::uint32_t icb, bool respect_trigger = false, bool overlap_first_half = false) {
 #ifdef ARCH_BLACKHOLE
     MATH((llk_math_reduce_uninit()));
+#elif defined(ARCH_QUASAR)
+    // The custom block reduce math uninit is a no-op (addrmods are reprogrammed by the next init).
+    (void)icb;
+    MATH((llk_math_reduce_block_max_row_uninit_runtime<DST_ACCUM_MODE>()));
 #else
     MATH((llk_math_reduce_uninit(icb)));
 #endif

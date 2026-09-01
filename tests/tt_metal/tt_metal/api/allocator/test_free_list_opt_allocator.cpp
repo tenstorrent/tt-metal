@@ -148,6 +148,22 @@ TEST(FreeListOptTest, CPU_ShrinkAndReset) {
     ASSERT_TRUE(e.has_value());
 }
 
+TEST(FreeListOptTest, CPU_RejectFullCapacityShrink) {
+    auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
+    const auto stats = allocator.get_statistics();
+    const auto blocks = allocator.get_memory_block_table();
+
+    EXPECT_THAT(
+        [&]() { allocator.shrink_size(1_GiB); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be smaller than max size")));
+
+    EXPECT_EQ(allocator.get_statistics().total_allocatable_size_bytes, stats.total_allocatable_size_bytes);
+    EXPECT_EQ(allocator.get_statistics().total_allocated_bytes, stats.total_allocated_bytes);
+    EXPECT_EQ(allocator.get_statistics().total_free_bytes, stats.total_free_bytes);
+    EXPECT_EQ(allocator.get_statistics().largest_free_block_bytes, stats.largest_free_block_bytes);
+    EXPECT_EQ(allocator.get_memory_block_table(), blocks);
+}
+
 TEST(FreeListOptTest, CPU_Statistics) {
     auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
     auto a = allocator.allocate(1_KiB);

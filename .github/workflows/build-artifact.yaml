@@ -476,12 +476,8 @@ jobs:
         TRACY_NO_ISA_EXTENSIONS: 1
       volumes:
         - ${{ github.workspace }}:/work
-        # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
-        - /home/ubuntu/.ccache-ci:/github/home/.ccache
-      # Group 1457 is for the shared ccache drive
       # tmpfs is for efficiency
       options: >
-        --group-add 1457
         --tmpfs /tmp
     defaults:
       run:

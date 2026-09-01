@@ -21,12 +21,12 @@ transport:
 model:
   variant: gpt_oss_d_p
   num_layers: 36
-  max_seq_len: 56320
-  chunk_size: 5120
+  max_seq_len: 131072
+  chunk_size: 8192
 
 workload:
   num_users: 2
-  chunks: "11"
+  chunks: "16"
   max_requests: 2
   interleave: round_robin
   check_pcc: true                 # SOURCE-slot golden PCC; --verify-migration covers the destinations

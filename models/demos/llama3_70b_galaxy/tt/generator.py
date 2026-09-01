@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from collections import defaultdict
 from dataclasses import fields, replace
 from typing import List
@@ -230,9 +229,7 @@ class Generator(WarmupForwardMixin):
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
         self._disable_prefill_tracing = False  # Whether to disable prefill traces
-        # DIAGNOSTIC: TT_DECODE_NO_TRACE=1 runs decode untraced so Python probes can observe
-        # the serving path (ttnn.execute_trace never re-enters Python). Slow; debug only.
-        self._disable_decode_tracing = bool(os.environ.get("TT_DECODE_NO_TRACE"))
+        self._disable_decode_tracing = False  # Whether to disable decode traces
         self._decode_inputs_need_reset = False
 
     def _set_prefill_column_mask(self, tt_column_mask):
@@ -1402,18 +1399,6 @@ class Generator(WarmupForwardMixin):
             reset_inputs = True
             reset_reasons.append("reset_batch")
 
-        # DIAGNOSTIC (TT_RESET_PROBE=N): reset_inputs copies HOST tokens over the decode
-        # trace's token input -- the same buffer on-device sampling writes the sampled token
-        # into. With device sampling the host copy is intentionally stale, so a reset firing
-        # every step would overwrite each sampled token. reset_reasons is collected but never
-        # logged, so print it for the first N decode steps.
-        _rp = int(os.environ.get("TT_RESET_PROBE", "0"))
-        if _rp and getattr(self, "_reset_probe_left", _rp) > 0:
-            self._reset_probe_left = getattr(self, "_reset_probe_left", _rp) - 1
-            logger.warning(
-                f"[reset-probe] reset_inputs={reset_inputs} reasons={reset_reasons} "
-                f"page_table_changed={page_table_changed} on_device_sampling={on_device_sampling}"
-            )
         kv_cache = kv_cache[0]
         active_seed_slots = None
         if start_pos is not None:
@@ -1591,35 +1576,6 @@ class Generator(WarmupForwardMixin):
         """
         Executes the trace for the decode_forward method but does not read back outputs.
         """
-        # DIAGNOSTIC (TT_TRACE_ALLOC_PROBE=N): the unsafe-allocation tracker is a query API,
-        # not a logger -- nothing reports on its own. Ask it, right before replay, which
-        # buffers were allocated behind THIS live trace.
-        # DIAGNOSTIC (TT_TOKIN_PROBE=N): read the decode trace's TOKEN INPUT right before
-        # replay. On-device sampling writes the sampled token into this exact buffer; the next
-        # replay reads it back. If the sampler wrote a real token but this reads 0, something
-        # between the two clobbered it (reset_inputs copying stale host tokens is the suspect).
-        _tp = int(os.environ.get("TT_TOKIN_PROBE", "0"))
-        if _tp and getattr(self, "_tokin_probe_left", _tp) > 0:
-            self._tokin_probe_left = getattr(self, "_tokin_probe_left", _tp) - 1
-            try:
-                _tin = device_inputs[0] if device_inputs else None
-                if _tin is not None:
-                    _v = ttnn.to_torch(ttnn.get_device_tensors(_tin)[0]).reshape(-1)[:8]
-                    logger.warning(f"[tokin-probe] decode token input before replay: {_v.tolist()}")
-            except Exception as _e:
-                logger.warning(f"[tokin-probe] read failed: {_e}")
-        _probe = int(os.environ.get("TT_TRACE_ALLOC_PROBE", "0"))
-        if _probe and getattr(self, "_alloc_probe_left", _probe) > 0:
-            self._alloc_probe_left = getattr(self, "_alloc_probe_left", _probe) - 1
-            try:
-                unsafe = ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(self.mesh_device, trace_id)
-                logger.warning(f"[alloc-probe] decode trace {trace_id}: {len(unsafe)} unsafe allocation(s)")
-                from collections import Counter as _C
-
-                for ctx, cnt in _C(unsafe.values()).most_common(12):
-                    logger.warning(f"[alloc-probe]   x{cnt:<4} {str(ctx)[:150]}")
-            except Exception as _e:
-                logger.warning(f"[alloc-probe] query failed: {_e}")
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
         return tt_out_trace
