@@ -538,18 +538,12 @@ def _all_gather_t(ccl_manager, x: "ttnn.Tensor", parallel_config) -> "ttnn.Tenso
     return x
 
 
-# `32 * factor` (not `factor`) exists only because TILE-layout mesh_partition needs a tile-aligned
-# split offset; ROW_MAJOR partitions fine at unaligned offsets, and every call site untilizes right
-# after anyway. `tight_t_align` switches to the tighter `factor` alignment. Off by default pending
-# wider coverage (channel-TP, other shard factors).
-#
-# These are per-call parameters, not module globals: this file is shared with LTX's Vocoder, so a
-# global env read would silently change LTX's partitioning too. Only `MiniMaxH3AudioDecoder` defaults
-# them from env (`MINIMAX_H3_AUDIO_TIGHT_T_ALIGN` / `_LOCAL_TPAD_TAIL`); LTX's `Vocoder` always gets
-# `False` regardless of that env var.
-#
-# `local_tpad_tail` only does anything once `tight_t_align` has shrunk the pad image below one shard
-# (see `_set_tpad_tail_local`); alone it's a no-op.
+# T-shard alignment is `factor`, not `32 * factor`: the coarser alignment existed only because
+# TILE-layout mesh_partition needs a tile-aligned split offset, but partitioning happens in
+# ROW_MAJOR (fine at unaligned offsets) and every call site untilized right afterward anyway.
+# The tighter alignment shrinks the T-pad image (49 -> 1 rows at T=207, factor 8), which also
+# lets `_set_tpad_tail` maintain just the pad suffix in place (`_set_tpad_tail_local`) instead
+# of multiplying every body row by 1.0.
 
 
 def _partition_t(x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
@@ -612,7 +606,7 @@ def _replicate_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_dev
     return ttnn.concat(pieces, dim=1)
 
 
-def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache, *, tight_t_align=False):
+def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache):
     """Cached T-sharded validity mask ``M`` (1.0 real, 0.0 on trailing ``tpad_image`` rows) and its complement ``inv``."""
     key = (global_T, tpad_image, dtype)
     cached = cache.get(key)
@@ -621,15 +615,10 @@ def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache,
         m[:, global_T - tpad_image :, :] = 0.0
         pair = []
         for t in (m, 1.0 - m):
-            if tight_t_align:
-                # The mask ends up ROW_MAJOR anyway, so build it that way and skip the tile-aligned
-                # partition constraint entirely.
-                mt = ttnn.from_torch(t, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
-                pair.append(_partition_t(mt, parallel_config))
-            else:
-                mt = ttnn.from_torch(t, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
-                mt = _partition_t(mt, parallel_config)
-                pair.append(ttnn.to_layout(mt, ttnn.ROW_MAJOR_LAYOUT))
+            # The mask ends up ROW_MAJOR anyway, so build it that way and skip the tile-aligned
+            # partition constraint entirely.
+            mt = ttnn.from_torch(t, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
+            pair.append(_partition_t(mt, parallel_config))
         cached = tuple(pair)
         cache[key] = cached
     return cached
@@ -660,9 +649,7 @@ def _tpad_mask_suffix(mesh_device, parallel_config, dtype, global_T, tpad_image,
     return cached
 
 
-def _set_tpad_tail(
-    x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache, tight_t_align=False, local_tpad_tail=False
-):
+def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache):
     """Set the trailing ``tpad_image`` tail rows: ``mode="zeros"`` zeros them, ``mode="replicate"`` fills the last real row.
 
     CCL-free via a cached validity mask (body rows multiply by 1.0, staying bit-identical).
@@ -670,18 +657,14 @@ def _set_tpad_tail(
     if tpad_image <= 0 or parallel_config is None or getattr(parallel_config, "factor", 0) <= 1:
         return x_BTC
     local_T = x_BTC.shape[1]
-    if local_tpad_tail and tpad_image < local_T:
+    if tpad_image < local_T:
+        # The pad fits inside one shard's tail, so fix just those rows in place instead of
+        # multiplying every body row by 1.0.
         return _set_tpad_tail_local(
             x_BTC, tpad_image, mode=mode, mesh_device=mesh_device, parallel_config=parallel_config, cache=cache
         )
     M, inv = _tpad_mask(
-        mesh_device,
-        parallel_config,
-        x_BTC.get_dtype(),
-        local_T * parallel_config.factor,
-        tpad_image,
-        cache,
-        tight_t_align=tight_t_align,
+        mesh_device, parallel_config, x_BTC.get_dtype(), local_T * parallel_config.factor, tpad_image, cache
     )
     xm = ttnn.multiply(x_BTC, M)
     if mode == "zeros":
@@ -1258,7 +1241,6 @@ class ConvTranspose1dViaConv3d(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        tight_t_align: bool = False,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -1270,7 +1252,6 @@ class ConvTranspose1dViaConv3d(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
-        self.tight_t_align = tight_t_align
 
         # Inner conv stays UNSHARDED; forward gathers T, runs unsharded, then re-partitions.
         self.conv = _AlignedOutConv1d(
@@ -1326,12 +1307,7 @@ class ConvTranspose1dViaConv3d(Module):
         y = self.conv(x_padded)
 
         if sharded:
-            if self.tight_t_align:
-                y = _partition_t(y, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
-            else:
-                y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
-                y = _partition_t(y, self.parallel_config)
-                y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
+            y = _partition_t(y, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
 
         if ch_axis is not None:
             # Re-pad C_out to unit so the per-chip C-shard is TILE-legal.

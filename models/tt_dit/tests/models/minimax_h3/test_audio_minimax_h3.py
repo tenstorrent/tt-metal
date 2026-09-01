@@ -485,22 +485,19 @@ FACTORS = [(1, 1), (4, 0), (8, 1)]
 KNOWN_BROKEN: set[tuple[int, int]] = set()
 
 
-def _build(mesh_device, config, converted, parallel_config, ccl_manager, **overrides):
+def _build(mesh_device, config, converted, parallel_config, ccl_manager):
     """The decoder at this file's shared defaults, plus a shard layout.
 
     Goes through `build_audio_decoder` rather than constructing directly so the precision levers
-    (`split_mode`, `max_c_in_block`) stay at whatever the shipping default is -- a sharded run
-    must measure the same configuration the unsharded gates do, or a divergence could be a lever
-    difference rather than a sharding bug. `overrides` reaches `MiniMaxH3AudioDecoder` directly,
-    for tests that need a non-default constructor kwarg (`tight_t_align`, `local_tpad_tail`)
-    rather than a full shipping-default build.
+    (`split_mode`, `max_c_in_block`) stay at whatever the shipping default is -- a
+    sharded run must measure the same configuration the unsharded gates do, or a divergence could
+    be a lever difference rather than a sharding bug.
     """
     decoder = build_audio_decoder(
         config,
         mesh_device,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
-        **overrides,
     )
     decoder.load_torch_state_dict(converted, strict=False)
     return decoder
@@ -663,65 +660,3 @@ def test_audio_decode_t_parallel(mesh_device):
         if seconds is None or (factor, axis) in KNOWN_BROKEN:
             continue
         assert psnr_db > 40.0, f"t_factor={factor} axis={axis} diverges from 1-device: PSNR {psnr_db:.1f} dB"
-
-
-# (tight_t_align, local_tpad_tail). `local_tpad_tail` alone is a no-op (needs `tight_t_align` to
-# shrink the pad image first) -- that row locks the no-op in as a tested invariant, not new coverage.
-LAYOUT_OPT_INS = [
-    pytest.param(True, False, id="tight_t_align"),
-    pytest.param(False, True, id="local_tpad_tail_alone_is_a_noop"),
-    pytest.param(True, True, id="tight_t_align+local_tpad_tail"),
-]
-
-
-# Both builds plus a decode, per (factor, opt-in) pair: worst case 2 factors x 3 rows x 2 builds.
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
-@pytest.mark.parametrize(("tight_t_align", "local_tpad_tail"), LAYOUT_OPT_INS)
-@pytest.mark.parametrize(("factor", "axis"), [f for f in FACTORS if f != (1, 1)])
-def test_audio_decode_layout_opt_ins_bit_identical(mesh_device, factor, axis, tight_t_align, local_tpad_tail):
-    """`tight_t_align` / `local_tpad_tail` change partitioning and tail-write mechanics, not precision,
-    so unlike `test_audio_decode_t_parallel`'s ~40 dB sharded-vs-unsharded bar, the bar here is exact:
-    bit-identical to the shipping-default path at the same shard factor.
-    """
-    weights_dir = weights_subdir("audio_vae")
-    if weights_dir is None:
-        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_MODEL_PATH")
-    pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
-    from diffusers import AutoencoderKLMiniMaxH3Audio
-    from safetensors.torch import load_file
-
-    from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
-
-    config = load_config(weights_dir)
-    reference = AutoencoderKLMiniMaxH3Audio(**config).eval()
-    reference.load_state_dict(load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors")))
-    converted = convert_minimax_h3_audio_state_dict(dict(reference.state_dict()))
-
-    torch.manual_seed(2)
-    latents = torch.randn(2, config["latent_channels"], NUM_LATENT_FRAMES) * 0.1
-
-    pc = ParallelFactor(factor=factor, mesh_axis=axis)
-    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-
-    baseline = _build(mesh_device, config, converted, pc, ccl)
-    baseline_out = baseline(latents)
-    del baseline
-
-    opted_in = _build(
-        mesh_device, config, converted, pc, ccl, tight_t_align=tight_t_align, local_tpad_tail=local_tpad_tail
-    )
-    opted_in_out = opted_in(latents)
-    del opted_in
-
-    assert opted_in_out.shape == baseline_out.shape, f"{opted_in_out.shape} != {baseline_out.shape}"
-    max_diff = (opted_in_out.float() - baseline_out.float()).abs().max().item()
-    psnr_db = psnr(baseline_out, opted_in_out)
-    logger.info(
-        f"layout opt-in t_factor={factor} axis={axis} tight_t_align={tight_t_align} "
-        f"local_tpad_tail={local_tpad_tail}: max abs diff {max_diff:.3e}, PSNR {psnr_db:.1f} dB"
-    )
-    assert max_diff == 0.0, (
-        f"t_factor={factor} axis={axis} tight_t_align={tight_t_align} local_tpad_tail={local_tpad_tail} "
-        f"is not bit-identical to the default path: max abs diff {max_diff:.3e} (PSNR {psnr_db:.1f} dB)"
-    )
