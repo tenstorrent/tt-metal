@@ -220,9 +220,22 @@ AllocatorConfig L1BankingAllocator::generate_config(
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto& logical_size = soc_desc.get_grid_size(CoreType::TENSIX);
     const auto& compute_size = tt::get_compute_grid_size(env, device_id, num_hw_cqs, dispatch_core_config);
+    // Under ATT, a DRAM endpoint is only addressable within its window's
+    // local-address field - 64 MiB per endpoint on the current Quasar maps -
+    // while the DRAM view itself is larger. Clamp the allocator so it never
+    // hands out an address the interconnect cannot express: without this,
+    // top-down allocations (kernel binaries) land at the top of the view and
+    // every fast-dispatch program launch composes an out-of-window operand.
+    // Interim until the maps widen the DRAM window span (map-sizing issue
+    // raised with the ATT map owner).
+    uint64_t att_dram_view_size = soc_desc.dram_view_size;
+    if (hal.get_arch() == tt::ARCH::QUASAR && std::getenv("TT_METAL_NOC_ATT") != nullptr) {
+        constexpr uint64_t k_att_dram_window_span = 64ull * 1024 * 1024;
+        att_dram_view_size = std::min<uint64_t>(att_dram_view_size, k_att_dram_window_span);
+    }
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
-         .dram_bank_size = soc_desc.dram_view_size,
+         .dram_bank_size = att_dram_view_size,
          .dram_bank_offsets = {},
          .dram_unreserved_base = static_cast<uint32_t>(hal.get_dev_addr(HalDramMemAddrType::UNRESERVED)),
          .dram_alignment = hal.get_alignment(HalMemType::DRAM),
