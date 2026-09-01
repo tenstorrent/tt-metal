@@ -142,7 +142,10 @@ class TtPrefillRuntime:
         # after the driver has built any D2D endpoints and registered the per-layer ack/completion
         # callback. Everything happens before the first request; there is no lazy or repeat capture.
         #   _controller       — SubDeviceTraceController driving the segmented capture/replay
-        #   _trace_input      — persistent per-chunk input buffer (captured address; updated in place)
+        #   _trace_input      — the per-chunk input buffer whose address the capture bakes in. compile()
+        #                       seeds a throwaway (the sockets do not exist yet); capture_trace() swaps in
+        #                       the ENGINE's persistent socket-input buffer, which the inbound sync op
+        #                       drains each chunk into directly, and frees the throwaway
         #   _trace_metadata   — 3 persistent 1-element uint32 tensors (slot_id, actual_start, actual_end)
         #   _trace_metadata_msg — persistent packed [1,1,1,3] uint32 tensor holding the same three words;
         #                       the D2H layer-ack ships it as the record, so it needs an address the
@@ -381,22 +384,6 @@ class TtPrefillRuntime:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-    def claim_persistent_input(self) -> ttnn.Tensor | None:
-        """Hand the traced forward's input buffer to the caller so it can fill the buffer ITSELF,
-        or None when this runtime is not tracing.
-
-        The inbound socket sync op takes a caller-owned destination (``tokens_out=``); pointing it at
-        this buffer makes the H2D/D2D drain land directly on the address the trace captured. That
-        removes a per-chunk allocation AND the per-chunk full-chunk stage-in copy `prefill_chunk` does
-        — a trace re-patches no addresses on replay, so a destination it did not capture cannot be used.
-
-        Claiming is a commitment, not a peek: from here on `prefill_chunk` must neither copy over the
-        buffer nor free it, which is what `_input_is_caller_filled` records. Callers that do not claim
-        keep the copy-in/free-after behaviour unchanged.
-        """
-        self._input_is_caller_filled = getattr(self, "_trace_input", None) is not None
-        return getattr(self, "_trace_input", None)
-
     def make_chunk_input(self, token_ids: list[int]) -> ttnn.Tensor:
         """Build one chunk's device input for `prefill_chunk`. First-rank input is
         SP-sharded token IDs; a non-first pipeline rank instead gets a placeholder
@@ -454,7 +441,7 @@ class TtPrefillRuntime:
         )
         self.compiled = True
 
-    def capture_trace(self, kv_cache: ttnn.Tensor) -> None:
+    def capture_trace(self, kv_cache: ttnn.Tensor, *, input_tensor: ttnn.Tensor) -> None:
         """Record the segmented trace, ONCE, before the chunk loop opens.
 
         The driver must call this AFTER building any D2D pipeline endpoints (their receiver-socket L1 must
@@ -471,6 +458,16 @@ class TtPrefillRuntime:
             return
         controller = self._controller
         assert controller is not None, "capture_trace(): compile() must run first (prepares the trace)"
+
+        # Adopt the engine's persistent socket-input buffer as THE captured input, replacing the
+        # throwaway _prepare_trace warmed with. The capture below is what bakes an input address in, and
+        # it has to bake the buffer the inbound sync op drains into (tokens_out=) — a trace re-patches no
+        # addresses on replay. Doing the swap here, not in compile(), is forced by ordering: compile()
+        # runs before the engine's sockets exist, and the buffer is allocated from a service's per-shard
+        # spec. Nothing has captured the throwaway, so it is safe to free (the warm pass synchronized).
+        if input_tensor is not self._trace_input:
+            ttnn.deallocate(self._trace_input)
+            self._trace_input = input_tensor
 
         # Ack registered after compile: the block runs the metadata zero_padded_kv_cache + ack routing
         # ONLY when on_layer_complete is set (tt_prefill_block.forward), so those programs were NOT
@@ -575,15 +572,17 @@ class TtPrefillRuntime:
         )
 
     def _prepare_trace(self, kv_cache: ttnn.Tensor) -> None:
-        """Set up the persistent input + per-element metadata buffers and the controller, then warm-compile
+        """Set up the warm-pass input + per-element metadata buffers and the controller, then warm-compile
         the metadata-variant programs (a full forward). Does NOT begin/end the capture — the driver calls
         capture_trace() later, once any ack/completion callback is registered. Called once from compile()."""
         chunk = self.config.chunk_size
-        # Persistent input at a stable (captured) address; seeded with zeros, overwritten per chunk. On a
-        # non-first rank make_chunk_input yields a placeholder hidden-state activation (the D2D-received one).
+        # Input for the warm pass below only — a stable address, but NOT the one the capture will bake
+        # in: that has to be the engine's persistent socket-input buffer, which cannot exist yet (the
+        # engine builds its sockets after compile(), because a service's init program validates its cores
+        # against the default whole-chip sub-device that compile() replaces). capture_trace() swaps that
+        # buffer in and frees this one. On a non-first rank make_chunk_input yields a placeholder
+        # hidden-state activation (the D2D-received one).
         self._trace_input = self.make_chunk_input([0] * chunk)
-        # Flipped by claim_persistent_input(); see prefill_chunk's traced stage-in.
-        self._input_is_caller_filled = False
         # Per-element metadata: (slot_id, actual_start, actual_end), seeded for chunk 0.
         self._trace_metadata = (self._meta1_dev(0), self._meta1_dev(0), self._meta1_dev(chunk))
         # Same three words packed, for the D2H ack record. Allocated whether or not the ack is wired:
@@ -607,6 +606,7 @@ class TtPrefillRuntime:
         request_id: int = 0,
         d2h_service=None,
         metadata_msg: Optional[ttnn.Tensor] = None,
+        input_owned_by_caller: bool = False,
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user `slot_id`'s slice of the engine-owned `kv_caches`.
 
@@ -654,6 +654,11 @@ class TtPrefillRuntime:
                 it is REQUIRED and carries (slot_id, actual_start, actual_end): its words are copied
                 on-device into the persistent buffers the capture reads, replacing the host round trip. On
                 the eager path it is the ack record sent per layer, required only when d2h_service is set.
+            input_owned_by_caller: the caller owns `input_tensor` and reuses it for later chunks, so this
+                call must not free it. The engine passes True for its one persistent socket-input buffer
+                (the inbound sync op drains every chunk straight into it, so on the traced path the data
+                already sits at the captured address and the stage-in copy is skipped too). False — the
+                default, and what compile()'s warm-up uses — keeps the consume-the-input behaviour.
         """
         # Not gated on self.compiled: compile() warms up by calling prefill_chunk() once before
         # marking the runtime compiled. The model must exist, though.
@@ -702,16 +707,17 @@ class TtPrefillRuntime:
                 "use_trace: prefill_chunk needs the packed metadata_msg to populate the per-chunk metadata "
                 "on-device (the traced serving loop always carries it; the eager warm-up passes host ints)"
             )
-            # Stage this chunk in. When the caller claimed _trace_input (claim_persistent_input) and had
-            # the inbound socket sync op drain straight into it, `input_tensor` IS that buffer: the data
-            # already sits at the captured address, so the copy is redundant and the free would pull the
-            # buffer out from under every later replay. Mirrors the output side, where the runner passes
-            # _d2d_send(deallocate=not use_trace) for the persistent _trace_output.
-            if not self._input_is_caller_filled:
+            # Stage this chunk in. Under input_owned_by_caller `input_tensor` IS _trace_input — the
+            # engine's persistent socket buffer, whose address capture_trace() baked in — so the inbound
+            # sync op has already left this chunk's data at the captured address: the copy is redundant
+            # and the free would pull the buffer out from under every later replay. Only a caller that
+            # brings its own input (compile()'s warm-up) still needs the copy-in/free-after. Mirrors the
+            # output side, where the runner passes _d2d_send(deallocate=not use_trace) for _trace_output.
+            if not input_owned_by_caller:
                 ttnn.copy(input_tensor, self._trace_input)
             self._metadata_from_msg(metadata_msg)
             self._controller.replay()
-            if not self._input_is_caller_filled:
+            if not input_owned_by_caller:
                 ttnn.deallocate(input_tensor)
             # Non-last rank: return the persistent output activation (replay just refreshed it) for the
             # driver to forward downstream over D2D. Last/single rank: the populated KV cache is the output.
@@ -730,12 +736,19 @@ class TtPrefillRuntime:
         else:
             on_layer_complete = self._on_layer_complete
 
+        # A caller-owned input is the engine's persistent socket buffer, reused by every later chunk, so
+        # it must survive this call. The eager path never copies its input, so honouring that is just
+        # declining the free. The dflash unpack below derives a runtime-owned model_input from it, and
+        # that one is freed either way.
         model_input = input_tensor
+        free_model_input = not input_owned_by_caller
         if self.config.dflash_enabled:
             self.drafter.reset()
             if not self.config.is_first_rank:
                 model_input, partial = self._unpack_activation(input_tensor)
-                ttnn.deallocate(input_tensor)
+                if not input_owned_by_caller:
+                    ttnn.deallocate(input_tensor)
+                free_model_input = True
                 self.drafter.import_partial(partial)
 
         out = self.model.forward(
@@ -751,7 +764,8 @@ class TtPrefillRuntime:
             cache_user_id=slot_id,
             index_kv_cache=kv_caches.index,
         )
-        ttnn.deallocate(model_input)
+        if free_model_input:
+            ttnn.deallocate(model_input)
 
         if self.config.dflash_enabled:
             if self.config.is_last_rank:

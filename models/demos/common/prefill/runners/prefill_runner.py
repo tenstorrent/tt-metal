@@ -286,6 +286,20 @@ def _make_socket_metadata_buffer(mesh_device) -> ttnn.Tensor:
     )
 
 
+def _make_socket_input_buffer(inbound_service, mesh_device) -> ttnn.Tensor:
+    """The engine's ONE per-chunk input buffer, used by every model. The inbound sync op takes it as a
+    caller-owned destination (``tokens_out=``), so each H2D/D2D drain lands straight in it and no
+    per-chunk input is allocated anywhere — the same deal _make_socket_metadata_buffer already gets for
+    the metadata record, and independent of trace for the same reason: the op validates the destination
+    against the service backing and copies page-for-page, with no trace awareness in it at all.
+
+    Allocated from the service's OWN per-shard spec, so the op's destination check compares that spec
+    against itself and cannot fail. That is also what keeps this model-agnostic: the layout comes from
+    the socket, not the model — SP-sharded token ids on the first rank, the hidden-state activation on a
+    downstream one — so the engine needs to know nothing about how a given model shards its input."""
+    return ttnn.allocate_tensor_on_device(inbound_service.get_per_shard_spec(), mesh_device)
+
+
 def _socket_next(h2d_service, metadata_buf, tokens_out=None) -> tuple:
     """Block on the next producer push: returns (tt_tokens, meta, metadata_msg). The device metadata
     tensor is returned (not discarded) so it can be propagated into the model's per-layer ack send.
@@ -456,7 +470,16 @@ def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: fl
 
 
 def _compute_and_send(
-    runtime, kv_caches, rank: int, c: int, inp, meta: Optional[dict], d2d_out, d2h_service=None, metadata_msg=None
+    runtime,
+    kv_caches,
+    rank: int,
+    c: int,
+    inp,
+    meta: Optional[dict],
+    d2d_out,
+    d2h_service=None,
+    metadata_msg=None,
+    input_owned_by_caller: bool = False,
 ) -> float:
     """Run one chunk: prefill into the engine-owned kv_caches, forward the output downstream (non-last
     rank) and grant the outbound sender so it ships over fabric. Returns the compute-start epoch
@@ -478,6 +501,7 @@ def _compute_and_send(
         request_id=c,
         d2h_service=d2h_service,
         metadata_msg=metadata_msg,
+        input_owned_by_caller=input_owned_by_caller,
     )
     if SYNC_PER_CHUNK:
         # Block on device completion so the delta is this rank's forward alone, not the downstream-start
@@ -536,12 +560,14 @@ def run_request_loop(
     d2d_out=None,
     d2h_service=None,
     metadata_buf=None,
+    persistent_in=None,
 ) -> None:
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
     closes the stream with the all -1 shutdown sentinel (each rank forwards it and exits gracefully) or,
-    as a hard fallback, until SIGTERM/SIGKILL. No fixed chunk bound, no trace input, no PCC, no
-    migration — the runner serves; migration is issued from outside (migration_driver.py).
+    as a hard fallback, until SIGTERM/SIGKILL. No fixed chunk bound, no host-built input (every chunk
+    drains from the socket straight into the engine's persistent input buffer), no PCC, no migration —
+    the runner serves; migration is issued from outside (migration_driver.py).
 
     The per-chunk metadata is read to host on every chunk (traced and eager alike): the scalars are tiny
     and the read is what lets the loop see the in-band shutdown sentinel and drain gracefully. Trace
@@ -552,13 +578,12 @@ def run_request_loop(
         raise ValueError("request mode requires the H2D service on the first rank for input")
     if metadata_buf is None:
         raise ValueError("request mode requires the persistent metadata record buffer (_make_socket_metadata_buffer)")
+    if persistent_in is None:
+        raise ValueError("request mode requires the persistent input buffer (_make_socket_input_buffer)")
     logger.info(
         f"[pp rank {rank}/{num_ranks}] request (unbounded) loop start "
         f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
     )
-    persistent_in = runtime.claim_persistent_input() if hasattr(runtime, "claim_persistent_input") else None
-    dest = "runtime traced input (persistent, no per-chunk copy)" if persistent_in is not None else "per-chunk alloc"
-    logger.info(f"[pp rank {rank}] input destination = {dest}")
     t0 = time.perf_counter()
     c = 0
     first = None
@@ -569,16 +594,24 @@ def run_request_loop(
         else:
             inp, meta, metadata_msg = _d2d_recv(d2d_in, metadata_buf, persistent_in)
         if _is_shutdown_sentinel(meta):
-            # End of stream: drop the throwaway payload + its metadata tensor, hand the sentinel to the
-            # next rank so it too unblocks and exits, then fall through to the graceful drain below.
+            # End of stream: the sentinel's payload landed in the engine's persistent input buffer, which
+            # outlives the loop, so there is nothing to drop here. Hand the sentinel to the next rank so
+            # it too unblocks and exits, then fall through to the graceful drain below.
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
-            if persistent_in is None:
-                ttnn.deallocate(inp)
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
         t = _compute_and_send(
-            runtime, kv_caches, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, metadata_msg=metadata_msg
+            runtime,
+            kv_caches,
+            rank,
+            c,
+            inp,
+            meta,
+            d2d_out,
+            d2h_service=d2h_service,
+            metadata_msg=metadata_msg,
+            input_owned_by_caller=True,
         )
         if first is None:
             first = t
@@ -1194,13 +1227,17 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         logger.info("[migration] LayerAck channel disabled (set PREFILL_ENABLE_LAYER_ACK=1 to enable)")
 
     metadata_buf = _make_socket_metadata_buffer(mesh_device)
+    # The other caller-owned socket destination, on this rank's inbound service: H2D on the first rank,
+    # the D2D receiver downstream. Created here, once, for whatever model is loaded; a traced runtime
+    # captures THIS buffer's address below, and prefill_chunk is told not to free it.
+    persistent_in = _make_socket_input_buffer(h2d_service if is_first_rank else d2d_in, mesh_device)
 
     # Capture the trace (use_trace) after the D2D endpoints AND the per-layer completion wiring
     # (LayerAck channel / layer-completion sink) are set up, but before the request loop: the capture
     # must split at each completion point, and doing it here keeps the one-time cost out of the loop.
     # No-op if already captured. See TtPrefillRuntime.capture_trace().
     if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
-        runtime.capture_trace(kv_caches)
+        runtime.capture_trace(kv_caches, input_tensor=persistent_in)
         # D2H ack under trace: the capture's warm forward compiles the ack programs by running them, so
         # num_layers real records already sit in the FIFO. Drain them before the reader starts, or the
         # scheduler sees a phantom chunk's worth of layer acks and migrates a slot that was never filled.
@@ -1227,6 +1264,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2d_out=d2d_out,
             d2h_service=d2h_service,
             metadata_buf=metadata_buf,
+            persistent_in=persistent_in,
         )
     finally:
         # Always tear down — the request loop can raise (e.g. the layer-completion sink's ring-full

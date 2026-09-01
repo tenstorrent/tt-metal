@@ -126,7 +126,9 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         the first rank, or a placeholder hidden-state activation on a non-first pipeline
         rank (which receives the real activation over the D2D socket)."""
 
-    def prefill_chunk(self, input_tensor, kv_cache, *, slot_id, actual_start, actual_end, request_id=0):
+    def prefill_chunk(
+        self, input_tensor, kv_cache, *, slot_id, actual_start, actual_end, request_id=0, input_owned_by_caller=False
+    ):
         """Prefill ONE chunk into user `slot_id`'s slice of `kv_cache` (the engine-owned
         cache, passed in), in order (a chunk's KV must be written before the next reads
         it). `[actual_start, actual_end)` is the absolute KV-position range of the chunk's
@@ -138,7 +140,25 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         `request_id` is the engine's chunk counter; the runner ALWAYS passes it, so accept it
         even if unused. Only the pipelined layer-completion sink consumes it (to build a
         globally-dense `seq = request_id * num_layers + layer_idx`); a single-rank LayerAck
-        channel carries no payload and can ignore it."""
+        channel carries no payload and can ignore it.
+
+        `input_owned_by_caller` says the caller owns `input_tensor` and will hand you the SAME
+        buffer again for the next chunk, so this call must not free it. The serving loop passes True
+        on EVERY rank: it allocates one persistent input buffer per rank (`_make_socket_input_buffer`,
+        from the inbound service's own per-shard spec) and has the inbound socket sync op drain every
+        chunk straight into it (`tokens_out=`), which removes the per-chunk input allocation for every
+        model, traced or eager. Honour it wherever your runtime is the one doing the free — usually
+        just guarding the `ttnn.deallocate(input_tensor)` that follows the embedding. If your model
+        consumes the input INSIDE the forward (e.g. its first decoder layer takes the layer input as
+        `residual` and force-frees it, which is what happens to the received activation on a non-first
+        pipeline rank) you cannot lend the buffer out at all: `ttnn.clone` it and give the forward the
+        copy, so the caller's buffer survives. Do not ignore the flag — a freed buffer means the next
+        chunk drains into released memory — and do not expect the engine to stop passing it for you: a
+        traced runtime NEEDS the drain to land on the address its capture baked in, on every rank, so
+        the engine cannot tell the two cases apart. Moving that free out of the model and into your
+        runtime is what buys the copy back. The default is False, which is the plain
+        consume-the-input behaviour every other caller (your `compile()` warm-up, your own test
+        drivers) already relies on."""
 
     # --- OPTIONAL hooks — implement only if your model supports cache migration; the serving loop
     #     never calls them. Keep the heavy table logic in your model's own module (a thin forwarder on

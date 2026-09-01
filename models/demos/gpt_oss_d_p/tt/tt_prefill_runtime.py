@@ -299,6 +299,7 @@ class TtPrefillRuntime:
         request_id: int = -1,  # accepted for the common-runner contract; single-request prefill ignores it
         d2h_service=None,  # accepted for the common-runner contract; this runtime uses host-callback LayerAcks
         record_dev=None,  # accepted for the common-runner contract; the D1H record path is unused here
+        input_owned_by_caller: bool = False,  # caller reuses input_tensor for later chunks: do not free it
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user ``slot_id``'s slice of the KV cache (self-owned or the engine's
         ``kv_caches``). Returns None (skip_lm_head) — the populated cache is the output.
@@ -331,9 +332,22 @@ class TtPrefillRuntime:
             actual_start < actual_end <= actual_start + chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {chunk_size}"
 
+        # input_owned_by_caller (the engine's persistent socket-input buffer, reused for every chunk)
+        # means this call must not free the input. On the first rank that is just declining the free, as
+        # the embedding only reads it. A non-first rank has to copy instead — see below.
         if self.config.is_first_rank:
             x_embd = self._embed_tokens(input_tensor)
-            ttnn.deallocate(input_tensor)
+            if not input_owned_by_caller:
+                ttnn.deallocate(input_tensor)
+        elif input_owned_by_caller:
+            # A non-first rank cannot lend the caller's buffer to the forward: the free lives inside the
+            # model, not here — tt/layer.py takes the layer input as `residual` and force-frees it after
+            # the attention add — so the buffer would come back released and the next chunk would drain
+            # into freed memory. Copy, and leave the caller's buffer intact. That copy is the price of the
+            # free sitting in the model; a runtime that frees its own input instead (deepseek_v3_d_p)
+            # passes the buffer straight through and pays nothing. Moving the layer-0 free out here would
+            # remove it for this runtime too.
+            x_embd = ttnn.clone(input_tensor)
         else:
             x_embd = input_tensor
 

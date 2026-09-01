@@ -277,6 +277,7 @@ class TtPrefillRuntime:
         *,
         skip_lm_head: bool = True,
         get_last_token: int = -1,
+        input_owned_by_caller: bool = False,
     ):
         """Prefill ONE chunk into user ``slot_id``'s slice of the engine-owned ``kv_cache``. With
         ``skip_lm_head`` (the default) returns None — single-rank is headless, the populated cache is the
@@ -330,9 +331,22 @@ class TtPrefillRuntime:
 
         # First rank embeds the SP-sharded tokens. On a non-first rank the input is already the upstream
         # hidden state, fed straight in — the first decoder layer frees it, so don't deallocate it here.
+        # input_owned_by_caller (the engine's persistent socket-input buffer, reused for every chunk)
+        # means this call must not free the input: on the first rank that is just declining the free,
+        # since the embedding only reads it. A non-first rank has to copy instead — see below.
         if self.config.is_first_rank:
             x_embd = self._embed_tokens(input_tensor)
-            ttnn.deallocate(input_tensor)
+            if not input_owned_by_caller:
+                ttnn.deallocate(input_tensor)
+        elif input_owned_by_caller:
+            # A non-first rank cannot lend the caller's buffer to the forward: the free lives inside the
+            # model, not here — tt/layer.py takes the layer input as `residual` and force-frees it after
+            # the attention add — so the buffer would come back released and the next chunk would drain
+            # into freed memory. Copy, and leave the caller's buffer intact. That copy is the price of the
+            # free sitting in the model; a runtime that frees its own input instead (deepseek_v3_d_p)
+            # passes the buffer straight through and pays nothing. Moving the layer-0 free out here would
+            # remove it for this runtime too.
+            x_embd = ttnn.clone(input_tensor)
         else:
             x_embd = input_tensor
 
