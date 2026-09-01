@@ -21,6 +21,7 @@
 #include "tt-metalium/circular_buffer_constants.h"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/host_api.hpp"
+#include "tt-metalium/math.hpp"
 #include "tt-metalium/program_descriptors.hpp"
 #include "tt-metalium/tensor_accessor_args.hpp"
 #include "tt-metalium/tile.hpp"
@@ -199,7 +200,7 @@ struct Logical1DShape {
 [[nodiscard]] uint32_t tile_mirror_elements(const uint32_t workspace_elements, const bool hybrid_tile_mirror) {
     return hybrid_tile_mirror
                ? checked_u32(
-                     ceil_div(workspace_elements, static_cast<uint32_t>(device_protocol::kLwtGroupOutputElements)) *
+                     tt::div_up(workspace_elements, static_cast<uint32_t>(device_protocol::kLwtGroupOutputElements)) *
                          device_protocol::kLwtGroupOutputElements,
                      "hybrid tile mirror elements")
                : 0U;
@@ -207,7 +208,7 @@ struct Logical1DShape {
 
 [[nodiscard]] uint32_t output_group_count(const size_t output_length) {
     return checked_u32(
-        ceil_div(output_length, static_cast<size_t>(device_protocol::kLwtGroupOutputElements)), "LWT group count");
+        tt::div_up(output_length, static_cast<size_t>(device_protocol::kLwtGroupOutputElements)), "LWT group count");
 }
 
 [[nodiscard]] uint32_t planner_signal_budget_bytes(
@@ -921,7 +922,7 @@ void validate_1d_tensor(const Tensor& tensor, const char* tensor_name) {
 
 [[nodiscard]] tt::tt_metal::TensorSpec output_spec_1d(
     const Logical1DShape& input_shape, const uint32_t length, const MemoryConfig& memory_config) {
-    const uint32_t stick_count = checked_u32(ceil_div(length, kStickWidth), "1D wavelet output stick count");
+    const uint32_t stick_count = checked_u32(tt::div_up(length, kStickWidth), "1D wavelet output stick count");
     const Shape output_shape = input_shape.rank_four ? Shape({input_shape.batch_count, 1, stick_count, kStickWidth})
                                                      : Shape({stick_count, kStickWidth});
     return tt::tt_metal::TensorSpec(

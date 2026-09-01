@@ -43,7 +43,7 @@ namespace inverse_2d_detail {
     TT_FATAL(output.end <= std::numeric_limits<size_t>::max() - pad, "2D ILWT padded output interval overflows");
     const size_t padded_begin = output.begin + pad;
     const size_t padded_end = output.end + pad;
-    return even ? IndexInterval{.begin = ceil_div(padded_begin, size_t{2}), .end = ceil_div(padded_end, size_t{2})}
+    return even ? IndexInterval{.begin = tt::div_up(padded_begin, size_t{2}), .end = tt::div_up(padded_end, size_t{2})}
                 : IndexInterval{.begin = padded_begin / 2, .end = padded_end / 2};
 }
 
@@ -278,8 +278,8 @@ inline void append_axis_routes(
     const size_t chunk_height = static_cast<size_t>(chunk_tiles_y) * kTileHeight2D;
     const size_t chunk_width = static_cast<size_t>(chunk_tiles_x) * kTileWidth2D;
     std::vector<Lwt2DChunkPlan> chunks;
-    const size_t chunk_rows = ceil_div(y_plan.original_length, chunk_height);
-    const size_t chunk_columns = ceil_div(x_plan.original_length, chunk_width);
+    const size_t chunk_rows = tt::div_up(y_plan.original_length, chunk_height);
+    const size_t chunk_columns = tt::div_up(x_plan.original_length, chunk_width);
     chunks.reserve(plan_2d_detail::checked_area(chunk_rows, chunk_columns, "2D ILWT chunk grid"));
     for (size_t y = 0; y < y_plan.original_length; y += chunk_height) {
         for (size_t x = 0; x < x_plan.original_length; x += chunk_width) {
@@ -321,9 +321,9 @@ inline void append_axis_routes(
         kMax2DLogicalExtent);
 
     const uint32_t output_tiles_y =
-        plan_2d_detail::checked_u32(ceil_div(y_plan.original_length, kTileHeight2D), "2D ILWT output tile rows");
+        plan_2d_detail::checked_u32(tt::div_up(y_plan.original_length, kTileHeight2D), "2D ILWT output tile rows");
     const uint32_t output_tiles_x =
-        plan_2d_detail::checked_u32(ceil_div(x_plan.original_length, kTileWidth2D), "2D ILWT output tile columns");
+        plan_2d_detail::checked_u32(tt::div_up(x_plan.original_length, kTileWidth2D), "2D ILWT output tile columns");
     const uint64_t maximum_tile_area = plan_2d_detail::maximum_candidate_tile_area(l1_budget_bytes);
     const uint32_t maximum_tiles_y = static_cast<uint32_t>(std::min<uint64_t>(output_tiles_y, maximum_tile_area));
     const uint32_t maximum_tiles_x = static_cast<uint32_t>(std::min<uint64_t>(output_tiles_x, maximum_tile_area));
