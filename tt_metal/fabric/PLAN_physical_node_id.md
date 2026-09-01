@@ -28,13 +28,13 @@ PhysicalNodeId = {
 
 Do **not** pack the host as `hash32` into a `uint64`. After tray and loc take 32 bits, only four characters would fit; `bh-glx-110-c01u02` is 18. A 128-bit pack is still only 12 host chars. The hash was the only way to stay in 64 bits, and it is the conversion this plan drops.
 
-Do **not** use FSD `host_id` (0..N-1 in file order): live discovery has no FSD index.
+Do **not** use FSD `host_id` (0..N-1 in file order): live discovery has no FSD index. That index and the UMD cluster descriptor's new `host_id` string (§8.2) are **different things that share a name** — the FSD one is a per-file position, the UMD one is the accelerator-group identifier that goes into `host[]`. Where it is ambiguous, say "FSD host index" / "UMD `host_id`".
 
 Do **not** use `std::string` inside the node (heap, allocator-sensitive compare). Do **not** use `std::array` — the host is a fixed buffer we never pass around on its own; a C array is the pack.
 
 UMD unique ids stay on `ASICDescriptor::umd_unique_id` / `Cluster::get_unique_chip_ids()` — they are not mapper identity.
 
-**Mock + FSD is the load-bearing case.** The name that goes into `host[]` is the **exact** FSD / OS hostname. Mock filenames are not that name — §8.1. The fix is a UMD `hostname:` field — §8.2. Until assets are filled, the aisle-token fallback in §8.2. If mock and FSD pack different `host[]` bytes, the solve diverges again. Work list: §8.3.
+**Mock + FSD is the load-bearing case.** The name that goes into `host[]` is the **exact** FSD / OS hostname. Mock filenames are not that name — §8.1. The fix is a UMD `host_id:` field — §8.2. Until assets are filled, the aisle-token fallback in §8.2. If mock and FSD pack different `host[]` bytes, the solve diverges again. Work list: §8.3.
 
 ---
 
@@ -563,7 +563,7 @@ builder fills ASICDescriptor          discovery fills ASICDescriptor
 - Empty / unset id is all zeros; `make_*` never returns it.
 - Golden vector: one fixed host/tray/loc → exact `host[]` bytes + tray + loc.
 - **Stability (the load-bearing one):** build one graph from FSD and one from a live-style descriptor with UMD-like `umd_unique_id`s; adjacency maps keyed by `PhysicalNodeId` are equal. `TopologyMapper` (or the solver on those maps) assigns the same `FabricNodeId` per position.
-- **Mock + FSD (the other load-bearing one):** descriptor with `hostname: bh-glx-110-c01u02` packs the same id as the FSD builder. Filename-only (no field) must **not** equal that id. After the UMD field is filled, SC36 rank 15 packs `bh-glx-110-d10u20`, not the `120` in the filename.
+- **Mock + FSD (the other load-bearing one):** descriptor with `host_id: bh-glx-110-c01u02` packs the same id as the FSD builder. Filename-only (no field) must **not** equal that id. After the UMD field is filled, SC36 rank 15 packs `bh-glx-110-d10u20`, not the `120` in the filename.
 - Builder unit test: QuietBox / a tiny in-memory FSD, two ASICs, ids equal `make_physical_node_id` of their FSD hostnames, not `1` and `2`.
 - Discovery: graph key ≠ `umd_unique_id` on silicon when UMD ids are large; `get_asic_id(host, tray, loc)` returns the packed id.
 
@@ -577,7 +577,7 @@ Existing mapper tests that assert one specific mapping may need a re-baseline (i
 
 `PhysicalNodeId.host[]` is the **exact** OS / FSD hostname (`bh-glx-110-c01u02`). Hall stays. FSD builder already has that string. Silicon `gethostname()` is that string.
 
-Mock discovery does **not**. A UMD cluster descriptor YAML has no hostname field. `get_local_discovery_hostname()` (`physical_system_discovery.cpp` ~60) returns the **filename basename** of `TT_METAL_MOCK_CLUSTER_DESC_PATH`:
+Mock discovery does **not**. A UMD cluster descriptor YAML has no field naming its host. `get_local_discovery_hostname()` (`physical_system_discovery.cpp` ~60) returns the **filename basename** of `TT_METAL_MOCK_CLUSTER_DESC_PATH`:
 
 ```cpp
 return std::filesystem::path(mock_cluster_desc_path).filename().string();
@@ -600,35 +600,37 @@ If we pack the basename or the filename token, FSD-built and mock-discovered `Ph
 
 ### 8.2 Solution
 
-Put the real hostname **on the cluster descriptor** and query it. Do not parse the filename at runtime.
+Put an identifier for the host **on the cluster descriptor** and query it. Do not parse the filename at runtime.
 
-Full design: [`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md).
+The UMD field is `host_id` — *a unique string identifying a group of TT accelerators connected to a common host / controller / root complex*. Its **value** today is that machine's bare-metal hostname (or `$TT_HOST_ID` in a container / VM), which is exactly what this plan needs in `host[]`. It is deliberately not named `hostname`: the long-term direction is off hostnames for ASIC addressing, and this plan's `host[]` buffer is one of the things that follows later.
+
+Full design: [`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md) (file keeps its old name; the field is `host_id`).
 
 ```yaml
-hostname: bh-glx-110-c01u02    # exact FSD / OS name — hall included
+host_id: bh-glx-110-c01u02    # today: exact FSD / OS name — hall included
 arch:
   ...
 ```
 
 ```
-desc.get_hostname()  →  optional<string>   // UMD
+desc.get_host_id()  →  optional<string>   // UMD; env $TT_HOST_ID else gethostname() on live
 
 get_local_discovery_hostname(desc):
-    if desc.get_hostname():  return *that          // the name we pack
-    if mock env set:         return filename       // legacy, until assets are filled
+    if desc.get_host_id():  return *that          // the string we pack
+    if mock env set:        return filename       // legacy, until assets are filled
     return get_host_name()
 ```
 
 `node_id_from_asic_descriptor` then packs that string. FSD builder and mock PSD produce the same `PhysicalNodeId`.
 
-**Backward compatible:** the field is optional. Old YAMLs still load (`nullopt`). Old UMD ignores an unknown `hostname:` key. Metal falls back to the basename when the field is absent — ClosetBox and existing tests stay green. Do not rename files. Do not edit FSD textprotos.
+**Backward compatible:** the field is optional. Old YAMLs still load (`nullopt`). Old UMD ignores an unknown `host_id:` key. Metal falls back to the basename when the field is absent — ClosetBox and existing tests stay green. Do not rename files. Do not edit FSD textprotos.
 
-**Until FSD-paired YAMLs are filled:** if mock + FSD and `get_hostname()` is empty, aisle-token alias (testing plan §6.3) so `host[]` is still the FSD hostname. Delete the alias once those files have the field. ClosetBox / no-FSD keeps the basename.
+**Until FSD-paired YAMLs are filled:** if mock + FSD and `get_host_id()` is empty, aisle-token alias (testing plan §6.3) so `host[]` is still the FSD hostname. Delete the alias once those files have the field. ClosetBox / no-FSD keeps the basename.
 
 ```
 host_for_node_id(desc, fsd):
-    if desc.get_hostname():
-        return canonical(*desc.get_hostname())
+    if desc.get_host_id():
+        return canonical(*desc.get_host_id())
     if mock and fsd:
         return alias[basename]     // temporary
     return canonical(live_key)
@@ -637,10 +639,13 @@ host_for_node_id(desc, fsd):
 | Path | String that goes into `host[]` |
 |------|--------------------------------|
 | FSD builder | `hosts[].hostname` |
-| Silicon | `gethostname()` / stamped `desc.get_hostname()` |
-| Mock + field set | `desc.get_hostname()` (= FSD name) |
+| Silicon | stamped `desc.get_host_id()` (`$TT_HOST_ID` else `gethostname()`) |
+| Container / VM | stamped `desc.get_host_id()` (`$TT_HOST_ID` — `gethostname()` there is a container id, not the machine) |
+| Mock + field set | `desc.get_host_id()` (= FSD name) |
 | Mock, field empty, + FSD | alias fallback (temporary) |
 | Mock, no FSD | basename (ClosetBox) |
+
+`canonical_host_for_node_id` stays as specified (§3) while `host_id` is hostname-valued. When the value scheme stops being a hostname, the DNS-label / FQDN handling in it retires — see the UMD plan §11 table, where `PhysicalNodeId.host[]` is listed.
 
 ### 8.3 What needs to be done
 
@@ -648,30 +653,31 @@ Work is three repos. None of this is “parse the filename in the mapper.”
 
 **1. UMD** — [`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)
 
-- [ ] Add optional top-level `hostname:` to the cluster-descriptor YAML schema (`not` required).
-- [ ] `ClusterDescriptor::get_hostname()` / `set_hostname()`; parse if present, `nullopt` if missing; reject empty / illegal strings.
+- [ ] Add optional top-level `host_id:` to the cluster-descriptor YAML schema (`not` required).
+- [ ] `ClusterDescriptor::get_host_id()` / `set_host_id()`; parse if present, `nullopt` if missing; reject empty / illegal strings.
 - [ ] `serialize()` writes the key only when set (old goldens unchanged).
-- [ ] Copy `hostname_` in `create_constrained_cluster_descriptor` and `apply_chip_id_remapping`.
-- [ ] `TopologyDiscovery::fill_cluster_descriptor_info` stamps `gethostname()` on live silicon.
+- [ ] Copy `host_id_` in `create_constrained_cluster_descriptor` and `apply_chip_id_remapping`.
+- [ ] `TopologyDiscovery::fill_cluster_descriptor_info` stamps `local_host_id()` = `$TT_HOST_ID` else `gethostname()`. Env var read in that one helper only — not in YAML parsing, not in `create_mock_cluster`, not in metal.
 - [ ] Nanobind get/set.
-- [ ] Offline tests: with key, without key (every existing YAML still parses), round-trip, validation fatals.
+- [ ] Offline tests: with key, without key (every existing YAML still parses), round-trip, validation fatals, env-var precedence, env var does not leak into parsing.
 - [ ] Bump `tt_metal/third_party/umd` in tt-metal.
 
 **2. tt-metal** — consume the field
 
-- [ ] `get_local_discovery_hostname(cluster_desc)` prefers `get_hostname()`, else today’s basename / `gethostname()`.
+- [ ] `get_local_discovery_hostname(cluster_desc)` prefers `get_host_id()`, else today’s basename / `gethostname()`. (Optional cosmetic rename to `get_local_host_id()`.)
 - [ ] `node_id_from_asic_descriptor` / `make_physical_node_id` use that string for `PhysicalNodeId.host[]`.
 - [ ] Every TopologyMapper **physical** map keyed by `PhysicalNodeId` (§6.1).
 - [ ] Temporary aisle-token alias when mock + FSD and the field is still empty (testing plan §6.3).
-- [ ] Tests: filename-only id ≠ FSD id; `hostname: bh-glx-110-c01u02` id == FSD id; SC36 packs `bh-glx-110-d10u20` not the `120` in the file.
+- [ ] Tests: filename-only id ≠ FSD id; `host_id: bh-glx-110-c01u02` id == FSD id; SC36 packs `bh-glx-110-d10u20` not the `120` in the file.
+- [ ] Metal does **not** read `TT_HOST_ID` itself — only `ClusterDescriptor::get_host_id()`.
 
 **3. tt-cluster-descriptors** — **TODO: fill every YAML** (~230 files)
 
-- [ ] Write `hostname:` on **all** cluster descriptors (BH, ClosetBox, wormhole, T3K, dual-host, virtu, …). Separate PR. Does **not** block the UMD PR. Partial fill is fine.
-- [ ] FSD-paired BH: one-shot script — filename aisle token `c01u02` / `d10u20` → unique FSD `Host` with that `aisle`/`rack`/`shelf_u` → write that host’s `hostname` (`bh-glx-110-c01u02`).
+- [ ] Write `host_id:` on **all** cluster descriptors (BH, ClosetBox, wormhole, T3K, dual-host, virtu, …), value = that machine's OS / FSD hostname. Separate PR. Does **not** block the UMD PR. Partial fill is fine.
+- [ ] FSD-paired BH: one-shot script — filename aisle token `c01u02` / `d10u20` → unique FSD `Host` with that `aisle`/`rack`/`shelf_u` → write that host’s `hostname` as `host_id` (`bh-glx-110-c01u02`).
 - [ ] QuietBox: `sjc1-tt-qb-01` etc.
 - [ ] ClosetBox: real host token (`metal-wh-09`), not the whole basename.
-- [ ] Unknown captures: leave unset until recapture (`serialize_to_file` stamps live `gethostname()`).
+- [ ] Unknown captures: leave unset until recapture (`serialize_to_file` stamps the live `host_id`).
 - [ ] Pin the submodule when a batch is ready. Then delete the aisle-token fallback for filled FSD-paired files.
 
 **Do not / what does not change**
@@ -679,7 +685,7 @@ Work is three repos. None of this is “parse the filename in the mapper.”
 - Parse / pack the filename token as a hostname.
 - Drop the hall from the FSD name.
 - Rename cluster-desc files or FSD textprotos.
-- Require `hostname:` in the UMD schema or fatal when it is missing.
+- Require `host_id:` in the UMD schema or fatal when it is missing.
 - Change ClosetBox tests in the UMD PR (they keep the basename until those files are filled).
 - `LinkInfo` physical host still comes from the expected (FSD) PSD.
 
@@ -694,17 +700,19 @@ Work is three repos. None of this is “parse the filename in the mapper.”
 - Making `PhysicalNodeId` a protobuf field of the FSD
 - Packing the host as `hash32` or stuffing the POD into `AsicID`
 - Treating the mock filename token (`bh-glx-120-d10u20`) as a hostname
+- Retiring `canonical_host_for_node_id`'s DNS-label handling in this plan — that follows the value scheme moving off hostnames (UMD plan §11), not this PR series
+- Confusing the UMD descriptor's `host_id` string with the FSD's `host_id` file index (§2)
 
 ---
 
 ## 10. Sequence
 
-1. UMD hostname field ([`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)) — separate PR.
-2. Utility + tests (no callers). Mock golden uses `desc.get_hostname()`, not the filename.
+1. UMD `host_id` field ([`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)) — separate PR.
+2. Utility + tests (no callers). Mock golden uses `desc.get_host_id()`, not the filename.
 3. Builder switches off `1..N`. Offline test: FSD-only ids are the POD of the FSD hostname.
 4. Mapper re-keys adjacency through the utility. FSD vs live agree when live uses `host_for_node_id` (§8.2).
 5. Discovery writes packed graph keys and keeps UMD on `umd_unique_id`.
-6. **TODO:** fill `hostname:` on **all** tt-cluster-descriptors YAMLs (UMD plan §7); delete the aisle-token fallback when FSD-paired files are done.
+6. **TODO:** fill `host_id:` on **all** tt-cluster-descriptors YAMLs (UMD plan §7); delete the aisle-token fallback when FSD-paired files are done.
 7. Downed-links / FSD ControlPlane work then diffs and maps without overlay.
 
 Slices 2–4 are the PhysicalNodeId PR series. Slice 1 can land first or in parallel. Slice 6 is assets.

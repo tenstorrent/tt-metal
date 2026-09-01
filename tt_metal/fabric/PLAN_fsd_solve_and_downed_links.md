@@ -73,7 +73,7 @@ flowchart TB
   subgraph C["Provision — ControlPlane"]
     direction TB
     DISC["run_physical_system_discovery<br/>→ live_psd  host set = the allocation"]
-    HOST["live host strings<br/>UMD hostname field, else basename"]
+    HOST["live host strings<br/>UMD host_id field, else basename"]
     FILTC["fsd_host_filter_from_live<br/>alias or canonical §5.2"]
     AGREE["agree_or_throw_fsd_host_filter<br/>every rank, same message"]
     BUILDC["fsd_psd<br/>expected graph, live host_to_rank copied"]
@@ -561,10 +561,11 @@ The live PSD's host keys are **not always OS hostnames**, so a naive string inte
 nothing. From `physical_system_discovery.cpp`:
 
 - **Mock mode** (`TT_METAL_MOCK_CLUSTER_DESC_PATH`): prefer
-  `ClusterDescriptor::get_hostname()` (exact FSD / OS name —
+  `ClusterDescriptor::get_host_id()` (the accelerator-group id, whose value today is the
+  exact FSD / OS name —
   [`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)).
   If the field is unset, today's basename fallback stays (ClosetBox). Do not pass a
-  basename to `filter_factory_descriptor`; use the UMD name or the aisle-token alias
+  basename to `filter_factory_descriptor`; use the UMD `host_id` or the aisle-token alias
   (testing plan §6.3) until every FSD-paired YAML is filled.
 - **Non-unique hostnames across ranks**: the key becomes `hostname + "_" + rank` (`run_local_discovery`;
   `my_host_name()` mirrors it through `all_hostnames_unique_`).
@@ -599,7 +600,7 @@ sides; never rewrite the FSD on disk.
 | 7 | **Board-type mismatch** per `(host, tray)` | compare FSD board type against live | Fatal — wrong/stale FSD, would otherwise surface as a confusing partial mapping |
 | 8 | **Duplicate hostnames inside the FSD** | duplicates among retained hosts | Fatal — `filter_factory_descriptor` keeps *all* matching indices, so one name silently pulls in two machines |
 | 9 | Any rank's filter failed, **or** ranks disagree on the filter | `agree_or_throw_fsd_host_filter` — all-reduce `local_ok` + host-list checksum + FSD fingerprint **before** ingest | **Every rank throws the same `std::runtime_error`.** See protocol below. |
-| 10 | **Mock cluster + FSD** | live name from `ClusterDescriptor::get_hostname()` once filled ([`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)); filename is not a hostname | Prefer the UMD field (exact FSD name). If the field is still empty, aisle-token alias (testing plan §6.3) so `PhysicalNodeId.host[]` and the filter still use FSD hostnames. Fatal if a live key has no field and no token, the token misses or collides, or the map is not injective. ClosetBox / no-field / no-FSD keeps the basename fallback. |
+| 10 | **Mock cluster + FSD** | live name from `ClusterDescriptor::get_host_id()` once filled ([`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)); filename is not a hostname | Prefer the UMD `host_id` field (value is the exact FSD name). If the field is still empty, aisle-token alias (testing plan §6.3) so `PhysicalNodeId.host[]` and the filter still use FSD hostnames. Fatal if a live key has no field and no token, the token misses or collides, or the map is not injective. ClosetBox / no-field / no-FSD keeps the basename fallback. |
 
 Case 2 **replaces** the earlier "unknown host in the FSD filter: warn, fall back to live, leave
 `link_health_` null". That fallback is per-rank: one rank maps on live while the others map on the FSD, so
@@ -663,9 +664,10 @@ The init sequence that applies all of this is in §7.
 > [Piotr Stankiewicz, #54752](https://github.com/tenstorrent/tt-metal/pull/54752) shows the
 > solver can take a tuple `GlobalNode`; production uses the POD (fixed `char[]`, not
 > `std::string`). Mock + FSD pack the **exact** FSD hostname from
-> `ClusterDescriptor::get_hostname()`
-> ([`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)).
-> Filename is not a hostname.
+> `ClusterDescriptor::get_host_id()`
+> ([`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)) —
+> the UMD descriptor's `host_id`, an accelerator-group id whose value today is that
+> hostname. Not the builder's `host_id` index below. Filename is not a hostname.
 
 **Why overlay-before-solve is the wrong fix.** The previous plan rewrote FSD AsicIDs to live UMD ids
 (`overlay_live_asic_identity`) so the mapper would see one id space. Two consequences:

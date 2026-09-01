@@ -290,10 +290,11 @@ build_mock_to_fsd_host_alias(live_psd, fsd):
     // values() are FSD hosts[].hostname — PhysicalNodeId.host[] and the filter both use these
 ```
 
-Prefer `ClusterDescriptor::get_hostname()`
+Prefer `ClusterDescriptor::get_host_id()`
 ([`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)) —
-exact FSD name, no filename parse. The aisle-token alias is only a fallback while YAMLs
-lack the field, and the one-time script that **writes** the field. See
+the descriptor's `host_id`, which today holds the exact FSD name, so no filename parse.
+The aisle-token alias is only a fallback while YAMLs lack the field, and the one-time
+script that **writes** the field. See
 [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) §8.
 
 **Where it runs** — ControlPlane init, after live discovery, before filter:
