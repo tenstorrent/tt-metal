@@ -13,25 +13,30 @@ context, design, ownership and function passing, validation, and its own open qu
 | --- | --- | --- | --- |
 | 1 | [PGD-shape-aware inter-mesh constraints](TOPOLOGY_MAPPER_PLAN_1_PGD_SHAPE_INTERMESH_CONSTRAINTS.md) | 1 | Prune the inter-mesh SAT domain so shape-mismatched mesh pairs are unreachable, removing the dominant source of intra-mesh retry churn |
 | 2 | [Incremental inter-mesh solving + stronger rejection](TOPOLOGY_MAPPER_PLAN_2_INCREMENTAL_INTERMESH_SOLVE.md) | 3 | Reuse the SAT encoding across retries instead of re-solving from scratch, and generalize the rejection constraints |
-| 3 | [Connectivity-aware PGD grouping placement](TOPOLOGY_MAPPER_PLAN_3_CONNECTIVITY_AWARE_PGD_PLACEMENT.md) | 2 | Feed the logical mesh-level adjacency graph into the per-shape placement search so chosen groupings are seam-compatible by construction |
+| 3 | [Connectivity-aware PGD grouping placement](TOPOLOGY_MAPPER_PLAN_3_CONNECTIVITY_AWARE_PGD_PLACEMENT.md) | 2 | Replace the per-shape maximum-coverage tiling with one adjacency-guided DFS that grows a mixed-shape placement along the MGD's own mesh graph |
 
 Priorities are stated per plan and do not follow the numbering: plan 2 is deliberately last.
 
 ## Sequencing
 
 1. **Plan 1** — self-contained, no solver changes, immediate reduction in retry churn. Ship first.
-2. **Plan 3, layers (a) and (b)** — turns the silent unroutable placement into a loud, diagnosable
-   failure, and fixes the common cases.
-3. **Plan 2** — needs the session-tightening fix in the solver bridge; its payoff shrinks once plan 1
-   has removed most retries. Do it for the encode-once win, not for correctness.
-4. **Plan 3, layer (c)** — the full joint SAT from #54623, once (a) exists as an oracle to check it
-   against.
+2. **Plan 3, §4(h) measurement** — check whether the per-grouping enumeration cap is being hit on the
+   validation MGDs. The answer decides whether anchored enumeration is a prerequisite or a follow-up.
+3. **Plan 3** — the adjacency-guided search, behind a fallback to the existing path.
+4. **Plan 2** — needs the session-tightening fix in the solver bridge; its payoff shrinks once plans 1
+   and 3 have removed most retries. Do it for the encode-once win, not for correctness.
 
 ## How the plans relate
 
 Plan 1 fixes *which physical region a logical mesh may use*, given a set of regions. Plan 3 fixes *which
-set of regions gets chosen*. Plan 2 makes the retry loop that plan 1 mostly empties cheaper still. Plans
-1 and 3 are both required to close #54623; plan 2 is a performance change.
+set of regions gets chosen* — and does so by keeping the candidate pool that `find_all_in_psd` currently
+collapses to a maximum-coverage tiling. Plan 2 makes the retry loop that plans 1 and 3 mostly empty
+cheaper still. Plans 1 and 3 are both required to close #54623; plan 2 is a performance change.
+
+Plan 3 supersedes the earlier "seam check at the leaf of the packing DFS" approach. That version treated
+the symptom: it filtered bad combinations out of a search whose tile boundaries were already frozen. The
+8-chip example in Plan 3 §2 shows an MGD that is unsatisfiable over those frozen tilings no matter what
+is checked downstream, which is why the fix moved upstream into placement itself.
 
 ## Validation MGDs
 
