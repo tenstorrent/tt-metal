@@ -365,6 +365,8 @@ ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/**/CMakeLists.txt @tensto
 ttnn/cpp/ttnn/operations/experimental/experimental_nanobind.cpp @mbezuljTT @ppetrovicTT @pavlepopovic @tenstorrent/metalium-developers-ops-leads
 ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/ @tenstorrent/metalium-developers-sdpa
 ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/**/CMakeLists.txt @tenstorrent/metalium-developers-sdpa @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/indexed_page_cache/ @tenstorrent/metallium-maintainers-llama-models
+ttnn/cpp/ttnn/operations/experimental/indexed_page_cache/**/CMakeLists.txt @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/indexer_score/ @tenstorrent/metalium-developers-sdpa
 ttnn/cpp/ttnn/operations/experimental/indexer_score/**/CMakeLists.txt @tenstorrent/metalium-developers-sdpa @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/isin/ @tenstorrent/metalium-developers-external-experience
@@ -490,6 +492,7 @@ tests/ttnn/nightly/unit_tests/operations/moreh/ @razorback3 @dongjin-na @ayerofi
 tests/ttnn/nightly/unit_tests/operations/reduction/ @tenstorrent/metalium-developers-mmfusedreduce
 tests/ttnn/nightly/unit_tests/operations/sdpa/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/nightly/unit_tests/operations/transformers/ @tenstorrent/metallium-maintainers-llama-models
+tests/ttnn/unit_tests/operations/experimental/indexed_page_cache/ @tenstorrent/metallium-maintainers-llama-models
 tests/ttnn/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/operations/sdpa/ @tenstorrent/metalium-developers-sdpa
