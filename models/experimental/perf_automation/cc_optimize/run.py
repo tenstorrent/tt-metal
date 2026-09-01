@@ -3989,6 +3989,40 @@ def _measure_backstop(repo_root: Path) -> int:
 _MAX_AUTH_STRIKES = max(1, int(os.environ.get("PERF_MCP_MAX_AUTH_STRIKES", "2") or "2"))
 
 
+# A renewal that keeps succeeding while rounds keep being refused must not spin: past this many
+# recoveries the refusal is treated as permanent and the round is spent, so the loop always advances.
+_MAX_AUTH_RECOVERIES = max(1, int(os.environ.get("PERF_MCP_MAX_AUTH_RECOVERIES", "3") or "3"))
+
+
+def _recover_agent_auth() -> bool:
+    """Ask the agent binary to prove it can authenticate, which is also what renews it.
+
+    The client holds a refresh token of its own and renews an expired access token when something
+    asks it to work -- verified by expiring a COPY of the credential and watching one call both
+    succeed and rewrite the expiry. So the recovery is simply to ask, with a prompt small enough to
+    cost nothing: if the answer comes back the credential is usable and the round can be re-run,
+    and if it does not, no renewal this tool could perform would have helped either.
+
+    Deliberately does not touch the credential file. Rewriting it by hand would mean re-implementing
+    the client's own refresh flow, and getting that wrong locks the box out of the agent entirely --
+    a far worse failure than the lost round this is recovering from.
+    """
+    try:
+        r = subprocess.run(
+            [_resolve_claude_bin(), "-p", "ok", "--output-format", "text"],
+            capture_output=True,
+            text=True,
+            timeout=int(os.environ.get("PERF_MCP_AUTH_PROBE_TIMEOUT_S", "180") or "180"),
+        )
+    except Exception:  # noqa: BLE001 -- a probe that cannot run is a probe that proves nothing
+        return False
+    if r.returncode != 0:
+        return False
+    from agent.probes import detect_auth_failure
+
+    return detect_auth_failure((r.stdout or "") + (r.stderr or "")) is None
+
+
 def _agent_auth_failure(kernel_log) -> str | None:
     """The phrase the agent used to say it was refused, or None if this round was let in.
 
@@ -5010,6 +5044,7 @@ def optimize_pipeline(
     max_wedge = int(os.environ.get("PERF_MCP_MAX_WEDGE_STRIKES", "2") or "2")
     wedge_strikes = 0
     auth_strikes = 0
+    auth_recoveries = 0
     round_cmd = [
         _resolve_claude_bin(),
         "-p",
@@ -5040,26 +5075,44 @@ def optimize_pipeline(
             can_stop = True
             break
         wedged = _run_round_with_watchdog(round_cmd, repo_root, devices, kernel_log, stall_sec)
-        # A ROUND THAT WAS NEVER LET IN IS NOT A ROUND THAT FOUND NOTHING. An expired or rejected
-        # credential produces a round that runs, writes a transcript and exits cleanly having done
-        # nothing, which the loop cannot tell from an agent that looked and found no win -- so it
-        # spent all ten rounds of a 7h37m run on it and reported "no kernel attempts recorded",
-        # which reads as "already optimal" rather than "nobody was allowed in". Two in a row,
-        # because a single blip is worth one retry and two identical refusals are not a blip.
+        # A ROUND THAT WAS NEVER LET IN IS NOT A ROUND THAT FOUND NOTHING. A refused credential
+        # produces a round that runs, writes a transcript and exits cleanly having done nothing,
+        # which the loop cannot tell from an agent that looked and found no win -- so it spent all
+        # ten rounds of a 7h37m run on it and reported "no kernel attempts recorded", which reads as
+        # "already optimal" rather than "nobody was allowed in".
+        #
+        # RECOVER, THEN CARRY ON -- the same shape as the device reclaim below, because the run's
+        # measured baseline and ladder state are just as expensive to rebuild after a credential
+        # blip as after a wedge. The client renews an expired token from its own refresh token when
+        # something asks it to, so asking is the whole recovery; a round is only lost when even that
+        # is refused, and then the run stops rather than spending its remaining rounds being told no.
         _auth = _agent_auth_failure(kernel_log)
         if _auth:
+            print("  [optimize/cc] round %d was refused (%s) — recovering" % (rounds + 1, _auth), flush=True)
+            # BOUNDED, because a retry that does not consume a round cannot be unbounded: if renewal
+            # keeps succeeding while the round keeps being refused, an unbounded `continue` spins
+            # forever without ever finishing the run. Past the budget the refusal is treated as
+            # permanent and the round is spent, so the loop always makes progress.
+            if _recover_agent_auth() and auth_recoveries < _MAX_AUTH_RECOVERIES:
+                auth_recoveries += 1
+                print(
+                    "  [optimize/cc] credential renewed (%d/%d) — re-running this round"
+                    % (auth_recoveries, _MAX_AUTH_RECOVERIES),
+                    flush=True,
+                )
+                auth_strikes = 0
+                continue
             auth_strikes += 1
-            print(
-                "  [optimize/cc] round %d could not authenticate (%s) — retrying once" % (rounds + 1, _auth)
-                if auth_strikes < _MAX_AUTH_STRIKES
-                else "  [optimize/cc] STOPPING: the agent cannot authenticate (%s). "
-                "Nothing was tried and nothing can be, so the remaining rounds are not run. "
-                "Re-authenticate (`claude /login`) and start again." % _auth,
-                flush=True,
-            )
             if auth_strikes >= _MAX_AUTH_STRIKES:
+                print(
+                    "  [optimize/cc] STOPPING: the agent cannot authenticate (%s) and renewing did not "
+                    "help. Nothing was tried and nothing can be, so the remaining rounds are not run. "
+                    "Sign in again (`claude /login`) and start this run over." % _auth,
+                    flush=True,
+                )
                 halted = True
                 break
+            print("  [optimize/cc] still refused — one more attempt before stopping", flush=True)
         else:
             auth_strikes = 0
         if wedged:
