@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/topk.h"
 #include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
