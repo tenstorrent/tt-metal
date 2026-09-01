@@ -134,38 +134,6 @@ jobs:
           # metal-run-id is set. To widen the scope, add the sibling
           # `bh-loudbox-*` / `p150-*` booleans from tt-blaze's ci.yaml here (its
           # job guards need widening too).
-          # Preflight the token before dispatching. tt-blaze is PRIVATE, and
-          # GitHub answers 404 (never 403) for anything a token cannot see there,
-          # so `gh workflow run` reports a missing workflow when the real fault is
-          # a PAT that cannot read the repo. These two probes separate the cases so
-          # the log names the actual problem.
-          # Probe 1: is the credential live at all? Separated from the repo probe
-          # because "expired/revoked token" and "valid token that cannot see
-          # tt-blaze" have completely different fixes but look identical once the
-          # repo lookup 404s.
-          if ! PAT_LOGIN=$(gh api user --jq .login 2>/dev/null) || [ -z "$PAT_LOGIN" ]; then
-            echo "::error::TT_BLAZE_PAT is not a usable credential -- GitHub rejected it outright (401 Bad credentials), so this is not about repo access. It is expired, revoked, or was stored with stray whitespace/quotes when the secret was set. Reissue it and update the secret in ${GITHUB_REPOSITORY}."
-            echo "- ❌ tt-blaze — TT_BLAZE_PAT rejected (bad credentials)" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-          # Not a secret; naming it turns "wrong account / stale bot" into a
-          # one-line diagnosis instead of a hunt.
-          echo "TT_BLAZE_PAT authenticates as: ${PAT_LOGIN}"
-
-          if ! gh api "repos/${BLAZE_REPO}" --jq .full_name >/dev/null 2>&1; then
-            echo "::error::TT_BLAZE_PAT is valid (authenticates as '${PAT_LOGIN}') but cannot see ${BLAZE_REPO}. ${BLAZE_REPO} is private, so GitHub answers 404 rather than 403 for anything this token is not entitled to. Either '${PAT_LOGIN}' has no access to ${BLAZE_REPO}, or the token is scoped away from it: a fine-grained PAT must list ${BLAZE_REPO} in its selected repositories AND be approved by the tenstorrent org (pending approval also reads as 404); a classic PAT needs the 'repo' scope to see private repos at all."
-            echo "- ❌ tt-blaze — TT_BLAZE_PAT ('${PAT_LOGIN}') cannot see ${BLAZE_REPO}" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-          if ! gh api "repos/${BLAZE_REPO}/actions/workflows/${BLAZE_WORKFLOW}" --jq .id >/dev/null 2>&1; then
-            echo "::error::TT_BLAZE_PAT can read ${BLAZE_REPO} but not ${BLAZE_WORKFLOW}. That is an Actions-permission gap, not a missing file: a fine-grained PAT needs Actions: Read and write (plus Metadata: Read); a classic PAT needs the 'repo' and 'workflow' scopes."
-            echo "- ❌ tt-blaze — TT_BLAZE_PAT lacks Actions access on ${BLAZE_REPO}" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-
-          # Dispatching needs actions:WRITE, which neither probe above proves --
-          # both are reads. A 403 here (rather than 404) means the token can see
-          # Actions but not trigger them.
           if ! gh workflow run "$BLAZE_WORKFLOW" \
             --repo "$BLAZE_REPO" \
             --ref "$BLAZE_REF" \
@@ -174,7 +142,7 @@ jobs:
             -f dispatch-id="$DISPATCH_ID" \
             -f bh-loudbox-run-all=false \
             -f bh-loudbox-gptoss-temporal=true; then
-            echo "::error::Dispatch of ${BLAZE_WORKFLOW} on ${BLAZE_REPO}@${BLAZE_REF} failed. The token can read the workflow (checked above), so the usual causes are: no actions:write on ${BLAZE_REPO}; ${BLAZE_REF} does not carry every input passed here (an input this workflow sends but ${BLAZE_REF}'s ci.yaml does not declare is rejected outright -- the tt-blaze side must land FIRST); or ${BLAZE_REF} does not exist."
+            echo "::error::Dispatch of ${BLAZE_WORKFLOW} on ${BLAZE_REPO}@${BLAZE_REF} failed. Usual causes: ${BLAZE_REF} does not carry every input passed here (an input this workflow sends but ${BLAZE_REF}'s ci.yaml does not declare is rejected outright -- the tt-blaze side must land FIRST); ${BLAZE_REF} does not exist; or TT_BLAZE_PAT has lapsed or lost access. Note ${BLAZE_REPO} is PRIVATE, so GitHub answers 404 rather than 403 for anything the token is not entitled to -- a token fault therefore surfaces here as a missing-workflow error, not a permission one."
             echo "- ❌ tt-blaze — dispatch rejected" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
