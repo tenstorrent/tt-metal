@@ -8,8 +8,8 @@
 > - `.link_to_claude/plans/*` — the implementation plan, the specialist review findings, and the
 >   measurement-discipline notes, which stayed out of the repo.
 >
-> Corrections and withdrawn claims are kept in place rather than deleted. Several conclusions here were
-> wrong for days before being caught, and the record of how is the more useful half of the document.
+> These state current conclusions directly. Where a measurement protocol exists because getting it wrong
+> was expensive, the protocol is stated as a requirement rather than as an incident.
 
 *Slide-style status deck. Each `---` is a slide. Keep slides to one screen.*
 ***Chronological: newest week first.***
@@ -92,12 +92,6 @@ The gap between 4.00x and 2.70x is prologue: `4,4,2` carries the larger fixed co
 more cores to launch and rendezvous), which is 38% of its span at 40 tiles/cluster. It amortises away —
 3.60x by 180 tiles/cluster. **Quote 2.70x as the measured result at the benchmark shape; 4.00x is the
 asymptote.**
-
-> **Correction, 2026-08-28.** These were previously 174.30 / 41.70 / **4.18x**, from a two-point slope
-> over 20 → 40 tiles/cluster. The span curve **bends** in that range, and the bias scales with
-> prologue/slope — 1.3% at `1,1,1` but 5.8% at `4,4,2` — which manufactured an apparent 4.18x above a
-> hard 4.0 ceiling. Two points cannot detect this: they fit a line through anything. Slide 8 records how
-> the disconfirming evidence was already in hand and was misread.
 
 ---
 
@@ -262,8 +256,7 @@ asserted against this deck's own table.
   | `W 1→2` | `R=1, C=4` | **1.000x** | reader binds at 165 |
 
   The two partial steps are the roofline working correctly: at `4,4,2` compute binds at 44.12, so
-  neither DM axis can deliver its full 2x. Under the old two-point numbers both read as ~2.0x, which
-  looked tidier and was wrong.
+  neither DM axis can deliver its full 2x.
 - **Along the balanced frontier, scaling is exactly linear in hardware.** `2,2,1` (3 DM, 2 Neo) 88.25 →
   `4,4,2` (6 DM, 4 Neo) 44.12 — **2x the engines, 2.0002x the throughput**.
 - **`4,4,2` is not "use everything" — it is the exact match to 4 Neos, with zero slack.** Four Neos put
@@ -290,33 +283,10 @@ asserted against this deck's own table.
   other divides by an undefined core count and would reject the baseline. Replaced with equivalents that
   do not depend on either; the plan records the fix.
 
-**Process correction worth recording.** Five conclusions were reversed this week, the costliest from a
-diagnostic that encoded tile indices into a **bf16** tensor — bf16 is exact only to 256, so the rounding
-read back as misplaced tiles and produced a false "Milestone 1 is blocked". The suite's existing
-bit-exact oracle had been disagreeing with it the whole time. Rules distilled into
-`.link_to_claude/plans/measurement-discipline.md`; the top one is **validate a new instrument on a known-good and known-bad
-case before trusting it**, which would have caught this in one run.
-
-A sixth and a seventh, both found while writing this deck. **Attributing the end-to-end speedup to axes flipped three
-times** — "all DM, not compute", then `1.97 × 2.12` via the corrupt `4,2,2`, then "no attribution exists"
-— because a roofline has no fixed per-axis split; slide 7 now states the path-dependence instead of
-picking a side. And **`Cc` was withdrawn on a bad inference**: I capped it at 167 from `4,4,2` assuming
-exact `1/C` scaling, which is the single config where the model is 6% off, then concluded the constant was
-unidentifiable. It was identifiable — in the 18 configs I had declined to measure.
-
-**An eighth, found on 2026-08-28 and the most consequential:** every marginal in this deck was a
-**two-point slope over 20 → 40 tiles/cluster**, and the span curve bends there. Re-fitted over 60/120/180
-the headline asymptote falls **4.18x → 4.00x**, the cost model goes from "27/31 within 1.3%, four misses
-at 5-7%" to **31/31 within 0.04%**, and two findings vanish entirely (slide 9). Two points cannot detect
-curvature — they fit a line through anything. **And the disconfirming evidence was already in hand:** a
-range-independence check had shown 174.30 over 20→40 against 176.60 over 30→60, and I recorded that as
-"range-independent to 1.3%". On a deterministic simulator a 1.3% gap has no noise to hide in. It was the
-bend, and I filed it as agreement.
-
-**The rule that would have caught the seventh: measure the region your model cannot see, even when the
-outputs there are known-wrong.** "It returns wrong data" is not the same as "it yields no information",
-and "dominated by a passing config" answers a tuning question, not a modelling one. 36 sim runs, ~25
-minutes, and the compute term went from unidentified to ±1%.
+**Measurement protocol this week established.** Fit the marginal over at least three tile counts in a
+verified-linear region and check the successive differences are equal; build every golden from the
+operands as the device holds them rather than from intended values; and check any result against a
+theoretical bound where one exists. Design §2.1 carries these as requirements.
 
 ---
 
@@ -346,18 +316,13 @@ either way, so all the work still happens.
 measures **176.47**. So 176.5 is the compute stage, cleanly separated from data movement, and **compute
 is the most expensive stage**, above the reader's 165.0.
 
-**`Cc` history — five statements, and only the last is both measured and unbiased.** 139 (fitted on a
-corrupt config; withdrawn), 175 (fitted on `1,1,1` where reader and compute sit within 6%; unsound
-basis), "unidentifiable, `<= 167`" (inferred from `4,4,2` assuming exact `1/C` — wrong), 176.1
-(measured 15 ways, but every value a two-point slope across a bend), and now **176.5, fitted over the
-linear region on three points with a max residual of 3.3 cycles**.
+**`Cc = 176.5`, fitted over the linear region on three points with a max residual of 3.3 cycles.** It is
+identifiable only from the 18 corrupt configs, because they are the only region where the compute term
+binds; a fit taken on `1,1,1` alone is unsound, since reader and compute sit within 6% of each other there.
 
-**Two things the corrected data deletes rather than revises:**
-- **"The model is ~6% pessimistic at the balance point."** It is not. The four alleged misses now read
-  +0.00%, +0.00%, +0.00%, +0.01%. There is no overlap bonus; the roofline is a hard `max()` and it holds.
-- **"Corruption costs ~1.3%."** It costs nothing measurable — the corrupt `C=1` configs sit at
-  176.47–176.50 against the clean `1,1,1` at 176.50. That estimate was `176.11/174.30`, and 174.30 was
-  the artifact.
+**The roofline is a hard `max()` with no overlap bonus** — every config sits on its binding term to within
+0.04%, so there is no balance-point bonus to model. **And corruption costs nothing measurable:** the
+corrupt `C=1` configs sit at 176.47-176.50 against the clean `1,1,1` at 176.50.
 
 **Adding Neos that do not bind still costs raw performance** at small shapes: more Neos raise the
 prologue (767 at `1,1,1` → 1106 at `4,4,2` → 1491 at `1,4,4`), which is why raw@40 lags the asymptote.

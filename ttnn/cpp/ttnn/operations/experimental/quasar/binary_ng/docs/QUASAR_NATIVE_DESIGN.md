@@ -8,8 +8,8 @@
 > - `.link_to_claude/plans/*` — the implementation plan, the specialist review findings, and the
 >   measurement-discipline notes, which stayed out of the repo.
 >
-> Corrections and withdrawn claims are kept in place rather than deleted. Several conclusions here were
-> wrong for days before being caught, and the record of how is the more useful half of the document.
+> These state current conclusions directly. Where a measurement protocol exists because getting it wrong
+> was expensive, the protocol is stated as a requirement rather than as an incident.
 
 Status: **design v3 — measured.** Five specialist reviews (2026-08-19); re-scoped against craq-sim's real
 measurement capability and reviewed again by four specialists (2026-08-20); then **every lever testable
@@ -116,21 +116,20 @@ steady-state scaling and is the only basis on which configs with different threa
 at all; the span basis is what somebody running the op at a given tensor size actually experiences. Lead
 with the span number for a result and give the marginal as the asymptote — never the reverse.
 
-> **Corrected 2026-08-28 — this previously specified a TWO-POINT fit, and that is what produced a week of
-> wrong marginals.** Two points fit a line through anything and leave no residual, so they cannot reveal
-> that the range is curved. Every Milestone 1 marginal was `(span@40 - span@20)/20`; the native path's
-> span is still bending there, which biased each config low by an amount scaling with prologue/slope
-> (1.3% at `1,1,1`, 5.8% at `4,4,2`) and manufactured a 4.18x end-to-end speedup **above a hard 4.0
-> ceiling**. Re-fitted over 60/120/180 the answer is 4.00x, and the cost model goes from 27/31-within-1.3%
-> to **31/31 within 0.04%**.
->
-> **The rule:** fit over **at least three** tile counts, and *check the successive differences are equal*
-> before trusting the slope — that check is the point of the third point, not precision. **Linearity is
-> per-config, not per-op:** a larger prologue pushes the bend further out, so the linear region must be
-> re-established for each configuration rather than inherited (research base §3.4's "40/core is within 4%
-> of the asymptote" is true of the 2-DM-core baseline and false of `4,4,2`, which is 64% above it).
-> Where a theoretical bound exists, check the result against it — exceeding one is proof of method error.
-> Note the *range* was the error, not the point count: two points at 60 and 180 give the right answer.
+**How to fit the marginal.** Use **at least three** tile counts and *check the successive differences are
+equal* before trusting the slope — that check is the purpose of the third point, not precision. Two points
+fit a line through anything and leave zero residual, so they cannot reveal that the range is curved; the
+error mode is a bias scaling with prologue/slope, which is largest exactly at the many-thread configs.
+Note it is the **range** that has to be right, not the point count: 60/120/180 and a two-point 60/180 both
+give the correct answer, while any fit inside the bend does not.
+
+**Linearity is per-config, not per-op.** A larger prologue pushes the bend further out, so the linear
+region must be re-established for each configuration rather than inherited — "40 tiles/cluster is within
+4% of the asymptote" holds for the 2-DM-core baseline and is false for `4,4,2`, which is 64% above it at
+that size. The measured linear region for the native path is 60-180 tiles/cluster.
+
+**Where a theoretical bound exists, check the result against it.** Exceeding one is proof of method error,
+not of a good result.
 
 ### 2.2 Baseline and the measured floor
 
@@ -269,12 +268,11 @@ without asking which direction the simulator errs in.
 *shape* — occupancy achieved, work split evenly, instruction count down, output still exact — and to catch
 bugs cheaply at 15 s a run. That division of labour is also what keeps emulator use to one campaign.
 
-**~~64.6 is the C=1 floor~~ — SUPERSEDED by Milestone 1.** This section previously argued that compute at
-C=1 does not pin the span, on the grounds that the Tensix is ~94% stalled and the roofline was measured at
-C=1 knobs. The measured cost model is `max(165.0/R, 176.5/C, 83.5/W)`, so at C=1 the compute term alone
-floors the span at **176.5 cyc/tile** no matter how many DM cores are added — the flat `C=1` wall in status
-§5. A stalled engine is not a cheap one: it was stalled *waiting for work it then had to do serially*. The
-gate's 149.1 headroom is only reachable with `C > 1`.
+**At `C=1` the compute term alone floors the span at 176.5 cyc/tile**, no matter how many DM cores are
+added — the flat `C=1` wall in status §5, and a direct consequence of the measured cost model
+`max(165.0/R, 176.5/C, 83.5/W)`. So 64.6 is not reachable at `C=1`, and the gate's 149.1 headroom needs
+`C > 1`. Note that the Tensix being ~94% *stalled* at `C=1` does not make it cheap: it is stalled waiting
+for work it then has to do serially.
 
 **Basis note — every "% captured" figure must name its estimator.** The gate above is on the
 **span-at-40** basis: irreducible machinery contributes `(772 + 45.25×40)/40 = 64.55` cyc/tile, so the
@@ -766,13 +764,12 @@ counts must be derived in-kernel from `get_my_thread_id()`.
 6 DM threads + 4 Tensix engines in one `WorkUnitSpec` — the full budget. `4S×4S` and `4S×2S` are both in
 the passing DFB matrix.
 
-**~~Phase 1 reaches R=4, C=1, W=2 — the full DM budget — without the tt-llk fix.~~ SUPERSEDED — that
-config is one of the 18 corrupt ones.** The legality argument still holds (`max(R,C) % min(R,C)` is
-`4%1`, `(C,W)` is `2%1`) and `DMTensixTest1xDFB4Sx1S` does exist and pass
-(`test_dataflow_buffer_base.cpp:53`) — but `4,1,2` measures **FAIL 73.3%** here, and that gtest cannot
-contradict it: no DM→Tensix test verifies delivered data (`dfb_test_common.hpp:539`). **A passing
-upstream gtest for an endpoint shape is not evidence that shape delivers correct bytes.** The rule is
-`R <= C and W <= C`, so the DM budget is only spendable once the Neos are there; the target topology
+**The full DM budget cannot be spent at `C=1`.** `R=4, C=1, W=2` is legal (`max(R,C) % min(R,C)` is
+`4%1`, `(C,W)` is `2%1`) and its endpoint shape has a passing upstream gtest — `DMTensixTest1xDFB4Sx1S`,
+`test_dataflow_buffer_base.cpp:53` — yet it measures **FAIL 73.3%** here. That gtest cannot contradict the
+measurement, because no DM→Tensix test verifies delivered data: **a passing upstream gtest for an endpoint
+shape is not evidence that the shape delivers correct bytes.** The rule is `R <= C and W <= C`, so DM cores
+are only worth spending once the Neos are there; the target topology
 above is the *only* full-budget topology that works.
 
 #### 4.1.1 Why STRIDED on every endpoint — and where ALL would belong instead
@@ -939,9 +936,9 @@ unrepresentable.
 
 ## 6. Correctness
 
-**Where these live in phase 1 — reversed in round 2.** The oracle, the routing assertion and the §6.6 cases
-are **one real pytest file** from the start, `tests/ttnn/nightly/.../test_binary_ng_quasar_native.py`; only
-the sweep/bench harness stays in `debug/`. Three reasons the earlier `debug/`-only call was wrong: the
+**Where these live.** The oracle, the routing assertion and the §6.6 cases are **one real pytest file**
+from the start, `tests/ttnn/nightly/.../test_binary_ng_quasar_native.py`; only the sweep/bench harness
+stays in `debug/`. Three reasons a `debug/`-only harness is not sufficient: the
 DM→Tensix DFB tests verify **no data** (`dfb_test_common.hpp:539-540`,
 `test_kernels/compute/dfb_t6_consumer_2_0.cpp:21` — the consumer `copy_tile`s and discards), so **nothing in
 the tree data-verifies a multi-thread STRIDED producer writing its own slots** and this oracle is the first —
@@ -1113,8 +1110,8 @@ math 10240 / 246730 (96%), sem 5152 / 224426 (97.8%), other 27392 / 230442 (89.4
 because `math_instr` is only 8/tile — the signature would not fire even if the prediction it was meant to
 confirm were right.
 
-**The validity identity is an inequality, not an equation.** v2.1 stated
-`Σinstr + Σstall ≈ (#active TRISCs) × 32 × per-core span` and quoted 1.42%; that is wrong twice over — as
+**The validity identity is an inequality, not an equation.** The form
+`Σinstr + Σstall ≈ (#active TRISCs) × 32 × per-core span` is wrong twice over — as
 written it is `3 × 32 × 8549 = 820704` against a measured 748350, i.e. **+9.7%**, and the 737888 it quoted is
 actually `32 × Σ(per-TRISC own spans)`. It also hardcodes 32 cores, and it holds only while every pipe has an
 instruction pending ~100% of the time: an **idle** pipe contributes to neither term, so at the roofline — the
@@ -1132,8 +1129,8 @@ unused and contribute to neither numerator nor denominator.
 
 Native factory at baseline-equivalent knobs (explicit, `entries_per_thread`=2, R=C=W=1).
 
-- **Zero tolerance** on instrumentation-invariant work counters, stated **per active core** (v2.1 stated
-  totals, which false-fail the moment the active core count changes): `unpack_instr=80`, `math_instr=320`,
+- **Zero tolerance** on instrumentation-invariant work counters, stated **per active core** — totals
+  false-fail the moment the active core count changes: `unpack_instr=80`, `math_instr=320`,
   `pack_instr=40`, `cb_waits=80`, `cb_reserves=40`, `cb_pushes=40`, `cb_pops=80`. (`semaphores`/`other_instr`
   may legitimately differ — the native kernel is a rewrite.) **Excluded as null tests:** `kernel_launches`
   (512 in both a 32-core interleaved and a 4-core sharded run — it counts RISCs taken out of reset, 4 TRISCs ×
@@ -1264,10 +1261,8 @@ set as the levers that scored well on craq-sim.
 
 1. **Sweep in-flight concurrency as ONE axis, and `R`/`W` as the other.** In-flight concurrency is the
    `(entries_per_thread, n, implicit_sync)` triple — they are facets of one quantity (§2.4), constrained by
-   `capacity >= 2n`, so sweeping them independently wastes runs and produces uninterpretable results. Round 2
-   recommended dropping
-   `implicit_sync` from the campaign because craq-sim shows it at ≤1.10×, and I applied that here —
-   **it was wrong, and this restores it.** The ≤1.10× is a craq-sim artifact: barriers there are
+   `capacity >= 2n`, so sweeping them independently wastes runs and produces uninterpretable results. **`implicit_sync`
+   stays in the campaign despite scoring ≤1.10× on craq-sim.** That number is a craq-sim artifact: barriers there are
    pre-satisfied, so only their instruction cost is visible, whereas on silicon a barrier is a real per-tile
    NoC round-trip stall. Depth and `implicit_sync` are the *same* latency-hiding mechanism from two angles and
    must be swept **together** — §7.6: at `entries_per_thread = 2` in-flight is 1, so implicit sync is
@@ -1278,9 +1273,8 @@ set as the levers that scored well on craq-sim.
    funnelling through one ISR core, the additive behaviour measured at depth 2 could get *worse* with `R`,
    which would be a phase-1-invalidating result discoverable only there.
 2. **Six runs, not four.** Two end-point configs cannot separate a prologue change from a steady-state
-   one, and the prologue is exactly what `R=4` inflates (DFB init, the drain's `sync_threads`). This
-   previously said "four runs — a T=40/T=80 two-point fit per arm"; **that is the error that cost a week
-   of craq-sim marginals** (§2.1). Take **three** tile counts per arm, chosen so the successive
+   one, and the prologue is exactly what `R=4` inflates (DFB init, the drain's `sync_threads`). A
+   two-point fit per arm is not sufficient (§2.1). Take **three** tile counts per arm, chosen so the successive
    differences come out equal — on craq-sim the native path is still bending at T=40 and only
    straightens by 60, and the emulator's prologue will be *larger*, so its linear region starts later
    still. **Verify equal increments on the emulator itself; do not inherit craq-sim's 60/120/180.**

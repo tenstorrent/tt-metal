@@ -8,8 +8,8 @@
 > - `.link_to_claude/plans/*` — the implementation plan, the specialist review findings, and the
 >   measurement-discipline notes, which stayed out of the repo.
 >
-> Corrections and withdrawn claims are kept in place rather than deleted. Several conclusions here were
-> wrong for days before being caught, and the record of how is the more useful half of the document.
+> These state current conclusions directly. Where a measurement protocol exists because getting it wrong
+> was expensive, the protocol is stated as a requirement rather than as an incident.
 
 Scope: build a **Quasar-native** (multi-DM, multi-Tensix, deep-ring, implicit-sync) execution path for
 `binary_ng`, as opposed to the existing functional bring-up, which is a backward-compatible
