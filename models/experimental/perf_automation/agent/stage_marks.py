@@ -606,19 +606,56 @@ def inject_stage_marks(text: str) -> tuple:
     # function being called here -- not of this scope. Copying the test's adapter arguments into this
     # branch is what raised NameError on a regenerated test. So the bracket stays here and the pass is
     # appended to the END of that function's body, where its locals() still hold the pipeline.
-    end, find = _function_body_end(text, fname)
+    end, find = _mark_pass_site(text, fname)
     if end is None:
         return text, "cannot find the body of %s() to append the per-stage pass to" % fname
     lines[k] = _INJECT_TEMPLATE.format(i=ind, body=lines[k])
     out = "".join(lines)
     # Re-locate after the bracket edit shifted the lines below it.
-    end2, find2 = _function_body_end(out, fname)
+    end2, find2 = _mark_pass_site(out, fname)
     if end2 is None:
         return text, "lost the body of %s() after bracketing" % fname
     o = out.splitlines(keepends=True)
     _prep = find_input_preparer(out, end2)
     o.insert(end2, _MARK_PASS_TEMPLATE.format(i=find2, bind=(", bind=%s" % _prep) if _prep else ""))
     return "".join(o), "injected at line %d, per-stage pass in %s()" % (k + 1, fname)
+
+
+def _mark_pass_site(text: str, name: str):
+    """Where the per-stage pass goes inside `name`: (insert index, that body's indent).
+
+    AS EARLY AS THE PIPELINE ALLOWS, not as late as possible. Tracy stops instrumenting after 32K
+    source locations -- "Instrumentation failure: Too many source locations" -- and a model forward
+    exhausts that budget long before it finishes. Marks emitted afterwards are still emitted (tracy's
+    own logger prints every one) but there is no capture left to record them, so the profile carried
+    a single `start` signpost, `stage_buckets` came back empty, and every stack shared one math peak.
+    Reproduced and fixed on device: 1 signpost before, all 7 after.
+
+    The bulk of a perf pass is its loop over inputs, and the pipeline is built before that loop --
+    it is what the loop iterates against. So the first loop in the body is the earliest point that is
+    both inside the instrumentation budget and late enough for the pipeline to exist. Structural, so
+    nothing is assumed about what the test calls its stages, its pipeline or its inputs.
+
+    A body with no loop keeps the previous site (before the return), which is still correct for a
+    pass small enough not to exhaust tracy.
+    """
+    end, indent = _function_body_end(text, name)
+    if end is None:
+        return None, ""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return end, indent
+    for node in ast.walk(tree):
+        if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name and node.body):
+            continue
+        for st in ast.walk(node):
+            if isinstance(st, (ast.For, ast.AsyncFor, ast.While)):
+                # The loop's OWN indent, not the body's: the pass is a sibling of the loop, and a
+                # loop nested in a `with`/`try` sits deeper than the function body it belongs to.
+                return st.lineno - 1, " " * st.col_offset
+        break
+    return end, indent
 
 
 def _function_body_end(text: str, name: str):

@@ -444,6 +444,29 @@ _MARKER_DROP_RE = re.compile(
     re.IGNORECASE,
 )
 
+# TRACY GIVING UP IS NOT THE DEVICE DROPPING MARKERS, and the two must not share a verdict.
+# "Instrumentation failure: Too many source locations. You cannot have more than 32K static or
+# dynamic source locations" means tracy stopped instrumenting mid-run, saved what it had, and
+# recorded nothing after -- so the capture is missing rows and every signpost past that point is
+# absent. The op timings that DID come through are still real, which is why this is deliberately
+# NOT folded into _MARKER_DROP_RE: that verdict fails profile_model outright and rejects every
+# candidate, and a model whose forward always exhausts the budget would never profile again.
+# What it does invalidate is anything derived from the WHOLE capture -- the per-stage split above
+# all, whose signposts are exactly what goes missing.
+_CAPTURE_TRUNCATED_RE = re.compile(
+    r"Instrumentation failure|too many source locations",
+    re.IGNORECASE,
+)
+
+
+def detect_capture_truncated(log_text: str) -> str | None:
+    """Tracy stopped instrumenting before the run ended, or None. Best-effort, never raises."""
+    if not log_text:
+        return None
+    m = _CAPTURE_TRUNCATED_RE.search(log_text)
+    return m.group(0) if m else None
+
+
 _MAX_PROFILER_SUPPORT_COUNT = 2_000_000
 _MAX_HEAL_ATTEMPTS = 4
 _HEAL_GROWTH = 8

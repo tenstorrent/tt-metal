@@ -440,6 +440,26 @@ def stage_windows(raw_csv: str | Path) -> list:
     return out
 
 
+def _capture_truncated_reason(profiles_dir) -> str | None:
+    """The phrase tracy used to say it stopped instrumenting, or None. Best-effort.
+
+    Reads the run's own log rather than inferring: the capture still exits 0 and still writes a CSV
+    when this happens, so nothing else distinguishes a truncated capture from a complete one.
+    """
+    try:
+        from agent.probes import detect_capture_truncated
+    except Exception:  # noqa: BLE001 -- a check that cannot load must not stop the profile
+        return None
+    try:
+        for log in sorted(Path(profiles_dir).glob("*_tracy.log")):
+            hit = detect_capture_truncated(log.read_text(errors="ignore"))
+            if hit:
+                return hit
+    except OSError:
+        return None
+    return None
+
+
 def _per_stage_buckets(raw_csv, profiles_dir, available_cores, arch) -> dict:
     """{stage: [buckets]} for every stage the capture marked. {} when it marked none.
 
@@ -781,10 +801,22 @@ def tracy_tool(
     # whole-profile figure it already had.
     stage_buckets = _per_stage_buckets(raw_dest, profiles_dir, available_cores, arch)
     if not stage_buckets:
+        # NAME THE CAUSE THAT ACTUALLY HAPPENED. This blamed the import unconditionally, and the
+        # import was fine: tracy stops instrumenting after 32K source locations, saves what it has,
+        # and records nothing further -- so marks emitted after that point are emitted (tracy's own
+        # logger prints every one) into a capture that has already closed. Reading the log turns a
+        # misleading hint into the reason, which is the difference between a one-line fix and a day.
+        _why = _capture_truncated_reason(profiles_dir)
         print(
             "  [tracy] no stage signposts in the capture -- the roofline falls back to whole-profile "
-            "figures (one math-fidelity peak shared by every stack). Expected stage:<name> / "
-            "stage:<name>:end from measure_adapter; check that `tracy` imports in the workload.",
+            "figures (one math-fidelity peak shared by every stack). %s"
+            % (
+                "Cause: tracy stopped instrumenting mid-run (%s), so marks emitted after that point "
+                "had no capture to land in." % _why
+                if _why
+                else "Expected stage:<name> / stage:<name>:end from measure_adapter; check that "
+                "`tracy` imports in the workload."
+            ),
             file=sys.stderr,
             flush=True,
         )
