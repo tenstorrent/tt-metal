@@ -107,28 +107,8 @@ public:
 class DestAccessCfg
 { // There are two optional modes you can turn on in dest: - "Stride 8 swizzling in 32-bit mode" (call this A) - "Address remapping" (call this B)
 public:
-    static constexpr Field swizzle_32b {
-        RegisterScope::State,
-        32,
-        220,
-        0,
-        0,
-        1,
-        1,
-        0}; // Allow 32-bit datums to be swizzled across horizontal banks. See
-            // https://tenstorrent.sharepoint.com/:x:/s/Specifications/EYYARiPa5RFHp7lJ8QGNdIgBj0TjQfxWP0M6Lr7T--maSw?e=c4Less
-            // for details (1b)
-    static constexpr Field remap_addrs {
-        RegisterScope::State,
-        32,
-        220,
-        0,
-        1,
-        1,
-        1,
-        0}; // Allow hardware to remap dest addresses behind-the-scenes. See
-            // https://tenstorrent.sharepoint.com/:x:/s/Specifications/Eenm7aQbWf5FoIM6jYQoavwB5plRcQZo0mw_GcRHvklcSw?e=c2rSfC
-            // for details (1b)
+    static constexpr Field swizzle_32b {RegisterScope::State, 32, 220, 0, 0, 1, 1, 0}; // Allow 32-bit datums to be swizzled across horizontal banks. (1b)
+    static constexpr Field remap_addrs {RegisterScope::State, 32, 220, 0, 1, 1, 1, 0}; // Allow hardware to remap dest addresses behind-the-scenes. (1b)
     static constexpr Field disable_full_write_dest_q_bypass {
         RegisterScope::State, 32, 220, 0, 2, 1, 1, 0}; // As a power optimization, if a dest write would write an entire SRAM row, it will bypass the dest_q.
                                                        // This is a chicken bit to disable that optimization in case it causes problems. This bit does nothing
