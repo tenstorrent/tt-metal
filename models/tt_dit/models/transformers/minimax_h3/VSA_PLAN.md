@@ -126,6 +126,26 @@ github.com/hao-ai-lab/FastVideo @ main, 2026-08-31).
 6. **R6 gates**: sparsity=0 vs ring path; 0.9 vs oracle (both shapes); nonzero gate; striped ≡
    identity.
 
+## Device perf, one transformer block, 768p, 4x8 (tracy, warm iteration, sum of device kernel time)
+
+| duration | dense block | VSA block (s=0.9, m=2) | VSA/dense | dense ring SDPA | vsa_sdpa |
+|---|---|---|---|---|---|
+| 5 s  | 16.7 ms | 50.2 ms  | 3.00x | 7.5 ms  | 33.0 ms  |
+| 10 s | 40.4 ms | 129.9 ms | 3.21x | 24.7 ms | 91.8 ms  |
+| 15 s | 74.4 ms | 235.3 ms | 3.16x | 51.5 ms | 178.4 ms |
+
+v0 VSA is ~3.1x SLOWER than dense despite ~9% of the attention math: `vsa_sdpa` is
+DRAM-traffic-bound on redundant K/V reads. Every (head, q-tile) row re-gathers its ~197 listed
+blocks (15s) from DRAM: 14 heads x 226 rows x 197 blocks x 32 KB = ~20 GB/layer/device, sustained
+~112 GB/s over 178 ms — near the practical bound for scattered 2 KB tile reads — while ring SDPA
+streams each K/V byte once per head (~0.8 GB). Levers, in impact order (all v1; perf is a v0
+non-goal): (1) cut traffic — KV-stationary or multi-row scheduling so gathered blocks serve many
+q-rows, exempt blocks first (shared by every row); (2) bfp8 K/V halves bytes; (3) double-buffer
+the chunk CBs (gather/compute currently serialized); (4) larger m only amortizes handshakes, not
+bytes. Ideal-utilization bound at 0.9 sparsity is ~6-7 ms for the fine stage at 15s (~30x headroom
+in the kernel, ~2-3x end-to-end block speedup over dense). Reports & CSVs were generated via
+`run_vsa_perf_sweep.sh` + `tt-perf-report --start-signpost start --end-signpost stop`.
+
 ## Decisions log
 - **2026-08-31 machine setup**: 4x8 BH galaxy runs bare-metal (no docker): build_metal.sh with
   clang-20, create_venv.sh, pinned diffusers (abc5e9bf71) for the torch reference. Requires
