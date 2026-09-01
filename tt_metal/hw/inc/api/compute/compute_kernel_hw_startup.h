@@ -114,6 +114,9 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) { compute_kerne
  * those writes are visible. Safe to call mid-kernel without re-running
  * compute_kernel_hw_startup.
  *
+ * All three TRISC threads must call this together. TRISC mailboxes must not
+ * be in use.
+ *
  * Must be paired with disable_fp32_dest_acc() when switching back to
  * BF16 accumulation mode within the same kernel.
  *
@@ -142,6 +145,9 @@ ALWI void enable_fp32_dest_acc() {
  * STALLWAITs on TRISC_CFG, blocking unpacker / packer / FPU / SFPU until
  * those writes are visible. Safe to call mid-kernel without re-running
  * compute_kernel_hw_startup.
+ *
+ * All three TRISC threads must call this together. TRISC mailboxes must not
+ * be in use.
  *
  * Only available on Wormhole and Blackhole. Not supported on Quasar (compile error)
  *
