@@ -24,9 +24,7 @@ def test_pytest_is_not_imported_at_module_scope():
 def test_ti_skip_imports_pytest_lazily():
     utility_functions_path = Path(__file__).parents[2] / "utility_functions.py"
     syntax_tree = ast.parse(utility_functions_path.read_text())
-    ti_skip = next(
-        node for node in syntax_tree.body if isinstance(node, ast.FunctionDef) and node.name == "ti_skip"
-    )
+    ti_skip = next(node for node in syntax_tree.body if isinstance(node, ast.FunctionDef) and node.name == "ti_skip")
 
     assert any(
         isinstance(node, ast.Import) and any(alias.name == "pytest" for alias in node.names) for node in ti_skip.body
