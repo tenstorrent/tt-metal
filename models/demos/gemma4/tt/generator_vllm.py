@@ -1225,6 +1225,12 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             # fixing the batched deferred-lm-head logits extraction behind the
             # identity gate. Escape hatch for that work: G4_FORCE_BATCH_PREFILL=1.
             and os.environ.get("G4_FORCE_BATCH_PREFILL", "0") == "1"
+            # The bounded-sliding exclusion predates the all-modes gate and must
+            # survive the hatch: under bounded rings the per-slot decode state
+            # does not follow batched-prefill KV (measured 2026-09-01 on QB2/12B
+            # bounded: hatch conc4 distinct -> 3/4 degenerate even on the eager
+            # capture-free path, while unbounded LB is byte-clean).
+            and not self._bounded_sliding_kv_cache
         )
         use_sequential = batch_size > 1 and not will_batch
 

@@ -888,6 +888,10 @@ def warmup_gemma4_batched_prefill_traces(
         batched_runtime_enabled = (
             not getattr(model_args, "disable_batched_prefill", False)
             and os.environ.get("G4_FORCE_BATCH_PREFILL", "0") == "1"
+            # Mirror will_batch's bounded-sliding exclusion (generator_vllm):
+            # bounded rings never take the batched runtime path, so batched
+            # warmup captures would only waste boot time and trace region.
+            and not getattr(generator, "_bounded_sliding_kv_cache", False)
         )
         if batched_runtime_enabled:
             # Runtime batched prefill REPLAYS need boot-time captures. A cold
