@@ -375,6 +375,9 @@ void kernel_main() {
                                     {});
                             }
                         } else {
+                            // Whole rows only: a DRAM transfer here is 64-byte granular in both
+                            // address and size, so a 32-byte face half cannot be fetched on its
+                            // own however its offset lands. Both halves are placed from L1 below.
                             CoreLocalMem<uint32_t> dst(value_row_l1 + (r * N_D_TILES + k) * TILE_ROW_NBYTES);
                             noc.async_read(
                                 value_acc, dst, bytes_k, {.page_id = stick_idx, .offset_bytes = src_off}, {});
@@ -384,8 +387,10 @@ void kernel_main() {
                 noc.async_read_barrier();
 
                 if constexpr (!HALF_READ_ALIGNED) {
-                    // The rows arrived whole; place each one's two halves now that the
-                    // transfers have landed. Same skip rule as the gather above.
+                    // The rows arrived whole; place each one's two halves now that the transfers
+                    // have landed. The NoC does the move: an L1-to-L1 transfer needs only 16-byte
+                    // alignment on either arch, and a word loop here is the dataflow core doing
+                    // work it has no unit for. Same skip rule as the gather above.
                     for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
                         if (r >= v_rows || !(yv_arr[r] && xv_arr[r])) {
                             continue;
@@ -398,13 +403,15 @@ void kernel_main() {
                                                          : TILE_ROW_NBYTES;
                             const uint32_t lo_bytes = bytes_k < HALF_STICK_NBYTES ? bytes_k : HALF_STICK_NBYTES;
                             const uint32_t ktile_l1 = tile_l1 + k * TILE_NBYTES;
-                            CoreLocalMem<volatile uint32_t> src(value_row_l1 + (r * N_D_TILES + k) * TILE_ROW_NBYTES);
-                            CoreLocalMem<volatile uint32_t> dl(ktile_l1 + off.lo);
+                            // Not volatile: the barrier has landed these bytes and nothing else
+                            // writes them, so the compiler is free to widen and unroll.
+                            CoreLocalMem<uint32_t> src(value_row_l1 + (r * N_D_TILES + k) * TILE_ROW_NBYTES);
+                            CoreLocalMem<uint32_t> dl(ktile_l1 + off.lo);
                             for (uint32_t i = 0; i < lo_bytes / sizeof(uint32_t); ++i) {
                                 dl[i] = src[i];
                             }
                             if (bytes_k > lo_bytes) {
-                                CoreLocalMem<volatile uint32_t> dh(ktile_l1 + off.hi);
+                                CoreLocalMem<uint32_t> dh(ktile_l1 + off.hi);
                                 const uint32_t hi_words = (bytes_k - lo_bytes) / sizeof(uint32_t);
                                 for (uint32_t i = 0; i < hi_words; ++i) {
                                     dh[i] = src[HALF_WORDS + i];

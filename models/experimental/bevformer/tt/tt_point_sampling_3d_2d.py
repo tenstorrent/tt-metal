@@ -73,7 +73,26 @@ def generate_reference_points_ttnn(
     return ttnn_ref_points
 
 
+_PC_RANGE_ROWS = {}
 _IMAGE_SCALE_ROWS = {}
+
+
+def _pc_range_rows(pc_range, device):
+    """``(scale, offset)`` rows mapping normalized [0, 1] coordinates onto the point cloud range.
+
+    Depends only on ``pc_range``, so both are built once per range rather than per call.
+    """
+    key = (tuple(pc_range), id(device))
+    if key not in _PC_RANGE_ROWS:
+        x_min, y_min, z_min, x_max, y_max, z_max = pc_range[:6]
+        mk = lambda vals: ttnn.from_torch(
+            torch.tensor([vals], dtype=torch.float32),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        _PC_RANGE_ROWS[key] = (mk([x_max - x_min, y_max - y_min, z_max - z_min]), mk([x_min, y_min, z_min]))
+    return _PC_RANGE_ROWS[key]
 
 
 def _image_scale_row(img_h: int, img_w: int, device):
@@ -150,17 +169,16 @@ def point_sampling_3d_to_2d_ttnn(
     if use_signpost:
         signpost(header="Point Sampling Coordinate Scaling Start")
 
-    # Scale normalized coordinates [0, 1] to actual world coordinates
-    reference_points_x = reference_points[:, :, :, 0:1]
-    reference_points_y = reference_points[:, :, :, 1:2]
-    reference_points_z = reference_points[:, :, :, 2:3]
+    # Scale normalized coordinates [0, 1] to actual world coordinates. One broadcast multiply and
+    # one add over all three axes at once: a 1-wide slice of a tiled tensor pads to a whole 32x32
+    # tile, so doing this per axis carried 32x its own data three times over.
+    scale_row, offset_row = _pc_range_rows(pc_range, device)
+    reference_points = ttnn.add(ttnn.mul(reference_points, scale_row), offset_row)
 
-    reference_points_x = ttnn.add(ttnn.mul(reference_points_x, x_max - x_min), x_min)
-    reference_points_y = ttnn.add(ttnn.mul(reference_points_y, y_max - y_min), y_min)
-    reference_points_z = ttnn.add(ttnn.mul(reference_points_z, z_max - z_min), z_min)
-
-    ones = ttnn.ones_like(reference_points_x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    reference_points = ttnn.concat([reference_points_x, reference_points_y, reference_points_z, ones], dim=-1)
+    ones = ttnn.ones(
+        (batch_size, num_queries, num_points, 1), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    reference_points = ttnn.concat([reference_points, ones], dim=-1)
     reference_points = ttnn.permute(reference_points, (0, 2, 1, 3))  # [bs, num_points, num_queries, 4]
 
     if use_signpost:
@@ -215,15 +233,10 @@ def point_sampling_3d_to_2d_ttnn(
     # Clamp to [-10, 10] and create validity masks. Only the masks use the clamped form; the
     # projected points are returned as computed, which is what the reference produces.
     reference_points_cam_clamped = ttnn.clamp(reference_points_cam, -10.0, 10.0)
-    valid_x = ttnn.logical_and(
-        (reference_points_cam_clamped[..., 0:1] >= 0.0), (reference_points_cam_clamped[..., 0:1] <= 1.0)
-    )
-    valid_y = ttnn.logical_and(
-        (reference_points_cam_clamped[..., 1:2] >= 0.0), (reference_points_cam_clamped[..., 1:2] <= 1.0)
-    )
-
-    bev_mask = ttnn.logical_and(bev_mask, valid_x)
-    bev_mask = ttnn.logical_and(bev_mask, valid_y)
+    # Both axes tested at once and reduced over the pair, rather than sliced apart: a 1-wide slice
+    # of a tiled tensor pads to a whole tile, and min over 0/1 lanes is the same as their AND.
+    in_range = ttnn.logical_and((reference_points_cam_clamped >= 0.0), (reference_points_cam_clamped <= 1.0))
+    bev_mask = ttnn.logical_and(bev_mask, ttnn.min(in_range, dim=-1, keepdim=True))
 
     nan_mask = ttnn.isnan(bev_mask)
     bev_mask = ttnn.logical_or(
