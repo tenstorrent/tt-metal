@@ -509,7 +509,14 @@ inline void eltwise_binary_run_with_dest_reuse(
     constexpr std::uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
     // DEST rows one face spans -- what ZEROACC's 16-row mode clears in a single instruction.
     constexpr std::uint32_t DEST_ROWS_PER_FACE = FACE_R_DIM;
-    constexpr std::uint32_t DEST_ROWS_PER_TILE = 4 * DEST_ROWS_PER_FACE;
+    // DEST rows one tile slot spans. This is DEST geometry, not the tile's logical face count: every tile gets
+    // the same slot whatever its shape, because set_dst_write_addr<Tile32x32> places tiles at exactly this stride
+    // and the MOP pads partial faces to 16-row spacing (eltwise_binary_configure_mop_with_dest_reuse). A tile with
+    // fewer faces uses the low faces of its slot and leaves the rest unused. Derived from the same shift
+    // set_dst_write_addr uses so the two cannot drift apart.
+    constexpr std::uint32_t DEST_ROWS_PER_TILE = 1u << DstTileSizeLog2[DstTileShape::Tile32x32];
+    static_assert(DEST_ROWS_PER_TILE == TILE_NUM_FACES * DEST_ROWS_PER_FACE, "DEST slot must hold a full tile");
+    static_assert(MAX_TILES_IN_HALF_DEST * DEST_ROWS_PER_TILE == DEST_REGISTER_HALF_SIZE, "DEST slots tile the bank");
     // Rows in one 16-bit DEST bank. The 32-bit bank is half this, but it is excluded below.
     constexpr std::uint32_t DEST_ROWS_PER_BANK = DEST_REGISTER_HALF_SIZE;
 
