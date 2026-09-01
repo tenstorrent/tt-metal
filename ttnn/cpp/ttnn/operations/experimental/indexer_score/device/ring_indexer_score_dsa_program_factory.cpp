@@ -144,8 +144,9 @@ ProgramDescriptor build_ring_program_descriptor(
     const uint32_t D = q.logical_shape()[3];
     const uint32_t T = k.logical_shape()[2];
 
-    const uint32_t tensor_rank = device_index_for(args, coord, q);
     const uint32_t transport_rank = transport_rank_for(args, coord, q);
+    // Enforce row-major order instead of relying on device_storage's implicit ordering.
+    const uint32_t tensor_rank = transport_to_tensor_rank(args, transport_rank);
     // 2D SP×TP: the K cache is SP-sharded + TP-replicated and the ring AG still gathers along the SP axis
     // (cluster_axis), so the reader's K sourcing is unchanged; TP only sub-shards the QUERY rows. tp_index is
     // this device's rank along seq_subshard_axis (the TP axis) -- device_causal_geometry adds its tp_index*Sq
@@ -748,7 +749,8 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     const uint32_t k_local_batch_page_offset = args.cache_batch_idx.value_or(0) * local_slot_pages;
 
     for (auto& [range, program] : cached.workload.get_programs()) {
-        const uint32_t device_index = device_index_for(args, range.start_coord(), q);
+        // Must match the build path's rank, or a cache hit shifts the causal offset.
+        const uint32_t device_index = transport_to_tensor_rank(args, transport_rank_for(args, range.start_coord(), q));
         const uint32_t tp_index =
             (args.tp_axis().has_value() && q.device_storage().get_coords().size() > 1)
                 ? ttnn::ccl::get_linearized_index_from_physical_coord(q, range.start_coord(), args.tp_axis())

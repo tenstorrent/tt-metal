@@ -45,8 +45,11 @@ uint32_t sliding_halo_token_count(uint32_t sliding_window_size, uint32_t k_chunk
 
 bool is_replicated_across_complete_mesh(const Tensor& tensor) {
     const auto& topology = tensor.tensor_topology();
-    return topology.distribution_shape().mesh_size() == tensor.device()->shape().mesh_size() &&
-           std::all_of(topology.placements().begin(), topology.placements().end(), [](const auto& placement) {
+    const auto& distribution_shape = topology.distribution_shape();
+    const auto& placements = topology.placements();
+    return tensor.device() != nullptr && distribution_shape.mesh_size() == tensor.device()->shape().mesh_size() &&
+           placements.size() == distribution_shape.dims() &&
+           std::all_of(placements.begin(), placements.end(), [](const auto& placement) {
                return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placement);
            });
 }

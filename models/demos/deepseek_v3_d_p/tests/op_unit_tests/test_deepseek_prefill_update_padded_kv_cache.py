@@ -412,7 +412,7 @@ def test_update_padded_kv_cache_full_mesh_rejects_axis_topology(mesh_device, exp
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
-    with expect_error(RuntimeError, "cluster_axis=None requires"):
+    with expect_error(RuntimeError, "cluster_axis=None requires cache and input"):
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             axis_cache,
             input_tensor,
