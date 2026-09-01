@@ -417,6 +417,16 @@ public:
         return this->device_eth_routing_info_.at(chip_id);
     }
 
+    // Routing mode for an ethernet core, or nullopt when the core has no entry.
+    //
+    // device_eth_routing_info_ is populated from get_active_eth_channels(), i.e. trained
+    // channels only, while get_ethernet_cores_grouped_by_connected_chips() is built from the
+    // cluster descriptor's full connection list. A half-trained link appears in the second and
+    // not the first, so indexing one with keys from the other throws. Use this instead of
+    // .at() anywhere the key comes from the connection list.
+    std::optional<EthRouterMode> get_eth_routing_mode_if_active(
+        ChipId chip_id, const tt::tt_metal::CoreCoord& eth_core) const;
+
 private:
     void detect_arch_and_target();
     void generate_cluster_descriptor();

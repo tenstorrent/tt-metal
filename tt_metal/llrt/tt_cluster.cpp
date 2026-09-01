@@ -1139,6 +1139,19 @@ std::unordered_map<ChipId, std::vector<tt::tt_metal::CoreCoord>> Cluster::get_et
     return connected_chips;
 }
 
+std::optional<EthRouterMode> Cluster::get_eth_routing_mode_if_active(
+    ChipId chip_id, const tt::tt_metal::CoreCoord& eth_core) const {
+    const auto chip_it = this->device_eth_routing_info_.find(chip_id);
+    if (chip_it == this->device_eth_routing_info_.end()) {
+        return std::nullopt;
+    }
+    const auto core_it = chip_it->second.find(eth_core);
+    if (core_it == chip_it->second.end()) {
+        return std::nullopt;
+    }
+    return core_it->second;
+}
+
 // Ethernet cluster api
 void Cluster::initialize_ethernet_sockets() {
     TT_ASSERT(this->hal_ != nullptr, "Hal is not set. Need to call set_hal() first.");
@@ -1160,7 +1173,19 @@ void Cluster::initialize_ethernet_sockets() {
                 continue;
             }
             for (const auto& eth_core : eth_cores) {
-                if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::IDLE) {
+                const auto routing_mode = this->get_eth_routing_mode_if_active(chip_id, eth_core);
+                if (!routing_mode.has_value()) {
+                    // The descriptor reports this connection but the channel never trained, so
+                    // it has no routing info. Skip it rather than throwing out of device open.
+                    log_warning(
+                        tt::LogDevice,
+                        "Skipping ethernet socket for chip {} core {}: the cluster descriptor reports a connection "
+                        "but the channel is not active (half-trained link). Retrain the board to use it.",
+                        chip_id,
+                        eth_core.str());
+                    continue;
+                }
+                if (routing_mode == EthRouterMode::IDLE) {
                     this->ethernet_sockets_.at(chip_id).at(connected_chip_id).emplace_back(eth_core);
                     this->ethernet_sockets_.at(connected_chip_id)
                         .at(chip_id)
@@ -1317,14 +1342,20 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
 
                 const auto connected_core =
                     std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core)));
-                if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
+                // Same connection-list keys as initialize_ethernet_sockets, so the same guard.
+                // A core with no entry compares unequal to both modes and the link is skipped.
+                if (this->get_eth_routing_mode_if_active(chip_id, eth_core) == EthRouterMode::FABRIC_ROUTER) {
                     // already reserved for fabric, potentially by the connected chip id
                     num_reserved_cores++;
                     continue;
                 }
 
-                if (this->device_eth_routing_info_[chip_id][eth_core] == EthRouterMode::IDLE &&
-                    this->device_eth_routing_info_.at(connected_chip_id).at(connected_core) == EthRouterMode::IDLE) {
+                // operator[] here used to default-construct a missing entry, and EthRouterMode::IDLE
+                // is 0, so an untrained link read as IDLE and could then be reserved as a fabric
+                // router. A non-inserting lookup skips it instead.
+                if (this->get_eth_routing_mode_if_active(chip_id, eth_core) == EthRouterMode::IDLE &&
+                    this->get_eth_routing_mode_if_active(connected_chip_id, connected_core) ==
+                        EthRouterMode::IDLE) {
                     this->device_eth_routing_info_[chip_id][eth_core] = EthRouterMode::FABRIC_ROUTER;
                     this->device_eth_routing_info_[connected_chip_id][connected_core] = EthRouterMode::FABRIC_ROUTER;
                     num_reserved_cores++;
@@ -1379,7 +1410,8 @@ std::vector<tt::tt_metal::CoreCoord> Cluster::get_fabric_ethernet_routers_betwee
     TT_FATAL(connected_chips.contains(dst_id), "Dst Chip {} is not connected to Src Chip {}", dst_id, src_id);
     fabric_ethernet_channels.reserve(connected_chips.at(dst_id).size());
     for (const auto& eth_core : connected_chips.at(dst_id)) {
-        if (this->device_eth_routing_info_.at(src_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
+        // connected_chips comes from the connection list, so guard as above.
+        if (this->get_eth_routing_mode_if_active(src_id, eth_core) == EthRouterMode::FABRIC_ROUTER) {
             fabric_ethernet_channels.push_back(eth_core);
         }
     }
