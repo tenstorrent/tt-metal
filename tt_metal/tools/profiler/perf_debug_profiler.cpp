@@ -2331,6 +2331,77 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
     // both on purpose -- this path then only measures and reports).
     st->publish = (eth_track_hz() == 0);
 
+    // ---- write configs: responder first, magic last ----
+    using namespace tt::tt_fabric::router_sync;
+    auto write_cfg = [&](FabricSyncState::End& en, bool initiator, uint64_t interval, uint32_t peer_blk) {
+        uint32_t body[7];  // flags .. peer_blk (Cfg minus magic)
+        body[0] = kFlagEnabled | (initiator ? kFlagInitiator : 0);
+        body[1] = static_cast<uint32_t>(interval & 0xFFFFFFFFu);
+        body[2] = static_cast<uint32_t>(interval >> 32);
+        body[3] = FabricSyncState::kNSamples;
+        body[4] = 1u << 21;  // first_wait ~1.55 ms: responder poll cadence + a context-switch stretch
+        body[5] = 1u << 19;  // next_wait ~0.39 ms: mid-round tolerance for the peer's context switch
+        body[6] = peer_blk;
+        cluster.write_core(body, sizeof(body), tt_cxy_pair(en.chip, en.virt), en.blk_addr + 4);
+        const uint32_t magic = kCfgMagic;
+        cluster.write_core(&magic, sizeof(magic), tt_cxy_pair(en.chip, en.virt), en.blk_addr);
+        std::memcpy(en.cfg, body, sizeof(body));
+        en.cfg_valid = true;
+    };
+    for (auto& e : st->edges) {
+        if (e.init.blk_addr == 0) {
+            continue;
+        }
+        const int aiclk_mhz = cluster.get_device_aiclk(e.init.chip);
+        const double cyc_per_s = (aiclk_mhz > 0 ? aiclk_mhz : 1350) * 1e6;
+        const uint64_t init_interval = static_cast<uint64_t>(cyc_per_s / hz);
+        const uint64_t resp_interval = std::min<uint64_t>(init_interval / 4, 1u << 17);  // <= ~97 us poll
+        write_cfg(e.resp, false, resp_interval, e.init.blk_addr);
+        write_cfg(e.init, true, init_interval, e.resp.blk_addr);
+        // Readback: proves the config bytes are IN L1 at the discovered address (a wrong address or
+        // a swallowed PCIe write shows up here, not as a silent dead link).
+        uint32_t rb[8] = {0};
+        cluster.read_core(rb, sizeof(rb), tt_cxy_pair(e.init.chip, e.init.virt), e.init.blk_addr);
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] FSYNC cfg readback init chip {} @0x{:x}: magic 0x{:x} flags 0x{:x} "
+            "interval {} n {} waits {}/{} peer 0x{:x}",
+            e.init.chip,
+            e.init.blk_addr,
+            rb[0],
+            rb[1],
+            (static_cast<uint64_t>(rb[3]) << 32) | rb[2],
+            rb[4],
+            rb[5],
+            rb[6],
+            rb[7]);
+        st->end_by_core[FabricSyncState::core_key(e.init.chip, e.init.virt.x, e.init.virt.y)] = {
+            static_cast<size_t>(&e - st->edges.data()), 0};
+        st->end_by_core[FabricSyncState::core_key(e.resp.chip, e.resp.virt.x, e.resp.virt.y)] = {
+            static_cast<size_t>(&e - st->edges.data()), 1};
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] FABRIC SYNC link {} ({},{}) -> {} ({},{}): {} rounds/s x {} samples "
+            "in-router on the CLAIMED channel{}",
+            e.init.chip,
+            e.init.logical.x,
+            e.init.logical.y,
+            e.resp.chip,
+            e.resp.logical.x,
+            e.resp.logical.y,
+            hz,
+            FabricSyncState::kNSamples,
+            e.in_tree ? "" : " [closure edge]");
+    }
+
+    // NOTE ON ORDER: this runs AFTER the config write, and that is deliberate. The sync window
+    // (start_fabric_sync -> the stop() that disables the devices) can be as short as ~100 ms on a
+    // small workload, which at 20 Hz is only 1-2 rounds. The reference host fit below costs ~50 ms
+    // of MMIO (spacing_us=500 x ~100 samples), so doing it BEFORE the config write ate half the
+    // window and regressed the continuous-sync test to a single round. Anchoring is safe to defer:
+    // a Tracy context bakes its anchor in at CREATION, contexts are created lazily on a core's
+    // first zone, and the only zones these eth lanes ever carry are the FSYNC ones drawn at
+    // teardown (fabric routers carry no DeviceZoneScopedN of their own).
     // ---- anchor the sync eth lanes: ONE host fit, everything else via device<->device ----
     // Contexts are minted lazily on a core's first zone and bake their anchor in at creation, so this
     // has to happen now (start), never at the teardown render.
@@ -2442,56 +2513,6 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
                 f_chip,
                 en == ref ? " [reference: the one host fit]" : " [carried by device<->device]");
         }
-    }
-
-    // ---- write configs: responder first, magic last ----
-    using namespace tt::tt_fabric::router_sync;
-    auto write_cfg = [&](FabricSyncState::End& en, bool initiator, uint64_t interval, uint32_t peer_blk) {
-        uint32_t body[7];  // flags .. peer_blk (Cfg minus magic)
-        body[0] = kFlagEnabled | (initiator ? kFlagInitiator : 0);
-        body[1] = static_cast<uint32_t>(interval & 0xFFFFFFFFu);
-        body[2] = static_cast<uint32_t>(interval >> 32);
-        body[3] = FabricSyncState::kNSamples;
-        body[4] = 1u << 21;  // first_wait ~1.55 ms: responder poll cadence + a context-switch stretch
-        body[5] = 1u << 19;  // next_wait ~0.39 ms: mid-round tolerance for the peer's context switch
-        body[6] = peer_blk;
-        cluster.write_core(body, sizeof(body), tt_cxy_pair(en.chip, en.virt), en.blk_addr + 4);
-        const uint32_t magic = kCfgMagic;
-        cluster.write_core(&magic, sizeof(magic), tt_cxy_pair(en.chip, en.virt), en.blk_addr);
-        std::memcpy(en.cfg, body, sizeof(body));
-        en.cfg_valid = true;
-    };
-    for (auto& e : st->edges) {
-        if (e.init.blk_addr == 0) {
-            continue;
-        }
-        const int aiclk_mhz = cluster.get_device_aiclk(e.init.chip);
-        const double cyc_per_s = (aiclk_mhz > 0 ? aiclk_mhz : 1350) * 1e6;
-        const uint64_t init_interval = static_cast<uint64_t>(cyc_per_s / hz);
-        const uint64_t resp_interval = std::min<uint64_t>(init_interval / 4, 1u << 17);  // <= ~97 us poll
-        write_cfg(e.resp, false, resp_interval, e.init.blk_addr);
-        write_cfg(e.init, true, init_interval, e.resp.blk_addr);
-        // Readback: proves the config bytes are IN L1 at the discovered address (a wrong address or
-        // a swallowed PCIe write shows up here, not as a silent dead link).
-        uint32_t rb[8] = {0};
-        cluster.read_core(rb, sizeof(rb), tt_cxy_pair(e.init.chip, e.init.virt), e.init.blk_addr);
-        log_info(
-            tt::LogMetal,
-            "[perf-debug profiler] FSYNC cfg readback init chip {} @0x{:x}: magic 0x{:x} flags 0x{:x} "
-            "interval {} n {} waits {}/{} peer 0x{:x}",
-            e.init.chip, e.init.blk_addr, rb[0], rb[1],
-            (static_cast<uint64_t>(rb[3]) << 32) | rb[2], rb[4], rb[5], rb[6], rb[7]);
-        st->end_by_core[FabricSyncState::core_key(e.init.chip, e.init.virt.x, e.init.virt.y)] = {
-            static_cast<size_t>(&e - st->edges.data()), 0};
-        st->end_by_core[FabricSyncState::core_key(e.resp.chip, e.resp.virt.x, e.resp.virt.y)] = {
-            static_cast<size_t>(&e - st->edges.data()), 1};
-        log_info(
-            tt::LogMetal,
-            "[perf-debug profiler] FABRIC SYNC link {} ({},{}) -> {} ({},{}): {} rounds/s x {} samples "
-            "in-router on the CLAIMED channel{}",
-            e.init.chip, e.init.logical.x, e.init.logical.y,
-            e.resp.chip, e.resp.logical.x, e.resp.logical.y,
-            hz, FabricSyncState::kNSamples, e.in_tree ? "" : " [closure edge]");
     }
 
     // ---- the aggregator thread ----
