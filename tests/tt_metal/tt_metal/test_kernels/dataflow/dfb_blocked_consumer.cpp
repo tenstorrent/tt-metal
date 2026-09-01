@@ -37,13 +37,11 @@ void kernel_main() {
         }
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            // block_size when this thread's entries are adjacent in L1, else 1. Don't pass an explicit
-            // size -- that picks the generic Noc::async_write, which posts no credits.
-            const uint32_t entries_per_txn = dfb.get_entries_per_txn();
-            for (uint32_t j = 0; j < block_size; j += entries_per_txn) {
-                noc.async_write<NocOptions::TXN_ID>(
-                    dfb, tensor_accessor, {}, {.page_id = block_base_page + j});
-            }
+            // This kernel IS the blocked side, so one transaction drains the whole block; the
+            // library is told rather than left to guess. Don't pass an explicit byte size --
+            // that picks the generic Noc::async_write, which posts no credits.
+            noc.async_write<NocOptions::TXN_ID>(
+                dfb, tensor_accessor, {.num_entries = block_size}, {.page_id = block_base_page});
 #endif
         } else {
             dfb.wait_front(block_size);

@@ -10,16 +10,14 @@
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
 
 #if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK))
-// Used by pack and unpack to advance DFB rd/wr tile offsets and the tile counter pointer
+// Used by pack and unpack to advance DFB rd/wr tile offsets and the tile counter pointer.
+// Pack updates wr_entry_idx; unpack updates rd_entry_idx.
 //
-// Pack updates wr_entry_idx (cursor byte-offset derived via dfb_slot_cursor_offset_units)
-// Unpack updates rd_entry_idx
-//
-// run_length == 0: every call advances the cursor by num_tiles strides and rotates to the next
-// tile counter.
-// run_length > 0: we stay on one tile counter for run_length tiles. Each tile advances the
-// cursor one stride; the last tile of the run instead jumps `jump` entries ahead, to where this
-// counter's next run starts.
+// Each tile counter keeps its own cursor, a bookmark into just its entries of the ring. The
+// hart collects `tiles_to_collect` tiles from one counter, then hands off: it parks this
+// counter's bookmark `jump` entries ahead (its next entries sit past the other counter's)
+// and rotates to the next counter, whose bookmark is already waiting exactly where
+// the stream continues.
 inline void dfb_advance_slot(LocalDFBInterface& intf, DFBTCSlot& slot, std::uint32_t num_tiles) {
     std::uint32_t entry_idx;
 #if defined(UCK_CHLKC_PACK)
@@ -28,21 +26,20 @@ inline void dfb_advance_slot(LocalDFBInterface& intf, DFBTCSlot& slot, std::uint
     entry_idx = slot.rd_entry_idx;
 #endif
 
-    bool rotate = true;
-    if (intf.run_length == 0) {
-        entry_idx += num_tiles * static_cast<std::uint32_t>(intf.stride_size_tiles);
+    const std::uint32_t stride = intf.stride_size_tiles ? static_cast<std::uint32_t>(intf.stride_size_tiles) : 1u;
+    const std::uint32_t tiles_to_collect =
+        intf.split_tc ? 1u : ((intf.block_size > stride) ? (static_cast<std::uint32_t>(intf.block_size) / stride) : 1u);
+    bool rotate_tcs = true;
+    const std::uint32_t current_tile_count = static_cast<std::uint32_t>(intf.tiles_collected) + num_tiles;
+    ASSERT(tiles_to_collect == 1u || current_tile_count <= tiles_to_collect);
+    if (current_tile_count >= tiles_to_collect) {
+        // Collected this counter's share: park its bookmark at its next entries and hand off.
+        entry_idx += (num_tiles - 1u) * stride + static_cast<std::uint32_t>(intf.jump);
+        intf.tiles_collected = 0;
     } else {
-        const std::uint32_t new_pos = static_cast<std::uint32_t>(intf.run_pos) + num_tiles;
-        ASSERT(new_pos <= intf.run_length);
-        if (new_pos >= intf.run_length) {
-            entry_idx += (num_tiles - 1u) * static_cast<std::uint32_t>(intf.stride_size_tiles) +
-                         static_cast<std::uint32_t>(intf.jump);
-            intf.run_pos = 0;
-        } else {
-            entry_idx += num_tiles * static_cast<std::uint32_t>(intf.stride_size_tiles);
-            intf.run_pos = static_cast<std::uint16_t>(new_pos);
-            rotate = false;
-        }
+        entry_idx += num_tiles * stride;
+        intf.tiles_collected = static_cast<std::uint16_t>(current_tile_count);
+        rotate_tcs = false;
     }
     const std::uint32_t offset = dfb_slot_cursor_offset_units(intf, slot, entry_idx);
     if (offset >= slot.ring_size) {
@@ -55,7 +52,7 @@ inline void dfb_advance_slot(LocalDFBInterface& intf, DFBTCSlot& slot, std::uint
     slot.rd_entry_idx = static_cast<std::uint16_t>(entry_idx);
 #endif
 
-    if (rotate) {
+    if (rotate_tcs) {
         intf.tc_idx = (intf.tc_idx + 1) % intf.num_tcs_to_rr;
     }
 }

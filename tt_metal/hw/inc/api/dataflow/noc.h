@@ -20,6 +20,9 @@ class DataflowBuffer;
 // dataflow_buffer.h which includes noc.h
 struct DataflowBufferArgs {
     uint32_t offset_bytes{};
+    // Entries one transaction moves. The kernel knows its own batching (a BLOCKED side moves a
+    // whole block, everyone else moves one entry); the library never guesses it.
+    uint32_t num_entries{1};
 };
 
 template <typename T>

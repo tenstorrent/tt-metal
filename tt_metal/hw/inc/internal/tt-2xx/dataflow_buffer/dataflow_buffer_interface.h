@@ -53,14 +53,16 @@ struct LocalDFBInterface {
     uint8_t stride_size_tiles;
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
-    uint16_t run_length;  // tiles per tile-counter run; 0 = no jump
-    uint16_t run_pos;     // tiles into the current run
-    uint16_t jump;        // entries the cursor jumps on the tile that completes a run
+    uint16_t block_size;       // tiles in one block; 1 unless the ring is BLOCKED
+    uint16_t split_tc;         // Tensix B->S producer: each tile belongs to the next consumer's
+                               // TC, so credit and rotate TCs every tile
+    uint16_t tiles_collected;  // tiles taken from the current counter so far
+    uint16_t jump;             // cursor jump in tiles, taken on each hand-off
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (pack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 95, "LocalDFBInterface (pack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 97, "LocalDFBInterface (pack TRISC) size is incorrect");
 
 #elif defined(COMPILE_FOR_TRISC)
 
@@ -81,14 +83,16 @@ struct LocalDFBInterface {
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
     uint8_t tensix_trisc_mask;
-    uint16_t run_length;  // tiles per tile-counter run; 0 = no jump
-    uint16_t run_pos;     // tiles into the current run
-    uint16_t jump;        // entries the cursor jumps on the tile that completes a run
+    uint16_t block_size;       // tiles in one block; 1 unless the ring is BLOCKED
+    uint16_t split_tc;         // Tensix B->S producer: each tile belongs to the next consumer's
+                               // TC, so credit and rotate TCs every tile
+    uint16_t tiles_collected;  // tiles taken from the current counter so far
+    uint16_t jump;             // cursor jump in tiles, taken on each hand-off
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (unpack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 94, "LocalDFBInterface (unpack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 96, "LocalDFBInterface (unpack TRISC) size is incorrect");
 
 #else
 
@@ -121,13 +125,11 @@ struct LocalDFBInterface {
     uint8_t _tc_align_pad;  // pad bytes [8,20) → 20B so tc_slots[] stays 4B-aligned
 
     uint16_t num_entries;
-    uint16_t block_size;   // how many entries this RISC moves in one NoC transaction: a whole block
-                           // when this side is BLOCKED and its entries are adjacent, otherwise 1.
-    uint16_t run_length;   // ops on one tile counter before the cursor takes stride2.
-                           // >0 jumps, 0 no jump
-    uint16_t run_pos;      // ops into the current run
-    uint32_t stride2;      // raw-byte cursor jump on the op that completes a run; equals stride_size
-                           // for any side that rotates every op
+    uint16_t block_size;       // entries in one block; 1 unless the ring is BLOCKED
+    uint16_t split_tc;         // B->S producer: a transaction spans all its TCs, so give
+                               // each TC its share instead of one TC everything
+    uint16_t tiles_collected;  // tiles taken from the current counter so far
+    uint32_t jump;             // cursor jump in bytes, taken on each TC rotation
 
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 };

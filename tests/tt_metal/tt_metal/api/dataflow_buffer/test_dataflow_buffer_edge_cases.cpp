@@ -721,6 +721,15 @@ TEST_F(UnitMeshFixture, A1Blocked_2_0_DMTensixDM_ALL_2B_blk4_impl) {
 }
 
 // C>1 Tensix consumers. RUN WITH TT_METAL_WATCHER=1 (multi-thread coherence race).
+// DM -> Tensix data coverage for the BLOCKED->STRIDED consumer pattern: the first hop carries
+// the pattern under test into C Tensix consumers, the second hop is the proven 1Sx1S
+// pass-through, so the Tensix side's addressing is verified end to end.
+TEST_F(UnitMeshFixture, A1Fanout_2_0_DMTensixDM_STRIDED_1Bx2_blk4) {
+    run_a1_fanout_blocked_pipeline(this->device(), 2, 4, 16, /*implicit=*/false, m2::DFBAccessPattern::STRIDED);
+}
+TEST_F(UnitMeshFixture, A1Fanout_2_0_DMTensixDM_STRIDED_1Bx4_blk4) {
+    run_a1_fanout_blocked_pipeline(this->device(), 4, 4, 16, /*implicit=*/false, m2::DFBAccessPattern::STRIDED);
+}
 TEST_F(UnitMeshFixture, A1Fanout_2_0_DMTensixDM_BLOCKED_1Bx2_blk4) {
     run_a1_fanout_blocked_pipeline(this->device(), 2, 4, 16);
 }

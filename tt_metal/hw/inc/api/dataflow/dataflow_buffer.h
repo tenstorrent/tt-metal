@@ -335,13 +335,6 @@ public:
     uint32_t get_write_ptr() const { return get_write_ptr_impl() + L1_UNCACHED_OFFSET; }
     uint32_t get_read_ptr() const { return get_read_ptr_impl() + L1_UNCACHED_OFFSET; }
 
-#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
-    // How many entries one NoC transaction carries here.
-    // A whole block if this side is BLOCKED and its entries sit next to each other in memory,
-    // otherwise a single entry.
-    uint32_t get_entries_per_txn() const { return get_entries_per_txn_impl(); }
-#endif
-
 #ifndef ARCH_QUASAR
     // WH/BH only — mutate FIFO cursor state (rewind / jump / hold-wr style surgery).
     // Not for peeks: use get_*_ptr. Not declared on Quasar (redesign Classes 2–5).
@@ -394,9 +387,6 @@ private:
 
     void write_barrier_impl(const Noc &noc) const;
 #endif
-#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
-    uint32_t get_entries_per_txn_impl() const;
-#endif
 
     struct ScopedLockRegion {
         uint32_t start;  // first locked address = the write/read pointer at acquire
@@ -415,11 +405,11 @@ private:
 #ifndef COMPILE_FOR_TRISC
     friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_*
 
-    uint32_t prepare_implicit_read();
-    void commit_implicit_read();
+    uint32_t prepare_implicit_read(uint32_t num_tiles);
+    void commit_implicit_read(uint32_t num_tiles);
 
-    uint32_t prepare_implicit_write();
-    void commit_implicit_write();
+    uint32_t prepare_implicit_write(uint32_t num_tiles);
+    void commit_implicit_write(uint32_t num_tiles);
 #endif // !COMPILE_FOR_TRISC
 #endif // ARCH_QUASAR
 
@@ -440,6 +430,7 @@ private:
     // Metadata for implicit sync
     uint16_t ptxn_id_loop_cnt_ = 0;
     uint8_t ptxn_id_index_ = 0;
+    uint16_t implicit_txn_tiles_ = 1;  // tiles per implicit txn
     uint16_t ptiles_read_ = 0;  // not the same as tile counter: HW has no way to track pending posts
 
     uint16_t ctxn_id_loop_cnt_ = 0;

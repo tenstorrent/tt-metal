@@ -178,7 +178,7 @@ constexpr uint8_t DFB_HART_FLAG_BROADCAST_TC = (1u << 5);
 constexpr uint8_t DFB_HART_FLAG_REMAPPER_SELF_PROG = (1u << 4);
 constexpr uint8_t DFB_HART_FLAG_TRISC_MASK   = 0x0Fu;  // bits 3:0 = tensix_trisc_mask (which TRISC(s) run DFB ops)
 
-// Layout: dfb_blob_tc_pair_t[num_tcs] immediately after the 36B header, followed by
+// Layout: dfb_blob_tc_pair_t[num_tcs] immediately after the 32B header, followed by
 // uint8_t packed_tile_counter[num_tcs] padded to the next 4B boundary.
 // This keeps base_addr and limit for the same slot adjacent (8B apart, same cache line).
 // Total TC section = num_tcs*9B rounded up to 4B.
@@ -189,14 +189,15 @@ struct dfb_blob_tc_pair_t {
 static_assert(sizeof(dfb_blob_tc_pair_t) == 8, "dfb_blob_tc_pair_t must be 8B");
 
 // Per-(hart, DFB) init entry in this hart's sequential blob.
-// Fixed 36B header, followed by dfb_blob_tc_pair_t[num_tcs] (8B each), then
+// Fixed 32B header, followed by dfb_blob_tc_pair_t[num_tcs] (8B each), then
 // uint8_t packed_tile_counter[num_tcs] padded to 4B.
-// Total entry size = 36 + ceil9(num_tcs) where ceil9(n) = (n*9 + 3) & ~3.
+// Total entry size = 32 + ceil9(num_tcs) where ceil9(n) = (n*9 + 3) & ~3.
 struct dfb_hart_init_entry_t {
     uint8_t  logical_dfb_id;
     uint8_t  num_tcs;
     uint8_t  flags;                          // DFB_HART_FLAG_* bits above; bits3:0 = tensix_trisc_mask
-    uint8_t _reserved0;                      // kept zeroed for 32B layout stability
+    uint8_t split_tc;                        // byte 3: 1 = each transaction is split across all
+                                             // tile counters (a share of the credits to each)
     uint32_t entry_size;                     // raw bytes; device applies >> cb_addr_shift
     // Host precomputes the ready-to-copy stride_size per hart type:
     //   DM harts:    stride_size_precomp = entry_size_raw * stride_in_entries  (raw bytes)
@@ -215,16 +216,12 @@ struct dfb_hart_init_entry_t {
                                              // reclaims this byte for remapper_pair_index.
     uint16_t num_entries;                    // bytes 24-25; ring entry count (main update_size path)
     uint16_t capacity;  // bytes 26-27; producer: TC capacity; consumer: 0
-    uint16_t block_size;       // bytes 28-29: how many entries this hart moves in one NoC
-                               // transaction. 1 unless this hart is BLOCKED and its entries
-                               // are adjacent, in which case block_size.
-    uint16_t run_length;       // bytes 30-31: ops on one tile counter before the cursor takes
-                               // the stride2 jump.
-                               // >0 = jumps every run_length; 0 = no jump.
-    uint32_t stride2_precomp;  // bytes 32-35: cursor jump in bytes (DM) or tile units (TRISC)
-                               // after run_length ops.
+    uint16_t block_size;       // how many tiles exist in one block. 1 unless the ring is
+                               // BLOCKED, in which case every hart gets the ring's block size.
+    uint16_t entries_to_jump;  // bytes 30-31: how many tiles the counter's cursor jumps on each
+                               // rotation of tile counters.
 } __attribute__((packed));
-static_assert(sizeof(dfb_hart_init_entry_t) == 36, "dfb_hart_init_entry_t must be 36B");
+static_assert(sizeof(dfb_hart_init_entry_t) == 32, "dfb_hart_init_entry_t must be 32B");
 static_assert(offsetof(dfb_hart_init_entry_t, capacity) == 26, "capacity must occupy former pad bytes 26-27");
 static_assert(offsetof(dfb_hart_init_entry_t, num_entries) == 24, "num_entries must stay at bytes 24-25");
 
@@ -399,7 +396,7 @@ inline uint32_t dm0_isr_blob_byte_size(uint32_t producer_txn_id_mask, uint32_t c
 static_assert(sizeof(dfb_global_header_t) == 96, "dfb_global_header_t size changed — check field alignment");
 static_assert(sizeof(dfb_dm1_remapper_core_header_t) == 4, "dfb_dm1_remapper_core_header_t must be 4 bytes");
 static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
-static_assert(sizeof(dfb_hart_init_entry_t) == 36, "dfb_hart_init_entry_t must be 36B");
+static_assert(sizeof(dfb_hart_init_entry_t) == 32, "dfb_hart_init_entry_t must be 32B");
 
 namespace dfb {
 

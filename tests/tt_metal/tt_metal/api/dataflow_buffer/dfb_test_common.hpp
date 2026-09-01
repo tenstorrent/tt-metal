@@ -308,12 +308,12 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     // Producer kernel
     m2::KernelSpec producer;
     if (p.producer_type == M2PorCType::DM) {
-        const char* producer_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp";
-        if (blocked_to_strided) {
-            producer_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_strided_producer.cpp";
-        } else if (producer_blocked) {
-            producer_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer.cpp";
-        }
+        // One producer kernel per side kind: a BLOCKED producer moves whole blocks (the
+        // interface's split_tc shares the credits when its consumers are STRIDED); everyone
+        // else moves single entries.
+        const char* producer_src = producer_blocked
+                                       ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer.cpp"
+                                       : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp";
         producer = make_dm_kernel(PRODUCER, producer_src, p.num_producers);
         producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
         producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
@@ -368,7 +368,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
                 {"implicit_sync", p.implicit_sync ? 1u : 0u}};
         }
         consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
-    } else {
+    } else {  // Tensix consumer
         consumer = make_compute_kernel(
             CONSUMER,
             "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer_2_0.cpp",
@@ -730,11 +730,8 @@ inline void run_a1_blocked_pipeline(
     };
 
     // Front half: P DM BLOCKED producers → DFB_IN (consumer is the Tensix below, pattern cap_in).
-    const char* producer_src =
-        (cap_in == m2::DFBAccessPattern::STRIDED)
-            ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_strided_producer.cpp"
-            : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer.cpp";
-    auto producer = make_dm_kernel(PRODUCER, producer_src, static_cast<uint8_t>(P));
+    auto producer = make_dm_kernel(
+        PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer.cpp", static_cast<uint8_t>(P));
     producer.dfb_bindings = {
         {.dfb_spec_name = DFB_IN,
          .accessor_name = "out",
@@ -868,7 +865,8 @@ inline void run_a1_fanout_blocked_pipeline(
     uint32_t C,
     uint32_t block_size,
     uint32_t num_entries,
-    bool implicit = false) {
+    bool implicit = false,
+    m2::DFBAccessPattern cap_in = m2::DFBAccessPattern::BLOCKED) {
     if (mesh_device.arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
     }
@@ -918,8 +916,8 @@ inline void run_a1_fanout_blocked_pipeline(
         {.dfb_spec_name = DFB_IN,
          .accessor_name = "in",
          .endpoint_type = m2::DFBEndpointType::CONSUMER,
-         .access_pattern = m2::DFBAccessPattern::BLOCKED,
-         .block_size = block_size},
+         .access_pattern = cap_in,
+         .block_size = (cap_in == m2::DFBAccessPattern::BLOCKED) ? block_size : 0u},
         {.dfb_spec_name = DFB_OUT,
          .accessor_name = "out",
          .endpoint_type = m2::DFBEndpointType::PRODUCER,
@@ -988,7 +986,10 @@ inline void run_a1_fanout_blocked_pipeline(
     for (uint32_t r = 0; r < num_entries; ++r) {
         const uint32_t c = r % C;
         const uint32_t m = r / C;
-        const uint32_t src = (c + (m / bs) * C) * bs + (m % bs);
+        // Which input page Tensix consumer c consumed as its m-th tile. BLOCKED consumers take
+        // whole blocks; STRIDED consumers take their within-block share in ring order, which
+        // composes with the round-robin back half to the identity.
+        const uint32_t src = (cap_in == m2::DFBAccessPattern::BLOCKED) ? ((c + (m / bs) * C) * bs + (m % bs)) : r;
         std::copy(input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + r * wpe);
     }
     if (expected != output) {

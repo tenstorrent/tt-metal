@@ -107,16 +107,100 @@ namespace {
 #if !DFB_IS_COMPUTE_MATH
 
 #ifndef COMPILE_FOR_TRISC
-// Move the current slot's cursor past the n entries this op just handled.
+// Tiles this hart collects from one counter before handing off to the next -- the DM twin of
+// llk_io.h's tiles_to_collect. Not sent: the hart's own stride says how many of its tiles fit
+// inside one block, and under SPLIT every tile of the block belongs to a different counter, so
+// it collects one.
+inline uint32_t dfb_dm_tiles_to_collect(const LocalDFBInterface& intf) {
+    if (intf.split_tc) {
+        return 1u;
+    }
+    const uint32_t stride_entries =
+        (intf.entry_size && intf.stride_size >= intf.entry_size) ? (intf.stride_size / intf.entry_size) : 1u;
+    return (intf.block_size > stride_entries) ? (intf.block_size / stride_entries) : 1u;
+}
+
+// The count each counter takes of an n-entry transaction, and whether it really split: the equal
+// share under SPLIT, or the full count when the count cannot split evenly (or under BROADCAST,
+// where every counter gets everything). Owning both halves of the decision here keeps every
+// caller's wait, credit, and cursor motion agreeing on the same answer.
+struct DfbTcShare {
+    uint16_t per_tc;
+    bool split;
+};
+inline DfbTcShare dfb_dm_per_tc_share(const LocalDFBInterface& intf, uint16_t n) {
+    const bool split = intf.split_tc && (n % intf.num_tcs_to_rr == 0);
+    return {split ? static_cast<uint16_t>(n / intf.num_tcs_to_rr) : n, split};
+}
+
+// Spin until every counter can absorb (producer) or supply (consumer) per_tc entries.
+template <bool is_write, bool fast>
+inline void dfb_dm_all_tc_wait(const LocalDFBInterface& intf, uint32_t per_tc) {
+    bool ready = false;
+    while (!ready) {
+        ready = true;
+        for (uint8_t i = 0; i < intf.num_tcs_to_rr; i++) {
+            dfb::PackedTileCounter ptc = intf.tc_slots[i].packed_tile_counter;
+            const uint8_t tid = dfb::get_tensix_id(ptc);
+            const uint8_t cid = dfb::get_counter_id(ptc);
+            if constexpr (!fast) {
+                ASSERT(overlay::llk_intf_get_capacity(tid, cid) >= per_tc);
+            }
+            const uint32_t level = fast ? (is_write ? overlay::fast_llk_intf_get_free_space(tid, cid)
+                                                    : overlay::fast_llk_intf_get_occupancy(tid, cid))
+                                        : (is_write ? overlay::llk_intf_get_free_space(tid, cid)
+                                                    : overlay::llk_intf_get_occupancy(tid, cid));
+            if (level < per_tc) {
+                ready = false;
+                break;
+            }
+        }
+    }
+}
+
+// Post (producer) or ack (consumer) per_tc credits on every counter.
+template <bool is_write>
+inline void dfb_dm_all_tc_credit(const LocalDFBInterface& intf, uint16_t per_tc) {
+    for (uint8_t i = 0; i < intf.num_tcs_to_rr; i++) {
+        dfb::PackedTileCounter ptc = intf.tc_slots[i].packed_tile_counter;
+        const uint8_t tid = dfb::get_tensix_id(ptc);
+        const uint8_t cid = dfb::get_counter_id(ptc);
+        ASSERT(overlay::llk_intf_get_capacity(tid, cid) >= per_tc);
+        if constexpr (is_write) {
+            overlay::llk_intf_inc_posted(tid, cid, per_tc);
+        } else {
+            overlay::llk_intf_inc_acked(tid, cid, per_tc);
+        }
+    }
+}
+
+// One transaction left a share on every counter: advance every slot's cursor past its share,
+// wrapping to its base. The next transaction is issued at slot 0's cursor.
+template <bool is_write>
+inline void dfb_dm_all_slots_advance(LocalDFBInterface& intf, uint32_t step_bytes) {
+    for (uint8_t i = 0; i < intf.num_tcs_to_rr; i++) {
+        uint32_t& ptr = is_write ? intf.tc_slots[i].wr_ptr : intf.tc_slots[i].rd_ptr;
+        ptr += step_bytes;
+        if (ptr >= intf.tc_slots[i].limit) {
+            ptr = intf.tc_slots[i].base_addr;
+        }
+    }
+}
+
+// Move the current slot's cursor past the n entries this op just handled -- the DM twin of
+// llk_io.h's dfb_advance_slot: collect this counter's entries, then park its bookmark `jump`
+// bytes ahead and rotate to the next counter.
 template <bool is_write>
 inline void dfb_dm_advance_slot(LocalDFBInterface& intf, uint32_t n) {
-    ASSERT(intf.block_size <= 1 || n == intf.block_size);
     auto& slot = intf.tc_slots[intf.tc_idx];
-    const uint32_t run_len = (intf.run_length > 1) ? static_cast<uint32_t>(intf.run_length) : 1u;
-    const uint32_t run_pos_after = (intf.run_length > 1) ? (static_cast<uint32_t>(intf.run_pos) + n) : 1u;
-    ASSERT(run_pos_after <= run_len);
-    const bool completing = run_pos_after >= run_len;
-    const uint32_t advance = (n - 1u) * intf.stride_size + (completing ? intf.stride2 : intf.stride_size);
+    const uint32_t tiles_to_collect = dfb_dm_tiles_to_collect(intf);
+    const uint32_t current_tile_count =
+        (tiles_to_collect > 1u) ? (static_cast<uint32_t>(intf.tiles_collected) + n) : 1u;
+    // One op may cover the whole collection (a hart that takes the block in a single
+    // transaction), so overshooting is legitimate -- the hand-off resets the count either way.
+    ASSERT(current_tile_count <= tiles_to_collect || n >= tiles_to_collect);
+    const bool hand_off = current_tile_count >= tiles_to_collect;
+    const uint32_t advance = (n - 1u) * intf.stride_size + (hand_off ? intf.jump : intf.stride_size);
     if constexpr (is_write) {
         slot.wr_ptr += advance;
         if (slot.wr_ptr >= slot.limit) {
@@ -128,11 +212,11 @@ inline void dfb_dm_advance_slot(LocalDFBInterface& intf, uint32_t n) {
             slot.rd_ptr = slot.base_addr;
         }
     }
-    if (completing) {
-        intf.run_pos = 0;
+    if (hand_off) {
+        intf.tiles_collected = 0;
         intf.tc_idx = (intf.tc_idx + 1) % intf.num_tcs_to_rr;
     } else {
-        intf.run_pos = static_cast<uint16_t>(run_pos_after);
+        intf.tiles_collected = static_cast<uint16_t>(current_tile_count);
     }
 }
 #endif  // !COMPILE_FOR_TRISC
@@ -178,26 +262,9 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
     llk_wait_for_free_tiles(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
-    if (__builtin_expect(local_dfb_interface_.broadcast_tc || local_dfb_interface_.run_length == 0, 0)) {
-        // BROADCAST: every TC receives the full count, so each needs that much room.
-        // SPLIT (run_length == 0): each TC receives count/num_tcs, so each only needs room for its
-        // share, but a count that doesn't divide evenly can't be split, so wait for the full count.
-        const bool split = (local_dfb_interface_.run_length == 0) &&
-                           (num_entries % local_dfb_interface_.num_tcs_to_rr == 0);
-        const uint16_t per_tc =
-            split ? static_cast<uint16_t>(num_entries / local_dfb_interface_.num_tcs_to_rr) : num_entries;
-        bool ready = false;
-        while (!ready) {
-            ready = true;
-            for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
-                dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
-                ASSERT(overlay::llk_intf_get_capacity(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) >= per_tc);
-                if (overlay::llk_intf_get_free_space(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) < per_tc) {
-                    ready = false;
-                    break;
-                }
-            }
-        }
+    if (__builtin_expect(local_dfb_interface_.broadcast_tc || local_dfb_interface_.split_tc, 0)) {
+        // BROADCAST: every TC receives the full count; SPLIT: each TC its share.
+        dfb_dm_all_tc_wait<true, false>(local_dfb_interface_, dfb_dm_per_tc_share(local_dfb_interface_, num_entries).per_tc);
     } else {
         uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
         ASSERT(overlay::llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
@@ -216,29 +283,13 @@ inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
     llk_push_tiles(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
-    if (__builtin_expect(local_dfb_interface_.broadcast_tc || local_dfb_interface_.run_length == 0, 0)) {
+    if (__builtin_expect(local_dfb_interface_.broadcast_tc || local_dfb_interface_.split_tc, 0)) {
         // BROADCAST: post the full count to every TC (every consumer reads every entry).
-        // SPLIT (run_length == 0): post each TC its share, count/num_tcs, but a count that doesn't
-        // divide evenly can't be split, so post the full count instead of rounding down to zero.
-        const bool split = (local_dfb_interface_.run_length == 0) &&
-                           (num_entries % local_dfb_interface_.num_tcs_to_rr == 0);
-        const uint16_t per_tc =
-            split ? static_cast<uint16_t>(num_entries / local_dfb_interface_.num_tcs_to_rr) : num_entries;
-        for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
-            dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
-            ASSERT(overlay::llk_intf_get_capacity(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) >= per_tc);
-            overlay::llk_intf_inc_posted(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc), per_tc);
-        }
-        if (split) {
-            // The block put per_tc entries in every consumer's slots, so advance every slot's write
-            // pointer past its share. The next burst is issued at slot 0's wr_ptr, which now points
-            // at the start of the next block.
-            for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
-                local_dfb_interface_.tc_slots[i].wr_ptr += (per_tc * local_dfb_interface_.stride_size);
-                if (local_dfb_interface_.tc_slots[i].wr_ptr >= local_dfb_interface_.tc_slots[i].limit) {
-                    local_dfb_interface_.tc_slots[i].wr_ptr = local_dfb_interface_.tc_slots[i].base_addr;
-                }
-            }
+        // SPLIT: post each TC its share -- a count that doesn't divide evenly can't be split.
+        const DfbTcShare share = dfb_dm_per_tc_share(local_dfb_interface_, num_entries);
+        dfb_dm_all_tc_credit<true>(local_dfb_interface_, share.per_tc);
+        if (share.split) {
+            dfb_dm_all_slots_advance<true>(local_dfb_interface_, share.per_tc * local_dfb_interface_.stride_size);
         } else {
             // BROADCAST: each entry is written once and every consumer reads that same entry, so
             // there is only one write position to track (slot 0 is used).
@@ -380,10 +431,6 @@ inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
 }
 
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
-// Entries this side moves per NoC transaction: a whole block when BLOCKED with adjacent entries, else 1.
-inline uint32_t DataflowBuffer::get_entries_per_txn_impl() const {
-    return local_dfb_interface_.block_size;
-}
 #endif
 
 #ifndef COMPILE_FOR_TRISC
@@ -398,23 +445,27 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
 
     uint8_t N = local_dfb_interface_.num_tcs_to_rr;
     dfb::PackedTileCounter ptc0 = local_dfb_interface_.tc_slots[0].packed_tile_counter;
-    const uint16_t L = local_dfb_interface_.run_length > 1 ? local_dfb_interface_.run_length : 1u;
-    const uint16_t NL = static_cast<uint16_t>(N * L);
-    const uint16_t block = local_dfb_interface_.block_size;
+    // Tiles this hart leaves on one counter per visit. tiles_to_collect covers walks built from
+    // several transactions; a hart whose single transaction is bigger than that deposits the
+    // whole transaction in one visit, so the visit is whichever is larger.
+    const uint16_t tiles_to_collect = static_cast<uint16_t>(dfb_dm_tiles_to_collect(local_dfb_interface_));
+    const uint16_t visit = (tiles_to_collect > implicit_txn_tiles_) ? tiles_to_collect : implicit_txn_tiles_;
+    const uint16_t NV = static_cast<uint16_t>(N * visit);
     auto expected_for_slot = [&](uint8_t i) -> uint16_t {
-        if (local_dfb_interface_.run_length == 0) {
+        if (local_dfb_interface_.split_tc) {
             return static_cast<uint16_t>(transactions_issued / N);
         }
-        const uint16_t ops = static_cast<uint16_t>(transactions_issued / block);
-        const uint16_t full = static_cast<uint16_t>((ops / NL) * L);
-        const uint16_t rem = ops % NL;
-        const uint16_t start = static_cast<uint16_t>(i * L);
+        // Everything below is in tiles: whole rounds hand every counter `visit`, and the
+        // partial round is walked counter by counter.
+        const uint16_t full = static_cast<uint16_t>((transactions_issued / NV) * visit);
+        const uint16_t rem = transactions_issued % NV;
+        const uint16_t start = static_cast<uint16_t>(i * visit);
         uint16_t part = 0u;
         if (rem > start) {
-            const uint16_t into_run = static_cast<uint16_t>(rem - start);
-            part = (into_run > L) ? L : into_run;
+            const uint16_t into_slot = static_cast<uint16_t>(rem - start);
+            part = (into_slot > visit) ? visit : into_slot;
         }
-        return static_cast<uint16_t>((full + part) * block);
+        return static_cast<uint16_t>(full + part);
     };
     uint16_t expected_slot0 = expected_for_slot(0);
 
@@ -524,10 +575,10 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
 template <bool is_write>
 inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16_t num_entries) {
     ASSERT(
-        local_dfb_interface_.run_length <= 1 &&
+        dfb_dm_tiles_to_collect(local_dfb_interface_) <= 1u &&
         (local_dfb_interface_.block_size > 1
              ? local_dfb_interface_.stride_size == local_dfb_interface_.entry_size
-             : local_dfb_interface_.stride2 == local_dfb_interface_.stride_size));
+             : local_dfb_interface_.jump == local_dfb_interface_.stride_size));
     const auto& s = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
     const uint32_t stride = local_dfb_interface_.stride_size;
     const uint32_t entry = local_dfb_interface_.entry_size;
@@ -584,7 +635,7 @@ inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
 
 // Preamble for implicit-sync read: spin until previous reads are posted and there is space in the tile counters.
 // Returns the txn_id to stamp on the next NOC read.
-inline uint32_t DataflowBuffer::prepare_implicit_read() {
+inline uint32_t DataflowBuffer::prepare_implicit_read(uint32_t num_tiles) {
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
@@ -600,59 +651,32 @@ inline uint32_t DataflowBuffer::prepare_implicit_read() {
     while (static_cast<int16_t>(
         static_cast<uint16_t>(overlay::fast_llk_intf_read_posted(tensix_id, tc_id)) -
         static_cast<uint16_t>(ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
-    // A transaction fills `block_size` entries, so wait for room for all of them.
-    // This is 1 by default in the non-blocked case.
-    // Under SPLIT (run_length == 0) the block spans every TC, so wait for each TC's share on each TC.
-    // A broadcasting block producer posts the whole block to every TC, so wait for the full block
-    // on each.
-    if (__builtin_expect(local_dfb_interface_.run_length == 0, 0)) {
-        const uint32_t per_tc = local_dfb_interface_.block_size / local_dfb_interface_.num_tcs_to_rr;
-        bool ready = false;
-        while (!ready) {
-            ready = true;
-            for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
-                dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
-                if (overlay::fast_llk_intf_get_free_space(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) <
-                    per_tc) {
-                    ready = false;
-                    break;
-                }
-            }
-        }
-    } else if (__builtin_expect(local_dfb_interface_.broadcast_tc && local_dfb_interface_.block_size > 1, 0)) {
-        bool ready = false;
-        while (!ready) {
-            ready = true;
-            for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
-                dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
-                if (overlay::fast_llk_intf_get_free_space(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) <
-                    local_dfb_interface_.block_size) {
-                    ready = false;
-                    break;
-                }
-            }
-        }
+    // The kernel says how many tiles this transaction fills; wait for room for all of them.
+    // Under SPLIT the transaction spans every TC, so wait for each TC's share on each TC. A count
+    // that doesn't divide evenly can't be split, so wait for the full count instead.
+    // A broadcasting block producer posts the whole count to every TC, so wait for it on each.
+    if (__builtin_expect(local_dfb_interface_.split_tc, 0)) {
+        dfb_dm_all_tc_wait<true, true>(
+            local_dfb_interface_, dfb_dm_per_tc_share(local_dfb_interface_, num_tiles).per_tc);
+    } else if (__builtin_expect(local_dfb_interface_.broadcast_tc && num_tiles > 1, 0)) {
+        dfb_dm_all_tc_wait<true, true>(local_dfb_interface_, num_tiles);
     } else {
-        while (overlay::fast_llk_intf_get_free_space(tensix_id, tc_id) < local_dfb_interface_.block_size);
+        while (overlay::fast_llk_intf_get_free_space(tensix_id, tc_id) < num_tiles);
     }
     WAYPOINT("PIRD");
     return txn_id;
 }
 
 // Postamble for implicit-sync read: advance wr_ptr, tile/txn counters, and tc_idx.
-inline void DataflowBuffer::commit_implicit_read() {
-    // Runs once per transaction, which carries `block` entries, so advance by that much.
-    // This is 1 by default in the non-blocked case.
-    const uint32_t block = local_dfb_interface_.block_size;
-    if (__builtin_expect(local_dfb_interface_.run_length == 0, 0)) {
-        const uint32_t per_tc_step =
-            (block / local_dfb_interface_.num_tcs_to_rr) * local_dfb_interface_.stride_size;
-        for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
-            local_dfb_interface_.tc_slots[i].wr_ptr += per_tc_step;
-            if (local_dfb_interface_.tc_slots[i].wr_ptr >= local_dfb_interface_.tc_slots[i].limit) {
-                local_dfb_interface_.tc_slots[i].wr_ptr = local_dfb_interface_.tc_slots[i].base_addr;
-            }
-        }
+inline void DataflowBuffer::commit_implicit_read(uint32_t num_tiles) {
+    // Runs once per transaction; the kernel said how many tiles it carried.
+    const uint32_t block = num_tiles;
+    implicit_txn_tiles_ = static_cast<uint16_t>(block);
+    if (__builtin_expect(local_dfb_interface_.split_tc, 0)) {
+        dfb_dm_all_slots_advance<true>(
+            local_dfb_interface_,
+            dfb_dm_per_tc_share(local_dfb_interface_, static_cast<uint16_t>(block)).per_tc *
+                local_dfb_interface_.stride_size);
     } else if (__builtin_expect(local_dfb_interface_.broadcast_tc && block > 1, 0)) {
         local_dfb_interface_.tc_slots[0].wr_ptr += local_dfb_interface_.stride_size * block;
         if (local_dfb_interface_.tc_slots[0].wr_ptr >= local_dfb_interface_.tc_slots[0].limit) {
@@ -670,7 +694,7 @@ inline void DataflowBuffer::commit_implicit_read() {
 
 // Preamble for implicit-sync write: spin until previous writes are acked and data is available in the tile counters.
 // Returns the txn_id to stamp on the next NOC write.
-inline uint32_t DataflowBuffer::prepare_implicit_write() {
+inline uint32_t DataflowBuffer::prepare_implicit_write(uint32_t num_tiles) {
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
@@ -681,18 +705,17 @@ inline uint32_t DataflowBuffer::prepare_implicit_write() {
     while (static_cast<int16_t>(
         static_cast<uint16_t>(overlay::fast_llk_intf_read_acked(tensix_id, tc_id)) -
         static_cast<uint16_t>(ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
-    // A transaction drains `block_size` entries, so wait until that many are available.
-    // This is 1 by default in the non-blocked case.
-    while (overlay::fast_llk_intf_get_occupancy(tensix_id, tc_id) < local_dfb_interface_.block_size);
+    // The kernel says how many tiles this transaction drains; wait until they are available.
+    while (overlay::fast_llk_intf_get_occupancy(tensix_id, tc_id) < num_tiles);
     WAYPOINT("PIWD");
     return txn_id;
 }
 
 // Postamble for implicit-sync write: advance rd_ptr, tile/txn counters, and tc_idx.
-inline void DataflowBuffer::commit_implicit_write() {
-    // Runs once per transaction, which drains `block` entries, so advance by that much.
-    // This is 1 by default in the non-blocked case.
-    const uint32_t block = local_dfb_interface_.block_size;
+inline void DataflowBuffer::commit_implicit_write(uint32_t num_tiles) {
+    // Runs once per transaction; the kernel said how many tiles it drained.
+    const uint32_t block = num_tiles;
+    implicit_txn_tiles_ = static_cast<uint16_t>(block);
     dfb_dm_advance_slot</*is_write=*/false>(local_dfb_interface_, block);
     ctiles_written_ += block;
     if (ctiles_written_ % local_dfb_interface_.num_entries_per_txn_id == 0) {
@@ -712,23 +735,22 @@ Noc::async_read(
     DataflowBuffer& dst,
     const typename noc_traits_t<Src>::src_args_type& src_args,
     const DataflowBufferArgs& dst_args) const {
-    // Implicit sync always issues one full-entry read at get_noc_write_addr() and advances wr_ptr by
-    // stride_size in commit_implicit_read(); offset_bytes is ignored, so a non-zero offset would
-    // land data in the wrong place while still posting a full entry's credit.
+    // Implicit sync reads land at get_noc_write_addr() and commit_implicit_read() advances the
+    // cursor by whole entries; offset_bytes is ignored, so a non-zero offset would land data in
+    // the wrong place while still posting whole-entry credits.
     ASSERT(dst_args.offset_bytes == 0);
-    uint32_t txn_id = dst.prepare_implicit_read();
+    uint32_t txn_id = dst.prepare_implicit_read(dst_args.num_entries);
     noc_async_read_set_trid(txn_id, noc_id_);
     while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
-    // Move a whole block in one NOC transaction.
-    // A block is size 1 in the non-blocked case.
+    // Move as many entries as the kernel says one of its transactions carries.
     noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
         get_src_ptr<AddressType::NOC>(src, src_args),
         // Use cached addresses for NOC APIs
         dst.get_noc_write_addr(),
-        dst.get_entry_size() * dst.get_entries_per_txn(),
+        dst.get_entry_size() * dst_args.num_entries,
         noc_id_,
         NOC_UNICAST_WRITE_VC);
-    dst.commit_implicit_read();
+    dst.commit_implicit_read(dst_args.num_entries);
 }
 
 template <NocOptions opts, typename Dst>
@@ -738,16 +760,15 @@ Noc::async_write(
     const Dst& dst,
     const DataflowBufferArgs& src_args,
     const typename noc_traits_t<Dst>::dst_args_type& dst_args) const {
-    // Same contract as async_read above: implicit sync always transfers get_entry_size() bytes from
+    // Same contract as async_read above: implicit sync always transfers whole entries from
     // get_noc_read_addr() and ignores offset_bytes.
     ASSERT(src_args.offset_bytes == 0);
-    uint32_t txn_id = src.prepare_implicit_write();
+    uint32_t txn_id = src.prepare_implicit_write(src_args.num_entries);
     // Use cached addresses for NOC APIs
     auto src_addr = src.get_noc_read_addr();
     auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
-    // Drain a whole block in one transaction.
-    // A block is size 1 in the non-blocked case.
-    const uint32_t txn_bytes = src.get_entry_size() * src.get_entries_per_txn();
+    // Drain as many entries as the kernel says one of its transactions carries.
+    const uint32_t txn_bytes = src.get_entry_size() * src_args.num_entries;
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, txn_bytes, -1, false, noc_id_);
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, txn_bytes);
     // DPRINT("Issue the write\n");
@@ -764,7 +785,7 @@ Noc::async_write(
         true,    // multicast_path_reserve
         false,   // posted == false (NocOptions::POSTED not set)
         txn_id);
-    src.commit_implicit_write();
+    src.commit_implicit_write(src_args.num_entries);
 }
 
 #else  // COMPILE_FOR_TRISC
