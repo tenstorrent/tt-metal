@@ -21,6 +21,11 @@ struct BlackholeStatsSelectorParams {
     bool compact_two_pass_fits_in_l1;
 };
 
+inline constexpr std::uint32_t kBf16FusedResidualNarrowMaxWidth = 256;
+inline constexpr std::uint32_t kBf16FusedResidualWideMinWidth = 2880;
+inline constexpr std::uint32_t kBfp8FusedResidualWideMinWidth = 2880;
+inline constexpr std::uint32_t kBf16PartialAffineMinWidth = 3232;
+
 // Crossover points measured against the centred tile-reduction path.
 // FP32 uses shifted two-pass statistics at every width. The tile reducer has
 // better ULP behaviour for ordinary parameter-free inputs, but its TF32 intake
@@ -49,16 +54,17 @@ constexpr bool use_blackhole_sfpu_stats(const BlackholeStatsSelectorParams& para
     }
     if (params.fuse_pre_add && has_full_affine) {
         if (params.input_format == tt::DataFormat::Float16_b) {
-            return params.padded_width <= 256 || params.padded_width >= 2880;
+            return params.padded_width <= kBf16FusedResidualNarrowMaxWidth ||
+                   params.padded_width >= kBf16FusedResidualWideMinWidth;
         }
-        return params.input_format == tt::DataFormat::Bfp8_b && params.padded_width >= 2880;
+        return params.input_format == tt::DataFormat::Bfp8_b && params.padded_width >= kBfp8FusedResidualWideMinWidth;
     }
 
     if (has_full_affine) {
         return params.input_format == tt::DataFormat::Float16_b;
     }
 
-    return params.input_format == tt::DataFormat::Float16_b && params.padded_width >= 3232;
+    return params.input_format == tt::DataFormat::Float16_b && params.padded_width >= kBf16PartialAffineMinWidth;
 }
 
 constexpr StatisticsBackend select_interleaved_statistics_backend(
