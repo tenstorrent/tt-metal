@@ -4259,6 +4259,42 @@ void PerfDebugProfiler::set_drisc_niu_mode(
 //
 // Learned the hard way, twice in one session from unrelated causes: card FW below the DRISC gate, and a
 // drain kernel that failed to JIT-compile. Both looked like a hung test.
+// DEFENCE IN DEPTH for the resident-eth ring accounting. The rebase at session start should make this
+// unreachable, but an unbounded spin whose only escape is broadcast to the WRONG CORE TYPE is the actual
+// reason a ring-accounting slip escalated into a wedged card and a dead session: disarm_producers() walks
+// compute_with_storage_grid_size() with CoreType::WORKER and the TENSIX profiler address, so it has never
+// reached an eth core, and it only runs in the no-drainer fallback anyway.
+//
+// So on EVERY normal stop, set PROFILER_TERMINATE on the eth lanes too. While set, a producer that finds
+// a full ring proceeds instead of blocking -- markers are dropped, the erisc keeps servicing its router
+// and keeps yielding to base FW, and the next session can still bring the link up. The next session's
+// control-vector rebase clears the flag again, so this costs nothing while things are healthy.
+void PerfDebugProfiler::terminate_eth_producers() {
+    const uint32_t one = 1;
+    for (const auto& ctx : devices_) {
+        if (ctx.eth_prof_l1 == 0 || ctx.n_eth_cores == 0) {
+            continue;
+        }
+        auto& cluster = MetalContext::instance().get_cluster();
+        for (uint32_t k = 0; k < ctx.n_eth_cores; k++) {
+            const uint32_t idx = ctx.eth_start + k;
+            if (idx >= ctx.core_virt.size()) {
+                break;
+            }
+            const CoreCoord v{ctx.core_virt[idx].first, ctx.core_virt[idx].second};
+            try {
+                cluster.write_core(
+                    &one,
+                    sizeof(one),
+                    tt_cxy_pair(ctx.chip_id, v),
+                    ctx.eth_prof_l1 + kernel_profiler::PROFILER_TERMINATE * sizeof(uint32_t));
+            } catch (const std::exception&) {
+                // A core we cannot reach is not one this can rescue; the rebase is the primary fix.
+            }
+        }
+    }
+}
+
 void PerfDebugProfiler::disarm_producers(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t device_id) {
     const auto context_id = mesh_device->impl().get_context_id();
@@ -4440,8 +4476,35 @@ bool PerfDebugProfiler::boot_device(
             const uint32_t vx = static_cast<uint32_t>(eth_virt[k].x), vy = static_cast<uint32_t>(eth_virt[k].y);
             coords[idx] = (vx & 0xFFFFu) | ((vy & 0xFFFFu) << 16);
             ctx.core_of_xy[coords[idx]] = idx;
+            // REBASE, NOT A ZERO -- this line used to write zero_ctrl and that is what wedged cards.
+            //
+            // A WORKER's kernel relaunches per program, so its producer-local `wIndex` resets alongside a
+            // zeroed HEAD and the two stay in step. An eth core running a RESIDENT router never relaunches:
+            // `wIndex` persists across profiler sessions. Zeroing HEAD here therefore makes
+            // (wIndex - HEAD) == wIndex, and the moment that exceeds RING_USABLE the ring LOOKS permanently
+            // full -- the next checked emit parks in ring_ensure_room_slow's unbounded spin, the erisc never
+            // returns to the router loop or calls risc_context_switch(), base FW never ticks its heartbeat,
+            // and the NEXT session's device open dies at llrt.cpp:603 with "Timed out while waiting for
+            // active ethernet core ... to become active again".
+            //
+            // Measured on bh-31 (ring 506 usable words, 64 words/round): 6 rounds = 384 w survived,
+            // 11 rounds = 704 w wedged at session 2. So carry HEAD forward to the producer's own published
+            // TAIL rather than resetting it under a producer that never restarted.
+            std::vector<uint32_t> eth_ctrl(zero_ctrl.size() / sizeof(uint32_t), 0);
+            {
+                std::vector<uint32_t> live(zero_ctrl.size() / sizeof(uint32_t), 0);
+                cluster.read_core(
+                    live.data(), (uint32_t)zero_ctrl.size(), tt_cxy_pair(device_id, eth_virt[k]), eth_prof_l1);
+                for (uint32_t r = 0; r < kernel_profiler::PROFILER_SPSC_MAX_RISC; r++) {
+                    // HEAD := TAIL leaves (wIndex - HEAD) at the handful of words the producer wrote but
+                    // has not published yet, instead of its whole lifetime count.
+                    const uint32_t tail = live[kernel_profiler::SPSC_RING_TAIL_0 + r];
+                    eth_ctrl[kernel_profiler::SPSC_RING_HEAD_0 + r] = tail;
+                    eth_ctrl[kernel_profiler::SPSC_RING_TAIL_0 + r] = tail;
+                }
+            }
             cluster.write_core(
-                zero_ctrl.data(), (uint32_t)zero_ctrl.size(), tt_cxy_pair(device_id, eth_virt[k]), eth_prof_l1);
+                eth_ctrl.data(), (uint32_t)zero_ctrl.size(), tt_cxy_pair(device_id, eth_virt[k]), eth_prof_l1);
             // SPSC_CORE_XY, which on a WORKER the BRISC FW rewrites at every launch (after this
             // zeroing). An eth core gets no launches while a resident router runs, so the identity
             // must come from here -- without it every eth span frame decodes as unknown-core and is
@@ -6386,6 +6449,7 @@ void PerfDebugProfiler::stop() {
     stop_drift_corrector();
     stop_fabric_sync();  // before stop_eth_tracker: the teardown cross-check reads the tracker's edges
     stop_eth_tracker();
+    terminate_eth_producers();
     cross_path_tracking_test();
     check_sync_drift_at_close();
     check_anchor_staleness_at_close();

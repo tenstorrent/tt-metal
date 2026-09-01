@@ -309,6 +309,9 @@ private:
     void log_fabric_sync_closure(bool final_report);
     // Draw the sync exchanges onto the eth lanes that carried them (initiator zone, responder marker).
     void render_fabric_sync_into_tracy();
+    // Set PROFILER_TERMINATE on the ETH lanes at stop, so a resident router can never park in the
+    // full-ring spin (whose only escape disarm_producers() broadcasts to workers only).
+    void terminate_eth_producers();
     void fabric_sync_disable_devices();  // early in stop(): no new rounds while the drain quiesces
     void stop_fabric_sync();
 
