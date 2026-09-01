@@ -4,7 +4,8 @@
 
 // Thin wrapper around compute_kernel_lib::reduce<>. The input data format is deduced from the input
 // CB id inside the helper, so Int32 MAX, MIN and SUM are routed to the SFPU path automatically;
-// otherwise FPU/GMPOOL. float/bf16 MIN is lowered to -MAX(-x) via reduce_{h,w}_neg on the host.
+// otherwise FPU/GMPOOL. Accurate fp32 also uses the SFPU; fast-mode float/bf16 MIN is lowered to
+// -MAX(-x) via reduce_{h,w}_neg on the host.
 
 #include <cstdint>
 #include "api/compute/cb_api.h"
@@ -15,7 +16,7 @@ void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
     uint32_t NC = get_compile_time_arg_val(2);
-    // Accurate fp32 mean: host sets CT arg 4 to route Float32 SUM through the SFPU (full fp32) vs the FPU (tf32).
+    // Accurate fp32: host sets CT arg 4 to route Float32 through the SFPU (full fp32) vs the FPU (tf32).
     constexpr auto fp32_mode = get_compile_time_arg_val(4) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);

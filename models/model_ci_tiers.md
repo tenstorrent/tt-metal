@@ -62,7 +62,10 @@ it is classified differently on different systems.
 | Flux.1-dev | BH QuietBox 2, BH Single Galaxy |
 | Wan2.2-T2V-A14B | WH Galaxy, BH SC4 |
 | Wan2.2-I2V-A14B | WH Galaxy, BH SC4 |
+| Z-Image-Turbo | BH QuietBox 2 |
 | TT-DiT (shared) | WH N150, BH QuietBox 2 |
+| TT-DiT encoders (shared) | WH LLMBox |
+| TT-Transformers (shared) | WH LLMBox |
 | ResNet-50 | WH N150, WH LLMBox, BH P150b |
 ## Tier 2 Models
 | Model | Systems |
@@ -87,6 +90,8 @@ it is classified differently on different systems.
 | Gemma-4-31B | WH LLMBox |
 | Stable Diffusion XL | WH N150, WH N300, BH P150 |
 | ViT | WH N150, WH N300 |
+| Motif-Image-6B | WH LLMBox |
+| BGE-M3 | WH N150 |
 ## Tier 3 Models
 | Model | Systems |
 |-------|---------|
@@ -101,6 +106,8 @@ it is classified differently on different systems.
 | Qwen2.5-7B | WH N300 |
 | Qwen2.5-72B | WH LLMBox |
 | Qwen2.5-VL-32B | WH LLMBox, BH QuietBox 2 |
+| Qwen3-0.6B | WH N150, BH P150 |
+| Qwen3-1.7B | WH N150, BH P150 |
 | Gemma-4-E2B | WH N150, BH P150 |
 | Gemma-4-E4B | BH P300, BH QuietBox 2 |
 | Mamba-2.8B | WH N150 |
@@ -110,12 +117,20 @@ it is classified differently on different systems.
 | BEVFormer | BH P150 |
 | Mistral-Small-3.1-24B | WH LLMBox, BH QuietBox 2 |
 | Stable Diffusion 3.5 Large | WH LLMBox |
+| Mochi-1-preview | WH LLMBox, WH Galaxy |
 | VGGNet | WH N150 |
 | BERT-Tiny | WH N150 |
 | BERT-Large | WH N150 |
 | DistilBERT | WH N150 |
 | SqueezeBERT | WH N150 |
 | MNIST MLP classifier | WH N150 |
+| EfficientDet-D0 | WH N150 |
+| MobileNetV3 | WH N150 |
+| RetinaNet | WH N150 |
+| SSD512 | WH N150 |
+| VAD v2 | WH N150 |
+| OpenPDN-MNIST | WH N150 |
+| YuNet | WH N150 |
 
 
 # Pipelines

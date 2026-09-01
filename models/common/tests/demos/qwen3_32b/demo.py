@@ -46,16 +46,16 @@ from loguru import logger
 from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
-from models.common.models.executor import (
+from models.common.models.qwen3_32b.executor import EagerQwen3_32BExecutor, TracedQwen3_32BExecutor
+from models.common.models.qwen3_32b.model import QWEN3_32B_ACCURACY, QWEN3_32B_PERFORMANCE, Qwen3_32B
+from models.common.sampling.sampling_params import SamplingParams
+from models.common.tests.demos.cleanup_utils import cleanup_model_case
+from models.common.tests.demos.run_helpers import (
     load_eval_repeat_prompts_batch32,
     run_eval_repeat_batch32,
     run_perf_benchmark,
     run_teacher_forcing,
 )
-from models.common.models.qwen3_32b.executor import EagerQwen3_32BExecutor, TracedQwen3_32BExecutor
-from models.common.models.qwen3_32b.model import QWEN3_32B_ACCURACY, QWEN3_32B_PERFORMANCE, Qwen3_32B
-from models.common.sampling.sampling_params import SamplingParams
-from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -94,7 +94,7 @@ EXPECTED_METRICS: dict = {
 # -k batch-1, "Average speed"): perf 27.1 t/s/u (36.9ms/step, TTFT 118.8ms), acc 22.57 (44.3ms/step).
 #
 # DECODE GAP CLOSED (issue #49282, fixed by #49284). The base now carries the shared on-device decode
-# loop + pipelined non-blocking readback (models/common/models/executor.py), and it IS wired into this
+# loop + pipelined non-blocking readback (model-owned traced executor), and it IS wired into this
 # model (TracedQwen3_32BExecutor(ondevice_decode_loop=...) on the perf path). That removes the per-step
 # host round-trip (blocking readback + synchronize_device) that made TTTv2 ~35% slower at batch-1 on the
 # old base (c93ed50, which had no on-device decode loop). On a healthy box TTTv2 on_device_topk reaches
@@ -158,11 +158,9 @@ EXPECTED_METRICS_BATCH32: dict = {
 # prefill matmuls cuts ci-32 TTFT: same-box median-of-3 (2026-07-25) perf 47.3ms (OFF) -> 40.3ms (ON),
 # acc ~56 -> 48.8ms — closing most of the old +28/36% gap vs TTTv1 (perf 37.4 / acc 41.5ms) down to
 # ~+8% / +18%. Accuracy is unchanged with it ON (eval-32 64/64 host, batched ON+OFF; token-accuracy
-# 90.6/98.6 perf, 96.7/100 acc). The residual TTFT gap is the shared-engine batched-prefill FOLD term
-# (32 users -> passes capped at max_prefill_batch_size vs TTTv1's single pass); the fold-cap lever is
-# dead (8->32 single-pass moved TTFT only ~1ms), so it is NOT per-model closeable and is escalated as a
-# shared-engine item. The ttft gate is a CEILING TTTv2 clears (batched-ON ~40/49 << the sequential-OFF
-# ~103/113); the tolerance-free parity RED lives in PR.md, not a lowered gate.
+# 90.6/98.6 perf, 96.7/100 acc). The ttft gate is a CEILING TTTv2 clears
+# (batched-ON ~40/49 << the sequential-OFF ~103/113); the tolerance-free parity RED lives in PR.md,
+# not a lowered gate.
 EXPECTED_METRICS_BATCH32_CI: dict = {
     "host": {
         "performance": {},
@@ -172,8 +170,7 @@ EXPECTED_METRICS_BATCH32_CI: dict = {
         # best-of{TTTv2, same-box TTTv1 ci-32}. Decode: TTTv2 25.3/20.5 vs TTTv1 25.75/20.89 — ~1.7/1.9%
         # under (diffuse shared-engine per-step delta; NOT lowered to the TTTv2 number — see PR.md).
         # ttft is a CEILING TTTv2 clears (minimal_matmul-ON batched ~40/49 << the sequential-OFF ~103/113);
-        # the tolerance-free TTFT parity RED (residual batched-prefill fold, +8/18% after minimal_matmul)
-        # is documented in PR.md + the shared-gap ticket.
+        # the tolerance-free TTFT parity RED is documented in PR.md + the shared-gap ticket.
         "performance": {"T3K": {"tok_s_u": 25.7, "ttft_ms": 110}},
         "accuracy": {"T3K": {"tok_s_u": 20.8, "ttft_ms": 120}},
     },
@@ -307,6 +304,46 @@ def lazy_weight_cache_dir_for_demo(mesh_device: ttnn.MeshDevice, hf_model_id: st
     root.mkdir(parents=True, exist_ok=True)
     logger.info(f"Qwen3-32B demo LazyWeight cache directory: {root.resolve()}")
     return root
+
+
+def _warmup_demo_executor(
+    executor,
+    *,
+    kv_cache,
+    page_table,
+    prefill_compile_case=None,
+    prefill_sampling_params=None,
+    prefill_compile_execution=None,
+):
+    """Compile eager programs and representative requests before trace activation."""
+    config = executor.config
+    prefill_kwargs = {
+        "kv_cache": kv_cache,
+        "can_sample_on_device": config.device_sampling_enabled,
+    }
+    decode_kwargs = {
+        "kv_cache": kv_cache,
+        "max_batch_size": int(executor.model.config.max_batch_size),
+        "num_blocks": int(page_table.shape[-1]),
+        "can_sample_on_device": config.device_sampling_enabled,
+    }
+    executor.warmup_model_decode(enable_trace=False, **decode_kwargs)
+    executor.warmup_model_prefill(enable_trace=False, **prefill_kwargs)
+    if prefill_compile_case is not None:
+        tokens, prompt_lens = prefill_compile_case
+        executor.compile_prefill(
+            tokens=tokens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            empty_slots=list(range(tokens.shape[0])),
+            sampling_params=prefill_sampling_params,
+            execution=prefill_compile_execution if prefill_compile_execution is not None else executor.eager_execution,
+        )
+    if config.trace.prefill_enabled:
+        executor.warmup_model_prefill(enable_trace=True, **prefill_kwargs)
+    if config.trace.decode_enabled:
+        executor.warmup_model_decode(enable_trace=True, **decode_kwargs)
 
 
 def ref_basename_for_hf(hf_model_id: str) -> str:
@@ -1183,14 +1220,6 @@ def _run_eval_repeat_batch32(model, mesh_device):
     kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
     page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
 
-    # Fresh traced executor + zeroed KV cache per repeat (driver owns the lifecycle), so the rotated
-    # batches are fully independent — see run_eval_repeat_batch32 for why reuse corrupts the 3rd repeat.
-    def make_executor():
-        return TracedQwen3_32BExecutor(model, mesh_device)
-
-    def allocate_kv_cache(executor):
-        return executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-
     # TTTv1 ci-eval-32 numeric prompts (parity).
     prompts = load_eval_repeat_prompts_batch32()
 
@@ -1207,7 +1236,29 @@ def _run_eval_repeat_batch32(model, mesh_device):
         if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
         else None
     )
+    representative_prefill = tokenize_fn(prompts)
     logger.info(f"[eval-32] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
+
+    # Fresh traced executor + zeroed KV cache per repeat (driver owns the lifecycle), so the rotated
+    # batches are fully independent — see run_eval_repeat_batch32 for why reuse corrupts the 3rd repeat.
+    def make_executor():
+        return TracedQwen3_32BExecutor(
+            model,
+            mesh_device,
+            ondevice_decode_loop=sampling_params is not None,
+            trace_mode="decode_only",
+        )
+
+    def allocate_kv_cache(executor):
+        kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
+        _warmup_demo_executor(
+            executor,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            prefill_compile_case=representative_prefill,
+            prefill_sampling_params=sampling_params,
+        )
+        return kv_cache
 
     run_eval_repeat_batch32(
         make_executor=make_executor,

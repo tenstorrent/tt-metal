@@ -13,7 +13,7 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
-#include "tt-metalium/experimental/internal/blitz_decode_pipeline.hpp"
+#include "internal/blitz_decode_pipeline.hpp"
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 
 namespace ttnn::pipeline_module {
@@ -235,11 +235,13 @@ void bind_pipeline_builder(nb::module_& mod) {
 
     mod.def(
         "resolve_graph_layout",
-        [](const std::vector<tt::tt_fabric::EdgeInputTuple>& edges,
+        [](const std::vector<std::string>& nodes,
+           const std::vector<tt::tt_fabric::EdgeInputTuple>& edges,
            const std::vector<std::vector<tt::tt_fabric::ChipTuple>>& submesh_chips,
            const std::map<std::string, uint32_t>& node_chip_counts) -> tt::tt_fabric::GraphLayoutResult {
-            return tt::tt_fabric::resolve_graph_layout(edges, submesh_chips, node_chip_counts);
+            return tt::tt_fabric::resolve_graph_layout(nodes, edges, submesh_chips, node_chip_counts);
         },
+        nb::arg("nodes") = std::vector<std::string>{},
         nb::arg("edges"),
         nb::arg("submesh_chips"),
         nb::arg("node_chip_counts") = std::map<std::string, uint32_t>{},
@@ -251,9 +253,15 @@ void bind_pipeline_builder(nb::module_& mod) {
             topological sort and backtracking submesh assignment.
 
             Args:
+                nodes:         List of all node names in declaration order.  Authoritative
+                               node list, so graphs whose nodes are not all covered by
+                               edges (e.g. a single-stage pipeline with no edges) are
+                               handled.  Every endpoint referenced by ``edges`` must appear
+                               here or a RuntimeError is raised.
                 edges:         List of (src_name, dst_name, is_loopback) tuples describing
                                the pipeline graph.  Set is_loopback=True for the return
-                               edge from the last stage back to stage 0.
+                               edge from the last stage back to stage 0.  A self-loop
+                               (src == dst) is allowed and satisfied trivially.
                 submesh_chips: For each submesh, a list of (mesh_id, chip_id, row, col)
                                tuples (obtained from submesh.get_fabric_node_id()).
                 node_chip_counts: Optional {node_name: expected_chip_count} map. When a

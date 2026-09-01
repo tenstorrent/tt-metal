@@ -13,6 +13,7 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from ....pipelines.events import profiler_event_callback
 from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
+from ....utils.test import line_params_req_exact_devices, skip_if_unsupported_num_links
 
 
 @pytest.mark.parametrize(
@@ -31,17 +32,18 @@ from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
         [(4, 8), 1, 0, (4, 8), 0, 1, ttnn.Topology.Linear, 2],  # note sp <-> tp switch for VAE for memory efficiency.
     ],
     ids=[
-        "dit_2x2sp0tp1_vae_1x4sp0tp1_BH_QB",
-        "dit_2x4sp0tp1_vae_1x4sp0tp1_BH_LB",
-        "dit_2x4sp0tp1_vae_1x8sp0tp1",
-        "dit_4x8sp1tp0_vae_4x8sp0tp1",
-        "dit_4x8sp1tp0_vae_4x8sp0tp1_BH_GLX",
+        "dit_2x2sp0tp1_vae_1x4sp0tp1nl2",
+        "dit_2x4sp0tp1_vae_1x8sp0tp1nl2",
+        "dit_2x4sp0tp1_vae_1x8sp0tp1nl1",
+        "dit_4x8sp1tp0_vae_4x8sp0tp1nl4",
+        "dit_4x8sp1tp0_vae_4x8sp0tp1nl2",
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [line_params_req_exact_devices],
+    ids=["line"],
     indirect=True,
 )
 def test_mochi_pipeline_performance(
@@ -65,6 +67,8 @@ def test_mochi_pipeline_performance(
     galaxy_type: str,
 ) -> None:
     """Performance test for Mochi pipeline with detailed timing analysis."""
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
 
     benchmark_profiler = BenchmarkProfiler()
 

@@ -118,7 +118,7 @@
 
 # RL Examples
 - name: "Llama 3.2 1B on BoolQ GRPO Training"
-  cmd: python tt-train/sources/examples/grpo/boolq_training_example.py
+  cmd: python tt-train/sources/examples/grpo/boolq/boolq_training_example.py
   skus:
     bh_p150b_civ2:
       timeout: 45
@@ -127,7 +127,7 @@
   team: train
 
 - name: "Llama 3.2 1B on BoolQ GRPO Accuracy"
-  cmd: python tt-train/sources/examples/grpo/boolq_accuracy_example.py
+  cmd: python tt-train/sources/examples/grpo/boolq/boolq_accuracy_example.py
   skus:
     bh_p150b_civ2:
       timeout: 10

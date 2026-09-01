@@ -32,19 +32,20 @@ from loguru import logger
 import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
-from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import generate_pcc_plots, write_pcc_summary
 from models.demos.deepseek_v3_d_p.utils.test_utils import save_intermediate_output
@@ -80,9 +81,6 @@ DETERMINISM_PCC_THRESHOLD = 1.0
 INFINITEBENCH_SUBSET_NAMES = {"longbook_qa_eng"}
 # input_source meaning "this variant's own golden" — naming it after a prompt would go stale.
 VARIANT_DEFAULT_TRACE = "variant_default"
-SEQ_LEN_1K = 1024
-SEQ_LEN_5K = 5120
-SEQ_LEN_25K = 25600
 
 
 def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_padded_tokens, padding_side):
@@ -427,12 +425,13 @@ def run_model(
 
     # Sparse single-shot is folded onto the block-cyclic path, so (like chunked) it needs the caller-owned,
     # user-major layer-stacked indexer key cache [num_users*index_cache_layers, 1, T, D_idx]. Unlike the
-    # per-layer KVPE cache, the indexer stride is the COMPACTED full-indexer count (num_full_indexer_layers)
-    # for GLM-5.2 cross-layer reuse — "shared" layers reuse a "full" layer's cache and get no slot of their
-    # own — falling back to num_layers when there is no indexer_types map. Dense variants use no index cache.
+    # per-layer KVPE cache, the indexer stride is the COMPACTED full-indexer count over the layers this
+    # instance builds — GLM-5.2 "shared" layers reuse a "full" layer's cache and get no slot of their own.
+    # full_indexer_rank returns num_layers unchanged when there is no indexer_types map. Dense variants use
+    # no index cache.
     tt_index_kv_cache = None
     if has_indexer:
-        index_cache_layers = num_full_indexer_layers(config) or num_layers
+        index_cache_layers = full_indexer_rank(config, num_layers)
         tt_index_kv_cache = init_kvpe_cache(
             kvpe_cache_head_dim=config.index_head_dim,
             mesh_device=mesh_device,
@@ -854,7 +853,8 @@ def run_model(
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_1K, 8), (SEQ_LEN_25K, 8)],
+    [(PREFILL_CHUNK_TOKENS, 8)],
+    ids=["isl_5k"],
 )
 @pytest.mark.parametrize(
     "num_layers",
@@ -880,34 +880,8 @@ def run_model(
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
         # FABRIC_2D variants — shared list defined in conftest.py (also used by
         # test_prefill_block_loop.py). Covers (4,2) BH LoudBox, (2,4) asymmetric, (8,4) BH Galaxy.
         *FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS,
@@ -928,7 +902,6 @@ def test_ds_prefill_transformer(
     n_routed_experts,
     gate_fallback_mode,
     num_links,
-    topology,
     pcc_validation,
     determinism_check,
     num_iterations,
@@ -942,6 +915,7 @@ def test_ds_prefill_transformer(
     tokenizer,
     request,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])
     run_model(
         variant,
         config_only,
@@ -994,8 +968,8 @@ def test_ds_prefill_transformer(
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_1K, 8), (SEQ_LEN_5K, 8), (SEQ_LEN_25K, 8)],
-    ids=["1k", "5k", "25k"],
+    [(PREFILL_CHUNK_TOKENS, 8)],
+    ids=["isl_5k"],
 )
 @pytest.mark.parametrize(
     "num_layers",
@@ -1014,23 +988,19 @@ def test_ds_prefill_transformer(
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
-            },
+            torus_xy_device_params(fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer(
     variant,
@@ -1044,7 +1014,6 @@ def test_kimi_prefill_transformer(
     n_routed_experts,
     gate_fallback_mode,
     num_links,
-    topology,
     pcc_validation,
     determinism_check,
     num_iterations,
@@ -1058,6 +1027,7 @@ def test_kimi_prefill_transformer(
     tokenizer,
     request,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])
     run_model(
         variant,
         config_only,
@@ -1102,8 +1072,8 @@ def test_kimi_prefill_transformer(
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_5K, 8)],
-    ids=["5k"],
+    [(PREFILL_CHUNK_TOKENS, 8)],
+    ids=["isl_5k"],
 )
 @pytest.mark.parametrize(
     "num_layers",
@@ -1122,18 +1092,14 @@ def test_kimi_prefill_transformer(
 @pytest.mark.parametrize("determinism_check", [False], ids=["no_determinism"])
 @pytest.mark.parametrize("num_iterations", [1], ids=["iter1"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
-            },
+            torus_xy_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -1152,7 +1118,6 @@ def test_glm_prefill_transformer(
     n_routed_experts,
     gate_fallback_mode,
     num_links,
-    topology,
     pcc_validation,
     determinism_check,
     num_iterations,
@@ -1166,6 +1131,7 @@ def test_glm_prefill_transformer(
     tokenizer,
     request,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])
     # Full-transformer end-to-end validates against the GPU trace (variant.test_prefill_trace_default;
     # approach B) — MLA/DSA + MoE correctness live in their op-level tests.
     run_model(

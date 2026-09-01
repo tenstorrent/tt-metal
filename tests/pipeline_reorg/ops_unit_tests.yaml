@@ -96,7 +96,7 @@
     bh_p100:
       timeout: 60
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 40
   owner_id: U080FKG7KEU # Utku Aydonat
   team: ttnn
   category: experimental
@@ -294,7 +294,7 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150_civ2:
-      timeout: 40
+      timeout: 50
     wh_n300_civ2:
       timeout: 40
     bh_p100:

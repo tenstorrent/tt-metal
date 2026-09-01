@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import ttnn
+from models.common.device_utils import is_blackhole
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig
@@ -53,11 +54,12 @@ from models.common.modules.tt_ccl import (
 )
 from models.common.tensor_utils import (
     TILE_SIZE,
+    get_out_subblock_w,
     get_rot_transformation_mat,
+    nearest_32,
     zeros_like_kv_cache,
     zeros_like_paged_cache,
 )
-from models.common.utility_functions import is_blackhole, nearest_32
 
 # =============================================================================
 # Constants
@@ -117,6 +119,9 @@ class Attention1DConfig:
     topology: Optional[ttnn.Topology] = None  # None = auto-detect
     num_reduce_scatter_links: int | None = None
     num_all_gather_links: int | None = None
+    decode_agmm_num_links: int = 1
+    decode_agmm_chunks_per_sync: int = CCL_CHUNKS_PER_SYNC
+    decode_agmm_num_workers_per_link: int = CCL_NUM_WORKERS_PER_LINK
 
     # Optional CCL dtype for the prefill output reduce-scatter. When the fused all-gather+WO path is
     # not selected, attention runs a separate reduce-scatter on the bf16 WO output; reducing it in a
@@ -408,7 +413,8 @@ class Attention1D(LightweightModule):
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
-        batch_size: int = 1,
+        chunk_start_idx_tensor: ttnn.Tensor | None = None,
+        batch_size: Optional[int] = None,  # todo)) work on removing this argument
     ) -> ttnn.Tensor:
         """
         Prefill forward - multiple tokens.
@@ -426,9 +432,10 @@ class Attention1D(LightweightModule):
             page_table: Page table for paged attention (optional). For batched prefill this is the
                 full ``[batch_size, num_blocks]`` table; each user's row is selected by ``batch_idx``.
             chunk_page_table: Page table for chunked prefill (optional).
-            chunk_start_idx: Start index for chunked prefill (optional). Batched prefill always uses
-                the non-chunked path (the executor predicate keeps chunked prompts sequential).
-            batch_size: Number of users batched into one forward pass. ``1`` = the single-user path
+            chunk_start_idx: Start index for chunked prefill (optional).
+            chunk_start_idx_tensor: Runtime device start-index tensor for
+                position-general chunked prefill (optional).
+            batch_size: Optional number of users batched into one forward pass. ``1`` = the single-user path
                 (unchanged). ``> 1`` unfolds ``[1,1,B*S,*] -> [B,1,S,*]`` only for the
                 create_qkv_heads → rotary → KV-fill → SDPA → concat_heads window, mirroring TTTv1.
 
@@ -443,7 +450,13 @@ class Attention1D(LightweightModule):
         x = _load_input_device_tensor(x, self.config, mode="prefill")
         cfg = self.config
 
-        seq_len = x.shape[-2]  # folded length (batch_size * S) when batched
+        if batch_size is None:  # todo)) work on removing this argument
+            batch_size = x.shape[0]
+        if batch_size > 1:
+            x = ttnn.reshape(x, [1, 1, x.shape[-2] * x.shape[-3] * x.shape[0], -1])
+
+        seq_len = x.shape[-2]
+        original_seq_len = seq_len
         assert seq_len % 128 == 0 and seq_len > 0, "seq_len must be divisible by 128"
         assert seq_len % batch_size == 0, f"folded seq_len {seq_len} must be divisible by batch_size {batch_size}"
         # Per-user sequence length (== seq_len when batch_size == 1).
@@ -497,11 +510,12 @@ class Attention1D(LightweightModule):
         if seq_len > MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
-        # Batched prefill: unfold the folded sequence axis into a real batch axis so each user's
-        # tokens become an independent row for head-splitting / rotary / SDPA (TTTv1 attention.py
-        # L945-946). Single-user (batch_size == 1) is a no-op.
+        if original_seq_len != seq_len:
+            xqkv_fused = xqkv_fused[:, :, :original_seq_len, :]
+            seq_len = original_seq_len
+
         if batch_size > 1:
-            xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, per_user_seq_len, -1])
+            xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
 
         ttnn.deallocate(x)
 
@@ -588,20 +602,35 @@ class Attention1D(LightweightModule):
         # Invalid combinations (rejected at config time in _resolve_attention1d_config):
         # - Non-paged + Chunked: chunked_sdpa requires page_table
         # - sliding_window + Chunked: chunked_sdpa does not implement window masking
-        if chunk_start_idx is not None:
-            attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
-                input_tensor_q=q_heads_sdpa,
-                input_tensor_k=keys,
-                input_tensor_v=values,
-                page_table_tensor=page_table,
-                chunk_start_idx=chunk_start_idx,
-                compute_kernel_config=cfg.sdpa_prefill_compute_kernel_cfg,
-                program_config=cfg.prefill_sdpa_prg_config(seq_len, chunk_start_idx),
-            )
+        # Llama3_8B stages one device-resident chunk-start tensor before entering the layer loop and
+        # reuses it here.
+        # todo)) Other models still receive a Python scalar from the legacy shared executor. Retain
+        # that compatibility path until their executor/model plumbing is updated to stage and forward
+        # the tensor once per chunk.
+        if chunk_start_idx is not None or chunk_start_idx_tensor is not None:
+            if chunk_start_idx_tensor is None:
+                attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    input_tensor_q=q_heads_sdpa,
+                    input_tensor_k=keys,
+                    input_tensor_v=values,
+                    page_table_tensor=page_table,
+                    chunk_start_idx=chunk_start_idx,
+                    compute_kernel_config=cfg.sdpa_prefill_compute_kernel_cfg,
+                    program_config=cfg.prefill_sdpa_prg_config(seq_len, chunk_start_idx),
+                )
+            else:
+                block_size = cfg.paged_attention_config.block_size
+                attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    input_tensor_q=q_heads_sdpa,
+                    input_tensor_k=keys,
+                    input_tensor_v=values,
+                    page_table_tensor=page_table,
+                    chunk_start_idx_tensor=chunk_start_idx_tensor,
+                    compute_kernel_config=cfg.sdpa_prefill_compute_kernel_cfg,
+                    program_config=cfg.prefill_sdpa_prg_config(seq_len, block_size),
+                )
         else:
-            # Batched: q/k/v are [B, n_heads, per_user_seq_len, head_dim]; is_causal masks each row to
-            # its own sequence (device-verified: kernel probe C, pcc 0.9998, row0 independent). The
-            # program config keys on the per-user seq len, not the folded length.
+            sdpa_seq_len = seq_len // batch_size if batch_size > 1 else seq_len
             attn_output = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_sdpa,
                 k_heads_cache_dtype,
@@ -610,7 +639,7 @@ class Attention1D(LightweightModule):
                 sliding_window_size=cfg.sliding_window,
                 scale=cfg.scale,
                 compute_kernel_config=cfg.sdpa_prefill_compute_kernel_cfg,
-                program_config=cfg.prefill_sdpa_prg_config(per_user_seq_len, None),
+                program_config=cfg.prefill_sdpa_prg_config(sdpa_seq_len, None),
             )
 
         ttnn.deallocate(q_heads_sdpa)
@@ -618,18 +647,12 @@ class Attention1D(LightweightModule):
         ttnn.deallocate(v_heads_cache_dtype)
 
         # --- STAGE 11: Reshape and Concat Heads ---
-        # Single-user: [1, n_heads, S, hd]. Batched: keep [B, n_heads, S, hd] — reshaping to
-        # [1, n_heads, B*S, hd] before concat would scramble data across the head axis (TTTv1
-        # attention.py L1112-1119). nlp_concat_heads handles the real batch axis natively.
         if batch_size == 1:
             attn_output = ttnn.reshape(attn_output, [1, n_local_heads, -1, cfg.head_dim])
 
         attn_output_concat = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
 
-        # Batched: nlp_concat_heads emits [B, 1, S, n_heads*hd]; refold the batch axis back into the
-        # sequence ([1, 1, B*S, n_heads*hd]) so the WO matmul runs as one long-sequence matmul. This
-        # MUST happen after concat_heads to preserve layout (TTTv1 attention.py L1130-1134).
         if batch_size > 1:
             attn_output_concat = ttnn.reshape(attn_output_concat, [1, 1, seq_len, -1])
 
@@ -925,8 +948,31 @@ class Attention1D(LightweightModule):
         fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
         page_len = fill_page_table.shape[1] * block_size
 
+        if k_fill.shape[0] > 1:
+            # paged_fill_cache applies batch_idx to the passed page table. For batched
+            # prefill, pass one user's page-table row at a time and always write row 0.
+            valid_slots = user_id if isinstance(user_id, (list, tuple)) else list(range(k_fill.shape[0]))
+            seq_len_per_user = k_fill.shape[2]
+            for slot in valid_slots:
+                k_user = k_fill[slot : slot + 1, :, :, :]
+                v_user = v_fill[slot : slot + 1, :, :, :]
+                page_table_user = fill_page_table[slot : slot + 1, :]
+                page_len_user = page_table_user.shape[1] * block_size
+                k_user_sliced = k_user[:, :, :page_len_user, :] if page_len_user < seq_len_per_user else k_user
+                v_user_sliced = v_user[:, :, :page_len_user, :] if page_len_user < seq_len_per_user else v_user
+                ttnn.experimental.paged_fill_cache(keys, k_user_sliced, page_table_user, batch_idx=0)
+                ttnn.experimental.paged_fill_cache(values, v_user_sliced, page_table_user, batch_idx=0)
+            return
+
         k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
         v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
+
+        if k_fill_sliced.dtype != keys.dtype or v_fill_sliced.dtype != values.dtype:
+            raise ValueError(
+                "paged KV cache prefill requires K/V fill tensors to already match the cache dtype: "
+                f"k_fill={k_fill_sliced.dtype}, keys={keys.dtype}, "
+                f"v_fill={v_fill_sliced.dtype}, values={values.dtype}"
+            )
 
         ttnn.experimental.paged_fill_cache(keys, k_fill_sliced, fill_page_table, batch_idx=user_id)
         ttnn.experimental.paged_fill_cache(values, v_fill_sliced, fill_page_table, batch_idx=user_id)
@@ -941,12 +987,11 @@ class Attention1D(LightweightModule):
         """Batched prefill KV fill — one fill call per user (loop), mirroring TTTv1 attention.py
         L1013-1040.
 
-        ``k_fill`` / ``v_fill`` are ``[batch_size, n_kv_heads, per_user_seq_len, head_dim]`` and
-        ``user_id`` is the list of *local* valid row indices (padded slots are excluded). ``batch_idx``
-        is a scalar per call because ``paged_fill_cache`` reads ``batch_idx_ptr[0]`` for all rows — a
-        per-row batch_idx in one call is unsupported. The executor builds ``page_table`` with one row
-        per local user, so local row ``i`` selects that user's physical blocks. Device-verified
-        correct (kernel probe E: per-slot readback pcc 1.0).
+        ``k_fill`` / ``v_fill`` are ``[batch_size, n_kv_heads, per_user_seq_len, head_dim]``.
+        Eager execution supplies active local ``user_id`` rows, while trace capture deliberately
+        supplies every padded row to keep one stable graph. Planner-owned padded page-table rows are
+        all ``-1``, the paged-fill skip sentinel, so those captured calls issue no KV writes.
+        ``batch_idx`` is scalar because ``paged_fill_cache`` reads ``batch_idx_ptr[0]`` for all rows.
         """
         cfg = self.config
         is_paged = cfg.paged_attention_config is not None
@@ -1254,13 +1299,13 @@ class Attention1D(LightweightModule):
             multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             all_gather_core_grid_offset=(0, 4),
             barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            num_links=1,
+            num_links=cfg.decode_agmm_num_links,
             memory_config_ag=cfg.decode_all_gather_matmul_memcfg,
             memory_config_mm=cfg.decode_residual_memcfg,
             program_config=cfg.decode_all_gather_matmul_prg_config,
             compute_kernel_config=cfg.li_o_decode_compute_kernel_cfg,
-            chunks_per_sync=CCL_CHUNKS_PER_SYNC,
-            num_workers_per_link=CCL_NUM_WORKERS_PER_LINK,
+            chunks_per_sync=cfg.decode_agmm_chunks_per_sync,
+            num_workers_per_link=cfg.decode_agmm_num_workers_per_link,
             num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
         )
 
@@ -1415,7 +1460,7 @@ class Attention1D(LightweightModule):
             (configuration.n_heads * configuration.head_dim) // num_devices, configuration.dim
         )
 
-        use_fused_all_gather_matmul = model_config.get("USE_FUSED_ALL_GATHER_MATMUL", False)
+        use_fused_all_gather_matmul = getattr(configuration, "use_fused_all_gather_matmul", False)
 
         wo = LazyWeight(
             source=pt_wo,
@@ -1953,7 +1998,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             compute_with_storage_grid_size=do_core_grid_size,
             in0_block_w=dim // tile_size // (do_core_grid_size[0] * do_core_grid_size[1]),
             out_subblock_h=1,
-            out_subblock_w=_get_out_subblock_w(do_per_core_N, out_subblock_h=1),
+            out_subblock_w=get_out_subblock_w(do_per_core_N, out_subblock_h=1),
             per_core_M=tile_padded_batch_rows // tile_size,
             per_core_N=do_per_core_N,
             fuse_batch=True,
@@ -2245,16 +2290,6 @@ def _find_prefill_grid(row_tiles: int, col_tiles: int, max_rows: int = 8, max_co
     return rows, cols
 
 
-def _get_out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
-    """Get output subblock width that divides per_core_n and satisfies constraints."""
-    out_subblock_w = 4
-    while out_subblock_w > 1:
-        if out_subblock_w * out_subblock_h <= 4 and per_core_n % out_subblock_w == 0:
-            break
-        out_subblock_w -= 1
-    return out_subblock_w
-
-
 def _dram_shard_core_grid(k: int, tile_size: int = TILE_SIZE) -> ttnn.CoreGrid:
     """Get core grid for DRAM sharding based on K dimension."""
     rows, cols = _find_grid(k // tile_size)
@@ -2292,7 +2327,7 @@ def _matmul_config(
         per_core_n = math.ceil(n / (tile_size * grid_size[0]))
 
     out_subblock_h = 1
-    out_subblock_w = _get_out_subblock_w(per_core_n, out_subblock_h)
+    out_subblock_w = get_out_subblock_w(per_core_n, out_subblock_h)
 
     if in0_block_w is None:
         in0_block_w = _find_largest_divisor(k // (tile_size * grid_size[1]))

@@ -19,7 +19,9 @@ void kernel_main() {
 
     // this call will get captured by noc tracing as a 'READ' event
     noc_async_read(dram_buffer_src_noc_addr, l1_buffer_addr, dram_buffer_size);
-    // this call will get captured by noc tracing as a 'READ_BARRIER_START' and 'READ_BARRIER_END' event
+    // this call is captured as a 'READ_BARRIER_START' and 'READ_BARRIER_END' event ONLY when the NOC debug tool is
+    // enabled (TT_METAL_NOC_DEBUG_DUMP). Barriers move no data, so plain noc tracing omits them -- NPE does not
+    // consume them, and recording them costs runtime and profiler buffer space.
     noc_async_read_barrier();
 
     std::uint64_t dram_buffer_dst_noc_addr =
@@ -27,6 +29,7 @@ void kernel_main() {
 
     // this call will get captured by noc tracing as a 'WRITE_' event
     noc_async_write(l1_buffer_addr, dram_buffer_dst_noc_addr, dram_buffer_size);
-    // this call will get captured by noc tracing as a 'WRITE_BARRIER_START' and 'WRITE_BARRIER_END' event
+    // as with the read barrier above, this is captured as 'WRITE_BARRIER_START' / 'WRITE_BARRIER_END' only under
+    // TT_METAL_NOC_DEBUG_DUMP
     noc_async_write_barrier();
 }

@@ -18,6 +18,7 @@ from ..layers.module import Module, Parameter
 from ..parallel.config import AudioTCParallelConfig, AudioTParallelConfig, ParallelFactor
 from ..parallel.manager import CCLManager
 from ..utils.conv3d import _ntuple, aligned_channels, get_conv3d_config
+from ..utils.tensor import local_device_to_torch
 
 # Per-mesh cache of constant zeros buffers, keyed by id(mesh_device).
 _ZEROS_CACHE: dict = {}
@@ -195,7 +196,9 @@ def prepare_conv3d_weight_state(
         prepared = ttnn.experimental.prepare_conv3d_weights(
             weight_tensor=weight_tt, C_in_block=conv_config.C_in_block, device=mesh_device
         )
-        return ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
+        # Replicated, but slicing one coordinate keeps the parent's distribution metadata, which
+        # `ttnn.to_torch` refuses on a multi-host mesh; the helper reads a shard this host owns.
+        return local_device_to_torch(prepared)
 
     if split:
         w_hi = w_5d.float().bfloat16().float()
@@ -331,12 +334,106 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache, pref
         # HEIGHT_SHARDED conv1d needs enough rows to spread over the core grid. Every LTX call
         # site has tens of thousands of frames, but MiniMax-H3's BigVGAN starts at the latent
         # rate (T=207, and T=40 in a short test), where the DRAM slicer cannot find any valid
-        # configuration. The exact threshold is internal to the slicer's core-grid search and
-        # its error text is not a stable API, so any RuntimeError from the conv takes the
-        # fallback: the shift-multiply-add form, which has no sharding constraint at all --
-        # slower, but this is a correctness path (and MAC is the *more* accurate form).
+        # configuration. Its error text is not a stable API, so any RuntimeError takes a fallback.
+        #
+        # Before giving up, retry on channel slices. The failure is the slicer running out of L1: a
+        # depthwise conv1d lays the K sticks out contiguously, so the activation block is C*K wide
+        # (3584 at C=512, K=7) and does not fit however finely T is sliced. Splitting C fits, and the
+        # filter is depthwise so slices are independent and reassembly is a concat -- ~9 ops against
+        # MAC's 3K-1, on a faster op.
+        for chunk in (128, 64, 32):
+            if C % chunk or chunk >= C:
+                continue
+            try:
+                out = _depthwise_tap_conv1d_chunked(
+                    x_BTC,
+                    taps,
+                    stride,
+                    B=B,
+                    C=C,
+                    T_pad=T_pad,
+                    T_out=T_out,
+                    K=K,
+                    chunk=chunk,
+                    mesh_device=mesh_device,
+                    dtype=dtype,
+                    conv_config=conv_config,
+                    compute_config=cache["cc"],
+                    cache=cache,
+                )
+                logger.warning(
+                    f"depthwise conv1d needs C-chunking at T_pad={T_pad}, C={C}, K={K}, stride={stride}; "
+                    f"using {C // chunk} chunks of {chunk}"
+                )
+                return out
+            except RuntimeError:
+                continue
+        # No chunking fits either: the shift-multiply-add form, which has no sharding constraint at
+        # all -- slower, but this is a correctness path (and MAC is the *more* accurate form).
         logger.warning(f"depthwise conv1d failed at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback ({exc})")
         return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out, dtype=dtype)
+
+
+def _depthwise_tap_conv1d_chunked(
+    x_BTC,
+    taps,
+    stride,
+    *,
+    B,
+    C,
+    T_pad,
+    T_out,
+    K,
+    chunk,
+    mesh_device,
+    dtype,
+    conv_config,
+    compute_config,
+    cache,
+):
+    """``_depthwise_tap_conv1d`` over independent ``chunk``-wide channel slices, concatenated back.
+
+    Slicing C is exact for a depthwise filter -- no partial sums to reconcile. The reassembly is a
+    last-dim concat, lossy in fp32 unless the row is a multiple of the 64B buffer alignment; every chunk
+    here is 32 fp32 elements = 128B, and the assert keeps a future chunk size from silently truncating
+    the mantissa to TF32.
+    """
+    assert (chunk * 4) % 64 == 0, f"C-chunk {chunk} would make ttnn.concat(dim=-1) lossy in fp32"
+    wkey = ("w", chunk, stride, K, tuple(taps))
+    weight = cache.get(wkey)
+    prepared = weight is not None
+    if weight is None:
+        wt = torch.tensor(taps, dtype=torch.float32).reshape(1, 1, K).expand(chunk, 1, K).contiguous()
+        weight = ttnn.from_torch(
+            wt,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dtype,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+    parts = []
+    for start in range(0, C, chunk):
+        piece = ttnn.slice(x_BTC, [0, 0, start], [B, T_pad, start + chunk])
+        parts.append(
+            _depthwise_tap_conv1d(
+                piece,
+                weight,
+                B=B,
+                C=chunk,
+                T_pad=T_pad,
+                T_out=T_out,
+                K=K,
+                stride=stride,
+                mesh_device=mesh_device,
+                dtype=dtype,
+                conv_config=conv_config,
+                compute_config=compute_config,
+                cache=cache,
+                wkey=wkey,
+                prepared=prepared or start > 0,
+            )
+        )
+        ttnn.deallocate(piece)
+    return ttnn.concat(parts, dim=2)
 
 
 def _depthwise_tap_mac(x_BTC, taps, stride, *, T_out: int, dtype):
@@ -853,17 +950,8 @@ class Conv1dViaConv3d(Module):
 
         self.same_pad = same_pad
         self.eff_k = eff_k
-        # The shifted-matmul form (see `_forward_tap_matmul`) needs stride 1 to index taps directly,
-        # fp32 to be worth doing at all, and the unsharded path: under T- or channel-sharding the conv3d
-        # route owns the halo exchange and the C_in gather, and duplicating that here would be a second
-        # place for the same invariant to be wrong. Sharded audio decode is off by default.
-        self.tap_matmul = (
-            tap_matmul
-            and dtype == ttnn.float32
-            and stride == 1
-            and not sharded
-            and channel_axis(parallel_config) is None
-        )
+        # Needs stride 1 to index taps directly and fp32 to be worth doing.
+        self.tap_matmul = tap_matmul and dtype == ttnn.float32 and stride == 1 and channel_axis(parallel_config) is None
 
         self._alloc_weight_bias()
 
@@ -1000,9 +1088,27 @@ class Conv1dViaConv3d(Module):
         # `ConvTranspose1dViaConv3d` builds a causal inner conv and then forces `external_pad_front = 0`
         # because it supplies its own symmetric padding, so a tap path that re-derived `eff_k - 1` from
         # the mode would silently prepend zeros to all 7 upsamplers.
-        pad_left = self.external_pad_front + self.internal_padding[0]
-        pad_right = self.internal_padding[0]
-        x_padded = _zero_pad_t(x_BTC, pad_left, pad_right, self.mesh_device) if pad_left or pad_right else x_BTC
+        #
+        sharded = self.parallel_config is not None and self.parallel_config.factor > 1
+        if sharded:
+            # Context must come from the neighbour; `_zero_pad_t` is local and would zero its rows. The
+            # widths have to sum to `eff_k - 1` (what the taps consume) or `t_out` is not the shard's own
+            # T and the residual add rejects it. `halo_pad_left/right` are both `eff_k // 2`, which only
+            # sums right for odd `eff_k`, so derive it here.
+            pad_left = self.halo_pad_left
+            pad_right = (self.eff_k - 1) - pad_left
+            x_padded = _t_neighbor_pad(
+                x_BTC,
+                pad_left=pad_left,
+                pad_right=pad_right,
+                parallel_config=self.parallel_config,
+                ccl_manager=self.ccl_manager,
+                padding_mode="zeros",
+            )
+        else:
+            pad_left = self.external_pad_front + self.internal_padding[0]
+            pad_right = self.internal_padding[0]
+            x_padded = _zero_pad_t(x_BTC, pad_left, pad_right, self.mesh_device) if pad_left or pad_right else x_BTC
         t_out = x_padded.shape[1] - (self.eff_k - 1)
         batch, _, channels = x_padded.shape
 
@@ -1046,7 +1152,8 @@ class Conv1dViaConv3d(Module):
                 ttnn.deallocate(accumulator)
                 ttnn.deallocate(term)
                 accumulator = new_accumulator
-        if x_padded is not x_BTC:
+        # Sharded, `x_padded` is the ccl_manager's ping-pong buffer, so freeing it corrupts that cache.
+        if not sharded and x_padded is not x_BTC:
             ttnn.deallocate(x_padded)
 
         if self.bias is not None:
@@ -1346,8 +1453,7 @@ class SnakeBeta(Module):
                 partition_channel(self.beta.data, self.parallel_config, dim=2),
             )
         a, b = self._ab_shard
-        if x_BTC.layout != ttnn.TILE_LAYOUT:
-            x_tile = ttnn.to_layout(x_BTC, ttnn.TILE_LAYOUT)
-        else:
-            x_tile = x_BTC
-        return ttnn.snake_beta(x_tile, a, b)
+
+        x_tile = ttnn.to_layout(x_BTC, ttnn.TILE_LAYOUT) if x_BTC.layout != ttnn.TILE_LAYOUT else x_BTC
+        y = ttnn.snake_beta(x_tile, a, b)
+        return y

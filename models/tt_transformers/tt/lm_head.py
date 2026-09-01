@@ -8,8 +8,27 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import copy_to_buffer
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode
+
+
+def _lm_head_cache_file_name(
+    weight_cache_path,
+    *,
+    dummy_weights,
+    num_splits,
+    shard,
+    width,
+    mode,
+    galaxy_2d,
+    mesh_shape,
+):
+    if dummy_weights:
+        return None
+
+    layout_suffix = f"_galaxy_2d_{mesh_shape[0]}x{mesh_shape[1]}_v1" if galaxy_2d else ""
+    return weight_cache_path / (f"output_lm_head_{num_splits}_split_shard_{shard}_{width}_mode_{mode}{layout_suffix}")
 
 
 class LMHead(LightweightModule):
@@ -34,8 +53,10 @@ class LMHead(LightweightModule):
         self.padded_vocab_size = args.padded_vocab_size
         self.num_devices = args.num_devices
         self.prefetcher = prefetcher
+        self.use_galaxy_no_prefetch = args.is_galaxy and prefetcher is None
 
-        size_per_device = self.padded_vocab_size // self.num_devices
+        vocab_shards = args.cluster_shape[0] if self.use_galaxy_no_prefetch else self.num_devices
+        size_per_device = self.padded_vocab_size // vocab_shards
 
         tile_size = 32
         max_columns_per_device_ring_mm = math.ceil((max_columns_per_device) / tile_size) * tile_size
@@ -79,7 +100,7 @@ class LMHead(LightweightModule):
             for i, split_size in enumerate(split_sizes):
                 # Create a list to store the split tensors for each device
                 device_splits = []
-                for device in range(self.num_devices):
+                for device in range(vocab_shards):
                     start = device * size_per_device + sum(split_sizes[:i])
                     end = start + split_size
                     device_splits.append(torch_output_weights[:, start:end])
@@ -87,11 +108,15 @@ class LMHead(LightweightModule):
                 # Concatenate the splits from all devices
                 combined_split = torch.cat(device_splits, dim=-1)
 
-                cache_file_name = (
-                    None
-                    if args.dummy_weights
-                    else weight_cache_path
-                    / f"output_lm_head_{len(split_sizes)}_split_shard_{i}_{combined_split.shape[-1]}_mode_{mode}"
+                cache_file_name = _lm_head_cache_file_name(
+                    weight_cache_path,
+                    dummy_weights=args.dummy_weights,
+                    num_splits=len(split_sizes),
+                    shard=i,
+                    width=combined_split.shape[-1],
+                    mode=mode,
+                    galaxy_2d=self.use_galaxy_no_prefetch and mode == 0,
+                    mesh_shape=args.cluster_shape,
                 )
 
                 def pad_to_power_of_2(n):
@@ -100,14 +125,21 @@ class LMHead(LightweightModule):
                     return 1 << (n - 1).bit_length()
 
                 if mode == 0:
-                    memory_config = args.create_dram_sharded_mem_config(
-                        k=args.dim, n=math.ceil(combined_split.shape[-1] / self.num_devices)
-                    )
+                    if self.use_galaxy_no_prefetch:
+                        torch_weight = combined_split.unsqueeze(0).unsqueeze(0)
+                        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(3, 2), mesh_shape=args.cluster_shape)
+                        memory_config = ttnn.DRAM_MEMORY_CONFIG
+                    else:
+                        torch_weight = combined_split
+                        mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+                        memory_config = args.create_dram_sharded_mem_config(
+                            k=args.dim, n=math.ceil(combined_split.shape[-1] / self.num_devices)
+                        )
                     self.output_weights_dram_sharded.append(
                         ttnn.as_tensor(
-                            combined_split,
+                            torch_weight,
                             device=mesh_device,
-                            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+                            mesh_mapper=mesh_mapper,
                             layout=ttnn.TILE_LAYOUT,
                             dtype=dtype,
                             memory_config=memory_config,
@@ -139,6 +171,70 @@ class LMHead(LightweightModule):
             packer_l1_acc=True,
         )
 
+    def _update_output_weights_dram_sharded(self, weight: ttnn.Tensor) -> None:
+        """In-place replace every chunk of ``self.output_weights_dram_sharded``
+        on device (``weight`` is HF ``(1, 1, V, H)``, replicated, TILE, bf16,
+        DRAM-interleaved). Mirrors the constructor's host-side pad+transpose+split
+        but on device: optional ``ttnn.pad`` to ``padded_vocab_size``,
+        ``ttnn.transpose``, contiguous per-chunk ``ttnn.slice``, then
+        ``copy_to_buffer`` reshards into the DRAM-sharded dest (preserving
+        addresses). Single-device only; multi-device per-device gather not
+        implemented.
+
+        Tile-alignment caveat: ``ttnn.slice`` on TILE requires offsets aligned
+        to TILE_SIZE (32); the default Llama configs satisfy this, but assert it
+        rather than silently miscompile slices.
+        """
+        assert self.num_devices == 1, (
+            "LMHead.update for num_devices > 1 is not yet implemented; "
+            "the multi-device path needs a per-device interleaved gather."
+        )
+        tile_size = 32
+        assert all(s % tile_size == 0 for s in self.split_sizes_dram_sharded), (
+            f"LMHead.update requires every split in self.split_sizes_dram_sharded "
+            f"to be a multiple of TILE_SIZE={tile_size}, got "
+            f"{self.split_sizes_dram_sharded}; on-device ttnn.slice cannot produce "
+            "sub-tile-aligned chunks on TILE_LAYOUT."
+        )
+
+        padded = weight
+        if self.vocab_size < self.padded_vocab_size:
+            pad_amount = self.padded_vocab_size - self.vocab_size
+            padded = ttnn.pad(padded, [(0, 0), (0, 0), (0, pad_amount), (0, 0)], value=0.0)
+
+        permuted = ttnn.transpose(padded, -2, -1)
+
+        start = 0
+        for i, split_size in enumerate(self.split_sizes_dram_sharded):
+            end = start + split_size
+            chunk = ttnn.slice(permuted, (0, 0, 0, start), (1, 1, self.args.dim, end))
+            copy_to_buffer(chunk, self.output_weights_dram_sharded[i], self.dtype)
+            start = end
+
+    def _update_output_weights_ring_mm(self, weight: ttnn.Tensor) -> None:
+        """In-place replace every chunk of ``self.output_weights_ring_mm``. Not
+        yet implemented: the ring-mm path (distinct per-chunk split, power-of-two
+        column padding, prefetcher-derived DRAM grid) needs its own builder.
+        """
+        raise NotImplementedError("LMHead.update for output_weights_ring_mm (prefetcher path) is not yet implemented")
+
+    def update(self, *, weight: ttnn.Tensor) -> None:
+        """In-place replace the on-device LM-head weights via ``ttnn.copy``.
+
+        HF-format input (see ``LLAMA_WEIGHT_TRANSFER.md``): ``weight`` is
+        ``lm_head.weight``, shape ``(1, 1, vocab_size, hidden_size)``, bf16, TILE,
+        DRAM-interleaved, replicated.
+
+        Updates ``self.output_weights_dram_sharded`` on device (no host
+        roundtrip). When the prefetcher is enabled the ring-mm mirror must also
+        be synced; that path is not implemented. Every chunk keeps its device
+        allocation, so captured traces and the prefetcher's recorded addresses
+        stay valid.
+        """
+        self._update_output_weights_dram_sharded(weight)
+        if len(self.output_weights_ring_mm) > 0:
+            self._update_output_weights_ring_mm(weight)
+
     def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
         outputs = []
         use_prefetcher = self.prefetcher is not None and self.prefetcher.mode == Mode.DECODE
@@ -150,6 +246,9 @@ class LMHead(LightweightModule):
 
         output_weights = self.output_weights_ring_mm if use_prefetcher else self.output_weights_dram_sharded
 
+        if self.use_galaxy_no_prefetch:
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
         self.lm_head_output_memory_config = self.args.get_lm_head_output_mem_config(
             Mode.DECODE if use_prefetcher else Mode.PREFILL, self.prefetcher if use_prefetcher else None
         )
@@ -159,8 +258,10 @@ class LMHead(LightweightModule):
                 x,
                 weight,
                 compute_kernel_config=self.compute_kernel_config,
-                program_config=pc,
-                memory_config=self.lm_head_output_memory_config,
+                program_config=None if self.use_galaxy_no_prefetch else pc,
+                memory_config=(
+                    ttnn.DRAM_MEMORY_CONFIG if self.use_galaxy_no_prefetch else self.lm_head_output_memory_config
+                ),
                 dtype=self.args.lm_head_dtype if hasattr(self.args, "lm_head_dtype") else ttnn.bfloat8_b,
                 sub_device_id=self.prefetcher.worker_sub_device_id if use_prefetcher else None,
             )

@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tilize_multi_core_retile_program_factory.hpp"
+#include "ttnn/operations/data_movement/tilize/device/tilize_device_operation.hpp"
+
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
@@ -81,6 +84,8 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
     // tile-rows don't exist in DRAM. Only these real rows are read; the compute kernel zero-fills
     // the rest rather than reading invalid input.
     const uint32_t num_real_input_tile_rows = a.physical_volume() / tensor_width / in_tile_height;
+    // Shrink-case dual of the reader clamp: bounds the writer so surplus rows don't OOB past `output`.
+    const uint32_t num_real_output_tile_rows = output.physical_volume() / tensor_width / out_tile_height;
 
     const uint32_t ratio = shrink ? (in_tile_height / out_tile_height) : (out_tile_height / in_tile_height);
 
@@ -244,28 +249,43 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
     uint32_t output_tile_start_id = 0;
     const auto& cores = corerange_to_cores(all_cores);
 
+    auto derive_per_core_counts = [&](uint32_t input_rows, uint32_t output_rows) {
+        const uint32_t core_input_row_start = input_tile_start_id / tiles_per_block;
+        const uint32_t real_input_rows = core_input_row_start >= num_real_input_tile_rows
+                                             ? 0u
+                                             : std::min(num_real_input_tile_rows - core_input_row_start, input_rows);
+        const uint32_t core_output_row_start = output_tile_start_id / tiles_per_block;
+        const uint32_t real_output_rows =
+            core_output_row_start >= num_real_output_tile_rows
+                ? 0u
+                : std::min(num_real_output_tile_rows - core_output_row_start, output_rows);
+        // Hang-free invariant: both clamps zero together (both derive from same H via ceil(H/tile_h)).
+        TT_FATAL(
+            (real_input_rows == 0) == (real_output_rows == 0),
+            "tilize retile clamps out of sync: real_in={}, real_out={} (would hang reader)",
+            real_input_rows,
+            real_output_rows);
+        return std::make_pair(real_input_rows, real_output_rows);
+    };
+
     for (uint32_t i = 0; i < ncores_full; ++i) {
         const CoreCoord& core = cores[i];
         // nblocks_per_core is in split units (input tile-rows if shrink, output tile-rows if grow).
         const uint32_t input_rows = shrink ? nblocks_per_core : nblocks_per_core * ratio;
         const uint32_t output_rows = shrink ? nblocks_per_core * ratio : nblocks_per_core;
         const uint32_t num_input_blocks = input_rows;
-        // Padding is always at the tail (highest rows), so this core's real rows are a prefix.
-        const uint32_t core_row_start = input_tile_start_id / tiles_per_block;
-        const uint32_t real_rows = core_row_start >= num_real_input_tile_rows
-                                       ? 0u
-                                       : std::min(num_real_input_tile_rows - core_row_start, input_rows);
-        const uint32_t num_input_tiles = real_rows * tiles_per_block;  // only real tiles are read
-        const uint32_t num_output_tiles = output_rows * tiles_per_block;
+        auto [real_rows, real_output_rows] = derive_per_core_counts(input_rows, output_rows);
+        const uint32_t num_input_tiles = real_rows * tiles_per_block;
+        const uint32_t num_output_tiles = real_output_rows * tiles_per_block;
 
         reader_ref.emplace_runtime_args(core, {src0_buffer, num_input_tiles, input_tile_start_id});
         writer_ref.emplace_runtime_args(core, {dst_buffer, num_output_tiles, output_tile_start_id});
         if (full_compute_idx >= 0) {
-            desc.kernels[full_compute_idx].emplace_runtime_args(core, {num_input_blocks, real_rows});
+            desc.kernels[full_compute_idx].emplace_runtime_args(core, {num_input_blocks, real_rows, real_output_rows});
         }
 
         input_tile_start_id += input_rows * tiles_per_block;
-        output_tile_start_id += num_output_tiles;
+        output_tile_start_id += output_rows * tiles_per_block;
     }
 
     if (has_cliff) {
@@ -273,21 +293,30 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
         const uint32_t input_rows = shrink ? nblocks_per_core_cliff : nblocks_per_core_cliff * ratio;
         const uint32_t output_rows = shrink ? nblocks_per_core_cliff * ratio : nblocks_per_core_cliff;
         const uint32_t num_input_blocks = input_rows;
-        const uint32_t core_row_start = input_tile_start_id / tiles_per_block;
-        const uint32_t real_rows = core_row_start >= num_real_input_tile_rows
-                                       ? 0u
-                                       : std::min(num_real_input_tile_rows - core_row_start, input_rows);
-        const uint32_t num_input_tiles = real_rows * tiles_per_block;  // only real tiles are read
-        const uint32_t num_output_tiles = output_rows * tiles_per_block;
+        auto [real_rows, real_output_rows] = derive_per_core_counts(input_rows, output_rows);
+        const uint32_t num_input_tiles = real_rows * tiles_per_block;
+        const uint32_t num_output_tiles = real_output_rows * tiles_per_block;
 
         reader_ref.emplace_runtime_args(core, {src0_buffer, num_input_tiles, input_tile_start_id});
         writer_ref.emplace_runtime_args(core, {dst_buffer, num_output_tiles, output_tile_start_id});
         if (cliff_compute_idx >= 0) {
-            desc.kernels[cliff_compute_idx].emplace_runtime_args(core, {num_input_blocks, real_rows});
+            desc.kernels[cliff_compute_idx].emplace_runtime_args(core, {num_input_blocks, real_rows, real_output_rows});
         }
     }
 
     return desc;
+}
+
+void TilizeMultiCoreRetileProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const TilizeParams& /*operation_attributes*/,
+    const TilizeInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Every shape-derived arg is keyed, so only the reader/writer buffer addresses move on a hit.
+    // Reader is pushed first, writer second, each taking its buffer at slot 0.
+    patch_tilize_kernel_slot0(program, 0, tensor_args.input_tensor.buffer()->address());
+    patch_tilize_kernel_slot0(program, 1, tensor_return_value.buffer()->address());
 }
 
 }  // namespace ttnn::prim
