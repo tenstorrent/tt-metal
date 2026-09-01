@@ -61,6 +61,11 @@ void RecordKernelGroup(
 // Update stats with an enqueue of given program.
 void RecordProgramRun(tt::tt_metal::ContextId context_id, uint64_t program_id);
 
+// True while a profiler can still consume what RecordProgramMetadata and RecordProgramSubDevice
+// record. Both are no-ops otherwise, so a dispatch path that would call them once per program per
+// device can check this once instead.
+bool IsProgramMetadataRecordingEnabled(tt::tt_metal::ContextId context_id);
+
 // Record metadata used by profiler lookups for this program dispatch.
 void RecordProgramMetadata(tt::tt_metal::ContextId context_id, tt_metal::detail::ProgramImpl& program);
 

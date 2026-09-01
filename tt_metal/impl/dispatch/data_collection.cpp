@@ -60,10 +60,14 @@ void RecordProgramSubDevice(
     uint64_t runtime_id,
     SubDeviceId sub_device_id,
     uint32_t num_available_worker_cores) {
-    MetalContext::instance(context_id)
-        .data_collector()
-        ->RecordProgramSubDevice(
-            device_id, sub_device_manager_id, runtime_id, sub_device_id, num_available_worker_cores);
+    auto& data_collector = *MetalContext::instance(context_id).data_collector();
+    // Only the profiler reads this back, and it is recorded once per program per device on the
+    // dispatch path, so skip the mutex and the keyed insert when no profiler is listening.
+    if (!data_collector.IsProgramMetadataRecordingEnabled()) {
+        return;
+    }
+    data_collector.RecordProgramSubDevice(
+        device_id, sub_device_manager_id, runtime_id, sub_device_id, num_available_worker_cores);
 }
 
 std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(
@@ -72,7 +76,15 @@ std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(
 }
 
 void RecordProgramMetadata(ContextId context_id, ProgramImpl& program) {
-    MetalContext::instance(context_id).data_collector()->RecordProgramMetadata(program);
+    auto& data_collector = *MetalContext::instance(context_id).data_collector();
+    if (!data_collector.IsProgramMetadataRecordingEnabled()) {
+        return;
+    }
+    data_collector.RecordProgramMetadata(program);
+}
+
+bool IsProgramMetadataRecordingEnabled(ContextId context_id) {
+    return MetalContext::instance(context_id).data_collector()->IsProgramMetadataRecordingEnabled();
 }
 
 std::span<const std::string_view> GetKernelSourcesForRuntimeId(ContextId context_id, uint16_t runtime_id) {

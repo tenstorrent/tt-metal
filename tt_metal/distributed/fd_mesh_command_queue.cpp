@@ -527,7 +527,10 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr();
     const CoreCoord dispatch_core = this->virtual_program_dispatch_core();
     const uint64_t active_sub_device_manager_id = *mesh_device_->get_active_sub_device_manager_id();
-    const bool record_sub_device = active_sub_device_manager_id != *mesh_device_->get_default_sub_device_manager_id();
+    // Only a profiler reads the recorded sub-device mapping back, and a full-mesh workload would
+    // record it once per device on every enqueue, so decide once here and skip the whole loop.
+    const bool record_sub_device = active_sub_device_manager_id != *mesh_device_->get_default_sub_device_manager_id() &&
+                                   tt::IsProgramMetadataRecordingEnabled(extract_context_id(mesh_device_));
     const uint32_t num_available_worker_cores =
         record_sub_device ? mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) : 0;
 
