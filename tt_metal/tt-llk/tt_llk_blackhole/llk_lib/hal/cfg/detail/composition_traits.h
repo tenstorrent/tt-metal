@@ -74,7 +74,7 @@ template <typename T>
 inline constexpr bool is_write_operation_v = is_field_assignment_v<T> || is_gpr_write_v<T>;
 
 template <typename Lhs, typename Rhs>
-inline constexpr bool assignments_share_word_v = Lhs::file == Rhs::file && Lhs::addr == Rhs::addr;
+inline constexpr bool assignments_share_word_v = Lhs::scope == Rhs::scope && Lhs::addr == Rhs::addr;
 
 template <typename... Assignments>
 class assignment_groups_disjoint;
@@ -105,7 +105,7 @@ inline constexpr bool write_operations_disjoint_pair()
     }
     else if constexpr (is_field_assignment_v<Lhs> && is_gpr_write_v<Rhs>)
     {
-        return Lhs::file != Rhs::file || Lhs::addr < Rhs::addr || Lhs::addr >= Rhs::addr + Rhs::words;
+        return Lhs::scope != Rhs::scope || Lhs::addr < Rhs::addr || Lhs::addr >= Rhs::addr + Rhs::words;
     }
     else if constexpr (is_gpr_write_v<Lhs> && is_field_assignment_v<Rhs>)
     {
@@ -113,7 +113,7 @@ inline constexpr bool write_operations_disjoint_pair()
     }
     else if constexpr (is_gpr_write_v<Lhs> && is_gpr_write_v<Rhs>)
     {
-        return Lhs::file != Rhs::file || Lhs::addr + Lhs::words <= Rhs::addr || Rhs::addr + Rhs::words <= Lhs::addr;
+        return Lhs::scope != Rhs::scope || Lhs::addr + Lhs::words <= Rhs::addr || Rhs::addr + Rhs::words <= Lhs::addr;
     }
     else
     {
