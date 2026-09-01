@@ -122,22 +122,8 @@ void kernel_main() {
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(incoming_ready_sem), 1);
     constexpr uint32_t predecessor_ring_id = my_ring_id == 0 ? ring_size - 1 : my_ring_id - 1;
     op_signaler.synchronize_workers_and_signal_op(predecessor_ring_id);
-    // Consume exactly the one increment this exchange waited for, atomically, instead of
-    // zeroing the counter.
-    //
-    // The old `noc_semaphore_set(..., 0)` asserted ownership of the whole counter, which is
-    // only safe if nothing else can ever increment it — an invariant nothing enforces. The
-    // halo and the fused all-gather are separate programs that share BOTH this semaphore
-    // (halo: semaphores.front(); all-gather backward: semaphore.at(0)) and a worker core,
-    // because both allocate from the same ccl_core_grid_offset. Fabric increments are
-    // delivered asynchronously — a sender's kernel finishes while its increment is still in
-    // flight — so an all-gather increment can land here while this core has already moved on
-    // to a sliding layer's halo. Zeroing then destroyed it, and the all-gather reader
-    // counting on it waited forever (see
-    // docs/superpowers/specs/2026-08-06-ring-trace-replay-deadlock.md).
-    //
-    // A wrapping atomic add of -1 is used rather than a read-modify-write, so a concurrent
-    // remote increment cannot be lost.
+    // Consume exactly one arrival. The wrapping atomic decrement preserves a concurrent remote
+    // increment for the next exchange; a read-modify-write could lose it.
     noc_semaphore_inc(get_noc_addr(incoming_ready_sem), static_cast<uint32_t>(-1));
     noc_async_atomic_barrier();
 }

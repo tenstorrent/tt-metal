@@ -162,7 +162,9 @@ void ring_attention_neighbor_halo_exchange_helper(
     using tt::tt_metal::WriterConfigDescriptor;
 
     TT_FATAL(!input_tensors.empty() && input_tensors.size() == output_tensors.size(), "Invalid halo tensor list");
-    TT_FATAL(!semaphores.empty(), "Neighbor halo requires an incoming-ready semaphore");
+    TT_FATAL(
+        semaphores.size() >= 3,
+        "Neighbor halo requires three global semaphores: backward all-gather, forward all-gather, and dedicated halo");
     TT_FATAL(
         halo.derives_cache_batch_on_device() == halo.derives_start_on_device(),
         "Neighbor halo slot_id and kv_actual_isl metadata must be supplied together");
@@ -293,14 +295,9 @@ void ring_attention_neighbor_halo_exchange_helper(
     }
     halo_signaler.initialized_all_gather = true;
 
-    // The halo needs a semaphore of its OWN. semaphores[0]/[1] belong to the all-gather's
-    // backward/forward directions, and the halo lands on the same worker core as the
-    // backward direction because both allocate from this same core_grid_offset. Sharing one
-    // counter between two protocols with different arrival counts deadlocks the all-gather:
-    // see docs/superpowers/specs/2026-08-06-ring-trace-replay-deadlock.md. Callers that
-    // supply a third semaphore get the isolated counter; older two-semaphore callers fall
-    // back to the previous behaviour so this stays source-compatible.
-    const auto& halo_semaphore = semaphores.size() > 2 ? semaphores.at(2) : semaphores.front();
+    // semaphores[0]/[1] coordinate the backward/forward all-gather directions. Keep halo
+    // arrivals on semaphores[2] so the protocols cannot consume each other's signals.
+    const auto& halo_semaphore = semaphores.at(2);
     for (uint32_t link = 0; link < num_links; ++link) {
         KernelDescriptor::RTArgList reader_args;
         reader_args.push_back(

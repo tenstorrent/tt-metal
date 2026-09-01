@@ -4,7 +4,7 @@
 """GPT-OSS CCL manager. Mirrors ``minimax_m3/tt/ccl.py``.
 
 Owns the CCL sub-device, the reduce-scatter / all-gather ping-pong semaphores, the barrier
-semaphores, the ring-attention semaphore pair, and the reusable ring-gather scratch buffers. The
+semaphores, the three ring-attention semaphores, and the reusable ring-gather scratch buffers. The
 attention + MoE modules take a ``CCLManager`` and pull semaphores / buffers from it per call, so all
 persistent CCL state is allocated ONCE here (not per layer / per chunk).
 """
@@ -79,10 +79,10 @@ class CCLManager:
             ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_ns_sems)
         ]
 
-        # Ring-attention semaphores: a forward/backward PAIR for the ring SDPA (the SP dense-attention
-        # path). Matches deepseek_v3_d_p create_global_semaphores (2 handles).
+        # Ring-attention semaphores: forward/backward all-gather plus a dedicated halo semaphore.
+        # The third counter isolates sliding-window halo signaling from the all-gather protocols.
         self.ring_attention_ccl_semaphore_handles = [
-            ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(2)
+            ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(3)
         ]
 
     def get_rs_ping_pong_semaphore(self):
