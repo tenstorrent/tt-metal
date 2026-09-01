@@ -44,6 +44,7 @@ from helpers.sfpu_domains import (
     negative_zero_delivered,
     op_edge_points,
     ops_with_singularity,
+    signed_zero_pole_cells,
     specials_safe,
 )
 from helpers.stimuli_config import StimuliConfig
@@ -1091,11 +1092,31 @@ def test_eltwise_binary_sfpu_logsigmoid_specials(request, formats, dest_acc, mat
             "(see sfpu_domains.specials_safe)"
         )
 
-    if (
+    # logsigmoid(NaN) leaves the polynomial arm as a NaN the datapath *built*, not the operand
+    # forwarded, so `SFPMAD.md`'s wording covers it: canonical 0x7fc00000 on Blackhole, "might or
+    # might not" set on Wormhole. Where the pipeline also narrows, that sign becomes the
+    # observable result -- an infinity of one sign or the other -- and there is nothing sound to
+    # assert on Wormhole. Same gate and same per-lane relaxation the edge sweep applies at its
+    # nan_golden class; every measurement behind the xfail below is a p150, where this is False
+    # and the full assertion stands.
+    unspecified_sign = generated_nan_sign_is_asserted(
         formats.input_format,
         formats.output_format,
         dest_acc,
-    ) in _logsigmoid_nan_sign_cells():
+        on_wormhole=TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE,
+    )
+
+    # Only where the sign *is* asserted: with the comparison relaxed to magnitude the divergence
+    # cannot be observed, and the marker would be an XPASS every run.
+    if (
+        not unspecified_sign
+        and (
+            formats.input_format,
+            formats.output_format,
+            dest_acc,
+        )
+        in _logsigmoid_nan_sign_cells()
+    ):
         request.node.add_marker(
             pytest.mark.xfail(reason=_LOGSIGMOID_NAN_SIGN_REASON, strict=False)
         )
@@ -1106,6 +1127,7 @@ def test_eltwise_binary_sfpu_logsigmoid_specials(request, formats, dest_acc, mat
         dest_acc,
         mathop,
         src_A_override=_build_paired_tile_override(pairs, torch.float32),
+        unspecified_nonfinite_sign=unspecified_sign,
     )
 
 
@@ -1485,7 +1507,6 @@ def test_eltwise_binary_sfpu_uint32_high_range(mathop, dest_acc):
         dest_acc,
         mathop,
         src_A_override=_build_paired_tile_override(pairs, torch.int64),
-        twos_complement=True,
     )
 
 
@@ -1957,15 +1978,13 @@ _ZERO_SIGN_CELLS = (
 def _signed_zero_pole_cells():
     """The cells where a -0.0 driven *into* a registered pole actually reaches the LREG.
 
-    Derived from negative_zero_delivered() rather than listed, so a revision to the delivery
-    measurement moves these entries with it instead of leaving them behind. Distinct from
+    The unary suite asks the identical question of the identical grid, so the derivation itself
+    lives in sfpu_domains; this is the name the table below reads by. Distinct from
     _ZERO_SIGN_CELLS above, which is about the sign of a zero *result* on the SFPMAD path.
     """
-    return tuple(
-        (fmt.input_format, fmt.output_format, dest_acc)
-        for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
-        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
-        if negative_zero_delivered(fmt.input_format, dest_acc)
+    return signed_zero_pole_cells(
+        input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+        (DestAccumulation.No, DestAccumulation.Yes),
     )
 
 
@@ -2188,10 +2207,10 @@ _INT_EXTREME_OPS = [
     MathOperation.SfpuEqInt,
     MathOperation.SfpuNeInt,
     *_INT_COMPARISON_OPS,
-    # The arithmetic ops whose documented range reaches the extremes. gcd and max/min take the
-    # non-negative half (see _INT_EXTREMES_NON_NEGATIVE); rsub takes the whole thing, having no
-    # documented sub-range at all -- out = in1 - in0 is exact integer subtraction.
-    # The arithmetic int32 ops, all measured at the extremes before being added here.
+    # The arithmetic ops whose documented range reaches the extremes, all measured there before
+    # being added. Every one takes the full signed set except fmod, whose *golden* -- not the
+    # kernel -- is only valid on the non-negative half; that narrowing is
+    # _INT_EXTREMES_NON_NEGATIVE's, applied by _build_int_extremes_src.
     MathOperation.SfpuDivInt32,
     MathOperation.SfpuDivInt32Floor,
     MathOperation.SfpuFmodInt32,

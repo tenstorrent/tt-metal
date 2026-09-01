@@ -241,10 +241,12 @@ def test_generated_nan_sign_gate_is_the_narrowing_cells_on_wormhole_only():
 def test_binary_golden_dest_format_matches_the_domains_rule():
     """BinarySFPUGolden._dest_format and nan_survives_to_l1 must derive the same Dest.
 
-    Three places state this rule -- the unary golden, the binary golden, and sfpu_domains'
-    internal derivation -- and a silent disagreement would put the golden's NaN substitution on
-    a different set of cells than the gate that decides where the probe may be asserted. Checked
-    rather than commented, since the two live in different modules.
+    Two places state this rule -- golden_generators.sfpu_dest_format(), which every golden
+    delegates to, and sfpu_domains' internal derivation -- and a silent disagreement would put
+    the golden's NaN substitution on a different set of cells than the gate that decides where
+    the probe may be asserted. Checked rather than commented, since the two live in different
+    modules. This enters through BinarySFPUGolden._dest_format, its caller; the ternary half
+    below pins the shared function directly.
     """
     from helpers.golden_generators import BinarySFPUGolden
 
@@ -1158,9 +1160,10 @@ def test_edge_spec_cycles_probes_across_the_whole_face():
 def test_edge_spec_lets_a_caller_opt_out_of_cycling():
     """cycle=True is a default, not a fixed policy.
 
-    The int comparison sweep builds its own spec around a zero tail on purpose -- the tail is
-    its below-threshold probe -- so the knob has to stay reachable, or that sweep would have to
-    stop using this builder to keep its stimulus.
+    No sweep passes it today: the int comparison sweep builds its own spec around a zero tail
+    on purpose -- the tail is its below-threshold probe -- but it does so through
+    StimuliSpec.custom directly and never reaches this builder. So this test is what keeps the
+    knob reachable, for the sweep that next wants a probe the cycled face would destroy.
     """
     from helpers.sfpu_domains import edge_spec
 

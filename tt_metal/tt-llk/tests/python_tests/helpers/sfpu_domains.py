@@ -1971,9 +1971,10 @@ _COMPARISON_EDGE_OPS = (
 # lcm have identities there, and 0 annihilates the multiply and is neutral for max/min. 1 comes
 # with it as the multiplicative identity gcd and lcm are next most likely to disagree on.
 #
-# Registered here rather than in the test that drives them -- an op joins a sweep by gaining a
-# table entry -- which also makes the ledger tell the truth: from a test-file list, cat D read "no knee registered" for ops that
-# were being driven at one.
+# Registered here rather than in the test that drives them: an op joins the probe by gaining a
+# table entry, and the coverage ledger then derives cat D from the same place rather than from a
+# test-file list it cannot see. While the list lived in the test, cat D reported "no knee
+# registered" for ops that were being driven at one.
 #
 # The divisor ops are absent: a zero divisor is undefined for them (_INT_ZERO_UNDEFINED_DIVISOR
 # in the binary suite) and a zero dividend is an ordinary value, so there is nothing to register.
@@ -3012,8 +3013,8 @@ def _deliverable_extremes(
 ) -> List[float]:
     """format_extremes(*range_fmt*) minus the probes this pipeline cannot deliver.
 
-    One filter for both cat-F entry points, so edge_values(extremes=True) and extreme_values()
-    cannot come to disagree about which probes are sent. Today that is the subnormal alone: the
+    Factored out of extreme_values() rather than inlined, so the delivery rule is stated once
+    for cat F however many entry points it grows. Today that is the subnormal alone: the
     ceiling, its neighbour and the smallest normal all survive every pipeline cat F runs on,
     because a 16-bit Dest is bfloat16 or Float16 and both carry the exponent range that
     clip_to_format() has already bounded the probe by.
@@ -3215,10 +3216,11 @@ def extreme_values(
 ) -> List[float]:
     """The cat-F probe for this pipeline, and nothing else.
 
-    edge_values(extremes=True) returns cat F *alongside* the op's poles and knees, which is
-    right for a caller building one tensor per op; a sweep that wants one failure class per
-    variant needs cat F on its own, and deriving it by set-differencing two edge_values() calls
-    is the kind of cleverness that stops being right the moment either list gains a duplicate.
+    The only cat-F entry point, and deliberately separate from edge_values(): a sweep wants one
+    failure class per variant, so a saturation probe must not share a tensor with the op's poles
+    and knees, where one xfail would hide the other. edge_values() carries no cat-F flag for that
+    reason -- deriving cat F by set-differencing two of its calls is the kind of cleverness that
+    stops being right the moment either list gains a duplicate.
 
     No *op* argument, deliberately: the format's ceiling and its subnormal band are properties
     of the pipeline, not of the function evaluated on them. Which ops may be *driven* at them
@@ -3278,6 +3280,80 @@ def specials_safe_formats(
     ]
 
 
+def signed_zero_pole_cells(
+    formats: List["InputOutputFormat"],  # noqa: F821 - test-side type, duck-typed
+    dest_accs,
+) -> Tuple[Tuple[DataFormat, DataFormat, object], ...]:
+    """The cells of *formats* x *dest_accs* where a -0.0 driven into a pole reaches the LREG.
+
+    Derived from negative_zero_delivered() rather than listed, so a revision to the delivery
+    measurement moves the entries with it instead of leaving them behind. Shared because the
+    unary and binary suites ask the identical question of the identical grid, and two copies of
+    a derivation are two things to keep in step; this is the cat-A twin of the cat-B gate above,
+    and unlike it takes no specials_safe() -- the -0.0 at a registered pole comes from
+    boundary_probes(), not from FLOAT_SPECIALS, so delivery alone decides it.
+
+    Duck-typed on *formats* for the reason specials_safe_formats() is: InputOutputFormat is a
+    test-side type and this module does not import it.
+    """
+    return tuple(
+        (fmt.input_format, fmt.output_format, dest_acc)
+        for fmt in formats
+        for dest_acc in dest_accs
+        if negative_zero_delivered(fmt.input_format, dest_acc)
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mixed-magnitude block-float blocks
+#
+# Bfp8_b, Bfp4_b and Bfp2_b share one exponent per BLOCK_SPREAD_ELEMENTS-element block, so the
+# stimulus that exercises the format is a block of one large element and fifteen small ones --
+# every other spec here is a narrow-range uniform or gaussian, and the shared exponent never
+# bites. Shared by the unary and ternary suites so the decades and the quantization model they
+# each measure against cannot drift apart.
+# ─────────────────────────────────────────────────────────────────────────────
+
+BLOCK_SPREAD_ELEMENTS = 16
+
+# The spread, in binary decades below the block's largest element. 4 keeps every element inside
+# Bfp8_b's 7 magnitude bits, 12 flushes the tail of the block, and 24 flushes most of it -- the
+# walk from "all values keep full mantissa" to "the small ones are gone".
+BLOCK_SPREAD_DECADES = (4, 12, 24)
+
+# The largest element of every block. 1.0 rather than an op's domain ceiling: it is exact in
+# every format, and it keeps the whole spread inside the domain of the ops the sweeps select,
+# which is what makes that selection a domain question rather than a magnitude one.
+BLOCK_SPREAD_HIGH = 1.0
+
+
+def block_spread_spec(decades: int, seed: int = 0) -> StimuliSpec:
+    """One element at BLOCK_SPREAD_HIGH per block, the rest log-spaced *decades* below it.
+
+    Log-spaced rather than linear so the block spans the exponent range evenly: what the shared
+    exponent does to an element depends on its distance from the block maximum in *binades*, so
+    a linear ramp would put almost every element in the top binade and quantize none of them.
+
+    *seed* only makes the specs of a multi-operand caller distinguishable objects; the pattern
+    is deterministic and identical across them, which is what keeps a ternary product exactly
+    reproducible.
+    """
+
+    def face(size, dtype, generator):
+        steps = torch.tensor(
+            [0.0]
+            + [
+                -(decades * i) / (BLOCK_SPREAD_ELEMENTS - 1)
+                for i in range(1, BLOCK_SPREAD_ELEMENTS)
+            ],
+            dtype=torch.float32,
+        )
+        block = BLOCK_SPREAD_HIGH * torch.pow(2.0, steps)
+        return block.repeat(-(-size // BLOCK_SPREAD_ELEMENTS))[:size].to(dtype)
+
+    return StimuliSpec(distribution=face, seed=seed)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # edge_spec — the one builder the per-family edge tests call
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3301,21 +3377,19 @@ def edge_values(
     specials: bool = False,
     include_undefined: bool = False,
     dest_acc: Optional[Union[bool, Enum]] = None,
-    extremes: bool = False,
 ) -> List[float]:
     """Every value worth hitting on purpose for (*op*, *operand*) in this pipeline.
 
-    Four sources, matching the audit's edge categories:
+    Three sources, matching the audit's edge categories:
       * cat A — boundary_probes(): the op's singularities, straddled.
       * cat D — op_edge_points(): knees, thresholds, exact rounding ties.
       * cat B — format_specials(), only when *specials* is True. The caller decides via
         specials_safe(input_format, output_format, dest_acc); it is off by default
         because injecting them on the wrong triple is a wall of failures with one root
         cause (see the section above).
-      * cat F — format_extremes(), only when *extremes* is True, decided by the caller via
-        EXTREMES_READY_OPS and extremes_safe(). A separate flag from *specials* and not a
-        synonym for it: the delivery rules differ and so do the failure classes, so folding
-        the two would give one xfail covering an unpack question and a saturation one.
+    Cat F is not here: a format extreme is a different failure class from a pole or a special,
+    and one tensor carrying both would let a saturation xfail hide an unpack one. It has its own
+    entry point, extreme_values(), and its own sweeps.
 
     Clipped against the *narrowest* format in the pipeline, not the input format, which is why
     the signature takes both: a caller that passes a spec to a driver bypasses the driver's own for_op_pipeline() resolution entirely
@@ -3345,13 +3419,6 @@ def edge_values(
         # Specials are an exponent-range property, so they key off range_fmt: it is what
         # decides integer extremes vs IEEE non-finites, and what clip_to_format honours.
         vals += list(format_specials(range_fmt))
-    if extremes:
-        # Cat F off range_fmt for the same reason cat B is: the ceiling and the subnormal band
-        # are properties of the narrowest exponent range in the pipeline, and format_extremes()
-        # is built against the very table clip_to_format() clips with, so nothing it emits is
-        # then dropped. The caller has already asked extremes_safe(), which rejects the integer
-        # and block-float legs format_extremes() would raise on.
-        vals += _deliverable_extremes(range_fmt, input_format, dest_acc)
 
     if not range_fmt.is_integer() and not negative_zero_delivered(
         input_format, dest_acc
@@ -3377,7 +3444,6 @@ def edge_spec(
     specials: bool = False,
     include_undefined: bool = False,
     dest_acc: Optional[Union[bool, Enum]] = None,
-    extremes: bool = False,
     **kwargs,
 ) -> Optional[StimuliSpec]:
     """edge_values() as a StimuliSpec, or None if *op* has no edge worth probing.
@@ -3391,8 +3457,10 @@ def edge_spec(
     the first vector op, hiding any lane-position-dependent defect and leaving PCC a statement
     about the filler. It also drove an unrecorded out-of-domain 0.0 into Acosh, Log and Rsqrt.
     Cycling loses nothing: 0.0 is a registered pole or knee wherever it means anything. Pass
-    ``cycle=False`` for a probe that genuinely depends on the tail — the int comparison sweep is
-    the one place that does.
+    ``cycle=False`` for a probe that genuinely depends on the zero tail. Nothing in the tree does
+    today -- the int comparison sweep looks like the exception but builds its own
+    StimuliSpec.custom and never reaches here -- so the opt-out is kept working by
+    test_edge_spec_lets_a_caller_opt_out_of_cycling rather than by a caller.
 
     ``custom`` is per-face only (generate_full_tensor raises), so the pattern repeats in every
     face; ``custom_faces`` is available when faces must differ.
@@ -3409,7 +3477,6 @@ def edge_spec(
         specials,
         include_undefined,
         dest_acc,
-        extremes,
     )
     if not vals:
         return None

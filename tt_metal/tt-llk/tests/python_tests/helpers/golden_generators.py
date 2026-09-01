@@ -193,6 +193,11 @@ def sfpu_dest_format(
     One derivation for all three families and for sfpu_domains.nan_survives_to_l1();
     test_sfpu_domains pins them together, since disagreement would put a golden's NaN
     substitution on different cells than the gate that decides where a probe is assertable.
+
+    Every caller delegates the whole rule. UnarySFPUGolden.__call__ is the only one that gates
+    it, on two legs this rule says nothing about -- an MX input, which always unpacks to
+    Float16_b, and the SrcS path, where a 16-bit float stays 16-bit -- and falls through to here
+    for the rest.
     """
     if dest_acc == DestAccumulation.Yes:
         return DataFormat.Float32
@@ -2515,7 +2520,9 @@ class UnarySFPUGolden:
                 reduced, input_format, data_format, self.dest_acc, reduce_pool
             )
 
-        # determine the data format for dst
+        # determine the data format for dst. Two unary-only exceptions first, then the shared
+        # rule: this path has an MX leg and a SrcS leg that the binary and ternary goldens have
+        # no equivalent of, and everything past them is sfpu_dest_format()'s.
         if input_format.is_mx_format():
             # MX in L1 always unpacks to Float16_b even if dest_acc=Yes.
             dst_format = DataFormat.Float16_b
@@ -2525,12 +2532,8 @@ class UnarySFPUGolden:
         ):
             # SrcS: fp16 stays 16-bit; dest_acc does not widen.
             dst_format = input_format
-        elif self.dest_acc == DestAccumulation.Yes:
-            dst_format = DataFormat.Float32
-        elif DataFormat.Float16 in (input_format, data_format):
-            dst_format = DataFormat.Float16
         else:
-            dst_format = DataFormat.Float16_b
+            dst_format = sfpu_dest_format(input_format, data_format, self.dest_acc)
 
         self.dst_format = dst_format
 
@@ -3403,15 +3406,7 @@ class UnarySFPUGolden:
         if reduce_pool in cls._SFPMAD_REDUCE_POOLS:
             reduced = torch.where(torch.isnan(reduced), reduced.abs(), reduced)
 
-        dst_format = (
-            DataFormat.Float32
-            if dest_acc == DestAccumulation.Yes
-            else (
-                DataFormat.Float16
-                if DataFormat.Float16 in (input_format, output_format)
-                else DataFormat.Float16_b
-            )
-        )
+        dst_format = sfpu_dest_format(input_format, output_format, dest_acc)
         result = cast_to_dest_dtype(
             reduced.to(torch.float32), format_dict[dst_format]
         ).float()

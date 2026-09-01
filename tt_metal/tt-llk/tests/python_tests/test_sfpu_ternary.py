@@ -22,8 +22,10 @@ from helpers.llk_params import (
 from helpers.param_config import input_output_formats, parametrize, runtime
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
+    BLOCK_SPREAD_DECADES,
     TERNARY_SPECIALS_READY_OPS,
     Operand,
+    block_spread_spec,
     edge_values,
     exclude_undefined_pair,
     for_op,
@@ -702,39 +704,17 @@ def test_sfpu_addcmul_cancellation(formats, dest_acc, mathop):
 # ─────────────────────────────────────────────────────────────────────────────
 # Mixed-magnitude block-float blocks, ternary side
 #
-# Reasoning is in the unary half, test_eltwise_unary_sfpu_block_spread. addcmul is the only
-# ternary op the suite drives on Bfp8_b and a good subject: no pole and no knee, so a mixed block
-# is the only thing the variant asks about, and its three operands each carry their own shared
-# exponent -- which is why the spread is driven on all three. Quantization is per operand, so
-# pinning two to a narrow range would leave two thirds of the question untested, and there is no
-# second failure class here to keep separate.
+# The stimulus is sfpu_domains.block_spread_spec(), the same builder and the same decades the
+# unary half drives; the reasoning for its shape is there and in that half's header. The three
+# operands differ only in *seed*, which makes the specs distinguishable objects -- the pattern
+# is identical across them, which is what keeps a + value*b*c exactly reproducible.
+#
+# addcmul is the only ternary op the suite drives on Bfp8_b and a good subject: no pole and no
+# knee, so a mixed block is the only thing the variant asks about, and its three operands each
+# carry their own shared exponent -- which is why the spread is driven on all three. Quantization
+# is per operand, so pinning two to a narrow range would leave two thirds of the question
+# untested, and there is no second failure class here to keep separate.
 # ─────────────────────────────────────────────────────────────────────────────
-
-_BLOCK_ELEMENTS = 16
-_BLOCK_SPREAD_DECADES = (4, 12, 24)
-
-
-def _block_spread_spec(decades, seed):
-    """One element at 1.0 per 16-element block, the rest log-spaced 2**-decades below it.
-
-    Seeded per operand only so the three specs are distinguishable objects; the pattern is
-    deterministic and identical across them, which is what makes the product a + value*b*c
-    exactly reproducible.
-    """
-
-    def face(size, dtype, generator):
-        steps = torch.tensor(
-            [0.0]
-            + [
-                -(decades * i) / (_BLOCK_ELEMENTS - 1)
-                for i in range(1, _BLOCK_ELEMENTS)
-            ],
-            dtype=torch.float32,
-        )
-        block = torch.pow(2.0, steps)
-        return block.repeat(-(-size // _BLOCK_ELEMENTS))[:size].to(dtype)
-
-    return StimuliSpec(distribution=face, seed=seed)
 
 
 @pytest.mark.nightly
@@ -742,7 +722,7 @@ def _block_spread_spec(decades, seed):
     formats=input_output_formats([DataFormat.Bfp8_b], same=True),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=MathOperation.SfpuAddcmul,
-    decades=runtime(list(_BLOCK_SPREAD_DECADES)),
+    decades=runtime(list(BLOCK_SPREAD_DECADES)),
 )
 def test_sfpu_ternary_block_spread(formats, dest_acc, mathop, decades):
     """addcmul on three Bfp8_b operands whose blocks span the shared exponent."""
@@ -750,9 +730,9 @@ def test_sfpu_ternary_block_spread(formats, dest_acc, mathop, decades):
         formats,
         dest_acc,
         mathop,
-        spec_A=_block_spread_spec(decades, seed=0),
-        spec_B=_block_spread_spec(decades, seed=1),
-        spec_C=_block_spread_spec(decades, seed=2),
+        spec_A=block_spread_spec(decades, seed=0),
+        spec_B=block_spread_spec(decades, seed=1),
+        spec_C=block_spread_spec(decades, seed=2),
     )
 
 
@@ -999,12 +979,20 @@ def test_ttnn_where_mcw(
 # Values come from edge_values() like every other cat-B sweep, so where enrols through
 # TERNARY_SPECIALS_READY_OPS and the -0.0 probe is dropped by negative_zero_delivered() on the
 # pipelines that flatten it.
+#
+# Two variants, not one. A -0.0 *condition* is the only where probe that diverges, and the
+# driver asserts a whole tile at once, so it gets its own variant -- otherwise its xfail would
+# stand for every special in the same tile and hide a regression on any of them.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Constants for the two operands not under test: exact in every format here, and distinct from
 # each other so the result says which branch was taken.
 _WHERE_TRUE_CONST = 2.0
 _WHERE_FALSE_CONST = 11.0
+
+
+def _is_negative_zero(value):
+    return value == 0.0 and math.copysign(1.0, value) < 0.0
 
 
 def _where_const_tile(value, fmt, dimensions):
@@ -1036,25 +1024,38 @@ def _where_probe_tile(values, fmt, dimensions):
     # runtime(): the operand axis changes the three tensors and nothing about the kernel.
     operand=runtime(list(_TERNARY_OPERANDS)),
 )
-def test_ttnn_where_specials(request, formats, dest_acc, mathop, operand):
+def test_ttnn_where_specials(formats, dest_acc, mathop, operand):
     """Drive IEEE specials into one where operand, with the other two held at constants."""
     _skip_unsupported_where(formats, dest_acc)
 
     specials = _ternary_cat_b_enabled(mathop, formats, dest_acc)
-    vals = [
-        v
-        for v in edge_values(
-            mathop,
-            formats.input_format,
-            formats.output_format,
-            operand=operand,
-            specials=specials,
-            dest_acc=dest_acc,
-        )
-        # where has no pole and no knee, so without cat B edge_values() returns nothing at all;
-        # the finiteness filter is here to keep the two zeros, which are cat B's and are the
-        # condition operand's most interesting probe.
-    ]
+    # Nothing is filtered: where has no pole and no knee, so edge_values() is cat B alone here
+    # and every special it returns -- the NaN, both infinities and both zeros -- is a probe this
+    # variant wants. Stated because the finite/non-finite partition _ternary_edge_class_values()
+    # uses looks like it belongs here too, and applying it would silently drop the NaN and the
+    # infinities from a variant whose whole subject is them.
+    vals = edge_values(
+        mathop,
+        formats.input_format,
+        formats.output_format,
+        operand=operand,
+        specials=specials,
+        dest_acc=dest_acc,
+    )
+
+    if operand == Operand.A:
+        # The -0.0 condition is driven by test_ttnn_where_negative_zero_condition instead, and
+        # has to leave here: _run_ttnn_where makes one aggregate torch_equal_nan assert over the
+        # whole tile, so the xfail that divergence needs would absorb a future regression on the
+        # NaN or either infinity into the same expected failure. One failure class per variant,
+        # the way the binary suite splits on (op, edge_class). Dropped unconditionally rather
+        # than only on the delivering cells, so this variant drives the same condition probe
+        # everywhere and its verdict does not change shape with the pipeline.
+        #
+        # Before the producer guard below, not after: the guard's job is to leave the compile
+        # producer with a non-empty list, and a filter applied downstream of it could empty the
+        # list again and skip the build the other five variants share.
+        vals = [v for v in vals if not _is_negative_zero(v)]
 
     if not vals and TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         # `operand` is runtime() here too, so the same starvation is available. It does not
@@ -1068,27 +1069,6 @@ def test_ttnn_where_specials(request, formats, dest_acc, mathop, operand):
         pytest.skip(
             reason=f"cat B is off for {mathop.name} on this pipeline, and where has no "
             "other edge"
-        )
-
-    # A -0.0 *condition* selects the true branch on the unpack-to-dest path, where a real -0.0
-    # reaches the LREG; `-0.0 == 0` makes it the false branch. Outside the documented contract
-    # rather than a hardware fault: SFPSETCC is specified only for inputs that are not negative
-    # zero (tt-isa-documentation WormholeB0/.../VectorUnit.md, identically on Blackhole), which
-    # is the same caveat that scopes Sign's and Heaviside's divergences in the unary suite -- and
-    # to the same set of cells, since negative_zero_delivered() is what decides both. Measured on
-    # a Blackhole p150: the only divergent lane, on the only cell that delivers the probe.
-    #
-    # Non-strict, and derived from the delivery gate rather than listed, so a cell drifting in or
-    # out of it reports a behaviour change instead of leaving a stale table.
-    if operand == Operand.A and negative_zero_delivered(formats.input_format, dest_acc):
-        request.node.add_marker(
-            pytest.mark.xfail(
-                reason="where(-0.0, t, f) returns t; -0.0 == 0 makes it f. Outside the "
-                "documented contract: SFPSETCC is specified only for inputs that are not "
-                "negative zero. Same caveat and same unpack-to-dest scoping as Sign and "
-                "Heaviside.",
-                strict=False,
-            )
         )
 
     dimensions = (64, 64)
@@ -1113,4 +1093,56 @@ def test_ttnn_where_specials(request, formats, dest_acc, mathop, operand):
         tiles[Operand.A],
         tiles[Operand.B],
         tiles[Operand.C],
+    )
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=MathOperation.TTNNWhere,
+)
+def test_ttnn_where_negative_zero_condition(request, formats, dest_acc, mathop):
+    """A -0.0 condition on its own, because it is the one where probe that diverges.
+
+    Split out of test_ttnn_where_specials rather than xfailed inside it: _run_ttnn_where makes
+    one aggregate comparison over the whole tile, so an xfail covering this divergence would
+    also cover a future NaN or infinity regression on the same condition operand and report it
+    as the expected failure. Same reason the binary edge sweep keys its xfails on
+    (op, edge_class) instead of on op.
+
+    Runs on every cell, including the ones that flatten the probe to +0.0, where it passes
+    vacuously -- the unary suite's Sign and Heaviside entries are scoped the same way. That
+    keeps the xfail derived from negative_zero_delivered() rather than from a listed set of
+    cells, so a cell drifting in or out of delivery reports a behaviour change instead of
+    leaving a stale table behind.
+    """
+    _skip_unsupported_where(formats, dest_acc)
+
+    # A -0.0 *condition* selects the true branch on the unpack-to-dest path, where a real -0.0
+    # reaches the LREG; `-0.0 == 0` makes it the false branch. Outside the documented contract
+    # rather than a hardware fault: SFPSETCC is specified only for inputs that are not negative
+    # zero (tt-isa-documentation WormholeB0/.../VectorUnit.md, identically on Blackhole), which
+    # is the same caveat that scopes Sign's and Heaviside's divergences in the unary suite -- and
+    # to the same set of cells, since negative_zero_delivered() is what decides both. Measured on
+    # a Blackhole p150: the only divergent lane, on the only cell that delivers the probe.
+    if negative_zero_delivered(formats.input_format, dest_acc):
+        request.node.add_marker(
+            pytest.mark.xfail(
+                reason="where(-0.0, t, f) returns t; -0.0 == 0 makes it f. Outside the "
+                "documented contract: SFPSETCC is specified only for inputs that are not "
+                "negative zero. Same caveat and same unpack-to-dest scoping as Sign and "
+                "Heaviside.",
+                strict=False,
+            )
+        )
+
+    dimensions = (64, 64)
+    _run_ttnn_where(
+        formats,
+        dest_acc,
+        mathop,
+        _where_probe_tile([-0.0], formats.input_format, dimensions),
+        _where_const_tile(_WHERE_TRUE_CONST, formats.input_format, dimensions),
+        _where_const_tile(_WHERE_FALSE_CONST, formats.input_format, dimensions),
     )
