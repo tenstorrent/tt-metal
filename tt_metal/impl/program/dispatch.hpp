@@ -120,7 +120,7 @@ uint32_t finalize_cross_node_dfbs(
     ttsl::Span<detail::ProgramImpl*> programs,
     uint32_t base_offset);
 
-uint32_t finalize_persistent_dfbs(
+uint32_t finalize_prefetcher_pipes(
     uint32_t programmable_core_type_index, ttsl::Span<detail::ProgramImpl*> programs, uint32_t base_offset);
 
 // Cores of a kernel group that share the same CrossNodeDFB kernel-config payload.
@@ -133,7 +133,7 @@ struct CrossNodeDFBCoreGroup {
     CoreRangeSet cores;
 };
 
-struct PersistentDFBCoreGroup {
+struct PrefetcherPipeCoreGroup {
     std::vector<uint32_t> payload;
     CoreCoord representative_core;
     CoreRangeSet cores;
@@ -150,10 +150,10 @@ std::vector<CrossNodeDFBCoreGroup> partition_cores_by_cross_node_dfb_payload(
         per_core_cross_node_dfbs,
     uint8_t num_program_slots);
 
-std::vector<PersistentDFBCoreGroup> partition_cores_by_persistent_dfb_payload(
+std::vector<PrefetcherPipeCoreGroup> partition_cores_by_prefetcher_pipe_payload(
     const CoreRangeSet& kernel_group_cores,
-    const std::unordered_map<CoreCoord, std::vector<detail::ProgramImpl::PersistentDFBParticipant>>&
-        per_core_persistent_dfbs,
+    const std::unordered_map<CoreCoord, std::vector<detail::ProgramImpl::PrefetcherPipeParticipant>>&
+        per_core_prefetcher_pipes,
     uint8_t num_program_slots);
 
 uint32_t finalize_kernel_bins(

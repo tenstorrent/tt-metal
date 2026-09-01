@@ -156,7 +156,7 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/endpoints.h
     inc/api/dataflow/circular_buffer.h
     inc/api/dataflow/cross_node_dfb.h
-    inc/api/dataflow/persistent_dfb.h
+    inc/api/dataflow/prefetcher_pipe.h
     inc/api/dataflow/dataflow_buffer.h
     inc/experimental/kernel_args.h
     inc/experimental/blaze_named_args.h
@@ -180,7 +180,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/circular_buffer_interface.h
     inc/internal/circular_buffer_init.h
     inc/internal/cross_node_dfb_init.h
-    inc/internal/persistent_dfb_init.h
+    inc/internal/prefetcher_pipe_init.h
     inc/internal/cross_node_dfb_interface.h
     inc/internal/firmware_common.h
     inc/internal/mod_div_lib.h

@@ -139,7 +139,7 @@ public:
         const uint32_t launch_index = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
         const auto* launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_index]);
         const auto& kernel_config = launch_msg->kernel_config;
-        ASSERT(kernel_config.cross_node_dfb_offset != CROSS_NODE_DFB_OFFSET_NONE);
+        ASSERT(kernel_config.cross_node_dfb_offset != REMOTE_DFB_OFFSET_NONE);
 
         const uint32_t kernel_config_base = kernel_config.kernel_config_base[PROGRAMMABLE_CORE_TYPE];
         volatile tt_l1_ptr uint32_t* region =
@@ -147,7 +147,7 @@ public:
         ASSERT(remote_dfb_id < region[0]);
 
         volatile tt_l1_ptr uint32_t* slot =
-            region + CROSS_NODE_DFB_REGION_HEADER_WORDS + remote_dfb_id * UINT32_WORDS_PER_CROSS_NODE_DFB_CONFIG;
+            region + REMOTE_DFB_REGION_HEADER_WORDS + remote_dfb_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
         setup_cross_node_dfb_interface(
             interface_, /*config_page_addr=*/slot[0], /*entry_size=*/slot[1], /*relay_dfb_id=*/slot[2]);
     }

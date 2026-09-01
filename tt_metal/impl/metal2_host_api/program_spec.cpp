@@ -2530,15 +2530,15 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
 
 // Create map of local accessor name -> DFB device slot. This is the value baked into the kernel's
 // dfb::<name> accessor, so it must be the device slot rather than the program-wide id.
-// `dfb_name_to_is_relay` marks CrossNode/Persistent relay locals so codegen emits
+// `dfb_name_to_is_relay` marks CrossNode/PrefetcherPipe relay locals so codegen emits
 // RelayDFBBindingToken instead of DFBBindingToken.
-// `dfb_name_to_persistent_dfb_id` carries the Persistent slot for Persistent relays (0xFF
+// `dfb_name_to_prefetcher_pipe_id` carries the PrefetcherPipe slot for PrefetcherPipe relays (0xFF
 // otherwise) so TRISC construction can align to the durable checkpoint.
 tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const KernelSpec& kernel_spec,
     const DFBNameToSlotMap& dfb_name_to_slot,
     const std::unordered_map<DFBSpecName, bool>& dfb_name_to_is_relay,
-    const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_persistent_dfb_id) {
+    const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
@@ -2550,13 +2550,13 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
             dfb_binding.dfb_spec_name,
             slot);
         const bool is_relay = dfb_name_to_is_relay.at(dfb_binding.dfb_spec_name);
-        const uint8_t persistent_dfb_id = dfb_name_to_persistent_dfb_id.at(dfb_binding.dfb_spec_name);
+        const uint8_t prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
         out.emplace(
             dfb_binding.accessor_name,
             tt::tt_metal::DataflowBufferBindingHandle{
                 .logical_dfb_id = static_cast<uint16_t>(slot),
                 .is_relay = is_relay,
-                .persistent_dfb_id = persistent_dfb_id});
+                .prefetcher_pipe_id = prefetcher_pipe_id});
     }
     return out;
 }
@@ -3046,9 +3046,9 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         }
     }
 
-    std::unordered_map<DFBSpecName, uint8_t> dfb_name_to_persistent_dfb_id;
+    std::unordered_map<DFBSpecName, uint8_t> dfb_name_to_prefetcher_pipe_id;
     for (const auto& [dfb_name, dfb_id] : dfb_name_to_id) {
-        dfb_name_to_persistent_dfb_id[dfb_name] = program_impl->get_persistent_dfb_id_for_relay(dfb_id).value_or(0xFF);
+        dfb_name_to_prefetcher_pipe_id[dfb_name] = program_impl->get_prefetcher_pipe_id_for_relay(dfb_id).value_or(0xFF);
     }
 
     // Wire alias groups: for each DFB that has alias_with entries, make the first
@@ -3097,7 +3097,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
         // Make the local accessor name -> DFB device slot map for this kernel
         const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles = MakeDataflowBufferBindingHandles(
-            kernel_spec, dfb_name_to_slot, dfb_name_to_is_relay, dfb_name_to_persistent_dfb_id);
+            kernel_spec, dfb_name_to_slot, dfb_name_to_is_relay, dfb_name_to_prefetcher_pipe_id);
         const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
             MakeSemaphoreBindingHandles(kernel_spec, semaphore_name_to_id);
 

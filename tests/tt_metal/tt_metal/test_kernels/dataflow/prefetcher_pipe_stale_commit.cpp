@@ -5,7 +5,7 @@
 // Sender-only kernel that proves commit() rejects a stale entry_size epoch.
 //
 // Compile-time args:
-//   [0] persistent_dfb_id
+//   [0] prefetcher_pipe_id
 //   [1] entry_size          - initial / dense-slot size (E1)
 //   [2] new_entry_size      - resize target (E2); must differ from E1
 //   [3] poison_wr_ptr       - value that must NOT land in word[4] on stale commit
@@ -13,17 +13,17 @@
 // Runtime args:
 //   [0] l1_staging_addr
 
-#include "api/dataflow/persistent_dfb.h"
+#include "api/dataflow/prefetcher_pipe.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 
 namespace experimental {
 
-// This test-only friend is declared by PersistentDFB only when
-// PERSISTENT_DFB_TEST_HELPERS is defined. It is intentionally not part of the
+// This test-only friend is declared by PrefetcherPipe only when
+// PREFETCHER_PIPE_TEST_HELPERS is defined. It is intentionally not part of the
 // production object API.
 FORCE_INLINE void test_stale_commit_after_resize(
-    PersistentDFB& dfb, uint32_t new_entry_size, uint32_t stale_entry_size, uint32_t poison_wr_ptr) {
+    PrefetcherPipe& dfb, uint32_t new_entry_size, uint32_t stale_entry_size, uint32_t poison_wr_ptr) {
     CrossNodeSenderDFBInterface& iface = dfb.interface_.sender;
     ASSERT(
         static_cast<bool>(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.config_ptr)[REMOTE_DFB_CFG_IS_SENDER]));
@@ -36,7 +36,7 @@ FORCE_INLINE void test_stale_commit_after_resize(
     iface.fifo_wr_ptr = iface.fifo_start_addr + dfb.derived_wr_offset(iface, 0);
     dfb.resize_sender_interface<false>(new_entry_size, noc_index);
     volatile tt_l1_ptr uint32_t* config = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.config_ptr);
-    config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE] = iface.fifo_page_size;
+    config[PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE] = iface.fifo_page_size;
 
     // Make the stale iface resolve to a distinct, valid credit-derived cursor.
     volatile tt_l1_ptr uint32_t* sent_ptr = dfb.local_sent_ptr(iface, 0);
@@ -57,7 +57,7 @@ FORCE_INLINE void test_stale_commit_after_resize(
 }  // namespace experimental
 
 void kernel_main() {
-    constexpr uint8_t persistent_dfb_id = get_compile_time_arg_val(0);
+    constexpr uint8_t prefetcher_pipe_id = get_compile_time_arg_val(0);
     constexpr uint32_t entry_size = get_compile_time_arg_val(1);
     constexpr uint32_t new_entry_size = get_compile_time_arg_val(2);
     constexpr uint32_t poison_wr_ptr = get_compile_time_arg_val(3);
@@ -66,7 +66,7 @@ void kernel_main() {
     static_assert(entry_size != new_entry_size, "stale-commit test requires distinct entry sizes");
 
     Noc noc;
-    experimental::PersistentDFB dfb(persistent_dfb_id);
+    experimental::PrefetcherPipe dfb(prefetcher_pipe_id);
 
     // Advance one entry so the durable checkpoint is not fifo_start.
     dfb.reserve_back(1);
@@ -76,5 +76,5 @@ void kernel_main() {
 
     // A stale entry-size epoch must not overwrite word[4] with poison_wr_ptr.
     experimental::test_stale_commit_after_resize(dfb, new_entry_size, entry_size, poison_wr_ptr);
-    // ~PersistentDFB commits the restored credit-derived cursor under the live E2 epoch.
+    // ~PrefetcherPipe commits the restored credit-derived cursor under the live E2 epoch.
 }

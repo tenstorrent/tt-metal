@@ -108,7 +108,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
         const auto& kernel_groups = program.impl().get_kernel_groups(index);
         ASSERT_FALSE(kernel_groups.empty());
         EXPECT_NE(
-            kernel_groups[0]->launch_msg.view().kernel_config().cross_node_dfb_offset(), CROSS_NODE_DFB_OFFSET_NONE);
+            kernel_groups[0]->launch_msg.view().kernel_config().cross_node_dfb_offset(), REMOTE_DFB_OFFSET_NONE);
     }
     // UpdateDynamicCrossNodeDFBAddress: valid case - retargets to a distinct matching buffer.
     {
@@ -158,7 +158,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
         EXPECT_THROW(
             experimental::UpdateDynamicCrossNodeDFBAddress(program, remote_dfb_id, *dummy_data), std::exception);
     }
-    // No CrossNodeDFBs created: cross_node_dfb_offset must be CROSS_NODE_DFB_OFFSET_NONE.
+    // No CrossNodeDFBs created: cross_node_dfb_offset must be REMOTE_DFB_OFFSET_NONE.
     {
         tt_metal::Program program = CreateProgram();
         tt::tt_metal::CreateKernel(
@@ -171,13 +171,13 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
         program.impl().finalize_offsets(mesh_device.get());
         const auto& hal = MetalContext::instance().hal();
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-        EXPECT_EQ(program.impl().get_program_config(index).cross_node_dfb_offset, CROSS_NODE_DFB_OFFSET_NONE);
+        EXPECT_EQ(program.impl().get_program_config(index).cross_node_dfb_offset, REMOTE_DFB_OFFSET_NONE);
     }
 }
 
 // MeshWorkload finalizes offsets across all programs together. Programs can share logical
 // core coordinates across device ranges; a program with no CrossNodeDFB must keep
-// CROSS_NODE_DFB_OFFSET_NONE even when another program in the workload has participants on
+// REMOTE_DFB_OFFSET_NONE even when another program in the workload has participants on
 // the same logical cores.
 TEST_F(CrossNodeDFBFixture, MeshWorkload_CrossNodeOffsetUsesPerProgramParticipants) {
     auto mesh_device = devices_[0];
@@ -224,7 +224,7 @@ TEST_F(CrossNodeDFBFixture, MeshWorkload_CrossNodeOffsetUsesPerProgramParticipan
             kg->launch_msg.view().kernel_config().cross_node_dfb_offset(), static_cast<uint16_t>(kSharedRegionOffset));
     }
     for (const auto& kg : program_without_cn.impl().get_kernel_groups(index)) {
-        EXPECT_EQ(kg->launch_msg.view().kernel_config().cross_node_dfb_offset(), CROSS_NODE_DFB_OFFSET_NONE);
+        EXPECT_EQ(kg->launch_msg.view().kernel_config().cross_node_dfb_offset(), REMOTE_DFB_OFFSET_NONE);
     }
 }
 
@@ -284,7 +284,7 @@ TEST_F(CrossNodeDFBFixture, DispatchPartitionsHeterogeneousKernelGroupByPayload)
     for (const auto& group : groups) {
         EXPECT_FALSE(group.cores.contains(non_participant_core));
         total_cores += group.cores.num_cores();
-        const uint32_t relay_word = group.payload[CROSS_NODE_DFB_REGION_HEADER_WORDS + 2];
+        const uint32_t relay_word = group.payload[REMOTE_DFB_REGION_HEADER_WORDS + 2];
         if (group.cores.contains(sender_core)) {
             EXPECT_EQ(group.cores.num_cores(), 1u);
             EXPECT_EQ(relay_word, std::numeric_limits<uint8_t>::max());
@@ -399,14 +399,14 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI_IndependentTopologiesUseProg
     ASSERT_EQ(groups.size(), 2u);
     for (const auto& group : groups) {
         ASSERT_EQ(group.payload[0], 2u);
-        ASSERT_EQ(group.payload.size(), cross_node_dfb_config_region_words(2));
+        ASSERT_EQ(group.payload.size(), remote_dfb_config_region_words(2));
         const bool is_topology0 = group.cores.contains(sender0);
         const uint32_t participant_slot = is_topology0 ? 0u : 1u;
         const uint32_t non_participant_slot = is_topology0 ? 1u : 0u;
         const uint32_t participant_base =
-            CROSS_NODE_DFB_REGION_HEADER_WORDS + participant_slot * CROSS_NODE_DFB_CONFIG_WORDS;
+            REMOTE_DFB_REGION_HEADER_WORDS + participant_slot * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
         const uint32_t non_participant_base =
-            CROSS_NODE_DFB_REGION_HEADER_WORDS + non_participant_slot * CROSS_NODE_DFB_CONFIG_WORDS;
+            REMOTE_DFB_REGION_HEADER_WORDS + non_participant_slot * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
         EXPECT_EQ(
             group.payload[participant_base], program.impl().get_cross_node_dfb(participant_slot).config_address());
         EXPECT_EQ(group.payload[participant_base + 1], 256u);
@@ -425,8 +425,8 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI_IndependentTopologiesUseProg
     constexpr uint32_t kBase = 256;
     const uint32_t next = program_dispatch::finalize_cross_node_dfbs(
         metal_ctx, index, ttsl::Span<detail::ProgramImpl*>(programs, 1), kBase);
-    const uint32_t l1_align = hal.get_alignment(HalMemType::L1);
-    const uint32_t region_bytes = cross_node_dfb_config_region_words(2) * sizeof(uint32_t);
+    const uint32_t l1_align = metal_ctx.hal().get_alignment(HalMemType::L1);
+    const uint32_t region_bytes = remote_dfb_config_region_words(2) * sizeof(uint32_t);
     const uint32_t expected_next = (kBase + region_bytes + l1_align - 1) & ~(l1_align - 1);
     EXPECT_EQ(next, expected_next);
     for (const auto& kg : program.impl().get_kernel_groups(index)) {

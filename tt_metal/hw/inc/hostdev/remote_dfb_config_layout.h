@@ -6,13 +6,13 @@
 
 #include <cstdint>
 
-// Remote-DFB config page layouts used by CrossNodeDFB and PersistentDFB.
+// Remote-DFB config page layouts used by CrossNodeDFB and PrefetcherPipe.
 //
 // Shared prefix:
 //   word[0]  is_sender (1) | is_receiver (0)
 //   word[1]  num_receivers
 //   word[2]  fifo_start_addr
-//   word[3]  fifo_size (CrossNode: entry_size * num_entries; Persistent: ring bytes)
+//   word[3]  fifo_size (CrossNode: entry_size * num_entries; PrefetcherPipe: ring bytes)
 //
 // CrossNode:
 //   word[4]  fifo_ptr_checkpoint   // reserved / ignored; ctor resets ptrs to word[2]
@@ -22,7 +22,7 @@
 //   + sender NOC XY table + L1-aligned sent/acked pairs
 //   + receiver sender XY after header
 //
-// Persistent:
+// PrefetcherPipe:
 //   word[4]  fifo_ptr_checkpoint   // sender wr / receiver rd; commit stores; ctor loads
 //   word[5]  applied_entry_size    // epoch + last successful resize
 //   word[6]  noc_xy_offset         // page-relative → word[9]
@@ -47,14 +47,14 @@ inline constexpr uint32_t cross_node_dfb_noc_xy_byte_offset() {
     return CROSS_NODE_DFB_CONFIG_HEADER_WORDS * static_cast<uint32_t>(sizeof(uint32_t));
 }
 
-// --- PersistentDFB header ---
-inline constexpr uint32_t PERSISTENT_DFB_CONFIG_HEADER_WORDS = 9;
-inline constexpr uint32_t PERSISTENT_DFB_CFG_FIFO_PTR_CHECKPOINT = 4;
-inline constexpr uint32_t PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE = 5;
-inline constexpr uint32_t PERSISTENT_DFB_CFG_NOC_XY_OFFSET = 6;
-inline constexpr uint32_t PERSISTENT_DFB_CFG_PAGES_SENT_OFFSET = 7;
-inline constexpr uint32_t PERSISTENT_DFB_CFG_PAGES_ACKED_OFFSET = 8;
+// --- PrefetcherPipe header ---
+inline constexpr uint32_t PREFETCHER_PIPE_CONFIG_HEADER_WORDS = 9;
+inline constexpr uint32_t PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT = 4;
+inline constexpr uint32_t PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE = 5;
+inline constexpr uint32_t PREFETCHER_PIPE_CFG_NOC_XY_OFFSET = 6;
+inline constexpr uint32_t PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET = 7;
+inline constexpr uint32_t PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET = 8;
 
-inline constexpr uint32_t persistent_dfb_noc_xy_byte_offset() {
-    return PERSISTENT_DFB_CONFIG_HEADER_WORDS * static_cast<uint32_t>(sizeof(uint32_t));
+inline constexpr uint32_t prefetcher_pipe_noc_xy_byte_offset() {
+    return PREFETCHER_PIPE_CONFIG_HEADER_WORDS * static_cast<uint32_t>(sizeof(uint32_t));
 }

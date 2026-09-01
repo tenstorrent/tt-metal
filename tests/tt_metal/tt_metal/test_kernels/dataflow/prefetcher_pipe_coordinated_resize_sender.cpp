@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Long-running PersistentDFB sender for coordinated live-peer E1→E2.
+// Long-running PrefetcherPipe sender for coordinated live-peer E1→E2.
 //
 // Mixed-size prefetch protocol:
 //   1. Construct at E1
@@ -13,7 +13,7 @@
 //   6. Push num_entries_e2 at E2
 //
 // Compile-time args:
-//   [0] persistent_dfb_id
+//   [0] prefetcher_pipe_id
 //   [1] entry_size_e1
 //   [2] num_entries_e1
 //   [3] entry_size_e2
@@ -29,13 +29,13 @@
 //   [0, num_entries_e1 * entry_size_e1)           E1 entries
 //   [num_entries_e1 * entry_size_e1, ...)         E2 entries
 
-#include "api/dataflow/persistent_dfb.h"
+#include "api/dataflow/prefetcher_pipe.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    constexpr uint8_t persistent_dfb_id = get_compile_time_arg_val(0);
+    constexpr uint8_t prefetcher_pipe_id = get_compile_time_arg_val(0);
     constexpr uint32_t entry_size_e1 = get_compile_time_arg_val(1);
     constexpr uint32_t num_entries_e1 = get_compile_time_arg_val(2);
     constexpr uint32_t entry_size_e2 = get_compile_time_arg_val(3);
@@ -51,7 +51,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* go_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(2));
 
     Noc noc;
-    experimental::PersistentDFB gdfb(persistent_dfb_id);
+    experimental::PrefetcherPipe gdfb(prefetcher_pipe_id);
 
     for (uint32_t i = 0; i < num_entries_e1; ++i) {
         gdfb.reserve_back(1);

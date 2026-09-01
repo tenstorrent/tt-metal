@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// PersistentDFB sender kernel
+// PrefetcherPipe sender kernel
 //
 // Compile-time parameters (via kernel compile_args):
-//   [0] persistent_dfb_id      - runtime-assigned slot (CreatePersistentDFB persistent_dfb_id on host)
+//   [0] prefetcher_pipe_id      - runtime-assigned slot (CreatePrefetcherPipe prefetcher_pipe_id on host)
 //   [1] entry_size         - bytes per entry (must be L1_ALIGNMENT multiple)
 //   [2] num_entries        - number of entries to push per receiver
 //   [3] write_primitive    - 0=write_broadcast, 1=write_strided,
@@ -14,27 +14,27 @@
 //                            4=decoupled: reserve(n) + write_broadcast(n) + flush + push_back(n),
 //                            5=per-receiver credit interleaved across receivers (entry-major)
 //   [4] data_pattern       - 0=multicast counter layout, 1=strided per-receiver layout,
-//                            2=per-receiver constant layout (see persistent_dfb_test_utils.hpp)
+//                            2=per-receiver constant layout (see prefetcher_pipe_test_utils.hpp)
 //   [5] do_barrier         - 1 to call barrier() after pushing all entries
 //
 // Runtime args:
 //   [0] l1_staging_addr    - sender-local L1 scratch region pre-populated by the host
 
-#include "api/dataflow/persistent_dfb.h"
+#include "api/dataflow/prefetcher_pipe.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 
 FORCE_INLINE uint32_t staging_addr(uint32_t staging_base, uint32_t byte_offset) { return staging_base + byte_offset; }
 
 void kernel_main() {
-    constexpr uint8_t persistent_dfb_id = get_compile_time_arg_val(0);
+    constexpr uint8_t prefetcher_pipe_id = get_compile_time_arg_val(0);
     constexpr uint32_t entry_size = get_compile_time_arg_val(1);
     constexpr uint32_t num_entries = get_compile_time_arg_val(2);
     constexpr uint32_t write_primitive = get_compile_time_arg_val(3);
     constexpr uint32_t data_pattern = get_compile_time_arg_val(4);
     constexpr uint32_t do_barrier = get_compile_time_arg_val(5);
 
-    // Must match SenderDataPattern in persistent_dfb_test_utils.hpp.
+    // Must match SenderDataPattern in prefetcher_pipe_test_utils.hpp.
     constexpr uint32_t pattern_multicast_counter = 0;
     constexpr uint32_t pattern_strided_per_receiver = 1;
     constexpr uint32_t pattern_per_receiver_constant = 2;
@@ -45,7 +45,7 @@ void kernel_main() {
     // Spot-check: log first byte of each entry (host pre-populated staging)
     DPRINT("l1_staging_addr: 0x{:x}\n", staging_base);
 
-    experimental::PersistentDFB gdfb(persistent_dfb_id);
+    experimental::PrefetcherPipe gdfb(prefetcher_pipe_id);
 
     DPRINT("Running write_primitive: {}\n", write_primitive);
 

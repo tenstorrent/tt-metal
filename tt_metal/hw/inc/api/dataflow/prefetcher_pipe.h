@@ -8,7 +8,7 @@
 #ifndef ARCH_QUASAR
 
 #include <cstdint>
-#include "internal/persistent_dfb_init.h"
+#include "internal/prefetcher_pipe_init.h"
 #include "internal/circular_buffer_interface.h"
 #include "api/alignment.h"
 #include "api/debug/assert.h"
@@ -40,9 +40,9 @@ static_assert(
 
 namespace experimental {
 
-// PersistentDFB: device-side kernel class for a cross-program durable remote DFB (WH/BH).
+// PrefetcherPipe: device-side kernel class for a cross-program durable remote DFB (WH/BH).
 // Config pages + credits persist across programs; ctor loads word[4]
-// (PERSISTENT_DFB_CFG_FIFO_PTR_CHECKPOINT — durable sender wr / receiver rd cursor).
+// (PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT — durable sender wr / receiver rd cursor).
 // If this Attach's dense entry_size differs from word[5] (applied_entry_size), ctor
 // resizes with NOC pad credits. Same-epoch relaunch skips that so
 // a producer can keep filling free space while outstanding credits wait for a consumer.
@@ -111,51 +111,51 @@ namespace experimental {
 //    set_receiver_entry_size(E2);  // use on receiver cores only
 //
 // ═══════════════════════════════════════════════════════════════════════
-//  RELAY DFB FLOW — bridging PersistentDFB to Compute
+//  RELAY DFB FLOW — bridging PrefetcherPipe to Compute
 // ═══════════════════════════════════════════════════════════════════════
 //
 //  Compute cannot issue NOC atomics. Data is bridged via a host-declared local
-//  DataflowBuffer that aliases the Persistent ring. DM owns Persistent credits;
+//  DataflowBuffer that aliases the PrefetcherPipe ring. DM owns PrefetcherPipe credits;
 //  TRISC consumes through the normal local DFB API.
 //
-//  Host: AttachPersistentDFB(..., receivers) then CreatePersistentRelayDataflowBuffer.
+//  Host: AttachPrefetcherPipe(..., receivers) then CreatePrefetcherPipeRelayDataflowBuffer.
 //  DM deliberately receives no relay binding token and must use bind_relay().
 //
 //  DM (receiver kernel):
-//    PersistentDFB pdfb(id);
-//    auto relay = pdfb.bind_relay();  // copies receiver iface into the local relay DFB
+//    PrefetcherPipe pipe(id);
+//    auto relay = pipe.bind_relay();  // copies receiver iface into the local relay DFB
 //    while (has_more) {
 //        relay.reserve_back(n);       // wait for local free space
-//        pdfb.wait_front(n);          // wait for sender's data (pages_sent)
+//        pipe.wait_front(n);          // wait for sender's data (pages_sent)
 //        relay.push_back(n);          // publish via CB credits
 //        relay.wait_consumed(n);      // wait for TRISC to free the local slots
-//        pdfb.pop_front(n);           // advance DM rd_ptr + NOC-ack sender
+//        pipe.pop_front(n);           // advance DM rd_ptr + NOC-ack sender
 //    }
 //
-//  Compute kernel (reads relay DFB, no PersistentDFB or NOC knowledge):
-//    DataflowBuffer relay(RelayDFBBindingToken{relay_id, persistent_dfb_id});
+//  Compute kernel (reads relay DFB, no PrefetcherPipe or NOC knowledge):
+//    DataflowBuffer relay(RelayDFBBindingToken{relay_id, prefetcher_pipe_id});
 //    // or dfb::relay from kernel_bindings_generated.h — construction snaps the
 //    // borrowed iface to the durable checkpoint (O(1) launch-msg slot lookup)
 //    relay.wait_front(n);
 //    // consume ...
 //    relay.pop_front(n);
 //
-class PersistentDFB {
+class PrefetcherPipe {
 public:
-    FORCE_INLINE explicit PersistentDFB(uint8_t persistent_dfb_id) : persistent_dfb_id_(persistent_dfb_id) {
+    FORCE_INLINE explicit PrefetcherPipe(uint8_t prefetcher_pipe_id) : prefetcher_pipe_id_(prefetcher_pipe_id) {
         const uint32_t launch_index = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
         const auto* launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_index]);
         const auto& kernel_config = launch_msg->kernel_config;
-        ASSERT(kernel_config.persistent_dfb_offset != PERSISTENT_DFB_OFFSET_NONE);
+        ASSERT(kernel_config.prefetcher_pipe_offset != REMOTE_DFB_OFFSET_NONE);
 
         const uint32_t kernel_config_base = kernel_config.kernel_config_base[PROGRAMMABLE_CORE_TYPE];
         volatile tt_l1_ptr uint32_t* region =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kernel_config_base + kernel_config.persistent_dfb_offset);
-        ASSERT(persistent_dfb_id < region[0]);
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kernel_config_base + kernel_config.prefetcher_pipe_offset);
+        ASSERT(prefetcher_pipe_id < region[0]);
 
         volatile tt_l1_ptr uint32_t* slot =
-            region + PERSISTENT_DFB_REGION_HEADER_WORDS + persistent_dfb_id * UINT32_WORDS_PER_PERSISTENT_DFB_CONFIG;
-        setup_persistent_dfb_interface(
+            region + REMOTE_DFB_REGION_HEADER_WORDS + prefetcher_pipe_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
+        setup_prefetcher_pipe_interface(
             interface_, /*config_page_addr=*/slot[0], /*entry_size=*/slot[1], /*relay_dfb_id=*/slot[2]);
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
@@ -164,7 +164,7 @@ public:
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.sender.config_ptr);
         const bool is_sender = static_cast<bool>(l1_config[REMOTE_DFB_CFG_IS_SENDER]);
         const uint32_t dense_entry_size = slot[1];
-        const uint32_t applied_entry_size = l1_config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE];
+        const uint32_t applied_entry_size = l1_config[PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE];
         // Same-epoch relaunch: setup already restored the checkpoint + this Attach's
         // entry size. Skip resize so a producer can relaunch and keep
         // filling free space while outstanding credits wait for an offline consumer.
@@ -174,32 +174,33 @@ public:
             const uint8_t noc_id = noc_index;
             if (is_sender) {
                 resize_sender_interface<true>(dense_entry_size, noc_id);
-                l1_config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE] = interface_.sender.fifo_page_size;
+                l1_config[PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE] = interface_.sender.fifo_page_size;
             } else {
                 resize_receiver_interface<true>(dense_entry_size, noc_id);
-                l1_config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE] = interface_.receiver.fifo_page_size;
+                l1_config[PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE] = interface_.receiver.fifo_page_size;
             }
         }
 #endif
     }
 
-    FORCE_INLINE ~PersistentDFB() { commit(); }
+    FORCE_INLINE ~PrefetcherPipe() { commit(); }
 
     FORCE_INLINE void commit() {
         volatile tt_l1_ptr uint32_t* l1_config =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.sender.config_ptr);
         const bool is_sender = static_cast<bool>(l1_config[REMOTE_DFB_CFG_IS_SENDER]);
         const uint32_t epoch_fifo_start = l1_config[REMOTE_DFB_CFG_FIFO_START];
-        const uint32_t epoch_entry_size = l1_config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE];
+        const uint32_t epoch_entry_size = l1_config[PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE];
         if (is_sender) {
             CrossNodeSenderDFBInterface& iface = interface_.sender;
             if (iface.fifo_start_addr == epoch_fifo_start && iface.fifo_page_size == epoch_entry_size) {
-                l1_config[PERSISTENT_DFB_CFG_FIFO_PTR_CHECKPOINT] = iface.fifo_start_addr + derived_wr_offset(iface, 0);
+                l1_config[PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT] =
+                    iface.fifo_start_addr + derived_wr_offset(iface, 0);
             }
         } else {
             CrossNodeReceiverDFBInterface& iface = interface_.receiver;
             if (iface.fifo_start_addr == epoch_fifo_start && iface.fifo_page_size == epoch_entry_size) {
-                l1_config[PERSISTENT_DFB_CFG_FIFO_PTR_CHECKPOINT] = iface.fifo_rd_ptr;
+                l1_config[PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT] = iface.fifo_rd_ptr;
             }
         }
     }
@@ -214,7 +215,7 @@ public:
         ASSERT(static_cast<bool>(l1_config[REMOTE_DFB_CFG_IS_SENDER]));
         const uint8_t noc_id = noc_index;
         resize_sender_interface<true>(entry_size, noc_id);
-        l1_config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE] = interface_.sender.fifo_page_size;
+        l1_config[PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE] = interface_.sender.fifo_page_size;
     }
 
     // Change the size of subsequent receiver operations after this receiver has
@@ -230,10 +231,10 @@ public:
         ASSERT(!static_cast<bool>(l1_config[REMOTE_DFB_CFG_IS_SENDER]));
         const uint8_t noc_id = noc_index;
         resize_receiver_interface<true>(entry_size, noc_id);
-        l1_config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE] = interface_.receiver.fifo_page_size;
+        l1_config[PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE] = interface_.receiver.fifo_page_size;
         const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
         if (iface.relay_id != RELAY_DFB_INVALID) {
-            align_local_dfb_to_persistent_receiver_iface(iface.relay_id, iface);
+            align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface);
         }
     }
 #endif
@@ -506,7 +507,7 @@ public:
     // Accessors
     // -----------------------------------------------------------------------
 
-    // Number of receivers connected to this PersistentDFB (sender participant cores only).
+    // Number of receivers connected to this PrefetcherPipe (sender participant cores only).
     FORCE_INLINE uint32_t num_receivers() {
         const CrossNodeSenderDFBInterface& iface = interface_.sender;
         return cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
@@ -553,25 +554,25 @@ public:
         DataflowBuffer dfb_;
     };
 
-    // Open the relay declared by CreatePersistentRelayDataflowBuffer. Copies the
+    // Open the relay declared by CreatePrefetcherPipeRelayDataflowBuffer. Copies the
     // current receiver cursor/page size into the local DFB iface (TRISC is aligned
     // separately in DataflowBuffer(RelayDFBBindingToken)). A later
     // set_receiver_entry_size() refreshes that same local iface in place.
     FORCE_INLINE RelayView bind_relay() {
         const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
         ASSERT(iface.relay_id != RELAY_DFB_INVALID);
-        align_local_dfb_to_persistent_receiver_iface(iface.relay_id, iface);
+        align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface);
         return RelayView(iface.relay_id);
     }
 #endif
 
 private:
     CrossNodeDFBInterface interface_;
-    uint8_t persistent_dfb_id_ = 0;
+    uint8_t prefetcher_pipe_id_ = 0;
 
-#ifdef PERSISTENT_DFB_TEST_HELPERS
+#ifdef PREFETCHER_PIPE_TEST_HELPERS
     friend void test_stale_commit_after_resize(
-        PersistentDFB&, uint32_t new_entry_size, uint32_t stale_entry_size, uint32_t poison_wr_ptr);
+        PrefetcherPipe&, uint32_t new_entry_size, uint32_t stale_entry_size, uint32_t poison_wr_ptr);
 #endif
 
     // Read a word from the config page.

@@ -35,7 +35,7 @@
 //     word[0] = num_slots
 //     slot i in [0, num_slots): [config_page_addr, entry_size, relay_dfb_id]
 // Slot index i matches the remote_dfb_id returned by CreateCrossNodeDFB (0 .. num-1).
-// Launch-msg cross_node_dfb_offset == CROSS_NODE_DFB_OFFSET_NONE means no CrossNodeDFBs.
+// Launch-msg cross_node_dfb_offset == REMOTE_DFB_OFFSET_NONE means no CrossNodeDFBs.
 
 namespace experimental {
 
