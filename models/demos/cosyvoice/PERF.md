@@ -439,6 +439,20 @@ KV-cache mechanisms, `bfloat8_b` against `bfloat16` — it lives in Part I §6 i
 because the suite does both arms in one process and the figure is current by
 construction. What is left here is the comparisons that would need a second tree.
 
+## What made the difference, ranked
+
+| change | effect |
+|---|---|
+| fixed-width KV cache | **73×** on the first pass — a growing cache gives every token a new shape and so a fresh JIT compile; 98.9 % of the cold cost was compilation. Part I §6. |
+| trace capture, both compute stages | `3.37×` (`p150a`) / `3.92×` (`p150b`) / `1.71×` (n300) on the decode step. Part I §6. |
+| fused decode attention (`sdpa_decode` with the rel-pos term as its mask) | `−17.1 %` on the step; `3.3×`–`3.4×` on the attention block alone. §1.1. |
+| hoisting `linear_pos` out of the decode step | `15.71 → 8.25 ms`. §1.2. |
+| in-place KV via `ttnn.update_cache` | `1.30×` on n300, `1.15×` on Blackhole — the one change that pays more on the slower part. Part I §6. |
+| cached CFM trace | `2.37×` on the solver on `p150b`, `1.67×` on n300. §2.2. |
+| fused SDPA in the flow estimator | faster and more accurate on every check — `0.707 → 0.600 s`. §2.1. |
+| `rel_shift` → one slice at `T = 1` | seven ops become one. §1.2. |
+| QKV fusion | flow decoder `1.075 → 0.719 s`; the same change on the AR decoder was a wash, since the split op's data movement costs what it saves at `T = 1`. §1.2. |
+
 ## 1. The AR decode step
 
 The largest stage, and the one every remaining lever sits in.
