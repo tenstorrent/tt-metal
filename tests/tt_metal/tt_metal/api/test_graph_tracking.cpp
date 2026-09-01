@@ -250,16 +250,19 @@ TEST(ScopedTrackedFunction, CPU_AbortsWhenUnwinding) {
 TEST(ScopedTrackedFunction, CPU_ExplicitAbortCarriesTheReason) {
     auto processor = std::make_shared<CountingProcessor>();
     const ScopedProcessor registration(processor);
+    const char* const expected_message = "circular buffers clash with L1 buffers";
+    std::string s(expected_message);
 
     try {
         ScopedTrackedFunction tracked("op");
         try {
-            throw std::runtime_error("circular buffers clash with L1 buffers");
+            throw std::runtime_error(expected_message);
         } catch (const std::exception& e) {
             tracked.abort(e.what());
             throw;
         }
     } catch (const std::runtime_error&) {
+        EXPECT_EQ(s.compare(e.what()), 0);
     }
 
     EXPECT_EQ(processor->function_ends.load(), 0);
