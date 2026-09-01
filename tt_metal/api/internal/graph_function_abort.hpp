@@ -45,11 +45,11 @@ class [[nodiscard]] ScopedTrackedFunction {
 public:
     template <class... Args>
     explicit ScopedTrackedFunction(std::string_view function_name, Args&&... args) :
+        started_count_(GraphTracker::instance().get_processors().size()),
         entry_uncaught_exceptions_(std::uncaught_exceptions()) {
-        const auto& live = GraphTracker::instance().get_processors();
-        started_count_ = live.size();
         // Copy processors only during capture; the SHM-only launch path stores a count.
         if (GraphTracker::instance().is_enabled()) {
+            const auto& live = GraphTracker::instance().get_processors();
             started_processors_.assign(live.begin(), live.end());
         }
         GraphTracker::instance().track_function_start(function_name, std::forward<Args>(args)...);
@@ -122,10 +122,10 @@ private:
         }
     }
 
+    const std::size_t started_count_;
     int entry_uncaught_exceptions_;
-    std::size_t started_count_ = 0;
-    std::vector<std::shared_ptr<IGraphProcessor>> started_processors_;
     bool ended_ = false;
+    std::vector<std::shared_ptr<IGraphProcessor>> started_processors_;
 };
 
 // Close every scope the processors of this thread still hold open, marking each aborted.

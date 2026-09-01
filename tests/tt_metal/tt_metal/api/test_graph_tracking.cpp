@@ -261,7 +261,7 @@ TEST(ScopedTrackedFunction, CPU_ExplicitAbortCarriesTheReason) {
             tracked.abort(e.what());
             throw;
         }
-    } catch (const std::runtime_error&) {
+    } catch (const std::runtime_error& e) {
         EXPECT_EQ(s.compare(e.what()), 0);
     }
 
