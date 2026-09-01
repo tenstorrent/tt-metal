@@ -144,7 +144,15 @@ The pipeline period is set by the **slowest** stage, so stage 3 (and stage 1's M
 would bound throughput. Stage 1's `Combine` is worth a look — possible expert-routing imbalance — but
 it is a single layer, so do not over-read it.
 
-## 2.4 tt-perf-report — copy/paste
+## 2.4 The captures are committed
+
+The data behind this section is in `models/demos/deepseek_v3_d_p/tests/perf/pp4/captures/`, so it
+can be read and re-analysed **without a galaxy**: `report_<n>.txt` is the rendered `tt-perf-report`
+op table plus both analyzer summaries, and `ops_<n>.csv.gz` is the row data (all devices, reduced
+columns) that reproduces the numbers above exactly. See that directory's README for what was
+dropped and how to read it. The full 13 GB captures are not committed.
+
+## 2.5 tt-perf-report — copy/paste
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"     # tt-perf-report lives here; LOCAL disk, per machine
