@@ -178,9 +178,10 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         pack_src_format[output_id],
         pack_dst_format[output_id],
         get_local_cb_interface(output_id).fifo_page_size,
-        face_r_dim,
+        TILE_C_DIM,
         num_faces,
         partial_face,
+        face_r_dim,
         narrow_tile);
 }
 

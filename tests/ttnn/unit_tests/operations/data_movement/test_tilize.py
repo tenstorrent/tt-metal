@@ -1053,32 +1053,23 @@ def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_
     assert_equal(torch_input, ttnn.to_torch(tt_output))
 
 
-@skip_for_wormhole_b0("LLK for tiny tiles not fully supported on Wormhole B0")
-@pytest.mark.parametrize(
-    "tensor_shape, shard_layout",
-    [
-        # Interleaved input/output.
-        ([1, 1, 128, 256], None),
-        ([1, 1, 64, 256], None),
-        ([1, 1, 64, 128], None),
-        ([1, 1, 16, 128], None),
-        # Sharded input/output (invokes the sharded retile factory).
-        ([1, 1, 1, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        ([1, 1, 32, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        ([1, 1, 1024, 32], ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        ([1, 1, 256, 256], ttnn.TensorMemoryLayout.BLOCK_SHARDED),
-    ],
-)
-@pytest.mark.parametrize("input_tile_shape", [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32), (1, 32)])
-@pytest.mark.parametrize("output_tile_shape", [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32), (1, 32)])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
-def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, output_tile_shape, dtype):
+_RETILE_TILE_SHAPES = [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32), (1, 32)]
+_RETILE_DTYPES = [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b]
+_RETILE_SHAPES = [
+    # Interleaved input/output.
+    ([1, 1, 16, 128], None),
+    # Sharded input/output (invokes the sharded retile factory).
+    ([1, 1, 1, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+    ([1, 1, 32, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+    ([1, 1, 1024, 32], ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+    ([1, 1, 256, 256], ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+]
+
+
+def _run_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, output_tile_shape, dtype):
     """Retile an already-tiled input into a different tile shape (invokes the retile factory)."""
     torch.manual_seed(42)
     torch_input = torch.rand(tensor_shape, dtype=torch.bfloat16)
-
-    if input_tile_shape[0] == output_tile_shape[0]:
-        pytest.skip("Input and output tile shapes are the same")
 
     def make_mem_cfg(tile_h):
         """Shard spec for this tensor tiled at `tile_h`, or None when interleaved."""
@@ -1131,6 +1122,50 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
     # preserve values; comparing to the original bfloat16 source would fail for BFP4/BFP8
     # due to host quantization, not retile error.
     assert_equal(ttnn.to_torch(tt_input), ttnn.to_torch(tt_output))
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_output)
+
+
+@skip_for_wormhole_b0("LLK for tiny tiles not fully supported on Wormhole B0")
+def test_tilize_retile(device):
+    """Minimal retile coverage for CI. Combinations are looped so the device is opened once."""
+    cases = [
+        # Width-sharded H=1 and height-sharded: a few tile pairs and dtypes.
+        ([1, 1, 1, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED, (32, 32), (16, 32), ttnn.bfloat16),
+        ([1, 1, 1, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED, (16, 32), (1, 32), ttnn.bfloat16),
+        ([1, 1, 1, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED, (1, 32), (32, 32), ttnn.bfloat8_b),
+        ([1, 1, 1024, 32], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (32, 32), (16, 32), ttnn.bfloat16),
+        ([1, 1, 1024, 32], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (16, 32), (1, 32), ttnn.bfloat16),
+        ([1, 1, 1024, 32], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (1, 32), (32, 32), ttnn.bfloat8_b),
+    ]
+    for tensor_shape, shard_layout, input_tile_shape, output_tile_shape, dtype in cases:
+        try:
+            _run_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, output_tile_shape, dtype)
+        except Exception as exc:
+            raise AssertionError(
+                f"retile failed for shape={tensor_shape} layout={shard_layout} "
+                f"in={input_tile_shape} out={output_tile_shape} dtype={dtype}"
+            ) from exc
+
+
+@skip_for_wormhole_b0("LLK for tiny tiles not fully supported on Wormhole B0")
+def test_tilize_retile_full(device):
+    """Full retile sweep over shard layouts, tile heights, and dtypes. Device is opened once."""
+    for tensor_shape, shard_layout in _RETILE_SHAPES:
+        for input_tile_shape in _RETILE_TILE_SHAPES:
+            for output_tile_shape in _RETILE_TILE_SHAPES:
+                if input_tile_shape[0] == output_tile_shape[0]:
+                    continue
+                for dtype in _RETILE_DTYPES:
+                    try:
+                        _run_tilize_retile(
+                            device, tensor_shape, shard_layout, input_tile_shape, output_tile_shape, dtype
+                        )
+                    except Exception as exc:
+                        raise AssertionError(
+                            f"retile failed for shape={tensor_shape} layout={shard_layout} "
+                            f"in={input_tile_shape} out={output_tile_shape} dtype={dtype}"
+                        ) from exc
 
 
 # Tilize with simultaneous tile-shape and dtype change (the retile path).

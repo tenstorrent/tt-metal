@@ -662,10 +662,11 @@ template <bool is_fp32_dest_acc_en>
 __attribute__((noinline)) inline void reconfig_packer_data_format(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size  = 0,
-    const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t num_faces  = 4,
-    const bool partial_face        = false)
+    const std::uint32_t tile_size                   = 0,
+    [[maybe_unused]] const std::uint32_t tile_c_dim = TILE_C_DIM,
+    const std::uint32_t num_faces                   = 4,
+    const std::uint32_t face_r_dim                  = FACE_R_DIM,
+    const bool partial_face                         = false)
 {
     // Packer strides for standard tiled dest layout (PackMode::Default). Untilize uses configure_pack with PackMode::Untilize.
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");

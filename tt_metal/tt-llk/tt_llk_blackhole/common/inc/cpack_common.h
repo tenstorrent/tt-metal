@@ -505,7 +505,6 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     const std::uint32_t tile_size,
     const std::uint32_t tile_c_dim,
     const std::uint32_t num_faces,
-    const bool partial_face,
     const std::uint32_t face_r_dim = FACE_R_DIM)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
