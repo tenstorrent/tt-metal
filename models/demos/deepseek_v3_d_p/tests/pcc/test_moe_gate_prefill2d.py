@@ -393,11 +393,15 @@ def _ci_unsupported_param_combos_forward_pass(**params):
     return False
 
 
-def _ci_unsupported_param_combos_hash_gate(**params):
-    """HASH_HOST is a local diagnostic; CI covers the on-device hash gate only."""
-    if not (params["is_ci_env"] or params["is_ci_v2_env"]):
+def _ci_unsupported_param_combos_hash_gate_forward_pass(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    gate_compute_mode = params["gate_compute_mode"]
+
+    if not on_ci:
         return False
-    return params["gate_compute_mode"] != GateComputeMode.HASH_DEVICE
+    if gate_compute_mode != GateComputeMode.HASH_DEVICE:
+        return True
+    return False
 
 
 def _reference_topk(config, gate_model, gate_w, torch_input):
@@ -553,7 +557,7 @@ HASH_GATE_MODES = [
 ]
 
 
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_hash_gate)
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_hash_gate_forward_pass)
 @pytest.mark.parametrize("gate_model", ["dsv4_pro", "dsv4_flash"])
 @pytest.mark.parametrize("gate_compute_mode", HASH_GATE_MODES)
 @pytest.mark.parametrize(

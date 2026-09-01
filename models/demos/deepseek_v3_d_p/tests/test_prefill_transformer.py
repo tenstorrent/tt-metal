@@ -83,11 +83,15 @@ INFINITEBENCH_SUBSET_NAMES = {"longbook_qa_eng"}
 VARIANT_DEFAULT_TRACE = "variant_default"
 
 
-def _ci_unsupported_param_combos_ds_transformer(**params):
-    """host_all is a local diagnostic aid; CI validates the production device gate only."""
-    if not (params["is_ci_env"] or params["is_ci_v2_env"]):
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    gate_fallback_mode = params["gate_fallback_mode"]
+
+    if not on_ci:
         return False
-    return params["gate_fallback_mode"] != GateComputeMode.DEVICE_FP32
+    if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
+        return True
+    return False
 
 
 def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_padded_tokens, padding_side):
@@ -858,7 +862,7 @@ def run_model(
         "smoke-random-random",
     ],
 )
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_ds_transformer)
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
