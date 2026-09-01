@@ -308,8 +308,8 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
              .has_beta = beta.has_value(),
              .compact_two_pass_fits_in_l1 = two_pass_fits}) == layernorm::StatisticsBackend::SFPU_TWO_PASS;
     const bool fp32_finalizer_arch = device->arch() == tt::ARCH::BLACKHOLE || device->arch() == tt::ARCH::WORMHOLE_B0;
-    const bool fp32_sfpu_finalizer = fp32_finalizer_arch && plan.use_welford && !rms_norm && !input_is_row_major &&
-                                     input_format == tt::DataFormat::Float32 &&
+    const bool fp32_sfpu_finalizer = fp32_finalizer_arch && fp32_dest_acc_en && plan.use_welford && !rms_norm &&
+                                     !input_is_row_major && input_format == tt::DataFormat::Float32 &&
                                      output_format == tt::DataFormat::Float32 &&
                                      !operation_attributes.fused_activation.has_value();
     const bool selected_fits = plan.use_welford ? two_pass_fits : tile_fits;
@@ -546,8 +546,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     const bool use_welford = selected_plan.use_welford;
     const bool compensated_finalizer_arch =
         device->arch() == tt::ARCH::BLACKHOLE || device->arch() == tt::ARCH::WORMHOLE_B0;
-    const bool fp32_sfpu_finalizer = compensated_finalizer_arch && use_welford && !rms_norm && !input_is_row_major &&
-                                     in_data_format == tt::DataFormat::Float32 &&
+    const bool fp32_sfpu_finalizer = compensated_finalizer_arch && fp32_dest_acc_en && use_welford && !rms_norm &&
+                                     !input_is_row_major && in_data_format == tt::DataFormat::Float32 &&
                                      out_data_format == tt::DataFormat::Float32 &&
                                      !operation_attributes.fused_activation.has_value();
     if (use_welford) {

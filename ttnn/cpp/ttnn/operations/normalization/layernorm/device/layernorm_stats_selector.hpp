@@ -74,13 +74,16 @@ constexpr StatisticsBackend select_interleaved_statistics_backend(
     if (arch == tt::ARCH::QUASAR) {
         return StatisticsBackend::TILE_REDUCTION;
     }
+    if (!fp32_dest_acc_en) {
+        return StatisticsBackend::TILE_REDUCTION;
+    }
     // RMSNorm does not execute the Welford calculation, but its existing
     // Welford-configured route has distinct kernel and CB requirements.
     if (arch != tt::ARCH::BLACKHOLE || rms_norm || input_is_row_major) {
         return StatisticsBackend::SFPU_TWO_PASS;
     }
-    return fp32_dest_acc_en && use_blackhole_sfpu_stats(blackhole_params) ? StatisticsBackend::SFPU_TWO_PASS
-                                                                          : StatisticsBackend::TILE_REDUCTION;
+    return use_blackhole_sfpu_stats(blackhole_params) ? StatisticsBackend::SFPU_TWO_PASS
+                                                      : StatisticsBackend::TILE_REDUCTION;
 }
 
 constexpr StatisticsBackend select_sharded_statistics_backend(
