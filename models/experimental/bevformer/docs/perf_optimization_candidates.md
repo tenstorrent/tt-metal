@@ -705,7 +705,7 @@ each names the row it is priced from, so a miss is diagnosable.
 |--:|---|---|---:|---|---|
 | [5a](#5a-delete-the-key-permute) | delete the dead `key` permute | [sca:349-350](../tt/tt_spatial_cross_attention.py#L349-L350) | **landed: −18.1 ms (−4.0%) — [06](perf_reports/06-sca-key-permute-deleted.md)** | XS | **none** |
 | [5b](#5b-do-the-sampling-location-math-in-row_major) | sampling-location math in ROW_MAJOR | [msda:110-117](../tt/tt_ms_deformable_attention.py#L110-L117), [313-357](../tt/tt_ms_deformable_attention.py#L313-L357) | **landed: −82.2 ms (−18.8%) — [07](perf_reports/07-sampling-grid-in-row-major.md)** | M | low |
-| [5c](#5c-untilize-attn-once-not-per-level) | untilize `attn` once, slice in ROW_MAJOR | [msda:322-332](../tt/tt_ms_deformable_attention.py#L322-L332), [58-61](../tt/tt_ms_deformable_attention.py#L58-L61) | **−35 ms (−7.7%)** | S | low |
+| [5c](#5c-untilize-attn-once-not-per-level) | untilize `attn` once, slice in ROW_MAJOR | [msda:322-332](../tt/tt_ms_deformable_attention.py#L322-L332), [58-61](../tt/tt_ms_deformable_attention.py#L58-L61) | **landed: −44.9 ms (−12.6%) — [08](perf_reports/08-attn-prepared-once-per-call.md)** | S | low |
 | [5e](#5e-permute-grid-once-slice-after) | permute `grid` once above the loop | [msda:54-56](../tt/tt_ms_deformable_attention.py#L54-L56) | **−13 ms (−2.8%)** | S | low |
 | [5d](#5d-split-value-into-heads-in-row_major) | head-split `value` in ROW_MAJOR | [msda:296-305](../tt/tt_ms_deformable_attention.py#L296-L305), [50-52](../tt/tt_ms_deformable_attention.py#L50-L52) | **−10…−20 ms**, uncertain | M | med |
 | [5f](#5f-the-per-level-guards-are-free-dont-book-them) | per-level `to_layout` / `typecast` guards | [msda:61-68](../tt/tt_ms_deformable_attention.py#L61-L68) | **0 ms** — measured | XS | none |
@@ -816,6 +816,11 @@ shapes has not been measured at the SCA size and the estimate rests on row 508's
 were wrong, the offset-normalizer fold would have broken. Gate on PCC anyway, per change.
 
 #### 5c. Untilize `attn` once, not per level
+
+**Landed** — [stage 08](perf_reports/08-attn-prepared-once-per-call.md), −44.9 ms kernel against a
+predicted −35, ops 131 → 113, PCC unchanged. It beat the estimate by keeping the head-major move as
+a **TILE transpose** (0.40 ms) instead of the ROW_MAJOR permute this entry priced it at (5.01 ms) —
+read that as a correction to 5e and 5d below, which assume the ROW_MAJOR rate.
 
 **43.0 ms (9.4%) to feed the fused op a 0.5 MB tensor.** `attention_weights` after softmax is
 `(bs, Q, heads, L, P)` in TILE with trailing axes `(4, 4)` — padded `32 × 32` again — and

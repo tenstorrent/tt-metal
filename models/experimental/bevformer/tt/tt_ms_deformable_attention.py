@@ -33,15 +33,15 @@ from loguru import logger
 ENABLE_LOGGING = False
 
 
-def _fused_msda_level(value_level, sampling_grids, attention_weights, level, H, W, shape):
+def _fused_msda_level(value_level, sampling_grids, attn_all, level, H, W, shape):
     """Run one pyramid level through the fused `multi_scale_deformable_attn` device op.
 
     The op fuses grid_sample with the weighted sum over sampling points, so it returns
     `(N, Q, D)` already reduced over `P` — there is no per-level tensor left to stack.
 
-    `value_level` is `(bs, H*W, num_heads, D)`; `sampling_grids` and `attention_weights`
-    carry all levels and are sliced here. All three op inputs must be ROW_MAJOR bfloat16
-    and INTERLEAVED, which the device op enforces with TT_FATAL rather than converting.
+    `value_level` is `(bs, H*W, num_heads, D)`; `sampling_grids` and `attn_all` carry all
+    levels and are sliced here. All three op inputs must be ROW_MAJOR bfloat16 and
+    INTERLEAVED, which the device op enforces with TT_FATAL rather than converting.
     """
     bs, num_heads, num_queries, num_points, head_dim = shape
 
@@ -55,10 +55,9 @@ def _fused_msda_level(value_level, sampling_grids, attention_weights, level, H, 
     grid = ttnn.permute(grid, (0, 2, 1, 3, 4))
     grid = ttnn.reshape(grid, (bs * num_heads, num_queries * num_points, 1, 2))
 
-    attn = attention_weights[:, :, :, level, :]  # (bs, Q, num_heads, P)
-    attn = ttnn.permute(attn, (0, 2, 1, 3))
-    attn = ttnn.reshape(attn, (bs * num_heads, num_queries, num_points))
-    attn = ttnn.to_layout(attn, layout=ttnn.ROW_MAJOR_LAYOUT)
+    # Already (N, Q, L, P) and ROW_MAJOR — the head-major transpose and the untilize are hoisted
+    # above the level loop, so a level costs one slice.
+    attn = attn_all[:, :, level]  # (N, Q, P)
 
     if value_l.dtype != ttnn.bfloat16:
         value_l = ttnn.typecast(value_l, ttnn.bfloat16)
@@ -92,7 +91,8 @@ def multi_scale_deformable_attn_ttnn(
             the last dimension 2 represent (x, y).
         attention_weights (ttnn.Tensor): The weight of sampling points used
             when calculate the attention, has shape
-            (bs, num_queries, num_heads, num_levels, num_points),
+            (bs, num_queries, num_heads, num_levels * num_points), softmaxed over the
+            trailing axis and still in TILE,
         device: TTNN device
 
     Returns:
@@ -110,6 +110,15 @@ def multi_scale_deformable_attn_ttnn(
     # `attention_weights` is softmaxed jointly over levels and points, so the joint
     # weighted sum decomposes exactly into a sum of per-level weighted sums — each fused
     # call reduces its own level's points and the levels are added. No renormalization.
+    #
+    # It arrives as (bs, Q, num_heads, L*P) in TILE and is prepared once for all levels: the
+    # head-major move is a TILE transpose (cheap — it swaps whole tiles) rather than a ROW_MAJOR
+    # permute, and the untilize runs on an L*P-wide tensor instead of on a (L, P) tail that would
+    # pad 4x4 to 32x32. The split into (L, P) afterwards is a ROW_MAJOR view.
+    attn_all = ttnn.transpose(attention_weights, 1, 2)  # (bs, num_heads, Q, L*P)
+    attn_all = ttnn.to_layout(attn_all, layout=ttnn.ROW_MAJOR_LAYOUT)
+    attn_all = ttnn.reshape(attn_all, (bs * num_heads, num_queries, num_levels, num_points))
+
     shape = (bs, num_heads, num_queries, num_points, head_dim)
     output = None
     if use_signpost:
@@ -118,7 +127,7 @@ def multi_scale_deformable_attn_ttnn(
         level_out = _fused_msda_level(
             value_list[level],
             sampling_grids,
-            attention_weights,
+            attn_all,
             level,
             int(H_),
             int(W_),
@@ -352,10 +361,9 @@ class TTMSDeformableAttention:
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_queries, self.num_heads, self.num_levels * self.num_points)
         )
+        # Left as (bs, Q, num_heads, L*P): splitting the trailing axis into (L, P) here would put
+        # a 4x4 tail into the two tiled dimensions. The split happens in ROW_MAJOR downstream.
         attention_weights = ttnn.softmax(attention_weights, dim=-1)
-        attention_weights = ttnn.reshape(
-            attention_weights, (bs, num_queries, self.num_heads, self.num_levels, self.num_points)
-        )
 
         if ENABLE_LOGGING:
             logger.info("MSDA Sampling Location Calculation")
