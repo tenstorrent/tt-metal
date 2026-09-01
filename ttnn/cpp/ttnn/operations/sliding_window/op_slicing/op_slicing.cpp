@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "op_slicing.hpp"
+#include <optional>
 #include <tuple>
 #include <ttnn/operations/core/core.hpp>
 #include <ttnn/operations/data_movement/untilize/untilize.hpp>
@@ -152,8 +153,9 @@ static Op2DSliceConfig::SliceType best_guess_slice_type(
     return Op2DSliceConfig::SliceType::DRAM_WIDTH;
 }
 
-// Internal helper that tracks whether we've already attempted a fallback
-static Op2DSliceConfig determine_slice_config_internal(
+// Internal helper that tracks whether we've already attempted a fallback.
+// Returns nullopt when no spatial slice configuration fits L1 (capacity miss).
+static std::optional<Op2DSliceConfig> determine_slice_config_internal(
     OpSliceAttr* op_slice_attr,
     const ttnn::Shape& input_shape,
     const ttnn::Shape& output_shape,
@@ -233,7 +235,6 @@ static Op2DSliceConfig determine_slice_config_internal(
             return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "width" : "height");
 
         if (return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_WIDTH) {
-            // Switch from width slicing to height slicing and try again.
             return determine_slice_config_internal(
                 op_slice_attr,
                 input_shape,
@@ -241,9 +242,8 @@ static Op2DSliceConfig determine_slice_config_internal(
                 Op2DSliceConfig{.slice_type = Op2DSliceConfig::SliceType::DRAM_HEIGHT, .num_slices = 0},
                 output_layout,
                 device,
-                true);  // Mark as retry attempt
+                true);
         }
-        // Switch from height slicing to width slicing and try again.
         return determine_slice_config_internal(
             op_slice_attr,
             input_shape,
@@ -251,25 +251,34 @@ static Op2DSliceConfig determine_slice_config_internal(
             Op2DSliceConfig{.slice_type = Op2DSliceConfig::SliceType::DRAM_WIDTH, .num_slices = 0},
             output_layout,
             device,
-            true);  // Mark as retry attempt
+            true);
     }
 
-    // If we haven't found a valid config, this is fatal
-    TT_FATAL(
-        found_valid_config,
-        "DRAM Auto slice could not find valid slice configuration. Tried up to {} slices for {}-slicing on output "
-        "dimension {}. Available L1: {} bytes. Operation requires more memory than available even with maximum "
-        "slicing.",
-        current_num_slices - 1,
-        return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "height" : "width",
-        output_sliced_dim,
-        L1_stats.total_free_bytes);
-
+    if (!found_valid_config) {
+        return std::nullopt;
+    }
     return return_slice_config;
 }
 
 // Public wrapper that starts the slice configuration search
 Op2DSliceConfig determine_slice_config(
+    OpSliceAttr* op_slice_attr,
+    const ttnn::Shape& input_shape,
+    const ttnn::Shape& output_shape,
+    const std::optional<Op2DSliceConfig> slice_config_,
+    const tt::tt_metal::Layout output_layout,
+    MeshDevice* device) {
+    auto cfg = determine_slice_config_internal(
+        op_slice_attr, input_shape, output_shape, slice_config_, output_layout, device, false);
+    TT_FATAL(
+        cfg.has_value(),
+        "DRAM Auto slice could not find valid slice configuration. Available L1: {} bytes. Operation requires more "
+        "memory than available even with maximum slicing.",
+        device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_free_bytes);
+    return *cfg;
+}
+
+std::optional<Op2DSliceConfig> try_determine_slice_config(
     OpSliceAttr* op_slice_attr,
     const ttnn::Shape& input_shape,
     const ttnn::Shape& output_shape,
