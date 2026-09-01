@@ -293,7 +293,7 @@ else anonymous. Pass 2 completes it.
 | Per-chip MGD pinnings | Chip granularity; see (d) | `add_pinning_constraints` (`3616`) |
 | **Rank bindings** | Excluded by judgement for v1, **not** by the (b) rule — see the note below | Rank-binding identity path in `build_inter_mesh_constraints` |
 | Channel counts, STRICT vs RELAXED | Deferred by §5(j); existence-only is the weakest predicate that kills #54623 | Inter-mesh validation |
-| PGD↔MGD node orientation | Frozen pre-placement and seam-blind; see (g) | `add_pgd_pinning_preferred_constraints` (`2957`), soft |
+| PGD↔MGD node orientation | Frozen pre-placement and seam-blind, which is why it stays *soft* — but it is required and is never skipped for any mesh; see (g) | `add_pgd_pinning_preferred_constraints` (`2957`) |
 
 **Rank bindings, honestly.** An earlier draft excluded these on principle, arguing a rank binding is a
 labelling property. That is too strong. "Mesh `L` is bound to rank 3" evaluated against a candidate
@@ -325,12 +325,31 @@ region having links toward the other:
 The DFS needs the same set — non-empty is exactly its seam test. **Extract it once and share it.** The
 DFS uses non-emptiness as its generator (§5(c)); pass 2 uses the set itself as the required domain.
 
-Two consequences, both good. The DFS structurally cannot hand pass 2 a region pair that will fail the
-exit-node check, so the `"exit node constraints cannot be satisfied"` rejection at
-`topology_mapper_utils.cpp:3611` becomes unreachable from this path. And the two stages stop carrying
-two definitions of a usable seam that can drift apart.
+**`add_exit_node_constraints` is not removed, weakened, or made conditional.** Sharing the predicate is
+about having one definition instead of two that can drift, plus fail-fast pruning in the DFS. It is not
+a step toward eliminating the constraint, and an earlier draft of this section was wrong to imply the
+`"exit node constraints cannot be satisfied"` rejection at `topology_mapper_utils.cpp:3611` becomes
+unreachable.
 
-### (g) Suppress the seam-blind PGD preference
+The reason it stays is that the two consumers answer different questions at different granularities:
+
+| | DFS (pass 1) | `add_exit_node_constraints` (pass 2) |
+| --- | --- | --- |
+| Operates on | PGD regions | MGD fabric nodes inside a region |
+| Asks | Do these two *regions* touch at all? | Which *chip* of this mesh faces the neighbour? |
+| Arity | nullary — region pair only | n-ary — depends on neighbours' labels (§4(h) tier 2) |
+
+Placement is a PGD-level activity; the intra-mesh solve is where MGD nodes are finally positioned. The
+exit-node constraints are what orient the MGD *within* its region so its declared exits land on chips
+that physically face the right neighbours — a question the DFS never asked and cannot answer, because at
+placement time the MGD's internal node positions do not exist yet. A non-empty seam is necessary for
+that orientation to be possible; it is nowhere near sufficient.
+
+So what the sharing buys is narrower than "elimination", and still worth having: the DFS stops
+generating region pairs that would fail for the *non-adjacency* reason, which is the #54623 class. Exit
+failures for orientation reasons remain reachable and remain pass 2's to solve.
+
+### (g) Keep the PGD pinning preference — required, and it stays soft
 
 The PGD↔MGD node correspondence is composed at *match* time, before placement:
 
@@ -346,13 +365,26 @@ the intra-mesh solve as a soft preference, deliberately added after the hard con
 (`topology_mapper_utils.cpp:3632–3645`), so it cannot cause a failure — but on a mesh that has seams it
 biases toward a neighbour-ignorant orientation that the hard exit constraints must then undo.
 
-Proposed: skip `add_pgd_pinning_preferred_constraints` for meshes with a non-empty exit-node graph, and
-keep it for interior meshes where it is a genuine tie-break. Small, independently testable, and it does
-not depend on the DFS landing.
+That seam-blindness is the reason it must stay **soft**. It is emphatically not a reason to skip it.
 
-**Do not promote this pinning to a hard constraint.** A 4x4 MESH has eight topologically equivalent
-orientations; today the solver picks whichever satisfies the seams. Hard-pinning would pick one blind
-and convert a cheap local repair into a whole-placement backtrack.
+**Do not skip `add_pgd_pinning_preferred_constraints`, for any mesh, under any circumstance.** An
+earlier draft of this plan proposed suppressing it for meshes with a non-empty exit-node graph. That was
+wrong and is withdrawn. The preference is the only thing connecting the MGD's chip numbering to the
+PGD's intended physical layout. The hard constraints — exit nodes, MGD pinnings, rank binding — leave
+many orientations legal; a 4x4 MESH has eight, a torus far more. With the preference removed, the
+intra-mesh solver picks among the survivors arbitrarily, so which physical ASIC becomes logical chip 0
+turns into an artifact of solver internals rather than a property of the descriptors. Mesh coordinates
+then shift between runs and between solver versions for reasons no descriptor explains, and the PGD's
+declared layout stops meaning anything downstream.
+
+**Do not promote it to a hard constraint either.** A hard pinning would fix one of the eight
+orientations before the seams are known and convert a cheap local repair into a whole-placement
+backtrack.
+
+Soft, applied to every mesh, ordered after the hard constraints — which is exactly what the code does
+today at `topology_mapper_utils.cpp:3632–3645`. The ordering is load-bearing: it lets the hard
+constraints choose the orientation and lets the preference break the remaining ties toward the PGD's
+intent. Nothing about this plan changes it.
 
 ### (h) Check tiers
 
@@ -399,9 +431,6 @@ calls and rejections — and drop it if the rejection count stays at zero.
 
 ## 5. Design — adjacency-guided mixed-shape DFS
 
-Keep Phase A untouched and delete Phase B from this path. Index the pool, then grow one placement over
-all shapes at once, ordered by the MGD's own graph.
-
 ```mermaid
 flowchart TB
     X0["per shape S:<br/>enumerate_distinct_placements_for_grouping"] --> X1["pool_S — rich, overlapping"]
@@ -418,8 +447,9 @@ flowchart TB
 *Today. Phase B collapses a menu of options into one maximum-coverage tiling per shape, before anything
 has looked at the MGD's edges. §2 shows an 8-chip MGD that is unsatisfiable over the result.*
 
-Keep Phase A untouched and delete Phase B from this path. Index the pool, then grow one placement over
-all shapes at once, ordered by the MGD's own graph.
+Delete Phase B from this path, and **fix** Phase A rather than leaving it alone — its cross-grouping
+dedup discards PGD variants the DFS needs, and its caps truncate the pool the DFS searches (§5(h)). Then
+index the pool and grow one placement over all shapes at once, ordered by the MGD's own graph.
 
 ```mermaid
 flowchart TB
@@ -624,11 +654,52 @@ representative from each signature class first, then the rest. If measurement la
 really are isomorphic, promoting this to a prune is a one-line change — but it needs evidence first,
 because the machine is not guaranteed vertex-transitive under that signature.
 
-### (h) Delete `kMaxPlacementsPerGrouping`
+### (h) Phase A pool completeness: every variant, no caps
+
+Under this plan the pool *is* the search space, so anything Phase A silently drops is a solution the DFS
+can never find. Phase A drops things in two ways, and the first is the more damaging.
+
+**Keep every PGD variant. Phase A cannot be left untouched.** An earlier draft of this plan said to keep
+Phase A as-is and delete only Phase B. That was wrong: Phase A performs its own lossy step, and it
+destroys exactly the distinction this plan needs.
+
+```1730:1730:tt_metal/fabric/physical_grouping_descriptor_matching.cpp
+    // Phase A: enumerate candidates per grouping, de-duplicating identical ASIC sets across groupings.
+```
+
+The key is the sorted ASIC slot set, and `seen_sets` is shared across every grouping in the call:
+
+```1776:1779:tt_metal/fabric/physical_grouping_descriptor_matching.cpp
+            std::string key(reinterpret_cast<const char*>(slots.data()), slots.size() * sizeof(size_t));
+            if (!seen_sets.insert(std::move(key)).second) {
+                continue;
+            }
+```
+
+`find_all_in_psd` is called once per MGD mesh name with *all* matching PGD variants in `groupings`
+(`topology_mapper_utils.cpp:907–911`). So `4x4_Mesh` and `4x4_SplitHost` covering the same sixteen chips
+hash to the same key and only one survives — and which one is not arbitrary, because `variant_priority`
+deliberately orders `MESH` ahead of the torus forms (`physical_grouping_descriptor_matching.cpp:1124–1131`).
+The split-host form is systematically the loser.
+
+The consequence is severe and is independent of everything else in this plan: an MGD that needs a region
+whose chips span two hosts can never be satisfied, because the variant expressing that structure was
+discarded before any search saw it. Two variants over an identical chip set are *not* interchangeable —
+they differ in host structure and in internal adjacency, which is precisely what the intra-mesh solve
+and the rank bindings care about.
+
+**The fix.** Make the dedup key `(grouping index, sorted slot set)` rather than the slot set alone.
+Dedup within a single grouping stays — two enumerations of the same grouping over the same chips really
+are redundant. Cross-grouping dedup existed to keep Phase B's packing universe small; Phase B is gone
+from this path, and the DFS needs the distinction that dedup was throwing away.
+
+This also matters for the single-shape fast path, which never reaches the DFS at all — see §8.
+
+**Second: delete `kMaxPlacementsPerGrouping`.**
 
 The cap is 1024 placements per grouping. It exists to stop Phase B's set packing from choking on a big
-pool. Phase B is gone from this path, so the reason for the cap is gone too. Under this plan the pool
-*is* the search space, and silently truncating it can turn a solvable MGD into a reported failure.
+pool. Phase B is gone from this path, so the reason for the cap is gone too, and silently truncating the
+pool can turn a solvable MGD into a reported failure.
 
 **Delete it, and pass `0` instead.** `solve_topology_mapping_n` treats `0` as "enumerate everything",
 capped by its own backstop `kTopologyMappingEnumerateSolutionsHardCap = 500000`
@@ -652,10 +723,16 @@ below 1024, so the cap almost certainly never fires today.
 Enumeration is also incremental AllSAT — `SatSearchEngine::search_n` keeps one solver, encodes once, and
 appends a blocking clause per model — so the cost of enumerating a small set completely is small.
 
-**No new bookkeeping.** Do not replace the cap with truncation tracking, a wall-clock guard, or a config
-knob. The 500k backstop is orders of magnitude above any real pool, and if it ever fires the solver
-already says so. Adding machinery for a case that cannot happen is the accretion this plan is trying to
-remove.
+**There is a second cap; do not leave it behind.** `kMaxPlacementsPerRun = 10000`
+(`physical_grouping_descriptor_matching.cpp:1659`) bounds the enumeration loop at `1685` and truncates
+the packing result at `1822`. Removing one cap while the other still silently truncates the enumeration
+would be worse than leaving both — the failure would look identical but come from a different line.
+Audit both when this is implemented.
+
+**No new bookkeeping.** Do not replace either cap with truncation tracking, a wall-clock guard, or a
+config knob. The 500k backstop is orders of magnitude above any real pool, and if it ever fires the
+solver already says so. Adding machinery for a case that cannot happen is the accretion this plan is
+trying to remove.
 
 ### (i) Contingency: anchored placement, expressed with existing constraints
 
@@ -899,7 +976,7 @@ flowchart TB
         direction TB
         MM --> AE["add_exit_node_constraints<br/>:3023 · consumes seam_exit_domain"]
         AE --> AP["add_pinning_constraints<br/>:3616"]
-        AP --> PP["add_pgd_pinning_preferred_constraints<br/>:2957 · skipped for meshes with seams · §4(g)"]
+        AP --> PP["add_pgd_pinning_preferred_constraints<br/>:2957 · every mesh, soft, unchanged · §4(g)"]
         PP --> ST["solve_topology_mapping<br/>:3652"]
     end
 
@@ -912,7 +989,6 @@ flowchart TB
     style SD fill:#d1e7dd
     style ED fill:#fff3cd
     style AE fill:#fff3cd
-    style PP fill:#fff3cd
 ```
 
 Two things the diagram is meant to make obvious. `seam_exit_domain` has one definition and two callers,
@@ -924,8 +1000,9 @@ subtree, so nothing new appears in a public header.
 
 | Concern | Owner | Notes |
 | --- | --- | --- |
-| Candidate pool (unpacked) | New `enumerate_all_candidates_in_psd(groupings, psd, flat_graph)` in `physical_grouping_descriptor_matching.cpp` | Extract Phase A (`1730–1789`) into its own function; `solve_for_many_groupings_to_psd_heterogeneous` calls it too, so the packer keeps working unchanged |
-| Placement cap | `kMaxPlacementsPerGrouping` (`1663`) deleted; `enumerate_distinct_placements_for_grouping` passes `0` | Inherits the solver's own 500k backstop. No replacement bookkeeping (§5(h)) |
+| Candidate pool (unpacked) | New `enumerate_all_candidates_in_psd(groupings, psd, flat_graph)` in `physical_grouping_descriptor_matching.cpp` | Extract Phase A (`1730–1789`) into its own function, deduping **within** a grouping only (§5(h)). Cross-grouping dedup moves out into `solve_for_many_groupings_to_psd_heterogeneous`, so the packer's behaviour is bit-for-bit unchanged while the DFS sees every variant |
+| Variant preservation | The `seen_sets` key (`1776–1779`) becomes `(grouping index, slot set)` on the DFS path | The single most important correctness fix in this plan: without it `4x4_SplitHost` is discarded in favour of `4x4_Mesh` before any search runs (§5(h)) |
+| Pool caps | `kMaxPlacementsPerGrouping` (`1663`) deleted, `enumerate_distinct_placements_for_grouping` passes `0`; `kMaxPlacementsPerRun` (`1659`) audited at `1685` and `1822` | Inherits the solver's own 500k backstop. Both caps, or the fix is cosmetic. No replacement bookkeeping (§5(h)) |
 | Anchored placement | New `enumerate_placements_anchored` beside `enumerate_distinct_placements_for_grouping` (`1514`) | Seeds `initial_constraints` with a forbidden set plus one at-least-1 cardinality per placed neighbour; no solver change. Contingency only (§5(i)) |
 | Pool indices | New `PlacementIndex` struct, anonymous namespace in `topology_mapper_utils.cpp`, built in Phase 3 beside `group_bits_by_name` (`927`) | Owns `pool`, `pool_by_shape`, `pool_by_chip`, `touches`, `touches_bits`; built from `flat_graph`, which Phase 3 already holds |
 | Tier-1 probe | New `tier_1_probe(MeshId, candidate)` beside `PlacementIndex` | Unary necessary conditions only (§4(h)): pinning containment, intra-mesh channel shortfall. Memo table keyed on `(MeshId, candidate id)`. **Must not call `solve_topology_mapping`** |
@@ -933,7 +1010,7 @@ subtree, so nothing new appears in a public header.
 | Full logical mesh graph | `get_requested_intermesh_from_mgd` result used **unfiltered** (`1007`) | The existing `build_mgd_mesh_level_subgraph_for_mesh_descriptor_name` (`1037`) shape filter is simply not applied on this path |
 | Shape of each logical mesh | `logical_mesh_id_to_mgd_instance_name` (`1522`) + `get_valid_groupings_for_mgd` keys | Already the key space `placements_by_shape` uses |
 | The search | New `AdjacencyGuidedPlacementSearch` replacing `DisjointPackingSearch` (`1085–1458`) | Takes `const PlacementIndex&`, the logical graph, and the shape map by const ref; owns only `occupied`, `assign`, and the trail |
-| Result assembly | Phase 7 (`1480–1515`), unchanged | Search emits `logical MeshId → PsdPlacement`; disjointness by construction keeps the one-ASIC-to-one-MeshId assumption in `build_hierarchical_from_flat_graph` (`2433–2437`) sound |
+| Result assembly | Phase 7 (`1480–1515`), **unchanged — do not modify** | The DFS already assigns real logical MeshIds, so the re-key at `combined_placements[logical_mesh_id.get()]` (`1494`) is a straight copy and every downstream consumer keeps working. This is also how each placement's `mesh_node_to_asic_position` reaches `mesh_pgd_pinnings_` (`2519–2522`) and therefore how `add_pgd_pinning_preferred_constraints` still gets its input — see §4(g). Disjointness by construction keeps the one-ASIC-to-one-MeshId assumption in `build_hierarchical_from_flat_graph` (`2433–2437`) sound |
 | Fallback | Existing Phases 5–6, kept | Entered on budget expiry or exhaustion |
 | Diagnostics | Replaces the `TT_THROW` at `1472` | Reports the deepest partial assignment and the specific mesh and seam that could not be satisfied |
 
@@ -945,13 +1022,36 @@ here needs to appear in a public header.
 | Phase | Fate |
 | --- | --- |
 | 3 — `find_all_in_psd` | Replaced on this path by the Phase A pool build. `find_all_in_psd` itself stays for its other callers |
-| 4 — single-shape fast path | **Keep.** One shape means no cross-shape seams and no reason to search |
+| 4 — single-shape fast path | **Keep** — but see the note below; keeping it is only safe once §5(h)'s variant fix lands |
 | 5 — per-shape `MeshEnumState` + SAT | Becomes fallback only |
 | 6 — `DisjointPackingSearch` | Becomes fallback only |
 | 7 — result assembly | Unchanged |
 
 The per-shape SAT is subsumed rather than lost: it embedded the same-shape subgraph into a fixed tiling,
 and the new search embeds the *whole* graph into the whole pool.
+
+**On keeping Phase 4.** The usual justification — one shape means no cross-shape seams, so there is
+nothing to search — is not sufficient on its own. "Single shape" means a single MGD mesh *descriptor
+name*, which can still resolve to several PGD variants, and Phase 4 returns the graph built from Phase
+B's output directly:
+
+```962:969:tt_metal/fabric/topology_mapper_utils.cpp
+    if (mesh_shape_entries.size() == 1) {
+        const std::string& sole_mesh_name = mesh_shape_entries.begin()->first;
+        const auto sole_it = mesh_physical_graphs.find(sole_mesh_name);
+        TT_FATAL(
+            sole_it != mesh_physical_graphs.end(),
+            "Single mesh shape '{}' missing PSD-derived PhysicalMultiMeshGraph",
+            sole_mesh_name);
+        return sole_it->second;
+```
+
+So a single-shape MGD inherits both Phase A's variant dedup and Phase B's tiling, with no search
+available to recover from either. The variant dedup is the part that actually bites — it is what makes
+`4x4_SplitHost` unreachable for an MGD whose region must span two hosts. Fixing the dedup key (§5(h))
+repairs the single-shape path without routing it through the DFS, which is why Phase 4 stays. If a
+single-shape MGD is later shown to fail for a *tiling* reason rather than a variant reason, that is the
+signal to send this path through the search as well.
 
 ## 9. Interaction with Plans 1 and 2
 
@@ -973,6 +1073,12 @@ correctness fix.
   `tests/tt_metal/tt_fabric/fabric_router/test_topology_mapper_utils.cpp`. It fails today and must pass
   after. This is the sharpest possible regression test because the frozen tilings make it provably
   unsatisfiable on the current path.
+- **Variant preservation** (§5(h)), and this one is worth writing first because it is independent of the
+  DFS: a PGD offering two variants over an identical chip set — a single-host `4x4_Mesh` and a
+  `4x4_SplitHost` — with an MGD that can only be satisfied by the split form. It must fail today (the
+  split variant is deduped away in favour of the MESH-first ordering) and pass after the dedup key
+  change. Assert on the *chosen variant*, not merely on success, so the test cannot pass for the wrong
+  reason. Run it through the single-shape fast path too, per §8.
 - **The issue's 4-slot cycle**: 4 physical slots in a cycle, 4 logical meshes alternating two shapes;
   assert the interleaved placement, not the packed one.
 - **`bh_glx_2branch_mesh_per_stage_router_pipeline.textproto`**: assert every declared MGD boundary
@@ -1031,9 +1137,9 @@ correctness fix.
 - **Is a rank-count feasibility bound worth adding to the DFS?** §4(e) says no: a Hall-type check on
   host-rank supply versus demand is the most a label-free pass can do, and pass 2 repairs those failures
   by relabelling anyway. Revisit only if rank-binding rejections turn out to dominate pass-2 failures.
-- **Does the seam-blind preference suppression in §4(g) stand alone?** It needs neither the DFS nor
-  Plan 1, so it could ship first as an independent change. Worth confirming it does not regress
-  interior-mesh determinism, which is the one thing the preference currently buys.
+- **Does the variant fix in §5(h) stand alone?** It needs neither the DFS nor Plan 1, and it repairs the
+  single-shape path (§8) on its own. Strong candidate to ship first and independently — it is a dedup
+  key change, and it is the one fix here with a known concrete failure behind it.
 - **Does the joint SAT from #54623 still have a role?** It becomes the escalation if the DFS proves
   inadequate, not the first move. The DFS is strictly less new machinery: encoding chip-disjointness in
   the SAT needs an at-most-one primitive that `MappingConstraints` does not have today
