@@ -160,17 +160,23 @@ ProgramRunArgs MyProgramFactory::override_runtime_arguments(
 
 ## Feasibility gate
 
-The audit's job here is one question: **does the op fit one of the two concepts above?** Their limits are identical — the fork between them is about the cache-hit path, not about what the op is allowed to be — so the blockers below apply to both.
+The audit's job here is one question: **does the op fit one of the two concepts above?** Their limits are identical — the fork between them is about the cache-hit path, not about what the op is allowed to be.
 
 - **Single-program** (the common case — op-owned tensors are fine) → proceed, on whichever concept the [selector](#the-two-metal-20-factory-concepts) picks.
-- **Anything else** → the port is **blocked on framework work**, not porter-resolvable. Record RED and stop.
+- **Op-owned `GlobalSemaphore`s.** The factory allocates its own in its body, and the artifact carries only `MeshTensor`s — no slot for them. Not porter-resolvable: record RED and stop. Op-owned *tensors* are supported and **not** blocked.
+- **Multi-program / per-coord variation.** The op's programs genuinely differ across mesh coordinates (CCL-style), and both concepts above stamp one spec everywhere. **Don't RED this on your own judgment** — see below.
 
-The "anything else" cases — and the reason they're blocked:
+### Multi-program: the sheet gates, you name the target
 
-- **Op-owned `GlobalSemaphore`s.** The factory allocates its own `GlobalSemaphore`s in its body. Op-owned *tensors* are supported (the artifact carries them; see above), but the artifact has no slot for op-owned semaphores yet. An op needing only op-owned *tensors* is **not** blocked — it ports cleanly.
-- **Multi-program / per-coord variation.** The op's programs genuinely differ across mesh coordinates (CCL-style). The single-program adapter stamps one spec everywhere.
+A Metal 2.0 mesh-workload concept was expected to follow the two above, so this document holds no verdict on whether one exists — that would go stale the day it lands. The sheet's `Is able to port?` is the gate and already accounts for framework support: [read that cell, don't vet it](../audit/metal2_audit.md#ttnn-factory-concept-prerequisite). Attribute and route a `no` like any other; on a `yes`, name the target concept from the code:
 
-Op-owned *tensors* are supported on this concept; the remaining gaps — op-owned `GlobalSemaphore`s and genuine multi-program workloads — are not porter-resolvable and are tracked separately. If you hit one, the op is parked until that framework work lands — record it in the audit so it feeds prioritization.
+```bash
+grep -n "concept \|create_" ttnn/api/ttnn/operation_concepts.hpp
+```
+
+Look for a **Metal 2.0** concept — one built on a `ProgramSpec` / `ProgramArtifacts` entry point rather than a `ProgramDescriptor` — that admits per-coordinate programs, and record its name as the target. **As of 2026-08-31 there was none:** the only two Metal 2.0 concepts were `ProgramSpecFactoryConcept` and `CustomProgramSpecFactoryConcept`, both single-program, both excluding `MeshWorkloadFactoryConcept`. If that is still the picture, record **target concept: none yet** and RED, citing this lookup as the evidence.
+
+Either way the **port procedure covers only the two single-program concepts**: a mesh-workload target means the porter stops at [its coverage boundary](../port/metal2_port.md#what-this-procedure-covers). Note that in the brief so the stop reads as expected, not as a failed port.
 
 > **Heads-up — a legacy `MeshWorkload` is not automatically a multi-program op.** Some legacy ops construct a `MeshWorkload` only because the legacy framework couldn't carry op-owned tensors on the single-program path. If every per-coord program is structurally identical (same kernels, same DFB shape, same bindings — only the tensor data differs) and the only thing pushing it multi-program was a resource workaround, the op is *morally* single-program and **ports cleanly** — carry its **op-owned** tensors in `op_owned_tensors` on the single-program concept and drop the `MeshWorkload`. Record it as a resource-workaround unwind rather than genuine per-coord variation.
 
@@ -258,10 +264,10 @@ The auditor adds the following to `METAL2_PREPORT_AUDIT.md`. The decision is rec
 ## TTNN ProgramFactory
 
 ### Concept
-[ProgramSpecFactoryConcept (ported-from factory has no override_runtime_arguments) / CustomProgramSpecFactoryConcept (it does — name the method's file:line) / BLOCKED (op-owned GlobalSemaphores / genuine multi-program; see below)]
+[ProgramSpecFactoryConcept (ported-from factory has no override_runtime_arguments) / CustomProgramSpecFactoryConcept (it does — name the method's file:line) / <mesh-workload concept, named from the header lookup> / BLOCKED (op-owned GlobalSemaphores, or multi-program with no concept yet; see below)]
 
 ### Fit
-- Single vs multi-program: [single — one ProgramSpec stamped across the mesh / multi — BLOCKED]
+- Single vs multi-program: [single — one ProgramSpec stamped across the mesh / multi — quote the sheet's `Is able to port?` cell and the header-lookup result]
 - Op-owned device resources: [none / op-owned tensors (supported) / op-owned GlobalSemaphores — BLOCKED, list them]
 - Tensor-arg matching: strict [default; deviation requires a paragraph and is not a port-time call]
 - Legacy-to-Metal-2.0 shape: [1:1 with legacy — or — legacy MeshWorkload was a resource workaround, see heads-up]
@@ -271,7 +277,7 @@ The auditor adds the following to `METAL2_PREPORT_AUDIT.md`. The decision is rec
 [Recorded so the porter knows it is there and leaves it alone; the port never edits it.]
 
 ### Stop signals
-[If BLOCKED: which framework capability is missing (op-owned GlobalSemaphores / genuine multi-program), and confirm the overall audit result is RED. Otherwise: "None."]
+[If BLOCKED: which framework capability is missing (op-owned GlobalSemaphores, or multi-program with no concept yet — for that one quote the sheet cell and the lookup), and confirm the overall audit result is RED. If the target is a mesh-workload concept: note that the port procedure does not cover it yet, so the porter will stop at its coverage boundary. Otherwise: "None."]
 ```
 
 ## Port plan deliverable (porter-facing)
@@ -280,7 +286,7 @@ The porter inherits the audit's decision; the port plan's TTNN section is a brie
 
 ```markdown
 ## TTNN ProgramFactory
-- Concept (inherited from audit): [ProgramSpecFactoryConcept / CustomProgramSpecFactoryConcept]
+- Concept (inherited from audit): [ProgramSpecFactoryConcept / CustomProgramSpecFactoryConcept — anything else is outside this procedure; stop and report]
 - Custom compute_program_hash: [present at file:line — leave intact / none]
 - Implementation notes: [optional — anything specific about how this op realizes the concept; most ports won't need this]
 ```
