@@ -1,41 +1,41 @@
 # Validation evidence, requirement by requirement
 
 Every requirement in the bring-up scope, what validates it, and where its number
-lives. This document is a **map, not a second copy of the numbers**: measured figures
+lives. This document is a map, not a second copy of the numbers: measured figures
 appear once, in [`../PERF.md`](../PERF.md), and are linked from here. Two documents
 quoting the same measurement is how they drift apart.
 
 Read the columns as:
 
-* **validated by** — the test that decides it. A name in `tests/` is executable; run
+* validated by — the test that decides it. A name in `tests/` is executable; run
   it and it passes or fails. Where a requirement is validated by inspection or by a
-  measurement with no gate, the cell says so rather than naming a test that does not
+  measurement with no check, the cell says so rather than naming a test that does not
   enforce it.
-* **evidence** — the section of `PERF.md` carrying the number, or the artefact.
+* evidence — the section of `PERF.md` carrying the number, or the artefact.
 
 ## How the numeric thresholds are enforced
 
 Before 2026-08-29 the perf suite printed its figures and asserted `total_s > 0` — a
-timing harness, not a gate. It now enforces every numeric threshold through
+timing harness, not a check. It now enforces every numeric threshold through
 [`../tests/perf/gates.py`](../tests/perf/gates.py), which separates two things that
 were previously conflated:
 
-* **`GATES`** — the thresholds themselves, quoted from the scope. One declaration,
+* `GATES` — the thresholds themselves, quoted from the scope. One declaration,
   used by every test that produces one of these numbers.
-* **`EXPECTATIONS`** — the per-architecture verdict. A gate recorded as met is
-  asserted against the threshold, so a regression fails. A gate recorded as **missed**
-  is asserted against its recorded measurement, **both bounds**, exactly as
+* `EXPECTATIONS` — the per-architecture verdict. A threshold recorded as met is
+  asserted against the requirement, so a regression fails. One recorded as unmet
+  is asserted against its recorded measurement, both directions, exactly as
   `models/perf/device_perf_utils.check_device_perf` does: slower fails because that is
   a regression, and *faster* fails because it means the published figure is stale.
 
-Nothing is `xfail`-ed. A missed target gets a measured number, a band it must stay
+Nothing is `xfail`-ed. An unmet target gets a measured number, a band it must stay
 inside, and a named lever.
 
 | threshold | scope stage | enforced in |
 |---|---|---|
 | `>= 30 tok/s` semantic generation | Stage 1 | `test_device_end_to_end_rtf`, `test_device_traced_throughput`, `test_device_inplace_throughput` |
 | `RTF < 0.5` | Stage 1 | `test_device_end_to_end_rtf` |
-| `>= 60 tok/s` | Stage 3 stretch | same three as the 30 tok/s gate |
+| `>= 60 tok/s` | Stage 3 stretch | same three as the 30 tok/s threshold |
 | `RTF < 0.2` | Stage 3 stretch | `test_device_end_to_end_rtf` |
 | token agreement `> 95 %` | Stage 1 | `test_gate1_teacher_forced_argmax_match`, `test_gate1b_teacher_forced_argmax_through_the_kv_cache` |
 | per-module PCC `>= 0.99` | Stage 1 | every `tests/pcc/test_device_*` |
@@ -43,8 +43,8 @@ inside, and a named lever.
 | batching amortises the weight read | Stage 3 | `test_device_batched_decode_throughput` |
 | streaming starts before generation ends | Stage 3 | `test_device_streaming_first_audio_latency` |
 
-`WER < 3.0` and `speaker similarity > 60` are **not** enforced by a test in this tree,
-and that is a deliberate boundary rather than an omission: scoring needs whisper
+`WER < 3.0` and `speaker similarity > 60` are not enforced by a test in this tree,
+and that is a deliberate split rather than an omission: scoring needs whisper
 `large-v3` and `WavLMForXVector` in the reference venv (see
 [`security.md`](security.md)), which tt-metal's `python_env` does not carry and this
 demo does not install. They are produced by `scripts/eval_wer_sim.py` and reported in
@@ -54,28 +54,20 @@ demo does not install. They are produced by `scripts/eval_wer_sim.py` and report
 
 Three boards, one commit, one day — see `PERF.md`'s *The certification run* for the
 commit, the date and the per-board environment. Every figure in `PERF.md` comes from
-that run; where a board is missing a cell, the cell is empty rather than filled from
+that run; where a board has no result, the cell is empty rather than filled from
 the other board of the same architecture.
 
 | board | architecture | in scope because |
 |---|---|---|
-| Wormhole n300 | Wormhole | the scope names N150 **or** N300; this is the named target |
+| Wormhole n300 | Wormhole | the named Wormhole target |
 | Blackhole `p150a` | Blackhole | actively cooled, the faster of the two |
 | Blackhole `p150b` | Blackhole | passively cooled; ~5 % slower per token on identical work |
 
-**N150 was not available, and what that does and does not leave open is worth being
-precise about.** The n300 board reports two Wormhole B0 chips — `n300 L` and `n300 R` —
-and the model runs on the local one, selected with `TT_VISIBLE_DEVICES=0`. **Nothing in
-this port is multi-chip**: there are no collectives, no fabric traffic and no mesh
-device; the tensor-parallel prototype that would have used the second chip was measured
-and not shipped (see below). So the compute the model actually uses on the n300 is one
-Wormhole B0 with an 8 × 8 grid — the same compute an N150 provides.
-
-That makes an N150 result *predictable* rather than *measured*, and the distinction is
-kept: nothing in `PERF.md` reports an N150 figure, and `tests/perf/gates.py`'s Wormhole
-expectations are recorded from n300 and will trip their two-sided band rather than
-silently absorb a different part. What would be expected to differ on an N150 is the
-host interface and the board's power envelope, not the grid the kernels run on.
+The n300 board reports two Wormhole B0 chips — `n300 L` and `n300 R` — and the model
+runs on the local one, selected with `TT_VISIBLE_DEVICES=0`. Nothing in this port is
+multi-chip: there are no collectives, no fabric traffic and no mesh device; the
+tensor-parallel prototype that would have used the second chip was measured and not
+shipped (see below).
 
 ---
 
@@ -87,15 +79,15 @@ host interface and the board's power envelope, not the grid the kernels run on.
 | LLM backbone for semantic tokens | ✅ | `test_device_ar_prefill_and_decode`, `test_device_text_encoder` | *Accuracy* |
 | Flow-based decoder | ✅ | `test_device_flow_tokens_to_mel`, `test_device_estimator_matches_golden`, `test_device_flow_encoder_matches_golden` | *Accuracy* |
 | Vocoder | ✅ | `test_device_hift_decode_matches_golden`, `test_device_istft_matches_golden` | *Accuracy* |
-| Runs on N150 or N300 with no errors | ✅ n300 | full `tests/pcc/` + `tests/e2e/` on all three boards | *The certification run* |
+| Runs on the named hardware with no errors | ✅ n300 | full `tests/pcc/` + `tests/e2e/` on all three boards | *The certification run* |
 | SFT mode | ✅ | `test_modes_differ_only_in_prompt_construction`; `demo/demo.py --mode sft` | *Generation modes* |
 | Zero-shot mode | ✅ | same | *Generation modes* |
 | Cross-lingual mode | ✅ | same | *Generation modes* |
 | Instruct mode | ✅ | same | *Generation modes* |
 | Valid audio, 5 languages | ✅ 20/20 | `demo/sweep.py` — all four modes × zh/en/ja/ko/yue | *Speech quality* |
-| Verifiable against the PyTorch reference | ✅ | `tests/pcc/` PCC gates; `test_device_tokens_to_waveform` end to end | *Accuracy* |
-| `>= 30 tok/s` semantic generation | ✅ | gated — see the table above | *Semantic-token throughput* |
-| `RTF < 0.5` | ✅ Blackhole · ❌ n300 | gated, with the n300 miss held to a recorded band | *End-to-end real-time factor* |
+| Verifiable against the PyTorch reference | ✅ | `tests/pcc/` PCC checks; `test_device_tokens_to_waveform` end to end | *Accuracy* |
+| `>= 30 tok/s` semantic generation | ✅ | checked — see the table above | *Semantic-token throughput* |
+| `RTF < 0.5` | ✅ Blackhole · ❌ n300 | checked, with the n300 shortfall held to a recorded band | *End-to-end real-time factor* |
 | Token accuracy `> 95 %` | ✅ | `test_gate1_teacher_forced_argmax_match`, `..._through_the_kv_cache`, `test_gate2_free_running_greedy` | *Accuracy* |
 | WER `< 3.0`, speaker similarity `> 60` | ✅ | `scripts/eval_wer_sim.py`, reference venv | *Speech quality* |
 | Setup and run instructions | ✅ | [`../README.md`](../README.md) | — |
@@ -104,8 +96,8 @@ host interface and the board's power envelope, not the grid the kernels run on.
 
 | requirement | status | validated by | evidence |
 |---|---|---|---|
-| Optimal sharded / interleaved memory configs | **measured; the default wins almost everywhere** | `scripts/probe_linear_grid.py`, `scripts/probe_ff2_shard.py` — no gate, these are sweeps | `PERF.md` *Tuning flags*, *What the decode step is bound by* |
-| Sharding: token embeddings | not sharded — the tensors are one row at decode | inspection | *What the decode step is bound by* |
+| Optimal sharded / interleaved memory configs | **measured; the default wins almost everywhere** | `scripts/probe_linear_grid.py`, `scripts/probe_ff2_shard.py` — no check, these are sweeps | `PERF.md` *Tuning flags*, *What limits the step* |
+| Sharding: token embeddings | not sharded — the tensors are one row at decode | inspection | *What limits the step* |
 | Sharding: transformer layers | see above; explicit grids lost in 10 of 12 combinations tried | `scripts/probe_linear_grid.py` | *Tuning flags* |
 | Sharding: multi-head attention | superseded by the fused kernel — `sdpa_decode` owns its own parallelisation | `test_device_fused_attention_matches_explicit` | *Fused decode attention* |
 | Sharding: flow decoder layers | superseded by fused `sdpa` in the estimator | `test_device_estimator_matches_golden` | *Flash attention* |
@@ -124,7 +116,7 @@ host interface and the board's power envelope, not the grid the kernels run on.
 | Efficient KV-cache for long sequences | ✅ | `test_device_fixed_shape_cache_matches_the_growing_one` | *Fixed-width KV cache* |
 | Flash attention or equivalent | ✅ both stages | `test_device_fused_attention_matches_explicit` | *Fused decode attention*, *Flash attention* |
 | Minimize token generation latency | ✅ | `test_device_traced_throughput`, `test_device_inplace_throughput` | *The LLM decode step* |
-| **Batch processing for multiple utterances** | ✅ decode batched and gated; end-to-end batched synthesis blocked by a pre-existing device defect (below) | `test_device_batched_decode_matches_single` (correctness, ragged prefixes), `test_device_batched_decode_throughput` (the sweep, gated) | *Batched decode* |
+| **Batch processing for multiple utterances** | ✅ decode batched and checked; end-to-end batched synthesis blocked by a pre-existing device defect (below) | `test_device_batched_decode_matches_single` (correctness, ragged prefixes), `test_device_batched_decode_throughput` (the sweep, checked) | *Batched decode* |
 | Efficient sampling strategies | ✅ top-k / top-p / RAS, host-side **by measurement** | `test_nucleus_filter_*`, `test_ras_*`, `scripts/profile_token_tail.py` | *The LLM decode step* |
 | **Pipeline semantic generation with acoustic modeling** | ✅ | `test_device_streaming_first_audio_latency` (both schedules, all three stages real; Blackhole), `test_device_streaming_generates_the_same_tokens_as_batch` (the shipped API, all three boards) | *Streaming* |
 | Optimize flow decoder computation | ✅ | `test_device_solve_euler_matches_golden`; trace-cache timing | *The flow decoder* |
@@ -132,8 +124,8 @@ host interface and the board's power envelope, not the grid the kernels run on.
 | Speculative decoding | ❌ **not explored** — see below | — | — |
 | Multi-chip / tensor parallelism | **measured, not shipped** — see below | `scripts/probe_tp_decode.py` (a scratch probe, not in this tree) | *Known limitations* |
 | Document tuning, limitations, trade-offs | ✅ | this document, `PERF.md` *Tuning flags* and *Known limitations* | — |
-| `60+ tok/s` | ✅ | gated | *Semantic-token throughput* |
-| `RTF < 0.2` | ❌ **bounded below, not merely missed** — see below | gated against a recorded band | *End-to-end real-time factor* |
+| `60+ tok/s` | ✅ | checked | *Semantic-token throughput* |
+| `RTF < 0.2` | ❌ floored, not merely unmet — see below | checked against a recorded band | *End-to-end real-time factor* |
 | Streaming inference | ✅ | `test_device_streamed_matches_non_streamed` (content), `test_device_streaming_first_audio_latency` (schedule) | *Streaming* |
 | Efficient multi-lingual switching | ✅ 5 languages × 4 modes | `demo/sweep.py` | *Speech quality* |
 
@@ -145,17 +137,18 @@ host interface and the board's power envelope, not the grid the kernels run on.
 
 Not a tuning shortfall. The flow decoder alone consumes a large fraction of the
 `0.2` budget after a fused SDPA and a trace cache, and its cost is 64 transformer
-blocks × 10 Euler steps — the Euler count is a **model** parameter, and lowering it
+blocks × 10 Euler steps — the Euler count is a model parameter, and lowering it
 costs accuracy (`PERF.md` records what 5 steps buys and what it costs). The LLM's
 share needs the decode step under 1.5 ms on its own, against a best measured step that
-is bandwidth-bound on the AR decoder's weights. Both figures are in `PERF.md`
-*End-to-end real-time factor*; the gate is enforced against a recorded band so a
+is bandwidth-limited on the AR decoder's weights. Both figures are in `PERF.md`
+*End-to-end real-time factor*; the threshold is enforced against a recorded band so a
 future improvement cannot pass unnoticed.
 
 ### `RTF < 0.5` on Wormhole n300
 
-Met on both Blackhole boards, missed on n300, and n300 is a named target — so this is
-reported as a miss rather than as a Blackhole result. The gap is the compute grid:
+Met on both Blackhole boards, not met on n300, and n300 is a named target — so this
+is reported on its own rather than folded into a Blackhole result. The gap is the
+compute grid:
 8 × 8 = 64 cores against Blackhole's 13 × 10 = 130, on a decode step whose cost is
 dominated by weight traffic. `COSYVOICE_FF2_GRID=8x2` closes part of it. The lever and
 the measured band are in `PERF.md` and in `tests/perf/gates.py`'s `WORMHOLE` table.
@@ -167,9 +160,9 @@ often enough that verifying `k` drafted tokens in one target pass beats `k` sequ
 passes. Two properties of this model make that a poor fit, and neither is a matter of
 effort:
 
-* **There is no draft model.** CosyVoice-300M ships one LLM; a draft would have to be
+* There is no draft model. CosyVoice-300M ships one LLM; a draft would have to be
   trained or distilled, which is model work rather than a bring-up optimisation.
-* **Sampling is not greedy.** The reference decodes with RAS — nucleus sampling plus a
+* Sampling is not greedy. The reference decodes with RAS — nucleus sampling plus a
   repetition-aware resample over the emitted history. Speculative decoding's
   acceptance test is defined for a fixed conditional distribution; RAS's rejection
   branch rewrites a score *based on tokens already emitted*, so the target
@@ -184,39 +177,39 @@ batching. `PERF.md` *The LLM decode step* carries what each was worth.
 
 ### End-to-end batched synthesis — blocked by the L1 growth, not by batching
 
-`TtTransformerLM.generate_batch` is verified and gated: batched rows match single-row
+`TtTransformerLM.generate_batch` is verified and checked: batched rows match single-row
 decode at ragged prompt lengths, and the `B = 1..8` sweep fails if batching amortises
 nothing. That is where the win is — the LLM runs once per *token* and is the large
 majority of an utterance, while the flow decoder and the vocoder run once per
 utterance each.
 
 `CosyVoiceTTNN.synthesize_batch` composes that with per-utterance flow and vocoder
-work on one open device, and **that composition hangs**: synthesising two utterances
+work on one open device, and that composition hangs: synthesising two utterances
 of different lengths on one device wedges it, needing a board reset. The cause is
 known, pre-dates all of this, and is unrelated to batching — something in the
 vocoder's `conv_transpose2d`/halo path accumulates per-geometry device state that
 `release_caches()` does not free. It is why `demo/demo.py` opens a fresh device per
 utterance.
 
-`test_device_batched_synthesis_agrees_with_one_at_a_time` is therefore **skipped with
-that reason attached** rather than deleted: the moment the L1 growth is root-caused,
+`test_device_batched_synthesis_agrees_with_one_at_a_time` is therefore skipped with
+that reason attached rather than deleted: the moment the L1 growth is root-caused,
 it is the test that says whether `synthesize_batch` was right all along. Anyone
 building a real multi-utterance serving path needs that defect closed first, and
 should batch the decode while keeping a device per utterance for the other two stages
 until then.
 
-### The interleaved schedule's corrupt audio — diagnosed, remedy known, not landed
+### The interleaved schedule's corrupt audio — diagnosed, remedy known, not shipped
 
 `CosyVoiceTTNN.synthesize_streaming` returns audio peaking around 72 against a batch
 path peaking at 0.001 on the same prompt — identical tokens, correct chunk schedule,
-destroyed waveform. **The cause is established**, which is the part that changed:
+destroyed waveform. The cause is established, which is the part that changed:
 
-* **`generate(use_trace=False)` makes it correct.** Same conditioning, same schedule,
+* `generate(use_trace=False)` makes it correct. Same conditioning, same schedule,
   same tokens; the only variable is whether a decode trace exists. So it is not the
   per-chunk conditioning, which an earlier revision of this document wrongly blamed.
-* **Per chunk against a no-trace reference:** chunk 0, vocoded mid-generation with the
+* Per chunk against a no-trace reference: chunk 0, vocoded mid-generation with the
   trace live, matches at mel PCC `0.99999988` and waveform PCC `0.99999994`. Chunk 1,
-  the finalize, has a **bit-identical mel** at PCC `1.000000000` and waveform PCC
+  the finalize, has a bit-identical mel at PCC `1.000000000` and waveform PCC
   `0.011`.
 
 Identical mel with destroyed audio rules out the flow decoder and the vocoder's
@@ -225,18 +218,19 @@ arithmetic and leaves what `StreamState` carries across a seam — `mel_overlap`
 live and clobbered by a later `execute_trace`. TTNN warns about exactly this: *"These
 buffers may be corrupted once a trace is executed."*
 
-**The remedy is known and is not in the tree.** Parking those four on the host between
+The remedy is known and is not in the tree. Parking those four on the host between
 chunks (`to_torch` out, `from_torch` back) fixes the audio — verified on `p150a` and
-n300. It is not landed because it **hangs `tests/perf/test_streaming_perf.py` on
-Blackhole**, where that test otherwise passes in 12.7 s; the A/B is one commit apart on
+n300. It is not shipped because it hangs `tests/perf/test_streaming_perf.py` on
+Blackhole, where that test otherwise passes in 12.7 s; the A/B is one commit apart on
 one board. Also tried and
 rejected: draining the queue before the readback, and hoisting the synthesizer out of
 the traced region.
 
-So the defect stands, with `synthesize` as the gated path for audio, and the schedule
-itself gated by `test_device_streaming_generates_the_same_tokens_as_batch` — which
-asserts identical tokens and that chunks are emitted *during* generation, both of which
-hold. What is not yet deliverable is correct audio out of the interleaved path.
+So the defect stands, with `synthesize` as the checked path for audio, and the
+schedule itself checked by
+`test_device_streaming_generates_the_same_tokens_as_batch` — which asserts identical
+tokens and that chunks are emitted *during* generation, both of which hold. What is
+not yet deliverable is correct audio out of the interleaved path.
 
 ### `test_streaming_perf` hangs on Wormhole — a TTNN defect, not a port defect
 
@@ -245,7 +239,7 @@ n300: log frozen, JIT cache flat, CPU pegged, board needing a reset. Both Blackh
 boards run it. It is skipped on Wormhole with that reason attached rather than left to
 hang, because a wedged board costs every later test in the run.
 
-**The cause is now isolated, and it is upstream.** Re-seeding a trace's persistent
+The cause is now isolated, and it is upstream. Re-seeding a trace's persistent
 buffers *after that trace has executed* hangs Wormhole. The minimal reproduction is
 four calls with no flow decoder, no vocoder, no streaming and no allocation under a
 live trace:
@@ -263,8 +257,8 @@ re-seeds per pass, so passes 2-4 seed after the trace has executed. Blackhole ru
 same sequence in under a second, which is why only n300 is skipped.
 
 Two details matter for anyone reproducing it. The hang needs the trace to have
-**executed**, not merely to exist: earlier arms that called `capture()` and `seed()`
-without `step()` all survive. And it depends on **how the device was opened** —
+executed, not merely to exist: earlier attempts that called `capture()` and `seed()`
+without `step()` all survive. And it depends on how the device was opened —
 `ttnn.CreateDevice`, which is what the repository's `device` fixture uses, hangs;
 `ttnn.open_mesh_device(MeshShape(1, 1))` on the same chip does not, though it then
 hangs at teardown instead, on every board tried.
@@ -286,18 +280,18 @@ synthesis of one prompt, Blackhole gives batch and streaming peaks that match
 (`0.001` each) while n300 gives batch `0.001` and streaming `0.660`, identically with
 and without a trace.
 
-**Which number is wrong is not established.** `0.001` is near-silence and `0.660` is a
+Which number is wrong is not established. `0.001` is near-silence and `0.660` is a
 plausible speech peak, so the batch path may be the degenerate one on a capped greedy
 run rather than streaming being broken. Ruled out: the live trace, and the known
 Wormhole `ttnn.conv1d` prepared-weight defect (`COSYVOICE_CONV_PREPARE=0` gives the
-same figure). The gated content comparison,
-`test_device_streamed_matches_non_streamed`, **passes on n300** at mel-space PCC
+same figure). The content-comparison test,
+`test_device_streamed_matches_non_streamed`, passes on n300 at mel-space PCC
 `0.902` — that uses the golden's own prompt and full token list rather than this case.
 
 ### Multi-chip tensor parallelism — measured, and it does not compound
 
 A two-chip Megatron-sharded decoder was prototyped and measured on an n300 pair. It
-works and it is not enough on its own; more importantly it **collides** with
+works and it is not enough on its own; more importantly it collides with
 `COSYVOICE_FF2_GRID` rather than compounding: tensor parallelism halves the FFN's
 second linear to `K = 2048`, and the core-grid win that is large at `K = 4096` nearly
 vanishes there. Same lever, different granularity, already mostly spent once TP has
@@ -314,7 +308,7 @@ pytest models/demos/cosyvoice/tests/ -k "not device"
 # device tier: correctness
 pytest models/demos/cosyvoice/tests/pcc/ models/demos/cosyvoice/tests/e2e/ -v
 
-# device tier: the gated performance suite
+# device tier: the checked performance suite
 pytest models/demos/cosyvoice/tests/perf/ -v -s
 
 # the two tuning flags, each a full perf pass

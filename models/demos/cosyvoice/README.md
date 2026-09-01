@@ -11,9 +11,9 @@ FunAudioLLM's multilingual TTS model, for
 
 ## Overview
 
-CosyVoice generates speech in three stages: an **LLM** predicts supervised semantic
-tokens from text, a **flow-matching decoder** turns those tokens into a mel
-spectrogram, and a **HiFTNet vocoder** turns the mel into a waveform. All three run
+CosyVoice generates speech in three stages: an LLM predicts supervised semantic
+tokens from text, a flow-matching decoder turns those tokens into a mel
+spectrogram, and a HiFTNet vocoder turns the mel into a waveform. All three run
 through TTNN here — including the vocoder, which is the part that is normally left
 on the host. [Why that was the hard part](#why-the-vocoder-is-the-interesting-part).
 
@@ -83,17 +83,17 @@ The reference pins its own `torch` and `transformers` — see `requirements-refe
 which records why each pin is where it is. Forcing those into the tt-metal environment
 would risk the tt-metal build for no benefit, since the reference never runs on device.
 
-**Checkpoints.** `--skip-onnx-trt` omits `flow.decoder.estimator.fp32.onnx` (329 MB × 2),
+Checkpoints. `--skip-onnx-trt` omits `flow.decoder.estimator.fp32.onnx` (329 MB × 2),
 which only the TensorRT export path reads. The three checkpoints then total ~6.9 GB.
 
-> **First inference downloads more.** The text frontend fetches ~31 MB of `wetext` FSTs
+> First inference downloads more. The text frontend fetches ~31 MB of `wetext` FSTs
 > from ModelScope the first time it normalises text — not at import. A network-isolated
 > run will fail there unless `~/.cache/modelscope` is already populated.
 
-**Goldens.** `gen_golden.py` writes `tests/golden/*.npz` — one per module boundary, plus
+Goldens. `gen_golden.py` writes `tests/golden/*.npz` — one per module split, plus
 `manifest.json`.
 
-**Weights.** `export_weights.py` flattens each submodule's `state_dict` into
+Weights. `export_weights.py` flattens each submodule's `state_dict` into
 `tests/golden/<module>_weights.npz` with a JSON `__meta__` blob carrying the architectural
 constants that cannot be read off a tensor shape. `weight_norm` is folded at export
 (verified bit-exact) so the device never recomputes a constant normalisation.
@@ -114,7 +114,7 @@ pytest models/demos/cosyvoice/tests/ -k "not device"
 pytest models/demos/cosyvoice/tests/pcc/ models/demos/cosyvoice/tests/e2e/ -v
 
 # performance -- every numeric threshold is asserted, not printed; see
-# tests/perf/gates.py for how a met gate and a missed one are each enforced,
+# tests/perf/gates.py for how each threshold is enforced, met or not,
 # and PERF.md for what the numbers mean.
 pytest models/demos/cosyvoice/tests/perf/ -v -s
 
@@ -137,7 +137,7 @@ hear the pipeline work, and it additionally scores itself against the reference 
 The front-end is not ported. `scripts/prepare_inputs.py` runs it once in the reference
 venv and writes the flat `.npz` files the demo loads — see [What runs where](#what-runs-where).
 
-**All four modes, real synthesis:**
+All four modes, real synthesis:
 
 `sft` and `instruct` need their own checkpoint's weights, not the base `CosyVoice-300M`
 export above -- `llm.pt` differs across all three checkpoints and `flow.pt` differs for
@@ -181,7 +181,7 @@ $COSYVOICE_PY scripts/run_reference.py --out /tmp/ref
 $COSYVOICE_PY scripts/eval_wer_sim.py --run-dir /tmp/ref
 ```
 
-> **Never run scoring and synthesis at the same time.** Whisper large-v3 is ~9 GB
+> Never run scoring and synthesis at the same time. Whisper large-v3 is ~9 GB
 > resident on CPU and synthesis is ~4.6 GB; together they OOM an 11 GB host. The harness
 > preflights available memory and refuses rather than getting killed mid-run. Pass
 > `--asr-model medium` on a small box.
@@ -198,11 +198,11 @@ $COSYVOICE_PY scripts/eval_wer_sim.py --run-dir /tmp/ref
 | RAS sampling | `tt/llm/sampling.py` | host (Stage 1) |
 | front-end (tokenizer, 2 ONNX encoders) | `scripts/prepare_inputs.py` | host, by design |
 
-The front-end — text normalisation, the Whisper-family tokenizer, and the two **ONNX**
+The front-end — text normalisation, the Whisper-family tokenizer, and the two ONNX
 encoders (`speech_tokenizer_v1.onnx`, `campplus.onnx`) — stays on host by design: three
 of the four are ONNX blobs, and none is on the critical path for this port.
 `prepare_inputs.py` writes a flat `.npz` the device side loads without importing
-CosyVoice or `onnxruntime` — the same boundary `export_weights.py` draws.
+CosyVoice or `onnxruntime` — the same split `export_weights.py` draws.
 
 <details>
 <summary>Each stage in detail</summary>
@@ -226,9 +226,9 @@ the captured goldens to PCC 0.9999999, which is what lets a device bring-up star
 phase offset from `U(−π, π)` plus Gaussian noise; `SourceModuleHnNSF.forward` draws noise
 again.
 
-Seeding does **not** make TTNN and PyTorch comparable — it only makes PyTorch reproducible
+Seeding does not make TTNN and PyTorch comparable — it only makes PyTorch reproducible
 against itself, because TTNN cannot consume the torch RNG stream in the same order. So
-`gen_golden.py` **captures every draw as a named array**, and the TTNN modules take them as
+`gen_golden.py` captures every draw as a named array, and the TTNN modules take them as
 explicit inputs during PCC tests. Get this wrong and a perfectly correct vocoder port scores
 PCC ≈ 0.3.
 
@@ -236,15 +236,15 @@ PCC ≈ 0.3.
 
 ## Why the vocoder is the interesting part
 
-TTNN has **no FFT of any kind**. A case-insensitive search for `fft|rfft|irfft|stft|istft`
+TTNN has no FFT of any kind. A case-insensitive search for `fft|rfft|irfft|stft|istft`
 across `ttnn/` and `tt_metal/` returns nothing. HiFTNet ends in an inverse STFT, so the
 vocoder looks unportable — and is usually left on the host.
 
-It does not actually block anything, because CosyVoice uses **`n_fft = 16`**. At that
+It does not actually block anything, because CosyVoice uses `n_fft = 16`. At that
 size the inverse DFT of 9 one-sided bins is a fixed 16×9 real matrix pair, smaller than a
-single 32×32 tile. So it is a **matmul** — and a matmul maps onto the FPU, the widest unit
+single 32×32 tile. So it is a matmul — and a matmul maps onto the FPU, the widest unit
 on a Tensix core. Windowing and overlap-add then fuse into a single
-**transposed convolution** with a diagonal kernel, because OLA
+transposed convolution with a diagonal kernel, because OLA
 (`out[t·h + j] += frames[j,t]·w[j]`) and `conv_transpose1d`
 (`out[o, t·s + k] += in[i,t]·W[i,o,k]`) are the same operation. The NOLA normalisation
 depends only on the frame count, so it is a precomputed constant and one multiply.
@@ -265,40 +265,40 @@ See `tt/hifigan/istft.py` for the derivation and `tests/pcc/test_istft.py` for t
 
 ## Validation strategy
 
-Designed first rather than last — the gates below were written before the port, not
+Designed first rather than last — the checks below were written before the port, not
 fitted to it.
 
-| what is gated | how |
+| what is checked | how |
 |---|---|
-| Token accuracy | Exact agreement, not top-k overlap: teacher-forced argmax match per position, plus free-running greedy (`top_k=1`) full-sequence comparison. RAS sampling (`top_p 0.8`, `top_k 25`) is stochastic — reported for audio quality, never the gate. |
+| Token accuracy | Exact agreement, not top-k overlap: teacher-forced argmax match per position, plus free-running greedy (`top_k=1`) full-sequence comparison. RAS sampling (`top_p 0.8`, `top_k 25`) is stochastic — reported for audio quality, never what decides pass or fail. |
 | Per-module numerics | PCC ≥ 0.99 against goldens captured from the reference. |
 | Streaming, content | Not chunk count: concatenated streamed audio versus non-streamed, same text and seed, compared in mel space and in the energy envelope, plus seam continuity. |
-| Streaming, schedule | That audio starts *before* generation finishes — the interleaved path measured against the batch one, both schedules in one process with all three stages real. Chunked reconstruction and interleaving are different claims and are gated separately. |
-| Batching | Batched decode against single-row decode at *ragged* prompt lengths, gated on PCC and on the deviation not compounding across steps; plus a sweep that fails if batching amortises nothing. |
+| Streaming, schedule | That audio starts *before* generation finishes — the interleaved path measured against the batch one, both schedules in one process with all three stages real. Chunked reconstruction and interleaving are different claims and are checked separately. |
+| Batching | Batched decode against single-row decode at *ragged* prompt lengths, checked on PCC and on the deviation not compounding across steps; plus a sweep that fails if batching amortises nothing. |
 | Perf targets | **Asserted, not printed**, through [`tests/perf/gates.py`](tests/perf/gates.py) — mechanism in [`docs/VALIDATION.md`](docs/VALIDATION.md#how-the-numeric-thresholds-are-enforced). |
 
-**Every measured figure lives in [`PERF.md`](PERF.md) and nowhere else** — the end-to-end
+Every measured figure lives in [`PERF.md`](PERF.md) and nowhere else — the end-to-end
 RTF, the per-stage breakdown, the Blackhole/Wormhole comparison, which targets are met on
 which part, and the per-module PCCs under [§ Accuracy](PERF.md#accuracy). The handful of
 PCCs quoted in this file support an argument; PERF.md is the record.
 
-**[`docs/VALIDATION.md`](docs/VALIDATION.md) maps it the other way** — every requirement
+[`docs/VALIDATION.md`](docs/VALIDATION.md) maps it the other way — every requirement
 in the bring-up scope against the test that decides it, including the ones that are not
 met and why. It carries no numbers of its own; it links to PERF.md for each. Start there
 to check a specific requirement; start at PERF.md to read the measurements. It also
 carries the open device-level findings, including one where buffers carried across a
-streaming chunk boundary while a decode trace was live get corrupted — diagnosed, with a
-remedy identified but not yet landed, which is a constraint on anyone extending that
+streaming chunk seam while a decode trace was live get corrupted — diagnosed, with a
+remedy identified but not yet shipped, which is a constraint on anyone extending that
 path.
 
-### Two things cannot be gated on exact agreement
+### Two things cannot be checked against exact agreement
 
-RAS sampling is a multinomial draw, so the LLM is gated on its *logits* and the audio
+RAS sampling is a multinomial draw, so the LLM is checked against its *logits* and the audio
 chain on the reference's *captured tokens*.
 
 NSF excitation phase is chaotically sensitive to f0. A 0.03 Hz error accumulates a tenth
 of a cycle over an utterance — finer than Tensix arithmetic delivers. So waveform
-*samples* are gated with the reference excitation injected, and the *envelope* without it.
+*samples* are checked with the reference excitation injected, and the *envelope* without it.
 
 ---
 
@@ -328,22 +328,22 @@ models/demos/cosyvoice/
     ├── golden/                  captured .npz + manifest.json
     ├── pcc/                     per-module PCC >= 0.99
     ├── e2e/                     4 modes x 5 languages, exact-token, WER, SIM
-    └── perf/                    tok/s and RTF gates
+    └── perf/                    tok/s and RTF thresholds
 ```
 
 ---
 
 ## Known constraints
 
-- **`weight_norm` must be folded at load time.** Every conv in HiFT is wrapped in it;
+- `weight_norm` must be folded at load time. Every conv in HiFT is wrapped in it;
   folding `w = g·v/‖v‖` on host removes a per-inference normalisation for free.
-- **The CFM solver's classifier-free guidance is already batched upstream** into one
+- The CFM solver's classifier-free guidance is already batched upstream into one
   2-row call. Preserve it; unrolling it into two calls doubles the cost of the hottest
   module in the model.
-- **`att_cache` is `[n_layers, n_heads, T, 2·head_dim]`** with K and V concatenated on
+- `att_cache` is `[n_layers, n_heads, T, 2·head_dim]` with K and V concatenated on
   the last axis. `ttnn.experimental.paged_cache` does not take this shape directly.
-- **`SineGen` integrates phase with `cumsum` over the audio-rate signal.** In bfloat16 an
+- `SineGen` integrates phase with `cumsum` over the audio-rate signal. In bfloat16 an
   accumulator reaching ~1e3 loses the ~1e-2 increments entirely; use
   `ttnn.cumsum(dtype=ttnn.float32)`.
-- **RAS's retry path is a plain multinomial over the full 4097-token vocabulary**, not a
+- RAS's retry path is a plain multinomial over the full 4097-token vocabulary, not a
   re-draw from the truncated distribution. `ttnn.sampling` covers the primary path only.
