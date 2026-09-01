@@ -21,7 +21,6 @@ the shared function exactly as before -- this file changes nothing there.
 """
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     _recurrent_read_query_program_config,
     l2_norm_ttnn,
@@ -243,22 +242,33 @@ def recurrent_gated_delta_rule_decode_wh(
 
 def recurrent_gated_delta_rule_decode_dispatch(*args, model_args=None, **kwargs):
     """Blackhole -> the shared upstream function, byte-for-byte unchanged. wh_9b_n300 -> the
-    variant above. Same model_args-gated dispatch shape as
-    conv_fir_wh.causal_conv1d_fir_dispatch, so gdn/tp.py's call sites don't need their own
-    branching.
+    variant above. Same dispatch shape as conv_fir_wh.causal_conv1d_fir_dispatch, so gdn/tp.py's
+    call sites don't need their own branching.
 
-    model_args: the caller's ModelArgs (gdn/tp.py passes self.args), used to scope the fork to
-    wh_9b_n300. None (default, for any caller that hasn't been updated) falls back to the
-    previous is_blackhole()-only decision.
+    model_args: accepted and ignored. gdn/tp.py passes self.args; the parameter stays so it is
+    absorbed here rather than forwarded into the kernel via **kwargs. It no longer gates anything
+    -- see below.
 
-    DELIBERATE narrowing (Wormhole gating audit, item 1): this used to be is_blackhole()-gated
-    (Wormhole-wide), so T3K and N150 got the WH variant too. Narrowed to wh_9b_n300 on purpose --
-    the WH variant is bit-identical to upstream when high_precision=False and a measured
-    ~15-20us/step win when True (q's dead-weight fp32 promotion skipped; see this file's module
-    docstring), so T3K/N150 falling back to upstream is a pure perf regression there, not a
-    correctness one. Accepted per explicit instruction -- don't revert this to is_blackhole()
-    without re-measuring on T3K/N150."""
-    _use_wh = tpc.wh_9b_n300(model_args) if model_args is not None else (not is_blackhole())
+    REVERTED narrowing (was: Wormhole gating audit, item 1). This was briefly narrowed from
+    is_blackhole() to wh_9b_n300 on the stated grounds that "the WH variant is bit-identical to
+    upstream when high_precision=False", making the T3K/N150 fallback a pure perf regression rather
+    than a correctness one. That premise is FALSE on T3K, and the narrowing's own docstring asked
+    for a re-measurement before reverting -- this is that measurement.
+
+    MEASURED (T3K 1x8, Qwen3.6-27B, layer 0, B=1, Nv_tp=6, Dk=Dv=128, high_precision=False -- so
+    exactly the "bit-identical" case). One decode step probed end to end, with sane inputs
+    throughout (q 0.27, k 0.88, v 1.69, beta 0.80, g 1.02, initial_state 1.00):
+
+        upstream fallback : recurrence out absmax 7.39e36 -> rms_norm underflows -> output ALL ZERO
+        WH variant        : recurrence out absmax 0.019   -> rms_norm 8.875      -> output 2.08
+
+    The upstream kernel overflows for this shape on Wormhole, so every GDN decode returned zeros:
+    10 of 14 test_gdn_tp cases failed with PCC exactly 0.0 (per-user state, batched prefill) or
+    ~0.0 (prefill-vs-decode, -0.0012), while the pure-prefill cases passed at 0.9991 -- the tell
+    that only the decode path was affected. test_decode_bucketing's width-1 case failed the same way.
+
+    Blackhole still takes the shared upstream function, byte-for-byte unchanged."""
+    _use_wh = not is_blackhole()
     if not _use_wh:
         return _recurrent_gated_delta_rule_decode_upstream(*args, **kwargs)
     return recurrent_gated_delta_rule_decode_wh(*args, **kwargs)
