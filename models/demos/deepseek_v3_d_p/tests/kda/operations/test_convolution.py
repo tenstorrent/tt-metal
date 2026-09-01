@@ -10,7 +10,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.kda.utils import collect_mesh_accuracy_and_determinism_results
-from models.demos.deepseek_v3_d_p.tt.kda import ops
+from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_equal
 
 pytestmark = [
@@ -54,7 +54,7 @@ def _sp_carries(tensor: ttnn.Tensor, device: ttnn.MeshDevice, sp_axis: int, tp_a
 
 
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
-def test_convolution_halo_preserves_causal_carries(
+def test_exchange_convolution_carry_preserves_causal_carries(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> None:
@@ -78,7 +78,7 @@ def test_convolution_halo_preserves_causal_carries(
     state_tt = _to_device(external, mesh_device, tuple(state_dims))
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        return ops.convolution_halo(qkv_tt, state_tt, sequence_parallel_axis=sp_axis)
+        return exchange_convolution_carry(qkv_tt, state_tt, sequence_parallel_axis=sp_axis)
 
     (entry_tt, final_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
     actual_entries = _sp_carries(entry_tt, mesh_device, sp_axis, tensor_parallel_axis)
