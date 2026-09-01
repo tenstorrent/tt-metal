@@ -15,6 +15,8 @@ add_subdirectory(sigmoid_gated_rms_norm)
 add_subdirectory(qkv_causal_conv1d_silu)
 add_subdirectory(reduce_affine_transforms)
 add_subdirectory(affine_exclusive_scan)
+add_subdirectory(prepare_chunk_recurrence)
+add_subdirectory(recurrent_chunk_scan)
 
 add_library(ttnn_op_experimental_kda INTERFACE)
 add_library(TTNN::Ops::Experimental::KDA ALIAS ttnn_op_experimental_kda)
@@ -26,6 +28,8 @@ target_link_libraries(
         TTNN::Ops::Experimental::KDA::QkvCausalConv1dSilu
         TTNN::Ops::Experimental::KDA::ReduceAffineTransforms
         TTNN::Ops::Experimental::KDA::AffineExclusiveScan
+        TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence
+        TTNN::Ops::Experimental::KDA::RecurrentChunkScan
 )
 
 # OBJECT libraries do not propagate their compiled objects through a nested
@@ -39,4 +43,6 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::QkvCausalConv1dSilu>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::ReduceAffineTransforms>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::AffineExclusiveScan>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::RecurrentChunkScan>
 )

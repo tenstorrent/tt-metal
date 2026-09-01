@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
@@ -56,6 +57,7 @@ class TtPrefillTransformer(LightweightModule):
         is_last_rank: bool = True,
         kv_only_last_layer: bool = False,
         model_cfg: type | None = None,
+        routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
     ) -> bool:
         """
         Top-level cache completeness check for the full transformer.
@@ -71,6 +73,10 @@ class TtPrefillTransformer(LightweightModule):
             first_layer_idx: Global index of this instance's first layer. Non-zero
                 for a pipeline-parallel rank owning a layer slice; block cache keys
                 are global, so dense/MoE selection must use the global index.
+            routed_expert_weights_dtype: dtype the routed experts were/will be BUILT at.
+                as_tensor stamps it into the tensorbin filename, so the completeness check must
+                pin the same value it will later request -- otherwise a stale cache at another
+                dtype reports complete and the empty placeholder is loaded as the weights.
             is_first_rank / is_last_rank: a pipeline-parallel rank builds the
                 embedding only on the first rank and the final norm + LM head only
                 on the last, so check only the weights it actually loads. Both True
@@ -99,7 +105,12 @@ class TtPrefillTransformer(LightweightModule):
             layer_idx = first_layer_idx + local_idx
             is_dense = layer_idx < first_k_dense
             if not TtPrefillBlock.check_cache_complete(
-                cache_path, layer_idx, is_dense, experts_per_chip, model_cfg=model_cfg
+                cache_path,
+                layer_idx,
+                is_dense,
+                experts_per_chip,
+                model_cfg=model_cfg,
+                routed_expert_weights_dtype=routed_expert_weights_dtype,
             ):
                 return False
 
@@ -131,7 +142,7 @@ class TtPrefillTransformer(LightweightModule):
         padding_side: str = "right",
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
-        routed_expert_weights_dtype=ttnn.bfloat4_b,
+        routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
@@ -352,7 +363,7 @@ class TtPrefillTransformer(LightweightModule):
         read_profiler: bool = False,
         temperature: Union[float, list[float]] = 0.0,
         d2h_service=None,
-        record_dev: Optional[ttnn.Tensor] = None,
+        metadata_msg: Optional[ttnn.Tensor] = None,
         on_layer_complete: Optional[Callable[[int], None]] = None,
         on_layer_hidden: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_start: Optional[int] = None,
@@ -387,7 +398,7 @@ class TtPrefillTransformer(LightweightModule):
                         each layer's KV cache has been populated on device. When set, each block zeros the
                         cache pad window and enqueues the ack via the outbound_socket_service_sync device op
                         on the same CQ (no host sync). When None, no ack or zeroing.
-            record_dev: the chunk's PrefillMetadata device tensor sent as each ack record; required when
+            metadata_msg: the chunk's PrefillMetadata device tensor sent as each ack record; required when
                         d2h_service is set.
             on_layer_complete: the HOST-callback alternative to d2h_service (used by pipelined prefill's
                         layer-completion router). Called as on_layer_complete(layer_idx) after the same
@@ -466,7 +477,7 @@ class TtPrefillTransformer(LightweightModule):
                 cache_layer_idx=i,
                 return_intermediates=return_intermediates,
                 d2h_service=d2h_service,
-                record_dev=record_dev,
+                metadata_msg=metadata_msg,
                 on_layer_complete=on_layer_complete,
                 on_layer_hidden=on_layer_hidden,
                 actual_start=actual_start,

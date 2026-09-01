@@ -14,6 +14,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_tp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from tests.ttnn.utils_for_testing import comp_pcc
 
 # 3 x uint32: [slot_id, actual_start, actual_end]
@@ -37,7 +38,7 @@ def test_h2d_socket_sync_8x4_galaxy(mesh_device):
     sp_factor = mesh_device.shape[sp_axis]
     tp_factor = mesh_device.shape[tp_axis]
 
-    seq_len_total = 5 * 1024
+    seq_len_total = PREFILL_CHUNK_TOKENS
     assert seq_len_total % sp_factor == 0
     isl_per_chip = seq_len_total // sp_factor
     assert isl_per_chip % ttnn.TILE_SIZE == 0

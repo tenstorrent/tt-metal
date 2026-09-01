@@ -2515,6 +2515,16 @@ class TestGraphReportImport:
         _ = ttnn.relu(tt_input)
         _ = ttnn.graph.end_graph_capture_to_file(report_path)
 
+        with open(report_path) as f:
+            report_json = json.load(f)
+        assert "metadata" in report_json
+        assert report_json["metadata"].get("git_sha")
+        assert len(report_json["metadata"]["git_sha"]) >= 40
+        assert report_json["metadata"].get("git_sha_short")
+        assert report_json["metadata"].get("version")
+        assert report_json["metadata"].get("build_type")
+        assert report_json["metadata"]["build_type"] != "Unknown"
+
         db_path = graph_report.import_report(report_path, db_dir)
 
         conn = sqlite3.connect(db_path)
@@ -2525,10 +2535,10 @@ class TestGraphReportImport:
 
         assert "git_sha" in rows and "git_url" in rows
         git_meta = graph_report.get_tt_metal_git_report_metadata()
-        assert rows["git_sha"] == git_meta["git_sha"]
+        assert rows["git_sha"] == report_json["metadata"]["git_sha"]
         assert rows["git_url"] == git_meta["git_url"]
         if git_meta["git_sha"]:
-            assert len(rows["git_sha"]) >= 7
+            assert len(rows["git_sha"]) >= 40
 
 
 class TestSanitizeGitRemoteUrl:
@@ -3417,6 +3427,66 @@ class TestSafeArgStr:
                 raise ValueError("boom")
 
         assert _safe_arg_str(BadStr()) == "<unprintable BadStr: ValueError: boom>"
+
+    def test_tensor_sequence_is_summarized_not_dumped(self, device):
+        """A list of ttnn.Tensors is summarized element-wise, never str()'d.
+
+        str() on the list would repr() each tensor, reading it back to host -- fatal inside a
+        device trace capture and a tensor-content dump in the report otherwise.
+        """
+        from ttnn.graph import _safe_arg_str
+
+        tensors = [
+            ttnn.from_torch(torch.rand(32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            for _ in range(2)
+        ]
+        result = _safe_arg_str(tensors)
+
+        assert result.startswith("[ttnn.Tensor(") and result.endswith(")]"), f"unexpected summary: {result}"
+        assert result.count("ttnn.Tensor(") == 2, f"expected 2 tensor summaries: {result}"
+        assert "shape=Shape([32, 32])" in result, f"tensor shape missing from summary: {result}"
+        # No raw tensor data: a dumped tensor renders its rows as "ttnn.Tensor([[".
+        assert "ttnn.Tensor([[" not in result, f"tensor contents dumped into the summary: {result}"
+
+    def test_nested_sequence_is_summarized_not_dumped(self, device):
+        """A tensor nested inside a sequence is summarized too, never str()'d.
+
+        The recursion matters as much as the top-level case: str() on the outer list reprs the
+        inner one, which reprs the tensor -- the same forbidden device read.
+        """
+        from ttnn.graph import _safe_arg_str
+
+        tensor = ttnn.from_torch(torch.rand(32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        result = _safe_arg_str([[tensor], (tensor,)])
+
+        assert result.count("ttnn.Tensor(") == 2, f"expected both nested tensors summarized: {result}"
+        assert "[[ttnn.Tensor(" in result, f"list nesting not preserved: {result}"
+        assert "(ttnn.Tensor(" in result, f"tuple nesting not preserved: {result}"
+        assert "ttnn.Tensor([[" not in result, f"tensor contents dumped into the summary: {result}"
+
+    def test_torch_tensor_sequence_is_summarized_not_dumped(self):
+        """A sequence of torch tensors is summarized: no contents in the report."""
+        from ttnn.graph import _safe_arg_str
+
+        result = _safe_arg_str([torch.rand(4, 4), torch.rand(4, 4)])
+
+        assert result.count("torch.Tensor(shape=[4, 4]") == 2, f"expected 2 torch summaries: {result}"
+        assert "tensor(" not in result, f"torch tensor contents dumped into the summary: {result}"
+
+    def test_long_tensor_sequence_is_elided(self, device):
+        """Past the element cap the tail is elided, and the marker says so.
+
+        The generator keys on that marker to refuse a partially-recorded sequence, so its exact
+        shape is part of the contract.
+        """
+        from ttnn.graph import _MAX_SEQUENCE_ELEMENTS, _safe_arg_str
+
+        tensor = ttnn.from_torch(torch.rand(32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        count = _MAX_SEQUENCE_ELEMENTS + 3
+        result = _safe_arg_str([tensor] * count)
+
+        assert result.count("ttnn.Tensor(") == _MAX_SEQUENCE_ELEMENTS, f"wrong number summarized: {result[:200]}"
+        assert result.endswith("... +3 more]"), f"missing elision marker: {result[-40:]}"
 
 
 class TestRecordPythonOperation:
