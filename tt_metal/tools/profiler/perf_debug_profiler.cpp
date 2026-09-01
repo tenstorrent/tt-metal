@@ -2087,10 +2087,23 @@ void PerfDebugProfiler::check_sync_drift_at_close() {
 // instruments on each shared link.
 
 namespace {
+// DEFAULT CADENCE. 100 Hz, chosen by measurement -- see tools/drisc_drain/FINDINGS.md. Rate buys
+// accuracy only up to about here: the paired echo residual is 83 / 44 / 38 ns at 20 / 100 / 500 Hz,
+// and the ~40 ns floor below that is NOT a sampling limit (it is a systematic -47 ns ring-closure
+// bias from eth forward/return asymmetry, plus the fixed 40 ms correction republish), so a faster
+// rate cannot reach it. The cost of rate is fabric bandwidth, and it is a cliff at num_links=4:
+// 100 Hz keeps ~8.8 points of golden-tolerance headroom there, 250 Hz keeps 0.8 (inside this
+// harness's own run-to-run variance) and 300 Hz fails outright.
+//
+// Set TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ=0 to opt out. Keep this in step with the compile-time
+// gate in compute_mesh_router_builder.cpp: a nonzero cadence here with no hook in the router
+// means the host waits on rounds nothing will ever serve.
+constexpr double kDefaultFabricSyncHz = 100.0;
+
 double fabric_sync_hz() {
     static const double v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ");
-        return (s != nullptr && *s != '\0') ? std::strtod(s, nullptr) : 0.0;
+        return (s != nullptr && *s != '\0') ? std::strtod(s, nullptr) : kDefaultFabricSyncHz;
     }();
     return v;
 }

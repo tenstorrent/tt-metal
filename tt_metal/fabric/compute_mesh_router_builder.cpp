@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_mesh_router_builder.hpp"
+#include <cstdlib>
 #include <limits>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
@@ -943,14 +944,17 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         }
     }
 
-    // Device-to-device clock-sync hook (perf_debug profiler): compiled into the router ONLY when the
-    // profiler is enabled AND TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ is set. The define is the entire
+    // Device-to-device clock-sync hook (perf_debug profiler): compiled into the router when the
+    // profiler is enabled and TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ is not explicitly 0. The define is the entire
     // opt-in -- absent, the hook macros in the router expand to nothing and the binary is unchanged.
     // The cadence itself is NOT compiled in: the hook reads its interval from an L1 config word the
     // host writes (and can rewrite live); the prescaler mask only sets the coarse check granularity.
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled()) {
+        // Unset means ON at the 100 Hz default (kDefaultFabricSyncHz in perf_debug_profiler.cpp).
+        // Parse rather than string-match the opt-out so "0", "0.0" and " 0" all disable the hook --
+        // the host reads this same var with strtod, and the two gates must not disagree.
         const char* fs = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ");
-        if (fs != nullptr && *fs != '\0' && !(fs[0] == '0' && fs[1] == '\0')) {
+        if (fs == nullptr || *fs == '\0' || std::strtod(fs, nullptr) != 0.0) {
             defines["FABRIC_ROUTER_SYNC_HOOK"] = "1";
             const char* pm = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_PRESCALER_MASK");
             defines["FABRIC_ROUTER_SYNC_PRESCALER_MASK"] = (pm != nullptr && *pm != '\0') ? pm : "63";

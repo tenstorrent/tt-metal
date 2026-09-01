@@ -17,8 +17,9 @@
 // ZERO COST WHEN OFF, BY CONSTRUCTION. The entire hook -- prescaler increment, branch, body -- is
 // reachable only through FABRIC_ROUTER_SYNC_INIT() / FABRIC_ROUTER_SYNC_POLL(), which expand to
 // NOTHING unless the FABRIC_ROUTER_SYNC_HOOK JIT define is present (injected by
-// compute_mesh_router_builder.cpp only when the profiler is enabled and
-// TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ is set). With the define absent there is no token from this
+// compute_mesh_router_builder.cpp when the profiler is enabled and
+// TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ is not explicitly 0 -- that var is the opt-OUT; unset means on
+// at the 100 Hz default). With the define absent there is no token from this
 // header in the router's translation unit: byte-identity of the stock router binary is by
 // construction (and verified by disassembly in the prototype report).
 //

@@ -6429,3 +6429,34 @@ is noise; the per-row headroom ordering is the one that is monotone and meaningf
    enough accuracy (44 -> ~40 ns) to justify spending 6 of the 8.8 points.
 2. Quote the ceiling as "~250 Hz, unusable" and the safe ceiling as ~100-150 Hz.
 3. Any future golden-threshold reasoning must read column 15 per row.
+
+---
+
+## CORRECTION: per-row headroom is far noisier than the geomean, and n=1
+
+The headroom table above is one sample per rate. A second run of the 100 Hz configuration (as the
+new unset default, functionally identical) put the worst 4-link row at **-8.43%**, against **-3.20%**
+in the isolation sweep -- a **5.2-point swing on the same config**.
+
+The reasoning error, stated plainly so it is not repeated: the "~0.5 pts run-to-run variance" figure
+was derived from the **overall geomean**, which averages 24 rows, and then applied to a **single
+row's** headroom. Those are different quantities with very different variance. The geomean estimate
+itself survives (1.0055 vs 1.0019 across the two 100 Hz runs = 0.36 pts); it is the per-row number
+that moves 5+ points.
+
+What survives and what does not:
+
+- **SURVIVES:** the ordering (20 < 100 < 200 < 250 < 300 < 500 in cost), the links=4 cliff, the
+  1-link column never moving, `SYNC_HZ=0` reproducing stock, and 300/500 Hz failing outright.
+  Those are large effects far outside this noise.
+- **SURVIVES, harder:** do not ship 250 Hz. Its measured 0.8-point margin sits inside a per-row
+  noise band now known to be several points wide, so it would flake in CI -- the conclusion is
+  stronger with the bigger error bar, not weaker.
+- **DOES NOT SURVIVE:** "100 Hz has 8.8 points of headroom" as a precise number. Across the two
+  runs the worst-row margin was 8.8 and 3.6 points. Treat 100 Hz as "comfortably passing, margin
+  somewhere in the 3-9 point range", n=2.
+
+**To pin it properly:** repeat the 100 Hz arm 5+ times and quote the worst row's margin as a
+distribution, not a value. UNDONE -- the operating-point decision does not depend on it (100 Hz
+passes in both samples with room; 250 Hz does not), but any future attempt to raise the rate toward
+the 250 Hz ceiling absolutely does, and must not start from the single-sample table.
