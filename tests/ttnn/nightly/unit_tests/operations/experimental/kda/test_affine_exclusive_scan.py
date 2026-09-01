@@ -13,9 +13,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
-from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_realtime_profiler_test_utils import (
-    profile_realtime_program,
-)
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -440,7 +438,6 @@ def test_affine_exclusive_scan_production_performance(device: ttnn.Device, case:
         output,
         measured_ns=duration_ns,
         core_count=int(grid.x) * int(grid.y),
-        frequency_ghz=perf_record["frequency_ghz"],
         math_fidelity=ttnn.MathFidelity.HiFi2,
     )
     logger.info(

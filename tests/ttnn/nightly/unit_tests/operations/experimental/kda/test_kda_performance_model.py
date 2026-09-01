@@ -9,14 +9,10 @@ from itertools import count
 from types import SimpleNamespace
 from typing import Any, Callable
 
-import pytest
 import torch
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
-from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_realtime_profiler_test_utils import (
-    profile_realtime_program,
-)
 
 _addresses = count(0x1000, 0x1000)
 
@@ -58,7 +54,6 @@ def _measurement() -> dict[str, Any]:
     return {
         "measured_ns": 1.0,
         "core_count": 1,
-        "frequency_ghz": 1.0,
         "math_fidelity": ttnn.MathFidelity.LoFi,
     }
 
@@ -135,10 +130,10 @@ def test_affine_exclusive_scan_performance_golden() -> None:
     )
 
     assert result.work == perf_model.KdaWork(fpu_matrix_flops=8, fpu_add_ops=2, dram_bytes=36)
-    assert result.ideal_fpu_ns == 0.017578125
+    assert result.ideal_fpu_ns == 0.013020833333333332
     assert result.ideal_dram_ns == 0.0703125
     assert result.ideal_ns == 0.0703125
-    assert result.fpu_utilization_pct == 1.7578125
+    assert result.fpu_utilization_pct == 1.3020833333333333
     assert result.dram_utilization_pct == 7.03125
     assert result.utilization_pct == 7.03125
 
@@ -230,35 +225,3 @@ def test_invalid_public_inputs_raise(expect_error: Callable) -> None:
             _FakeTensor((2, 2, 1)),
             **(_measurement() | {"measured_ns": 0.0}),
         )
-
-
-def test_realtime_profile_record_exposes_frequency_ghz(monkeypatch: pytest.MonkeyPatch) -> None:
-    callback = None
-
-    def register(collector: Callable) -> int:
-        nonlocal callback
-        callback = collector
-        return 7
-
-    monkeypatch.setattr(ttnn.device, "RegisterProgramRealtimeProfilerCallback", register)
-    monkeypatch.setattr(ttnn.device, "UnregisterProgramRealtimeProfilerCallback", lambda _handle: None)
-    monkeypatch.setattr(ttnn, "synchronize_device", lambda _device: None)
-
-    record = SimpleNamespace(
-        runtime_id=19,
-        chip_id=0,
-        start_timestamp=100,
-        end_timestamp=1450,
-        frequency=1.35,
-        kernel_sources=("reader.cpp",),
-    )
-
-    def run() -> str:
-        assert callback is not None
-        callback(SimpleNamespace(dropped=0, records=(record,)))
-        return "result"
-
-    result, profile = profile_realtime_program(object(), run)
-    assert result == "result"
-    assert profile["frequency_ghz"] == pytest.approx(1.35)
-    assert profile["duration_ns"] == pytest.approx(1000.0)

@@ -12,6 +12,8 @@ from typing import Any, Sequence
 
 CHUNK_SIZE = 32
 MATRIX_FLOPS_PER_CORE_CYCLE = 4096
+# Nominal clock used by the repository's Blackhole realtime utilization models.
+_BLACKHOLE_CLOCK_GHZ = 1.35
 # Blackhole ceiling used by the canonical operation model: ttnn/core/operation.cpp.
 DRAM_BYTES_PER_NS = 512
 
@@ -77,13 +79,10 @@ def _performance(
     *,
     measured_ns: float,
     core_count: int,
-    frequency_ghz: float,
     math_fidelity: Any,
 ) -> KdaPerformance:
     if not isinstance(core_count, int) or core_count <= 0:
         raise ValueError("core_count must be a positive integer")
-    if not math.isfinite(frequency_ghz) or frequency_ghz <= 0:
-        raise ValueError("frequency_ghz must be finite and positive")
     if not math.isfinite(measured_ns) or measured_ns <= 0:
         raise ValueError("measured_ns must be finite and positive")
 
@@ -94,7 +93,7 @@ def _performance(
         + 32 * work.fpu_add_ops
         + 16 * work.fpu_reduction_ops * fidelity_factor
     )
-    ideal_fpu_ns = cycle_numerator / (MATRIX_FLOPS_PER_CORE_CYCLE * core_count * frequency_ghz)
+    ideal_fpu_ns = cycle_numerator / (MATRIX_FLOPS_PER_CORE_CYCLE * core_count * _BLACKHOLE_CLOCK_GHZ)
     ideal_dram_ns = work.dram_bytes / DRAM_BYTES_PER_NS
     ideal_ns = max(ideal_fpu_ns, ideal_dram_ns)
     return KdaPerformance(
@@ -116,7 +115,6 @@ def sigmoid_gated_rms_norm_performance(
     *,
     measured_ns: float,
     core_count: int,
-    frequency_ghz: float,
     math_fidelity: Any,
 ) -> KdaPerformance:
     tensors = (input_tensor, gate, weight, output)
@@ -147,7 +145,6 @@ def sigmoid_gated_rms_norm_performance(
         work,
         measured_ns=measured_ns,
         core_count=core_count,
-        frequency_ghz=frequency_ghz,
         math_fidelity=math_fidelity,
     )
 
@@ -160,7 +157,6 @@ def qkv_causal_conv1d_silu_performance(
     *,
     measured_ns: float,
     core_count: int,
-    frequency_ghz: float,
     math_fidelity: Any,
 ) -> KdaPerformance:
     if len(taps) != 4 or len(outputs) != 3:
@@ -196,7 +192,6 @@ def qkv_causal_conv1d_silu_performance(
         work,
         measured_ns=measured_ns,
         core_count=core_count,
-        frequency_ghz=frequency_ghz,
         math_fidelity=math_fidelity,
     )
 
@@ -208,7 +203,6 @@ def reduce_affine_transforms_performance(
     *,
     measured_ns: float,
     core_count: int,
-    frequency_ghz: float,
     math_fidelity: Any,
 ) -> KdaPerformance:
     if len(outputs) != 2:
@@ -241,7 +235,6 @@ def reduce_affine_transforms_performance(
         work,
         measured_ns=measured_ns,
         core_count=core_count,
-        frequency_ghz=frequency_ghz,
         math_fidelity=math_fidelity,
     )
 
@@ -254,7 +247,6 @@ def affine_exclusive_scan_performance(
     *,
     measured_ns: float,
     core_count: int,
-    frequency_ghz: float,
     math_fidelity: Any,
 ) -> KdaPerformance:
     tensors = (a, b, initial_state, output)
@@ -284,7 +276,6 @@ def affine_exclusive_scan_performance(
         work,
         measured_ns=measured_ns,
         core_count=core_count,
-        frequency_ghz=frequency_ghz,
         math_fidelity=math_fidelity,
     )
 
@@ -295,7 +286,6 @@ def prepare_chunk_recurrence_performance(
     *,
     measured_ns: float,
     core_count: int,
-    frequency_ghz: float,
     math_fidelity: Any,
 ) -> KdaPerformance:
     if len(inputs) != 5 or len(outputs) != 7:
@@ -346,7 +336,6 @@ def prepare_chunk_recurrence_performance(
         work,
         measured_ns=measured_ns,
         core_count=core_count,
-        frequency_ghz=frequency_ghz,
         math_fidelity=math_fidelity,
     )
 
@@ -358,7 +347,6 @@ def recurrent_chunk_scan_performance(
     *,
     measured_ns: float,
     core_count: int,
-    frequency_ghz: float,
     math_fidelity: Any,
 ) -> KdaPerformance:
     if len(inputs) != 7 or len(outputs) != 2:
@@ -400,7 +388,6 @@ def recurrent_chunk_scan_performance(
         work,
         measured_ns=measured_ns,
         core_count=core_count,
-        frequency_ghz=frequency_ghz,
         math_fidelity=math_fidelity,
     )
 
@@ -411,7 +398,6 @@ def summarize_chunk_recurrence_performance(
     *,
     measured_ns: float,
     core_count: int,
-    frequency_ghz: float,
     math_fidelity: Any,
 ) -> KdaPerformance:
     if len(inputs) != 7 or len(outputs) != 2:
@@ -454,6 +440,5 @@ def summarize_chunk_recurrence_performance(
         work,
         measured_ns=measured_ns,
         core_count=core_count,
-        frequency_ghz=frequency_ghz,
         math_fidelity=math_fidelity,
     )
