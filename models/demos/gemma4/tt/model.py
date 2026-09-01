@@ -822,6 +822,7 @@ class Gemma4Model:
         position_idx_cache=None,
         pli_combined=None,
         get_last_token=-1,
+        skip_lm_head=False,
         page_tables_per_layer=None,
         batch_size=1,
         user_id=0,
@@ -1174,6 +1175,8 @@ class Gemma4Model:
         # discarded by the chunk loop, so skip the expensive full-sequence lm_head.
         # Gate on chunk_page_table: get_last_token defaults to -1 for all direct
         # ttnn_prefill_forward callers (unit tests, demos), which still need logits.
+        if not is_decode and skip_lm_head:
+            return None
         if not is_decode and get_last_token == -1 and batch_size > 1:
             return hidden_states
         if (
@@ -1819,6 +1822,7 @@ class Gemma4Model:
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token=-1,
+        skip_lm_head=False,
         kv_cache=None,
         batch_size=1,
         input_ids_torch=None,
@@ -1871,6 +1875,7 @@ class Gemma4Model:
             embeds_torch=embeds_torch,
             pli_device_tensors=pli_device_tensors,
             get_last_token=get_last_token,
+            skip_lm_head=skip_lm_head,
             page_tables_per_layer=page_tables_per_layer,
             batch_size=batch_size,
             user_id=user_id,

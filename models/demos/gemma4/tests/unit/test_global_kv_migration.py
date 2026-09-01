@@ -3,6 +3,9 @@
 
 """Contract and focused device tests for Gemma 4 mixed KV migration."""
 
+import inspect
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -29,6 +32,8 @@ try:
         sliding_layer_indices,
         write_sliding_kv_chunk,
     )
+    from models.demos.gemma4.tt.model import Gemma4Model
+    from models.demos.gemma4.tt.runners.adapters.gemma4 import migration_runtime_paged_caches
     from models.demos.gemma4.tt.runners.kv_chunk_table import (
         CONFIG_NAMES,
         GLOBAL_CHUNK_SIZE_BYTES,
@@ -36,6 +41,7 @@ try:
         build_kv_chunk_address_table,
         iter_source_chunk_locations,
     )
+    from models.demos.gemma4.tt.tt_prefill_runtime import TtPrefillRuntime
     from tests.ttnn.utils_for_testing import assert_with_pcc
 except Exception as exc:  # pragma: no cover - depends on a built ttnn package
     pytest.skip(f"Gemma 4 migration tests require built ttnn: {exc}", allow_module_level=True)
@@ -43,6 +49,63 @@ except Exception as exc:  # pragma: no cover - depends on a built ttnn package
 
 GLOBAL_LAYERS = tuple(range(5, 60, 6))
 SLIDING_LAYERS = tuple(layer for layer in range(60) if layer not in GLOBAL_LAYERS)
+
+
+def test_migration_runtime_has_no_paged_kv_and_explicit_cache_fill_mode():
+    paged = migration_runtime_paged_caches(60)
+    assert len(paged) == 60 and all(cache is None for cache in paged)
+
+    call_param = inspect.signature(Gemma4Model.__call__).parameters["skip_lm_head"]
+    prefill_param = inspect.signature(Gemma4Model.ttnn_prefill_forward).parameters["skip_lm_head"]
+    assert call_param.default is False
+    assert prefill_param.default is False
+
+
+def test_runtime_dispatches_ring_and_packed_caches_without_page_tables():
+    captured = {}
+
+    class FakeInput:
+        def deallocate(self, _force):
+            captured["input_deallocated"] = True
+
+    class FakeModel:
+        def transform_and_embed_prefill_inputs_device(self, input_tensor, page_table, chunk_page_table, start):
+            assert page_table is None and chunk_page_table is None and start is None
+            return object(), None, None, None
+
+        def ttnn_prefill_forward(self, **kwargs):
+            captured.update(kwargs)
+            return None
+
+    packed_global = object()
+    packed_sliding = SimpleNamespace(max_seq_len=8192)
+    caches = SimpleNamespace(
+        paged=migration_runtime_paged_caches(60),
+        migration=packed_global,
+        sliding_migration=packed_sliding,
+    )
+    runtime = TtPrefillRuntime.__new__(TtPrefillRuntime)
+    runtime.config = SimpleNamespace(num_users=1, chunk_size=8192, max_seq_len=8192)
+    runtime.model = FakeModel()
+    runtime._on_layer_complete = None
+    runtime._layer_completion_sink = None
+    runtime._resolve_kv = lambda _caches: caches
+    runtime._stage_metadata = lambda **_kwargs: None
+
+    runtime.prefill_chunk(
+        FakeInput(),
+        caches,
+        slot_id=0,
+        actual_start=0,
+        actual_end=8192,
+    )
+
+    assert captured["input_deallocated"]
+    assert captured["page_table"] is None and captured["chunk_page_table"] is None
+    assert captured["skip_lm_head"] is True
+    assert all(cache is None for cache in captured["kv_cache"])
+    assert captured["global_migration_cache"] is packed_global
+    assert captured["sliding_migration_cache"] is packed_sliding
 
 
 def test_layer_ids_and_36_config_order_are_locked():

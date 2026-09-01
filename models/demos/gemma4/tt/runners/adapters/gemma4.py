@@ -13,6 +13,13 @@ from typing import Optional
 from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, PrefillRunParams
 
 
+def migration_runtime_paged_caches(num_layers: int) -> list:
+    """Per-layer cache placeholders: CP ring attention owns compute history."""
+    if num_layers <= 0:
+        raise ValueError(f"num_layers must be positive, got {num_layers}")
+    return [None] * num_layers
+
+
 class Gemma4PrefillConfig:
     """Static dimensions consumed by the common runner and producer."""
 
@@ -94,17 +101,14 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:
         import ttnn
-        from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
         from models.demos.gemma4.tt.attention.global_migration import (
             allocate_global_migration_cache,
             global_layer_indices,
         )
-        from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
         from models.demos.gemma4.tt.attention.sliding_migration import (
             allocate_sliding_migration_cache,
             sliding_layer_indices,
         )
-        from models.tt_transformers.tt.common import PagedAttentionConfig
 
         if not (params.is_first_rank and params.is_last_rank and params.first_layer_idx == 0):
             raise NotImplementedError("initial Gemma 4 prefill migration support is single-rank only")
@@ -116,35 +120,17 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
                 f"{params.mesh_shape}, {params.sp_axis}, {params.tp_axis}"
             )
 
-        block_size = 64
-        if params.max_seq_len % (block_size * params.sp_factor):
-            raise ValueError(f"max_seq_len={params.max_seq_len} must divide into {block_size}-token blocks across CP8")
+        if params.max_seq_len % (ttnn.TILE_SIZE * params.sp_factor):
+            raise ValueError(
+                f"max_seq_len={params.max_seq_len} must divide into " f"{ttnn.TILE_SIZE}-token chunks across CP8"
+            )
         # This cache crosses a raw-byte migration boundary, so its dtype is a
         # protocol constant rather than a model-path-dependent precision-table
         # lookup (HF snapshot directory names are not stable identifiers).
         cache_dtype = ttnn.bfloat8_b
-
-        max_blocks = params.num_users * params.max_seq_len // block_size
-        paged_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_blocks)
-        paged = []
-        for layer_idx in range(params.num_layers):
-            config = Gemma4AttentionConfig(hf_config, layer_idx)
-            if config.is_sliding:
-                # Sliding computation uses its current K/V plus ring/tail path.
-                # Its only durable history is the packed migration cache below.
-                paged.append(None)
-            else:
-                paged.append(
-                    init_kv_cache(
-                        mesh_device,
-                        config,
-                        max_batch_size=params.num_users,
-                        max_seq_len=params.max_seq_len,
-                        paged_attention_config=paged_config,
-                        cache_dtype=cache_dtype,
-                        max_num_blocks_override=max_blocks // params.sp_factor,
-                    )
-                )
+        # CP ring attention owns the full-width compute history. The migration
+        # runtime therefore has no paged K/V tensors for either layer family.
+        paged = migration_runtime_paged_caches(params.num_layers)
 
         globals_ = global_layer_indices(hf_config.layer_types)
         if globals_ != self.model_config.GLOBAL_LAYERS:

@@ -13,18 +13,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
-from models.demos.gemma4.demo.prefill_runtime import (
-    PAGE_BLOCK_SIZE,
-    _cache_completion_state,
-    _chunk_page_table_row,
-    _cp_chunk_valid_lengths,
-    _device_page_table,
-    _fixed_cache_slot_blocks,
-    _host_mesh_scalars,
-    _host_page_table,
-    _host_tensor,
-    _page_table_row,
-)
+from models.demos.gemma4.demo.prefill_runtime import _cache_completion_state, _host_tensor
 from models.demos.gemma4.tt.common import create_tt_model
 
 
@@ -96,10 +85,6 @@ class TtPrefillRuntime:
             decode=ModeConfig(tp=config.tp_factor),
             prefill=ModeConfig(tp=config.tp_factor, sp=config.sp_factor),
         )
-        max_blocks = config.num_users * config.max_seq_len // PAGE_BLOCK_SIZE
-        from models.tt_transformers.tt.common import PagedAttentionConfig
-
-        self.paged_config = PagedAttentionConfig(block_size=PAGE_BLOCK_SIZE, max_num_blocks=max_blocks)
         model_args, self.model, _, _ = create_tt_model(
             mesh_device=mesh_device,
             # Requests may be chunk-interleaved by the common producer. Ring
@@ -110,7 +95,7 @@ class TtPrefillRuntime:
             state_dict=_cache_completion_state(model_path),
             num_layers=config.num_layers,
             mesh_config=self.mesh_config,
-            paged_attention_config=self.paged_config,
+            paged_attention_config=None,
             create_kv_cache=False,
             model_path=model_path,
             bounded_sliding_kv_cache=False,
@@ -119,16 +104,6 @@ class TtPrefillRuntime:
         )
         self.hf_config = model_args
         self.cp = config.sp_factor
-        self._page_table_width = config.max_seq_len // PAGE_BLOCK_SIZE // self.cp
-        self._chunk_page_table_width = config.chunk_size // PAGE_BLOCK_SIZE // self.cp
-        self._sliding_layers = tuple(layer_type == "sliding_attention" for layer_type in model_args.layer_types)
-        self._slot_blocks = [_fixed_cache_slot_blocks(slot, self._page_table_width) for slot in range(config.num_users)]
-
-        identity = torch.arange(self._page_table_width, dtype=torch.int32).reshape(1, -1)
-        self.page_table = _device_page_table(mesh_device, identity)
-        self.chunk_page_table = _device_page_table(mesh_device, identity[:, : self._chunk_page_table_width])
-        self.model._active_page_tables_per_layer = self._layer_page_tables(0)
-        self.model.update_persistent_per_layer_page_tables(self.model._active_page_tables_per_layer)
 
         zeros = torch.zeros((1, config.chunk_size), dtype=torch.int32)
         self.device_positions = ttnn.to_device(
@@ -152,27 +127,7 @@ class TtPrefillRuntime:
             raise TypeError(f"expected Gemma4KvCaches, got {type(kv_caches).__name__}")
         return kv_caches
 
-    def _layer_page_tables(self, slot: int) -> list[torch.Tensor]:
-        full = _page_table_row(self._page_table_width, self._slot_blocks[slot])
-        # Sliding layers have no paged cache in the migration runtime. Keep a
-        # shape-compatible table in the per-layer list; it is never consumed.
-        return [full for _is_sliding in self._sliding_layers]
-
     def _stage_metadata(self, *, slot_id: int, actual_start: int, actual_end: int) -> None:
-        layer_tables = self._layer_page_tables(slot_id)
-        ttnn.copy_host_to_device_tensor(_host_page_table(self.mesh_device, layer_tables[0]), self.page_table)
-        self.model.update_persistent_per_layer_page_tables(layer_tables)
-
-        chunk_idx = actual_start // self.config.chunk_size
-        chunk_row = _chunk_page_table_row(self._slot_blocks[slot_id], chunk_idx, self._chunk_page_table_width)
-        ttnn.copy_host_to_device_tensor(_host_page_table(self.mesh_device, chunk_row), self.chunk_page_table)
-
-        valid = actual_end - actual_start
-        valid_lengths = _cp_chunk_valid_lengths(valid, self.config.chunk_size, self.cp, self.config.tp_factor)
-        if self.model.prefill_valid_len_dev is not None:
-            ttnn.copy_host_to_device_tensor(
-                _host_mesh_scalars(self.mesh_device, valid_lengths), self.model.prefill_valid_len_dev
-            )
         positions = torch.arange(actual_start, actual_start + self.config.chunk_size, dtype=torch.int32).unsqueeze(0)
         ttnn.copy_host_to_device_tensor(
             _host_tensor(
@@ -256,9 +211,7 @@ class TtPrefillRuntime:
                 f"{kv.sliding_migration.max_seq_len}"
             )
         self._stage_metadata(slot_id=slot_id, actual_start=actual_start, actual_end=actual_end)
-        embeds, page_table, chunk_page_table, _ = self.model.transform_and_embed_prefill_inputs_device(
-            input_tensor, self.page_table, self.chunk_page_table, None
-        )
+        embeds, _, _, _ = self.model.transform_and_embed_prefill_inputs_device(input_tensor, None, None, None)
         input_tensor.deallocate(True)
 
         if self._layer_completion_sink is not None:
@@ -272,11 +225,12 @@ class TtPrefillRuntime:
 
         out = self.model.ttnn_prefill_forward(
             x=embeds,
-            page_table=page_table,
-            chunk_page_table=chunk_page_table,
+            page_table=None,
+            chunk_page_table=None,
             chunk_start_idx=actual_start,
             kv_cache=kv.paged,
             get_last_token=-1,
+            skip_lm_head=True,
             user_id=0,
             migration_slot_id=slot_id,
             migration_actual_end=actual_end,
