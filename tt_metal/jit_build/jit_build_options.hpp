@@ -39,6 +39,9 @@ public:
 
     // We can keep for future WH support, otherwise not used in GS
     bool fp32_dest_acc_en{};
+    // Blackhole-only caller contract: the kernel brackets any local FP32 DEST
+    // epoch at runtime. Derived from ALLOW_FP8_WITH_LOCAL_FP32_DEST.
+    bool allow_fp8_with_local_fp32_dest{};
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool bfp8_pack_precise{};
 

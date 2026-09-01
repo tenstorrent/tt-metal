@@ -730,31 +730,37 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
     const tt_hlk_desc& desc,
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
+    bool allow_fp8_with_local_fp32_dest,
     bool bfp8_pack_precise,
     const tt::ARCH arch,
     uint32_t max_cbs) {
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
-        desc.buf_dataformat_arr,
-        unpack_conditional_dst_format,
-        fp32_dest_acc_en,
-        bfp8_pack_precise,
-        false,
-        arch);
+        desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, false, arch);
 
-    vector<DataFormat> dst_formats = tt::get_pack_dst_formats(
-        desc.buf_dataformat_arr);
+    vector<DataFormat> dst_formats = tt::get_pack_dst_formats(desc.buf_dataformat_arr);
 
-    // Fp8_e4m3 is always unpacked to Float16 (A-family) in source/dest registers.
-    // Without fp32_dest_acc, the dest register holds Float16 (A-family) data when
-    // the input is Fp8, so non-Fp8 output CBs need A-family pack_src to match.
-    // With fp32_dest_acc, dest holds Float32 and pack_src semantics differ, so skip.
-    // CBs that are themselves Fp8_e4m3 are already handled by get_single_pack_src_format.
+    // FP8 formats are always unpacked to Float16 (A-family) in source/dest registers.
+    // Without any 32-bit DEST epoch, an FP8 kernel holds A-family data in DEST, so
+    // non-FP8 output CBs need A-family pack_src to match. An explicitly contracted
+    // local FP32 epoch instead runs FP8 work in 32-bit DEST and restores the global
+    // 16-bit mode afterwards; outputs from that restored mode retain their declared
+    // exponent family.
+    // CBs that are themselves FP8 are already handled by get_single_pack_src_format.
     if (!fp32_dest_acc_en &&
-        std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), [](DataFormat f) {
-            return f == DataFormat::Fp8_e4m3;
-        })) {
+        std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), tt::is_fp8_format)) {
         for (size_t i = 0; i < src_formats.size(); i++) {
-            if (desc.buf_dataformat_arr[i] == DataFormat::Fp8_e4m3) {
+            const bool local_fp32 = desc.buf_dataformat_arr[i] == DataFormat::Float32 && allow_fp8_with_local_fp32_dest;
+            if (local_fp32) {
+                // A contracted FP32 epoch may write any Float32 intermediate in
+                // the kernel. Preserve the complete destination mantissa instead
+                // of applying the mixed-FP8 kernel's Float16 pack-source rewrite.
+                src_formats[i] = DataFormat::Float32;
+                continue;
+            }
+            if (tt::is_fp8_format(desc.buf_dataformat_arr[i])) {
+                continue;
+            }
+            if (allow_fp8_with_local_fp32_dest) {
                 continue;
             }
             switch (src_formats[i]) {
@@ -823,9 +829,13 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
     ExpPrecision exp_prec = tt::get_data_exp_precision(desc.buf_dataformat_arr);
     DataFormat unpack_conditional_dst_format =
         (exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
-    if (options.fp32_dest_acc_en &&
+    DataFormat pack_conditional_dst_format = unpack_conditional_dst_format;
+    if ((options.fp32_dest_acc_en || options.allow_fp8_with_local_fp32_dest) &&
         (tt::is_all_fp32_formats(desc.buf_dataformat_arr) || (exp_prec == ExpPrecision::B))) {
         unpack_conditional_dst_format = DataFormat::Tf32;
+        if (options.fp32_dest_acc_en) {
+            pack_conditional_dst_format = DataFormat::Tf32;
+        }
     }
 
     if (std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), [](DataFormat f) {
@@ -836,14 +846,16 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
 
     tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
     auto [unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs] = generate_unpack_data_formats(
-        desc,
-        unpack_conditional_dst_format,
-        options.fp32_dest_acc_en,
-        options.unpack_to_dest_mode,
-        max_cbs);
+        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, max_cbs);
 
     auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(
-        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_cbs);
+        desc,
+        pack_conditional_dst_format,
+        options.fp32_dest_acc_en,
+        options.allow_fp8_with_local_fp32_dest,
+        options.bfp8_pack_precise,
+        arch,
+        max_cbs);
 
     // equalize "unpack src" and "pack dst" data format vectors
     // both "unpack src" and "pack dst" refer to data in L1, "unpack src" == L1, and "pack dst" == L1
@@ -1016,8 +1028,8 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
     out << "#if defined(UCK_CHLKC_PACK)\n";
     emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, fmts.unpack_src);
-    out << "#endif\n";   // if pack
-    out << "#endif\n\n"; // if not math and not unpack
+    out << "#endif\n";    // if pack
+    out << "#endif\n\n";  // if not math and not unpack
 
     out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
            "defined(UCK_CHLKC_ISOLATE_SFPU)\n";

@@ -76,6 +76,7 @@
 #include "tt_metal/impl/dispatch/dispatch_core_common.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
+#include "tt_metal/jit_build/data_format.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/jit_build_utils.hpp"
 #include "impl/jit_server/remote_compile_coordinator.hpp"
@@ -2412,10 +2413,9 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device));
 
-    uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(mesh_device))
-            .get_device_build_env(mesh_device->build_id())
-            .build_key();
+    uint64_t device_hash = BuildEnvManager::get_instance(extract_context_id(mesh_device))
+                               .get_device_build_env(mesh_device->build_id())
+                               .build_key();
     if (not metal_ctx.hal().is_coordinate_virtualization_enabled()) {
         ttsl::hash::hash_combine(device_hash, mesh_device->id());
     }
@@ -2454,10 +2454,9 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device));
 
-    uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(mesh_device))
-            .get_device_build_env(mesh_device->build_id())
-            .build_key();
+    uint64_t device_hash = BuildEnvManager::get_instance(extract_context_id(mesh_device))
+                               .get_device_build_env(mesh_device->build_id())
+                               .build_key();
     if (not metal_ctx.hal().is_coordinate_virtualization_enabled()) {
         device_hash = (device_hash << 32) | (mesh_device->id());
     }
@@ -2561,23 +2560,23 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         this->set_cb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
         this->set_dfb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
 
-        // Blackhole and Quasar: Fp8_e4m3 / Lf8 dataformats require fp32_dest_acc_en=true in the associated
-        // compute kernel. This is due to FP8/LF8 being considered "A" exp width formats, instead of "B" exp
-        // width formats that are supported mostly in tt-metal. This conservative check fires whenever a
-        // compute kernel shares a core with any FP8 CB — the old Program API has no way to know which CB
-        // a given kernel actually reads, so we err on the side of catching the misconfiguration.
-        if ((build_options.build_env.get_arch() == tt::ARCH::BLACKHOLE ||
-             build_options.build_env.get_arch() == tt::ARCH::QUASAR) &&
-            kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE &&
+        const auto arch = build_options.build_env.get_arch();
+        const bool is_compute_kernel = kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE;
+
+        // Blackhole and Quasar require a family-agnostic DEST mode whenever a
+        // compute kernel shares a core with an FP8 CB. Blackhole callers may
+        // explicitly promise that the kernel brackets local FP32 DEST epochs;
+        // Quasar continues to require global FP32 DEST.
+        if ((arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR) && is_compute_kernel &&
             std::any_of(
                 build_options.hlk_desc.buf_dataformat_arr.begin(),
                 build_options.hlk_desc.buf_dataformat_arr.end(),
                 is_fp8_format)) {
             TT_FATAL(
-                build_options.fp32_dest_acc_en,
-                "Fp8_e4m3 / Lf8 require fp32_dest_acc_en=true in ComputeConfig. The DEST "
-                "register must be in 32-bit (family-agnostic) mode when any CB on the same core uses "
-                "an 8-bit float format. Kernel: {}",
+                build_options.fp32_dest_acc_en || build_options.allow_fp8_with_local_fp32_dest,
+                "Fp8_e4m3 / Lf8 require fp32_dest_acc_en=true when any CB on the same core uses an 8-bit float "
+                "format. Blackhole kernels that bracket FP32 DEST locally may instead define "
+                "ALLOW_FP8_WITH_LOCAL_FP32_DEST. Quasar always requires global FP32 DEST. Kernel: {}",
                 kernel->name());
         }
 
