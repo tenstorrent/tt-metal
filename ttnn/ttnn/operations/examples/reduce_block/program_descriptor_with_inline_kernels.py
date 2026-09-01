@@ -264,8 +264,8 @@ void kernel_main() {
 # =============================================================================
 # Helper kernel — the reduce library over the general (Ht, Wt, NC) block, AVG pool. The `algo` CT arg
 # selects the library datapath: 0 = ReduceTile (Auto default, FPU matmul-with-ones), 1 = AccumulateViaAdd.
-# `policy` selects one of the four ReduceInputPolicy values for BOTH datapaths; `avg_direct` makes the
-# AccumulateViaAdd path use reduce<AVG> (aligned geometry 1/N) instead of reduce_mean (explicit N).
+# `policy` selects one of the four ReduceInputPolicy values for BOTH datapaths. Both routes use reduce<AVG>;
+# AccumulateViaAdd receives its logical element count as the compile-time `reduce_factor`.
 #
 # The per-iter reduce dispatch is hoisted into a TEMPLATE (do_reduce_block) so `if constexpr (algo)` GENUINELY
 # discards the dead branch. kernel_main is not a template, so an `if constexpr (algo)` there would still
@@ -274,7 +274,7 @@ void kernel_main() {
 # static_asserts, breaking the reduce_tile kernel compile. In a template, the discarded branch is not
 # instantiated, so each build compiles only its own algo's reduce().
 # CT args: [Ht, Wt, NC, dim, kernel_iters, out_tiles, algo, partial_elems, policy_id, recfg, row_stride,
-#           n_reduced, avg_direct, skip_within]
+#           n_reduced, avg_post_op, skip_within]
 # =============================================================================
 _HELPER_BLOCK_KERNEL = r"""
 #include <cstdint>
@@ -289,13 +289,18 @@ constexpr uint32_t cb_in = 0, cb_scaler = 1, cb_out = 16;
 
 // Templated so `if constexpr (algo)` discards the dead branch (see the header note). Each build instantiates
 // exactly one algo's reduce(), so a policy/dim invalid for the OTHER algo never trips its static_asserts.
-template <uint32_t algo, uint32_t dim, uint32_t policy_id, uint32_t avg_direct, uint32_t skip_within>
+template <
+    uint32_t algo,
+    uint32_t dim,
+    uint32_t policy_id,
+    uint32_t n_reduced,
+    uint32_t avg_post_op,
+    uint32_t skip_within>
 ALWI void do_reduce_block(
     [[maybe_unused]] uint32_t iter,
     compute_kernel_lib::ReduceInputBlockShape shape,
     compute_kernel_lib::ReduceInputMemoryLayout ml,
     compute_kernel_lib::ReducePartialScaler ps,
-    [[maybe_unused]] uint32_t n_reduced,
     [[maybe_unused]] uint32_t recfg) {
     using namespace compute_kernel_lib;
     using ckernel::PoolType;
@@ -310,28 +315,75 @@ ALWI void do_reduce_block(
                                              : ReduceDim::REDUCE_SCALAR;
     using RECFG = ReduceDataFormatReconfigMode;
     // skip_within==1 -> ReduceWithinTile::Skip: the input tiles are ALREADY collapsed on the reduce axis
-    // (a cross-core combine of per-core partials), so the finalize's sfpu_reduce is dropped. Skip is
-    // AccumulateViaAdd + SUM only, so it rides the reduce_mean form (SUM + caller 1/N), never reduce<AVG>.
+    // (a cross-core combine of per-core partials), so the finalize's sfpu_reduce is dropped. AVG still applies
+    // the caller's compile-time reduce_factor to the raw cross-tile sum.
     constexpr ReduceWithinTile WT = (skip_within == 1u) ? ReduceWithinTile::Skip : ReduceWithinTile::Collapse;
     if constexpr (algo == 1u) {
         // AccumulateViaAdd. recfg==1 exercises RECFG::NONE after the first call (reusing the first call's
-        // config). avg_direct==1: reduce<AVG> derives 1/N from aligned geometry; else reduce_mean applies the
-        // explicit caller N (which supports partial, cross-chunk, and uneven-shard means).
+        // config). The optional x2 post op proves AVG normalization and the caller post op are separate stages.
         const bool none_now = (recfg == 1u) && (iter > 0u);
-        if constexpr (avg_direct == 1u) {
+        if constexpr (avg_post_op == 1u) {
+            auto post_op = [](uint32_t dst) {
+                binop_with_scalar_tile_init();
+                mul_unary_tile(dst, 0x40000000u);  // x2, after the AVG normalization
+            };
             if (none_now)
-                reduce<PoolType::AVG, RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::NONE, ReduceFp32Mode::Fast, ALG>(
-                    shape, ml, NoAccumulation{}, NoOp{}, ps);
+                reduce<
+                    PoolType::AVG,
+                    RDIM,
+                    cb_in,
+                    cb_scaler,
+                    cb_out,
+                    POLICY,
+                    RECFG::NONE,
+                    ReduceFp32Mode::Fast,
+                    ALG,
+                    WT,
+                    n_reduced>(
+                    shape, ml, NoAccumulation{}, post_op, ps);
             else
-                reduce<PoolType::AVG, RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::INPUT_AND_OUTPUT, ReduceFp32Mode::Fast, ALG>(
-                    shape, ml, NoAccumulation{}, NoOp{}, ps);
+                reduce<
+                    PoolType::AVG,
+                    RDIM,
+                    cb_in,
+                    cb_scaler,
+                    cb_out,
+                    POLICY,
+                    RECFG::INPUT_AND_OUTPUT,
+                    ReduceFp32Mode::Fast,
+                    ALG,
+                    WT,
+                    n_reduced>(
+                    shape, ml, NoAccumulation{}, post_op, ps);
         } else {
             if (none_now)
-                reduce_mean<RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::NONE, ReduceFp32Mode::Fast, ALG, WT>(
-                    shape, n_reduced, ml, NoAccumulation{}, ps);
+                reduce<
+                    PoolType::AVG,
+                    RDIM,
+                    cb_in,
+                    cb_scaler,
+                    cb_out,
+                    POLICY,
+                    RECFG::NONE,
+                    ReduceFp32Mode::Fast,
+                    ALG,
+                    WT,
+                    n_reduced>(
+                    shape, ml, NoAccumulation{}, NoOp{}, ps);
             else
-                reduce_mean<RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::INPUT_AND_OUTPUT, ReduceFp32Mode::Fast, ALG, WT>(
-                    shape, n_reduced, ml, NoAccumulation{}, ps);
+                reduce<
+                    PoolType::AVG,
+                    RDIM,
+                    cb_in,
+                    cb_scaler,
+                    cb_out,
+                    POLICY,
+                    RECFG::INPUT_AND_OUTPUT,
+                    ReduceFp32Mode::Fast,
+                    ALG,
+                    WT,
+                    n_reduced>(
+                    shape, ml, NoAccumulation{}, NoOp{}, ps);
         }
     } else {
         // ReduceTile: AVG via the reader-computed 1/N scaler.
@@ -353,8 +405,8 @@ void kernel_main() {
     constexpr uint32_t policy_id = get_compile_time_arg_val(8);  // 0 Bulk, 1 WaitAndPop, 2 WaitUpfront, 3 NoWait
     constexpr uint32_t recfg = get_compile_time_arg_val(9);  // 1 = ReduceDataFormatReconfigMode::NONE after 1st call
     constexpr uint32_t row_stride = get_compile_time_arg_val(10);  // tile pitch per row (0=contiguous=Wt)
-    constexpr uint32_t n_reduced = get_compile_time_arg_val(11);  // real elems/output = the AccumulateViaAdd mean 1/N
-    constexpr uint32_t avg_direct = get_compile_time_arg_val(12);  // 1 = AccumulateViaAdd uses reduce<AVG> direct
+    constexpr uint32_t n_reduced = get_compile_time_arg_val(11);  // AccumulateViaAdd AVG reduce_factor
+    constexpr uint32_t avg_post_op = get_compile_time_arg_val(12);  // 1 = multiply the finished AVG by 2
     constexpr uint32_t skip_within = get_compile_time_arg_val(13);  // 1 = ReduceWithinTile::Skip (inputs pre-collapsed)
     constexpr uint32_t row_pitch = (row_stride > 0u) ? row_stride : Wt;
     constexpr uint32_t in_tiles = Ht * row_pitch * NC;  // resident block incl. padded rows
@@ -389,7 +441,7 @@ void kernel_main() {
             cb_reserve_back(cb_in, in_tiles);
             cb_push_back(cb_in, in_tiles);  // resident sharded input -> re-arm each iter
         }
-        do_reduce_block<algo, dim, policy_id, avg_direct, skip_within>(iter, SHAPE, ML, PS, n_reduced, recfg);
+        do_reduce_block<algo, dim, policy_id, n_reduced, avg_post_op, skip_within>(iter, SHAPE, ML, PS, recfg);
         if (iter + 1 < kernel_iters) {
             cb_wait_front(cb_out, out_tiles);
             cb_pop_front(cb_out, out_tiles);
@@ -403,10 +455,10 @@ void kernel_main() {
 # Accumulate kernel — the reduce library's cross-call Accumulate over AccumulateViaAdd. The reduce dim is
 # split into `num_chunks` chunks; each chunk is one reduce() call that folds the running RAW partial-sum tile
 # (in cb_acc) into the pairwise add and, only on the LAST chunk, finalizes (sfpu_reduce) into cb_out. Non-last
-# chunks point the output CB at cb_acc so the raw partial is written back for the next reload. SUM pool (the
-# accumulate path is SUM-only). To exercise the fold without a chunked reader, each chunk re-arms and reduces
-# the SAME resident block, so the result is num_chunks * sum(block, reduce_dim).
-# CT args: [Ht, Wt, NC, dim, kernel_iters, out_tiles, num_chunks]
+# chunks point the output CB at cb_acc so the raw partial is written back for the next reload. AVG uses a
+# compile-time factor for the grand total and applies it only on the last finalize. To exercise the fold without
+# a chunked reader, each chunk re-arms and reduces the SAME resident block.
+# CT args: [Ht, Wt, NC, dim, kernel_iters, out_tiles, num_chunks, mean_n, partial_elems, row_stride, reload_id]
 # =============================================================================
 _ACCUM_KERNEL = r"""
 #include <cstdint>
@@ -420,8 +472,8 @@ namespace {
 constexpr uint32_t cb_in = 0, cb_scaler = 1, cb_acc = 2, cb_out = 16;
 
 // One accumulate chunk (dim-templated to keep the per-dim reduce() calls in one place + thread the partial
-// scaler / memory layout cleanly). Non-last chunks SUM the RAW partial into cb_acc; the LAST chunk finalizes
-// into cb_out — MEAN via reduce_mean with the GRAND-TOTAL divisor mean_n (spanning all chunks), else SUM.
+// scaler / memory layout cleanly). Non-last chunks write the RAW partial into cb_acc; the LAST chunk finalizes
+// into cb_out. AVG receives the GRAND-TOTAL compile-time reduce_factor, spanning every chunk.
 // A partial (ROW/COL) folds the masked last reduce-dim tile into EACH chunk's sum; row_stride reduces the
 // first Wt columns of a wider resident block.
 template <uint32_t dim, uint32_t mean_n>
@@ -440,16 +492,42 @@ ALWI void do_accum_chunk(
     constexpr auto POLICY = ReduceInputPolicy::BulkWaitBulkPop;
     constexpr auto RECFG = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
     constexpr auto ALG = ReduceAlgorithm::AccumulateViaAdd;
-    if (is_last) {
-        if constexpr (mean_n > 0u)
-            reduce_mean<RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG, ReduceFp32Mode::Fast, ALG>(
-                shape, mean_n, ml, Accumulate::at_last(cb_acc, c).with_reload(reload), ps);
+    if constexpr (mean_n > 0u) {
+        if (is_last)
+            reduce<
+                PoolType::AVG,
+                RDIM,
+                cb_in,
+                cb_scaler,
+                cb_out,
+                POLICY,
+                RECFG,
+                ReduceFp32Mode::Fast,
+                ALG,
+                ReduceWithinTile::Collapse,
+                mean_n>(
+                shape, ml, Accumulate::at_last(cb_acc, c).with_reload(reload), NoOp{}, ps);
         else
+            reduce<
+                PoolType::AVG,
+                RDIM,
+                cb_in,
+                cb_scaler,
+                cb_acc,
+                POLICY,
+                RECFG,
+                ReduceFp32Mode::Fast,
+                ALG,
+                ReduceWithinTile::Collapse,
+                mean_n>(
+                shape, ml, Accumulate::at(cb_acc, c).with_reload(reload), NoOp{}, ps);
+    } else {
+        if (is_last)
             reduce<PoolType::SUM, RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG, ReduceFp32Mode::Fast, ALG>(
                 shape, ml, Accumulate::at_last(cb_acc, c).with_reload(reload), NoOp{}, ps);
-    } else {
-        reduce<PoolType::SUM, RDIM, cb_in, cb_scaler, cb_acc, POLICY, RECFG, ReduceFp32Mode::Fast, ALG>(
-            shape, ml, Accumulate::at(cb_acc, c).with_reload(reload), NoOp{}, ps);
+        else
+            reduce<PoolType::SUM, RDIM, cb_in, cb_scaler, cb_acc, POLICY, RECFG, ReduceFp32Mode::Fast, ALG>(
+                shape, ml, Accumulate::at(cb_acc, c).with_reload(reload), NoOp{}, ps);
     }
 }
 }  // namespace
@@ -613,7 +691,7 @@ def _resolve(variant, dim, Ht, Wt):
 
 
 def _mean_n(dim, Ht, Wt, partial_elems):
-    """N_true = real elements reduced into each output (the mean divisor the CALLER supplies to reduce_mean).
+    """N_true = the compile-time reduce_factor for each AccumulateViaAdd AVG output.
     partial_elems>0 -> the last reduce-dim tile holds that many valid elements, so N_true =
     (reduced_tiles-1)*32 + partial_elems (ROW/COL only); else the tile-aligned count."""
     if partial_elems > 0:
@@ -641,7 +719,7 @@ def create_program_descriptor(
     partial_elems=0,
     stream=False,
     policy="bulk",
-    avg_direct=False,
+    avg_post_op=False,
     reconfig=None,
     row_stride=0,
     within_tile="collapse",
@@ -681,10 +759,8 @@ def create_program_descriptor(
         # example wiring for those is proven on the bulk policy).
         if policy in _NO_POP and (partial_elems or row_stride):
             raise ValueError("no-pop policies are exercised aligned + contiguous in this example")
-    if avg_direct and variant != "accumulate_via_add":
-        raise ValueError("avg_direct (reduce<AVG> geometry 1/N) is an accumulate_via_add lever")
-    if avg_direct and partial_elems:
-        raise ValueError("avg_direct requires a tile-aligned reduce dimension; use reduce_mean for partial input")
+    if avg_post_op and variant != "accumulate_via_add":
+        raise ValueError("avg_post_op is an accumulate_via_add validation lever")
     if reconfig not in (None, "none_after_first"):
         raise ValueError(f"reconfig must be None or 'none_after_first', got {reconfig!r}")
     if reconfig and variant != "accumulate_via_add":
@@ -693,12 +769,10 @@ def create_program_descriptor(
         raise ValueError(f"within_tile must be one of {WITHIN_TILE}, got {within_tile!r}")
     if within_tile == "skip":
         # ReduceWithinTile::Skip: the input tiles are already collapsed on the reduce axis, so the reduce is a
-        # pure cross-tile sum (the SFPU finalize is dropped). AccumulateViaAdd + SUM only -> the reduce_mean
-        # form (SUM + caller 1/N), so avg_direct is out; partial is rejected by the library (nothing to mask).
+        # pure cross-tile sum (the SFPU finalize is dropped). AVG applies its compile-time reduce_factor to the
+        # raw sum; partial is rejected by the library because there are no uncollapsed lanes left to mask.
         if variant != "accumulate_via_add":
             raise ValueError("within_tile='skip' is an accumulate_via_add lever")
-        if avg_direct:
-            raise ValueError("within_tile='skip' is SUM-only; reduce<AVG> geometry 1/N needs the collapse")
         if partial_elems:
             raise ValueError("within_tile='skip' rejects partial (a lane mask has nothing to mask)")
         if dim not in ("row", "col"):
@@ -753,9 +827,9 @@ def create_program_descriptor(
         )
         return ttnn.ProgramDescriptor(kernels=[mask, compute], semaphores=[], cbs=cbs)
 
-    # Library paths: reduce_tile = algo 0 -> Auto/ReduceTile matmul-reduce; accumulate_via_add = algo 1 ->
-    # the opt-in AccumulateViaAdd. Direct AVG derives 1/N from aligned geometry; reduce_mean supplies N for
-    # other means. For a partial reduce, AccumulateViaAdd consumes a 0/1 mask tile from the scaler CB.
+    # Library paths: both call reduce<AVG>. ReduceTile consumes the reader-prepared scaler; AccumulateViaAdd
+    # applies the compile-time reduce_factor after its SFPU SUM. A partial AccumulateViaAdd reduce consumes a
+    # 0/1 mask tile from the scaler CB.
     algo = 1 if path == "accumulate_via_add" else 0
     use_mask = bool(partial_elems)
     if partial_elems:
@@ -783,7 +857,7 @@ def create_program_descriptor(
             # Skip's inputs are pre-collapsed partials, so the mean divides by the number of CONTRIBUTORS
             # (one per reduce-dim tile), not by the element count along the axis.
             reduced_count(dim, Ht, Wt) if within_tile == "skip" else _mean_n(dim, Ht, Wt, partial_elems),
-            int(avg_direct),
+            int(avg_post_op),
             int(within_tile == "skip"),
         ],
         config=ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest),
@@ -813,7 +887,7 @@ def run_op(
     partial_elems=0,
     stream=False,
     policy="bulk",
-    avg_direct=False,
+    avg_post_op=False,
     reconfig=None,
     row_stride=0,
     within_tile="collapse",
@@ -840,7 +914,7 @@ def run_op(
         partial_elems=partial_elems,
         stream=stream,
         policy=policy,
-        avg_direct=avg_direct,
+        avg_post_op=avg_post_op,
         reconfig=reconfig,
         row_stride=row_stride,
         within_tile=within_tile,
@@ -850,8 +924,8 @@ def run_op(
 
 # =============================================================================
 # Cross-call Accumulate (AccumulateViaAdd) — the reduce dim is split into `num_chunks` chunks, each folding a
-# running RAW partial-sum tile (cb_acc) into the pairwise add; the last chunk finalizes into cb_out. SUM pool.
-# Each chunk re-reduces the SAME resident block, so the result is num_chunks * sum(block, reduce_dim).
+# running RAW partial-sum tile (cb_acc) into the pairwise add; the last chunk finalizes into cb_out. SUM leaves
+# the grand total unchanged; AVG applies one compile-time factor covering all chunks.
 # =============================================================================
 def create_accumulate_program_descriptor(
     input_tensor,
@@ -909,8 +983,8 @@ def create_accumulate_program_descriptor(
     use_mask = bool(partial_elems)
     use_zero = reload == "copy_zero"  # scaler CB holds an all-zero tile (aligned only; guarded above)
     # MEAN over the accumulated chunks: each chunk re-reduces the same block, so the GRAND-total element
-    # count is num_chunks * (elements reduced per chunk, incl. the partial count). This is the divisor
-    # reduce_mean applies on the last chunk — it must span all chunks, not just the last block's count. 0 => SUM.
+    # count is num_chunks * (elements reduced per chunk, incl. the partial count). This compile-time factor
+    # must span all chunks, not just the last block's count. 0 selects SUM.
     mean_n = num_chunks * _mean_n(dim, Ht, Wt, partial_elems) if mean else 0
 
     cbs = [
