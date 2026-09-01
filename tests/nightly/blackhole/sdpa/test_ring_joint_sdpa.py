@@ -4527,7 +4527,7 @@ RING_JOINT_TRACE_REGION_SIZE = 32 * 1024 * 1024
 
 
 def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores():
-    """Replay changing prefixes through mixed sliding/dense CCL with an isolated halo semaphore."""
+    """Replay changing prefixes and cache slots through mixed sliding/dense CCL."""
     mesh_config = gpt_oss_chunked_mesh_config()
     sp_size = mesh_config.sp_size
     chunk_local = 256
@@ -4539,9 +4539,9 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores()
     local_q_heads, local_kv_heads, head_dim = 8, 1, 64
     nhq = local_q_heads * mesh_config.tp_size
     nhk = local_kv_heads * mesh_config.tp_size
-    cache_user_slot, num_layers, layer_idx = 1, 2, 1
-    cache_batch_idx = cache_user_slot * num_layers + layer_idx
-    cache_batch = cache_batch_idx + 1
+    cache_user_slots = (1, 0, 2)
+    num_layers, layer_idx = 2, 1
+    cache_batch = max(cache_user_slots) * num_layers + layer_idx + 1
 
     torch.manual_seed(CHUNKED_PREFILL_SEED + 701)
     total_seq = (max(prefix_groups) + 1) * chunk_global
@@ -4549,7 +4549,8 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores()
     k_full = fa_rand(1, nhk, total_seq, head_dim)
     v_full = fa_rand(1, nhk, total_seq, head_dim)
     chunks = []
-    for prefix_group in prefix_groups:
+    for prefix_group, cache_user_slot in zip(prefix_groups, cache_user_slots, strict=True):
+        cache_batch_idx = cache_user_slot * num_layers + layer_idx
         kv_actual_isl = prefix_group * chunk_global
         logical_n = kv_actual_isl + chunk_global
         q_host, k_host, v_host, valid_rows, _ = build_kv_pad_rotation_inputs(
@@ -4576,7 +4577,9 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores()
         )
         k_cache = k_cache_per_dev.reshape(cache_batch, nhk, stable_kv_seq, head_dim)
         v_cache = v_cache_per_dev.reshape(cache_batch, nhk, stable_kv_seq, head_dim)
-        chunks.append((kv_actual_isl, logical_n, q_host, k_cache, v_cache, valid_rows))
+        chunks.append(
+            (kv_actual_isl, logical_n, q_host, k_cache, v_cache, valid_rows, cache_user_slot, cache_batch_idx)
+        )
 
     runtime = open_ring_joint_sdpa_runtime(
         mesh_config, trace_region_size=RING_JOINT_TRACE_REGION_SIZE, num_global_semaphores=3
@@ -4621,10 +4624,10 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores()
             make_tensor(torch.zeros(dense_shape), ttnn.bfloat8_b, persistent_dims),
         )
         device_buffers = (sliding_k, sliding_v, dense_k, dense_v)
-        tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(mesh_device, cache_user_slot, chunks[0][0])
+        tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(mesh_device, chunks[0][6], chunks[0][0])
 
         def stage(chunk_index):
-            kv_actual_isl, _, q_host, k_host, v_host, _ = chunks[chunk_index]
+            kv_actual_isl, _, q_host, k_host, v_host, _, cache_user_slot, _ = chunks[chunk_index]
             ttnn.copy_host_to_device_tensor(make_tensor(q_host, ttnn.bfloat16, input_dims), tt_q)
             ttnn.copy_host_to_device_tensor(make_tensor(k_host, ttnn.bfloat8_b, input_dims), tt_k)
             ttnn.copy_host_to_device_tensor(make_tensor(v_host, ttnn.bfloat8_b, input_dims), tt_v)
@@ -4647,7 +4650,7 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores()
             ),
         )
 
-        def invoke(*, use_metadata, logical_n, kv_actual_isl):
+        def invoke(*, use_metadata, logical_n, kv_actual_isl, cache_batch_idx=None):
             common = dict(
                 logical_n=logical_n,
                 is_causal=True,
@@ -4685,9 +4688,14 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores()
             return tuple(ttnn.to_torch(out, mesh_composer=composer)[:, :, rows, :] for out in outputs)
 
         references = []
-        for chunk_index, (kv_actual_isl, logical_n, *_) in enumerate(chunks):
+        for chunk_index, (kv_actual_isl, logical_n, *_, cache_batch_idx) in enumerate(chunks):
             stage(chunk_index)
-            outputs = invoke(use_metadata=False, logical_n=logical_n, kv_actual_isl=kv_actual_isl)
+            outputs = invoke(
+                use_metadata=False,
+                logical_n=logical_n,
+                kv_actual_isl=kv_actual_isl,
+                cache_batch_idx=cache_batch_idx,
+            )
             ttnn.synchronize_device(mesh_device)
             references.append(read_outputs(outputs, chunk_index))
             for output in outputs:
@@ -4704,8 +4712,8 @@ def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores()
         scalar_rmse = torch.sqrt(((torch_sliding_ref - references[0][0]) ** 2).mean()).item()
         assert scalar_rmse < DEFAULT_RMSE_THRESHOLD, f"scalar sliding reference RMSE={scalar_rmse}"
 
-        # The host value remains fixed at the stable cache capacity. Prefix growth and halo relocation
-        # must therefore come exclusively from the two metadata tensors refreshed by stage().
+        # The host value remains fixed at the stable cache capacity. Cache-slot selection, prefix growth,
+        # and halo relocation must therefore come exclusively from the two metadata tensors refreshed by stage().
         capture_logical_n = stable_kv_seq
         stage(0)
         warm = invoke(use_metadata=True, logical_n=capture_logical_n, kv_actual_isl=None)
