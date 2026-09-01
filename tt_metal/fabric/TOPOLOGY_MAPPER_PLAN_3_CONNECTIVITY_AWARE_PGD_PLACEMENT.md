@@ -693,7 +693,8 @@ Dedup within a single grouping stays — two enumerations of the same grouping o
 are redundant. Cross-grouping dedup existed to keep Phase B's packing universe small; Phase B is gone
 from this path, and the DFS needs the distinction that dedup was throwing away.
 
-This also matters for the single-shape fast path, which never reaches the DFS at all — see §8.
+This fix is independent of the DFS: it repairs any path that consumes the pool, including the
+single-shape path that §8 folds into the search.
 
 **Second: delete `kMaxPlacementsPerGrouping`.**
 
@@ -723,11 +724,27 @@ below 1024, so the cap almost certainly never fires today.
 Enumeration is also incremental AllSAT — `SatSearchEngine::search_n` keeps one solver, encodes once, and
 appends a blocking clause per model — so the cost of enumerating a small set completely is small.
 
-**There is a second cap; do not leave it behind.** `kMaxPlacementsPerRun = 10000`
-(`physical_grouping_descriptor_matching.cpp:1659`) bounds the enumeration loop at `1685` and truncates
-the packing result at `1822`. Removing one cap while the other still silently truncates the enumeration
-would be worse than leaving both — the failure would look identical but come from a different line.
-Audit both when this is implemented.
+**Third: the full cap inventory.** Deleting one cap while others still silently truncate would produce
+an identical-looking failure from a different line. The dividing principle:
+
+> Delete caps that silently truncate a **search space**. Keep caps that bound **cost** and announce
+> themselves when they fire.
+
+| Cap | Where | Verdict |
+| --- | --- | --- |
+| `kMaxPlacementsPerGrouping = 1024` | `1663`, applied in Phase A at `1740` | **Delete.** Truncates the pool, which under this plan *is* the search space |
+| `kMaxPlacementsPerRun` as a loop bound | `1659`, applied at `1685` in `solve_for_many_groupings_to_psd` | **Delete.** Provably unreachable — each iteration forbids every grouping node from the ASICs just used (`1700–1703`), so the domain shrinks monotonically and the loop ends after at most `cluster_asics / grouping_size` placements. That is tens, against a cap of ten thousand |
+| `seen_asic_sets` (`1683`) | declared "Guard against infinite loop" | **Delete.** Dead code: it is declared and `used_asic_ids` is computed, but nothing ever inserts into or queries it. The forbidden-constraint loop is what actually guarantees termination. Goes with the cap above |
+| `kMaxPlacementsPerRun` as packing truncation | applied at `1822` | **Keep.** Off this plan's path once Phase B is gone, and it still guards the packer's remaining callers. Changing it alters existing behaviour for no benefit here |
+| `kSetPackingBudget = 5s` | `1666`, applied at `1806` | **Keep.** Belongs to Phase B, which survives for `find_all_in_psd`'s other callers and its tests |
+| `kTopologyMappingEnumerateSolutionsHardCap = 500000` | `topology_solver.tpp:44` | **Keep.** This is the backstop inherited by passing `0`, and it sits orders of magnitude above any real pool |
+| `kMaxCardinalityLiterals = 4096` | `topology_solver_sat.cpp` | **Keep.** An encoding limit that fails loudly rather than truncating quietly |
+| DFS node budget | new, §5(f) | **Keep.** The only thing bounding the new search |
+
+The two deletions plus the dead guard are a small, self-contained change to
+`solve_for_many_groupings_to_psd` and Phase A. Note that `find_all_in_psd` and the packer keep working
+for their other callers throughout — the caps being removed are the ones that bound *enumeration*, not
+the ones that bound the packer.
 
 **No new bookkeeping.** Do not replace either cap with truncation tracking, a wall-clock guard, or a
 config knob. The 500k backstop is orders of magnitude above any real pool, and if it ever fires the
@@ -1002,7 +1019,9 @@ subtree, so nothing new appears in a public header.
 | --- | --- | --- |
 | Candidate pool (unpacked) | New `enumerate_all_candidates_in_psd(groupings, psd, flat_graph)` in `physical_grouping_descriptor_matching.cpp` | Extract Phase A (`1730–1789`) into its own function, deduping **within** a grouping only (§5(h)). Cross-grouping dedup moves out into `solve_for_many_groupings_to_psd_heterogeneous`, so the packer's behaviour is bit-for-bit unchanged while the DFS sees every variant |
 | Variant preservation | The `seen_sets` key (`1776–1779`) becomes `(grouping index, slot set)` on the DFS path | The single most important correctness fix in this plan: without it `4x4_SplitHost` is discarded in favour of `4x4_Mesh` before any search runs (§5(h)) |
-| Pool caps | `kMaxPlacementsPerGrouping` (`1663`) deleted, `enumerate_distinct_placements_for_grouping` passes `0`; `kMaxPlacementsPerRun` (`1659`) audited at `1685` and `1822` | Inherits the solver's own 500k backstop. Both caps, or the fix is cosmetic. No replacement bookkeeping (§5(h)) |
+| Pool caps | `kMaxPlacementsPerGrouping` (`1663`) deleted and `0` passed instead; `kMaxPlacementsPerRun` deleted as the loop bound at `1685` but kept as the packing truncation at `1822`; dead `seen_asic_sets` (`1683`) removed | Full inventory and the delete/keep rule in §5(h). Inherits the solver's own 500k backstop; no replacement bookkeeping |
+| Single-shape fast path | Phase 4 (`953–970`) **deleted**; every MGD reaches the search | Its premise does not hold (§8). Deleting it also removes pass-2 headroom, so the search emits disjoint spares to restore it |
+| Disjoint spares | `AdjacencyGuidedPlacementSearch` continues past the last mesh, tiling free chips with additional non-overlapping candidates | Handed to Phase 7 as unassigned regions. Safe because they are disjoint, which is what the fast path relies on today (§8) |
 | Anchored placement | New `enumerate_placements_anchored` beside `enumerate_distinct_placements_for_grouping` (`1514`) | Seeds `initial_constraints` with a forbidden set plus one at-least-1 cardinality per placed neighbour; no solver change. Contingency only (§5(i)) |
 | Pool indices | New `PlacementIndex` struct, anonymous namespace in `topology_mapper_utils.cpp`, built in Phase 3 beside `group_bits_by_name` (`927`) | Owns `pool`, `pool_by_shape`, `pool_by_chip`, `touches`, `touches_bits`; built from `flat_graph`, which Phase 3 already holds |
 | Tier-1 probe | New `tier_1_probe(MeshId, candidate)` beside `PlacementIndex` | Unary necessary conditions only (§4(h)): pinning containment, intra-mesh channel shortfall. Memo table keyed on `(MeshId, candidate id)`. **Must not call `solve_topology_mapping`** |
@@ -1022,7 +1041,7 @@ here needs to appear in a public header.
 | Phase | Fate |
 | --- | --- |
 | 3 — `find_all_in_psd` | Replaced on this path by the Phase A pool build. `find_all_in_psd` itself stays for its other callers |
-| 4 — single-shape fast path | **Keep** — but see the note below; keeping it is only safe once §5(h)'s variant fix lands |
+| 4 — single-shape fast path | **Delete.** Every MGD goes through the search — see the note below |
 | 5 — per-shape `MeshEnumState` + SAT | Becomes fallback only |
 | 6 — `DisjointPackingSearch` | Becomes fallback only |
 | 7 — result assembly | Unchanged |
@@ -1030,9 +1049,9 @@ here needs to appear in a public header.
 The per-shape SAT is subsumed rather than lost: it embedded the same-shape subgraph into a fixed tiling,
 and the new search embeds the *whole* graph into the whole pool.
 
-**On keeping Phase 4.** The usual justification — one shape means no cross-shape seams, so there is
-nothing to search — is not sufficient on its own. "Single shape" means a single MGD mesh *descriptor
-name*, which can still resolve to several PGD variants, and Phase 4 returns the graph built from Phase
+**On deleting Phase 4.** The justification for the fast path — one shape means no cross-shape seams, so
+there is nothing to search — does not hold. "Single shape" means a single MGD mesh *descriptor name*,
+which can still resolve to several PGD variants, and the fast path returns the graph built from Phase
 B's output directly:
 
 ```962:969:tt_metal/fabric/topology_mapper_utils.cpp
@@ -1047,11 +1066,37 @@ B's output directly:
 ```
 
 So a single-shape MGD inherits both Phase A's variant dedup and Phase B's tiling, with no search
-available to recover from either. The variant dedup is the part that actually bites — it is what makes
-`4x4_SplitHost` unreachable for an MGD whose region must span two hosts. Fixing the dedup key (§5(h))
-repairs the single-shape path without routing it through the DFS, which is why Phase 4 stays. If a
-single-shape MGD is later shown to fail for a *tiling* reason rather than a variant reason, that is the
-signal to send this path through the search as well.
+available to recover from either. Fixing the dedup key (§5(h)) removes the variant half, but the tiling
+half remains: a single-shape MGD still has same-shape seams, and Phase B still chooses tile boundaries
+to maximize chip coverage rather than to satisfy them. §2's counterexample is drawn cross-shape only
+because that is the sharpest form; nothing about it requires two shapes. **Delete Phase 4 and route
+every MGD through the search.**
+
+Two consequences to plan for.
+
+**The search must cope with weakly connected MGDs.** Single-shape descriptors are more likely to have
+few mesh-level edges, or none — a single mesh, or several with no declared connections. Adjacency then
+prunes nothing and the DFS degenerates toward the packing problem it replaced. The counting bounds
+(§6(b) candidate 2) matter more once this path exists, and this is the case most likely to justify
+adopting them.
+
+**Deleting Phase 4 removes repair headroom that currently exists, and the fix corrects an earlier claim
+in this plan.** The fast path returns a graph built from *all* placements `find_all_in_psd` returned —
+Phase B's disjoint tiling, which normally holds more regions than the MGD has meshes. So pass 2 has
+genuine choice on this path today: it decides which tiles to use. The DFS as described emits exactly one
+region per mesh, which removes that choice.
+
+An earlier discussion concluded slack regions were structurally impossible because alternates would
+overlap in chips and break the one-ASIC-to-one-MeshId assumption in `build_hierarchical_from_flat_graph`.
+That is true only of *overlapping* alternates. The fast path is a working proof that a **disjoint
+superset** is fine — the invariant holds because the extra regions do not overlap either. So the DFS can
+preserve the headroom: after all meshes are placed, keep tiling the remaining free chips with additional
+disjoint candidates and hand those to pass 2 as unassigned spares. Pass 2 then retains somewhere to move
+a mesh when `handle_forbidden_constraint` rejects a pair, which is the only repair it currently has.
+
+This is worth doing as part of deleting Phase 4 rather than after it, since deleting the fast path is
+what takes the headroom away. It is cheap — the DFS already has the pool and the occupancy mask, so
+producing spares is continuing the loop rather than new machinery.
 
 ## 9. Interaction with Plans 1 and 2
 
@@ -1078,7 +1123,10 @@ correctness fix.
   `4x4_SplitHost` — with an MGD that can only be satisfied by the split form. It must fail today (the
   split variant is deduped away in favour of the MESH-first ordering) and pass after the dedup key
   change. Assert on the *chosen variant*, not merely on success, so the test cannot pass for the wrong
-  reason. Run it through the single-shape fast path too, per §8.
+  reason. Use a single-shape MGD, so it also covers the path §8 folds into the search.
+- **Single-shape regression sweep** (§8). Every single-shape MGD in the suite previously took the Phase 4
+  fast path and now goes through the search; all of them must still map. Include at least one edgeless
+  MGD and one single-mesh MGD, since those give the DFS no adjacency to prune with.
 - **The issue's 4-slot cycle**: 4 physical slots in a cycle, 4 logical meshes alternating two shapes;
   assert the interleaved placement, not the packed one.
 - **`bh_glx_2branch_mesh_per_stage_router_pipeline.textproto`**: assert every declared MGD boundary
@@ -1110,6 +1158,8 @@ correctness fix.
 | A future PGD leaves slot labels unspecified, so pools are large | Anchored placement via existing constraints (§5(i)) |
 | Symmetry multiplies dead ends on unpinned MGDs | Signature-ordered seeds (§5(g)); pinned MGDs are unaffected |
 | Loss of an explicit objective — the search returns *a* solution, not a good one | Host-locality as value-ordering bias (§5(e)). Max coverage was the wrong objective anyway |
+| Single-shape MGDs now reach the DFS (§8) and may be weakly connected or edgeless, so adjacency prunes nothing | Counting bounds (§6(b) candidate 2) become the primary pruning for this class; this is the case most likely to justify adopting them |
+| Deleting Phase 4 removes the pass-2 choice the fast path provided | The search emits disjoint spares (§8), restoring it. Regression test: a single-shape MGD that maps today must still map |
 | `touches` build or memory blows up at SC36 scale | Edge-list-driven construction, not pairwise (§5(a)); measure before assuming |
 | Pass 2 rejects a region set the DFS considers valid, and there is no recovery | Accepted for v1: fail with the §5(f) diagnostic. §6(d) records the loopback as the escalation, gated on the §10 counter |
 | Scope creep pulls labelling properties into the DFS one at a time | §4(b) is the single test to apply; §4(e) records each exclusion with its reason so the argument does not have to be re-litigated |
@@ -1130,6 +1180,11 @@ correctness fix.
 - **Where does #52016 (pipeline-stage adjacency in MGD) intersect?** If stage adjacency becomes explicit,
   seams gain direction — ordered pipeline hops rather than undirected boundaries — and both the ordering
   heuristic in §5(b) and the predicate in §3 could use it.
+- **How many disjoint spares should the search emit (§8)?** Tiling every remaining free chip matches
+  what the deleted fast path did and gives pass 2 the most room, but it also costs search time after a
+  complete assignment is already in hand. Stopping at a small number per shape is cheaper and probably
+  enough, since pass 2 only ever moves one mesh at a time. Start by matching the old behaviour so the
+  regression sweep is clean, then measure how many spares are ever actually used.
 - **Does pass 2 ever actually permute?** The whole two-pass argument in §4(a) rests on relabelling being
   a real repair. If the counter in §10 shows pass 2 always accepts the DFS labelling unchanged, the
   labelling stage is dead weight and collapsing the passes becomes defensible — with evidence rather
