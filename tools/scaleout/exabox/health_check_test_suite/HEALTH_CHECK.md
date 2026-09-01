@@ -26,11 +26,11 @@ Output goes to `./diag_report.json` by default; gtest logs to `./logs/<test>.log
 
 ## Tiers
 
-| Tier | Resets | Gtests | Duration | Use when |
+| Tier | Resets | Tests | Duration | Use when |
 |---|---|---|---|---|
 | `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | ~75 s   | Smoke check on every new unit |
 | `medium` | `tt-smi -r`, `tt-smi -glx_reset`          | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | ~5 min  | Pre-deployment validation |
-| `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2      | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests)   | ~15 min | Final deploy gate |
+| `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2      | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | ~18 min | Final deploy gate |
 
 The eth deployment tests are registered as `TensixDeploymentEthernet<NN><Name>`
 (e.g. `TensixDeploymentEthernet00LinkUp`, `TensixDeploymentEthernet01Bandwidth`,
@@ -43,8 +43,20 @@ which `tests/tt_metal/tt_metal/deployment/sources.cmake` now compiles.
 (Filters without the index wildcard match zero tests, so gtest exits 0 and the
 check is silently recorded as PASS without running — avoid that form.)
 
-The reset cadence and test set are defined in `RESET_PLAN` / `TIER_TESTS` in
-`diag_runner.py`.
+The deploy tier also runs `didt_matmul_galaxy`, a pytest-based dI/dt stress
+test: 1000 matmul iterations on the full (8, 4) mesh with a determinism
+re-check every 50, via the repo venv's pytest. Measured ~9 min on a BH galaxy
+(mostly cold bring-up + the 20 output readbacks); bump
+`--didt-workload-iterations` when triaging a suspect unit — a marginal chip
+that passed 1000 iterations failed under a 5000-iteration soak. `--timeout 0`
+is required (the repo-wide 300 s pytest-timeout kills the run otherwise), and
+zero-collected runs are recorded as FAIL, same trap as the zero-match gtest
+filters above. Needs the venv (`./create_venv.sh`) and standard mesh cabling —
+on torus-cabled units set `TT_MESH_GRAPH_DESC_PATH` to the matching descriptor
+or fabric mesh mapping fails.
+
+The reset cadence and test set are defined in `RESET_PLAN` / `TIER_TESTS` /
+`PYTESTS` in `diag_runner.py`.
 
 ## Flags
 
@@ -75,6 +87,11 @@ Per-rev hardware expectations (Confluence SYS-4055):
 | RevC   | `00000473…` | `16G` | Gen5 |
 
 The detected rev is also recorded at the top of the JSON report as `detected_board_rev`.
+
+### Host
+| Check | Rule | On fail |
+|---|---|---|
+| `host_fru_info` | Store-only: BMC FRU inventory via `sudo -n ipmitool fru print`. UBB tray serials in the details; full field set in `data.devices`. | never alerts — **SKIP** when ipmitool/sudo/BMC is unavailable |
 
 ### PCIe
 | Check | Rule | On fail |
