@@ -230,7 +230,7 @@ def _summarize_chunk_groups(
     )
     assert affine_a.dtype == ttnn.float32
     assert affine_b.dtype == ttnn.float32
-    # Precision boundary: summary-pair math is FP32; storage and transport are measured BF16.
+    # Precision boundary: summary-pair math is FP32; summaries are stored and transported as BF16.
     summary_a = ttnn.typecast(affine_a, KDA_AFFINE_SUMMARY_DTYPE, memory_config=summary_memory_config)
     summary_b = ttnn.typecast(affine_b, KDA_AFFINE_SUMMARY_DTYPE, memory_config=summary_memory_config)
     return summary_a, summary_b
@@ -663,7 +663,7 @@ def _distributed_affine_prefix(
     output_memory = KDA_OUTPUT_MEMORY_CONFIG
     working_memory = KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG
 
-    # Precision boundary: FP32 composition is transported as measured BF16.
+    # Precision boundary: FP32 composition is transported as BF16.
     transport_a = ttnn.typecast(transform_a, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
     transport_b = ttnn.typecast(transform_b, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
     transport_a = ttnn.reshape(transport_a, (1, batch_heads, key_dim, key_dim))
