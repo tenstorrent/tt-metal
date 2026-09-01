@@ -574,7 +574,7 @@ def _run_chunked_prefill(
         assert trace_paths, (
             f"reference='trace' is not supported for variant '{trace_variant.name}': no golden MLA "
             "trace was ever recorded for it (mla_trace_defaults is empty). Use reference='cpu' or "
-            "reference='func', or point MLA_CHUNKED_TRACE_PATH at a trace."
+            "reference='func', or point MLA_CHUNKED_TRACE_PATH at a trace.
         )
         traces = resolve_traces(trace_paths, num_users)
         # The trace is a DENSE token sequence; iters_isl just chunks it variably. Partial iters pad
@@ -950,8 +950,9 @@ def test_mla_chunked_prefill(
     reference), so this works for both variants. It complements the GPU-trace path, which only
     replays full-chunk iters and so never exercises real weights across the rotation/partial-chunk edge
     scenarios that the cpu path covers. Without the env var, fall back to random. kimi_k2_7 has no
-    registered golden MLA trace (see the skip below), so it runs the cpu and func paths only; it
-    otherwise runs the same config-driven driver on any arch/mesh.
+    registered golden MLA trace (https://github.com/tenstorrent/tt-metal/issues/54973), so selecting
+    'trace' for it fails rather than silently passing; it runs the cpu and func paths, otherwise the
+    same config-driven driver on any arch/mesh.
 
     kimi_k3 (NoPE + output gate, 96 heads) runs 'scalar' only -- 'metadata' is skipped explicitly
     below. Unlike kimi_k2_7 it runs 'trace', taking real weights from layer 3 via
@@ -967,15 +968,6 @@ def test_mla_chunked_prefill(
     # Incidental, not a K3 guarantee; re-enable when K3 has a runtime that actually feeds metadata.
     if variant.name == "kimi_k3" and use_metadata_tensor:
         pytest.skip("kimi_k3 has no runtime, so the metadata (device-scalar) path is unreachable for it")
-    # Skip rather than let _run_chunked_prefill assert on an empty trace list. Keyed on the
-    # precondition, not a variant name, so it holds as variants are added.
-    # kimi_k2_7 hits this today: https://github.com/tenstorrent/tt-metal/issues/54973
-    if reference == "trace" and not variant.mla_trace_defaults and not MLA_CHUNKED_TRACE_PATH:
-        pytest.skip(
-            f"{variant.name} has no registered golden MLA trace. MLA_CHUNKED_TRACE_PATH overrides the "
-            "trace for EVERY variant, so pair it with a variant-qualified -k (e.g. -k 'k2_7 and trace') "
-            "or other variants will replay the wrong golden."
-        )
     # Opt into real weights on the cpu path when the variant's checkpoint env var is set. The "trace"
     # path already forces pretrained; "func" is ref-less so weights don't matter. The pretrained
     # fixture skips the test if the env var is set but the checkpoint is incomplete.
