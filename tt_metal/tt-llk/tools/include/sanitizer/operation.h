@@ -200,6 +200,45 @@ struct OperationUnpackUnary : Operation<Exu::Unpack, Hoistable::Yes>
         UnpackToDest>;
 };
 
+// -----------------------------------------
+// OPERATION - UNPACK BINARY (AKA UNPACK_AB)
+// -----------------------------------------
+
+struct OperationUnpackBinary : Operation<Exu::Unpack, Hoistable::Yes>
+{
+    template <typename T>
+    using Field = StateField<OperationUnpackBinary, T>;
+
+    struct BroadcastType : Field<std::uint32_t>
+    {
+    };
+
+    struct FaceWidth : Field<std::uint32_t>
+    {
+    };
+
+    struct NumFacesRow : Field<std::uint32_t>
+    {
+    };
+
+    struct NumFacesCol : Field<std::uint32_t>
+    {
+    };
+
+    struct Transpose : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationUnpackBinary,
+        /* Fields */
+        BroadcastType,
+        FaceWidth,
+        NumFacesRow,
+        NumFacesCol,
+        Transpose>;
+};
+
 // ------------------------------------------------
 // OPERATION - UNPACK MATMUL (AKA UNPACK_AB_MATMUL)
 // ------------------------------------------------
@@ -462,7 +501,7 @@ struct OperationPackFastTilize : Operation<Exu::Pack, Hoistable::No>
         Use32BitDest>;
 };
 
-using UnpackOperations = OperationList<OperationUnpackUnary, OperationUnpackMatmul, OperationUnpackTilize, OperationUnpackFastTilize>;
+using UnpackOperations = OperationList<OperationUnpackUnary, OperationUnpackBinary, OperationUnpackMatmul, OperationUnpackTilize, OperationUnpackFastTilize>;
 
 using FpuOperations = OperationList<
     OperationFpuMatmul,
