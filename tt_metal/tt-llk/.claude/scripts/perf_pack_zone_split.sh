@@ -53,6 +53,18 @@ say "patching profiler analysis"
 python3 - "$PT/helpers/profiler.py" <<'PY'
 import sys, pathlib
 p = pathlib.Path(sys.argv[1]); t = p.read_text()
+pair_old = """def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
+    raw_data = data.zones().raw()
+"""
+pair_new = """def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
+    raw_data = data.zones().raw()
+    # Only INIT/TILE_LOOP span unpack->pack; the per-phase zones live on one
+    # thread and would fail the pairing below.
+    if not raw_data.empty:
+        raw_data = raw_data[raw_data[MARKER].isin(("INIT", "TILE_LOOP"))]
+"""
+assert t.count(pair_old) == 1, "pairing anchor not found"
+t = t.replace(pair_old, pair_new, 1)
 old = "    return _stats_timings(pd.concat(timings, ignore_index=True))"
 new = """    result = _stats_timings(pd.concat(timings, ignore_index=True))
     _pack = _stats_thread("PACKZONE", data.pack().raw())
@@ -76,7 +88,8 @@ say "compile rc=$?"
 for i in $(seq 1 "$RUNS"); do
   tt-smi -r >/dev/null 2>&1; sleep 15
   rm -rf "$LLK/perf_data" "$RUNNER_TEMP/tt-llk-build/temp_perf_data"
-  CHIP_ARCH=wormhole pytest -q --compile-consumer -n 1 -m perf --perf-run-types L1_TO_L1 -k "$CFG" . >/dev/null 2>&1
+  CHIP_ARCH=wormhole pytest -q --compile-consumer -n 1 -m perf --perf-run-types L1_TO_L1 -k "$CFG" . > "$OUT/last_run.log" 2>&1 \
+    || { echo "RUN $i FAILED -- see $OUT/last_run.log"; tail -5 "$OUT/last_run.log"; }
   python3 - "$LLK/perf_data/perf_math_matmul/perf_math_matmul.csv" "$i" >> "$OUT/data.csv" 2>/dev/null <<'PY'
 import sys, pandas as pd
 d = pd.read_csv(sys.argv[1]); i = sys.argv[2]
