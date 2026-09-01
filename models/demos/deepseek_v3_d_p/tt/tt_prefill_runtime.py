@@ -403,18 +403,6 @@ class TtPrefillRuntime:
         chunk = self.config.chunk_size
         t0 = time.perf_counter()
         if self.config.use_trace:
-            # Cache-level companion to the config-level guard in TtPrefillTransformer.set_trace_controller
-            # (which rejects a sparse/DSA model outright). Checked separately because it catches the other
-            # direction: a sparse INDEX cache handed to a model that resolved as dense. _forward_traced
-            # never threads index_kv_cache, so such a run would replay without the indexer cache and
-            # produce wrong KV silently instead of failing.
-            assert kv_caches.index is None, (
-                "use_trace=True with a sparse/DSA index KV cache is not supported: the captured forward "
-                "does not thread index_kv_cache, so the indexer would be skipped silently. Supported "
-                "traced models are the dense-MLA ones (deepseek_v3, kimi_k2_6, kimi_k2_7); GLM and other "
-                "sparse variants need their indexer ops ported to the metadata form first — run them "
-                "with use_trace=False (PREFILL_USE_TRACE=0) until then."
-            )
             logger.info(
                 f"TtPrefillRuntime.compile() — warming traced {chunk}-token chunk (metadata path); capture deferred to capture_trace()"
             )
@@ -432,7 +420,7 @@ class TtPrefillRuntime:
         )
         self.compiled = True
 
-    def capture_trace(self, kv_cache: ttnn.Tensor) -> None:
+    def capture_trace(self, kv_caches: MlaKvCaches) -> None:
         """Record the segmented trace, ONCE, before the chunk loop opens.
 
         The driver must call this AFTER building any D2D pipeline endpoints (their receiver-socket L1 must
@@ -457,12 +445,12 @@ class TtPrefillRuntime:
         # the capture splits at each ack point. No ack (standalone) => nothing extra to warm.
         if self._on_layer_complete is not None:
             controller.set_layer_ack_callback(lambda _layer_idx: None)
-            self._forward_traced(kv_cache)  # compile zero_padded_kv_cache + ack path (no real ack fires)
+            self._forward_traced(kv_caches)  # compile zero_padded_kv_cache + ack path (no real ack fires)
             ttnn.synchronize_device(self.mesh_device)
             controller.set_layer_ack_callback(self._on_layer_complete)
 
         controller.begin_capture()
-        out = self._forward_traced(kv_cache)
+        out = self._forward_traced(kv_caches)
         controller.end_capture()
         ttnn.synchronize_device(self.mesh_device)
         # Non-last rank: the persistent output activation the replay refreshes each chunk.
@@ -493,14 +481,20 @@ class TtPrefillRuntime:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-    def _forward_traced(self, kv_cache: ttnn.Tensor):
+    def _forward_traced(self, kv_caches: MlaKvCaches):
         """The captured/warmed metadata forward: per-chunk scalars come from the persistent metadata
         tensor on-device (actual_start/actual_end = None host-side). Writes user slot metadata[0].
         Returns the forward output — a hidden-state activation on a non-last rank (forwarded downstream
-        over D2D), or the last/single rank's ignored KV-only tuple."""
+        over D2D), or the last/single rank's ignored KV-only tuple.
+
+        index_kv_cache is threaded for the sparse/DSA path exactly as the eager prefill_chunk does;
+        omitting it would replay the indexer against no cache. This warm pass is also what memoizes
+        tt_ccl.get_indexer_ring_k_buffer, whose first call does a host ttnn.from_torch — a hard TT_FATAL
+        if it were to land inside begin_capture()."""
         return self.model.forward(
             self._trace_input,
-            kv_cache.kvpe,  # unwrap the engine-owned container to the primary MLA cache (mirrors prefill_chunk)
+            kv_caches.kvpe,  # unwrap the engine-owned container to the primary MLA cache (mirrors prefill_chunk)
+            index_kv_cache=kv_caches.index,
             # FULL chunk on purpose: downstream (TtMoe.forward) uses actual_isl only as the
             # padding-config GUARD on this path — a static capture-time "padding awareness is ON" —
             # while the real per-chunk bound is read on-device from `metadata` (actual_start/
@@ -514,7 +508,7 @@ class TtPrefillRuntime:
             metadata=self._trace_metadata,
         )
 
-    def _prepare_trace(self, kv_cache: ttnn.Tensor) -> None:
+    def _prepare_trace(self, kv_caches: MlaKvCaches) -> None:
         """Set up the persistent input + per-element metadata buffers and the controller, then warm-compile
         the metadata-variant programs (a full forward). Does NOT begin/end the capture — the driver calls
         capture_trace() later, once any ack/completion callback is registered. Called once from compile()."""
@@ -529,7 +523,7 @@ class TtPrefillRuntime:
         self.model.set_trace_controller(controller)
         self._controller = controller
 
-        self._forward_traced(kv_cache)  # warm/compile the metadata-variant programs
+        self._forward_traced(kv_caches)  # warm/compile the metadata-variant programs
         ttnn.synchronize_device(self.mesh_device)
 
     def prefill_chunk(

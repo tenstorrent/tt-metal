@@ -1361,6 +1361,7 @@ class ttMLA:
                 cache_user_id=cache_user_id,
                 cache_layer_idx=cache_layer_idx,
                 index_kv_cache=index_kv_cache,
+                metadata=metadata,
             )
         )
 
@@ -1479,6 +1480,7 @@ class ttMLA:
         cache_layer_idx,
         cache_user_id,
         seq_len_local,
+        metadata=None,
         **_,
     ):
         assert indices is not None, "sparse MLA forward requires indexer top-k indices"
@@ -1496,6 +1498,9 @@ class ttMLA:
             cache_user_id=cache_user_id,
             cache_layer_idx=cache_layer_idx,
             kv_actual_isl=kv_actual_isl,
+            # Same metadata the dense twin passes. Without it a captured replay writes EVERY chunk at the
+            # captured kv_actual_isl (None -> 0), stacking all chunks on top of chunk 0's KV region.
+            metadata=metadata,
         )
         # After the write above, KV is populated up to [0, kv_actual_isl + chunk_size_global); the gather
         # only needs that populated prefix (top-k indices never address the unwritten suffix).
@@ -1505,6 +1510,7 @@ class ttMLA:
             cache_batch_idx,
             populated_global,
             block_cyclic_chunk_local=seq_len_local,
+            metadata=metadata,
         )
         ttnn.deallocate(tt_kvpe)
 
@@ -1555,6 +1561,9 @@ class ttMLA:
                 cache_user_id=cache_user_id,
                 cache_layer_idx=cache_layer_idx,
                 index_kbuf=index_kv_cache,
+                # Under capture kv_actual_isl is None; without metadata this layer would rope and write its
+                # indexer K at position 0 on every chunk -- silent corruption, not a crash.
+                metadata=metadata,
             )
 
         # Reuse the regular KV stem so kv_only and full attention cannot drift in normalization,
@@ -1709,6 +1718,7 @@ class ttMLA:
         populated_global: int,
         *,
         block_cyclic_chunk_local: int,
+        metadata=None,
     ) -> MlaKvCache:
         """On-device read-back of the chunked KVPE prefix for sparse attention. The cache is
         ND-sharded / block-cyclic across SP, in the op's format (BF16 or packed scaled FP8, ROW_MAJOR).
@@ -1731,6 +1741,10 @@ class ttMLA:
 
         storage = kvpe_cache.storage
         slot_lo = cache_batch_idx if storage.shape[0] > 1 else 0
+        assert metadata is None or self.sp_factor > 1, (
+            "trace-safe sparse prefill requires sp_factor > 1: the sp==1 fallback selects the cache slot with a "
+            "host ttnn.slice, whose bounds a capture would freeze at the captured slot"
+        )
         if self.sp_factor == 1:
             # The native high-bandwidth gather requires multiple devices. Preserve the single-device
             # behavior, where sparse_sdpa still needs a batch-1 cache. For a multi-slot cache this
@@ -1750,10 +1764,19 @@ class ttMLA:
             # rank's active local prefix into its fixed worst-case slot, retaining the allocation and
             # the natural-to-physical stride expected by sparse SDPA for the next chunk/layer.
             slab_global = block_cyclic_chunk_local * self.sp_factor
-            gathered_dim_size = min(
-                storage.shape[2] * self.sp_factor,
-                ((populated_global + slab_global - 1) // slab_global) * slab_global,
-            )
+            if metadata is not None:
+                # Trace-safe: populated_global grows per chunk, but a capture would bake THIS chunk's value
+                # into the gather's runtime args and every replay would then re-gather only the captured
+                # prefix -- later chunks would attend against an unpopulated tail. gathered_dim_size controls
+                # bytes moved, NOT shapes (the output is the model-owned worst-case scratch), so pinning it to
+                # the full cache is correct and costs only transport on early chunks. Making it runtime-driven
+                # needs an on-device page-count clamp in high_bw_all_gather -- a follow-up, not a blocker.
+                gathered_dim_size = storage.shape[2] * self.sp_factor
+            else:
+                gathered_dim_size = min(
+                    storage.shape[2] * self.sp_factor,
+                    ((populated_global + slab_global - 1) // slab_global) * slab_global,
+                )
             assert gathered_dim_size > 0
             assert self._sparse_kv_gather_buffer is not None
             gathered = ttnn.experimental.high_bw_all_gather(

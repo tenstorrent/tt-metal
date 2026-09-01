@@ -500,18 +500,8 @@ class TtPrefillBlock(LightweightModule):
         its MLA (per-layer migration-ack segmentation; only acts when the controller carries an ack
         callback). No-op for dense / kv-only FFNs, whose FFN has no sub-device overlap to trace around.
 
-        DENSE-MLA ONLY — see TtPrefillTransformer.set_trace_controller for why. Re-asserted here so a
-        caller that drives a single block (the block-level tests) is caught too, not just whole-model
-        callers."""
-        mla = getattr(self, "mla", None)
-        if controller is not None and mla is not None and getattr(mla, "_has_indexer", False):
-            raise AssertionError(
-                f"trace capture is not supported for sparse/DSA (indexer) attention (layer "
-                f"{getattr(self.mla, 'layer_idx', '?')} resolved has_indexer=True). Supported today: "
-                "the dense-MLA models (deepseek_v3, kimi_k2_6, kimi_k2_7). GLM (glm_5_1 / glm_5_2) and "
-                "other sparse variants need their indexer ops ported to the per-element-tensor metadata "
-                "form first — run them untraced until then."
-            )
+        Both dense-MLA and sparse/DSA (indexer) blocks are traceable — see
+        TtPrefillTransformer.set_trace_controller."""
         # Stored so the block's migration-ack site (below, in forward) can route through the controller
         # (trace path) instead of calling on_layer_complete directly — see the ack comment in forward.
         self._trace_controller = controller

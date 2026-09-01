@@ -42,6 +42,15 @@ constexpr bool fuse_single = get_compile_time_arg_val(num_common_ct_args + 4) !=
 constexpr bool fused_stream_k = get_compile_time_arg_val(num_common_ct_args + 5) != 0;
 // Fused ring visits bands in the arrival-order permutation supplied in runtime args.
 constexpr bool fused_ring_enabled = get_compile_time_arg_val(num_common_ct_args + 6) != 0;
+// Trace-safe metadata: the causal scalars below arrive through a reader-produced mailbox CB instead of this
+// kernel's runtime args, which a trace replay would freeze at their capture-time values. A compute kernel
+// cannot issue a NoC read, so the reader (same core_ranges) does the read and the derivation.
+constexpr bool chunk_start_from_metadata = get_compile_time_arg_val(num_common_ct_args + 7) != 0;
+// Guard the INDEX, not the value: a ternary does not stop get_compile_time_arg_val from being evaluated at
+// compile time, so `cond ? get_compile_time_arg_val(N) : 0` still hard-fails with "Index out of range" when
+// arg N is absent. Fall back to a valid index instead (the value is unused when the flag is clear).
+constexpr uint32_t cb_meta_derived_arg = chunk_start_from_metadata ? num_common_ct_args + 8 : 0;
+constexpr uint32_t cb_meta_derived = get_compile_time_arg_val(cb_meta_derived_arg);
 
 // k-cols sharing ONE dest acquire in the blocked-custom mul (dest-bounded). One unpack context per head
 // (w[h] + ct_dim qk cols), so unpack-context sync is paid 1/ct_dim of the per-tile bcast-mul rate.
@@ -430,13 +439,25 @@ void kernel_main() {
     const uint32_t max_bands = get_arg_val<uint32_t>(5);  // row's widest column; streaming drains q to this
     // Valid KV length in tiles: caps each cell's valid cols (mask suffix grows over the tail). Full when
     // unset (dense path unchanged). Hash-excluded.
-    const uint32_t kv_len_tiles = get_arg_val<uint32_t>(6);
+    uint32_t kv_len_tiles = get_arg_val<uint32_t>(6);
     // Per-device chunk-start offset (tiles); runtime so distinct values reuse one program.
-    const uint32_t chunk_start_tiles = get_arg_val<uint32_t>(7);
+    uint32_t chunk_start_tiles = get_arg_val<uint32_t>(7);
     // Mid-slab boundary-chip diagonal straddle (tiles): q-rows >= straddle_q_tile jump by straddle_jump_tiles.
     // Both 0 on every non-boundary device and in the chunk-aligned case, leaving the diagonal linear.
-    const uint32_t straddle_q_tile = get_arg_val<uint32_t>(8);
-    const uint32_t straddle_jump_tiles = get_arg_val<uint32_t>(9);
+    uint32_t straddle_q_tile = get_arg_val<uint32_t>(8);
+    uint32_t straddle_jump_tiles = get_arg_val<uint32_t>(9);
+    if constexpr (chunk_start_from_metadata) {
+        // Take the four derived scalars from the reader's mailbox. Consumed BEFORE the zero-work early return
+        // below, because the reader publishes unconditionally -- leaving the page un-popped on an idle core
+        // would strand it for the next replay.
+        CircularBuffer cb_derived(cb_meta_derived);
+        cb_derived.wait_front(1);
+        kv_len_tiles = ckernel::read_tile_value(cb_meta_derived, 0, 0);
+        chunk_start_tiles = ckernel::read_tile_value(cb_meta_derived, 0, 1);
+        straddle_q_tile = ckernel::read_tile_value(cb_meta_derived, 0, 2);
+        straddle_jump_tiles = ckernel::read_tile_value(cb_meta_derived, 0, 3);
+        cb_derived.pop_front(1);
+    }
     if (num_groups == 0 || num_bands == 0) {
         return;
     }

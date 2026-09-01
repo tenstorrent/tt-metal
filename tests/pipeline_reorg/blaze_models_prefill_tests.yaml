@@ -562,7 +562,10 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache" -xvs
+      # "and notrace" pins the use_trace axis: without a mode term this selector matches BOTH notrace and
+      # traced, doubling a ~13-min job. notrace is the arm that also asserts per-layer PCC (impossible
+      # under capture). Adding a traced arm here needs a models/demo time-budget bump.
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked -k "glm52 and torus-xy-8x4 and L78 and warm_cache and notrace" -xvs
     '
   test_type: glm_chunked_accuracy
   test_tags: [glm_5_2, transformer]
@@ -585,7 +588,7 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
     '
   test_type: glm_chunked
   test_tags: [glm_5_2, transformer]

@@ -63,6 +63,37 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
     // of the physically-wider row is ignored, not read).  A short valid prefix is legal: inactive lanes
     // are already represented as -inf by the TopK XL tail path and are materialized as 0xFFFFFFFF indices.
     // This keeps a fixed worst-case k/output shape while a serving cache grows through its early prefixes.
+    if (tensor_args.has_valid_length_metadata()) {
+        // Mutually exclusive, rather than silently preferring one: the on-device value would win and the
+        // caller's scalar would be quietly ignored.
+        TT_FATAL(
+            !attrs.valid_length.has_value(),
+            "topk_large_indices: valid_length and valid_length_tensor are mutually exclusive (the tensor form "
+            "is read on-device; a scalar supplied alongside it would be ignored)");
+        const auto& m = *tensor_args.valid_length_tensor;
+        TT_FATAL(
+            m.storage_type() == StorageType::DEVICE && m.buffer() != nullptr,
+            "topk_large_indices valid_length_tensor must be allocated on device");
+        TT_FATAL(
+            m.device() == tensor_args.input_tensor.device(),
+            "topk_large_indices valid_length_tensor must be on the same device as the input");
+        TT_FATAL(m.dtype() == DataType::UINT32, "topk_large_indices valid_length_tensor must be UINT32");
+        TT_FATAL(m.layout() == Layout::ROW_MAJOR, "topk_large_indices valid_length_tensor must be ROW_MAJOR");
+        TT_FATAL(
+            m.logical_volume() == 1,
+            "topk_large_indices valid_length_tensor must hold exactly 1 element (got {})",
+            m.logical_volume());
+        TT_FATAL(
+            m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "topk_large_indices valid_length_tensor must be interleaved (the kernel reads page 0 at a single "
+            "fixed address)");
+        // The VALUE lives on device, so the <= n bound cannot be checked here; the offset alone can.
+        TT_FATAL(
+            attrs.valid_length_offset <= n,
+            "topk_large_indices valid_length_offset {} must be <= the input last dimension {}",
+            attrs.valid_length_offset,
+            n);
+    }
     if (attrs.valid_length.has_value()) {
         const uint32_t valid_length = attrs.valid_length.value();
         TT_FATAL(valid_length > 0, "topk_large_indices valid_length must be > 0");
@@ -93,6 +124,11 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
     const auto grid = input.device()->compute_with_storage_grid_size();
 
     return tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
+        // Metadata presence changes the reader/compute binaries (extra CBs + accessor args + the on-device
+        // derivation) and the offset is baked in as a compile arg, so both must be hashed. The per-chunk
+        // VALUE never enters the key -- that is what lets one captured program serve every chunk.
+        tensor_args.has_valid_length_metadata(),
+        attrs.valid_length_offset,
         attrs.k,
         input.dtype(),
         input.layout(),
@@ -125,18 +161,30 @@ tensor_return_value_t TopkLargeIndicesDeviceOperation::create_output_tensors(
 }
 
 std::tuple<TopkLargeIndicesDeviceOperation::operation_attributes_t, TopkLargeIndicesDeviceOperation::tensor_args_t>
-TopkLargeIndicesDeviceOperation::invoke(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length) {
-    return {operation_attributes_t{.k = k, .valid_length = valid_length}, tensor_args_t{.input_tensor = input_tensor}};
+TopkLargeIndicesDeviceOperation::invoke(
+    const Tensor& input_tensor,
+    uint32_t k,
+    std::optional<uint32_t> valid_length,
+    const std::optional<Tensor>& valid_length_tensor,
+    uint32_t valid_length_offset) {
+    return {
+        operation_attributes_t{.k = k, .valid_length = valid_length, .valid_length_offset = valid_length_offset},
+        tensor_args_t{.input_tensor = input_tensor, .valid_length_tensor = valid_length_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
 
 namespace ttnn::experimental {
 
-Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length) {
+Tensor topk_large_indices(
+    const Tensor& input_tensor,
+    uint32_t k,
+    std::optional<uint32_t> valid_length,
+    const std::optional<Tensor>& valid_length_tensor,
+    uint32_t valid_length_offset) {
     auto [operation_attributes, tensor_args] =
         operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation::invoke(
-            input_tensor, k, valid_length);
+            input_tensor, k, valid_length, valid_length_tensor, valid_length_offset);
     return ttnn::device_operation::launch<
         operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation>(
         operation_attributes, tensor_args);

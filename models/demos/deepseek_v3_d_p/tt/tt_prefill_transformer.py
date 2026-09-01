@@ -320,19 +320,10 @@ class TtPrefillTransformer(LightweightModule):
         trace captured over forward() is split at the shared-expert/dispatch sub-device boundaries
         (see utils/sub_device_trace.py). Pass None to restore plain eager load/clear.
 
-        DENSE-MLA ONLY. Tracing a sparse/DSA (indexer) model is rejected: the traced forward advances
-        its per-chunk scalars through the metadata ops, and the indexer path has no metadata overload
-        yet — the captured forward also never threads index_kv_cache, so a sparse model would replay
-        silently WITHOUT its indexer cache and produce wrong KV rather than failing. Porting the
-        indexer ops is out of scope here."""
-        if controller is not None:
-            assert not self._has_indexer, (
-                "trace capture is not supported for sparse/DSA (indexer) attention. Supported today: "
-                "the dense-MLA models (deepseek_v3, kimi_k2_6, kimi_k2_7). GLM (glm_5_1 / glm_5_2) and "
-                "any other indexer/sparse-attention variant need their indexer ops ported to the "
-                "per-element-tensor metadata form first — until then run them untraced (use_trace=False "
-                "/ PREFILL_USE_TRACE=0)."
-            )
+        Both dense-MLA and sparse/DSA (indexer) models are traceable: the indexer ops
+        (ring_indexer_score_dsa, topk_large_indices) read their per-chunk scalars on-device from the
+        metadata tensors, so a replay derives each chunk's causal window instead of reusing the
+        captured one."""
         for layer in self.layers:
             layer.set_trace_controller(controller)
 

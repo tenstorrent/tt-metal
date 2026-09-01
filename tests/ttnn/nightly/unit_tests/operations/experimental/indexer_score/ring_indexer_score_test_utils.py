@@ -32,10 +32,13 @@ _INPUT_DIMS = (None, 2)
 _BUF_DIMS = (1, None)
 
 
-def _open_ring4_ccl():
+def _open_ring4_ccl(trace_region_size: int = 0):
     """Open the full 2x4 with 2D fabric, carve a 1x4 submesh, load a worker sub-device, make 2 CCL semaphores
     (the two ring directions, as ring_attention_all_gather_async needs). Returns
-    (submesh, parent, ccl_semaphores, worker_sub_device_id, stall_group)."""
+    (submesh, parent, ccl_semaphores, worker_sub_device_id, stall_group).
+
+    trace_region_size > 0 reserves the DRAM a ttnn trace capture needs (0 = no tracing, the default, so every
+    existing caller is unchanged)."""
     ttnn.set_fabric_config(
         ttnn.FabricConfig.FABRIC_2D,
         ttnn.FabricReliabilityMode.STRICT_INIT,
@@ -46,7 +49,9 @@ def _open_ring4_ccl():
     )
     parent = None
     try:
-        parent = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*LOUDBOX_MESH_SHAPE))
+        parent = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(*LOUDBOX_MESH_SHAPE), trace_region_size=trace_region_size
+        )
         submesh = parent.create_submesh(ttnn.MeshShape(1, RING))
 
         grid = submesh.compute_with_storage_grid_size()

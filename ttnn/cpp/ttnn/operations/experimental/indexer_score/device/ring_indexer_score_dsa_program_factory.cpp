@@ -357,6 +357,35 @@ ProgramDescriptor build_ring_program_descriptor(
     // max(2*KC, .) keeps the QC<=2 double buffer and a whole multiple of QC*KC so a push never wraps mid-unit.
     make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
 
+    // Trace-safe metadata CBs, allocated AFTER the CbArg-indexed set so no existing slot moves (the classic
+    // factory shares CbArg and must stay byte-identical). Indices travel as trailing compile args.
+    //   cb_meta_derived — reader -> compute mailbox for the on-device causal derivation. A compute kernel
+    //     cannot issue a NoC read, so the reader (same core_ranges) reads the metadata word, derives
+    //     {kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles} and publishes them here.
+    //     It doubles as the reader's own NoC landing slot: the read lands at the page base, is consumed,
+    //     then the four derived values overwrite it before the push.
+    // TWO mailboxes, both filled by the reader from ONE metadata read: a CB has a single consumer, and
+    // compute and the writer each need the derived scalars. Publishing twice from one derivation is what
+    // guarantees they agree -- the writer's kv_len_tiles decides how many output columns it drains, so a
+    // disagreement with compute would silently write the wrong width. (The alternative, giving the writer
+    // its own runtime arg, would shift its band-permutation base, which the kernel hardcodes.)
+    const bool has_meta = tensors.has_chunk_start_metadata();
+    uint32_t cb_meta_derived = 0, cb_meta_writer = 0;
+    if (has_meta) {
+        const auto make_meta_cb = [&](uint32_t& slot) {
+            slot = next_cb_index++;
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = 64,
+                .core_ranges = core_ranges,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(slot),
+                    .data_format = tt::DataFormat::UInt32,
+                    .page_size = 64}}}});
+        };
+        make_meta_cb(cb_meta_derived);
+        make_meta_cb(cb_meta_writer);
+    }
+
     // Fused-op signal semaphores + consumer signaler (inlined init_fused_op against desc; MULTI). ring_size / rw
     // are computed above (hoisted for the readiness-balanced band assignment).
     ttnn::prim::RingSDPAFusedOpSignaler sdpa_sig;
@@ -426,12 +455,32 @@ ProgramDescriptor build_ring_program_descriptor(
         return ct;
     }();
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
+    // Trace-safe metadata block, appended LAST so every pre-existing compile-arg offset is unchanged and the
+    // scalar path stays byte-identical. sp / chunk_local already arrived via block_cyclic_ct above.
+    reader_ct.push_back(has_meta ? 1u : 0u);
+    if (has_meta) {
+        // The metadata RT block is inserted immediately before the band permutation, so its base IS the
+        // scalar-path band_perm base. Pass it as a compile arg instead of letting the kernel hardcode a
+        // number: this layout has already shifted once upstream (fused_rt_width 6 -> 9 moved it 35 -> 38),
+        // and a stale constant would silently read the wrong runtime args rather than fail to build.
+        reader_ct.push_back(rt_arg::reader_band_perm_base);
+        reader_ct.push_back(cb_meta_derived);
+        reader_ct.push_back(cb_meta_writer);
+        reader_ct.push_back(Sq);                                    // elements (causal_geometry_tiles' Sq)
+        reader_ct.push_back(args.sp_axis().has_value() ? 1u : 0u);  // block-cyclic named-SP-axis branch
+        tt::tt_metal::TensorAccessorArgs(*tensors.chunk_start_idx_tensor->buffer()).append_to(reader_ct);
+    }
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(1u);  // fused_ring on
     const uint32_t out_elem_bytes = out.element_size();
     writer_ct.push_back(T * out_elem_bytes);  // row-major page = one output row (no pooling)
     tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
+    // Trace-safe metadata: flag + the mailbox the reader publishes the derived kv_len_tiles into.
+    writer_ct.push_back(has_meta ? 1u : 0u);
+    if (has_meta) {
+        writer_ct.push_back(cb_meta_writer);
+    }
 
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.push_back(qk_subblock_h);
@@ -441,6 +490,12 @@ ProgramDescriptor build_ring_program_descriptor(
     compute_ct.push_back(0u);  // fuse_single off
     compute_ct.push_back(0u);  // fused_stream_k off
     compute_ct.push_back(1u);  // fused_ring on
+    // Trace-safe metadata: compute takes the derived causal scalars from the reader's mailbox instead of
+    // from its own runtime args (which a replay would freeze at capture-time values).
+    compute_ct.push_back(has_meta ? 1u : 0u);
+    if (has_meta) {
+        compute_ct.push_back(cb_meta_derived);
+    }
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     KernelDescriptor reader_kernel{};
@@ -560,6 +615,13 @@ ProgramDescriptor build_ring_program_descriptor(
             reader_rt.append(fused_rt);             // rt_arg::reader_fused_rt_base (27..35): ring/dir/sems/split
             reader_rt.push_back(k_local.buffer());  // rt_arg::reader_k_local_addr (36): local SP shard address
             reader_rt.push_back(k_local_batch_page_offset);  // selected slot in the original local cache
+            if (has_meta) {
+                // Consumed sequentially by FusedRingGate before it fixes perm_base, so the band-perm base
+                // shifts by exactly this block on the metadata path (the kernel advances the same argidx).
+                reader_rt.push_back(tensors.chunk_start_idx_tensor->buffer());
+                reader_rt.push_back(device_index);
+                reader_rt.push_back(tp_index);
+            }
             reader_rt.append(band_perm);                     // rt_arg::reader_band_perm_base (38..): band-visit perm
             reader_kernel.emplace_runtime_args(core, reader_rt);
 
@@ -743,18 +805,26 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         // (reader_k_batch_offset=25, reader_kv_len_tiles=26, reader_k_local_batch_offset=37 — past the
         // 9-wide fused block at 27..35 and k_local_addr at 36).
         patch_field(0, 25u, k_batch_page_offset);
-        patch_field(0, 26u, pcache.kv_len_tiles);
+        // Slot offset stays host-owned on BOTH paths: only chunk_start_idx moved on-device, not the cache
+        // slot, so this must still be re-patched every dispatch.
         patch_field(0, 37u, k_local_batch_page_offset);
-        // compute: kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles (slots [6, perm_base)).
-        patch_field(2, 6u, pcache.kv_len_tiles);
-        patch_field(2, 7u, geom.chunk_start_tiles);
-        patch_field(2, 8u, geom.straddle_q_tile);
-        patch_field(2, 9u, geom.straddle_jump_tiles);
-        // writer: same four scalars after out-addr(0) + schedule(1..6) (slots [7, perm_base)).
-        patch_field(1, 7u, pcache.kv_len_tiles);
-        patch_field(1, 8u, geom.chunk_start_tiles);
-        patch_field(1, 9u, geom.straddle_q_tile);
-        patch_field(1, 10u, geom.straddle_jump_tiles);
+        // The causal scalars (kv_len_tiles / chunk_start_tiles / straddle_*) are exactly what the trace-safe
+        // path moves on-device, and THIS host patch is what a trace replay cannot re-run. On the metadata
+        // path the kernels derive all four from the metadata word every dispatch, so patching them here would
+        // be dead writes into slots nothing reads -- and would misleadingly suggest the host still owns them.
+        if (!tensors.has_chunk_start_metadata()) {
+            patch_field(0, 26u, pcache.kv_len_tiles);
+            // compute: kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles (slots [6, perm_base)).
+            patch_field(2, 6u, pcache.kv_len_tiles);
+            patch_field(2, 7u, geom.chunk_start_tiles);
+            patch_field(2, 8u, geom.straddle_q_tile);
+            patch_field(2, 9u, geom.straddle_jump_tiles);
+            // writer: same four scalars after out-addr(0) + schedule(1..6) (slots [7, perm_base)).
+            patch_field(1, 7u, pcache.kv_len_tiles);
+            patch_field(1, 8u, geom.chunk_start_tiles);
+            patch_field(1, 9u, geom.straddle_q_tile);
+            patch_field(1, 10u, geom.straddle_jump_tiles);
+        }
 
         // The descriptor fast path patches buffer bindings but not scalar fields embedded in the fused AG
         // workers. cache_batch_idx and kv_len are hash-excluded, so update the selected input slot and the
