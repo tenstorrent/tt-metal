@@ -13,6 +13,8 @@ Lifetime contract: forward_single_step does NOT deallocate the caller's
 after each layer. ttnn.slice was avoided in favor of running lm_head over
 the full hidden state — caller indexes the last position.
 """
+
+import os
 from typing import List, Optional, Tuple
 
 import torch
@@ -46,6 +48,16 @@ class CodePredictor(LightweightModule):
         from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size
 
         self.tp_size = get_tp_size(device) if _is_mesh else 1
+        # N300-only fast path for the CP layer. The CodePredictor runs 15 forward
+        # passes per audio frame (prefill seq=2 + 13 residual decodes) x 5 layers, so
+        # it dominates the AR frame, yet its layer was built from generic ops: the
+        # hidden-size norms land on 1 core, nlp_create/concat_heads on 1 core, and each
+        # layer pays two full reduce_scatter+all_gather rounds. The Talker already has
+        # sharded equivalents (see attention.py / decoder_layer.py); this ports them to
+        # the CP for the 2-chip wormhole grid only. Set QWEN3_TTS_CP_N300_OPT=0 to A/B.
+        from models.demos.qwen3_tts.tt.mesh_utils import is_n300
+
+        self._n300_cp_opt = is_n300(device) and os.environ.get("QWEN3_TTS_CP_N300_OPT", "1") != "0"
         self.num_heads = config.num_attention_heads // self.tp_size
         self.num_kv_heads = config.num_key_value_heads // self.tp_size
         self.num_kv_groups = self.num_heads // self.num_kv_heads  # same ratio
@@ -241,6 +253,108 @@ class CodePredictor(LightweightModule):
         self._cp_down_out_memcfg = width_sharded_l1_memcfg(1, _n_tiles_d, _cols_d, _rows_d)
         self._cp_down_n_padded = _n_pad_d
 
+        # === N300 fast-path configs (sharded RMSNorm + sharded NLP head ops) ===
+        if self._n300_cp_opt:
+            from models.demos.qwen3_tts.tt.decoder_layer import _build_sharded_rmsnorm_configs
+
+            _M = 32  # CP is always <= 1 tile in M: decode seq=1 and prefill seq=2.
+            _dim_tiles = H // 32
+
+            # Post-attention norm: emit straight into the gate/up matmul's in0 layout so
+            # the MLP's to_memory_config disappears. _build_sharded_rmsnorm_configs lays
+            # out num_cores as cols=min(grid.x, n), rows=n/cols, which matches
+            # width_sharded_l1_memcfg(1, K_tiles, cols_gu, rows_gu) for the same count.
+            _ln_mlp_cores = _rows_gu * _cols_gu
+            assert _dim_tiles % _ln_mlp_cores == 0, (
+                f"CP hidden tiles={_dim_tiles} must divide the gate/up in0 grid "
+                f"({_ln_mlp_cores} cores) to fuse the post-norm shard layout"
+            )
+            _mlp_ln_in_memcfg, self._n300_ln_mlp_progcfg = _build_sharded_rmsnorm_configs(
+                device, H, _ln_mlp_cores, m=_M
+            )
+            assert _mlp_ln_in_memcfg == self._cp_gate_up_in0_memcfg, (
+                "post-norm shard layout must equal the gate/up in0 layout; got "
+                f"{_mlp_ln_in_memcfg} vs {self._cp_gate_up_in0_memcfg}"
+            )
+            self._n300_ln_mlp_memcfg = self._cp_gate_up_in0_memcfg
+
+            # Input norm: output goes back to L1_INTERLEAVED so the QKV matmul keeps its
+            # default wide grid. The sharded norm itself is the win — measured 25 us on
+            # 1 core -> 10 us on 32, and the two reshards around it cost ~2 us.
+            _ln_attn_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if _dim_tiles % c == 0)
+            self._n300_ln_attn_memcfg, self._n300_ln_attn_progcfg = _build_sharded_rmsnorm_configs(
+                device, H, _ln_attn_cores, m=_M
+            )
+
+            # Sharded nlp_create_qkv_heads / nlp_concat_heads memory configs, mirroring
+            # Attention._build_sharded_nlp_memcfgs. Head counts are already per-chip.
+            _num_q_per_kv = self.num_heads // self.num_kv_heads
+            self._n300_fused_qkv = (self.num_heads + 2 * self.num_kv_heads) * HD
+            _qkv_shard_w = (_num_q_per_kv + 2) * HD
+            assert self._n300_fused_qkv % _qkv_shard_w == 0
+            _qkv_cores = self._n300_fused_qkv // _qkv_shard_w
+            _qkv_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_qkv_cores - 1, 0))})
+            _q_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.num_heads - 1, 0))})
+            _concat_grid = ttnn.num_cores_to_corerangeset(self.num_heads, _cg, True)
+
+            def _hs(grid, w):
+                return ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(grid, (_M, w), ttnn.ShardOrientation.ROW_MAJOR),
+                )
+
+            def _ws(grid, w):
+                return ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(grid, (_M, w), ttnn.ShardOrientation.ROW_MAJOR),
+                )
+
+            self._n300_qkv_split_in_memcfg = _ws(_qkv_grid, _qkv_shard_w)
+            self._n300_qkv_split_q_memcfg = _hs(_q_grid, HD)
+            self._n300_concat_in_memcfg = _hs(_concat_grid, HD)
+            self._n300_concat_out_memcfg = _ws(_concat_grid, HD)
+
+            # The sharded nlp_create_qkv_heads kernel reads a KV-group-interleaved fused
+            # QKV ([q..q, k, v] per KV group) so it can split with no intermediate copy.
+            # Build a second, permuted copy of the fused QKV weight for this path.
+            _row_perm = []
+            for _kv in range(self.num_kv_heads):
+                for _qi in range(_num_q_per_kv):
+                    _qh = _kv * _num_q_per_kv + _qi
+                    _row_perm.extend(range(_qh * HD, (_qh + 1) * HD))
+                _k_off = self.num_heads * HD
+                _row_perm.extend(range(_k_off + _kv * HD, _k_off + (_kv + 1) * HD))
+                _v_off = (self.num_heads + self.num_kv_heads) * HD
+                _row_perm.extend(range(_v_off + _kv * HD, _v_off + (_kv + 1) * HD))
+            _perm_t = torch.tensor(_row_perm, dtype=torch.long)
+            assert _perm_t.numel() == self._n300_fused_qkv
+
+            for li, lw in enumerate(self.layers_w):
+                pfx = f"talker.code_predictor.model.layers.{li}."
+                _q = _perm_rope_rows(state_dict[pfx + "self_attn.q_proj.weight"], HD)
+                _k = _perm_rope_rows(state_dict[pfx + "self_attn.k_proj.weight"], HD)
+                _v = state_dict[pfx + "self_attn.v_proj.weight"]
+                _qc = list(torch.chunk(_q, self.tp_size, dim=0))
+                _kc = list(torch.chunk(_k, self.tp_size, dim=0))
+                _vc = list(torch.chunk(_v, self.tp_size, dim=0))
+                _per_chip = [
+                    torch.cat([_qc[i], _kc[i], _vc[i]], dim=0).index_select(0, _perm_t).contiguous()
+                    for i in range(self.tp_size)
+                ]
+                _stacked = torch.stack(_per_chip, dim=0).transpose(-2, -1).unsqueeze(0).contiguous()
+                lw["wqkv_kvgi"] = ttnn.from_torch(
+                    _stacked,
+                    device=device,
+                    dtype=ttnn.bfloat16,
+                    layout=TILE,
+                    memory_config=DRAM,
+                    mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1),
+                )
+                # The plain [Q|K|V] copy is unused on this path — free the DRAM.
+                ttnn.deallocate(lw.pop("wqkv"))
+
         # Build DRAM-sharded gate/up/down weights per layer.
         for li, lw in enumerate(self.layers_w):
             pfx = f"talker.code_predictor.model.layers.{li}."
@@ -280,6 +394,17 @@ class CodePredictor(LightweightModule):
             else:
                 self.codec_embeddings_tt.append(None)
 
+    def _all_reduce(self, t: ttnn.Tensor, fast: bool) -> ttnn.Tensor:
+        """TP all-reduce. On N300 use the 1-CCL 2-chip form (see mesh_utils).
+
+        Both forms are noisy run to run, so this was picked on medians of 3 captures of
+        the CP decode layer: 429 us with the 2-chip form vs 488 us with ttnn.all_reduce.
+        """
+        from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce, tp_all_reduce_2chip
+
+        fn = tp_all_reduce_2chip if fast else tp_all_reduce
+        return fn(t, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
     # ─── Per-layer forward — caller owns input h_tt; we do NOT deallocate it. ───
     def _layer_forward(
         self,
@@ -297,18 +422,69 @@ class CodePredictor(LightweightModule):
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         # residual aliases h_tt (caller-owned). Do NOT deallocate it.
         residual = h_tt
-        x = ttnn.rms_norm(h_tt, epsilon=self.rms_norm_eps, weight=lw["input_ln_w"], compute_kernel_config=self.kcfg)
+        # N300 fast path. Both CP modes fit one tile in M (decode seq=1, prefill seq=2),
+        # so a single m=32 set of shard configs covers them.
+        fast = self._n300_cp_opt and int(h_tt.shape[-2]) <= 32
 
-        xqkv = ttnn.matmul(x, lw["wqkv"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
-        ttnn.deallocate(x)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            xqkv,
-            num_heads=self.num_heads,
-            num_kv_heads=self.num_kv_heads,
-            transpose_k_heads=False,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(xqkv)
+        if fast:
+            # Sharded RMSNorm: [1,1,32,H] is one tile row, and the default kernel
+            # parallelises over rows — so the whole norm lands on 1 core (25 us measured).
+            # Width-sharding it over 32 cores drops it to 10 us.
+            h_ln_in = ttnn.to_memory_config(h_tt, self._n300_ln_attn_memcfg)
+            x_s = ttnn.rms_norm(
+                h_ln_in,
+                epsilon=self.rms_norm_eps,
+                weight=lw["input_ln_w"],
+                compute_kernel_config=self.kcfg,
+                program_config=self._n300_ln_attn_progcfg,
+                memory_config=self._n300_ln_attn_memcfg,
+            )
+            ttnn.deallocate(h_ln_in)
+            x = ttnn.to_memory_config(x_s, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(x_s)
+        else:
+            x = ttnn.rms_norm(h_tt, epsilon=self.rms_norm_eps, weight=lw["input_ln_w"], compute_kernel_config=self.kcfg)
+
+        if fast:
+            xqkv = ttnn.matmul(
+                x,
+                lw["wqkv_kvgi"],
+                dtype=self.act_dtype,
+                compute_kernel_config=self.kcfg,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(x)
+            # Sharded split: the interleaved kernel runs single-core (31 us measured);
+            # feeding it a WIDTH_SHARDED, KV-group-interleaved fused QKV parallelises it
+            # over 8 cores (2 us). wqkv_kvgi carries the matching row permutation.
+            xqkv_s = ttnn.to_memory_config(xqkv, self._n300_qkv_split_in_memcfg)
+            ttnn.deallocate(xqkv)
+            q_s, k_s, v_s = ttnn.experimental.nlp_create_qkv_heads(
+                xqkv_s,
+                num_heads=self.num_heads,
+                num_kv_heads=self.num_kv_heads,
+                transpose_k_heads=False,
+                memory_config=self._n300_qkv_split_q_memcfg,
+            )
+            ttnn.deallocate(xqkv_s)
+            # q_norm / k_norm / rotary_embedding_llama want L1_INTERLEAVED.
+            q = ttnn.to_memory_config(q_s, ttnn.L1_MEMORY_CONFIG)
+            k = ttnn.to_memory_config(k_s, ttnn.L1_MEMORY_CONFIG)
+            v = ttnn.to_memory_config(v_s, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(q_s)
+            ttnn.deallocate(k_s)
+            ttnn.deallocate(v_s)
+        else:
+            xqkv = ttnn.matmul(x, lw["wqkv"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
+            ttnn.deallocate(x)
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                xqkv,
+                num_heads=self.num_heads,
+                num_kv_heads=self.num_kv_heads,
+                transpose_k_heads=False,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(xqkv)
 
         q_n = ttnn.rms_norm(
             q,
@@ -491,22 +667,47 @@ class CodePredictor(LightweightModule):
         attn_out = ttnn.typecast(attn_out_f32, dtype=ttnn.bfloat16)
         ttnn.deallocate(attn_out_f32)
 
-        attn_concat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(attn_out)
+        if fast:
+            # Same story as the split: HEIGHT_SHARDED over num_heads cores rather than 1
+            # (12 us -> 0.5 us measured).
+            attn_s = ttnn.to_memory_config(attn_out, self._n300_concat_in_memcfg)
+            ttnn.deallocate(attn_out)
+            attn_concat_s = ttnn.experimental.nlp_concat_heads(attn_s, memory_config=self._n300_concat_out_memcfg)
+            ttnn.deallocate(attn_s)
+            attn_concat = ttnn.to_memory_config(attn_concat_s, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(attn_concat_s)
+        else:
+            attn_concat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(attn_out)
 
         o = ttnn.matmul(attn_concat, lw["o_proj"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
         ttnn.deallocate(attn_concat)
         if self.tp_size > 1:
-            from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce
-
-            o = tp_all_reduce(o, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
+            o = self._all_reduce(o, fast)
 
         # Residual + post-norm. residual = caller's h_tt — DO NOT deallocate.
         h_post = ttnn.add(residual, o, dtype=self.act_dtype)
         ttnn.deallocate(o)
 
         residual2 = h_post  # we own h_post → free after MLP residual.
-        h2 = ttnn.rms_norm(h_post, epsilon=self.rms_norm_eps, weight=lw["post_ln_w"], compute_kernel_config=self.kcfg)
+        if fast:
+            # Sharded post-norm emitting directly in the gate/up in0 layout, so the MLP's
+            # own to_memory_config drops out: a 1-core 25 us norm plus a reshard become
+            # one 9 us norm.
+            h_ln2_in = ttnn.to_memory_config(h_post, self._n300_ln_mlp_memcfg)
+            h2 = ttnn.rms_norm(
+                h_ln2_in,
+                epsilon=self.rms_norm_eps,
+                weight=lw["post_ln_w"],
+                compute_kernel_config=self.kcfg,
+                program_config=self._n300_ln_mlp_progcfg,
+                memory_config=self._n300_ln_mlp_memcfg,
+            )
+            ttnn.deallocate(h_ln2_in)
+        else:
+            h2 = ttnn.rms_norm(
+                h_post, epsilon=self.rms_norm_eps, weight=lw["post_ln_w"], compute_kernel_config=self.kcfg
+            )
 
         # DRAM-sharded MLP: shard h2 into L1 WIDTH_SHARDED once, then gate/up read from
         # their DRAM-banked weights in parallel. Output stays sharded — reshard to down's
@@ -563,9 +764,7 @@ class CodePredictor(LightweightModule):
             mlp_o = ttnn.to_memory_config(mlp_o_sharded, ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(mlp_o_sharded)
         if self.tp_size > 1:
-            from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce
-
-            mlp_o = tp_all_reduce(mlp_o, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
+            mlp_o = self._all_reduce(mlp_o, fast)
         out = ttnn.add(residual2, mlp_o, dtype=self.act_dtype)
         ttnn.deallocate(residual2)
         ttnn.deallocate(mlp_o)
