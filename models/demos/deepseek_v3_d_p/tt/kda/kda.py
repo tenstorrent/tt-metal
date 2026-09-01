@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -316,11 +317,10 @@ class ttKDA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         if self.sequence_parallel_size > 1:
-            state_row_major, new_state = ops.convolution_halo(
+            state_row_major, new_state = exchange_convolution_carry(
                 qkv_row_major,
                 state_row_major,
                 sequence_parallel_axis=self.sequence_parallel_axis,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
             new_state = ttnn.slice(

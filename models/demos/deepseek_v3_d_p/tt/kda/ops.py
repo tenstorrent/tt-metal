@@ -30,10 +30,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
 )
 
 
-def _output_memory_config(memory_config: ttnn.MemoryConfig | None) -> ttnn.MemoryConfig:
-    return ttnn.DRAM_MEMORY_CONFIG if memory_config is None else memory_config
-
-
 def _group_summary_memory_config(device: ttnn.Device, group_heads: int, key_dim: int) -> ttnn.MemoryConfig:
     worker_cores = ttnn.num_cores_to_corerangeset(
         group_heads,
@@ -47,87 +43,6 @@ def _group_summary_memory_config(device: ttnn.Device, group_heads: int, key_dim:
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-
-
-def convolution_halo(
-    projected_qkv: ttnn.Tensor,
-    initial_carry: ttnn.Tensor,
-    *,
-    sequence_parallel_axis: int,
-    memory_config: ttnn.MemoryConfig | None = None,
-) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Exchange causal-convolution carries along the configured SP axis."""
-    qkv_shape = tuple(projected_qkv.shape)
-    carry_shape = tuple(initial_carry.shape)
-    if sequence_parallel_axis not in (0, 1):
-        raise ValueError(f"sequence_parallel_axis must be 0 or 1, got {sequence_parallel_axis}")
-    if len(qkv_shape) != 3 or len(carry_shape) != 3:
-        raise ValueError("KDA convolution halo expects rank-3 tensors")
-    if qkv_shape[0] != carry_shape[0] or qkv_shape[2] != carry_shape[2]:
-        raise ValueError("KDA convolution halo requires matching batch and channel dimensions")
-    history = carry_shape[1]
-    if history <= 0 or qkv_shape[1] < history:
-        raise ValueError("KDA convolution halo requires 0 < history <= local T")
-    if projected_qkv.dtype != initial_carry.dtype or projected_qkv.layout != initial_carry.layout:
-        raise ValueError("KDA convolution halo requires matching dtypes and layouts")
-    if history > ttnn.TILE_SIZE:
-        raise ValueError("KDA convolution history must fit in one tile")
-
-    mesh_device = projected_qkv.device()
-    mesh_shape = tuple(mesh_device.shape)
-    if len(mesh_shape) != 2 or mesh_shape[sequence_parallel_axis] <= 1:
-        raise ValueError("KDA convolution halo requires a 2D mesh with SP > 1")
-    sp_size = mesh_shape[sequence_parallel_axis]
-    batch, local_sequence, channels = qkv_shape
-    out_mem = _output_memory_config(memory_config)
-
-    local_tail = ttnn.slice(
-        projected_qkv,
-        (0, local_sequence - history, 0),
-        (batch, local_sequence, channels),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    padded_tail = ttnn.pad(
-        local_tail,
-        ((0, 0), (0, ttnn.TILE_SIZE - history), (0, 0)),
-        value=0.0,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    tiled_tail = ttnn.to_layout(padded_tail, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    gathered_tails = ttnn.all_gather(
-        tiled_tail,
-        dim=1,
-        cluster_axis=sequence_parallel_axis,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    entry_carries = [initial_carry]
-    for rank in range(sp_size - 1):
-        tiled_rank_tail = ttnn.slice(
-            gathered_tails,
-            (0, rank * ttnn.TILE_SIZE, 0),
-            (batch, (rank + 1) * ttnn.TILE_SIZE, channels),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        rank_tail = ttnn.to_layout(tiled_rank_tail, ttnn.ROW_MAJOR_LAYOUT)
-        entry_carries.append(ttnn.slice(rank_tail, (0, 0, 0), (batch, history, channels), memory_config=out_mem))
-    replicated_entries = ttnn.concat(entry_carries, dim=1, memory_config=out_mem)
-    partition_carry = ttnn.mesh_partition(
-        replicated_entries,
-        dim=1,
-        cluster_axis=sequence_parallel_axis,
-        memory_config=out_mem,
-    )
-
-    tiled_final_carry = ttnn.slice(
-        gathered_tails,
-        (0, (sp_size - 1) * ttnn.TILE_SIZE, 0),
-        (batch, sp_size * ttnn.TILE_SIZE, channels),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    final_row_major = ttnn.to_layout(tiled_final_carry, ttnn.ROW_MAJOR_LAYOUT)
-    final_carry = ttnn.slice(final_row_major, (0, 0, 0), (batch, history, channels), memory_config=out_mem)
-    return partition_carry, final_carry
 
 
 @dataclass(frozen=True)
