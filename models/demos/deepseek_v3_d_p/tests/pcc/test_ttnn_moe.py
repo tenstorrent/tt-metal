@@ -404,8 +404,9 @@ def run_model(
         routed_expert_weights_dtype=ttnn.bfloat4_b,
         routed_expert_activation=routed_activation,
         # Straight off the variant's own dimension-constants class, which is where TtPrefillBlock
-        # takes it too, so every variant this file can run is graded on the dispatch it ships --
-        # 768 for K3, the fused-only sentinel for K2.6/2.7, absent (single-op) for DSv3.
+        # takes it too, so every variant this file can run is graded on the dispatch it ships -- the
+        # fused-only sentinel for K2.6/2.7, 1792 for GLM 5.1/5.2, absent (single-op) everywhere else,
+        # K3 included: its crossover is measured but parked until the split is enabled for it.
         routed_expert_hybrid_token_threshold=getattr(
             variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None
         ),
