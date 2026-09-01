@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// vsa_sdpa streaming (v2) writer (NCRISC): builds the persistent compute tiles, loads each pass's
-// resident Q rows, fetches K blocks on the reader's kreq (V is fetched by the reader on the other
-// NoC), and drains normalized row outputs to DRAM. K-serving and output-draining are polled in one
-// loop: the compute core back-pressures on the small output CB, so a blocking wait on either side
-// alone would deadlock.
+// vsa_sdpa streaming (v3) writer.
+// LEADER: serves the leader reader's kreq by fetching each block's K tiles from DRAM into the
+// shared stream slots (the second NoC of the fetch pair). Nothing else.
+// WORKER: builds the persistent compute tiles, loads each pass's resident Q rows, serves the local
+// reader's kreq by pulling K from the leader's L1 slot, and drains normalized row outputs to DRAM.
+// K-serving and output-draining are polled in one loop (blocking either side alone would deadlock).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -45,13 +46,18 @@ void kernel_main() {
     constexpr auto q_args =
         TensorAccessorArgs<k_args.next_compile_time_args_offset(), k_args.next_common_runtime_args_offset()>();
 
-    const uint32_t out_addr = get_arg_val<uint32_t>(0);
-    const uint32_t k_addr = get_arg_val<uint32_t>(1);
-    const uint32_t q_addr = get_arg_val<uint32_t>(2);
-    const uint32_t head = get_arg_val<uint32_t>(3);
-    const uint32_t row_start = get_arg_val<uint32_t>(4);
-    const uint32_t row_stride = get_arg_val<uint32_t>(5);
-    const uint32_t row_count = get_arg_val<uint32_t>(6);
+    uint32_t argi = 0;
+    const uint32_t out_addr = get_arg_val<uint32_t>(argi++);
+    const uint32_t k_addr = get_arg_val<uint32_t>(argi++);
+    const uint32_t q_addr = get_arg_val<uint32_t>(argi++);
+    const uint32_t head = get_arg_val<uint32_t>(argi++);
+    const uint32_t is_leader = get_arg_val<uint32_t>(argi++);
+    const uint32_t n_passes = get_arg_val<uint32_t>(argi++);
+    const uint32_t leader_x = get_arg_val<uint32_t>(argi++);
+    const uint32_t leader_y = get_arg_val<uint32_t>(argi++);
+    const uint32_t row_start = get_arg_val<uint32_t>(argi++);
+    const uint32_t row_stride = get_arg_val<uint32_t>(argi++);
+    const uint32_t row_count = get_arg_val<uint32_t>(argi++);
 
     Noc noc;
     experimental::CB q_cb(cb_q_res), k_cb(cb_k_stream), kreq_cb(cb_kreq), kack_cb(cb_kack);
@@ -60,7 +66,38 @@ void kernel_main() {
     const auto k = TensorAccessor(k_args, k_addr);
     const auto q = TensorAccessor(q_args, q_addr);
 
-    // Persistent compute tiles (always built: the compute kernel waits on them unconditionally).
+    if (is_leader) {
+        // Fetch K for every kreq {block_id, slot} from DRAM into the shared stream slots;
+        // a sentinel kreq ends each pass.
+        const uint32_t k_base = head * k_head_stride;
+        for (uint32_t pass = 0; pass < n_passes; ++pass) {
+            while (true) {
+                kreq_cb.wait_front(1);
+                uint32_t block_id, slot;
+                {
+                    volatile tt_l1_ptr uint32_t* rq =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
+                    block_id = rq[0];
+                    slot = rq[1];
+                }
+                kreq_cb.pop_front(1);
+                if (block_id == 0xFFFFFFFFu) {
+                    break;
+                }
+                sparse_sdpa_msa::TridRing ring{noc};
+                const uint32_t k_tile0 = k_base + block_id * k_tiles_per_block;
+                for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
+                    ring.read(k, k_cb, k_tile_bytes, k_tile0 + i, (slot * k_tiles_per_block + i) * k_tile_bytes);
+                }
+                ring.drain();
+                kack_cb.reserve_back(1);
+                kack_cb.push_back(1);
+            }
+        }
+        return;
+    }
+
+    // ---------------- WORKER ----------------
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<cb_scale, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
     generate_bcast_col_scalar(experimental::CB(cb_col_identity), one_bf16_packed);
@@ -71,9 +108,9 @@ void kernel_main() {
         experimental::CB(cb_neginf).push_back(1);
     }
 
-    const uint32_t k_base = head * k_head_stride;
+    const uint32_t k_l1_base = k_cb.get_write_ptr();
 
-    uint32_t drained = 0;  // rows written out, across the whole kernel
+    uint32_t drained = 0;
     uint32_t pass_base = 0;
 
     auto serve_kreq_if_any = [&]() {
@@ -81,38 +118,33 @@ void kernel_main() {
             return;
         }
         kreq_cb.wait_front(1);
-        uint32_t block_id, slot;
+        uint32_t leader_slot, slot;
         {
             volatile tt_l1_ptr uint32_t* rq = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
-            block_id = rq[0];
+            leader_slot = rq[0];
             slot = rq[1];
         }
         kreq_cb.pop_front(1);
-        sparse_sdpa_msa::TridRing ring{noc};
-        const uint32_t k_tile0 = k_base + block_id * k_tiles_per_block;
-        for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
-            ring.read(k, k_cb, k_tile_bytes, k_tile0 + i, (slot * k_tiles_per_block + i) * k_tile_bytes);
-        }
-        ring.drain();
+        const uint64_t src = get_noc_addr(
+            leader_x, leader_y, k_l1_base + leader_slot * k_tiles_per_block * k_tile_bytes, noc.get_noc_id());
+        noc_async_read(
+            src, k_l1_base + slot * k_tiles_per_block * k_tile_bytes, k_tiles_per_block * k_tile_bytes,
+            noc.get_noc_id());
+        noc.async_read_barrier();
         kack_cb.reserve_back(1);
         kack_cb.push_back(1);
     };
 
     while (pass_base < row_count || drained < row_count) {
-        // Load the next pass's Q rows as soon as the previous pass's rows have all drained
-        // (cb_q_res is reused across passes, and the compute core gates on cb_qdone).
         if (pass_base < row_count && drained >= pass_base) {
             const uint32_t pass_rows = (row_count - pass_base < R_MAX) ? (row_count - pass_base) : R_MAX;
             for (uint32_t r = 0; r < pass_rows; ++r) {
                 const uint32_t q_tile = row_start + (pass_base + r) * row_stride;
                 const uint32_t page0 = (head * n_q_tiles + q_tile) * q_tiles_per_row;
                 for (uint32_t i = 0; i < q_tiles_per_row; ++i) {
-                    // cb_q_res is RAM-mode: this side never reserves/pushes, so offsets are from the base.
+                    // cb_q_res is RAM-mode: never reserved/pushed here, offsets from the base.
                     noc.async_read(
-                        q,
-                        q_cb,
-                        q_tile_bytes,
-                        {.page_id = page0 + i},
+                        q, q_cb, q_tile_bytes, {.page_id = page0 + i},
                         {.offset_bytes = (r * q_tiles_per_row + i) * q_tile_bytes});
                 }
                 serve_kreq_if_any();
@@ -130,7 +162,8 @@ void kernel_main() {
             const uint32_t q_tile = row_start + drained * row_stride;
             const uint32_t page0 = (head * n_q_tiles + q_tile) * out_tiles_per_row;
             for (uint32_t i = 0; i < out_tiles_per_row; ++i) {
-                noc.async_write(out_cb, out, out_tile_bytes, {.offset_bytes = i * out_tile_bytes}, {.page_id = page0 + i});
+                noc.async_write(
+                    out_cb, out, out_tile_bytes, {.offset_bytes = i * out_tile_bytes}, {.page_id = page0 + i});
             }
             noc.async_write_barrier();
             out_cb.pop_front(out_tiles_per_row);

@@ -2,15 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// vsa_sdpa streaming (v2) reader (BRISC): owns the block stream schedule. Builds per-resident-row
-// membership bitmaps from the index rows, then walks blocks in ascending id order; for each block
-// any resident row lists, it takes a stream-slot credit, fetches the V tiles (NCRISC fetches K in
-// parallel via the kreq/kack pair), builds the ragged partial-column mask when needed, and emits
-// one VISIT ctrl message per listing row (the last one carries the slot-free flag). After the
-// stream, one FLUSH per resident row. Rows are processed in passes of at most R_MAX.
+// vsa_sdpa streaming (v3) reader. Cores are grouped per head; the group's first core is a
+// fetch-only LEADER, the rest are WORKERS holding resident query rows.
+//
+// LEADER (is_leader=1): streams every real (count > 0) KV block of the head from DRAM exactly once
+// per pass, in ascending id order, into its own stream-slot CBs (V here, K via the leader writer's
+// kreq/kack service). After a block lands it appends a {block_id, slot} log entry into every
+// worker's log ring and bumps their arrivals semaphore. Slot reuse is gated on a per-worker
+// progress MAILBOX (each worker posts its count of consumed arrivals into its own word of the
+// leader's ackbox; the leader gates on the MINIMUM). A pooled ack count cannot bound the slowest
+// worker -- a fast worker's acks would let the leader overwrite slots and log entries a lagging
+// worker has not pulled yet. A sentinel log entry (block_id = 0xFFFFFFFF) ends each pass.
+//
+// WORKER (is_leader=0): builds per-resident-row membership bitmaps for the pass, then consumes log
+// entries in order. For a block some resident row lists, it pulls V from the leader's L1 slot
+// (the K pull rides the local writer via kreq/kack), acks the leader, builds the ragged mask tile
+// if needed, and emits ONE multi-row visit message to compute. Blocks no row lists are acked
+// immediately. On the sentinel it emits per-row FLUSH messages carrying each row's final state
+// parity. CB layouts are identical on every core, so a leader slot's L1 address equals the
+// worker's own CB base plus the slot offset.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "sparse_sdpa_msa_gather.hpp"
 #include "dataflow_common.hpp"
@@ -19,9 +33,10 @@ constexpr uint32_t sentinel = 0xFFFFFFFFu;
 
 constexpr uint32_t MSG_VISIT = 0;
 constexpr uint32_t MSG_FLUSH = 1;
-constexpr uint32_t FLAG_IS_FIRST = 1u << 8;
-constexpr uint32_t FLAG_LAST_OF_BLOCK = 1u << 9;
-constexpr uint32_t FLAG_HAS_VMASK = 1u << 10;
+constexpr uint32_t FLAG_HAS_VMASK = 1u << 8;
+// per-row info word: row_slot | parity << 8 | is_first << 9
+constexpr uint32_t ROW_PARITY = 1u << 8;
+constexpr uint32_t ROW_IS_FIRST = 1u << 9;
 
 void kernel_main() {
     constexpr uint32_t W = get_compile_time_arg_val(0);            // index row width (entries)
@@ -30,72 +45,217 @@ void kernel_main() {
     constexpr uint32_t block_size = get_compile_time_arg_val(3);
     constexpr uint32_t R_MAX = get_compile_time_arg_val(4);
     constexpr uint32_t stream_depth = get_compile_time_arg_val(5);
-    constexpr uint32_t v_tiles_per_block = get_compile_time_arg_val(6);
-    constexpr uint32_t v_head_stride = get_compile_time_arg_val(7);  // tiles per head in v
-    constexpr uint32_t idx_row_bytes = get_compile_time_arg_val(8);
-    constexpr uint32_t counts_row_bytes = get_compile_time_arg_val(9);
-    constexpr uint32_t v_tile_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t log_depth = get_compile_time_arg_val(6);
+    constexpr uint32_t k_tiles_per_block = get_compile_time_arg_val(7);
+    constexpr uint32_t v_tiles_per_block = get_compile_time_arg_val(8);
+    constexpr uint32_t v_head_stride = get_compile_time_arg_val(9);  // tiles per head in v
+    constexpr uint32_t idx_row_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t counts_row_bytes = get_compile_time_arg_val(11);
+    constexpr uint32_t k_tile_bytes = get_compile_time_arg_val(12);
+    constexpr uint32_t v_tile_bytes = get_compile_time_arg_val(13);
 
-    constexpr uint32_t cb_v_stream = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_idxrow = get_compile_time_arg_val(12);   // one index row scratch
-    constexpr uint32_t cb_counts = get_compile_time_arg_val(13);   // counts row, resident
-    constexpr uint32_t cb_bitmap = get_compile_time_arg_val(14);   // R_MAX x ceil(KVB/32) words
-    constexpr uint32_t cb_ctrl = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_kreq = get_compile_time_arg_val(16);
-    constexpr uint32_t cb_kack = get_compile_time_arg_val(17);
-    constexpr uint32_t cb_free = get_compile_time_arg_val(18);
-    constexpr uint32_t cb_vmask = get_compile_time_arg_val(19);
+    constexpr uint32_t cb_k_stream = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_v_stream = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_idxrow = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_counts = get_compile_time_arg_val(17);
+    constexpr uint32_t cb_bitmap = get_compile_time_arg_val(18);
+    constexpr uint32_t cb_log = get_compile_time_arg_val(19);
+    constexpr uint32_t cb_ctrl = get_compile_time_arg_val(20);
+    constexpr uint32_t cb_kreq = get_compile_time_arg_val(21);
+    constexpr uint32_t cb_kack = get_compile_time_arg_val(22);
+    constexpr uint32_t cb_free = get_compile_time_arg_val(23);
+    constexpr uint32_t cb_vmask = get_compile_time_arg_val(24);
+    constexpr uint32_t cb_ackbox = get_compile_time_arg_val(25);  // per-worker progress words on the leader
+    constexpr uint32_t sem_arrivals = get_compile_time_arg_val(26);
 
-    constexpr auto v_args = TensorAccessorArgs<20, 0>();
+    constexpr auto v_args = TensorAccessorArgs<27, 0>();
     constexpr auto idx_args =
         TensorAccessorArgs<v_args.next_compile_time_args_offset(), v_args.next_common_runtime_args_offset()>();
     constexpr auto counts_args =
         TensorAccessorArgs<idx_args.next_compile_time_args_offset(), idx_args.next_common_runtime_args_offset()>();
 
-    const uint32_t v_addr = get_arg_val<uint32_t>(0);
-    const uint32_t idx_addr = get_arg_val<uint32_t>(1);
-    const uint32_t counts_addr = get_arg_val<uint32_t>(2);
-    const uint32_t head = get_arg_val<uint32_t>(3);
-    const uint32_t row_start = get_arg_val<uint32_t>(4);
-    const uint32_t row_stride = get_arg_val<uint32_t>(5);
-    const uint32_t row_count = get_arg_val<uint32_t>(6);
+    uint32_t argi = 0;
+    const uint32_t v_addr = get_arg_val<uint32_t>(argi++);
+    const uint32_t idx_addr = get_arg_val<uint32_t>(argi++);
+    const uint32_t counts_addr = get_arg_val<uint32_t>(argi++);
+    const uint32_t head = get_arg_val<uint32_t>(argi++);
+    const uint32_t is_leader = get_arg_val<uint32_t>(argi++);
+    const uint32_t n_passes = get_arg_val<uint32_t>(argi++);
+    const uint32_t leader_x = get_arg_val<uint32_t>(argi++);
+    const uint32_t leader_y = get_arg_val<uint32_t>(argi++);
+    const uint32_t n_workers = get_arg_val<uint32_t>(argi++);
+    const uint32_t row_start = get_arg_val<uint32_t>(argi++);   // worker: first resident row
+    const uint32_t row_stride = get_arg_val<uint32_t>(argi++);  // worker: row stride (= n_workers)
+    const uint32_t row_count = get_arg_val<uint32_t>(argi++);   // worker: total rows
 
     constexpr uint32_t keys_per_tile = tt::constants::TILE_WIDTH;
     constexpr uint32_t bitmap_words = (n_kv_blocks + 31) / 32;
+    constexpr uint32_t log_entry_words = 4;  // {block_id, slot, pad, pad} (16 B, DRAM/NoC aligned)
 
     Noc noc;
     experimental::CB v_cb(cb_v_stream), idx_cb(cb_idxrow), counts_cb(cb_counts);
     experimental::CB ctrl_cb(cb_ctrl), kreq_cb(cb_kreq), kack_cb(cb_kack), free_cb(cb_free);
+    Semaphore<> arrivals_sem(sem_arrivals);
+    experimental::CB ackbox_cb(cb_ackbox);
+    ackbox_cb.reserve_back(1);
+    volatile tt_l1_ptr uint32_t* ackbox = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ackbox_cb.get_write_ptr());
+    const uint32_t ackbox_l1 = ackbox_cb.get_write_ptr();
     const auto v = TensorAccessor(v_args, v_addr);
     const auto idx = TensorAccessor(idx_args, idx_addr);
     const auto counts = TensorAccessor(counts_args, counts_addr);
 
+    // counts row: resident for the whole kernel on both roles.
     counts_cb.reserve_back(1);
     noc.async_read(counts, counts_cb, counts_row_bytes, {.page_id = 0}, {.offset_bytes = 0});
     volatile tt_l1_ptr uint32_t* counts_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_cb.get_write_ptr());
+    noc.async_read_barrier();
 
+    experimental::CB log_cb(cb_log);
+    log_cb.reserve_back(1);
+    const uint32_t log_l1 = log_cb.get_write_ptr();
+
+    if (is_leader) {
+        // ---------------- LEADER ----------------
+        // Worker coords follow in the runtime args.
+        uint32_t worker_x[16], worker_y[16];
+        for (uint32_t w = 0; w < n_workers; ++w) {
+            worker_x[w] = get_arg_val<uint32_t>(argi++);
+            worker_y[w] = get_arg_val<uint32_t>(argi++);
+        }
+        const uint32_t v_base = head * v_head_stride;
+        volatile tt_l1_ptr uint32_t* log_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(log_l1);
+        for (uint32_t w = 0; w < n_workers; ++w) {
+            ackbox[w] = 0;
+        }
+        const auto wait_all_workers_at = [&](uint32_t target) {
+            for (uint32_t w = 0; w < n_workers; ++w) {
+                while (ackbox[w] < target) {
+                    invalidate_l1_cache();
+                }
+            }
+        };
+
+        uint32_t arrival = 0;    // real arrivals, monotonic across passes (gates slot reuse)
+        uint32_t log_n = 0;      // log entries emitted (arrivals + sentinels)
+        for (uint32_t pass = 0; pass < n_passes; ++pass) {
+            for (uint32_t b = 0; b < n_kv_blocks; ++b) {
+                if (counts_ptr[b] == 0) {
+                    continue;  // pad block: never listed
+                }
+                const uint32_t slot = arrival % stream_depth;
+                if (arrival >= stream_depth) {
+                    // Every worker must have consumed the arrival that last used this slot.
+                    wait_all_workers_at(arrival - stream_depth + 1);
+                }
+                // K rides the leader writer (other NoC); V here.
+                kreq_cb.reserve_back(1);
+                {
+                    volatile tt_l1_ptr uint32_t* rq =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
+                    rq[0] = b;
+                    rq[1] = slot;
+                }
+                kreq_cb.push_back(1);
+                {
+                    sparse_sdpa_msa::TridRing ring{noc};
+                    const uint32_t v_tile0 = v_base + b * v_tiles_per_block;
+                    for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
+                        ring.read(v, v_cb, v_tile_bytes, v_tile0 + i, (slot * v_tiles_per_block + i) * v_tile_bytes);
+                    }
+                    ring.drain();
+                }
+                kack_cb.wait_front(1);
+                kack_cb.pop_front(1);
+
+                // Publish: log entry into every worker's ring, then bump their arrivals sem.
+                const uint32_t entry_off = (log_n % log_depth) * log_entry_words * 4;
+                log_ptr[0] = b;
+                log_ptr[1] = slot;
+                for (uint32_t w = 0; w < n_workers; ++w) {
+                    const uint64_t dst = get_noc_addr(worker_x[w], worker_y[w], log_l1 + entry_off, noc.get_noc_id());
+                    noc_async_write(log_l1, dst, log_entry_words * 4, noc.get_noc_id());
+                }
+                noc.async_write_barrier();  // entries must land before the sem bump
+                for (uint32_t w = 0; w < n_workers; ++w) {
+                    arrivals_sem.up(noc, worker_x[w], worker_y[w], 1);
+                }
+                ++arrival;
+                ++log_n;
+            }
+            // End the leader writer's pass loop (sentinel kreq).
+            kreq_cb.reserve_back(1);
+            {
+                volatile tt_l1_ptr uint32_t* rq =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
+                rq[0] = sentinel;
+                rq[1] = 0;
+            }
+            kreq_cb.push_back(1);
+            // Sentinel: ends the pass (no slot, not acked).
+            const uint32_t entry_off = (log_n % log_depth) * log_entry_words * 4;
+            log_ptr[0] = sentinel;
+            log_ptr[1] = 0;
+            for (uint32_t w = 0; w < n_workers; ++w) {
+                const uint64_t dst = get_noc_addr(worker_x[w], worker_y[w], log_l1 + entry_off, noc.get_noc_id());
+                noc_async_write(log_l1, dst, log_entry_words * 4, noc.get_noc_id());
+            }
+            noc.async_write_barrier();
+            for (uint32_t w = 0; w < n_workers; ++w) {
+                arrivals_sem.up(noc, worker_x[w], worker_y[w], 1);
+            }
+            ++log_n;
+        }
+        // Drain: every arrival consumed before the program ends (so no worker still reads our
+        // L1), and no arrivals-sem atomic may still be in flight when the next program resets it.
+        wait_all_workers_at(arrival);
+        noc_async_atomic_barrier(noc.get_noc_id());
+        return;
+    }
+
+    // ---------------- WORKER ----------------
     idx_cb.reserve_back(1);
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_cb.get_write_ptr());
-
     experimental::CB bitmap_cb(cb_bitmap);
     bitmap_cb.reserve_back(1);
     volatile tt_l1_ptr uint32_t* bitmaps = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bitmap_cb.get_write_ptr());
-    noc.async_read_barrier();  // counts resident
+    volatile tt_l1_ptr uint32_t* log_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(log_l1);
 
-    const uint32_t v_base = head * v_head_stride;
-    uint32_t next_slot = 0;
+    // Per-row running state parity (bit) and first-visit flag, tracked across a pass.
+    uint32_t row_parity_bits = 0;
+    uint32_t row_seen_bits = 0;
 
-    for (uint32_t pass_base = 0; pass_base < row_count; pass_base += R_MAX) {
-        const uint32_t pass_rows = (row_count - pass_base < R_MAX) ? (row_count - pass_base) : R_MAX;
+    // Progress mailbox: this worker's consumed-arrival count, staged locally (own ackbox word) and
+    // posted to the leader's ackbox word for this worker. Monotonic single-writer, so unbarriered
+    // posted writes are safe; one barrier before exit flushes the tail.
+    uint32_t consumed = 0;
+    // row_start == this worker's index within the group (factory contract). The local staging word
+    // sits at the SAME offset as the remote target: NoC L1->L1 transfers require src and dst to
+    // share their 16-byte phase, so staging everyone at word 0 silently corrupts posts for
+    // workers whose slot is not 16-byte aligned.
+    const uint32_t my_box_local = ackbox_l1 + row_start * 4;
+    const uint64_t my_box_remote = get_noc_addr(leader_x, leader_y, ackbox_l1 + row_start * 4, noc.get_noc_id());
+    const auto post_progress = [&]() {
+        ++consumed;
+        ackbox[row_start] = consumed;
+        noc_async_write(my_box_local, my_box_remote, 4, noc.get_noc_id());
+    };
 
-        // membership bitmaps for this pass's rows
+    // The compute kernel hands out local stream-slot credits.
+    uint32_t log_n = 0;
+    uint32_t local_slot = 0;
+    for (uint32_t pass = 0; pass < n_passes; ++pass) {
+        const uint32_t pass_row_base = pass * R_MAX;
+        const uint32_t pass_rows =
+            (row_count > pass_row_base) ? ((row_count - pass_row_base < R_MAX) ? row_count - pass_row_base : R_MAX)
+                                        : 0;
+        // Membership bitmaps for this pass's rows.
         for (uint32_t r = 0; r < pass_rows; ++r) {
             volatile tt_l1_ptr uint32_t* bm = bitmaps + r * bitmap_words;
             for (uint32_t wd = 0; wd < bitmap_words; ++wd) {
                 bm[wd] = 0;
             }
-            const uint32_t q_tile = row_start + (pass_base + r) * row_stride;
+            const uint32_t q_tile = row_start + (pass_row_base + r) * row_stride;
             noc.async_read(idx, idx_cb, idx_row_bytes, {.page_id = head * n_q_tiles + q_tile}, {.offset_bytes = 0});
             noc.async_read_barrier();
             for (uint32_t e = 0; e < W; ++e) {
@@ -107,11 +267,20 @@ void kernel_main() {
                 bm[b >> 5] |= (1u << (b & 31));
             }
         }
+        row_parity_bits = 0;
+        row_seen_bits = 0;
 
-        uint32_t first_pending = (1u << pass_rows) - 1u;  // rows awaiting their first visit (R_MAX <= 32)
-        uint32_t listing[32];
+        while (true) {
+            arrivals_sem.wait_min(log_n + 1);
+            const uint32_t entry_off = (log_n % log_depth) * log_entry_words;
+            const uint32_t b = log_ptr[entry_off + 0];
+            const uint32_t leader_slot = log_ptr[entry_off + 1];
+            ++log_n;
+            if (b == sentinel) {
+                break;
+            }
 
-        for (uint32_t b = 0; b < n_kv_blocks; ++b) {
+            uint32_t listing[32];
             uint32_t n_listing = 0;
             const uint32_t wd = b >> 5;
             const uint32_t bit = 1u << (b & 31);
@@ -121,23 +290,37 @@ void kernel_main() {
                 }
             }
             if (n_listing == 0) {
+                post_progress();
                 continue;
             }
 
-            free_cb.wait_front(1);  // a stream slot is free
+            // Pull the block from the leader's stream slots into ours (same CB layout on all
+            // cores => the leader's slot address is our own CB base + the slot offset).
+            free_cb.wait_front(1);
             free_cb.pop_front(1);
-            const uint32_t slot = next_slot;
-            next_slot = (next_slot + 1 == stream_depth) ? 0 : next_slot + 1;
+            const uint32_t slot = local_slot;
+            local_slot = (local_slot + 1 == stream_depth) ? 0 : local_slot + 1;
 
-            // NCRISC fetches K for this block in parallel.
+            // K rides the local writer (other NoC): send it the leader slot to pull from.
             kreq_cb.reserve_back(1);
             {
-                volatile tt_l1_ptr uint32_t* rq = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    kreq_cb.get_write_ptr());
-                rq[0] = b;
+                volatile tt_l1_ptr uint32_t* rq =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
+                rq[0] = leader_slot;
                 rq[1] = slot;
             }
             kreq_cb.push_back(1);
+            {
+                const uint32_t v_l1_base = v_cb.get_write_ptr();
+                const uint64_t src = get_noc_addr(
+                    leader_x, leader_y, v_l1_base + leader_slot * v_tiles_per_block * v_tile_bytes, noc.get_noc_id());
+                noc_async_read(src, v_l1_base + slot * v_tiles_per_block * v_tile_bytes,
+                               v_tiles_per_block * v_tile_bytes, noc.get_noc_id());
+                noc.async_read_barrier();
+            }
+            kack_cb.wait_front(1);
+            kack_cb.pop_front(1);
+            post_progress();  // both halves are local; the leader slot may be reused
 
             const uint32_t count = counts_ptr[b];
             const bool ragged = count < block_size;
@@ -150,56 +333,51 @@ void kernel_main() {
                 vmask_cb.push_back(1);
             }
 
-            {
-                sparse_sdpa_msa::TridRing ring{noc};
-                const uint32_t v_tile0 = v_base + b * v_tiles_per_block;
-                for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
-                    ring.read(v, v_cb, v_tile_bytes, v_tile0 + i, (slot * v_tiles_per_block + i) * v_tile_bytes);
-                }
-                ring.drain();
-            }
-            kack_cb.wait_front(1);  // K landed
-            kack_cb.pop_front(1);
-
-            for (uint32_t i = 0; i < n_listing; ++i) {
-                const uint32_t r = listing[i];
-                uint32_t flags = MSG_VISIT;
-                if (first_pending & (1u << r)) {
-                    flags |= FLAG_IS_FIRST;
-                    first_pending &= ~(1u << r);
-                }
-                if (i + 1 == n_listing) {
-                    flags |= FLAG_LAST_OF_BLOCK;
-                }
-                if (needs_vmask) {
-                    flags |= FLAG_HAS_VMASK;
-                }
-                ctrl_cb.reserve_back(1);
-                {
-                    volatile tt_l1_ptr uint32_t* cp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        ctrl_cb.get_write_ptr());
-                    cp[0] = flags;
-                    cp[1] = r;
-                    cp[2] = slot;
-                    cp[3] = count;
-                }
-                ctrl_cb.push_back(1);
-            }
-        }
-
-        // every row has at least one valid block, so first_pending must be clear by now
-        ASSERT(first_pending == 0);
-        for (uint32_t r = 0; r < pass_rows; ++r) {
+            // One multi-row visit message: {flags|n_rows, slot, count, rowinfo...}.
             ctrl_cb.reserve_back(1);
             {
-                volatile tt_l1_ptr uint32_t* cp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    ctrl_cb.get_write_ptr());
+                volatile tt_l1_ptr uint32_t* cp =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
+                cp[0] = MSG_VISIT | (needs_vmask ? FLAG_HAS_VMASK : 0) | (n_listing << 16);
+                cp[1] = slot;
+                cp[2] = count;
+                for (uint32_t i = 0; i < n_listing; ++i) {
+                    const uint32_t r = listing[i];
+                    const uint32_t rbit = 1u << r;
+                    uint32_t info = r;
+                    if (!(row_seen_bits & rbit)) {
+                        info |= ROW_IS_FIRST;
+                        row_seen_bits |= rbit;
+                        // first visit writes parity 0; leave parity bit clear
+                    } else {
+                        row_parity_bits ^= rbit;  // this visit writes the flipped slot
+                        if (row_parity_bits & rbit) {
+                            info |= ROW_PARITY;
+                        }
+                    }
+                    cp[3 + i] = info;
+                }
+            }
+            ctrl_cb.push_back(1);
+        }
+
+        // FLUSH each pass row with its final state parity.
+        for (uint32_t r = 0; r < pass_rows; ++r) {
+            ASSERT(row_seen_bits & (1u << r));  // every row lists at least one block
+            ctrl_cb.reserve_back(1);
+            {
+                volatile tt_l1_ptr uint32_t* cp =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
                 cp[0] = MSG_FLUSH;
                 cp[1] = r;
-                cp[2] = 0;
-                cp[3] = 0;
+                cp[2] = (row_parity_bits >> r) & 1u;
             }
             ctrl_cb.push_back(1);
         }
     }
+
+    // Flush the tail progress posts (and any stray atomics) before this program ends; in-flight
+    // writes would otherwise land on the next program's memory (watcher-detected race otherwise).
+    noc.async_write_barrier();
+    noc_async_atomic_barrier(noc.get_noc_id());
 }

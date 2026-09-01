@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// vsa_sdpa streaming (v2) program factory. Head-grouped resident-row scheduling: head h owns the
-// contiguous core range [floor(h*C/H), floor((h+1)*C/H)); within it, core j takes rows
-// {j, j+stride, ...} (stride = the range size), which spreads the long fully-dense exempt-query
-// rows evenly instead of piling them onto one core. Each core streams the ascending-order union of
-// its resident rows' listed blocks exactly once per pass of at most R_MAX rows.
+// vsa_sdpa streaming (v3) program factory. Cores are grouped per head: the group's first core is a
+// fetch-only LEADER that streams the head's KV blocks from DRAM once per pass into its L1 slots;
+// the WORKERS hold resident query rows (strided across the group so the dense exempt-query rows
+// spread evenly), pull blocks from the leader's L1 over the NoC, and run the fused multi-row
+// online-softmax visit engine. DRAM reads the head's KV exactly n_passes times per group instead
+// of once per (row, listed block) -- the redundancy that made v1/v2 DRAM-bound.
 
 #include "ttnn/operations/transformer/sdpa/device/vsa_sdpa_device_operation.hpp"
 #include <tt-metalium/buffer.hpp>
@@ -26,18 +27,21 @@ namespace ttnn::prim {
 namespace {
 using RtArgs = std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>;
 
-constexpr uint32_t kRMax = 20;         // resident rows per pass (<= 32: the reader tracks rows in one word)
-constexpr uint32_t kStreamDepth = 6;   // KV blocks in flight
+constexpr uint32_t kRMax = 17;         // resident rows per pass (bounded by L1; <= 32 for the bitmasks)
+constexpr uint32_t kRowGroup = 8;      // rows fused per compute phase group
+constexpr uint32_t kStreamDepth = 6;   // KV blocks in flight per core
+constexpr uint32_t kLogDepth = 8;      // leader arrival-log ring (>= kStreamDepth + sentinel slack)
+constexpr uint32_t kMaxWorkers = 16;   // leader runtime-arg array bound
 
 struct StreamSchedule {
     uint32_t head = 0;
-    uint32_t row_start = 0;
-    uint32_t row_stride = 1;
-    uint32_t row_count = 0;
+    bool is_leader = false;
+    uint32_t group_first = 0;  // core id of the group's leader
+    uint32_t n_workers = 0;
+    uint32_t worker_index = 0;  // valid when !is_leader
 };
 
-StreamSchedule core_schedule(uint32_t core, uint32_t num_cores, uint32_t heads, uint32_t n_q_tiles) {
-    // head h owns cores [floor(h*C/H), floor((h+1)*C/H)); binary-search-free inversion
+StreamSchedule core_schedule(uint32_t core, uint32_t num_cores, uint32_t heads) {
     uint32_t head = static_cast<uint32_t>((static_cast<uint64_t>(core) * heads) / num_cores);
     while ((static_cast<uint64_t>(head + 1) * num_cores) / heads <= core) {
         ++head;
@@ -47,10 +51,20 @@ StreamSchedule core_schedule(uint32_t core, uint32_t num_cores, uint32_t heads, 
     }
     const uint32_t c0 = static_cast<uint32_t>((static_cast<uint64_t>(head) * num_cores) / heads);
     const uint32_t c1 = static_cast<uint32_t>((static_cast<uint64_t>(head + 1) * num_cores) / heads);
-    const uint32_t stride = c1 - c0;
-    const uint32_t j = core - c0;
-    const uint32_t count = (n_q_tiles > j) ? (n_q_tiles - j + stride - 1) / stride : 0;
-    return StreamSchedule{head, j, stride, count};
+    return StreamSchedule{head, core == c0, c0, c1 - c0 - 1, core - c0 - 1};
+}
+
+uint32_t active_workers(uint32_t group_workers, uint32_t n_q_tiles) {
+    // The leader tracks per-worker coords in a fixed array, and a head never benefits from more
+    // workers than it has rows; surplus cores idle (n_passes = 0, row_count = 0).
+    uint32_t n = group_workers;
+    if (n > kMaxWorkers) {
+        n = kMaxWorkers;
+    }
+    if (n > n_q_tiles) {
+        n = n_q_tiles;
+    }
+    return n == 0 ? 1 : n;
 }
 }  // namespace
 
@@ -67,31 +81,32 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     // Function-scoped to avoid unity-build collisions with the v1 factory's enum.
     enum StreamCB : uint32_t {
         cb_q_res = 0,      // resident Q rows [R_MAX, Sqt*DHt] (RAM-mode)
-        cb_k_stream,       // stream slots [depth, Skt*DHt] (RAM-mode)
-        cb_v_stream,       // stream slots [depth, Skt*vDHt] (RAM-mode)
-        cb_o_res,          // resident O accumulators [R_MAX, Sqt*vDHt] (RAM-mode, bf16)
-        cb_max_res,        // resident running max [R_MAX, Sqt] (RAM-mode)
-        cb_sum_res,        // resident running sum [R_MAX, Sqt] (RAM-mode)
-        cb_maxtmp,         // per-visit new max [Sqt]
-        cb_psum,           // per-visit partial sum [Sqt]
-        cb_corr,           // per-visit rescale factor [Sqt]
-        cb_qk,             // per-visit scores/probs [Sqt, Skt]
+        cb_k_stream,       // stream slots [depth, Skt*DHt] (RAM-mode; leader staging on leaders)
+        cb_v_stream,       // stream slots [depth, Skt*vDHt]
+        cb_o_res,          // resident O accumulators [R_MAX, Sqt*vDHt]
+        cb_max_res,        // resident running max, ping-pong [R_MAX, 2, Sqt]
+        cb_sum_res,        // resident running sum, ping-pong [R_MAX, 2, Sqt]
+        cb_corr,           // per-group rescale factors [G, Sqt]
+        cb_qk,             // per-group scores/probs scratch [G, Sqt*Skt]
         cb_scale,          // reduce identity scaler
-        cb_col_identity,   // ones-in-col0 for the sum reduction
+        cb_col_identity,   // ones-in-col0 for the flush sum reduction
         cb_recip_scratch,  // reciprocal scratch
         cb_neginf,         // persistent -inf tile
-        cb_vmask,          // ragged partial-column mask tiles (FIFO, one per ragged block in flight)
+        cb_vmask,          // ragged partial-column mask tiles (FIFO)
         cb_ctrl,           // reader -> compute visit/flush messages
-        cb_kreq,           // reader -> writer K fetch requests
+        cb_kreq,           // reader -> writer K fetch/pull requests
         cb_kack,           // writer -> reader K completion
         cb_free,           // compute -> reader stream-slot credits
         cb_qdone,          // writer -> compute pass-Q-resident token
         cb_out,            // normalized row outputs (compute -> writer)
         cb_idxrow,         // reader scratch: one index row
-        cb_counts,         // reader scratch: the counts row
+        cb_counts,         // counts row, resident
         cb_bitmap,         // reader scratch: R_MAX x ceil(KVB/32) membership words
+        cb_log,            // leader arrival log ring (leader stages, workers receive)
+        cb_ackbox,         // per-worker progress words (leader-resident; workers post their count)
         cb_count
     };
+    constexpr uint32_t sem_arrivals = 0;
 
     tt::tt_metal::ProgramDescriptor desc;
 
@@ -119,6 +134,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     const uint32_t idx_row_bytes = W * t.indices.element_size();
     const uint32_t counts_row_bytes = W * t.block_counts.element_size();
     const uint32_t bitmap_bytes = ((kRMax * ((n_kv_blocks + 31) / 32) * 4 + 15) / 16) * 16;
+    const uint32_t ctrl_page_bytes = ((4 + kRMax) * 4 + 15) / 16 * 16;
 
     constexpr tt::DataFormat bf = tt::DataFormat::Float16_b;
     constexpr uint32_t tile_bytes = tt::tile_size(bf);
@@ -131,12 +147,17 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     const uint32_t v_tile_bytes = tt::tile_size(v_df);
     const uint32_t out_tile_bytes = tt::tile_size(out_df);
 
-    const tt::tt_metal::CoreCoord grid = t.q.device()->compute_with_storage_grid_size();
+    auto* device = t.q.device();
+    const tt::tt_metal::CoreCoord grid = device->compute_with_storage_grid_size();
     const uint32_t num_cores = grid.x * grid.y;
-    TT_FATAL(H <= num_cores, "vsa_sdpa streaming needs at least one core per head (H {}, cores {})", H, num_cores);
+    TT_FATAL(num_cores >= 2 * H, "vsa_sdpa streaming needs >= 2 cores per head (H {}, cores {})", H, num_cores);
     auto core_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
 
-    // ---- CBs (fixed order = StreamCB enum) ----
+    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+        .id = sem_arrivals, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
+
+    // ---- CBs (fixed order = StreamCB enum; identical layout on every core is load-bearing:
+    // workers address leader slots as their own CB base + slot offset) ----
     const auto cb = [&](uint32_t page_size, uint32_t num_pages, tt::DataFormat df) {
         const uint32_t idx = desc.cbs.size();
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
@@ -150,18 +171,16 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     cb(k_tile_bytes, kStreamDepth * k_tiles_per_block, k_df);  // cb_k_stream
     cb(v_tile_bytes, kStreamDepth * v_tiles_per_block, v_df);  // cb_v_stream
     cb(tile_bytes, kRMax * out_tiles_per_row, bf);             // cb_o_res
-    cb(tile_bytes, kRMax * Sqt, bf);                           // cb_max_res
-    cb(tile_bytes, kRMax * Sqt, bf);                           // cb_sum_res
-    cb(tile_bytes, Sqt, bf);                                   // cb_maxtmp
-    cb(tile_bytes, Sqt, bf);                                   // cb_psum
-    cb(tile_bytes, Sqt, bf);                                   // cb_corr
-    cb(tile_bytes, Sqt * Skt, bf);                             // cb_qk
+    cb(tile_bytes, kRMax * 2 * Sqt, bf);                       // cb_max_res
+    cb(tile_bytes, kRMax * 2 * Sqt, bf);                       // cb_sum_res
+    cb(tile_bytes, kRowGroup * Sqt, bf);                       // cb_corr
+    cb(tile_bytes, kRowGroup * Sqt * Skt, bf);                 // cb_qk
     cb(tile_bytes, 1, bf);                                     // cb_scale
     cb(tile_bytes, 1, bf);                                     // cb_col_identity
     cb(tile_bytes, 1, bf);                                     // cb_recip_scratch
     cb(tile_bytes, 1, bf);                                     // cb_neginf
-    cb(tile_bytes, kStreamDepth, bf);                          // cb_vmask
-    cb(16, 64, bf);                                            // cb_ctrl
+    cb(tile_bytes, 4, bf);                                     // cb_vmask
+    cb(ctrl_page_bytes, 8, bf);                                // cb_ctrl
     cb(16, kStreamDepth, bf);                                  // cb_kreq
     cb(16, kStreamDepth, bf);                                  // cb_kack
     cb(16, kStreamDepth + 2, bf);                              // cb_free
@@ -170,6 +189,8 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     cb(idx_row_bytes, 1, bf);                                  // cb_idxrow
     cb(counts_row_bytes, 1, bf);                               // cb_counts
     cb(bitmap_bytes, 1, bf);                                   // cb_bitmap
+    cb(16, kLogDepth, bf);                                     // cb_log
+    cb(4 * kMaxWorkers, 1, bf);                                // cb_ackbox
 
     // ---- compile-time args ----
     std::vector<uint32_t> reader_ct = {
@@ -179,14 +200,20 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         block_size,
         kRMax,
         kStreamDepth,
+        kLogDepth,
+        k_tiles_per_block,
         v_tiles_per_block,
         v_head_stride,
         idx_row_bytes,
         counts_row_bytes,
+        k_tile_bytes,
         v_tile_bytes};
-    for (uint32_t id : {cb_v_stream, cb_idxrow, cb_counts, cb_bitmap, cb_ctrl, cb_kreq, cb_kack, cb_free, cb_vmask}) {
+    for (uint32_t id :
+         {cb_k_stream, cb_v_stream, cb_idxrow, cb_counts, cb_bitmap, cb_log, cb_ctrl, cb_kreq, cb_kack, cb_free,
+          cb_vmask, cb_ackbox}) {
         reader_ct.push_back(id);
     }
+    reader_ct.push_back(sem_arrivals);
     std::vector<uint32_t> reader_crt;
     tt::tt_metal::TensorAccessorArgs(t.v.buffer()).append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
@@ -211,10 +238,10 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(writer_ct, writer_crt);
 
     std::vector<uint32_t> compute_ct = {
-        DHt, vDHt, Skt, Sqt, kRMax, block_size, scale_packed,
-        cb_q_res, cb_k_stream, cb_v_stream, cb_o_res, cb_max_res, cb_sum_res, cb_maxtmp,
-        cb_psum, cb_corr, cb_qk, cb_scale, cb_col_identity, cb_recip_scratch, cb_neginf,
-        cb_vmask, cb_ctrl, cb_free, cb_qdone, cb_out, kStreamDepth};
+        DHt, vDHt, Skt, Sqt, kRMax, kRowGroup, block_size, scale_packed,
+        cb_q_res, cb_k_stream, cb_v_stream, cb_o_res, cb_max_res, cb_sum_res, cb_corr, cb_qk,
+        cb_scale, cb_col_identity, cb_recip_scratch, cb_neginf, cb_vmask, cb_ctrl, cb_free,
+        cb_qdone, cb_out, kStreamDepth};
 
     // ---- kernels ----
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/";
@@ -264,30 +291,62 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     auto* out_buf = output.buffer();
     for (uint32_t i = 0; i < num_cores; ++i) {
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
-        const auto sched = core_schedule(i, num_cores, H, n_q_tiles);
+        const auto sched = core_schedule(i, num_cores, H);
+        const uint32_t n_active = active_workers(sched.n_workers, n_q_tiles);
+        const bool is_idle = !sched.is_leader && sched.worker_index >= n_active;
 
-        RtArgs reader_rt(7);
-        reader_rt[0] = v_buf;
-        reader_rt[1] = idx_buf;
-        reader_rt[2] = counts_buf;
-        reader_rt[3] = sched.head;
-        reader_rt[4] = sched.row_start;
-        reader_rt[5] = sched.row_stride;
-        reader_rt[6] = sched.row_count;
+        const tt::tt_metal::CoreCoord leader_logical = {sched.group_first % grid.x, sched.group_first / grid.x};
+        const tt::tt_metal::CoreCoord leader_phys = device->worker_core_from_logical_core(leader_logical);
+        const uint32_t max_rows = (n_q_tiles + n_active - 1) / n_active;
+        const uint32_t n_passes = is_idle ? 0 : (max_rows + kRMax - 1) / kRMax;
+        const uint32_t row_start = sched.is_leader ? 0 : sched.worker_index;
+        const uint32_t row_count =
+            (sched.is_leader || is_idle)
+                ? 0
+                : ((n_q_tiles > sched.worker_index) ? (n_q_tiles - sched.worker_index + n_active - 1) / n_active : 0);
+
+        RtArgs reader_rt;
+        reader_rt.reserve(12 + 2 * kMaxWorkers);
+        reader_rt.push_back(v_buf);
+        reader_rt.push_back(idx_buf);
+        reader_rt.push_back(counts_buf);
+        reader_rt.push_back(sched.head);
+        reader_rt.push_back(sched.is_leader ? 1u : 0u);
+        reader_rt.push_back(n_passes);
+        reader_rt.push_back(static_cast<uint32_t>(leader_phys.x));
+        reader_rt.push_back(static_cast<uint32_t>(leader_phys.y));
+        reader_rt.push_back(n_active);
+        reader_rt.push_back(row_start);
+        reader_rt.push_back(n_active);  // row_stride
+        reader_rt.push_back(row_count);
+        if (sched.is_leader) {
+            for (uint32_t w = 0; w < n_active; ++w) {
+                const uint32_t wc = sched.group_first + 1 + w;
+                const tt::tt_metal::CoreCoord w_logical = {wc % grid.x, wc / grid.x};
+                const tt::tt_metal::CoreCoord w_phys = device->worker_core_from_logical_core(w_logical);
+                reader_rt.push_back(static_cast<uint32_t>(w_phys.x));
+                reader_rt.push_back(static_cast<uint32_t>(w_phys.y));
+            }
+        }
         reader_desc.emplace_runtime_args(core, reader_rt);
 
-        RtArgs writer_rt(7);
+        RtArgs writer_rt(12);
         writer_rt[0] = out_buf;
         writer_rt[1] = k_buf;
         writer_rt[2] = q_buf;
         writer_rt[3] = sched.head;
-        writer_rt[4] = sched.row_start;
-        writer_rt[5] = sched.row_stride;
-        writer_rt[6] = sched.row_count;
+        writer_rt[4] = sched.is_leader ? 1u : 0u;
+        writer_rt[5] = n_passes;
+        writer_rt[6] = static_cast<uint32_t>(leader_phys.x);
+        writer_rt[7] = static_cast<uint32_t>(leader_phys.y);
+        writer_rt[8] = row_start;
+        writer_rt[9] = n_active;  // row_stride
+        writer_rt[10] = row_count;
+        writer_rt[11] = 0u;
         writer_desc.emplace_runtime_args(core, writer_rt);
 
         RtArgs compute_rt(1);
-        compute_rt[0] = sched.row_count;
+        compute_rt[0] = row_count;
         compute_desc.emplace_runtime_args(core, compute_rt);
     }
 
