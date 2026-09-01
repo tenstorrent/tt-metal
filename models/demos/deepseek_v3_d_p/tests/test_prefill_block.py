@@ -78,7 +78,11 @@ class PrefillBlockThresholds:
 
 
 DSV3_THRESHOLDS = PrefillBlockThresholds()
-KIMI_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.950)
+# Kimi's MoE block sits at 0.950, not the 0.992 default. The override used to be written on
+# moe_gate_host: the branch above tested `== DEVICE` while the Kimi case has always run
+# DEVICE_FP32, so it fell through to the host arm and picked up 0.950 there. Now that the branch
+# tests DEVICE_FP32 the same number has to live on moe_gate_device to keep the bar where it was.
+KIMI_THRESHOLDS = PrefillBlockThresholds(moe_gate_device=0.950, moe_gate_host=0.950)
 
 # Determinism: every iteration must be bit-identical to the iter-0 baseline (strict).
 DETERMINISM_PCC_THRESHOLD = 1.0
