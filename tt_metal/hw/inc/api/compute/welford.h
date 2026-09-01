@@ -80,12 +80,29 @@ ALWI void welford_clear() { MATH((llk_math_welfords_sfpu_clear_previous_mean_and
  */
 ALWI void two_pass_stats_init_shifted() { MATH((llk_math_two_pass_sfpu_init())); }
 
+/**
+ * @brief Accumulates a row range into the current two-pass sum or centred-M2 state.
+ * @tparam accumulate_m2 If true, accumulates squared differences from the current mean; otherwise accumulates sums.
+ * @tparam dual_m2 If true, uses two independent accumulators to hide SFPU dependency latency.
+ * @param input_dst_idx Index of the input tile in the DST register buffer.
+ * @param start_row First tile row to process.
+ * @param num_rows Number of consecutive tile rows to process.
+ */
 template <bool accumulate_m2, bool dual_m2 = true>
 ALWI void two_pass_stats_update_rows(std::uint32_t input_dst_idx, std::uint32_t start_row, std::uint32_t num_rows) {
     ASSERT(start_row + num_rows <= TILE_WIDTH);
     MATH((llk_math_two_pass_sfpu_update_rows<accumulate_m2, dual_m2>(input_dst_idx, start_row, num_rows)));
 }
 
+/**
+ * @brief Accumulates shifted sums or centred M2 over a row range.
+ * @tparam accumulate_m2 If true, accumulates centred squared residuals; otherwise accumulates shifted sums.
+ * @tparam initialize_anchor If true, initialises the common anchor from the first selected input value.
+ * @tparam dual_accumulator If true, uses two independent accumulators to hide SFPU dependency latency.
+ * @param input_dst_idx Index of the input tile in the DST register buffer.
+ * @param start_row First tile row to process.
+ * @param num_rows Number of consecutive tile rows to process.
+ */
 template <bool accumulate_m2, bool initialize_anchor = false, bool dual_accumulator = true>
 ALWI void two_pass_stats_update_shifted_rows(
     std::uint32_t input_dst_idx, std::uint32_t start_row, std::uint32_t num_rows) {
@@ -94,50 +111,104 @@ ALWI void two_pass_stats_update_shifted_rows(
         input_dst_idx, start_row, num_rows)));
 }
 
+/**
+ * @brief Converts the shifted sum into a mean and clears the accumulators for the centred-M2 pass.
+ * @tparam dual_sum If true, combines the two shifted-sum accumulators before scaling.
+ * @tparam retain_anchor If true, retains the anchor for the subsequent centred-M2 pass.
+ * @param reciprocal_bits Bit representation of the FP32 reciprocal population count.
+ */
 template <bool dual_sum = true, bool retain_anchor = false>
 ALWI void two_pass_stats_finish_shifted_mean(std::uint32_t reciprocal_bits) {
     MATH((llk_math_two_pass_sfpu_finish_shifted_mean<dual_sum, retain_anchor>(reciprocal_bits)));
 }
 
+/** @brief Clears the two-pass mean, sum, and M2 accumulator registers. */
 ALWI void two_pass_stats_clear() { MATH((llk_math_two_pass_sfpu_clear_stats())); }
 
+/**
+ * @brief Stores the current mean and M2 state in consecutive DST tiles.
+ * @tparam dual_m2 If true, combines the two M2 accumulators before storing.
+ * @param mean_dst_idx Index of the DST tile that receives the mean; M2 is stored in the following tile.
+ */
 template <bool dual_m2 = true>
 ALWI void two_pass_stats_save_state(std::uint32_t mean_dst_idx) {
     MATH((llk_math_two_pass_sfpu_store_mean_m2_to_dst<dual_m2>(mean_dst_idx)));
 }
 
+/**
+ * @brief Finalises variance while storing the anchor and mean correction in a split-mean row layout.
+ * @tparam dual_m2 If true, combines the two M2 accumulators before scaling.
+ * @param mean_dst_idx Index of the DST tile that receives the split mean; variance uses the following tile.
+ * @param reciprocal_bits Bit representation of the FP32 reciprocal population count.
+ */
 template <bool dual_m2 = true>
 ALWI void two_pass_stats_finalize_split_mean_to_row(std::uint32_t mean_dst_idx, std::uint32_t reciprocal_bits) {
     MATH((llk_math_two_pass_sfpu_store_split_mean_var_to_dst_row<dual_m2>(mean_dst_idx, reciprocal_bits)));
 }
 
+/**
+ * @brief Stores the current shift anchor in a DST tile.
+ * @param anchor_dst_idx Index of the destination tile.
+ */
 ALWI void two_pass_stats_save_anchor(std::uint32_t anchor_dst_idx) {
     MATH((llk_math_two_pass_sfpu_store_anchor_to_dst(anchor_dst_idx)));
 }
 
+/**
+ * @brief Restores the shift anchor from a DST tile.
+ * @param anchor_dst_idx Index of the source tile.
+ */
 ALWI void two_pass_stats_restore_anchor(std::uint32_t anchor_dst_idx) {
     MATH((llk_math_two_pass_sfpu_load_anchor_from_dst(anchor_dst_idx)));
 }
 
+/**
+ * @brief Stores the shift anchor in the anchor row of a saved statistics state.
+ * @param mean_dst_idx Index of the saved mean/M2 state.
+ */
 ALWI void two_pass_stats_save_anchor_to_state(std::uint32_t mean_dst_idx) {
     MATH((llk_math_two_pass_sfpu_store_anchor_to_state_dst(mean_dst_idx)));
 }
 
+/**
+ * @brief Restores the shift anchor from the anchor row of a saved statistics state.
+ * @param mean_dst_idx Index of the saved mean/M2 state.
+ */
 ALWI void two_pass_stats_restore_anchor_from_state(std::uint32_t mean_dst_idx) {
     MATH((llk_math_two_pass_sfpu_load_anchor_from_state_dst(mean_dst_idx)));
 }
 
+/**
+ * @brief Merges the current block's mean/M2 with a previously saved statistics state.
+ * @tparam dual_m2 If true, combines the current block's two M2 accumulators before merging.
+ * @param mean_dst_idx Index of the saved mean/M2 state to update.
+ * @param total_reciprocal_bits Bit representation of the reciprocal combined population count.
+ * @param block_n_bits Bit representation of the current block's FP32 population count.
+ */
 template <bool dual_m2 = true>
 ALWI void two_pass_stats_combine_block(
     std::uint32_t mean_dst_idx, std::uint32_t total_reciprocal_bits, std::uint32_t block_n_bits) {
     MATH((llk_math_two_pass_sfpu_combine_block_to_dst<dual_m2>(mean_dst_idx, total_reciprocal_bits, block_n_bits)));
 }
 
+/**
+ * @brief Finalises the current mean and variance into the first row of consecutive DST tiles.
+ * @tparam dual_m2 If true, combines the two M2 accumulators before scaling.
+ * @param mean_dst_idx Index of the mean tile; variance is stored in the following tile.
+ * @param reciprocal_bits Bit representation of the FP32 reciprocal population count.
+ */
 template <bool dual_m2 = true>
 ALWI void two_pass_stats_finalize_to_row(std::uint32_t mean_dst_idx, std::uint32_t reciprocal_bits) {
     MATH((llk_math_two_pass_sfpu_store_mean_var_to_dst_row<dual_m2>(mean_dst_idx, reciprocal_bits)));
 }
 
+/**
+ * @brief Finalises one group's mean and variance into the raw face layout of consecutive DST tiles.
+ * @tparam dual_m2 If true, combines the two M2 accumulators before scaling.
+ * @param mean_dst_idx Index of the mean tile; variance is stored in the following tile.
+ * @param group_id Group slot within the raw face layout.
+ * @param reciprocal_bits Bit representation of the FP32 reciprocal population count.
+ */
 template <bool dual_m2 = true>
 ALWI void two_pass_stats_finalize_to_face(
     std::uint32_t mean_dst_idx, std::uint32_t group_id, std::uint32_t reciprocal_bits) {
@@ -145,6 +216,13 @@ ALWI void two_pass_stats_finalize_to_face(
 }
 
 #ifdef WELFORD_SFPU_LOCAL_COMBINE
+/**
+ * @brief Finalises one group's local statistics and combines its lane populations into the raw face layout.
+ * @tparam dual_m2 If true, combines the two M2 accumulators before finalisation.
+ * @param mean_dst_idx Index of the mean tile; variance is stored in the following tile.
+ * @param group_id Group slot within the raw face layout.
+ * @param reciprocal_bits Bit representation of the FP32 reciprocal local population count.
+ */
 template <bool dual_m2 = true>
 ALWI void two_pass_stats_finalize_and_combine_to_face(
     std::uint32_t mean_dst_idx, std::uint32_t group_id, std::uint32_t reciprocal_bits) {
@@ -319,6 +397,12 @@ ALWI void welford_restore_state(std::uint32_t mean_dst_idx, std::uint32_t group_
     MATH((llk_math_welfords_sfpu_load_mean_m2_from_dst(mean_dst_idx, group_id)));
 }
 
+/**
+ * @brief Saves the active group state and restores another group state.
+ * @param mean_dst_idx Index of the mean state tile; M2 is stored in the following tile.
+ * @param save_group_id Group slot that receives the active state.
+ * @param restore_group_id Group slot to load into the SFPU accumulators.
+ */
 ALWI void two_pass_stats_switch_group(
     std::uint32_t mean_dst_idx, std::uint32_t save_group_id, std::uint32_t restore_group_id) {
     MATH((llk_math_two_pass_sfpu_switch_group(mean_dst_idx, save_group_id, restore_group_id)));
