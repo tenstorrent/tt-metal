@@ -1,9 +1,30 @@
 # AGENTS.md — instructions for coding agents authoring changes
 
-This file is for agents **writing** changes to tt-metal (GitHub Copilot cloud
-agent and equivalents).
+## Determine whether you are a CI runner
 
-Related instruction files:
+The CI-runner instructions below describe the GitHub Copilot coding-agent job
+configured by `.github/workflows/copilot-setup-steps.yml`. Apply them only when
+both of these are true:
+
+- `GITHUB_ACTIONS=true` is present in the environment.
+- The task is running as that GitHub Copilot coding-agent job, or the runtime
+  explicitly identifies itself as that job.
+
+`CI=true`, `CODEX_CI=1`, being an automated coding agent, running remotely, or
+running in a container is not enough. If you cannot establish both conditions,
+assume you are **not** this CI runner.
+
+Non-CI agents must ignore the entire section below. In particular, do not adopt
+its assumptions about the installed toolchain, Docker, ccache, or accelerator
+availability. Inspect your actual environment and use any available local or
+remote Tenstorrent hardware and task-specific instructions.
+
+## If you are a CI runner
+
+This section is for agents **writing** changes to tt-metal on the GitHub Copilot
+coding-agent runner described above.
+
+### Related instruction files
 
 | File | Audience | Purpose |
 | --- | --- | --- |
@@ -14,7 +35,7 @@ Related instruction files:
 The review files describe how to critique a PR. They are not a specification
 for your own work.
 
-## Your environment
+### Your environment
 
 You run on an internal runner. The tt-metal toolchain is **not** installed on
 that host — it lives in the CI build image, and you reach it through a wrapper
@@ -24,7 +45,7 @@ script. Do not try to install compilers or dependencies; do not run
 What the host does have: `docker`, a checkout with submodules already
 initialised, and a shared remote ccache.
 
-## Match the check to the change
+### Match the check to the change
 
 | You changed | What to run |
 | --- | --- |
@@ -41,7 +62,7 @@ treat their absence in your environment as a reason to skip the table above.
 
 **If you are unsure whether your change affects the build, build it.**
 
-## Building
+### Building
 
 If you changed C++ or CMake, compile before opening the PR.
 
@@ -72,7 +93,7 @@ If the wrapper warns that Garage credentials are missing, you are building
 against a cold cache and it will most likely not finish. Say so in the PR
 rather than burning the session on it.
 
-## What to do about a build
+### What to do about a build
 
 - **Builds clean** — say so explicitly in the PR description, including the
   exact command you ran.
@@ -86,18 +107,25 @@ rather than burning the session on it.
 
 Do not claim you ran anything you did not run.
 
-## Things you cannot verify here
+### Hardware availability
 
-The runner has no Tenstorrent accelerator attached, so anything requiring real
-silicon — device tests, performance measurements, hardware-dependent
-behaviour — cannot be checked in your environment. Compilation and host-side
-unit tests are in scope; on-device results are not.
+The Copilot setup introduced with these instructions was designed for a runner
+with no Tenstorrent accelerator attached. That is an environment assumption,
+not a repository-wide fact. Before ruling out device tests, check for
+`/dev/tenstorrent` and for any hardware reservation or remote-execution tools
+provided to the task.
+
+If accelerator access is available, use the applicable hardware instructions
+and do not claim that silicon verification is unavailable. If it is not
+available, device tests, performance measurements, and hardware-dependent
+behaviour cannot be checked in this environment; compilation and host-side unit
+tests remain in scope.
 
 If a change's correctness depends on device behaviour, say so.
 
 Never state a performance improvement without measurements.
 
-## Scope discipline
+### Scope discipline
 
 - Change the minimum needed to solve the stated issue.
 - New source files go in the relevant `sources.cmake`, not into
