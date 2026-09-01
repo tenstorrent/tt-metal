@@ -11,12 +11,12 @@ Ties the validated blocks into one persistent, multi-request object (mirroring t
 
     XttsV2(mesh_device=None, ckpt_path=None)   # opens a (1,1) mesh if not given one
       .warmup()                                # compile all programs + capture the traces
-      .compute_voice(ref_audio, sr) -> Voice   # reference clip -> conditioning latents (Blocks 1+2)
-      .generate(text, voice, ...)  -> [1,1,N]  # text -> 24 kHz waveform (Block 3 GPT + Block 4 vocoder)
+      .compute_voice(ref_audio, sr) -> Voice   # reference clip -> conditioning latents (cond + speaker encoder)
+      .generate(text, voice, ...)  -> [1,1,N]  # text -> 24 kHz waveform (GPT + vocoder)
       .close()
 
-Front-end (tokenizer, mel/STFT, prompt assembly) is the coqui-free `frontend.py` — pure
-torch on host, validated bit-exact against coqui captures. Sampling (mel_head + repetition
+Front-end (tokenizer, mel/STFT, prompt assembly) is `frontend.py` — pure torch on host,
+needing no coqui package, validated bit-exact against coqui captures. Sampling (mel_head + repetition
 penalty + top-k/top-p/multinomial) is on host with a VECTORIZED repetition penalty — a
 per-token Python loop over the `seen` set is a known quadratic perf trap (grows linearly
 with `seen` per step; measured ~240x slower by step 586).
@@ -26,7 +26,7 @@ Device layout notes carried over from the block bringups:
     default/32K L1_SMALL (BUG-2/3 in the block docs).
   * `trace_region_size=160_000_000` holds the traced 30-layer GPT decode step plus one vocoder
     trace per VOC_BUCKETS shape; the traces scale with their frame count.
-  * Blocks 1 (cond+perceiver) and 4 (vocoder) run fp32 activations (PCC); Blocks 2/3 bf16.
+  * The conditioning branch and the vocoder run fp32 activations (PCC); speaker encoder and GPT bf16.
 
 Trace lifecycle — WHY the decode trace is captured once (option (a)):
   Capturing the decode trace after a single request's prefill serves that one request; for
@@ -127,8 +127,8 @@ VOC_BUCKETS = tuple(round(VOC_L * k / 16) for k in (2, 3, 4, 6, 8, 12, 16))
 class Voice:
     """A cloned voice: everything `generate()` needs from the reference clip."""
 
-    gpt_cond_latent: torch.Tensor  # [1, 32, 1024] — Block 1 (cond encoder + Perceiver) output
-    speaker_embedding: torch.Tensor  # [1, 512, 1]  — Block 2 (ResNet d-vector) output
+    gpt_cond_latent: torch.Tensor  # [1, 32, 1024] — cond encoder + Perceiver output
+    speaker_embedding: torch.Tensor  # [1, 512, 1]  — ResNet d-vector output
 
 
 def _voc_bucket(L):
@@ -252,7 +252,7 @@ class XttsV2:
             self._owns_device = False
         self.mesh_device.enable_program_cache()
 
-        # --- host front-end (coqui-free, validated bit-exact vs coqui) ---
+        # --- host front-end (no coqui package; validated bit-exact vs coqui) ---
         vocab = os.path.join(os.path.dirname(self.ckpt_path), "vocab.json")
         self.tokenizer = XttsTokenizer(vocab)
         self.tables = PromptTables(self.ckpt_path)
@@ -263,7 +263,7 @@ class XttsV2:
         dev = self.mesh_device
         self._spk_params = preprocess_speaker_parameters(dev, self.ckpt_path)
         self.speaker_encoder = TTNNSpeakerEncoder(dev, self._spk_params)
-        # Block 1 runs fp32 (PCC); the encoder instance is per-chunk (it bakes T-dependent
+        # The conditioning encoder runs fp32 (PCC); the encoder instance is per-chunk (it bakes T-dependent
         # masks), so keep only the preprocessed weights here.
         self._enc_params = preprocess_encoder_parameters(dev, self.ckpt_path, dtype=ttnn.float32)
         self._perc_params = preprocess_perceiver_parameters(dev, self.ckpt_path, dtype=ttnn.float32)
@@ -295,18 +295,18 @@ class XttsV2:
         """Compile every program the request path uses, then capture the traces.
 
         Order matters (same discipline as z_image_turbo): programs compiled after capture
-        risk landing where the trace keeps intermediates, so compile Blocks 1/2 (a full 6 s
+        risk landing where the trace keeps intermediates, so compile the conditioning and speaker encoders (a full 6 s
         conditioning chunk — the shape every long reference hits), the vocoder's slots and
         programs, one prefill, and the decode step BEFORE `capture()`. The vocoder TRACES are
         captured after it — see _alloc_vocoder / _capture_vocoder, which own that split.
         Prefill compiles per padded length, so every shape a request can reach is warmed here;
         otherwise the first request at each new length pays that compile."""
         t0 = time.time()
-        # 1) Blocks 1+2 on a dummy full-length (6 s) reference clip.
+        # 1) Conditioning + speaker encoder on a dummy full-length (6 s) reference clip.
         g = torch.Generator().manual_seed(0)
         dummy = torch.randn(6 * 22050, generator=g) * 0.1
         voice = self.compute_voice(dummy, 22050)
-        logger.info(f"[XttsV2] warmup: Blocks 1+2 compiled in {time.time() - t0:.1f}s")
+        logger.info(f"[XttsV2] warmup: conditioning + speaker encoder compiled in {time.time() - t0:.1f}s")
 
         # 2) Vocoder slots + programs at every bucket shape (see _alloc_vocoder: before capture).
         t1 = time.time()
@@ -342,7 +342,7 @@ class XttsV2:
     def compute_voice(self, ref_audio, sr) -> Voice:
         """Reference clip (torch [N] / [1,N] float waveform, sample rate sr) -> Voice.
 
-        Block 2 (speaker d-vector) runs once on the whole clip's logmel. Block 1 runs once
+        The speaker d-vector runs once on the whole clip's logmel. The conditioning encoder runs once
         PER <=6 s CHUNK and the 32 conditioning latents are MEANED across chunks — exactly
         coqui's get_gpt_cond_latents (one style embedding per chunk, averaged), which is what
         lifts the old "reference must be <=6 s" caveat (GAP-3): long references now
@@ -351,7 +351,7 @@ class XttsV2:
         dev = self.mesh_device
         audio = torch.as_tensor(ref_audio).float().reshape(1, -1)
 
-        # Block 2: ResNet speaker encoder on the 16 kHz logmel.
+        # ResNet speaker encoder on the 16 kHz logmel.
         logmel = speaker_logmel(audio, sr)  # [1,64,T]
         logmel_tt = ttnn.from_torch(logmel, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
         emb = self.speaker_encoder(logmel_tt)
@@ -359,7 +359,7 @@ class XttsV2:
             emb = emb[0]
         spk = ttnn.to_torch(emb).to(torch.float32).reshape(1, 512, 1)
 
-        # Block 1: conditioning encoder + Perceiver, once per 6 s chunk, latents averaged.
+        # Conditioning encoder + Perceiver, once per 6 s chunk, latents averaged.
         latents = []
         for mel in conditioning_mels(audio, sr, self.tables.mel_stats):  # each [1,80,T]
             T = mel.shape[2]

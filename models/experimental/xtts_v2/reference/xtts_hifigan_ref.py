@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-CPU reference for the XTTS-v2 HiFi-GAN vocoder generator (Block 4). Mirrors coqui
+CPU reference for the XTTS-v2 HiFi-GAN vocoder generator. Mirrors coqui
 TTS.vocoder.models.hifigan_generator.HifiganGenerator op-for-op, with weight-norm folded.
 
 Generator (input z [1,1024,L], d-vector g [1,512,1]):
@@ -13,7 +13,7 @@ Generator (input z [1,1024,L], d-vector g [1,512,1]):
       o = ConvTranspose1d ups[i]           # 512->256->128->64->32, strides 8,8,2,2
       o = o + conds[i](g)                  # per-layer d-vector conditioning
       o = mean_j ResBlock1(o, kernel[j], dil[j])   # MRF, kernels [3,7,11], dil [1,3,5]
-  o = leaky_relu(o, 0.1); o = conv_post(o) [k7,p3,no-bias]; o = tanh(o)  -> wav [1,1,L*256]
+  o = leaky_relu(o, 0.01); o = conv_post(o) [k7,p3,no-bias]; o = tanh(o)  -> wav [1,1,L*256]
 
 ResBlock1: for (c1,c2): x = x + c2(lrelu(c1(lrelu(x)))); c1 dilated, c2 dilation 1.
 """

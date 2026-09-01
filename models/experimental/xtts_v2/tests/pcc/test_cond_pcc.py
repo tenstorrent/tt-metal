@@ -2,14 +2,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC tests for the TTNN conditioning branch (Block 1) vs the CPU reference.
+"""PCC tests for the TTNN conditioning branch vs the CPU reference.
 
 Three levels, so a failure localises itself: the conditioning encoder alone (mel_in -> enc_out),
 the Perceiver resampler alone (fed the REFERENCE enc_out, so a fault there cannot be the
 encoder's), and the two chained on device (mel_in -> gpt_cond_latent [1,32,1024] — the 32 rows the
 GPT reads as "speak in this voice").
 
-Input: a deterministic synthetic voiced clip through the coqui-free mel front-end
+Input: a deterministic synthetic voiced clip through the mel front-end
 (frontend.conditioning_mels). Reference: reference/xtts_cond_ref.CondReference, validated at PCC
 1.0 against coqui activations during bringup. Set XTTS_GOLDEN_DIR to cross-check against stored
 coqui-captured fixtures instead.

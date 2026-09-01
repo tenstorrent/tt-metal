@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC tests for the traced KV-cached decode step of the XTTS-v2 GPT core (Block 3).
+"""PCC tests for the traced KV-cached decode step of the XTTS-v2 GPT core.
 
 Everything here drives TTNNGPTTracedDecoder, which is what a request runs: one-shot prefill into
 the cache, then the trace-replayed single-token step.

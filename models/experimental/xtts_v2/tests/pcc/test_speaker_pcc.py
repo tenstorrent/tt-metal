@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end PCC test for the TTNN ResNet speaker encoder (Block 2) vs the CPU reference.
+"""End-to-end PCC test for the TTNN ResNet speaker encoder vs the CPU reference.
 
 Block boundary: log-mel `logmel` [1,64,T] (mel front-end on CPU) -> d-vector [1,512,1].
 

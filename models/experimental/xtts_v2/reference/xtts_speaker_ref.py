@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-CPU reference for the XTTS-v2 ResNet speaker encoder (Block 2, "Branch B" -> d-vector).
+CPU reference for the XTTS-v2 ResNet speaker encoder ("Branch B" -> d-vector).
 
 Op-for-op mirror of coqui `TTS.encoder.models.resnet.ResNetSpeakerEncoder` as it is
 instantiated inside `TTS.tts.layers.xtts.hifigan_decoder.HifiDecoder`:

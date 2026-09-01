@@ -5,8 +5,8 @@
 
 Zero-shot voice-cloning text-to-speech ([coqui/XTTS-v2](https://huggingface.co/coqui/XTTS-v2))
 on Tenstorrent hardware. XTTS-v2 clones a voice from a few seconds of reference audio and
-speaks arbitrary text in it; the upstream model supports 17 languages, of which this TTNN
-implementation ships **13** (see [Known limitations](#known-limitations)). Output is 24 kHz
+speaks arbitrary text in it; the upstream model supports 17 languages, all of which this TTNN
+implementation ships (see [Known limitations](#known-limitations)). Output is 24 kHz
 audio.
 
 ## Hardware
@@ -66,8 +66,8 @@ python -m models.experimental.xtts_v2.demo.demo "Hello from Tenstorrent." \
 python -m models.experimental.xtts_v2.demo.demo_server --ref my_voice.wav
 ```
 
-`--ref` accepts a mono `.wav` (any sample rate) or a torch-saved `.pt` (raw waveform
-tensor, `(tensor, sr)` tuple, or HF audio-sample dict). The REPL supports `\seed N`,
+`--ref` accepts a mono `.wav`/`.flac`/`.ogg` at any sample rate (multi-channel is
+downmixed). The REPL supports `\seed N`,
 `\ref PATH` (recompute the voice), and `\quit`.
 
 ### Integration API
@@ -95,10 +95,10 @@ The suite is self-contained: references are computed live in-process from the ch
 pytest models/experimental/xtts_v2/tests/
 
 # Individual blocks
-pytest models/experimental/xtts_v2/tests/pcc/test_cond_pcc.py       # Block 1
-pytest models/experimental/xtts_v2/tests/pcc/test_speaker_pcc.py    # Block 2
-pytest models/experimental/xtts_v2/tests/pcc/test_gpt_decode_pcc.py # Block 3 (traced decode)
-pytest models/experimental/xtts_v2/tests/pcc/test_hifigan_pcc.py    # Block 4
+pytest models/experimental/xtts_v2/tests/pcc/test_cond_pcc.py       # conditioning encoder
+pytest models/experimental/xtts_v2/tests/pcc/test_speaker_pcc.py    # speaker encoder
+pytest models/experimental/xtts_v2/tests/pcc/test_gpt_decode_pcc.py # GPT, traced decode
+pytest models/experimental/xtts_v2/tests/pcc/test_hifigan_pcc.py    # vocoder
 
 # Per-stage timings and RTF, gated against per-stage ceilings
 pytest models/experimental/xtts_v2/tests/perf/test_perf.py
@@ -110,7 +110,7 @@ Measured on Wormhole N150 (warm, program cache + trace in place):
 
 | Stage | Time | Notes |
 |---|---|---|
-| `compute_voice` | ~2–6 s | once per speaker (Blocks 1+2); the first clip of a new length pays one-time conv compiles |
+| `compute_voice` | ~2–6 s | once per speaker (conditioning + speaker encoder); the first clip of a new length pays one-time conv compiles |
 | GPT prefill | ~21–22 ms | one-shot, incl. tokenize + prompt assembly; near-flat across prompt length (the prompt is padded to one of 7 length buckets) |
 | GPT decode | ~9 ms/token | traced, tuned matmul configs; each token = 46.4 ms of audio → **~5x real-time** decode |
 | HiFi-GAN vocoder | 0.09–0.71 s | traced, per length bucket: 0.09 s ≤ 3.5 s of audio … 0.71 s ≤ 28 s |
@@ -157,7 +157,7 @@ vocoder bucket, so no request pays a compile at request time.
 | Path | Role |
 |---|---|
 | `tt/` | TTNN blocks + the `XttsV2` serving class |
-| `frontend.py` | coqui-free host front-end (tokenizer, mel/STFT, prompt assembly) |
+| `frontend.py` | host front-end (tokenizer, mel/STFT, prompt assembly); no coqui package dependency, text cleaning vendored from coqui under MPL-2.0 |
 | `reference/` | CPU reference implementations (PCC oracles) |
 | `tests/` | per-block PCC tests (self-contained) |
 | `demo/` | one-shot CLI + interactive REPL server |

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-KV-cached autoregressive decode for the XTTS-v2 GPT transformer core (Block 3).
+KV-cached autoregressive decode for the XTTS-v2 GPT transformer core.
 
 Takes TTNNGPTCore's layer helpers and adds the two passes a request runs: a one-shot batched
 prefill that seeds a per-layer on-device KV cache, and a trace-replayed single-token step. At step

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-CPU reference for the XTTS-v2 conditioning branch (Block 1): conditioning encoder +
+CPU reference for the XTTS-v2 conditioning branch: conditioning encoder +
 Perceiver resampler. Mirrors coqui TTS.tts.layers.tortoise (ConditioningEncoder /
 AttentionBlock / QKVAttentionLegacy) + TTS.tts.layers.xtts.perceiver_encoder
 (PerceiverResampler), op-for-op, so it can be validated against captured coqui goldens

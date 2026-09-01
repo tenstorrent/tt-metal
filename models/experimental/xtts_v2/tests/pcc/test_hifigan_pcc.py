@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end PCC test for the TTNN HiFi-GAN generator (Block 4) vs the CPU reference wav.
+"""End-to-end PCC test for the TTNN HiFi-GAN generator vs the CPU reference wav.
 
 Block boundary: generator input z [1,1024,L] + d-vector g [1,512,1] -> waveform [1,1,L*256].
 The generator carries the 1D signal as NHWC [1,1,L,C].

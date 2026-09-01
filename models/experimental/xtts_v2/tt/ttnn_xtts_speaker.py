@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TTNN implementation of the XTTS-v2 ResNet speaker encoder (Block 2, "Branch B" -> d-vector).
+TTNN implementation of the XTTS-v2 ResNet speaker encoder ("Branch B" -> d-vector).
 
 Reference: models/experimental/xtts_v2/reference/xtts_speaker_ref.py
 

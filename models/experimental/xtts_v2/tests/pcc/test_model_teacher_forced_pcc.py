@@ -14,7 +14,7 @@ differ: device bf16, KV-cached, trace-replayed single steps against fp32, uncach
 Causal masking makes those the same function, so they must agree.
 
 Conditioning and the speaker embedding are computed once on device and handed to BOTH sides, so
-Blocks 1 and 2 are inputs here rather than results -- test_cond_pcc and test_speaker_pcc own those.
+the conditioning and speaker encoders are inputs here rather than results -- test_cond_pcc and test_speaker_pcc own those.
 
 English crosses three axes, because each selects different device work: prompt length (the prefill
 program and the fill_cache split), seed (a different path through the decoder), and reference-clip

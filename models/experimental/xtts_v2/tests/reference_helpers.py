@@ -8,7 +8,7 @@ Each helper returns the exact tensors the tests previously loaded from the (giti
 never-committed) golden/**/*.pt fixtures, computed in-process from the checkpoint:
 
   * deterministic input: either seeded noise shaped to the block's real input statistics,
-    or a synthetic voiced waveform pushed through the coqui-free front-end (frontend.py),
+    or a synthetic voiced waveform pushed through the front-end (frontend.py),
   * reference output: the op-by-op PyTorch mirrors in reference/ (each validated at
     PCC 1.0 against coqui activations during bringup), loaded from the same checkpoint
     the TTNN modules use.
@@ -62,7 +62,7 @@ def _load_golden(golden, *rel):
 
 
 # ---------------------------------------------------------------------------------------
-# Deterministic synthetic reference clip (input choice for Blocks 1 & 2)
+# Deterministic synthetic reference clip (input choice for the conditioning and speaker encoders)
 # ---------------------------------------------------------------------------------------
 
 
@@ -94,7 +94,7 @@ def synthetic_speech(seconds=4.0, sr=22050, seed=17):
 
 
 # ---------------------------------------------------------------------------------------
-# Block 1: conditioning encoder + Perceiver
+# Conditioning encoder + Perceiver
 # ---------------------------------------------------------------------------------------
 
 
@@ -116,7 +116,7 @@ def _cond_reference(golden):
 
 
 # ---------------------------------------------------------------------------------------
-# Block 2: ResNet speaker encoder
+# ResNet speaker encoder
 # ---------------------------------------------------------------------------------------
 
 
@@ -135,7 +135,7 @@ def _speaker_reference(golden):
 
 
 # ---------------------------------------------------------------------------------------
-# Block 4: HiFi-GAN generator
+# HiFi-GAN generator
 # ---------------------------------------------------------------------------------------
 
 HIFIGAN_L = 256  # synthetic latent length (frames @ ~93.75 Hz -> L*256 samples @ 24 kHz)
@@ -178,7 +178,7 @@ def _hifigan_reference(golden):
 
 
 # ---------------------------------------------------------------------------------------
-# Block 3: GPT transformer core (+ generation)
+# GPT transformer core (+ generation)
 # ---------------------------------------------------------------------------------------
 
 

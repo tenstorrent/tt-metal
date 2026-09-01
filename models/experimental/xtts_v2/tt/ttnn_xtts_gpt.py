@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTNN weight preprocessing and shared layer helpers for the XTTS-v2 GPT core (Block 3).
+"""TTNN weight preprocessing and shared layer helpers for the XTTS-v2 GPT core.
 
 Reference: models/experimental/xtts_v2/reference/xtts_gpt_ref.py
 Architecture (HF GPT2, 30 blocks, causal, wpe nulled) + XTTS final_norm:
