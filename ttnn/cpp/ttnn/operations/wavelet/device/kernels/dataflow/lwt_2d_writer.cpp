@@ -21,6 +21,7 @@ using ttnn::operations::wavelet::kernels::primitives::kFaceSide;
 using ttnn::operations::wavelet::kernels::primitives::kTileBytes;
 using ttnn::operations::wavelet::kernels::primitives::kTileSide;
 using ttnn::operations::wavelet::kernels::primitives::load_config_page;
+using ttnn::operations::wavelet::kernels::primitives::preload_config_pages;
 using ttnn::operations::wavelet::kernels::primitives::tile_element_offset;
 using ttnn::operations::wavelet::kernels::primitives::tiled_element_offset;
 
@@ -43,27 +44,6 @@ struct Rect {
 
 [[nodiscard]] ALWI uint32_t aligned_end(const uint32_t begin, const uint32_t length) {
     return ((begin + length + kTileSide - 1) / kTileSide) * kTileSide;
-}
-
-template <typename Accessor>
-ALWI void preload_config_pages(
-    const Accessor& accessor,
-    const uint32_t address,
-    const uint32_t page_bytes,
-    const uint32_t page_begin,
-    const uint32_t page_count,
-    const uint32_t destination_addr) {
-    const auto pages = TensorAccessor(accessor, address, page_bytes);
-    Noc noc;
-    for (uint32_t page = 0; page < page_count; ++page) {
-        noc.async_read(
-            pages,
-            CoreLocalMem<uint32_t>(destination_addr + page * page_bytes),
-            page_bytes,
-            {.page_id = page_begin + page},
-            {});
-    }
-    noc.async_read_barrier();
 }
 
 ALWI void write_local_output(
@@ -531,7 +511,7 @@ void kernel_main() {
         const uint32_t final_y_length = band_words[ttnn::operations::wavelet::device_protocol::kLwt2DBandFinalYLength];
         const uint32_t final_x_begin = band_words[ttnn::operations::wavelet::device_protocol::kLwt2DBandFinalXBegin];
         const uint32_t final_x_length = band_words[ttnn::operations::wavelet::device_protocol::kLwt2DBandFinalXLength];
-        constexpr uint32_t band_offsets[4] = {
+        constexpr uint32_t band_offsets[ttnn::operations::wavelet::device_protocol::kLwt2DBandCount] = {
             ttnn::operations::wavelet::device_protocol::kLwt2DBandLl,
             ttnn::operations::wavelet::device_protocol::kLwt2DBandLh,
             ttnn::operations::wavelet::device_protocol::kLwt2DBandHl,
@@ -539,9 +519,9 @@ void kernel_main() {
         };
         const ConfigWords band_config{band_words};
 #ifdef ILWT_2D
-        uint32_t parity_slots[4];
-        Rect parity_sources[4];
-        for (uint32_t parity = 0; parity < 4; ++parity) {
+        uint32_t parity_slots[ttnn::operations::wavelet::device_protocol::kLwt2DBandCount];
+        Rect parity_sources[ttnn::operations::wavelet::device_protocol::kLwt2DBandCount];
+        for (uint32_t parity = 0; parity < ttnn::operations::wavelet::device_protocol::kLwt2DBandCount; ++parity) {
             const uint32_t band_offset = band_offsets[parity];
             parity_slots[parity] =
                 band_words[band_offset + ttnn::operations::wavelet::device_protocol::kLwt2DBandSourceSlot];
@@ -565,7 +545,7 @@ void kernel_main() {
             pad_x,
             noc_scratch_addr);
 #else
-        for (uint32_t band = 0; band < 4; ++band) {
+        for (uint32_t band = 0; band < ttnn::operations::wavelet::device_protocol::kLwt2DBandCount; ++band) {
             const uint32_t band_offset = band_offsets[band];
             const uint32_t source_slot =
                 band_words[band_offset + ttnn::operations::wavelet::device_protocol::kLwt2DBandSourceSlot];

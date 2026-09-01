@@ -14,7 +14,7 @@
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/wavelet/common/signal_extension.hpp"
 #include "ttnn/operations/wavelet/device/protocol/lwt_2d_config.hpp"
-#include "ttnn/operations/wavelet/planner/step.hpp"
+#include "ttnn/operations/wavelet/device/protocol/lwt_config.hpp"
 
 namespace {
 
@@ -24,6 +24,7 @@ using ttnn::operations::wavelet::kernels::primitives::kTileBytes;
 using ttnn::operations::wavelet::kernels::primitives::kTileElements;
 using ttnn::operations::wavelet::kernels::primitives::kTileSide;
 using ttnn::operations::wavelet::kernels::primitives::load_config_page;
+using ttnn::operations::wavelet::kernels::primitives::preload_config_pages;
 using ttnn::operations::wavelet::kernels::primitives::tile_element_offset;
 using ttnn::operations::wavelet::kernels::primitives::tile_face_column_offset;
 using ttnn::operations::wavelet::kernels::primitives::tile_face_row_offset;
@@ -54,33 +55,6 @@ struct Rect {
 
 [[nodiscard]] ALWI uint32_t aligned_end(const uint32_t begin, const uint32_t length) {
     return ((begin + length + kTileSide - 1) / kTileSide) * kTileSide;
-}
-
-[[nodiscard]] ALWI bool contains(const Rect& rectangle, const int32_t y, const int32_t x) {
-    return y >= static_cast<int32_t>(rectangle.y_begin) && x >= static_cast<int32_t>(rectangle.x_begin) &&
-           y < static_cast<int32_t>(rectangle.y_begin + rectangle.y_length) &&
-           x < static_cast<int32_t>(rectangle.x_begin + rectangle.x_length);
-}
-
-template <typename Accessor>
-ALWI void preload_config_pages(
-    const Accessor& accessor,
-    const uint32_t address,
-    const uint32_t page_bytes,
-    const uint32_t page_begin,
-    const uint32_t page_count,
-    const uint32_t destination_addr) {
-    const auto pages = TensorAccessor(accessor, address, page_bytes);
-    Noc noc;
-    for (uint32_t page = 0; page < page_count; ++page) {
-        noc.async_read(
-            pages,
-            CoreLocalMem<uint32_t>(destination_addr + page * page_bytes),
-            page_bytes,
-            {.page_id = page_begin + page},
-            {});
-    }
-    noc.async_read_barrier();
 }
 
 template <ttnn::operations::wavelet::BoundaryMode Mode>
@@ -130,6 +104,7 @@ template <uint32_t Capacity>
             return index;
         }
     }
+    ASSERT(false);
     return 0;
 }
 
@@ -590,7 +565,7 @@ ALWI void split_macro_tile(
 
     if constexpr (Interior) {
         bool complete = true;
-        for (uint32_t plane = 0; plane < 4; ++plane) {
+        for (uint32_t plane = 0; plane < ttnn::operations::wavelet::device_protocol::kLwt2DInitialPlaneCount; ++plane) {
             complete = complete && covers_tile(rectangles[plane], tile_y, tile_x);
         }
         if (complete) {
@@ -675,7 +650,7 @@ ALWI void initialize_planes_tiled(
     uint32_t y_end = rectangles[0].y_begin + rectangles[0].y_length;
     uint32_t x_begin = rectangles[0].x_begin;
     uint32_t x_end = rectangles[0].x_begin + rectangles[0].x_length;
-    for (uint32_t plane = 1; plane < 4; ++plane) {
+    for (uint32_t plane = 1; plane < ttnn::operations::wavelet::device_protocol::kLwt2DInitialPlaneCount; ++plane) {
         y_begin = std::min(y_begin, rectangles[plane].y_begin);
         y_end = std::max(y_end, rectangles[plane].y_begin + rectangles[plane].y_length);
         x_begin = std::min(x_begin, rectangles[plane].x_begin);
@@ -686,7 +661,8 @@ ALWI void initialize_planes_tiled(
         for (uint32_t tile_x = aligned_begin(x_begin); tile_x < aligned_end(x_begin, x_end - x_begin);
              tile_x += kTileSide) {
             bool active = false;
-            for (uint32_t plane = 0; plane < 4; ++plane) {
+            for (uint32_t plane = 0; plane < ttnn::operations::wavelet::device_protocol::kLwt2DInitialPlaneCount;
+                 ++plane) {
                 active = active || intersects_tile(rectangles[plane], tile_y, tile_x);
             }
             if (!active) {
@@ -931,21 +907,6 @@ ALWI void initialize_inverse_band_planes(
 }
 #endif
 
-[[nodiscard]] ALWI float read_plane(
-    const uint32_t plane_addr,
-    const uint32_t plane_tile_columns,
-    const Rect& stored,
-    const int32_t y,
-    const int32_t x) {
-    if (!contains(stored, y, x)) {
-        return 0.0F;
-    }
-    const uint32_t local_y = static_cast<uint32_t>(y) - aligned_begin(stored.y_begin);
-    const uint32_t local_x = static_cast<uint32_t>(x) - aligned_begin(stored.x_begin);
-    const auto* source = reinterpret_cast<volatile tt_l1_ptr float*>(plane_addr);
-    return source[tiled_element_offset(local_y, local_x, plane_tile_columns)];
-}
-
 enum class RouteTileClass : uint32_t {
     kExact,
     kOneAxisShifted,
@@ -953,15 +914,6 @@ enum class RouteTileClass : uint32_t {
     kPartial,
     kEmpty,
 };
-
-ALWI void reserve_tile(const uint32_t cb) {
-    CircularBuffer buffer(cb);
-    buffer.reserve_back(1);
-    auto* tile = reinterpret_cast<volatile tt_l1_ptr float*>(buffer.get_write_ptr());
-    for (uint32_t element = 0; element < kTileElements; ++element) {
-        tile[element] = 0.0F;
-    }
-}
 
 enum class StageTileResult : uint32_t {
     kExactPending,
@@ -1183,7 +1135,8 @@ ALWI void stencil_requested_origin(
         requested_y += static_cast<int32_t>(source_tile_index * kTileSide);
     } else {
         requested_x +=
-            static_cast<int32_t>(source_tile_index * kTileSide) - static_cast<int32_t>(17 - coefficient_count);
+            static_cast<int32_t>(source_tile_index * kTileSide) -
+            static_cast<int32_t>(ttnn::operations::wavelet::device_protocol::kStepCoeffCapacity - coefficient_count);
     }
 }
 
@@ -1329,9 +1282,6 @@ void kernel_main() {
             plane_tile_columns,
             noc_scratch_addr);
 #endif
-        for (uint32_t word = 0; word < kTileElements; ++word) {
-            zero_tile[word] = 0;
-        }
         ASSERT(
             route_count * ttnn::operations::wavelet::device_protocol::kLwt2DRouteConfigPageBytes <=
             reader_config_capacity);
@@ -1365,6 +1315,7 @@ void kernel_main() {
             const bool scale = (flags & ttnn::operations::wavelet::device_protocol::kLwt2DRouteFlagScale) != 0;
             const uint32_t coefficient_count =
                 scale ? 1 : (vertical ? source.y_length - output.y_length + 1 : source.x_length - output.x_length + 1);
+            ASSERT(coefficient_count <= ttnn::operations::wavelet::device_protocol::kStepCoeffCapacity);
 
             for (uint32_t tile_y = 0; tile_y < output_tile_rows; ++tile_y) {
                 for (uint32_t tile_x = 0; tile_x < output_tile_columns; ++tile_x) {
