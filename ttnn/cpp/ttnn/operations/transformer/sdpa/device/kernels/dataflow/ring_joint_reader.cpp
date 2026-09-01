@@ -477,8 +477,10 @@ void kernel_main() {
                 get_common_arg_val<uint32_t>(3));
         }
         if constexpr (kv_pad_from_metadata) {
-            const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
+            uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
                 meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(4), meta_l1);
+            kv_actual_isl =
+                trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
             const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
             logical_nt = ring_joint::compute_logical_nt(kv_actual_isl, chunk_size_t * 32, 32);
             const uint32_t tensor_rank =

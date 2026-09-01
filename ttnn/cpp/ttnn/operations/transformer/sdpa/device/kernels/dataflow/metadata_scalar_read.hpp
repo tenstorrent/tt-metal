@@ -51,4 +51,18 @@ inline uint32_t bounded_cache_batch_idx(
     return slot_fits_cache ? slot_id * num_layers + layer_idx : 0;
 }
 
+inline uint32_t bounded_kv_actual_isl(
+    uint32_t kv_actual_isl, uint32_t chunk_global_tile_rows, uint32_t cache_global_tile_rows) {
+    constexpr uint32_t tile_height = 32;
+    const bool tile_aligned = kv_actual_isl % tile_height == 0;
+    const uint32_t kv_actual_tile_rows = kv_actual_isl / tile_height;
+    const bool geometry_valid = chunk_global_tile_rows > 0 && chunk_global_tile_rows <= cache_global_tile_rows;
+    const bool metadata_valid =
+        geometry_valid && tile_aligned && kv_actual_tile_rows <= cache_global_tile_rows - chunk_global_tile_rows;
+    ASSERT(metadata_valid);
+    // Treat invalid metadata as the first chunk when device assertions are disabled. Every metadata
+    // consumer uses this fallback, keeping CCL producer/consumer counts and SDPA work masks consistent.
+    return metadata_valid ? kv_actual_isl : 0;
+}
+
 }  // namespace trace_metadata
