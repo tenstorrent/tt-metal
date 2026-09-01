@@ -15,7 +15,9 @@ norm convention and its ``1/sqrt(head_dim)`` attention scale.
 
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 
 import torch
 
@@ -23,7 +25,7 @@ import ttnn
 
 from ...layers.embeddings import Embedding
 from ...layers.linear import ColParallelLinear, RowParallelLinear
-from ...layers.module import Module, ModuleList
+from ...layers.module import LoadingError, Module, ModuleList
 from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
@@ -474,13 +476,16 @@ class Gemma4EncoderLayer(Module):
         self.ff = Gemma4FF(config, mesh_device, ccl_manager, parallel_config)
         self.layer_scalar = 1.0
 
+    #: Sidecar for :attr:`layer_scalar`, which is NOT a Parameter and so is invisible to
+    #: ``Module.save``/``Module.load``. See :meth:`save`.
+    _SCALAR_FILE = "layer_scalar.json"
+
     def _prepare_torch_state(self, state):
         # A single learned scalar; kept on the host and folded into the output multiply
         # rather than round-tripped through a device Parameter.
         scalar = state.pop("layer_scalar", None)
         if scalar is not None:
             self.layer_scalar = float(scalar.reshape(-1)[0].item())
-
         rename_substate(state, "input_layernorm", "self_attn.input_layernorm")
         rename_substate(state, "post_attention_layernorm", "self_attn.post_attention_layernorm")
         rename_substate(state, "pre_feedforward_layernorm", "ff.pre_feedforward_layernorm")
@@ -488,6 +493,33 @@ class Gemma4EncoderLayer(Module):
         rename_substate(state, "mlp.gate_proj", "ff.gate_proj")
         rename_substate(state, "mlp.up_proj", "ff.up_proj")
         rename_substate(state, "mlp.down_proj", "ff.down_proj")
+
+    def save(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        """Weights, plus ``layer_scalar`` beside them.
+
+        ``layer_scalar`` is a host float, not a Parameter, so the base class does not persist it
+        and ``load`` does not run ``_prepare_torch_state``. Without this the cached path silently
+        kept the constructor's 1.0 for all 48 layers where the checkpoint carries 0.0045-0.93 --
+        every layer's residual contribution inflated, the text embedding destroyed, and video that
+        ignores its prompt while looking otherwise well-formed. The gate for it is
+        tests/unit/test_gemma4_cache_roundtrip.py.
+        """
+        super().save(directory, prefix=prefix)
+        (Path(directory) / f"{prefix}{self._SCALAR_FILE}").write_text(json.dumps(self.layer_scalar))
+
+    def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        super().load(directory, prefix=prefix)
+        path = Path(directory) / f"{prefix}{self._SCALAR_FILE}"
+        if not path.exists():
+            # Refuse rather than fall back to 1.0: a cache written before this existed holds the
+            # right tensors and no scalar, and silently using the default is the whole bug. Deleting
+            # the cache directory rebuilds it in about a minute.
+            msg = (
+                f"cache at '{directory}' predates layer_scalar persistence and would silently drop "
+                f"the per-layer scalars. Delete it and let it rebuild"
+            )
+            raise LoadingError(msg)
+        self.layer_scalar = json.loads(path.read_text())
 
     def forward(self, hidden_states, cos, sin, attn_mask=None):
         hidden_states = self.self_attn(hidden_states, cos, sin, attn_mask=attn_mask)
