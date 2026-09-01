@@ -379,7 +379,11 @@ class Talker(LightweightModule):
             if updated_kv_caches is not None:
                 updated_kv_caches.append(updated_kv_cache)
 
-        # Final norm
+        # Prefill layers return width-sharded residual; final RMSNorm is interleaved.
+        if hidden_states.is_sharded():
+            hidden_il = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(hidden_states)
+            hidden_states = hidden_il
         hidden_states = self.norm(hidden_states)
 
         return hidden_states, updated_kv_caches

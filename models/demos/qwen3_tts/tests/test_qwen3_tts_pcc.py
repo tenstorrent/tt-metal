@@ -390,6 +390,8 @@ def test_talker_chain_pcc(device, state_dict):
         hidden_tt, _ = layer(
             hidden_tt, cos_tt, sin_tt, trans_mat, attention_mask=None, kv_cache=None, start_pos=0, mode="prefill"
         )
+    if hidden_tt.is_sharded():
+        hidden_tt = ttnn.to_memory_config(hidden_tt, ttnn.L1_MEMORY_CONFIG)
     hidden_tt = ttnn.rms_norm(hidden_tt, epsilon=tt_cfg.rms_norm_eps, weight=final_norm_tt)
     x_tt = ttnn.to_torch(hidden_tt).squeeze(1).float()[:, :seq_len, :]
 
