@@ -56,13 +56,13 @@ private:
 
         static constexpr std::uint32_t XyWord = 44 + 12 * RegIndex + 2 * UnpackerIndex;
         static constexpr Field Xstride {
-            RegisterFile::State, 32, XyWord, 0, 0, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
+            RegisterScope::State, 32, XyWord, 0, 0, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
         static constexpr Field Ystride {
-            RegisterFile::State, 32, XyWord, 0, 16, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
+            RegisterScope::State, 32, XyWord, 0, 16, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
         static constexpr Field Zstride {
-            RegisterFile::State, 32, XyWord + 1, 0, 0, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
+            RegisterScope::State, 32, XyWord + 1, 0, 0, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
         static constexpr Field Wstride {
-            RegisterFile::State, 32, XyWord + 1, 0, 16, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
+            RegisterScope::State, 32, XyWord + 1, 0, 16, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
     };
 
     [[noreturn]] static UnpackerAddrCtrlEntry invalid_index()
@@ -121,7 +121,7 @@ private:
         static_assert(RegIndex < 2, "unpacker register index out of range");
 
         static constexpr Field Value {
-            RegisterFile::State, 32, 48 + 12 * UnpackerIndex + RegIndex, 0, 0, 18, 1, 0}; // Base 0 (of 0-8) used in X-Y addressing (18b)
+            RegisterScope::State, 32, 48 + 12 * UnpackerIndex + RegIndex, 0, 0, 18, 1, 0}; // Base 0 (of 0-8) used in X-Y addressing (18b)
     };
 
     [[noreturn]] static const Field& invalid_index()
@@ -161,8 +161,8 @@ public:
     std::uint32_t unpacker;
 
 private:
-    static constexpr Field Context01 {RegisterFile::State, 32, 51, 0, 0, 32, 1, 0}; // Context 0&1 blobs y_start (32b)
-    static constexpr Field Context23 {RegisterFile::State, 32, 52, 0, 0, 32, 1, 0}; // Context 2&3 blobs y_start (32b)
+    static constexpr Field Context01 {RegisterScope::State, 32, 51, 0, 0, 32, 1, 0}; // Context 0&1 blobs y_start (32b)
+    static constexpr Field Context23 {RegisterScope::State, 32, 52, 0, 0, 32, 1, 0}; // Context 2&3 blobs y_start (32b)
 
     [[noreturn]] static const Field& invalid_index()
     {
@@ -241,8 +241,8 @@ public:
     // Resolve the THCON section into a standalone field so Base itself can be
     // used as a single non-type template argument.
     static constexpr Field Base {
-        source().file,
-        source().wbits,
+        source().scope,
+        source().word_size,
         source().addr32(section),
         0,
         source().shamt(section),
@@ -346,12 +346,12 @@ private:
         static_assert(UnpackerIndex < 2, "unpacker index out of range");
 
         static constexpr Field ForcedSharedExp {
-            RegisterFile::State, 32, 50 + 12 * UnpackerIndex, 0, 0, 8, 1, 0}; // Forced shared exponent used when shared exponent reads are disabled for BFP
-                                                                              // formats (8b)
+            RegisterScope::State, 32, 50 + 12 * UnpackerIndex, 0, 0, 8, 1, 0}; // Forced shared exponent used when shared exponent reads are disabled for BFP
+                                                                               // formats (8b)
         static constexpr Field AddDestAddrCntr {
-            RegisterFile::State, 32, 50 + 12 * UnpackerIndex, 0, 8, 1, 1, 0}; // Combine the per-context destination address with the address counter (1b)
-        static constexpr Field NopRegClrVal {RegisterFile::State, 32, 53 + 10 * UnpackerIndex, 0, 0, 32, 1, 0}; // Immediate value used by UNPACR_NOP to clear
-                                                                                                                // SRCA (unpacker 0) or SRCB (unpacker 1) (32b)
+            RegisterScope::State, 32, 50 + 12 * UnpackerIndex, 0, 8, 1, 1, 0}; // Combine the per-context destination address with the address counter (1b)
+        static constexpr Field NopRegClrVal {RegisterScope::State, 32, 53 + 10 * UnpackerIndex, 0, 0, 32, 1, 0}; // Immediate value used by UNPACR_NOP to clear
+                                                                                                                 // SRCA (unpacker 0) or SRCB (unpacker 1) (32b)
     };
 
     [[noreturn]] static UnpackerEntry invalid_index()
