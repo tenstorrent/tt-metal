@@ -1,0 +1,7 @@
+# Source files for ttnn_op_experimental_deepseek_prefill_compressor_state_exchange.
+
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_COMPRESSOR_STATE_EXCHANGE_API_HEADERS compressor_state_exchange.hpp)
+
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_COMPRESSOR_STATE_EXCHANGE_NANOBIND_SRCS
+    compressor_state_exchange_nanobind.cpp
+)
