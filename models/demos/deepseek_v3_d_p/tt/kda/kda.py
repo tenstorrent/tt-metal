@@ -105,8 +105,10 @@ class KdaState:
     """Caller-owned KDA carries.
 
     ``recurrent`` is TP-local and must be replicated across the SP axis.
-    ``convolution`` is an SP-replicated stream tail; the halo exchange derives
-    each partition entry carry from it. Construct state with
+    ``convolution`` is the BF16 row-major DRAM stream tail with shape
+    ``[B, kernel_size - 1, Q_local + K_local + V_local]``. Its channels are
+    sharded across TP and the complete tail is replicated across SP. The halo
+    exchange derives each partition entry carry from it. Construct state with
     :meth:`ttKDA.allocate_state` or reuse a state returned by :meth:`ttKDA.forward`.
     """
 
@@ -141,7 +143,6 @@ class ttKDA:
             tuple(mesh_device.shape)[self.sequence_parallel_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
         )
         self.recurrence_config = program_config.recurrence
-        self.qkv_channel_chunk_size = program_config.qkv_channel_chunk_size
         self.output_projection_out_block_w = program_config.output_projection_out_block_w
         output_grid = mesh_device.compute_with_storage_grid_size()
         self.output_projection_grid = (output_grid.x, output_grid.y)
@@ -168,6 +169,12 @@ class ttKDA:
         self.weights = weights
         self.tensor_parallel_size = self.weights.tensor_parallel_size
         self.config = replace(config, num_heads=config.num_heads // self.tensor_parallel_size)
+        qkv_channel_chunk_size = _effective_qkv_channel_chunk_size(
+            self._convolution_width, program_config.qkv_channel_chunk_size
+        )
+        self.qkv_convolution_program_config = ttnn.QkvCausalConv1dSiluProgramConfig(
+            channel_chunk_size=qkv_channel_chunk_size
+        )
         if self.tensor_parallel_size > 1 and tt_ccl is None:
             raise ValueError("tt_ccl is required for tensor-parallel KDA")
         self.tt_ccl = tt_ccl
@@ -245,7 +252,7 @@ class ttKDA:
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
-    ) -> tuple[int, int]:
+    ) -> None:
         """Validate shape/type plus the documented SP state-distribution contract."""
         if len(hidden_states.shape) != 3 or hidden_states.shape[-1] != self.config.hidden_size:
             raise ValueError(
@@ -288,7 +295,6 @@ class ttKDA:
             raise ValueError(f"recurrent state dtype {state.recurrent.dtype} != {KDA_RECURRENT_STATE_DTYPE}")
         if state.convolution.dtype != ttnn.bfloat16 or state.convolution.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise ValueError("convolution state must be BF16 row-major")
-        return batch, sequence
 
     def _convolve_qkv(
         self,
@@ -322,12 +328,8 @@ class ttKDA:
                 (0, sequence - (config.conv_kernel_size - 1), 0),
                 (qkv_row_major.shape[0], sequence, channels),
             )
-            # Retained by real-K3 T=5120 component A/B: 74.36-75.76% faster at direct Q/K/V PCC >=0.999989.
-        # Resolve the configured ceiling to an exact divisor for this TP-local channel count.
-        channel_chunk_size = _effective_qkv_channel_chunk_size(channels, self.qkv_channel_chunk_size)
-        # The operation default differs from self.kda_compute_config only in disabling FP32 destination
-        # accumulation. Against one FP32 session, five default sessions were 0.15-0.25% faster at
-        # real-K3 T=5120 with output PCC >= 0.999893, so do not override the default here.
+        # The replacement state is BF16 row-major DRAM [B, K - 1, Q_local + K_local + V_local],
+        # channel-sharded across TP and replicated across SP.
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             qkv_row_major,
             state_row_major,
@@ -335,7 +337,7 @@ class ttKDA:
             config.q_dim,
             config.k_dim,
             config.v_dim,
-            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=channel_chunk_size),
+            program_config=self.qkv_convolution_program_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return q, k, v, new_state
@@ -559,7 +561,8 @@ class ttKDA:
         is sequence-partitioned along SP and, when TP > 1, reduce-scattered on
         the hidden dimension; TP == 1 returns the full hidden dimension.
         """
-        batch, sequence = self._validate_forward(hidden_states, state)
+        self._validate_forward(hidden_states, state)
+        batch, sequence = hidden_states.shape[0], hidden_states.shape[1]
         projected = self._project_inputs(hidden_states)
         q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution, sequence=sequence)
         inputs = self._compute_gates(
