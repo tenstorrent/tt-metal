@@ -245,7 +245,7 @@ def test_conv_operand_split_improves_precision(mesh_device):
     assert errors["full"] < errors["weight"], f"full split should beat weight-only: {errors}"
 
 
-def _tt_encoder(config: dict, mesh_device):
+def _tt_encoder(config: dict, mesh_device, split_mode: str = "full"):
     from ....models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 
     return MiniMaxH3AudioEncoder(
@@ -255,12 +255,19 @@ def _tt_encoder(config: dict, mesh_device):
         latent_channels=config["latent_channels"],
         num_attention_heads=config["num_attention_heads"],
         mesh_device=mesh_device,
+        split_mode=split_mode,
     )
 
 
+@pytest.mark.parametrize(
+    "split_mode",
+    # "full" is the accurate constructor default; "weight" is what the pipeline ships for ref2va
+    # (565 vs 796 ms at 5.17 s, mean PCC 99.978% vs 99.999% -- both far inside the bars below).
+    [pytest.param("full", id="full"), pytest.param("weight", id="weight_production")],
+)
 @pytest.mark.parametrize("num_latent_frames", PRODUCTION_LATENT_FRAMES)
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_encode(mesh_device, num_latent_frames):
+def test_encode(mesh_device, num_latent_frames, split_mode):
     """The whole encode path -- DAC trunk, ``pre_block``, posterior heads -- vs the reference."""
     reference, config = _build_reference()
     torch.manual_seed(2)
@@ -270,7 +277,7 @@ def test_encode(mesh_device, num_latent_frames):
         posterior = reference.encode(waveform).latent_dist
         expected_mean, expected_logs = posterior.mean, posterior.logs
 
-    tt_encoder = _tt_encoder(config, mesh_device)
+    tt_encoder = _tt_encoder(config, mesh_device, split_mode=split_mode)
     tt_encoder.load_torch_state_dict(convert_minimax_h3_audio_state_dict(dict(reference.state_dict())), strict=False)
     mean, logs = tt_encoder(waveform)
 
