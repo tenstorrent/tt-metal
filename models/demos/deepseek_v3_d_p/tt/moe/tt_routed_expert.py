@@ -596,11 +596,22 @@ class TtRoutedExpert(LightweightModule):
             # fused half then writes its own expert regions into. Both ops skip every expert
             # outside their band, and both already skip count 0, so the two bands tile the
             # experts exactly once with no double-write and no gap.
+            # On a TILE buffer the composite writes IN PLACE and hands x straight back, so its
+            # output IS x. In a hybrid that makes the fused band's output alias its own
+            # activations, which moe_fused_swiglu rejects outright. Give the composite a copy to
+            # consume, so the shared output is a distinct buffer and x stays pristine for the fused
+            # read rather than depending on the two bands' regions never overlapping. ROW_MAJOR x
+            # already gets a fresh output from the op, and a composite-only forward has no second
+            # reader, so neither pays for the copy.
+            composite_input = dispatched_buffer
+            if threshold is not None and not fused_only and dispatched_buffer.layout == ttnn.TILE_LAYOUT:
+                composite_input = ttnn.clone(dispatched_buffer)
+
             expert_outputs = None
             if not fused_only:
                 signpost(header="UnifiedRoutedExpertMoe")
                 expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
-                    dispatched_buffer,
+                    composite_input,
                     expert_region_offsets,
                     expert_token_counts,
                     self.global_expert_idx_table,

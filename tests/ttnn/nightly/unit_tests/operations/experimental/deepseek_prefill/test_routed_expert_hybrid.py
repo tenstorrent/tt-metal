@@ -201,30 +201,6 @@ def _xfail_blackhole(request, silicon_arch_name):
             break
 
 
-# The composite consumes a TILE activation buffer IN PLACE and hands it straight back as the
-# output. A hybrid that runs both bands then calls moe_fused_swiglu with an output aliasing its own
-# activations, which the op rejects -- at validation, so the case fails whichever band owns the
-# expert and even at count 0. Unreachable when the threshold drops the composite entirely
-# (fused_only allocates fresh), and unreachable in production, where the routed expert is always fed
-# row-major; ci_pruning.tiled_x_input prunes these in CI for that reason.
-_TILE_X_OUTPUT_ALIAS = (
-    "hybrid on TILE x: the composite writes in place, so the fused band's output aliases its "
-    "activations and trips the op's alias guard"
-)
-
-
-@pytest.fixture(autouse=True)
-def _xfail_tile_x_with_live_composite(request):
-    """Strict-xfail the TILE-x cases whose threshold leaves the composite a band to run, so the day
-    the aliasing is fixed these XPASS and the marker comes out."""
-    params = getattr(getattr(request.node, "callspec", None), "params", {})
-    threshold = params.get("threshold")
-    if params.get("x_row_major", True) or threshold is None:
-        return
-    if threshold < _ISL_ALLOCATED_TOKENS:
-        request.applymarker(pytest.mark.xfail(reason=_TILE_X_OUTPUT_ALIAS, strict=True))
-
-
 def _isl_params(active_sweep, only_models=None):
     """Per-model dims and shipped threshold crossed with a token sweep, all against the fixed
     _ISL_ALLOCATED_TOKENS buffer. Reuses SINGLE_EXPERT_MODELS so non-baseline models stay gated
