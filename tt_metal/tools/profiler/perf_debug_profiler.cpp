@@ -3033,6 +3033,18 @@ void PerfDebugProfiler::render_fabric_sync_into_tracy() {
         }
         capped = capped || e.draws.size() >= FabricSyncState::kMaxDraws;
 
+        // APPLY THE PUBLISHED CROSS-DEVICE CORRECTION -- this render used to skip it, and that is the
+        // whole reason FSYNC_ECHO and FSYNC_ECHO_RAW (the SAME instant, drawn on the two ends) sat
+        // 73.4 ms apart on link 2->3 instead of on top of each other: the gap was device 3's raw
+        // +73.5 ms timeline offset from device 2, not sync residual. Worst cross-device start skew in
+        // that capture was 189 ms, against a sync that measures alignment to ~50 ns.
+        //
+        // The record path already does exactly this at materialization (perf_debug_receiver.cpp:
+        // `r.ts - r.dur + corr`), but this render draws straight from st->edges at teardown and never
+        // passes through it. Same store, same convention: corrected = raw + get_zone_ts_correction(chip).
+        const int64_t corr_init = perf_debug::get_zone_ts_correction(e.init.chip);
+        const int64_t corr_resp = perf_debug::get_zone_ts_correction(e.resp.chip);
+
         // ---- initiator lane: the RTT box + the echo CARRIED ONTO THIS CLOCK ----
         // t1 lives on the responder's clock; t1 - offset puts it on the initiator's. Both endpoints
         // then share ONE anchor, so the anchor error cancels and "echo inside the box" is a genuine
@@ -3049,10 +3061,17 @@ void PerfDebugProfiler::render_fabric_sync_into_tracy() {
             if (dr.t2 < dr.t0) {
                 continue;
             }
-            items.push_back({dr.t0, dr.t2, kRtt, true});
+            // The inside-box test stays in RAW initiator-clock space: it is a same-lane causality
+            // check, and a correction common to both endpoints cannot change it. Only the DRAWN
+            // timestamps are corrected.
             const int64_t t1_on_init = static_cast<int64_t>(dr.t1) - dr.off;
+            items.push_back(
+                {static_cast<uint64_t>(static_cast<int64_t>(dr.t0) + corr_init),
+                 static_cast<uint64_t>(static_cast<int64_t>(dr.t2) + corr_init),
+                 kRtt,
+                 true});
             if (t1_on_init > 0) {
-                items.push_back({static_cast<uint64_t>(t1_on_init), 0, kEchoOn, false});
+                items.push_back({static_cast<uint64_t>(t1_on_init + corr_init), 0, kEchoOn, false});
                 total++;
                 inside +=
                     (static_cast<uint64_t>(t1_on_init) >= dr.t0 && static_cast<uint64_t>(t1_on_init) <= dr.t2) ? 1 : 0;
@@ -3110,7 +3129,7 @@ void PerfDebugProfiler::render_fabric_sync_into_tracy() {
             pe.risc = 0;
             pe.id = 0;
             pe.name = kEchoRaw;
-            pe.timestamp = t1;
+            pe.timestamp = static_cast<uint64_t>(static_cast<int64_t>(t1) + corr_resp);
             pe.num_values = 0;
             tracy_->HandleWorkerEvent(pe);
             marks++;
