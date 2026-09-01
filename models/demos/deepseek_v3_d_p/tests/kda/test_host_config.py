@@ -3,7 +3,7 @@
 """Host-only tests for KDA recurrence and program configuration."""
 
 from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import _device_program_label
-from models.demos.deepseek_v3_d_p.tt.kda import ops
+from models.demos.deepseek_v3_d_p.tt.kda import recurrence
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import _effective_qkv_channel_chunk_size
 
@@ -25,10 +25,10 @@ def test_device_program_label_preserves_material_operation_identity() -> None:
 
 
 def test_grouped_scan_uses_largest_valid_configured_divisor() -> None:
-    assert ops._effective_summary_group_chunks(160, 20) == 20
-    assert ops._effective_summary_group_chunks(64, 20) == 16
-    assert ops._effective_summary_group_chunks(88, 21) == 11
-    assert ops._effective_summary_group_chunks(161, 8) == 7
+    assert recurrence._effective_summary_group_chunks(160, 20) == 20
+    assert recurrence._effective_summary_group_chunks(64, 20) == 16
+    assert recurrence._effective_summary_group_chunks(88, 21) == 11
+    assert recurrence._effective_summary_group_chunks(161, 8) == 7
 
 
 def test_effective_qkv_channel_chunk_size_respects_ceiling_and_divisibility() -> None:

@@ -13,17 +13,15 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.tt.kda import ops
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_BETA_DTYPE,
     KDA_CHUNK_SIZE,
-    KDA_GATE_DTYPE,
     KDA_OUTPUT_MEMORY_CONFIG,
-    KDA_QKV_DTYPE,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
+from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -143,7 +141,6 @@ class ttKDA:
         self.sequence_parallel_size = (
             tuple(mesh_device.shape)[self.sequence_parallel_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
         )
-        self.recurrence_config = program_config.recurrence
         self.output_projection_out_block_w = program_config.output_projection_out_block_w
         output_grid = mesh_device.compute_with_storage_grid_size()
         self.output_projection_grid = (output_grid.x, output_grid.y)
@@ -198,22 +195,10 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        self.affine_prefix_compute_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=self.recurrence_config.affine_prefix_math_fidelity,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
-        self.scan_compute_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=self.recurrence_config.scan_math_fidelity,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
-        self.recurrence_compute_config = ops._RecurrenceComputeConfig(
-            preparation=self.kda_compute_config,
-            affine_prefix=self.affine_prefix_compute_config,
-            scan=self.scan_compute_config,
+        self.recurrence = KDARecurrence(
+            mesh_device,
+            program_config.recurrence,
+            sequence_parallel_axis=(self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None),
         )
         # Real-K3 component A/B: output-projection HiFi2 retained PCC >=0.999987 for every LoudBox
         # layout and improved median component latency by 3.580%-5.165%.
@@ -266,25 +251,6 @@ class ttKDA:
         if sequence <= 0 or sequence % KDA_CHUNK_SIZE != 0:
             raise ValueError(
                 f"KDA prefill requires local T to be positive and divisible by {KDA_CHUNK_SIZE}, got T={sequence}"
-            )
-        local_chunks = sequence // KDA_CHUNK_SIZE
-        sequence_parallel_axis = self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None
-        if ops._uses_grouped_scan(
-            program_config=self.recurrence_config,
-            sequence_parallel_axis=sequence_parallel_axis,
-        ):
-            if self.config.head_k_dim != self.config.head_v_dim:
-                raise ValueError(
-                    f"grouped KDA currently requires K == V, got {self.config.head_k_dim} and {self.config.head_v_dim}"
-                )
-            ops._validate_grouped_scan_capacity(
-                batch_heads=batch * self.config.num_heads,
-                num_chunks=local_chunks,
-                summary_group_chunks=ops._effective_summary_group_chunks(
-                    local_chunks,
-                    self.recurrence_config.summary_group_chunks,
-                ),
-                device=hidden_states.device(),
             )
         expected_recurrent = (batch, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim)
         expected_convolution = (batch, self.config.conv_kernel_size - 1, self._convolution_width)
@@ -425,58 +391,21 @@ class ttKDA:
             output_gate=output_gate,
         )
 
-    def _assert_flat_recurrence_contract(
-        self,
-        inputs: _KDAInputs,
-        recurrent_state: ttnn.Tensor,
-    ) -> None:
-        """Assert postconditions of the internal recurrence producers."""
-        batch, sequence, heads = inputs.beta.shape
-        key_width = heads * self.config.head_k_dim
-        value_width = heads * self.config.head_v_dim
-        assert tuple(inputs.q.shape) == (batch, sequence, key_width)
-        assert tuple(inputs.k.shape) == (batch, sequence, key_width)
-        assert tuple(inputs.v.shape) == (batch, sequence, value_width)
-        assert tuple(inputs.decay.shape) == (batch, sequence, key_width)
-        assert tuple(recurrent_state.shape) == (
-            batch,
-            heads,
-            self.config.head_k_dim,
-            self.config.head_v_dim,
-        )
-        for tensor in (inputs.q, inputs.k, inputs.v):
-            assert tensor.dtype == KDA_QKV_DTYPE
-            assert tensor.layout == ttnn.TILE_LAYOUT
-        assert inputs.decay.dtype == KDA_GATE_DTYPE
-        assert inputs.decay.layout == ttnn.TILE_LAYOUT
-        assert inputs.beta.dtype == KDA_BETA_DTYPE
-        assert inputs.beta.layout == ttnn.TILE_LAYOUT
-        assert recurrent_state.dtype == KDA_RECURRENT_STATE_DTYPE
-        assert recurrent_state.layout == ttnn.TILE_LAYOUT
-        assert recurrent_state.memory_config() == KDA_OUTPUT_MEMORY_CONFIG
-
     def _kda_prefill(
         self,
         inputs: _KDAInputs,
         recurrent_state: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run the KDA recurrence and return its raw output and updated state."""
-        self._assert_flat_recurrence_contract(inputs, recurrent_state)
-        recurrence_inputs = ops._FlatRecurrenceInputs(
+        new_state, output = self.recurrence(
             q=inputs.q,
             k=inputs.k,
             v=inputs.v,
             gate=inputs.decay,
             beta=inputs.beta,
+            initial_state=recurrent_state,
         )
-        result = ops._chunk_recurrence(
-            recurrence_inputs,
-            recurrent_state,
-            program_config=self.recurrence_config,
-            compute_config=self.recurrence_compute_config,
-            sequence_parallel_axis=(self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None),
-        )
-        return result.output, result.final_state
+        return output, new_state
 
     def _kda_rms_norm(
         self,
