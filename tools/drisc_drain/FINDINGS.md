@@ -6190,3 +6190,75 @@ Consequences:
 Direct confirmation would need a device-side probe that timestamps head-writeback LANDING (e.g. a
 worker-side release-latency counter) — not in the current instrumentation, deliberately left as the
 follow-up.
+
+## §N+67 — The streaming profiler costs up to -15% on LARGE-packet fabric at low link counts, enough to fail golden validation; the "pre-existing failure" claim was wrong (bh-31, 2026-09-01)
+
+`test_tt_fabric` on the 8-group 2D Mesh config aborts with `rc=134` at the end of the run:
+`CustomMaxPacketSizeMesh7K` and `Mesh8K` fail golden bandwidth comparison, `TT_THROW` is uncaught, the
+process takes SIGABRT, and Tracy reports the client as crashed. This was repeatedly dismissed
+(including by me, several times) as pre-existing noise on a degraded card.
+
+**That dismissal was wrong, and the reason is worth more than the finding.** The "control" it rested on
+had the fabric-sync hook not compiled but **`TT_METAL_STREAMING_PROFILER=1` still set**. It therefore
+controlled for the hook and not for the profiler — the arm that would have falsified the claim, fully
+stock, was never run. An arm that leaves the thing under test ENABLED is not a control.
+
+### The three arms (same config, same build, same box)
+
+| arm | result |
+|---|---|
+| **stock — no profiler at all** | 208 executed, **0 failed**, rc=0 |
+| profiler ON, hook OFF | 208 executed, **4 failed** (7K x2, 8K x2), rc=134 |
+| profiler ON, hook ON (`FABRIC_SYNC_HZ=20`) | 208 executed, **4 failed** (7K x2, 8K x2), rc=134 |
+
+The profiler causes it. **The in-router fabric sync hook adds nothing on top** — hook-on and hook-off
+are indistinguishable, same four tests, same count.
+
+### The cost is a function of PACKET SIZE and LINK COUNT
+
+Per-core telemetry mean BW, stock vs profiler-on, same run structure:
+
+| test | 1 link | 2 links | 3 links | 4 links |
+|---|---|---|---|---|
+| Mesh3K | +0.33% | +0.25% | +0.14% | +0.03% |
+| Mesh5K | +0.23% | -0.00% | -0.04% | -0.13% |
+| **Mesh7K** | **-12.44%** | **-9.81%** | -2.24% | -0.46% |
+| **Mesh8K** | **-15.16%** | **-12.26%** | -0.80% | -0.34% |
+| Mesh15K | -7.97% | -6.61% | -1.91% | -0.39% |
+| MeshMulticast | -0.04% | — | — | — |
+| SingleSenderMeshUnicastAllDevices | -0.02% | — | — | — |
+
+Zero cost at 3-5 KB. Up to **-15% at 7-8 KB on one link**. Negligible everywhere at 4 links. The four
+cells that breach tolerance are exactly the four failing tests, so the golden failure is fully
+explained by this curve and needs no other cause.
+
+**This does NOT contradict §the earlier NeighborExchange A/B**, which measured the profiler at +0.19%:
+that ran 2048 B packets, which sit in the flat part of this curve. Both numbers are correct. **Do not
+quote either as "the profiler's overhead"** — there is no single number; it is packet-size dependent.
+
+### It is a PERF failure, not a wedge — measured, not assumed
+
+Distinct from the eth wedge (§ the resident-eth HEAD rebase): there, the erisc parked in an unbounded
+spin, device open TIMED OUT at `llrt.cpp:603`, the run died at session 2/160 tests, and the card stayed
+poisoned until `tt-smi -r`. Here:
+
+- all 208 tests and all 6 profiler sessions COMPLETE, **0 eth timeouts**;
+- the abort is the harness's own verdict at the final summary, not a fault;
+- **the card is left healthy** — running the short config immediately afterwards **with no reset** gives
+  `rc=0`, 0 eth timeouts, 72 tests, 14400 samples lossless.
+
+### Mechanism — PLAUSIBLE, NOT DEMONSTRATED
+
+The drain competes with the workload for NoC/DRAM bandwidth. At 1-2 links the fabric test is not
+eth-limited, so large packets push NoC utilisation high and the drain's traffic bites; at 4 links the
+test becomes eth-limited and the drain is free. The shape fits (cost vanishes exactly where the test
+becomes eth-bound) but **causation is not established** — no probe was run to attribute the lost
+bandwidth to drain traffic. Do not quote this as the cause.
+
+### Consequences
+
+1. **Any CI running a large-packet fabric benchmark with the streaming profiler will go red**, and the
+   failure will look like a crash because the harness aborts.
+2. **Bandwidth numbers measured under the profiler are not trustworthy above ~5 KB packets** at low
+   link counts. Below that, and at 4 links, they are fine.
+3. The fabric sync hook is exonerated — this is the profiler's drain, not the sync.
