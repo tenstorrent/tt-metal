@@ -203,9 +203,11 @@ void kernel_main() {
         }
 
         for (std::uint32_t i = 0; i < block_h; ++i) {
-            if (i > 0) {
-                two_pass_stats_switch_group(mean_dst, active_group, 0);
-                active_group = 0;
+            if constexpr (num_groups > 1) {
+                if (i > 0) {
+                    two_pass_stats_switch_group(mean_dst, active_group, 0);
+                    active_group = 0;
+                }
             }
 
             // This indicates the smallest group that is yet to be processed for this block
@@ -292,9 +294,11 @@ void kernel_main() {
         tile_id = b * block_hw;
         active_group = 0;
         for (std::uint32_t i = 0; i < block_h; ++i) {
-            if (i > 0) {
-                two_pass_stats_switch_group(mean_dst, active_group, 0);
-                active_group = 0;
+            if constexpr (num_groups > 1) {
+                if (i > 0) {
+                    two_pass_stats_switch_group(mean_dst, active_group, 0);
+                    active_group = 0;
+                }
             }
             std::uint32_t min_group = 0;
             std::uint32_t channels_left = num_channels_per_group;

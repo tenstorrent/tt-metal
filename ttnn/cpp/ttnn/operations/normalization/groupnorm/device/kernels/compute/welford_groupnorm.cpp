@@ -271,9 +271,11 @@ void kernel_main() {
 
         // First statistics traversal: accumulate sums relative to each group's first value.
         for (uint32_t mt = 0; mt < block_h; ++mt) {
-            if (mt > 0) {
-                two_pass_stats_switch_group(mean_dst, active_group, 0);
-                active_group = 0;
+            if constexpr (num_groups > 1) {
+                if (mt > 0) {
+                    two_pass_stats_switch_group(mean_dst, active_group, 0);
+                    active_group = 0;
+                }
             }
 
             uint32_t min_group = 0;
@@ -350,9 +352,11 @@ void kernel_main() {
         // The reader streams the same local input tiles a second time.
         active_group = 0;
         for (uint32_t mt = 0; mt < block_h; ++mt) {
-            if (mt > 0) {
-                two_pass_stats_switch_group(mean_dst, active_group, 0);
-                active_group = 0;
+            if constexpr (num_groups > 1) {
+                if (mt > 0) {
+                    two_pass_stats_switch_group(mean_dst, active_group, 0);
+                    active_group = 0;
+                }
             }
             uint32_t min_group = 0;
             uint32_t channels_left = num_channels_per_group;

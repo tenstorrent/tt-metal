@@ -37,10 +37,11 @@ def test_group_norm_statistics_mode_validation(expect_error):
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("has_affine", [False, True], ids=["plain", "affine"])
-def test_group_norm_fp32_large_offset_DRAM(device, has_affine):
+@pytest.mark.parametrize("num_groups", [1, 2])
+def test_group_norm_fp32_large_offset_DRAM(device, has_affine, num_groups):
     """The FP32 finalizer must not truncate x and mean to TF32 before subtraction."""
     torch.manual_seed(7)
-    N, C, HW, num_groups = 1, 64, 32, 2
+    N, C, HW = 1, 64, 32
     x = 1_000_000.0 + 128.0 * (torch.rand((N, 1, HW, C), dtype=torch.float32) - 0.5)
     weight = torch.linspace(0.75, 1.25, C, dtype=torch.float32) if has_affine else None
     bias = torch.linspace(-0.25, 0.25, C, dtype=torch.float32) if has_affine else None
