@@ -16,6 +16,7 @@
 #include "internal/risc_attribs.h"
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
+#include <new>
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -124,8 +125,7 @@ namespace experimental {
 //        relay.reserve_back(n);                       // wait for local free space
 //        cn_dfb.wait_front(n);                        // wait for sender's data (pages_sent)
 //        relay.push_back(n);                          // publish via CB credits
-//        relay.wait_consumed(n);                      // wait for TRISC to free the local slots
-//        cn_dfb.pop_front(n);                         // advance DM rd_ptr + NOC-ack sender
+//        cn_dfb.pop_front(n);                         // wait for TRISC if relay-bound, then NOC-ack sender
 //    }
 //
 //  Compute kernel (reads relay DFB, no CrossNodeDFB or NOC knowledge):
@@ -408,23 +408,13 @@ public:
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
     // Advance read pointer and NOC-inc pages_acked on sender.
+    // If bind_relay() was called, waits until compute has consumed num_entries first.
     FORCE_INLINE void pop_front(uint32_t num_entries, const Noc& noc = Noc{}) {
-        CrossNodeReceiverDFBInterface& iface = interface_.receiver;
-        const uint32_t entry_size = iface.fifo_page_size;
-        const uint32_t fifo_size = get_config_word(iface.config_ptr, 3);
-
-        uint32_t len_bytes = num_entries * entry_size;
-        if (iface.fifo_rd_ptr + len_bytes >= iface.fifo_limit_page_aligned) {
-            iface.fifo_rd_ptr = iface.fifo_start_addr + (iface.fifo_rd_ptr + len_bytes - iface.fifo_limit_page_aligned);
-            len_bytes += iface.fifo_start_addr + fifo_size - iface.fifo_limit_page_aligned;
-        } else {
-            iface.fifo_rd_ptr += len_bytes;
+        if (interface_.receiver.relay_id != RELAY_DFB_INVALID) {
+            ASSERT(relay_dfb_ != nullptr);
+            wait_relay_consumed(num_entries);
         }
-        const uint32_t num_units = len_bytes / L1_ALIGNMENT;
-
-        const uint8_t noc_id = noc.get_noc_id();
-        detail::update_pages_acked(
-            reinterpret_cast<const RemoteReceiverCBInterface&>(iface), num_units, noc_id, false, write_at_cmd_buf);
+        pop_front_impl(num_entries, noc);
     }
 #endif  // KERNEL_BUILD && !COMPILE_FOR_TRISC
 
@@ -433,38 +423,17 @@ public:
     // Host-declared relay DFB
     // -----------------------------------------------------------------------
 
-    // Producer-only view. It intentionally exposes only the local operations the
-    // receiver DM owns; TRISC constructs the same local DFB from a RelayDFBBindingToken.
+    // Producer-only view over the DFB owned by this CrossNode object. Reserve/push
+    // stay here; pop_front waits on that same DFB so WH/BH and Quasar share one object.
     class RelayView {
     public:
-        FORCE_INLINE explicit RelayView(uint16_t relay_dfb_id) : dfb_(RelayDFBBindingToken{relay_dfb_id}) {}
-
         FORCE_INLINE void reserve_back(uint16_t num_entries) { dfb_.reserve_back(num_entries); }
         FORCE_INLINE void push_back(uint16_t num_entries) { dfb_.push_back(num_entries); }
 
-        // Wait until TRISC has consumed the num_entries just published via push_back.
-        // Call after push_back and before cn.pop_front so the remote ack cannot free
-        // L1 that TRISC is still reading.
-        FORCE_INLINE void wait_consumed(uint16_t num_entries) {
-            ASSERT(num_entries <= dfb_.get_local_num_entries());
-            WAYPOINT("CNCW");
-            // entries_received is written by this RISC in push_back; entries_acked is a
-            // register-mapped counter TRISC updates as uint16, so compare at uint16.
-            const uint16_t relay_dfb_id = dfb_.get_id();
-            volatile tt_reg_ptr uint32_t* entries_received_ptr = get_cb_tiles_received_ptr(relay_dfb_id);
-            const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(relay_dfb_id));
-            uint16_t entries_received;
-            uint16_t entries_acked;
-            do {
-                invalidate_l1_cache();
-                entries_received = static_cast<uint16_t>(entries_received_ptr[0]);
-                entries_acked = static_cast<uint16_t>(reg_read(entries_acked_ptr));
-            } while (entries_received != entries_acked);
-            WAYPOINT("CNCD");
-        }
-
     private:
-        DataflowBuffer dfb_;
+        friend class CrossNodeDFB;
+        FORCE_INLINE explicit RelayView(DataflowBuffer& dfb) : dfb_(dfb) {}
+        DataflowBuffer& dfb_;
     };
 
     // Open the relay declared by CreateCrossNodeRelayDataflowBuffer on the host.
@@ -473,7 +442,11 @@ public:
     FORCE_INLINE RelayView bind_relay() {
         const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
         ASSERT(iface.relay_id != RELAY_DFB_INVALID);
-        return RelayView(iface.relay_id);
+        ASSERT(relay_dfb_ == nullptr);
+        relay_dfb_ = new (relay_dfb_storage_) DataflowBuffer(RelayDFBBindingToken{iface.relay_id});
+        const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(iface.relay_id));
+        relay_entries_acked_checkpoint_ = static_cast<uint16_t>(reg_read(entries_acked_ptr));
+        return RelayView(*relay_dfb_);
     }
 #endif
 
@@ -501,6 +474,45 @@ public:
 
 private:
     CrossNodeDFBInterface interface_;
+
+#if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
+    DataflowBuffer* relay_dfb_ = nullptr;
+    alignas(DataflowBuffer) unsigned char relay_dfb_storage_[sizeof(DataflowBuffer)];
+    uint16_t relay_entries_acked_checkpoint_ = 0;
+
+    FORCE_INLINE void wait_relay_consumed(uint32_t num_entries) {
+        ASSERT(num_entries <= relay_dfb_->get_local_num_entries());
+        WAYPOINT("CNCW");
+        const uint16_t relay_dfb_id = relay_dfb_->get_id();
+        const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(relay_dfb_id));
+        uint16_t entries_acked;
+        do {
+            invalidate_l1_cache();
+            entries_acked = static_cast<uint16_t>(reg_read(entries_acked_ptr));
+        } while (static_cast<uint16_t>(entries_acked - relay_entries_acked_checkpoint_) < num_entries);
+        relay_entries_acked_checkpoint_ = static_cast<uint16_t>(relay_entries_acked_checkpoint_ + num_entries);
+        WAYPOINT("CNCD");
+    }
+
+    FORCE_INLINE void pop_front_impl(uint32_t num_entries, const Noc& noc) {
+        CrossNodeReceiverDFBInterface& iface = interface_.receiver;
+        const uint32_t entry_size = iface.fifo_page_size;
+        const uint32_t fifo_size = get_config_word(iface.config_ptr, 3);
+
+        uint32_t len_bytes = num_entries * entry_size;
+        if (iface.fifo_rd_ptr + len_bytes >= iface.fifo_limit_page_aligned) {
+            iface.fifo_rd_ptr = iface.fifo_start_addr + (iface.fifo_rd_ptr + len_bytes - iface.fifo_limit_page_aligned);
+            len_bytes += iface.fifo_start_addr + fifo_size - iface.fifo_limit_page_aligned;
+        } else {
+            iface.fifo_rd_ptr += len_bytes;
+        }
+        const uint32_t num_units = len_bytes / L1_ALIGNMENT;
+
+        const uint8_t noc_id = noc.get_noc_id();
+        detail::update_pages_acked(
+            reinterpret_cast<const RemoteReceiverCBInterface&>(iface), num_units, noc_id, false, write_at_cmd_buf);
+    }
+#endif
 
     // Read a word from the config page.
     FORCE_INLINE uint32_t get_config_word(uint32_t config_ptr, uint32_t word_idx) {

@@ -25,7 +25,6 @@ void kernel_main() {
         relay.reserve_back(batch_size);
         pipe.wait_front(batch_size);
         relay.push_back(batch_size);
-        relay.wait_consumed(batch_size);
         pipe.pop_front(batch_size, noc);
     }
 }

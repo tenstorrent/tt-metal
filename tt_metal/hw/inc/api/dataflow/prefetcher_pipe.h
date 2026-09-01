@@ -18,6 +18,7 @@
 #include "internal/risc_attribs.h"
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
+#include <new>
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -128,8 +129,7 @@ namespace experimental {
 //        relay.reserve_back(n);       // wait for local free space
 //        pipe.wait_front(n);          // wait for sender's data (pages_sent)
 //        relay.push_back(n);          // publish via CB credits
-//        relay.wait_consumed(n);      // wait for TRISC to free the local slots
-//        pipe.pop_front(n);           // advance DM rd_ptr + NOC-ack sender
+//        pipe.pop_front(n);           // wait for TRISC if relay-bound, then NOC-ack sender
 //    }
 //
 //  Compute kernel (reads relay DFB, no PrefetcherPipe or NOC knowledge):
@@ -223,7 +223,7 @@ public:
     // requiring the sender's newer E2 payload to drain.
     // If this core has a relay, also rewrite the local relay DFB iface (page size,
     // usable limit, rd/wr) so a RelayView from bind_relay() is not left on E1.
-    // TRISC must already have consumed the previous-size tiles (wait_consumed);
+    // TRISC must already have consumed the previous-size tiles (relay-backed pop_front);
     // its local CB is a separate object aligned at DataflowBuffer construction.
     FORCE_INLINE void set_receiver_entry_size(uint32_t entry_size) {
         volatile tt_l1_ptr uint32_t* l1_config =
@@ -483,23 +483,13 @@ public:
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
     // Advance read pointer and NOC-inc pages_acked on sender.
+    // If bind_relay() was called, waits until compute has consumed num_entries first.
     FORCE_INLINE void pop_front(uint32_t num_entries, const Noc& noc = Noc{}) {
-        CrossNodeReceiverDFBInterface& iface = interface_.receiver;
-        const uint32_t entry_size = iface.fifo_page_size;
-        const uint32_t payload_bytes = num_entries * entry_size;
-        ASSERT(iface.fifo_rd_ptr + payload_bytes <= iface.fifo_limit_page_aligned);
-        const uint32_t rd_offset = iface.fifo_rd_ptr - iface.fifo_start_addr;
-        const uint32_t num_units = units_for_read(iface, rd_offset, payload_bytes);
-        iface.fifo_rd_ptr += payload_bytes;
-        if (iface.fifo_rd_ptr >= iface.fifo_limit_page_aligned) {
-            iface.fifo_rd_ptr = iface.fifo_start_addr;
+        if (interface_.receiver.relay_id != RELAY_DFB_INVALID) {
+            ASSERT(relay_dfb_ != nullptr);
+            wait_relay_consumed(num_entries);
         }
-
-        // Posted: peer visibility is eventual; senders discover the ack by polling
-        // pages_acked (reserve_back / barrier). Matches push_back's posted sent-incs.
-        const uint8_t noc_id = noc.get_noc_id();
-        detail::update_pages_acked(
-            reinterpret_cast<const RemoteReceiverCBInterface&>(iface), num_units, noc_id, true, write_at_cmd_buf);
+        pop_front_impl(num_entries, noc);
     }
 #endif  // KERNEL_BUILD && !COMPILE_FOR_TRISC
 
@@ -525,33 +515,17 @@ public:
     // Host-declared relay DFB (DM → compute)
     // -----------------------------------------------------------------------
 
-    // Producer-only view. It intentionally exposes only the local operations the
-    // receiver DM owns; TRISC constructs the same local DFB from its normal token.
+    // Producer-only view over the pipe-owned local DFB. Reserve/push stay here;
+    // pop_front waits on that same DFB so WH/BH and Quasar share one object.
     class RelayView {
     public:
-        FORCE_INLINE explicit RelayView(uint16_t relay_dfb_id) : dfb_(RelayDFBBindingToken{relay_dfb_id}) {}
-
         FORCE_INLINE void reserve_back(uint16_t num_entries) { dfb_.reserve_back(num_entries); }
         FORCE_INLINE void push_back(uint16_t num_entries) { dfb_.push_back(num_entries); }
 
-        FORCE_INLINE void wait_consumed(uint16_t num_entries) {
-            ASSERT(num_entries <= dfb_.get_local_num_entries());
-            WAYPOINT("PDCW");
-            const uint16_t relay_dfb_id = dfb_.get_id();
-            volatile tt_reg_ptr uint32_t* entries_received_ptr = get_cb_tiles_received_ptr(relay_dfb_id);
-            const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(relay_dfb_id));
-            uint16_t entries_received;
-            uint16_t entries_acked;
-            do {
-                invalidate_l1_cache();
-                entries_received = static_cast<uint16_t>(entries_received_ptr[0]);
-                entries_acked = static_cast<uint16_t>(reg_read(entries_acked_ptr));
-            } while (entries_received != entries_acked);
-            WAYPOINT("PDCD");
-        }
-
     private:
-        DataflowBuffer dfb_;
+        friend class PrefetcherPipe;
+        FORCE_INLINE explicit RelayView(DataflowBuffer& dfb) : dfb_(dfb) {}
+        DataflowBuffer& dfb_;
     };
 
     // Open the relay declared by CreatePrefetcherPipeRelayDataflowBuffer. Copies the
@@ -561,14 +535,57 @@ public:
     FORCE_INLINE RelayView bind_relay() {
         const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
         ASSERT(iface.relay_id != RELAY_DFB_INVALID);
+        ASSERT(relay_dfb_ == nullptr);
         align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface);
-        return RelayView(iface.relay_id);
+        relay_dfb_ = new (relay_dfb_storage_) DataflowBuffer(RelayDFBBindingToken{iface.relay_id});
+        const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(iface.relay_id));
+        relay_entries_acked_checkpoint_ = static_cast<uint16_t>(reg_read(entries_acked_ptr));
+        return RelayView(*relay_dfb_);
     }
 #endif
 
 private:
     CrossNodeDFBInterface interface_;
     uint8_t prefetcher_pipe_id_ = 0;
+
+#if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
+    DataflowBuffer* relay_dfb_ = nullptr;
+    alignas(DataflowBuffer) unsigned char relay_dfb_storage_[sizeof(DataflowBuffer)];
+    uint16_t relay_entries_acked_checkpoint_ = 0;
+
+    FORCE_INLINE void wait_relay_consumed(uint32_t num_entries) {
+        ASSERT(num_entries <= relay_dfb_->get_local_num_entries());
+        WAYPOINT("PDCW");
+        const uint16_t relay_dfb_id = relay_dfb_->get_id();
+        const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(relay_dfb_id));
+        uint16_t entries_acked;
+        do {
+            invalidate_l1_cache();
+            entries_acked = static_cast<uint16_t>(reg_read(entries_acked_ptr));
+        } while (static_cast<uint16_t>(entries_acked - relay_entries_acked_checkpoint_) < num_entries);
+        relay_entries_acked_checkpoint_ = static_cast<uint16_t>(relay_entries_acked_checkpoint_ + num_entries);
+        WAYPOINT("PDCD");
+    }
+
+    FORCE_INLINE void pop_front_impl(uint32_t num_entries, const Noc& noc) {
+        CrossNodeReceiverDFBInterface& iface = interface_.receiver;
+        const uint32_t entry_size = iface.fifo_page_size;
+        const uint32_t payload_bytes = num_entries * entry_size;
+        ASSERT(iface.fifo_rd_ptr + payload_bytes <= iface.fifo_limit_page_aligned);
+        const uint32_t rd_offset = iface.fifo_rd_ptr - iface.fifo_start_addr;
+        const uint32_t num_units = units_for_read(iface, rd_offset, payload_bytes);
+        iface.fifo_rd_ptr += payload_bytes;
+        if (iface.fifo_rd_ptr >= iface.fifo_limit_page_aligned) {
+            iface.fifo_rd_ptr = iface.fifo_start_addr;
+        }
+
+        // Posted: peer visibility is eventual; senders discover the ack by polling
+        // pages_acked (reserve_back / barrier). Matches push_back's posted sent-incs.
+        const uint8_t noc_id = noc.get_noc_id();
+        detail::update_pages_acked(
+            reinterpret_cast<const RemoteReceiverCBInterface&>(iface), num_units, noc_id, true, write_at_cmd_buf);
+    }
+#endif
 
 #ifdef PREFETCHER_PIPE_TEST_HELPERS
     friend void test_stale_commit_after_resize(
