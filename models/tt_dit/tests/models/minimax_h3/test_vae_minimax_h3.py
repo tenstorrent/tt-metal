@@ -119,12 +119,8 @@ def test_tiling_geometry_matches_reference(width, height, num_frames):
     assert (num_frames - 5) % config.clip_length == 0, f"{num_frames} is not 17n+5"
 
 
-@pytest.mark.parametrize(
-    ("num_frames", "temporal_taps", "expected_latent_frames"),
-    [pytest.param(1, 1, 1, id="keyframe"), pytest.param(17, 3, 5, id="clip")],
-)
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_encode_clip_tiled(mesh_device, num_frames, temporal_taps, expected_latent_frames):
+def test_encode_clip_tiled(mesh_device):
     """Tiled ``encode_clip`` vs the reference's tiled ``_encode_clip``; also the whole-encoder gate."""
     # Whole-encoder coverage skips without MINIMAX_H3_MODEL_PATH.
     weights_dir = _weights_dir()
@@ -132,18 +128,40 @@ def test_encode_clip_tiled(mesh_device, num_frames, temporal_taps, expected_late
     torch.manual_seed(4)
 
     extent = 512
-    x = torch.randn(1, 3, num_frames, extent, extent)
+    x = torch.randn(1, 3, 1, extent, extent)
     with torch.no_grad():
         expected = reference._encode_clip(x)
 
-    tt_vae = MiniMaxH3Vae(config, mesh_device=mesh_device)
-    tt_vae.load_encoder_state(dict(reference.state_dict()))
-    actual = tt_vae.encode_clip(x, temporal_taps=temporal_taps)
+    tt_vae = MiniMaxH3Vae(config, task="t2va", mesh_device=mesh_device)
+    tt_vae.load_state(dict(reference.state_dict()))
+    actual = tt_vae.encode_clip(x)
 
-    assert (
-        actual.shape[2] == expected_latent_frames
-    ), f"{actual.shape[2]} latent frames, expected {expected_latent_frames}"
+    assert actual.shape[2] == 1, f"{actual.shape[2]} latent frames, expected 1"
     _assert_same(expected, actual, pcc=0.99)  # ttnn.group_norm has no fp32 path: bf16 floor
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
+def test_encode_tiled(mesh_device):
+    """Tiled ``encode`` of one 17-frame clip vs the reference's chunked ``_encode``.
+
+    The production taps=3 path: fp32, no pixel-norm fold. ``encode_clip`` is T=1 only;
+    this is the gate the clip-length case of the former ``test_encode_clip_tiled`` covered.
+    """
+    weights_dir = _weights_dir()
+    reference, config = _build_reference(weights_dir)
+    torch.manual_seed(4)
+
+    extent = 512
+    x = torch.randn(1, 3, config.clip_length, extent, extent)
+    with torch.no_grad():
+        expected = reference._encode(x)
+
+    tt_vae = MiniMaxH3Vae(config, task="ref2va", mesh_device=mesh_device)
+    tt_vae.load_state(dict(reference.state_dict()))
+    actual = tt_vae.encode(x)
+
+    assert actual.shape == expected.shape, f"{actual.shape} vs {expected.shape}"
+    _assert_same(expected, actual, pcc=0.99)
 
 
 @pytest.mark.parametrize("dtype", [pytest.param(ttnn.bfloat16, id="bf16"), pytest.param(ttnn.float32, id="fp32")])
@@ -170,9 +188,13 @@ def test_fl2va_conditioning_rows_proxy(mesh_device, dtype):
     image = Image.fromarray(torch.randint(0, 256, (768, 1344, 3), dtype=torch.uint8).numpy())
 
     tt_vae = MiniMaxH3Vae(
-        config, mesh_device=mesh_device, dtype=dtype, pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD)
+        config,
+        task="t2va",
+        mesh_device=mesh_device,
+        dtype=dtype,
+        pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
     )
-    tt_vae.load_encoder_state(dict(reference.state_dict()))
+    tt_vae.load_state(dict(reference.state_dict()))
     rows_device = encode_keyframes([image], tt_vae.encode_clip, latents_mean, latents_std, raw_pixels=True)
 
     with torch.no_grad():
@@ -205,26 +227,27 @@ def test_encode_video_uint8_pixel_norm(mesh_device, dtype):
         expected = reference._encode(normalized)
 
     tt_vae = MiniMaxH3Vae(
-        config, mesh_device=mesh_device, dtype=dtype, pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD)
+        config,
+        task="ref2va",
+        mesh_device=mesh_device,
+        dtype=dtype,
+        pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
     )
-    tt_vae.load_encoder_state(dict(reference.state_dict()))
+    tt_vae.load_state(dict(reference.state_dict()))
     actual = tt_vae.encode(pixels_uint8)
 
     assert actual.shape == expected.shape, f"{actual.shape} vs {expected.shape}"
     _assert_same(expected, actual, pcc=0.99)
 
 
-@pytest.mark.parametrize(
-    ("num_frames", "temporal_taps", "expected_latent_frames"),
-    [pytest.param(1, 1, 1, id="keyframe"), pytest.param(17, 3, 5, id="clip")],
-)
 @pytest.mark.parametrize("dtype", [pytest.param(ttnn.bfloat16, id="bf16"), pytest.param(ttnn.float32, id="fp32")])
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_encode_clip_uint8_pixel_norm(mesh_device, dtype, num_frames, temporal_taps, expected_latent_frames):
+def test_encode_clip_uint8_pixel_norm(mesh_device, dtype):
     """The `pixel_norm` fold: raw uint8 pixels into a folded encoder vs the reference on
-    normalized fp32. Gates the conv_in weight/bias fold, the uint8 -> typecast -> pad upload
-    chain, and -- on the clip case -- the `255 * mean` causal front-pad values, which only a
-    taps=3 encode with a temporal zero-pad in the reference can catch."""
+    normalized fp32. Gates the conv_in weight/bias fold and the uint8 -> typecast -> pad
+    upload chain on the keyframe path. The taps=3 causal-pad values are gated by
+    ``test_encode_tiled`` (plain fp32) and ``test_encode_video_uint8_pixel_norm`` (uint8).
+    """
     from ....pipelines.minimax_h3.conditioning import MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD
 
     weights_dir = _weights_dir()
@@ -232,7 +255,7 @@ def test_encode_clip_uint8_pixel_norm(mesh_device, dtype, num_frames, temporal_t
     torch.manual_seed(6)
 
     extent = 512
-    pixels_uint8 = torch.randint(0, 256, (1, 3, num_frames, extent, extent), dtype=torch.uint8)
+    pixels_uint8 = torch.randint(0, 256, (1, 3, 1, extent, extent), dtype=torch.uint8)
     mean = torch.tensor(MINIMAX_H3_PIXEL_MEAN).view(1, -1, 1, 1, 1)
     std = torch.tensor(MINIMAX_H3_PIXEL_STD).view(1, -1, 1, 1, 1)
     normalized = (pixels_uint8.float().div(255.0) - mean) / std
@@ -240,14 +263,16 @@ def test_encode_clip_uint8_pixel_norm(mesh_device, dtype, num_frames, temporal_t
         expected = reference._encode_clip(normalized)
 
     tt_vae = MiniMaxH3Vae(
-        config, mesh_device=mesh_device, dtype=dtype, pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD)
+        config,
+        task="t2va",
+        mesh_device=mesh_device,
+        dtype=dtype,
+        pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
     )
-    tt_vae.load_encoder_state(dict(reference.state_dict()))
-    actual = tt_vae.encode_clip(pixels_uint8, temporal_taps=temporal_taps)
+    tt_vae.load_state(dict(reference.state_dict()))
+    actual = tt_vae.encode_clip(pixels_uint8)
 
-    assert (
-        actual.shape[2] == expected_latent_frames
-    ), f"{actual.shape[2]} latent frames, expected {expected_latent_frames}"
+    assert actual.shape[2] == 1, f"{actual.shape[2]} latent frames, expected 1"
     _assert_same(expected, actual, pcc=0.99)
 
 
@@ -276,8 +301,8 @@ def test_decode_clip_tiled(mesh_device):
     with torch.no_grad():
         expected = reference._decode_clip(z)
 
-    tt_vae = MiniMaxH3Vae(config, mesh_device=mesh_device)
-    tt_vae.load_decoder_state(dict(reference.state_dict()))
+    tt_vae = MiniMaxH3Vae(config, task="t2va", mesh_device=mesh_device)
+    tt_vae.load_state(dict(reference.state_dict()))
     actual = tt_vae.decode_clip(z)
 
     _assert_same(expected, actual, pcc=0.99)
@@ -295,10 +320,8 @@ def test_visual_roundtrip_quality(mesh_device):
         expected_moments = reference._encode(x)
         expected = reference.decode(expected_moments.chunk(2, dim=1)[0]).sample
 
-    tt_vae = MiniMaxH3Vae(config, mesh_device=mesh_device)
-    state = dict(reference.state_dict())
-    tt_vae.load_encoder_state(state)
-    tt_vae.load_decoder_state(state)
+    tt_vae = MiniMaxH3Vae(config, task="ref2va", mesh_device=mesh_device)
+    tt_vae.load_state(dict(reference.state_dict()))
 
     moments = tt_vae.encode(x)
     expected_latent_frames = (num_frames + (-num_frames) % config.clip_length) // config.clip_length

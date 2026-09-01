@@ -161,18 +161,38 @@ def build_minimax_h3_text_encoder(
     )
 
     if load_weights:
-        cache.load_model(
+        load_minimax_h3_text_encoder_weights(
             encoder,
-            model_name="minimax-h3",
-            subfolder="text_encoder",
+            weights_dir,
             parallel_config=parallel_config,
-            mesh_shape=tuple(mesh_device.shape),
             mesh_device=mesh_device,
             is_fsdp=is_fsdp,
-            get_torch_state_dict=lambda: load_minimax_h3_text_state_dict(weights_dir, num_layers=num_layers),
+            num_layers=num_layers,
         )
 
     return encoder, config
+
+
+def load_minimax_h3_text_encoder_weights(
+    encoder: Qwen3VlTextEncoder,
+    weights_dir: str | os.PathLike,
+    *,
+    parallel_config,
+    mesh_device,
+    is_fsdp: bool = True,
+    num_layers: int = MINIMAX_H3_TEXT_ENCODER_LAYER,
+) -> None:
+    """Upload the truncated conditioner through ``cache.load_model``. Reload-safe."""
+    cache.load_model(
+        encoder,
+        model_name="minimax-h3",
+        subfolder="text_encoder",
+        parallel_config=parallel_config,
+        mesh_shape=tuple(mesh_device.shape),
+        mesh_device=mesh_device,
+        is_fsdp=is_fsdp,
+        get_torch_state_dict=lambda: load_minimax_h3_text_state_dict(weights_dir, num_layers=num_layers),
+    )
 
 
 _VISION_PREFIX = "model.visual."
