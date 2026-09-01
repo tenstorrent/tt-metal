@@ -25,6 +25,7 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
 )
 from models.demos.qwen3_tts.tt.linear_1d_program_config import find_1d_mcast_grid, make_linear_1d_program_config
 from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS, SHORT_SEQ_LIMIT
+from models.demos.qwen3_tts.tt.rope import apply_rope_qk, get_decode_transformation_mat
 
 
 class Attention(LightweightModule):
@@ -298,6 +299,11 @@ class Attention(LightweightModule):
             q_chunk_size=64,
             k_chunk_size=64,
         )
+
+        # Sharded transformation matrix for the decode-mode RoPE kernel. Same 32x32 matrix
+        # as the prefill one, different memory config — built here so it exists before any
+        # trace capture. See rope.apply_rope_qk.
+        self._decode_trans_mat = get_decode_transformation_mat(device)
 
         # RoPE (P3): default kernel was HiFi4; LoFi + explicit L1 matches linears and avoids DRAM spill.
         self.rope_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -700,24 +706,18 @@ class Attention(LightweightModule):
         # Q/K projection rows + Q/K norm weights were pre-permuted at init time so
         # Q/K are already in interleaved head-dim layout for rotary_embedding_llama.
         # This avoids per-call reshape/permute/reshape churn in decode/prefill.
-        # Use is_decode_mode=False to work with DRAM layout for all sequence lengths.
-        q = ttnn.experimental.rotary_embedding_llama(
+        # apply_rope_qk picks the decode-mode kernel at seq==1 (bit-identical, ~3x cheaper
+        # per layer) and the prefill kernel otherwise.
+        q, k = apply_rope_qk(
             q,
-            cos,
-            sin,
-            transformation_mat,
-            is_decode_mode=False,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.rope_compute_kernel_config,
-        )
-        k = ttnn.experimental.rotary_embedding_llama(
             k,
             cos,
             sin,
             transformation_mat,
-            is_decode_mode=False,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            head_dim=self.head_dim,
+            decode_trans_mat=self._decode_trans_mat,
             compute_kernel_config=self.rope_compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         # Keep Q/K in interleaved layout after RoPE.
 
