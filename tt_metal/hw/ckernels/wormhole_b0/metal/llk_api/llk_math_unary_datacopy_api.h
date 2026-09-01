@@ -12,6 +12,12 @@
  * LLK ELTWISE UNARY DATACOPY
  *************************************************************************/
 
+__attribute__((always_inline)) inline void llk_math_eltwise_unary_datacopy_to_dest_32x16(std::uint32_t dst_index) {
+    math::math_unpack_to_dest_math_ready();
+    math::set_dst_write_addr<DstTileShape::Tile32x16, UnpackDestination::DestReg>(dst_index);
+    math::math_unpack_to_dest_tile_ready();
+}
+
 template <
     DataCopyType type,
     bool is_fp32_dest_acc_en,

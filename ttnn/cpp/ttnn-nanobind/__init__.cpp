@@ -78,6 +78,7 @@
 #include "ttnn/operations/sliding_window/sliding_window_nanobind.hpp"
 #include "ttnn/operations/transformer/transformer_nanobind.hpp"
 #include "ttnn/operations/uniform/uniform_nanobind.hpp"
+#include "ttnn/operations/wavelet/wavelet_nanobind.hpp"
 #include "ttnn/operations/rand/rand_nanobind.hpp"
 #include "ttnn/operations/randn/randn_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
@@ -87,6 +88,7 @@ namespace nb = nanobind;
 namespace ttnn::operations {
 
 void py_module(nb::module_& mod) {
+    wavelet::bind_wavelet_operations(mod);
     nb::set_leak_warnings(true);
 
     auto m_core = mod.def_submodule("core", "core operations");
