@@ -9,6 +9,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <unistd.h>
+#include <atomic>
 
 namespace tt::tt_metal {
 
@@ -214,6 +215,35 @@ void ShmTrackingProcessor::track_deallocate(Buffer* buffer) {
                 to_shm_buffer_type(buffer->buffer_type()),
                 static_cast<uint32_t>(buffer->device()->id()));
         }
+    }
+}
+
+namespace {
+
+// Set once, by the first device that enables tracking. Null means tracking is off, which is what
+// makes the two hooks in Buffer cost a single load when it is.
+//
+// A function-local static rather than a registry: there is exactly one tracker, it is never
+// removed, and the language already guarantees that concurrent initialisation constructs it
+// exactly once -- so there is no registration to race over.
+std::atomic<ShmTrackingProcessor*> g_tracker{nullptr};
+
+}  // namespace
+
+void enable_shm_buffer_tracking(bool verbose) {
+    static ShmTrackingProcessor tracker(verbose);
+    g_tracker.store(&tracker, std::memory_order_release);
+}
+
+void record_buffer_allocation(const Buffer* buffer) {
+    if (auto* tracker = g_tracker.load(std::memory_order_acquire)) {
+        tracker->track_allocate(buffer);
+    }
+}
+
+void record_buffer_deallocation(Buffer* buffer) {
+    if (auto* tracker = g_tracker.load(std::memory_order_acquire)) {
+        tracker->track_deallocate(buffer);
     }
 }
 

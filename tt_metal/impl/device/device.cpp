@@ -654,19 +654,11 @@ bool Device::initialize(
             std::make_unique<SharedMemoryStatsProvider>(asic_id, this->id_, shm_tracking_disabled, shm_verbose);
         log_debug(tt::LogMetal, "Shared memory tracking enabled for device {}, asic_id=0x{:x}", this->id_, asic_id);
 
-        // Register the SHM buffer observer once, when the first device with SHM tracking is
-        // created. Verbose flag is captured here from this device's MetalContext for the same
-        // reason as SharedMemoryStatsProvider above.
-        //
-        // Idempotent, so repeated device init is safe and tracking recovers rather than being
-        // lost forever behind a one-shot flag -- and idempotent atomically, so two devices
-        // initializing at once cannot both register one and have every buffer event counted
-        // twice.
-        if (tt::tt_metal::register_buffer_allocation_observer_once(
-                typeid(tt::tt_metal::ShmTrackingProcessor),
-                [shm_verbose]() { return std::make_shared<tt::tt_metal::ShmTrackingProcessor>(shm_verbose); })) {
-            log_debug(tt::LogMetal, "ShmTrackingProcessor registered as a buffer allocation observer");
-        }
+        // Turn on buffer tracking for the process. Verbose flag is read here from this device's
+        // MetalContext for the same reason as SharedMemoryStatsProvider above. Safe to call from
+        // every device and from several at once: the tracker behind it is a function-local
+        // static, so it is constructed exactly once.
+        tt::tt_metal::enable_shm_buffer_tracking(shm_verbose);
     }
 
     this->initialized_ = true;

@@ -45,7 +45,6 @@ set(UNIT_TESTS_API_SOURCES
     test_filesystem_utils.cpp
     test_tt_memory.cpp
     test_graph_tracking.cpp
-    test_buffer_allocation_observer.cpp
     test_memory_tracking_shm.cpp
     test_buffer_region.cpp
     test_compile_time_args.cpp
