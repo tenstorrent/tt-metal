@@ -83,25 +83,42 @@ void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& 
 }
 // NOLINTEND(cppcoreguidelines-missing-std-forward)
 
-void record_program_sub_device_for_range(
-    MeshDevice* mesh_device, const MeshCoordinateRange& device_range, uint64_t runtime_id, SubDeviceId sub_device_id) {
-    // Skip programs that didn't opt into a user-defined sub-device manager.
-    const uint64_t active_manager_id = *mesh_device->get_active_sub_device_manager_id();
-    if (active_manager_id == *mesh_device->get_default_sub_device_manager_id()) {
-        return;
+// Only a profiler reads the recorded sub-device mapping back, and the values that decide whether to
+// record are constant across every program in a launch. Resolve them once, then record per program.
+class SubDeviceRecorder {
+public:
+    SubDeviceRecorder(MeshDevice* mesh_device, SubDeviceId sub_device_id) :
+        context_id_(extract_context_id(mesh_device)), manager_id_(*mesh_device->get_active_sub_device_manager_id()) {
+        // Skip programs that didn't opt into a user-defined sub-device manager.
+        enabled_ = manager_id_ != *mesh_device->get_default_sub_device_manager_id() &&
+                   tt::IsProgramMetadataRecordingEnabled(context_id_);
+        if (enabled_) {
+            num_available_worker_cores_ = mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+        }
     }
-    const uint32_t num_available_worker_cores =
-        mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-    for_each_local(mesh_device, device_range, [&](const MeshCoordinate& coord) {
+
+    bool enabled() const { return enabled_; }
+
+    void record(ChipId device_id, uint64_t runtime_id, SubDeviceId sub_device_id) const {
         tt::RecordProgramSubDevice(
-            extract_context_id(mesh_device),
-            mesh_device->impl().get_device(coord)->id(),
-            active_manager_id,
-            runtime_id,
-            sub_device_id,
-            num_available_worker_cores);
-    });
-}
+            context_id_, device_id, manager_id_, runtime_id, sub_device_id, num_available_worker_cores_);
+    }
+
+    void record(const std::vector<IDevice*>& devices, uint64_t runtime_id, SubDeviceId sub_device_id) const {
+        if (!enabled_) {
+            return;
+        }
+        for (const auto* device : devices) {
+            record(device->id(), runtime_id, sub_device_id);
+        }
+    }
+
+private:
+    ContextId context_id_;
+    uint64_t manager_id_ = 0;
+    uint32_t num_available_worker_cores_ = 0;
+    bool enabled_ = false;
+};
 
 [[maybe_unused]] MeshCoordinate get_local_start_coord(MeshDevice* mesh_device, const MeshCoordinateRange& range) {
     for (const auto& coord : range) {
@@ -386,8 +403,9 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     ZoneScopedN("EnqueueProgram");
     auto lock = lock_api_function_();
     in_use_ = true;
-    uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
-    const auto& sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_, command_hash);
+    // The active sub-device manager id doubles as the key for per-program cached command sequences.
+    const uint64_t active_sub_device_manager_id = *mesh_device_->get_active_sub_device_manager_id();
+    const auto& sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
     auto mesh_device_id = mesh_device_->id();
@@ -489,18 +507,13 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         program_ordering_sync_count,
         dispatch_metadata);
 
-    size_t num_program_devices = 0;
-    for (const auto& [device_range, program] : mesh_workload.get_programs()) {
-        (void)program;
-        num_program_devices += device_range.shape().mesh_size();
-    }
-    const bool covers_entire_mesh = num_program_devices == mesh_device_->shape().mesh_size();
+    const bool covers_entire_mesh = mesh_workload.impl().get_num_program_devices() == mesh_device_->shape().mesh_size();
     std::unordered_set<uint32_t> chip_ids_in_workload;
     if (!covers_entire_mesh) {
-        chip_ids_in_workload.reserve(mesh_device_->get_devices().size());
+        chip_ids_in_workload.reserve(mesh_device_->num_devices());
     }
 
-    auto max_program_kernels_sizeB = mesh_workload.impl().get_finalized_metadata().max_program_kernels_sizeB;
+    auto max_program_kernels_sizeB = mesh_workload.impl().get_max_program_kernels_sizeB();
     bool use_prefetcher_cache = mesh_workload.impl().use_prefetcher_cache_;
     if (use_prefetcher_cache) {
         bool is_cached;
@@ -526,19 +539,17 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     const uint32_t unicast_launch_msg_wptr =
         cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr();
     const CoreCoord dispatch_core = this->virtual_program_dispatch_core();
-    const uint64_t active_sub_device_manager_id = *mesh_device_->get_active_sub_device_manager_id();
-    // Only a profiler reads the recorded sub-device mapping back, and a full-mesh workload would
-    // record it once per device on every enqueue, so decide once here and skip the whole loop.
-    const bool record_sub_device = active_sub_device_manager_id != *mesh_device_->get_default_sub_device_manager_id() &&
-                                   tt::IsProgramMetadataRecordingEnabled(extract_context_id(mesh_device_));
-    const uint32_t num_available_worker_cores =
-        record_sub_device ? mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) : 0;
+    const SubDeviceRecorder sub_device_recorder(mesh_device_, sub_device_id);
+#if defined(TRACY_ENABLE)
+    const bool tag_tracy_zones = !tt::tt_metal::getDeviceProfilerState();
+#endif
 
     // Iterate over all programs. Update dispatch commands per program to reflect
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
-        auto& program_cmd_seq = mesh_workload.impl().get_dispatch_cmds_for_program(program, command_hash);
+        auto& program_cmd_seq =
+            mesh_workload.impl().get_dispatch_cmds_for_program(program, active_sub_device_manager_id);
         TT_ASSERT(
             use_prefetcher_cache == program_cmd_seq.prefetcher_cache_used,
             "use_prefetcher_cache: {}, program_cmd_seq.prefetcher_cache_used: {}",
@@ -558,28 +569,19 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             static_cast<uint8_t>(this->id()));
 
         const auto& local_devices = mesh_device_->impl().get_local_devices(device_range);
-        if (record_sub_device) {
+        sub_device_recorder.record(local_devices, program.get_runtime_id(), sub_device_id);
+        this->write_program_commands_to_devices(
+            local_devices, program_cmd_seq, dispatch_metadata.stall_first, dispatch_metadata.stall_before_program);
+        if (!covers_entire_mesh) {
             for (const auto* device : local_devices) {
-                tt::RecordProgramSubDevice(
-                    extract_context_id(mesh_device_),
-                    device->id(),
-                    active_sub_device_manager_id,
-                    program.get_runtime_id(),
-                    sub_device_id,
-                    num_available_worker_cores);
+                chip_ids_in_workload.insert(device->id());
             }
         }
-        this->write_program_commands_to_devices(
-            local_devices,
-            program_cmd_seq,
-            dispatch_metadata.stall_first,
-            dispatch_metadata.stall_before_program,
-            covers_entire_mesh ? nullptr : &chip_ids_in_workload);
 
         // Tag the host-side Tracy zone with the program's runtime_host_id so it pairs 1:1
         // with the device-side zones emitted by the real-time profiler.
 #if defined(TRACY_ENABLE)
-        if (!tt::tt_metal::getDeviceProfilerState()) {
+        if (tag_tracy_zones) {
             std::string msg = fmt::format("EnqueueProgram op_id={}", program.get_runtime_id());
             TracyMessage(msg.c_str(), msg.size());
         }
@@ -1248,14 +1250,10 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
     const std::vector<IDevice*>& devices,
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
-    bool stall_before_program,
-    std::unordered_set<uint32_t>* chip_ids_in_workload) {
+    bool stall_before_program) {
     for (auto* device : devices) {
         program_dispatch::write_program_command_sequence(
             program_cmd_seq, device->sysmem_manager(), id_, stall_first, stall_before_program);
-        if (chip_ids_in_workload != nullptr) {
-            chip_ids_in_workload->insert(device->id());
-        }
     }
 }
 
@@ -1628,7 +1626,13 @@ void FDMeshCommandQueue::record_end() {
                 std::pair<bool, int>(mesh_node.unicast_go_signals, num_virtual_eth_cores),
                 static_cast<uint8_t>(this->id()));
 
-            record_program_sub_device_for_range(mesh_device_, range, node.program_runtime_id, sub_device_id);
+            const SubDeviceRecorder trace_sub_device_recorder(mesh_device_, sub_device_id);
+            if (trace_sub_device_recorder.enabled()) {
+                for_each_local(mesh_device_, range, [&](const MeshCoordinate& coord) {
+                    trace_sub_device_recorder.record(
+                        mesh_device_->impl().get_device(coord)->id(), node.program_runtime_id, sub_device_id);
+                });
+            }
 
             // Issue dispatch commands for this program
             program_dispatch::write_program_command_sequence(

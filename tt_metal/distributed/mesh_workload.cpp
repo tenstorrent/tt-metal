@@ -94,8 +94,9 @@ MeshWorkloadImpl::FinalizedMetadata& MeshWorkloadImpl::get_finalized_metadata() 
 void MeshWorkloadImpl::set_finalized(uint32_t max_program_kernels_sizeB) {
     TT_ASSERT(!is_finalized());
     FinalizedMetadata metadata{.max_program_kernels_sizeB = max_program_kernels_sizeB};
-    for (auto& [_, program] : programs_) {
+    for (auto& [device_range, program] : programs_) {
         auto& program_impl = program.impl();
+        metadata.num_program_devices += device_range.shape().mesh_size();
         metadata.runs_on_noc_multicast_only_cores |= program_impl.runs_on_noc_multicast_only_cores();
         metadata.runs_on_noc_unicast_only_cores |= program_impl.runs_on_noc_unicast_only_cores();
 
@@ -255,12 +256,10 @@ void MeshWorkloadImpl::set_program_binary_status(std::size_t mesh_id, ProgramBin
     // Enqueue re-commits the status on every launch, but the Inspector record describes a
     // transition and writing one costs a mutex and a YAML append. Report only real changes.
     const auto [entry, inserted] = program_binary_status_.try_emplace(mesh_id, status);
-    if (!inserted) {
-        if (entry->second == status) {
-            return;
-        }
-        entry->second = status;
+    if (!inserted && entry->second == status) {
+        return;
     }
+    entry->second = status;
     Inspector::mesh_workload_set_program_binary_status(this, mesh_id, status);
 }
 
@@ -339,10 +338,9 @@ const std::vector<uint64_t>& MeshWorkloadImpl::get_cross_node_program_ids() {
     return get_finalized_metadata().cross_node_program_ids;
 }
 
-const std::unordered_set<SubDeviceId>& MeshWorkloadImpl::determine_sub_device_ids(
-    MeshDevice* mesh_device, uint64_t sub_device_manager_id) {
-    auto& sub_device_ids_by_manager = get_finalized_metadata().sub_device_ids_by_mesh_and_manager[mesh_device->id()];
-    auto [entry, inserted] = sub_device_ids_by_manager.try_emplace(sub_device_manager_id);
+const std::unordered_set<SubDeviceId>& MeshWorkloadImpl::determine_sub_device_ids(MeshDevice* mesh_device) {
+    auto& sub_device_ids_by_manager = sub_device_ids_by_mesh_and_manager_[mesh_device->id()];
+    auto [entry, inserted] = sub_device_ids_by_manager.try_emplace(*mesh_device->get_active_sub_device_manager_id());
     auto& sub_device_ids = entry->second;
     if (inserted) {
         for (auto& [device_range, program] : programs_) {
@@ -371,7 +369,7 @@ ProgramConfig& MeshWorkloadImpl::get_program_config(uint32_t index) {
         MetalContext::instance().rtoptions().get_fast_dispatch() && !is_service_workload_.value_or(false);
     TT_FATAL(
         !requires_finalized_config || is_finalized(),
-        "Program Configs can only be queried before finalization for slow-dispatch workloads.");
+        "Program Configs on a fast-dispatch MeshWorkload can only be queried after finalization.");
     return programs_.begin()->second.impl().get_program_config(index);
 }
 
