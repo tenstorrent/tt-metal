@@ -8,8 +8,9 @@ DRAM-sharded matmul kernel (parallel weight reads across DRAM banks). The
 output of gate/up stays sharded into the SiLU·mul and feeds down_proj's
 sharded input directly — no L1_INTERLEAVED round-trip in the chain.
 
-Prefill (M>1): the DRAM-sharded matmul kernel asserts M==tile_height, so
-we keep the standard 1D-mcast matmul path for prefill.
+Prefill (M>1 tile): 1D-mcast. When the activation is already width-sharded
+(piped from RMSNorm) the 1D kernel reads it in place — no S2I. DRAM-sharded
+matmul is decode-only (M must be one tile).
 """
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -20,7 +21,10 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     find_grid_k_n,
     width_sharded_l1_memcfg,
 )
-from models.demos.qwen3_tts.tt.linear_1d_program_config import make_linear_1d_program_config
+from models.demos.qwen3_tts.tt.linear_1d_program_config import find_1d_mcast_grid, make_linear_1d_program_config
+
+# Prefill buckets that get a 1D-mcast program config (M > 1 tile).
+_PREFILL_SEQS = (32, 64, 96, 128, 192, 256)
 
 
 class MLP(LightweightModule):
@@ -160,6 +164,19 @@ class MLP(LightweightModule):
             grid_y=grid.y,
             fp32_dest_acc_en=_fp32,
         )
+        # Gate/up 1D uses the full grid to match width-sharded LN in0.
+        # Down is interleaved after silu·mul — pick a 1D grid for blocking.
+        _down_gx, _down_gy = find_1d_mcast_grid(self.local_intermediate, hidden_size, grid.x, grid.y)
+        self._prefill_gate_up_progcfg = {
+            m: make_linear_1d_program_config(m, hidden_size, self.local_intermediate, grid.x, grid.y, _fp32)
+            for m in _PREFILL_SEQS
+            if m > self.short_seq_limit
+        }
+        self._prefill_down_progcfg = {
+            m: make_linear_1d_program_config(m, self.local_intermediate, hidden_size, _down_gx, _down_gy, _fp32)
+            for m in _PREFILL_SEQS
+            if m > self.short_seq_limit
+        }
 
         # DRAM-sharded decode path — now supported for TP>1 too.
         # TP=2 benefit: each chip has smaller dimensions (local_intermediate = intermediate // tp)
@@ -259,6 +276,9 @@ class MLP(LightweightModule):
         if is_decode:
             gate_up_progcfg = self._decode_gate_up_progcfg
             down_progcfg = self._decode_down_progcfg
+        elif seq_len in self._prefill_gate_up_progcfg:
+            gate_up_progcfg = self._prefill_gate_up_progcfg[seq_len]
+            down_progcfg = self._prefill_down_progcfg[seq_len]
         elif seq_len <= self.short_seq_limit:
             gate_up_progcfg = self._short_seq_gate_up_progcfg
             down_progcfg = self._short_seq_down_progcfg
@@ -351,7 +371,7 @@ class MLP(LightweightModule):
                 output = tp_all_reduce(output, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
             return output
 
-        # Prefill path: standard 1D-mcast matmul.
+        # Prefill path: 1D-mcast. Width-sharded in0 (from RMSNorm) is consumed in place.
         gate_out = ttnn.linear(
             x,
             self.gate_proj,

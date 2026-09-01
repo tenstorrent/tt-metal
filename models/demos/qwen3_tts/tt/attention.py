@@ -23,10 +23,9 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     find_grid_k_n,
     width_sharded_l1_memcfg,
 )
-from models.demos.qwen3_tts.tt.linear_1d_program_config import make_linear_1d_program_config
+from models.demos.qwen3_tts.tt.linear_1d_program_config import find_1d_mcast_grid, make_linear_1d_program_config
 
-# Prefill bucket sizes for which we pre-build sharded NLP head op memcfgs.
-# Matches SUPPORTED_PREFILL_LENS in demo_full_ttnn_tts.py.
+# Prefill bucket sizes that get a 2D-mcast QKV / O program config (M > 1 tile).
 _PREFILL_SEQS = (32, 64, 96, 128, 192, 256)
 
 
@@ -346,6 +345,20 @@ class Attention(LightweightModule):
             grid_y=_grid.y,
             fp32_dest_acc_en=_fp32_linear,
         )
+        # Prefill QKV / O are L1 interleaved — pick 1D grids for blocking.
+        # Limit QKV to 32 cores so in0_block_w>=2 (64 cores forces in0_block_w=1).
+        _qkv_gx, _qkv_gy = find_1d_mcast_grid(hidden_size, _local_fused_qkv, _grid.x, min(_grid.y, 4))
+        _wo_gx, _wo_gy = find_1d_mcast_grid(self._local_hidden, hidden_size, _grid.x, _grid.y)
+        self._prefill_wqkv_progcfg = {
+            m: make_linear_1d_program_config(m, hidden_size, _local_fused_qkv, _qkv_gx, _qkv_gy, _fp32_linear)
+            for m in _PREFILL_SEQS
+            if m > self.short_seq_limit
+        }
+        self._prefill_wo_progcfg = {
+            m: make_linear_1d_program_config(m, self._local_hidden, hidden_size, _wo_gx, _wo_gy, _fp32_linear)
+            for m in _PREFILL_SEQS
+            if m > self.short_seq_limit
+        }
 
         # === Decode-only DRAM-sharded QKV / O projections ===
         # qkv_2d rows are reordered into KV-group-interleaved layout so the sharded
@@ -429,7 +442,7 @@ class Attention(LightweightModule):
             m_tiles=1, k_tiles=n_tiles_o, num_cores_x=cols_o, num_cores_y=rows_o
         )
 
-        # === Sharded NLP head op memcfgs (decode m=32 + prefill m=128) ===
+        # === Sharded NLP head op memcfgs (decode m=32) ===
         # nlp_concat_heads HEIGHT_SHARDED input over num_heads cores (1 head/shard).
         # nlp_create_qkv_heads WIDTH_SHARDED input with shard_width=(Q/KV+2)*head_dim
         # over fused_qkv/shard_width cores (= num_kv_heads).
@@ -481,7 +494,6 @@ class Attention(LightweightModule):
         self._decode_qkv_split_k_out_memcfg = _dec["k_out"]
         self._decode_qkv_split_v_out_memcfg = self._decode_qkv_split_k_out_memcfg
 
-        # Per-bucket prefill sharded NLPConcat memcfgs (TP=1 only; prefill DRAM-sharded not yet ported for TP>1).
         self._prefill_concat_configs = (
             {} if self.tp_size > 1 else {m: _build_sharded_nlp_memcfgs(m) for m in _PREFILL_SEQS}
         )
@@ -559,17 +571,17 @@ class Attention(LightweightModule):
         if is_decode or seq_len == 1:
             wqkv_progcfg = self._decode_wqkv_progcfg
             wo_progcfg = self._decode_wo_progcfg
+        elif seq_len in self._prefill_wqkv_progcfg:
+            wqkv_progcfg = self._prefill_wqkv_progcfg[seq_len]
+            wo_progcfg = self._prefill_wo_progcfg[seq_len]
         elif seq_len <= self.short_seq_limit:
             wqkv_progcfg = self._short_seq_wqkv_progcfg
             wo_progcfg = self._short_seq_wo_progcfg
         else:
             wqkv_progcfg = wo_progcfg = None
 
-        # QKV projection — DRAM-sharded matmul path. Originally gated to
-        # decode (seq=1); relaxed to all seq_len <= 32 (one tile in M) so
-        # CP_prefill (seq=2) also takes the sharded fast path → 16-core
-        # nlp_create_qkv_heads instead of single-core. Larger prefill buckets
-        # (64, 128) need separate per-m shard configs to engage — TODO.
+        # QKV: DRAM-sharded when M is one tile (decode / CP prefill / seq<=32).
+        # Larger prefill: 1D-mcast on L1 interleaved in0 (faster than width-sharded).
         use_dram_shard_qkv = seq_len <= 32
         # Sharded nlp_create_qkv_heads engages downstream of the DRAM-sharded QKV
         # since wqkv was rearranged to KV-group-interleaved layout.
@@ -961,7 +973,6 @@ class Attention(LightweightModule):
 
         # Hoist use_dram_shard_o so it can also gate the direct concat→wo reshard below.
         use_dram_shard_o = is_decode and seq_len == 1
-        # Pick decode (m=32) vs prefill bucket-size sharded NLPConcat memcfgs.
         sharded_concat_decode = is_decode
         sharded_concat_prefill = (not is_decode) and (seq_len in self._prefill_concat_configs)
         use_sharded_concat = sharded_concat_decode or sharded_concat_prefill
