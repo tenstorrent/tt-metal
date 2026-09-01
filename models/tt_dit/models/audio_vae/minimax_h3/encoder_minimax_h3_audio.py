@@ -328,12 +328,21 @@ class MiniMaxH3AudioEncoder(Module):
         ccl_manager: CCLManager | None = None,
         split_mode: str = "full",
         max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
+        stereo_split_axis: int | None = None,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
         self.dtype = dtype
         self.latent_channels = latent_channels
         self.hop_length = math.prod(encoder_rates)
+        # Data-parallel over the batch (stereo = batch 2) across one mesh axis: each device row
+        # encodes one full-length channel, so nothing here is a collective -- no halo, no gather,
+        # and the numerics are the unsharded ones by construction. The batch is padded to the
+        # axis length by cycling channels (batch 2 does not divide a 4-wide axis); the pad rows
+        # are never read back. Weights replicate either way, so the device-weight cache key
+        # (`weights_variant`) is unaffected. Readback picks one device per batch row via
+        # `get_device_tensors`, which is host-local -- multi-host meshes are not supported yet.
+        self.stereo_split_axis = stereo_split_axis
 
         # The precision levers default to accurate, same rationale as the decoder. H3-only: LTX
         # constructs the same conv classes with its own fast defaults. Kept as attributes so the
@@ -383,8 +392,23 @@ class MiniMaxH3AudioEncoder(Module):
             num_samples % self.hop_length == 0
         ), f"{num_samples} samples is not a whole number of {self.hop_length}-sample hops"
 
+        batch = waveform_BCT.shape[0]
+        split = self.stereo_split_axis is not None and batch > 1 and not ttnn.using_distributed_env()
         x = waveform_BCT.transpose(1, 2).float().contiguous()  # (B, T, 1)
-        x_device = ttnn.from_torch(x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
+        mapper = None
+        if split:
+            axis_len = tuple(self.mesh_device.shape)[self.stereo_split_axis]
+            assert batch <= axis_len, f"batch {batch} exceeds mesh axis {self.stereo_split_axis} ({axis_len})"
+            # Cycle-pad the batch to the axis length; every device then holds exactly one item.
+            x = x[[i % batch for i in range(axis_len)]]
+            dims = [None, None]
+            dims[self.stereo_split_axis] = 0
+            mapper = ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=tuple(dims)
+            )
+        x_device = ttnn.from_torch(
+            x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype, mesh_mapper=mapper
+        )
 
         trunk = self.encoder(x_device)
         # pre_block is a transformer block, so it wants TILE; the convs want ROW_MAJOR.
@@ -398,7 +422,13 @@ class MiniMaxH3AudioEncoder(Module):
             # See `MiniMaxH3AudioDecoder.__call__`: a storage slice keeps the parent's distribution
             # metadata and the converter rejects it on a multi-host mesh. The helper reads a shard this
             # host owns instead, which for a replicated tensor is the whole answer.
-            return local_device_to_torch(tensor).float()
+            if not split:
+                return local_device_to_torch(tensor).float()
+            # Batch-split: device (r, 0) holds batch item r (columns replicate). One read per row.
+            shards = ttnn.get_device_tensors(tensor)
+            num_cols = tuple(self.mesh_device.shape)[1]
+            stride = num_cols if self.stereo_split_axis == 0 else 1
+            return torch.cat([ttnn.to_torch(shards[r * stride]).float() for r in range(batch)], dim=0)
 
         mean = read(self.mean_proj(projected))
         logs = read(self.logs_proj(projected))
