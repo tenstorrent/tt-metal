@@ -7,6 +7,7 @@
 #include "ckernel_globals.h"
 #include "internal/circular_buffer_interface.h"
 #include "llk_assert.h"
+#include "llk_fp32_dest_acc.h"
 #include "llk_outputs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
@@ -16,11 +17,13 @@
  *************************************************************************/
 
 /**
- * Enable or disable FP32 accumulation in the packer destination register.
+ * Pack-thread half of a mid-kernel FP32 dest-acc reconfiguration.
  *
- * @param enable When true, the packer treats the destination register as FP32 accumulated.
+ * @param enable When true, dest-acc is programmed for 32-bit destination reads. MATH owns the CFG
+ *               writes, including PCK_DEST_RD_CTRL.
+ * @note Must be called together with llk_unpack_set_fp32_dest_acc and llk_math_set_fp32_dest_acc.
  */
-inline void llk_pack_set_fp32_dest_acc(bool enable) { _llk_pack_set_fp32_dest_acc_(enable); }
+inline void llk_pack_set_fp32_dest_acc(bool enable) { _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(enable); }
 
 /**
  * Configure the packer hardware for the given output operand.

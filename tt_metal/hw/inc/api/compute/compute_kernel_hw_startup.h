@@ -13,7 +13,12 @@
 #endif
 
 #ifdef TRISC_MATH
+#include "llk_math_common_api.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
+#endif
+
+#ifdef TRISC_PACK
+#include "llk_pack_common_api.h"
 #endif
 
 namespace ckernel {
@@ -103,8 +108,10 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) { compute_kerne
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data)
- * for 32-bit destination reads. This is a lightweight, standalone
- * reconfiguration that is safe to call mid-kernel without re-running
+ * for 32-bit destination reads. UNPACK/PACK tensix_sync then notify MATH
+ * and wait; MATH writes dest-acc CFG and releases them. Every thread
+ * STALLWAITs on TRISC_CFG, blocking unpacker / packer / FPU / SFPU until
+ * those writes are visible. Safe to call mid-kernel without re-running
  * compute_kernel_hw_startup.
  *
  * Must be paired with disable_fp32_dest_acc() when switching back to
@@ -117,6 +124,7 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) { compute_kerne
 // clang-format on
 #ifndef ARCH_QUASAR
 ALWI void enable_fp32_dest_acc() {
+    UNPACK((llk_unpack_set_fp32_dest_acc(true)));
     MATH((llk_math_set_fp32_dest_acc(true)));
     PACK((llk_pack_set_fp32_dest_acc(true)));
 }
@@ -129,8 +137,10 @@ ALWI void enable_fp32_dest_acc() {
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data)
- * to disable 32-bit destination reads. This is a lightweight, standalone
- * reconfiguration that is safe to call mid-kernel without re-running
+ * to disable 32-bit destination reads. UNPACK/PACK tensix_sync then notify
+ * MATH and wait; MATH writes dest-acc CFG and releases them. Every thread
+ * STALLWAITs on TRISC_CFG, blocking unpacker / packer / FPU / SFPU until
+ * those writes are visible. Safe to call mid-kernel without re-running
  * compute_kernel_hw_startup.
  *
  * Only available on Wormhole and Blackhole. Not supported on Quasar (compile error)
@@ -140,6 +150,7 @@ ALWI void enable_fp32_dest_acc() {
 // clang-format on
 #ifndef ARCH_QUASAR
 ALWI void disable_fp32_dest_acc() {
+    UNPACK((llk_unpack_set_fp32_dest_acc(false)));
     MATH((llk_math_set_fp32_dest_acc(false)));
     PACK((llk_pack_set_fp32_dest_acc(false)));
 }

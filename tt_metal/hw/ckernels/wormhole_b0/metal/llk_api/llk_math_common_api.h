@@ -10,6 +10,7 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
+#include "llk_fp32_dest_acc.h"
 #include "llk_math_common.h"
 #include "llk_operands.h"
 #include "api/debug/waypoint.h"
@@ -28,7 +29,15 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
         unpack_dst_format[srca_operand_id], unpack_dst_format[srcb_operand_id]);
 }
 
-inline void llk_math_set_fp32_dest_acc(bool enable) { _llk_math_set_fp32_dest_acc_(enable); }
+/**
+ * Math-thread half of a mid-kernel FP32 dest-acc reconfiguration.
+ *
+ * Programs ALU_ACC_CTRL and PCK_DEST_RD_CTRL after Unpack and Pack have drained.
+ *
+ * @param enable True to enable FP32 dest accumulation, false to disable.
+ * @note Must be called together with llk_unpack_set_fp32_dest_acc and llk_pack_set_fp32_dest_acc.
+ */
+inline void llk_math_set_fp32_dest_acc(bool enable) { _llk_set_fp32_dest_acc_<ThreadId::MathThreadId>(enable); }
 
 inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {}
 

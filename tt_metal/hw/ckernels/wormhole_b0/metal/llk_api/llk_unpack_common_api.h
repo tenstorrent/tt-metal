@@ -14,6 +14,7 @@
 #include "llk_operands.h"
 #include "llk_param_structs.h"
 #include "llk_assert.h"
+#include "llk_fp32_dest_acc.h"
 #include "llk_unpack_common.h"
 #include "api/debug/waypoint.h"
 
@@ -77,6 +78,16 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
 template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand) {
     llk_unpack_hw_configure<is_fp32_dest_acc_en>(unpA_operand, unpA_operand);
+}
+
+/**
+ * Unpack-thread half of a mid-kernel FP32 dest-acc reconfiguration.
+ *
+ * @param enable True to enable FP32 dest accumulation, false to disable.
+ * @note Must be called together with llk_math_set_fp32_dest_acc and llk_pack_set_fp32_dest_acc.
+ */
+inline void llk_unpack_set_fp32_dest_acc(bool enable) {
+    _llk_set_fp32_dest_acc_<ThreadId::UnpackThreadId>(enable);
 }
 
 /**
