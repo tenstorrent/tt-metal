@@ -51,6 +51,11 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_eff_b.get_id(), dfb_eff_c.get_id(), dfb_out.get_id());
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
+        // Each broadcast block below retargets the packer at its broadcast CB and must hand it back
+        // to dfb_out: pack data format is sticky packer state, and the broadcast CBs carry the input
+        // dtypes while dfb_out carries the output dtype, which differ whenever a preallocated output
+        // tensor changes it. The unpack formats need no matching restore -- is_llk_bcast() admits
+        // this path only when all three inputs share one dtype, so every unpack source agrees.
 // 1) Prepare B and C (broadcast if required), then compute mul(B, C) -> DST[0]
 // Perform LLK row broadcast for B if requested
 #if BCAST_B
@@ -67,6 +72,10 @@ void kernel_main() {
         dfb_llk_b.push_back(num_tiles_per_cycle);
         tile_regs_release();
         dfb_in1.pop_front(num_tiles_per_cycle);
+        pack_reconfig_data_format(/*old*/ dfb_llk_b.get_id(), /*new*/ dfb_out.get_id());
+#ifdef ARCH_BLACKHOLE
+        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out.get_id())));
+#endif
 #endif
 
 // Perform LLK row broadcast for C if requested
@@ -84,6 +93,10 @@ void kernel_main() {
         dfb_llk_c.push_back(num_tiles_per_cycle);
         tile_regs_release();
         dfb_in2.pop_front(num_tiles_per_cycle);
+        pack_reconfig_data_format(/*old*/ dfb_llk_c.get_id(), /*new*/ dfb_out.get_id());
+#ifdef ARCH_BLACKHOLE
+        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out.get_id())));
+#endif
 #endif
 
 // Perform LLK row broadcast for A if requested (do this before compute regs session)
@@ -101,6 +114,10 @@ void kernel_main() {
         dfb_llk_a.push_back(num_tiles_per_cycle);
         tile_regs_release();
         dfb_in0.pop_front(num_tiles_per_cycle);
+        pack_reconfig_data_format(/*old*/ dfb_llk_a.get_id(), /*new*/ dfb_out.get_id());
+#ifdef ARCH_BLACKHOLE
+        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out.get_id())));
+#endif
 #endif
 
         // Ensure sources available
@@ -110,13 +127,13 @@ void kernel_main() {
 
         tile_regs_acquire();
 
-        copy_tile_init(dfb_eff_a.get_id());
+        copy_init(dfb_eff_a.get_id());
         copy_tile(dfb_eff_a.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_tile_init(dfb_eff_b.get_id());
+        copy_init(dfb_eff_b.get_id());
         copy_tile(dfb_eff_b.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        copy_tile_init(dfb_eff_c.get_id());
+        copy_init(dfb_eff_c.get_id());
         copy_tile(dfb_eff_c.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
         TERNARY_SFPU_OP_INIT();

@@ -186,6 +186,7 @@ inline void _llk_math_mul_reduce_scalar_init_()
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_configure_default_zero_flag_state_();
 }
 
 /**

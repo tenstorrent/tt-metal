@@ -6,8 +6,7 @@
 Dense MLA cache coverage lives in cache/test_mla_cache.py. This suite verifies the sparse-specific
 behavior: sparse capability is resolved explicitly (config / host weights / cache), the offline
 cache build emits the indexer tensorbins, cache-only construction stays sparse (binds TtIndexer,
-never dense), completeness covers the indexer files, and a sparse cache-only construct with no cache
-warns and stays sparse (mirrors dense's lenient placeholder load) instead of silently going dense.
+never dense), completeness covers the indexer files.
 
 The `matches_config` test is host-only (no device); the build→cache-only→PCC test runs on a TP>=2
 mesh so the dense 128-head epilogue fits (TP=1 overflows L1). Validity gating (so collected==run) is
@@ -26,11 +25,13 @@ from ttnn.device import is_blackhole
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config, glm_5_2_hf_config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     ReuseIndexer,
     TtIndexer,
     indexer_layer_is_reused,
+    normalized_hadamard_matrix,
     resolve_has_indexer,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -45,13 +46,62 @@ SP_AXIS, TP_AXIS = 0, 1
 
 
 # --------------------------------------------------------------------------------------------------
+# Host-only: the decode-compatible Hadamard is orthonormal, so applying it to both indexer operands
+# preserves their score while spreading values before cache quantization.
+# --------------------------------------------------------------------------------------------------
+def test_normalized_hadamard_preserves_indexer_scores():
+    h = normalized_hadamard_matrix(128).float()
+    identity = torch.eye(128)
+    torch.testing.assert_close(h.T @ h, identity, rtol=2e-3, atol=2e-3)
+
+    torch.manual_seed(0)
+    q = torch.randn(3, 128)
+    k = torch.randn(5, 128)
+    torch.testing.assert_close((q @ h) @ (k @ h).T, q @ k.T, rtol=2e-3, atol=2e-3)
+
+
+def test_normalized_hadamard_rejects_non_power_of_two(expect_error):
+    with expect_error(AssertionError, "power of two"):
+        normalized_hadamard_matrix(96)
+
+
+@pytest.mark.parametrize("slots", [1, 2])
+def test_sp1_kvpe_slice_materializes_only_multi_slot_cache(monkeypatch, slots):
+    """A single-slot full-range slice must remain an alias; only slot selection needs new DRAM storage."""
+    import models.demos.deepseek_v3_d_p.tt.mla.mla as mla_module
+
+    storage = SimpleNamespace(shape=(slots, 1, 64, 128))
+    cache = SimpleNamespace(storage=storage, format="format", geometry="geometry")
+    slice_calls = []
+
+    def fake_slice(tensor, starts, ends, **kwargs):
+        slice_calls.append((tensor, starts, ends, kwargs))
+        return tensor if not kwargs else SimpleNamespace(shape=(1, 1, 64, 128))
+
+    monkeypatch.setattr(ttnn, "slice", fake_slice)
+    monkeypatch.setattr(mla_module, "MlaKvCache", lambda **kwargs: SimpleNamespace(**kwargs))
+    self = SimpleNamespace(sp_factor=1)
+
+    gathered = ttMLA._gather_kvpe_prefix(
+        self, cache, cache_batch_idx=slots - 1, populated_global=64, block_cyclic_chunk_local=64
+    )
+
+    if slots == 1:
+        assert not slice_calls
+        assert gathered.storage is storage
+    else:
+        _, starts, _, kwargs = slice_calls[0]
+        assert starts[0] == slots - 1
+        assert kwargs["memory_config"] == ttnn.DRAM_MEMORY_CONFIG
+        assert gathered.storage is not storage
+
+
+# --------------------------------------------------------------------------------------------------
 # Host-only: the config-detection path, isolated from the host/cache fallbacks. A regression where a
 # variant's runtime config stops carrying the DSA fields would be masked by the PCC test below (it can
 # resolve sparse via the cache), so assert matches_config / resolve_has_indexer directly.
 # --------------------------------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    "variant", ["deepseek_v32", "glm_5_1", "glm_5_2"], indirect=True, ids=["deepseek_v32", "glm_5_1", "glm_5_2"]
-)
+@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm_5_1", "glm_5_2"])
 def test_matches_config_detects_dsa(variant, config_only):
     assert TtIndexer.matches_config(config_only), f"{variant.name}: runtime config should carry DSA index_* fields"
     # No host weights, no cache, no explicit override -> still resolves sparse purely from the config.
@@ -112,8 +162,8 @@ def test_glm52_indexer_types_generator():
 
 
 def test_indexer_layer_is_reused_gating():
-    """indexer_layer_is_reused is True only on shared layers. A config WITHOUT indexer_types (GLM-5.1 /
-    v3.2) is all-full -> always False: the single source of truth that keeps GLM-5.1 unaffected."""
+    """indexer_layer_is_reused is True only on shared layers. A config WITHOUT indexer_types (GLM-5.1)
+    is all-full -> always False: the single source of truth that keeps GLM-5.1 unaffected."""
     cfg = glm_5_2_hf_config()
     for i in (0, 1, 2, 6, 10, 74):
         assert indexer_layer_is_reused(cfg, i) is False, f"L{i} is a full layer"
@@ -222,17 +272,16 @@ def _build_mla(config, state_dict, mesh_device, weight_cache_path):
     [
         pytest.param(
             (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-            },
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="linear"),
-            id="linear-4x2",
+            fabric2d_device_params(
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
+            ),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-4x2",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["deepseek_v32", "glm_5_1"], indirect=True, ids=["deepseek_v32", "glm_5_1"])
+@pytest.mark.parametrize("variant", ["glm_5_1"], indirect=True, ids=["glm_5_1"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, variant, config_only):
@@ -303,12 +352,11 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, variant,
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-            },
+            torus_xy_device_params(
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -350,39 +398,3 @@ def test_glm52_shared_layer_cache_skips_indexer(mesh_device, device_params, vari
     assert type(mla_c._indexer).__name__ == "ReuseIndexer", "shared layer must bind ReuseIndexer"
     logger.info(f"[{variant.name}] shared layer {shared_idx}: cache built without indexer, ReuseIndexer bound")
     ttnn.synchronize_device(mesh_device)
-
-
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-            },
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="linear"),
-            id="linear-4x2",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("variant", ["deepseek_v32"], indirect=True, ids=["deepseek_v32"])
-@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
-@pytest.mark.timeout(0)
-def test_sparse_cache_only_without_cache_warns_stays_sparse(mesh_device, device_params, variant, config_only):
-    """Sparse cache-only construction with no indexer cache must WARN (not raise — mirrors dense's
-    lenient placeholder load) and stay sparse, never silently fall back to dense."""
-    config = config_only
-    config.max_seq_len = SEQ_LEN
-    warnings = []
-    sink = logger.add(lambda m: warnings.append(str(m)), level="WARNING")
-    try:
-        mla = _build_mla(config, {}, mesh_device, weight_cache_path=CACHE_DIR)  # empty (cleaned) dir
-    finally:
-        logger.remove(sink)
-    assert mla._has_indexer, "must stay sparse (resolved from config), not fall back to dense"
-    assert type(mla._indexer).__name__ == "TtIndexer", "must bind TtIndexer, never NullIndexer"
-    assert any(
-        "indexer has neither host weights nor a complete cache" in m for m in warnings
-    ), f"expected a loud warning about the missing indexer weights/cache; got: {warnings}"

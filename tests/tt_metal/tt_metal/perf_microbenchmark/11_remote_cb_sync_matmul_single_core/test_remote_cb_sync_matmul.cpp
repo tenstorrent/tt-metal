@@ -188,8 +188,8 @@ std::tuple<std::vector<tt_metal::Program>, ::tt_metal::experimental::GlobalCircu
     uint32_t in1_receiver_cb_size = in1_block_h * in1_block_w * single_tile_size * cb_num_blocks / num_receivers;
     uint32_t padded_global_cb_size = in1_receiver_cb_size + cb_padding;
 
-    auto global_cb = tt_metal::experimental::CreateGlobalCircularBuffer(
-        device, sender_receiver_core_mapping, padded_global_cb_size, tt_metal::BufferType::L1);
+    auto global_cb = tt_metal::experimental::GlobalCircularBuffer(
+        *device, sender_receiver_core_mapping, padded_global_cb_size, tt_metal::BufferType::L1);
 
     uint32_t in1_writer_cb_index = 31;
     tt_metal::CircularBufferConfig in1_writer_cb_config = tt_metal::CircularBufferConfig(in1_receiver_cb_size);

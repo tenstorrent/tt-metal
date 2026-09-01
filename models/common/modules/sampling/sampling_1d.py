@@ -191,7 +191,6 @@ class Sampling1D(LightweightModule):
 
         try:
             self._index_offsets = _materialize(cfg.index_offsets)
-            self._local_indices = _materialize(cfg.local_indices)
             self._invalid_vocab_mask = (
                 _materialize(cfg.invalid_vocab_mask) if cfg.invalid_vocab_mask is not None else None
             )
@@ -237,7 +236,6 @@ class Sampling1D(LightweightModule):
 
         for name in (
             "index_offsets",
-            "local_indices",
             "invalid_vocab_mask",
             "invalid_vocab_tail_mask",
             "seeds",
@@ -567,7 +565,7 @@ class Sampling1D(LightweightModule):
 
     # -- Top-k strategies (bound at init, no if-else in forward) --------------
 
-    def _topk_single_device(self, x_bf16, active_batch):
+    def _topk_single_device(self, x_bf16):
         """Split vocab in half → two topk → concat. Port of tt_sampling.py:346-371."""
         cfg = self.config
         x_list = ttnn.split(x_bf16, x_bf16.shape[-1] // 2, dim=3)
@@ -600,7 +598,7 @@ class Sampling1D(LightweightModule):
 
         return gathered_values, gathered_indices
 
-    def _topk_multi_device(self, x_bf16, active_batch):
+    def _topk_multi_device(self, x_bf16):
         """Local topk → all_gather across devices. Port of tt_sampling.py:372-421."""
         cfg = self.config
         cluster_shape = cfg.mesh_device.shape

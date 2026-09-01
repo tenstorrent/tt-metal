@@ -1,7 +1,7 @@
 name: "[internal] Model unit tests multihost (exabox) impl"
 
 # Multihost (exabox) model-unit tests. Modeled on the multihost job in
-# models-e2e-tests-multihost-impl.yaml / demo-sp-multihost-impl.yaml: each leg runs on an
+# models-e2e-tests-multihost-impl.yaml: each leg runs on an
 # exabox-multihost-ci-* runner with container.image for worker provisioning (runner hook),
 # fans the build/wheel out with `mpirun --pernode`, resets + validates the cluster, then
 # runs the test. Legs are selected by SKU: an entry lands here when prepare_test_matrix.py

@@ -64,6 +64,8 @@ it is classified differently on different systems.
 | Wan2.2-I2V-A14B | WH Galaxy, BH SC4 |
 | Z-Image-Turbo | BH QuietBox 2 |
 | TT-DiT (shared) | WH N150, BH QuietBox 2 |
+| TT-DiT encoders (shared) | WH LLMBox |
+| TT-Transformers (shared) | WH LLMBox |
 | ResNet-50 | WH N150, WH LLMBox, BH P150b |
 ## Tier 2 Models
 | Model | Systems |
@@ -122,6 +124,13 @@ it is classified differently on different systems.
 | DistilBERT | WH N150 |
 | SqueezeBERT | WH N150 |
 | MNIST MLP classifier | WH N150 |
+| EfficientDet-D0 | WH N150 |
+| MobileNetV3 | WH N150 |
+| RetinaNet | WH N150 |
+| SSD512 | WH N150 |
+| VAD v2 | WH N150 |
+| OpenPDN-MNIST | WH N150 |
+| YuNet | WH N150 |
 
 
 # Pipelines

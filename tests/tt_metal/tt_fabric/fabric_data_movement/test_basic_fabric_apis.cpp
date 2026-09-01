@@ -129,10 +129,10 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
     }
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
-        fixture->RunProgramNonblocking(devices[src_idx], programs[src_idx]);
+        fixture->RunProgramNonblocking(devices[src_idx], std::move(programs[src_idx]));
     }
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
-        fixture->WaitForSingleProgramDone(devices[src_idx], programs[src_idx]);
+        fixture->WaitForSingleProgramDone(devices[src_idx]);
     }
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
@@ -279,10 +279,10 @@ void RunSetUnicastRouteTest(
     }
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
-        fixture->RunProgramNonblocking(devices[src_idx], programs[src_idx]);
+        fixture->RunProgramNonblocking(devices[src_idx], std::move(programs[src_idx]));
     }
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
-        fixture->WaitForSingleProgramDone(devices[src_idx], programs[src_idx]);
+        fixture->WaitForSingleProgramDone(devices[src_idx]);
     }
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {

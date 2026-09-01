@@ -131,7 +131,11 @@ class Llama3Executor:
         self.traced_executor: TracedExecutor | None = None
         if config.trace.mode != "none":
             self.trace_compiler = TraceCompiler(self.program_compiler)
-            self.traced_executor = TracedExecutor(eager=self.eager_executor, trace_compiler=self.trace_compiler)
+            self.traced_executor = TracedExecutor(
+                eager=self.eager_executor,
+                trace_compiler=self.trace_compiler,
+                trace_mode=config.trace.mode,
+            )
         self.eager_execution = self.eager_executor
         self.traced_prefill_execution = (
             self.traced_executor if config.trace.prefill_enabled and self.traced_executor is not None else None

@@ -143,13 +143,13 @@ void kernel_main() {
     constexpr std::uint32_t FACE_ELEMENTS = FACE_W * FACE_W;
     constexpr std::uint32_t last_tile_cols = (W % tile_width == 0) ? tile_width : W % tile_width;
 
-    const std::uint32_t partial_tile_size_bytes = get_tile_size(dfb_partial);
-    const std::uint32_t out_tile_size_bytes = get_tile_size(dfb_out);
-
     Noc noc;
     DataflowBuffer dfb_partial_obj(dfb_partial);
     DataflowBuffer dfb_combined_obj(dfb_combined);
     DataflowBuffer dfb_out_obj(dfb_out);
+
+    const std::uint32_t partial_tile_size_bytes = dfb_partial_obj.get_tile_size();
+    const std::uint32_t out_tile_size_bytes = dfb_out_obj.get_tile_size();
 
     const auto tensor_out = TensorAccessor(dst_args, dst_addr);
 

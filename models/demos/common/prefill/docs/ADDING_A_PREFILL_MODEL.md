@@ -55,6 +55,9 @@ class MyModelAdapter(PrefillModelAdapter):
     prefill_trace_default: str # golden trace dir (token_ids + KV); PREFILL_TRACE_DIR overrides
     default_gate_mode: str = "DEVICE_FP32"  # MoE gate mode name; PREFILL_GATE_FALLBACK_MODE overrides
     l1_small_size: int = 0     # L1_SMALL carve-out at mesh-open (only if an op routes semaphores there)
+    supports_dflash: bool = False  # may PREFILL_DFLASH=1 attach the DFlash drafter to this model? The
+                               # drafter is a separate checkpoint targeting ONE architecture (today only
+                               # Kimi-K2.6/K2.7), so leave it False unless a matching drafter exists.
 
     def load_hf_config(self):
         """Load and normalize the HF config from PREFILL_HF_MODEL (falling back to
@@ -150,7 +153,13 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         """This rank's KV base DRAM address — the anchor the engine all-gathers to merge every pipeline
         stage into one table. Return `int(<your base tensor>.buffer_address())`; you pick which of your
         cache tensors is the migratable base, since the engine treats `kv_cache` as opaque and cannot.
-        Required whenever migration is enabled."""
+        Enough for a model with ONE migratable cache; otherwise implement `kv_migration_stages`."""
+
+    def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
+        """One `KvCacheStage` (common/prefill/runners/migration.py) per config of your merged table, in
+        config order — the engine gathers a layout for each, on every rank, and hands them to
+        `build_kv_chunk_table`. Implement it instead of `kv_migration_base_address` when your model
+        migrates SEVERAL caches, or one whose layer numbering is not the model's global numbering."""
 
     def set_layer_ack_channel(self, channel) -> None:
         """Register the per-layer LayerAck channel (the engine creates and owns it); the

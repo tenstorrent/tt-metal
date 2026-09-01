@@ -18,6 +18,7 @@
 #include <tt-metalium/mxfp8.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
@@ -60,14 +61,14 @@ static vector<uint32_t> run_mxfp8_typecast(
     InterleavedBufferConfig src_config{
         .device = dev,
         .size = num_tiles * input_tile_size,
-        .page_size = input_tile_size,
+        .page_size = num_tiles * input_tile_size,
         .buffer_type = BufferType::DRAM};
     auto src_buffer = CreateBuffer(src_config);
 
     InterleavedBufferConfig dst_config{
         .device = dev,
         .size = num_tiles * output_tile_size,
-        .page_size = output_tile_size,
+        .page_size = num_tiles * output_tile_size,
         .buffer_type = BufferType::DRAM};
     auto dst_buffer = CreateBuffer(dst_config);
 
@@ -158,12 +159,12 @@ static vector<uint32_t> run_mxfp8_typecast(
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     detail::WriteToBuffer(src_buffer, src_vec);
-    // Pass aligned DRAM page stride so the reader/writer advance the DRAM
-    // pointer by the allocator's aligned_page_size while the DFB streams the
-    // native tile size (e.g. 1056 bytes for MxFp8 on Quasar; the allocator
-    // rounds up to 1088 due to 64B DRAM alignment).
-    uint32_t src_dram_stride = static_cast<uint32_t>(src_buffer->aligned_page_size());
-    uint32_t dst_dram_stride = static_cast<uint32_t>(dst_buffer->aligned_page_size());
+    // The direct reader/writer kernels address a single DRAM bank
+    // (bank_id 0). Use page_size = whole buffer so the allocator places the
+    // buffer in one bank, and advance the DRAM pointer by the native tile
+    // size, matching the host-side vector layout.
+    uint32_t src_dram_stride = input_tile_size;
+    uint32_t dst_dram_stride = output_tile_size;
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -189,7 +190,7 @@ static vector<uint32_t> run_mxfp8_typecast(
     };
     experimental::SetProgramRunArgs(program, params);
 
-    detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     vector<uint32_t> result_vec;
     detail::ReadFromBuffer(dst_buffer, result_vec);

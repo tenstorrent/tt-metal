@@ -49,6 +49,7 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
+#include "distributed/trace_allocation_tracker.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
@@ -79,20 +80,6 @@ class SystemMemoryManager;
 namespace program_cache::detail {
 struct ProgramCache;
 }  // namespace program_cache::detail
-
-namespace experimental {
-std::map<ChipId, IDevice*> CreateDevices(
-    ContextId context_id,
-    const std::vector<ChipId>& device_ids,
-    uint8_t num_hw_cqs,
-    size_t l1_small_size,
-    size_t trace_region_size,
-    const DispatchCoreConfig& dispatch_core_config,
-    const std::vector<uint32_t>& l1_bank_remap,
-    size_t worker_l1_size,
-    bool init_profiler,
-    bool initialize_fabric_and_dispatch_fw);
-}  // namespace experimental
 
 }  // namespace tt::tt_metal
 
@@ -171,8 +158,8 @@ MeshDeviceImpl::ScopedDevices::ScopedDevices(
     ContextId context_id) :
     context_id_(context_id) {
     auto local_devices = extract_locals(all_device_ids);
-    opened_local_devices_ = tt_metal::experimental::CreateDevices(
-        context_id,
+    auto& ctx = MetalContext::instance(context_id);
+    ctx.initialize_device_manager(
         local_devices,
         num_command_queues,
         l1_small_size,
@@ -182,6 +169,12 @@ MeshDeviceImpl::ScopedDevices::ScopedDevices(
         worker_l1_size,
         /* init_profiler */ false,
         /* initialize_fabric_and_dispatch_fw */ false);
+    const bool is_galaxy = ctx.get_cluster().is_galaxy_cluster();
+    for (IDevice* device : ctx.device_manager()->get_all_active_devices()) {
+        if (!is_galaxy || !device->is_mmio_capable()) {
+            opened_local_devices_.emplace(device->id(), device);
+        }
+    }
 
     for (auto device_id : active_device_ids) {
         if (device_id.is_local()) {
@@ -267,11 +260,84 @@ uint32_t MeshDeviceImpl::dram_size_per_channel() const {
 
 IDevice* MeshDeviceImpl::reference_device() const { return this->get_devices().at(0); }
 
-// NOLINTNEXTLINE(readability-make-member-function-const)
-void MeshDeviceImpl::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
+std::vector<AllocatorImpl*> MeshDeviceImpl::trace_allocators() const {
+    this->validate_sub_device_manager_tracker();
+    std::vector<AllocatorImpl*> result;
+    std::unordered_set<AllocatorImpl*> seen;
+    const auto append_manager = [&result, &seen](const SubDeviceManager* manager) {
+        if (manager == nullptr) {
+            return;
+        }
+        for (const auto& allocator : manager->allocators()) {
+            if (allocator != nullptr && seen.insert(allocator.get()).second) {
+                result.push_back(allocator.get());
+            }
+        }
+    };
+
+    append_manager(sub_device_manager_tracker_->get_default_sub_device_manager());
+    append_manager(sub_device_manager_tracker_->get_active_sub_device_manager());
+    return result;
+}
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
-void MeshDeviceImpl::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
+void MeshDeviceImpl::register_active_trace(const MeshTraceId& trace_id) {
+    for (auto* allocator : this->trace_allocators()) {
+        allocator->register_active_trace(*trace_id);
+    }
+}
+
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void MeshDeviceImpl::unregister_active_trace(const MeshTraceId& trace_id) {
+    for (auto* allocator : this->trace_allocators()) {
+        allocator->unregister_active_trace(*trace_id);
+    }
+}
+
+std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ids(const MeshTraceId& trace_id) const {
+    std::unordered_map<size_t, std::string> result;
+    for (auto* allocator : this->trace_allocators()) {
+        result.merge(allocator->get_unsafe_tracked_ids(*trace_id));
+    }
+    return result;
+}
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void MeshDeviceImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
+    for (auto* allocator : this->trace_allocators()) {
+        allocator->remove_unsafe_tracked_id(buffer_unique_id);
+    }
+}
+std::vector<size_t> MeshDeviceImpl::drain_pending_traceback_ids() {
+    return AllocatorImpl::drain_pending_traceback_ids();
+}
+std::vector<size_t> MeshDeviceImpl::drain_retired_traceback_ids() {
+    return AllocatorImpl::drain_retired_traceback_ids();
+}
+void MeshDeviceImpl::push_corruptible_allocation_scope() {
+    AllocatorImpl::push_corruptible_allocation_scope(this->trace_allocators());
+}
+void MeshDeviceImpl::pop_corruptible_allocation_scope() { AllocatorImpl::pop_corruptible_allocation_scope(); }
+
+namespace trace_allocation_tracker {
+
+void register_active_trace(MeshDevice* device, const MeshTraceId& trace_id) {
+    device->impl().register_active_trace(trace_id);
+}
+void unregister_active_trace(MeshDevice* device, const MeshTraceId& trace_id) {
+    device->impl().unregister_active_trace(trace_id);
+}
+std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshDevice* device, const MeshTraceId& trace_id) {
+    return device->impl().get_unsafe_tracked_ids(trace_id);
+}
+void remove_unsafe_tracked_id(MeshDevice* device, size_t buffer_unique_id) {
+    device->impl().remove_unsafe_tracked_id(buffer_unique_id);
+}
+std::vector<size_t> drain_pending_traceback_ids() { return MeshDeviceImpl::drain_pending_traceback_ids(); }
+std::vector<size_t> drain_retired_traceback_ids() { return MeshDeviceImpl::drain_retired_traceback_ids(); }
+void push_corruptible_allocation_scope(MeshDevice* device) { device->impl().push_corruptible_allocation_scope(); }
+void pop_corruptible_allocation_scope(MeshDevice* device) { device->impl().pop_corruptible_allocation_scope(); }
+
+}  // namespace trace_allocation_tracker
 
 MeshDeviceImpl::MeshDeviceImpl(
     std::shared_ptr<ScopedDevices> mesh_handle,
@@ -1310,10 +1376,7 @@ void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
 
     tt::tt_metal::experimental::inspector::ReleaseTraceDebugEntries(trace_id);
 
-    // Only enable allocations once all captured traces are released
-    if (this->trace_buffers_size_ == 0) {
-        this->mark_allocations_safe();
-    }
+    this->unregister_active_trace(trace_id);
 }
 
 std::shared_ptr<MeshTraceBuffer> MeshDeviceImpl::get_mesh_trace(const MeshTraceId& trace_id) {
@@ -1334,8 +1397,6 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
         "CQ {} is already being used for tracing tid {}",
         (uint32_t)cq_id,
         *trace_id);
-    this->mark_allocations_safe();
-
     // Start tracking DRAM high water mark if trace_region_size is 0 (dynamic allocation mode)
     auto trace_region_size = this->allocator_impl()->get_config().trace_region_size;
     if (trace_region_size == 0) {
@@ -1357,8 +1418,10 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
 void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     TracyTTMetalEndMeshTrace(this->get_device_ids(), *trace_id);
 
-    // Ensure allocations are marked unsafe on any exit, including thrown exceptions
-    auto mark_unsafe_on_exit = ttsl::make_cleanup([this]() { this->mark_allocations_unsafe(); });
+    // Register the trace on any exit, including thrown exceptions, so subsequent allocations are treated
+    // conservatively until the trace is released.
+    auto register_trace_on_exit =
+        ttsl::make_cleanup([this, trace_id]() { this->register_active_trace(trace_id); });
 
     TT_FATAL(
         this->mesh_command_queues_[cq_id]->trace_id() == trace_id,
@@ -1529,7 +1592,7 @@ RealtimeProfilerManager* MeshDeviceImpl::get_realtime_profiler() const { return 
     TT_FATAL(
         drisc_l1_arena_ != nullptr,
         "DriscL1Arena not constructed; programmable DRAM cores auto-enable on Blackhole with firmware "
-        ">= 19.12.0.0 and either no harvested DRAM channels or a single device");
+        ">= 19.12.0.0");
     return *drisc_l1_arena_;
 }
 
@@ -1541,10 +1604,12 @@ TensorPrefetcherManager& MeshDeviceImpl::tensor_prefetcher(MeshDevice* mesh_devi
     return *tensor_prefetcher_;
 }
 
-CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const {
-    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());
+CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const {
+    TT_FATAL(device != nullptr, "Cannot select a DRAM sender core for a null device");
+    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(device->id());
     const uint32_t num_banks = soc_desc.get_num_dram_views();
-    TT_FATAL(bank_id < num_banks, "bank_id={} out of range (num_banks={})", bank_id, num_banks);
+    TT_FATAL(
+        bank_id < num_banks, "bank_id={} out of range for device {} (num_banks={})", bank_id, device->id(), num_banks);
 
     std::set<std::pair<size_t, size_t>> reserved;
     for (const auto& c : soc_desc.dram_view_worker_cores.at(bank_id)) {
@@ -1564,16 +1629,19 @@ CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const 
         }
     }
     TT_THROW(
-        "No unused DRAM subchannel found for bank_id={}; all {} subchannels are reserved as worker/eth endpoints",
+        "No unused DRAM subchannel found for bank_id={} on device {}; all {} subchannels are reserved as "
+        "worker/eth endpoints",
         bank_id,
+        device->id(),
         num_subchannels);
 }
 
-std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(uint32_t bank_id) const {
-    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());
+std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const {
+    TT_FATAL(device != nullptr, "Cannot enumerate DRAM sender cores for a null device");
+    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(device->id());
 
     // Sender 0: the free non-endpoint subchannel.
-    const CoreCoord free_core = pick_unused_dram_logical_core(bank_id);
+    const CoreCoord free_core = pick_unused_dram_logical_core(device, bank_id);
 
     // Sender 1: the NOC1 worker-endpoint subchannel. Resolve its subchannel index by
     // matching the endpoint's physical (TRANSLATED) coord against this bank's
@@ -1588,16 +1656,35 @@ std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(uint32_t bank_i
         if (coord.x == noc1_endpoint_phys.x && coord.y == noc1_endpoint_phys.y) {
             const CoreCoord noc1_core =
                 soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
+            // A sender mapping resolves logical DRAM coords against one reference device and is then
+            // reused mesh-wide (see build_dram_sender_mapping), so a role must land on the same
+            // logical y on every device. dram_bank_endpoint_coords orders a bank as [NOC0 endpoint,
+            // NOC1 endpoint, remaining subchannels ascending], which pins the NOC1 endpoint to y == 1
+            // and every free subchannel above it -- but only while the bank's two worker endpoints are
+            // distinct subchannels. A descriptor that names one subchannel for both NOCs (Wormhole
+            // does) collapses that ordering and would let the free and NOC1 roles swap logical y
+            // between devices, which the per-device membership check cannot see. Wormhole has no DRAM
+            // senders, so require the split here rather than in the descriptor.
             TT_FATAL(
-                noc1_core != free_core,
-                "DRAM bank {}: NOC1-endpoint subchannel collides with the free subchannel ({}, {})",
+                noc1_core.y == 1 && free_core.y > noc1_core.y,
+                "DRAM bank {} on device {}: expected the NOC1 worker endpoint at logical y=1 with the free "
+                "subchannel above it, but found NOC1 at ({}, {}) and free at ({}, {}). A bank's NOC0 and NOC1 "
+                "worker endpoints must be distinct subchannels so that a sender's logical coord names the same "
+                "endpoint role on every device in the mesh; check this view's worker_endpoint pair in the SoC "
+                "descriptor.",
                 bank_id,
+                device->id(),
+                noc1_core.x,
+                noc1_core.y,
                 free_core.x,
                 free_core.y);
             return {free_core, noc1_core};
         }
     }
-    TT_THROW("Could not resolve the NOC1 worker-endpoint subchannel for DRAM bank_id={}", bank_id);
+    TT_THROW(
+        "Could not resolve the NOC1 worker-endpoint subchannel for DRAM bank_id={} on device {}",
+        bank_id,
+        device->id());
 }
 
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }

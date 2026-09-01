@@ -50,6 +50,18 @@ def get_fused_ring_host_timing() -> tuple[int, float]:
     return _fused_ring_host_timing["calls"], _fused_ring_host_timing["seconds"]
 
 
+def normalized_hadamard_matrix(dim: int) -> torch.Tensor:
+    """Return the Sylvester-order orthonormal Hadamard matrix used by the decode indexer."""
+    assert dim > 0 and dim & (dim - 1) == 0, f"Hadamard dimension must be a power of two, got {dim}"
+    matrix = torch.ones(1, 1, dtype=torch.float32)
+    while matrix.shape[0] < dim:
+        matrix = torch.cat(
+            (torch.cat((matrix, matrix), dim=1), torch.cat((matrix, -matrix), dim=1)),
+            dim=0,
+        )
+    return (matrix * (dim**-0.5)).to(torch.bfloat16)
+
+
 class TtIndexer:
     """DSA lightning indexer for one MLA layer. Self-contained: owns the indexer weights, the
     grown-by-concat device index-key cache and the indexer RoPE tables, and runs its own TP/SP
@@ -259,6 +271,7 @@ class TtIndexer:
         active_seq_len: int | None = None,
         slot_num: int = 1,
         layer_num: int = 1,
+        first_layer_idx: int | None = None,
     ):
         """Architecture constants are read from the HF config with no defaults (index_n_heads,
         index_head_dim, index_topk, index_rope_interleave — a sparse config that omits any of them
@@ -335,17 +348,29 @@ class TtIndexer:
         # modes.
         # Block-cyclic key cache (persistent [num_users*_index_cache_layers,1,S/sp,D_idx]) is NOT owned
         # here: exactly like the MLA KVPE cache, the caller allocates it and passes it into
-        # forward(index_kv_cache=...) every call; the indexer never self-allocates it. write_k typecasts the
-        # roped key to the cache's dtype before the in-place write, so the caller controls the dtype (BF8
-        # validated — rotated + chunked suites match BF16 within bf16 noise, ~5e-4 PCC — so it can be
-        # allocated BF8 to halve mem).
+        # forward(index_kv_cache=...) every call; the indexer never self-allocates it. write_k applies the
+        # decode-compatible Hadamard transform and typecasts the key to the cache's dtype before the in-place
+        # write, so the caller controls the dtype.
         # GLM-5.2 cross-layer indexer reuse: the index key cache is allocated for full layers only, so this
-        # layer writes/reads its compacted rank among full layers, and the folded (user-major) slot stride
-        # is num_full, not all layers. _index_cache_layers is that stride.
-        self._num_index_layers = num_full_indexer_layers(config)
-        self._is_index_compact = self._num_index_layers is not None
-        self._index_layer_idx = full_indexer_rank(config, layer_idx) if self._is_index_compact else layer_idx
-        self._index_cache_layers = self._num_index_layers if self._is_index_compact else self.layer_num
+        # layer writes/reads its compacted rank among them and the folded (user-major) slot stride is the
+        # cache's full-layer count, not its layer count. _index_cache_layers is that stride.
+        # `first_layer_idx` declares this instance a pipeline stage owning global layers
+        # [first_layer_idx, first_layer_idx + layer_num): the cache then holds THAT stage's full layers
+        # only, numbered from 0. None means the cache spans the whole model -- what a layer built outside
+        # the transformer (unit tests) allocates.
+        num_full = num_full_indexer_layers(config)
+        self._is_index_compact = num_full is not None
+        base = full_indexer_rank(config, first_layer_idx) if first_layer_idx is not None else 0
+        if not self._is_index_compact:
+            self._index_layer_idx = layer_idx
+            self._index_cache_layers = self.layer_num
+        else:
+            self._index_layer_idx = full_indexer_rank(config, layer_idx) - base
+            self._index_cache_layers = (
+                num_full
+                if first_layer_idx is None
+                else full_indexer_rank(config, first_layer_idx + self.layer_num) - base
+            )
         # Stable, worst-case TP gather outputs.  Indexer layers execute serially, so TT_CCL shares each
         # buffer across them.  This keeps the high-bandwidth gathers allocation-free and their output
         # address fixed on the hot forward path.
@@ -399,6 +424,19 @@ class TtIndexer:
                 dtype=ttnn.bfloat16,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
+        # Blaze stores and scores indexer keys in the orthonormal Hadamard basis. Apply the same
+        # transform to both Q and K so standalone prefill scores are unchanged while the persistent
+        # index cache remains byte-compatible with decode after migration.
+        hadamard = normalized_hadamard_matrix(self.index_args.index_head_dim).reshape(
+            1, 1, self.index_args.index_head_dim, self.index_args.index_head_dim
+        )
+        self._index_hadamard = ttnn.from_torch(
+            hadamard,
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
 
     # Inlined TP/SP collectives — the indexer owns its own copy so it depends on tt_ccl, not on ttMLA
     # (the dense MLA forward keeps its own equivalents; both go through the same tt_ccl handles).
@@ -525,6 +563,12 @@ class TtIndexer:
         ttnn.deallocate(nope)
         return out
 
+    def _cache_slot(self, cache_layer_idx: int) -> int:
+        """Slot this layer owns in the index key cache. A compacted cache (GLM-5.2 cross-layer reuse)
+        holds one slot per FULL layer, so the caller's per-layer KVPE slot does not address it; every
+        entry point has to translate, not just forward()."""
+        return self._index_layer_idx if self._is_index_compact else cache_layer_idx
+
     def write_k(
         self, hidden_states, seq_len, start_pos, rope_tensors=None, cache_user_id=0, cache_layer_idx=0, index_kbuf=None
     ):
@@ -556,7 +600,17 @@ class TtIndexer:
         # offset (pad-aware) — the same math the query/key rope above uses. Single-shot is folded onto this
         # path as one full-seq chunk at start_pos=0, so the indexer is always block-cyclic. num_layers is the
         # compacted stride (_index_cache_layers) so it matches the cache_batch_idx computed in forward().
+        cache_layer_idx = self._cache_slot(cache_layer_idx)
         k = self._bc_rope_pe(k, rope_tensors, start_pos)  # [1, 1, S/sp, D_idx] bf16
+        k_h = ttnn.matmul(
+            k,
+            self._index_hadamard,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.default_compute_kernel_config,
+        )
+        ttnn.deallocate(k)
+        k = k_h
         if k.dtype != index_kbuf.dtype:  # write dtype must match the cache (update_padded_kv_cache asserts)
             k = ttnn.typecast(k, index_kbuf.dtype)
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -600,8 +654,7 @@ class TtIndexer:
         drive the per-user block-cyclic key cache + block-cyclic scoring. Scoring and transport are bounded
         by the written prefix, rounded to complete block-cyclic slabs for the fixed-size ring protocol."""
         a = self.index_args
-        if self._is_index_compact:
-            cache_layer_idx = self._index_layer_idx
+        cache_layer_idx = self._cache_slot(cache_layer_idx)
         glob = seq_len * self.sp_factor  # global query/key count this chunk
         end_pos = start_pos + glob
         # Block-cyclic key cache is caller-owned (like the KVPE cache) — required, never self-allocated.
@@ -630,14 +683,23 @@ class TtIndexer:
             self._idx_wq_b,
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # Keep indexer Q in BFP8 from its first materialization through scoring.
-            dtype=ttnn.bfloat8_b,
+            # Preserve the unquantized values through Hadamard, then materialize BFP8 once below.
+            dtype=ttnn.bfloat16,
         )  # [1, 1, S/sp, H_idx*D_idx] — ALL heads (wq_b replicated); queries stay SP-sharded (rotation-safe)
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q, num_heads=a.index_n_heads, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # [1, H_idx, S/sp, D_idx] — all heads resident
         # block-cyclic indexed rope (same op/tables as the key rope + MLA q_pe)
         q_dev = self._bc_rope_pe(q, rope_tensors, start_pos)
+        q_h = ttnn.matmul(
+            q_dev,
+            self._index_hadamard,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.default_compute_kernel_config,
+        )
+        ttnn.deallocate(q_dev)
+        q_dev = q_h
 
         # weights_proj: device stem -> FULL all-reduce over tp (all H_idx heads, matching the replicated
         # wq_b heads) -> scale -> [1, 1, S/sp, H_idx].
