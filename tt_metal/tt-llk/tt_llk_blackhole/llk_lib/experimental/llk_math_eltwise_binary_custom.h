@@ -214,6 +214,7 @@ inline void _llk_math_sub_bcast_cols_compensated_(
 {
     LLK_ASSERT(tensor_shape.total_num_faces() == 4, "compensated column broadcast requires 32x32 tiles");
 
+    math::_configure_preserve_zero_flag_state_();
     for (std::uint32_t tile = 0; tile < ct_dim; ++tile)
     {
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + tile);
@@ -239,5 +240,6 @@ inline void _llk_math_sub_bcast_cols_compensated_(
         TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
     }
     TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    math::_configure_default_zero_flag_state_();
     math::clear_dst_reg_addr();
 }
