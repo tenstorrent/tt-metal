@@ -32,6 +32,8 @@ import re
 import sys
 from datetime import datetime, timezone
 
+from utils.report import is_reset_op_check
+
 SCHEMA_VERSION = 1
 
 # check ip/phase -> dashboard category. "other" is the catch-all.
@@ -68,12 +70,6 @@ GDDR_INFO_PREFIX = "gddr_info_"
 
 SEVERITY = {"PASS": 0, "SKIP": 0, "EXCLUDED": 0, "WARN": 1, "FAIL": 2, "UNKNOWN": 3, "ERROR": 3}
 COVERED = {"PASS", "WARN", "FAIL"}
-
-
-# Reset *operation* steps (mirror of utils.report.is_reset_op_check): recorded with
-# their real status but acknowledged, so a recovered reset isn't counted as a fail.
-def is_reset_op_check(name: str) -> bool:
-    return name.startswith("reset_") or name == "cpld_auto_recover"
 
 
 RUNS_COLS = [
