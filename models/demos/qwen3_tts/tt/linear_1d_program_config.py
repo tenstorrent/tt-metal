@@ -119,6 +119,20 @@ def make_linear_2d_program_config(
     )
 
 
+def make_prefill_program_config(
+    m: int,
+    k: int,
+    n: int,
+    grid_x: int,
+    grid_y: int,
+    fp32_dest_acc_en: bool,
+    fused_activation=None,
+) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    """2D-mcast prefill linear: pick a grid that divides M/K/N tiles, then size blocks."""
+    gx, gy = find_2d_mcast_grid(m, k, n, grid_x, grid_y)
+    return make_linear_2d_program_config(m, k, n, gx, gy, fp32_dest_acc_en, fused_activation)
+
+
 def make_linear_1d_program_config(
     m: int,
     k: int,
