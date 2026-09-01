@@ -246,6 +246,7 @@ DATABASE_SCHEMA_VERSION = "3.3"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
+TENSOR_LIFETIME_SIDECAR_SUFFIX = ".tensor_lifetime.json"
 
 # Second and later JSON files for the same rank get operation ids shifted by this stride
 # so they do not collide (each capture must have fewer than this many ops).
@@ -296,7 +297,7 @@ def _discover_report_json_files(report_path: Path) -> list[Path]:
     ``graph_capture_0_of_1.python_io.json`` (a list, not a report dict), so we
     keep only names that match the main capture file pattern.
 
-    Otherwise all ``*.json`` except ``config.json`` and ``*.python_io.json``.
+    Otherwise all ``*.json`` except ``config.json`` and generated sidecars.
     """
     if report_path.is_file():
         return [report_path]
@@ -316,6 +317,7 @@ def _discover_report_json_files(report_path: Path) -> list[Path]:
         if p.name not in skip
         and not p.name.endswith(PYTHON_IO_SIDECAR_SUFFIX)
         and not p.name.endswith(COMPARISON_RECORDS_SIDECAR_SUFFIX)
+        and not p.name.endswith(TENSOR_LIFETIME_SIDECAR_SUFFIX)
         and p.name != COMPARISON_RECORDS_FALLBACK_NAME
     )
 
@@ -2074,7 +2076,7 @@ def import_report(
                 total_stats["tensor_consumer_rows"] += stats.get("tensor_consumers", 0)
                 total_stats["tensor_producer_rows"] += stats.get("tensor_producers", 0)
                 if tl:
-                    tl_path = output_dir / (rpath.stem + ".tensor_lifetime.json")
+                    tl_path = output_dir / (rpath.stem + TENSOR_LIFETIME_SIDECAR_SUFFIX)
                     with open(tl_path, "w") as f:
                         json.dump(tl, f, indent=2)
 

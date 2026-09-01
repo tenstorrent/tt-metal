@@ -388,6 +388,24 @@ class TestTensorLifetime:
         assert all(r[4] == 0 for r in rows.values())
         conn.close()
 
+    def test_report_directory_can_be_imported_twice_with_lifetime_sidecar(
+        self, tmp_path, single_relu_mock_graph, single_relu_python_io
+    ):
+        """A prior import's tensor-lifetime output must not be rediscovered as a graph report."""
+        report_dir = tmp_path / "report"
+        report_dir.mkdir()
+        report_path = report_dir / "graph_capture.json"
+        report = _make_report(single_relu_mock_graph, python_io=single_relu_python_io)
+        report_path.write_text(json.dumps(report))
+
+        first_db = graph_report.import_report(report_dir, report_dir)
+        lifetime_path = report_dir / f"graph_capture{graph_report.TENSOR_LIFETIME_SIDECAR_SUFFIX}"
+        assert first_db.exists()
+        assert lifetime_path.exists()
+
+        second_db = graph_report.import_report(report_dir, tmp_path / "second_import")
+        assert second_db.exists()
+
     def test_tensor_lifetime_table_empty_without_stack_traces(self, tmp_path, single_relu_mock_graph):
         """tensor_lifetime must NOT be populated when no stack traces are present.
 
