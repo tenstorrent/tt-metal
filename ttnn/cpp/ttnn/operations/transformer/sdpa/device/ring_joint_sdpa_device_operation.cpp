@@ -218,6 +218,29 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
     }
 }
 
+void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args) {
+    TT_FATAL(
+        tensor_args.slot_id.has_value() == tensor_args.kv_actual_isl.has_value(),
+        "metadata tensors slot_id and kv_actual_isl_tensor must be supplied together, or neither supplied");
+
+    if (!tensor_args.slot_id.has_value()) {
+        return;
+    }
+
+    const auto validate_metadata_tensor = [&tensor_args](const Tensor& tensor, const char* name) {
+        TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} must be on device", name);
+        TT_FATAL(tensor.buffer() != nullptr, "{} must be allocated on device", name);
+        TT_FATAL(tensor.device() == tensor_args.input_q.device(), "{} must be on the same device as Q", name);
+        TT_FATAL(tensor.dtype() == DataType::UINT32, "{} must have UINT32 dtype", name);
+        TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "{} must use ROW_MAJOR layout", name);
+        TT_FATAL(tensor.logical_volume() == 1, "{} must contain exactly one element", name);
+        TT_FATAL(tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "{} must be stored in DRAM", name);
+    };
+
+    validate_metadata_tensor(tensor_args.slot_id.value(), "slot_id");
+    validate_metadata_tensor(tensor_args.kv_actual_isl.value(), "kv_actual_isl_tensor");
+}
+
 // Re-validate the scalar args that are runtime-patched on a program-cache hit and therefore NOT part of
 // compute_program_hash: kv_cache_batch_idx (indexed KV cache) and logical_n / kv_actual_isl (KV-pad
 // rotation). Everything else is keyed by the hash, so a cache hit guarantees it already passed at miss
@@ -310,6 +333,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
 
+    validate_metadata_tensors(tensor_args);
+
     TT_FATAL(
         !args.sliding_window_size.has_value() || args.has_sliding_window(),
         "RingJointSDPA sliding_window_size must be greater than zero when provided");
@@ -357,10 +382,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         tensor_args.joint_q.has_value() == has_joint_tensors && tensor_args.joint_k.has_value() == has_joint_tensors &&
             tensor_args.joint_v.has_value() == has_joint_tensors,
         "Joint tensors must be provided all together or omitted altogether");
-    TT_FATAL(
-        tensor_args.slot_id.has_value() == tensor_args.kv_actual_isl.has_value(),
-        "metadata tensors slot_id and kv_actual_isl must be supplied together, or neither supplied");
-
     if (tensor_args.attention_sink.has_value()) {
         const auto& attention_sink = tensor_args.attention_sink.value();
         TT_FATAL(args.is_causal, "RingJointSDPA attention_sink is supported only for causal attention");
@@ -887,9 +908,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
 void RingJointSDPADeviceOperation::validate_on_program_cache_hit(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
-    // On a cache hit everything except the runtime-patched scalars is guaranteed by the program hash to
-    // match a prior miss that already passed full validation. Re-check only the values that the hash no
-    // longer keys on (kv_cache_batch_idx, logical_n, kv_actual_isl) — they are re-patched per dispatch.
+    validate_metadata_tensors(tensor_args);
     validate_runtime_patched_scalars(args, tensor_args);
 }
 
