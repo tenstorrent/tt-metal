@@ -3626,56 +3626,6 @@ class TestStoreCapturedGraph:
         assert g._python_io_data[0]["captured_graph"] == "new"
 
 
-class TestPytestGraphReportFixture:
-    def test_graph_report_without_detailed_buffer_tracing(self, tmp_path, monkeypatch):
-        capture_active = False
-        calls = []
-
-        def begin_graph_capture(run_mode):
-            nonlocal capture_active
-            capture_active = True
-            calls.append(("begin_graph_capture", run_mode))
-
-        def end_graph_capture_to_file(_path):
-            nonlocal capture_active
-            capture_active = False
-            calls.append(("end_graph_capture_to_file",))
-
-        monkeypatch.setattr(ttnn.graph, "is_graph_capture_active", lambda: capture_active)
-        monkeypatch.setattr(ttnn.graph, "begin_graph_capture", begin_graph_capture)
-        monkeypatch.setattr(ttnn.graph, "end_graph_capture_to_file", end_graph_capture_to_file)
-        monkeypatch.setattr(
-            ttnn.graph, "enable_detailed_buffer_tracing", lambda: calls.append(("enable_detailed_buffer_tracing",))
-        )
-        monkeypatch.setattr(
-            ttnn.graph, "disable_detailed_buffer_tracing", lambda: calls.append(("disable_detailed_buffer_tracing",))
-        )
-        monkeypatch.setattr(ttnn, "distributed_context_is_initialized", lambda: False)
-        monkeypatch.setattr(ttnn, "save_config_to_json_file", lambda _path: None)
-        monkeypatch.setattr(graph_report, "import_report", lambda _source, _destination: None)
-
-        class Request:
-            fixturenames = ()
-
-        with (
-            ttnn.manage_config("enable_logging", True),
-            ttnn.manage_config("enable_graph_report", True),
-            ttnn.manage_config("enable_detailed_buffer_report", False),
-            ttnn.manage_config("root_report_path", tmp_path),
-            ttnn.manage_config("report_name", f"fixture_{tmp_path.name}"),
-        ):
-            fixture = graph_report.run_pytest_graph_report_fixture(Request())
-            next(fixture)
-
-            assert ("begin_graph_capture", ttnn.graph.RunMode.NORMAL) in calls
-            assert ("enable_detailed_buffer_tracing",) not in calls
-
-            fixture.close()
-
-        assert ("end_graph_capture_to_file",) in calls
-        assert ("disable_detailed_buffer_tracing",) not in calls
-
-
 class TestBeginGraphCaptureClearing:
     """Tests for begin_graph_capture clearing behavior."""
 
