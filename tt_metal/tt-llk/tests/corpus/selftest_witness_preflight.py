@@ -190,9 +190,16 @@ if conf_rows:
     # +store-source-tier (fill node) each added its own R9 union fire
     # witness compile group; full table verified ALL GREEN on the
     # installed pin-32 binary in the same ceremony.
+    # Budget refreshed 16 -> 17 at the knob-promotion-round-4 ceremony
+    # (lane KM, 2026-09-01).  The 17th compile group PREDATES round 4:
+    # the lane-IZ dst-ownership witness (erfinv fp32 corr node) landed
+    # without this bump, so the selftest was RED at every canon tip
+    # since (pre-existing at pin 51, found and fixed here).  Round 4's
+    # own +priced-placement row SHARES that erfinv node (one compile,
+    # two dump flags), so the group count stays 17.
     check(
-        f"checked-in table stays within the 16-compile budget ({n_groups})",
-        1 <= n_groups <= 16,
+        f"checked-in table stays within the 17-compile budget ({n_groups})",
+        1 <= n_groups <= 17,
     )
 
 if FAILS:
