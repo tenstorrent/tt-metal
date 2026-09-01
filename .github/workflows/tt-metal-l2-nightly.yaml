@@ -316,6 +316,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      summary-scope: unit
   tt-train-perf-pretraining-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
@@ -331,6 +332,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       subcategories: pretraining
+      summary-scope: pretraining
   tt-train-perf-finetuning-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
@@ -346,6 +348,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       subcategories: finetuning
+      summary-scope: finetuning
 
   # =============================================================================
   # Triage team
