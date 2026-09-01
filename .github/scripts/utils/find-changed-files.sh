@@ -6,7 +6,15 @@ shopt -s extglob
 MERGE_BASE=$(git merge-base origin/main HEAD)
 
 # Get the list of files changed since the merge-base, ignoring changes on main
-CHANGED_FILES=$(git diff --name-only --diff-filter=ACMRT "${MERGE_BASE}..HEAD")
+#
+# D (deleted) is included. Removing a source or header breaks a build exactly as
+# thoroughly as editing one, but without D every flag below read false for a
+# deletion-only PR -- so the artifact build itself was skipped and every gate
+# keyed off it went with it. Deleting a file listed in a *.cmake was partly
+# covered by the accompanying cmake edit, but headers are not listed in cmake at
+# all and were invisible outright. The original filter (ACMRT, #19018) gave no
+# reason for the omission.
+CHANGED_FILES=$(git diff --name-only --diff-filter=ACDMRT "${MERGE_BASE}..HEAD")
 
 # Check for specific file patterns
 CMAKE_CHANGED=false
