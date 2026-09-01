@@ -48,8 +48,7 @@ private:
     std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
     std::vector<Semaphore>& semaphores();
     const std::vector<uint32_t>& get_program_config_sizes();
-    const std::unordered_set<SubDeviceId>& determine_sub_device_ids(
-        MeshDevice* mesh_device, uint64_t sub_device_manager_id);
+    const std::unordered_set<SubDeviceId>& determine_sub_device_ids(MeshDevice* mesh_device);
     bool is_finalized() const { return finalized_metadata_.has_value(); }
     void set_finalized(uint32_t max_program_kernels_sizeB);
     ProgramBinaryStatus get_program_binary_status(std::size_t mesh_id) const;
@@ -61,17 +60,22 @@ private:
     void finalize_offsets(MeshDevice* mesh_device);
 
     struct FinalizedMetadata {
-        std::unordered_map<std::size_t, std::unordered_map<uint64_t, std::unordered_set<SubDeviceId>>>
-            sub_device_ids_by_mesh_and_manager;
         std::vector<uint32_t> program_config_sizes;
         std::vector<uint64_t> cross_node_program_ids;
+        // Total devices covered by all program ranges. Fixed once programs_ is frozen, so enqueue
+        // can compare it against the mesh size instead of re-walking every range.
+        size_t num_program_devices = 0;
         uint32_t max_program_kernels_sizeB = 0;
         bool runs_on_noc_multicast_only_cores = false;
         bool runs_on_noc_unicast_only_cores = false;
     };
     FinalizedMetadata& get_finalized_metadata();
+    uint32_t get_max_program_kernels_sizeB() { return get_finalized_metadata().max_program_kernels_sizeB; }
+    size_t get_num_program_devices() { return get_finalized_metadata().num_program_devices; }
 
     std::unordered_map<std::size_t, ProgramBinaryStatus> program_binary_status_;
+    std::unordered_map<std::size_t, std::unordered_map<uint64_t, std::unordered_set<SubDeviceId>>>
+        sub_device_ids_by_mesh_and_manager_;
     std::shared_ptr<MeshBuffer> kernel_bin_buf_;
     std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>> kernels_;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;

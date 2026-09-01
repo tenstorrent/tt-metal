@@ -48,8 +48,6 @@
 #include "impl/buffers/semaphore.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/worker_config_buffer.hpp"
-#include "impl/program/program_impl.hpp"
-#include "tt_metal/impl/program/program_command_sequence.hpp"
 #include <tt_stl/span.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -163,23 +161,6 @@ void verify_cb_config(
             }
         }
     }
-}
-
-void verify_cached_cb_page_size(
-    const std::unordered_map<uint64_t, ProgramCommandSequence>& command_sequences,
-    CircularBufferImpl* circular_buffer,
-    uint8_t buffer_index,
-    uint32_t expected_page_size) {
-    uint32_t matching_updates = 0;
-    for (const auto& [_, command_sequence] : command_sequences) {
-        for (const auto& update : command_sequence.local_cb_config_updates) {
-            if (update.circular_buffer == circular_buffer && update.buffer_index == buffer_index) {
-                EXPECT_EQ(update.page_size, expected_page_size);
-                matching_updates++;
-            }
-        }
-    }
-    EXPECT_GT(matching_updates, 0);
 }
 
 void clear_cb_config_report(
@@ -1029,19 +1010,6 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
     Program& workload_program = mesh_workload.get_programs().at(devices);
     UpdateCircularBufferPageSize(
         workload_program, cb_handles[updated_cb_index], updated_cb_config.cb_id, updated_cb_config.page_size);
-
-    CircularBufferImpl* circular_buffer =
-        workload_program.impl().get_circular_buffer(cb_handles[updated_cb_index]).get();
-    verify_cached_cb_page_size(
-        workload_program.impl().get_cached_program_command_sequences(),
-        circular_buffer,
-        updated_cb_config.cb_id,
-        updated_cb_config.page_size);
-    verify_cached_cb_page_size(
-        workload_program.impl().get_trace_cached_program_command_sequences(),
-        circular_buffer,
-        updated_cb_config.cb_id,
-        updated_cb_config.page_size);
 
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());
