@@ -1,8 +1,8 @@
 name: Blaze Merge Gate
 
-# Runs tt-blaze's GPT-OSS BH Loudbox bucket against the tt-metal commit under
-# test, so a tt-metal change that breaks tt-blaze is caught before it lands
-# rather than by the next uplift.
+# Runs tt-blaze's gpt-oss-temporal-multiuser BH Loudbox bucket against the
+# tt-metal commit under test, so a tt-metal change that breaks tt-blaze is
+# caught before it lands rather than by the next uplift.
 #
 # Scope is deliberately ONE bucket, not tt-blaze's whole merge gate: this job
 # blocks tt-metal's merge queue while it waits, and tt-blaze's full silicon
@@ -56,9 +56,9 @@ on:
         default: main
       wait-timeout-minutes:
         description: >-
-          How long to wait for the tt-blaze run. The GPT-OSS bucket itself is
-          bounded by tt-blaze's own per-bucket budget; the bulk of this is queue
-          time for a free BH Loudbox.
+          How long to wait for the tt-blaze run. The bucket itself is bounded by
+          tt-blaze's own per-bucket budget; the bulk of this is queue time for a
+          free BH Loudbox.
         required: false
         type: number
         default: 180
@@ -73,7 +73,7 @@ on:
 
 jobs:
   blaze-ci:
-    name: tt-blaze CI (GPT-OSS Loudbox bucket)
+    name: tt-blaze CI (gpt-oss temporal multiuser Loudbox bucket)
     runs-on: ubuntu-latest
     # The poll loop must outlive its own deadline so it can report WHY it gave up;
     # if the runner killed it first, the failure would read as an infra timeout.
@@ -121,13 +121,19 @@ jobs:
           DISPATCH_ID="metal-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "dispatch-id: ${DISPATCH_ID}"
 
-          # Scope: the GPT-OSS Loudbox bucket only, NOT tt-blaze's whole merge gate.
-          # `bh-loudbox-run-all=false` flips tt-blaze's Loudbox job from "every
-          # gate bucket" to "the ones selected below", and `bh-loudbox-gptoss`
-          # expands to gptoss + gpt-oss-temporal-multiuser on that side. tt-blaze
-          # skips its unit / P150 / craq-sim jobs on its own whenever metal-run-id
-          # is set. To widen the scope, add the sibling `bh-loudbox-*` / `p150-*`
-          # booleans from tt-blaze's ci.yaml here (its job guards need widening too).
+          # Scope: the gpt-oss-temporal-multiuser Loudbox bucket only, NOT
+          # tt-blaze's whole merge gate. `bh-loudbox-run-all=false` flips
+          # tt-blaze's Loudbox job from "every gate bucket" to "the ones selected
+          # below", and `bh-loudbox-gptoss-temporal` selects exactly that one
+          # bucket on that side. (Its sibling `bh-loudbox-gptoss` is the wider
+          # selection -- gptoss + gpt-oss-temporal-multiuser -- and is
+          # deliberately NOT used here: the global-layer and teacher-forced
+          # e2e top-k legs roughly double the time this job holds tt-metal's
+          # merge queue for coverage the temporal run already exercises.)
+          # tt-blaze skips its unit / P150 / craq-sim jobs on its own whenever
+          # metal-run-id is set. To widen the scope, add the sibling
+          # `bh-loudbox-*` / `p150-*` booleans from tt-blaze's ci.yaml here (its
+          # job guards need widening too).
           # Preflight the token before dispatching. tt-blaze is PRIVATE, and
           # GitHub answers 404 (never 403) for anything a token cannot see there,
           # so `gh workflow run` reports a missing workflow when the real fault is
@@ -167,13 +173,13 @@ jobs:
             -f metal-ref="$METAL_REF" \
             -f dispatch-id="$DISPATCH_ID" \
             -f bh-loudbox-run-all=false \
-            -f bh-loudbox-gptoss=true; then
+            -f bh-loudbox-gptoss-temporal=true; then
             echo "::error::Dispatch of ${BLAZE_WORKFLOW} on ${BLAZE_REPO}@${BLAZE_REF} failed. The token can read the workflow (checked above), so the usual causes are: no actions:write on ${BLAZE_REPO}; ${BLAZE_REF} does not carry every input passed here (an input this workflow sends but ${BLAZE_REF}'s ci.yaml does not declare is rejected outright -- the tt-blaze side must land FIRST); or ${BLAZE_REF} does not exist."
             echo "- ❌ tt-blaze — dispatch rejected" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-          echo "Dispatched ${BLAZE_REPO} ${BLAZE_WORKFLOW} on ${BLAZE_REF} (GPT-OSS bucket)"
+          echo "Dispatched ${BLAZE_REPO} ${BLAZE_WORKFLOW} on ${BLAZE_REF} (gpt-oss-temporal-multiuser bucket)"
           echo "  tt-metal commit:  ${METAL_REF}"
           echo "  tt-metal build:   https://github.com/${GITHUB_REPOSITORY}/actions/runs/${METAL_RUN_ID}"
 
