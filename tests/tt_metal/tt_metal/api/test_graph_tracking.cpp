@@ -64,6 +64,11 @@ public:
     }
 };
 
+class NonCaptureProcessor : public CountingProcessor {
+public:
+    bool is_capture_processor() const override { return false; }
+};
+
 // Scoped push/pop so a failing expectation cannot leave a processor registered for later tests.
 class ScopedProcessor {
 public:
@@ -337,6 +342,27 @@ TEST(ScopedTrackedFunction, CPU_DoesNotEndAProcessorThatMissedTheStart) {
     EXPECT_EQ(processor->function_starts.load(), 0);
     EXPECT_EQ(processor->function_ends.load(), 0);
     EXPECT_EQ(processor->function_aborts.load(), 0);
+}
+
+// Capture off (SHM-like background processor): end the live prefix, not a copied snapshot.
+TEST(ScopedTrackedFunction, CPU_WithoutCaptureEndsTheLivePrefixOnly) {
+    auto background = std::make_shared<NonCaptureProcessor>();
+    auto late_capture = std::make_shared<CountingProcessor>();
+    auto& tracker = GraphTracker::instance();
+    tracker.clear();
+    tracker.push_processor(background);
+
+    {
+        ScopedTrackedFunction tracked("op");
+        tracker.push_processor(late_capture);
+        tracked.end();
+    }
+    tracker.clear();
+
+    EXPECT_EQ(background->function_starts.load(), 1);
+    EXPECT_EQ(background->function_ends.load(), 1);
+    EXPECT_EQ(late_capture->function_starts.load(), 0);
+    EXPECT_EQ(late_capture->function_ends.load(), 0);
 }
 
 // The safety net for call sites that are not guarded: the caller that knows nothing can still be
