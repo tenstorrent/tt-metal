@@ -4,6 +4,9 @@
 """Contract and focused device tests for Gemma 4 mixed KV migration."""
 
 import inspect
+import json
+import zlib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -40,6 +43,7 @@ try:
         SLIDING_CHUNK_SIZE_BYTES,
         build_kv_chunk_address_table,
         iter_source_chunk_locations,
+        worker_host_name,
     )
     from models.demos.gemma4.tt.tt_prefill_runtime import TtPrefillRuntime
     from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -49,6 +53,21 @@ except Exception as exc:  # pragma: no cover - depends on a built ttnn package
 
 GLOBAL_LAYERS = tuple(range(5, 60, 6))
 SLIDING_LAYERS = tuple(layer for layer in range(60) if layer not in GLOBAL_LAYERS)
+
+
+def test_migration_manifest_temporarily_caps_advertised_context_at_64k():
+    manifest_path = Path(__file__).resolve().parents[2] / "tt/runners/manifests/gemma4_31b.json"
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["env"]["PREFILL_MAX_SEQ_LEN"] == "65536"
+    assert manifest["env"]["PREFILL_GEMMA4_SLIDING_CACHE_LEN"] == "65536"
+    comment = " ".join(manifest["_comment"])
+    assert "TEMPORARY" in comment and "memory" in comment
+
+
+def test_source_table_uses_legacy_worker_crc_host_key():
+    hostname = "gemma-prefill-host"
+    expected = f"host-{zlib.crc32(hostname.encode()) & 0x7FFFFFFF:08x}"
+    assert worker_host_name(hostname) == expected
 
 
 def test_migration_runtime_has_no_paged_kv_and_explicit_cache_fill_mode():
@@ -311,3 +330,8 @@ def test_source_table_authors_the_correct_layer_family(mesh_device, device_param
     for config_id in range(4, 36):
         assert table.lookup(0, 0, 0, config_id).size_bytes == SLIDING_CHUNK_SIZE_BYTES
         assert table.lookup(5, 0, 0, config_id).size_bytes == 0
+
+    for config_id, layer in ((0, 5), (4, 0), (20, 0)):
+        location = table.lookup(layer, 0, 0, config_id)
+        group = table.get_device_group(location.device_group_index)
+        assert all(table.get_host(fnid) == worker_host_name() for fnid in group.fabric_node_ids)

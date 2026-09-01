@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import socket
+import zlib
 
 from loguru import logger
 
@@ -25,6 +26,12 @@ SLIDING_V_LABELS = tuple(f"v_h{head}" for head in range(16))
 CONFIG_LABELS = GLOBAL_LABELS + SLIDING_K_LABELS + SLIDING_V_LABELS
 # KvChunkAddressTable's protobuf path uses a lexicographically ordered map.
 CONFIG_NAMES = tuple(f"{idx:02d}_{label}" for idx, label in enumerate(CONFIG_LABELS))
+
+
+def worker_host_name(hostname: str | None = None) -> str:
+    """Host key consumed by the legacy worker's table-to-rank grouping."""
+    hostname = socket.gethostname() if hostname is None else hostname
+    return f"host-{zlib.crc32(hostname.encode()) & 0x7FFFFFFF:08x}"
 
 
 def iter_source_chunk_locations(
@@ -138,7 +145,7 @@ def build_kv_chunk_address_table(
         raise RuntimeError(f"protobuf config ordering changed: expected {CONFIG_NAMES}, got {actual_names}")
 
     num_banks = get_num_dram_banks(mesh_device)
-    host_name = socket.gethostname()
+    host_name = worker_host_name()
     mapped_hosts = set()
 
     def _populate(

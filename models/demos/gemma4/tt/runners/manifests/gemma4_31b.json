@@ -1,11 +1,17 @@
 {
+  "_comment": [
+    "TEMPORARY: advertise and allocate a 64K context while Gemma 4 KV migration tables use dense",
+    "(config, layer, slot, 32-token chunk) storage. This cap reduces host-memory and protobuf pressure",
+    "during legacy migration bring-up. Restore 262144 only after the table representation/splitting is",
+    "made sparse or compact enough for the production profile."
+  ],
   "env": {
     "PREFILL_MODEL": "gemma4_31b",
     "PREFILL_NUM_LAYERS": "60",
     "PREFILL_SP": "8",
     "PREFILL_TP": "4",
     "PREFILL_CHUNK_SIZE": "8192",
-    "PREFILL_MAX_SEQ_LEN": "262144",
+    "PREFILL_MAX_SEQ_LEN": "65536",
     "PREFILL_GEMMA4_SLIDING_CACHE_LEN": "65536",
     "PREFILL_NUM_USERS": "8",
     "PREFILL_USE_TRACE": "0",
