@@ -252,7 +252,15 @@ ProgramBinaryStatus MeshWorkloadImpl::get_program_binary_status(std::size_t mesh
 }
 
 void MeshWorkloadImpl::set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status) {
-    program_binary_status_[mesh_id] = status;
+    // Enqueue re-commits the status on every launch, but the Inspector record describes a
+    // transition and writing one costs a mutex and a YAML append. Report only real changes.
+    const auto [entry, inserted] = program_binary_status_.try_emplace(mesh_id, status);
+    if (!inserted) {
+        if (entry->second == status) {
+            return;
+        }
+        entry->second = status;
+    }
     Inspector::mesh_workload_set_program_binary_status(this, mesh_id, status);
 }
 
