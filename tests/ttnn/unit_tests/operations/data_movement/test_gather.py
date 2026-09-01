@@ -482,8 +482,9 @@ def _trace_case(device):
         pytest.param(
             False,
             marks=pytest.mark.xfail(
-                reason="#46533: a live-L1-derived plan misses the cache when the frontier moves "
-                "between warm-up and capture, and a capture cannot compile the plan it then needs",
+                reason="https://github.com/tenstorrent/tt-metal/issues/46533: a live-L1-derived plan "
+                "misses the cache when the frontier moves between warm-up and capture, and a capture "
+                "cannot compile the plan it then needs",
             ),
         ),
     ],
