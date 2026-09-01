@@ -8,6 +8,7 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/sub_device_types.hpp>
+#include <cstdint>
 
 // Macros for binary operations with identical argument signatures and implementation.
 // Each macro generates function declaration(s). Use the corresponding TTNN_*_IMPL macro in .cpp.
@@ -149,7 +150,7 @@
 #define TTNN_BINARY_OP_TENSOR_INT32_BITWISE(NAME, OP_TYPE)                                \
     Tensor NAME(                                                                          \
         const Tensor& lhs,                                                                \
-        int32_t rhs,                                                                      \
+        std::int32_t rhs,                                                                 \
         const std::optional<MemoryConfig>& memory_config = std::nullopt,                  \
         const std::optional<Tensor>& output = std::nullopt,                               \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
@@ -394,6 +395,18 @@ Tensor divide(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+Tensor floor_div(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+Tensor floor_div(
+    const Tensor& lhs,
+    operations::unary::ScalarVariant rhs,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor divide_(

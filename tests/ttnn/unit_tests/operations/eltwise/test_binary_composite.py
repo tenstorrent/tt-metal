@@ -2,21 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
 import random
+
+import pytest
+import torch
 import ttnn
-from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
-    data_gen_with_range,
-    data_gen_with_range_int,
-    compare_pcc,
-    compare_equal,
-)
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_div_by_zero_outputs
+from models.common.utility_functions import is_blackhole, is_slow_dispatch
+
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
-from models.common.utility_functions import is_blackhole, is_slow_dispatch
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
+    compare_equal,
+    compare_pcc,
+    data_gen_with_range,
+)
+from tests.ttnn.utils_for_testing import (
+    assert_div_by_zero_outputs,
+    assert_with_pcc,
+    assert_with_ulp,
+)
 
 
 def _data_gen_div_scalar_input(input_shapes, low, high, device, divisor):
@@ -366,6 +371,18 @@ def test_binary_floor_div_overload_ttnn(input_shapes, value, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+@pytest.mark.parametrize("torch_dtype,ttnn_dtype", [(torch.float32, ttnn.float32), (torch.int32, ttnn.int32)])
+def test_binary_floor_div_exact_multiples(torch_dtype, ttnn_dtype, device):
+    values = torch.tensor([41, 82, 164, -41, -82, -164], dtype=torch_dtype)
+    input_tensor = values.repeat(171)[:1024].reshape(1, 1, 32, 32)
+    input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.floor_div(input_tensor, value=41)
+    golden_tensor = torch.floor_divide(values.repeat(171)[:1024].reshape(1, 1, 32, 32), 41)
+
+    assert torch.equal(ttnn.to_torch(output_tensor), golden_tensor)
 
 
 @pytest.mark.parametrize(

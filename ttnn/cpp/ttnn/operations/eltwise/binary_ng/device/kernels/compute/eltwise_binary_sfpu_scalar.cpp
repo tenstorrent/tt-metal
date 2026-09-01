@@ -27,11 +27,11 @@
 
 // Process n LHS tiles against a scalar tile at index 0 in cb_post_rhs
 FORCE_INLINE void process_sfpu_scalar_tiles(
-    uint32_t n,
-    uint32_t cb_pre_lhs_id,
-    uint32_t cb_post_lhs_id,
-    uint32_t cb_post_rhs_id,
-    uint32_t cb_out_id ISCLOSE_RT_ARG_PARAMS) {
+    std::uint32_t n,
+    std::uint32_t cb_pre_lhs_id,
+    std::uint32_t cb_post_lhs_id,
+    std::uint32_t cb_post_rhs_id,
+    std::uint32_t cb_out_id ISCLOSE_RT_ARG_PARAMS) {
     CircularBuffer cb_post_lhs(cb_post_lhs_id);
     CircularBuffer cb_post_rhs(cb_post_rhs_id);
     CircularBuffer cb_out(cb_out_id);
@@ -48,12 +48,23 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
     tile_regs_acquire();
     reconfig_data_format_srca(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
     copy_init(cb_post_lhs.get_cb_id());
-    for (uint32_t i = 0; i < n; ++i) {
+    for (std::uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
     }
+#ifdef SCALAR_RHS_ONCE
+    constexpr std::uint32_t scalar_dst = 1;
+    constexpr std::uint32_t recip_dst = 3;
     reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
     copy_init(cb_post_rhs.get_cb_id());
-    for (uint32_t i = 0; i < n; ++i) {
+    copy_tile(cb_post_rhs.get_cb_id(), 0, scalar_dst);
+    floor_div_binary_scalar_recip_tile(scalar_dst, recip_dst);
+    for (std::uint32_t i = 0; i < n; ++i) {
+        BINARY_SFPU_OP(i * 2, scalar_dst, i * 2);
+    }
+#else
+    reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+    copy_init(cb_post_rhs.get_cb_id());
+    for (std::uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_rhs.get_cb_id(), 0, i * 2 + 1);  // Always use scalar at index 0
 #if HAS_ACTIVATIONS(POST)
         BINARY_SFPU_INIT;
@@ -65,10 +76,11 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 #endif
         PROCESS_POST_ACTIVATIONS(i * 2);
     }
+#endif
     tile_regs_commit();
 
     tile_regs_wait();
-    for (uint32_t i = 0; i < n; ++i) {
+    for (std::uint32_t i = 0; i < n; ++i) {
         pack_tile(i * 2, cb_out.get_cb_id());
     }
     tile_regs_release();
@@ -78,13 +90,13 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 }
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    std::uint32_t num_tiles = get_arg_val<std::uint32_t>(0);
 #ifdef ISCLOSE_OP
-    const uint32_t rtol_bits = get_arg_val<uint32_t>(ISCLOSE_RTOL_RT_ARG_IDX);
-    const uint32_t atol_bits = get_arg_val<uint32_t>(ISCLOSE_ATOL_RT_ARG_IDX);
+    const std::uint32_t rtol_bits = get_arg_val<std::uint32_t>(ISCLOSE_RTOL_RT_ARG_IDX);
+    const std::uint32_t atol_bits = get_arg_val<std::uint32_t>(ISCLOSE_ATOL_RT_ARG_IDX);
 #endif
 
-    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
+    constexpr std::uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
     constexpr auto cb_pre_lhs_id = tt::CBIndex::c_0;
     constexpr auto cb_pre_rhs_id = tt::CBIndex::c_1;
@@ -108,14 +120,14 @@ void kernel_main() {
     cb_post_rhs.wait_front(1);
 
     // Process full chunks
-    uint32_t full_chunks = num_tiles / num_tiles_per_cycle;
-    for (uint32_t chunk = 0; chunk < full_chunks; ++chunk) {
+    std::uint32_t full_chunks = num_tiles / num_tiles_per_cycle;
+    for (std::uint32_t chunk = 0; chunk < full_chunks; ++chunk) {
         process_sfpu_scalar_tiles(
             num_tiles_per_cycle, cb_pre_lhs_id, cb_post_lhs_id, cb_post_rhs.get_cb_id(), cb_out_id ISCLOSE_RT_ARG_FWD);
     }
 
     // Process remainder
-    uint32_t remainder = num_tiles % num_tiles_per_cycle;
+    std::uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
         process_sfpu_scalar_tiles(
             remainder, cb_pre_lhs_id, cb_post_lhs_id, cb_post_rhs.get_cb_id(), cb_out_id ISCLOSE_RT_ARG_FWD);

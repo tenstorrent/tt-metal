@@ -21,6 +21,7 @@
 
 #include <ttnn-nanobind/small_vector_caster.hpp>
 #include <ttnn-nanobind/span_caster.hpp>
+#include <cstdint>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
@@ -149,7 +150,7 @@ using InplaceTensorFn = Tensor (*)(
 
 using BitwiseScalarFn = Tensor (*)(
     const Tensor&,
-    int32_t,
+    std::int32_t,
     const std::optional<MemoryConfig>&,
     const std::optional<Tensor>&,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
@@ -1549,7 +1550,8 @@ void bind_binary_overload_operation(
     TensorScalarFn tensor_scalar_fn,
     TensorTensorFn tensor_tensor_fn,
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = " ") {
+    const std::string& note = " ",
+    const char* scalar_arg_name = "scalar") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -1600,7 +1602,7 @@ void bind_binary_overload_operation(
         ttnn::overload_t(
             tensor_scalar_fn,
             nb::arg("input_tensor_a"),
-            nb::arg("scalar"),
+            nb::arg(scalar_arg_name),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
@@ -1828,8 +1830,11 @@ void bind_power(nb::module_& mod, const std::string& note = "") {
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            nb::overload_cast<const Tensor&, int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&>(
-                &ttnn::pow),
+            nb::overload_cast<
+                const Tensor&,
+                std::int32_t,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&>(&ttnn::pow),
             nb::arg("input_tensor"),
             nb::arg("exponent"),
             nb::kw_only(),
@@ -2345,13 +2350,15 @@ void py_module(nb::module_& mod) {
         detail::kFloatAndInt32Dtypes,
         detail::kDivideDtypeFootnote);
 
-    detail::bind_binary_composite_overload<"floor_div">(
+    detail::bind_binary_overload_operation<"floor_div">(
         mod,
         R"doc(Computes floor division for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        static_cast<detail::BinaryCompositeTensorTensorFn>(&ttnn::floor_div),
-        static_cast<detail::BinaryCompositeTensorScalarFn>(&ttnn::floor_div),
+        R"doc(\mathrm{{output\_tensor}} = \left\lfloor \frac{\mathrm{{input\_tensor\_a}}}{\mathrm{{input\_tensor\_b}}} \right\rfloor)doc",
+        static_cast<detail::BinaryOverloadScalarFn>(&ttnn::floor_div),
+        static_cast<detail::BinaryOverloadTensorFn>(&ttnn::floor_div),
         detail::kFloatAndInt32Dtypes,
-        detail::kDivideDtypeFootnote);
+        detail::kDivideDtypeFootnote,
+        "value");
 
     detail::bind_binary_unary_max_operation<"maximum">(
         mod,
