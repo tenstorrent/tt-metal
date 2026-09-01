@@ -447,7 +447,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
             if packed_entry is not None:
                 (packed_tensor, packed_layout), packed_slot = packed_entry
                 packed_bundle = (packed_tensor, packed_layout, packed_slot)
-            gate = self._hash_gate(li, packed_bundle) if is_hash else None
+            prefetch_buffers = self._prefetch_buffers_for(current_device, weight_dtype, num_prefetch_pages)
+            gate = (
+                self._hash_gate(li, packed_bundle, prefetch_buffers=prefetch_buffers, weight_dtype=weight_dtype)
+                if is_hash
+                else None
+            )
             experts = DeepSeekV4PreloadedExperts(
                 config,
                 self._expert_provider(li),
@@ -467,7 +472,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     cache=layer_cache,
                     weight_dtype=weight_dtype,
                     use_prefetcher=self.use_prefetcher,
-                    prefetch_buffers=self._prefetch_buffers_for(current_device, weight_dtype, num_prefetch_pages),
+                    prefetch_buffers=prefetch_buffers,
                     packed_weights=packed_entry,
                     tp_size=tp_size,
                 )
@@ -662,7 +667,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         return provider
 
-    def _hash_gate(self, layer_idx: int, packed_weights=None) -> DeepSeekV4HashRouter:
+    def _hash_gate(
+        self, layer_idx: int, packed_weights=None, prefetch_buffers=None, weight_dtype=None
+    ) -> DeepSeekV4HashRouter:
         weights = {
             "gate.weight": self._thunk(f"layers.{layer_idx}.mlp.gate.weight"),
             "gate.tid2eid": self.loader.get_tensor(f"layers.{layer_idx}.mlp.gate.tid2eid").long(),
@@ -671,7 +678,15 @@ class DeepSeekV4Model(DeepSeekV4Module):
             this_device = self.submeshes[self._submesh_id_for_layer(layer_idx)]
         else:
             this_device = self.first_device
-        return DeepSeekV4HashRouter(self.config, weights, this_device, packed_weights=packed_weights)
+        return DeepSeekV4HashRouter(
+            self.config,
+            weights,
+            this_device,
+            packed_weights=packed_weights,
+            use_prefetcher=self.use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
+            weight_dtype=weight_dtype if weight_dtype is not None else ttnn.bfloat16,
+        )
 
     # -- compressor pooling schedule -------------------------------------------- #
     #
@@ -1192,18 +1207,26 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """Move the decode residual streams between two adjacent submeshes over the
         pre-created socket pair — device-to-device, with no host round-trip.
 
-        Used by the eager :meth:`decode` path: allocate a fresh tensor on the target
-        submesh, receive into it, and return it (the loop reassigns ``streams``). The
-        traced path instead folds the send/recv directly into each submesh's trace
+        Used by the eager :meth:`decode` path: untilize the residual, allocate a
+        row-major tensor on the target submesh, receive into it, tilize, and return
+        it (the loop reassigns ``streams``). The traced path instead folds the same
+        layout conversion plus send/recv into each submesh's trace
         (see :meth:`_decode_submesh_static`).
         """
         to_submesh = self.submeshes[to_submesh_id]
         sender_socket, receiver_socket = self.submesh_socket_pairs[(from_submesh_id, to_submesh_id)]
-        output_tensor = ttnn.allocate_tensor_on_device(streams.spec, to_submesh)
+        # Tile layout pads decode streams (height ``B * hc_mult``, typically 4) up to 32,
+        # so the socket payload is much smaller in row-major. Untilize for the hop,
+        # then tilize again so the next layer sees the usual TILE residual.
         with _region("PIPELINE_HANDOFF"):
-            ttnn.experimental.send_direct_async(streams, sender_socket)
-            ttnn.experimental.recv_direct_async(output_tensor, receiver_socket)
+            streams_rm = ttnn.to_layout(streams, ttnn.ROW_MAJOR_LAYOUT)
+            output_rm = ttnn.allocate_tensor_on_device(streams_rm.spec, to_submesh)
+            ttnn.experimental.send_direct_async(streams_rm, sender_socket)
+            ttnn.experimental.recv_direct_async(output_rm, receiver_socket)
+            output_tensor = ttnn.to_layout(output_rm, ttnn.TILE_LAYOUT)
         streams.deallocate(True)
+        streams_rm.deallocate(True)
+        output_rm.deallocate(True)
         return output_tensor
 
     def decode(self, token_id: int, pos: int, rope: dict) -> ttnn.Tensor:
@@ -1638,7 +1661,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     # page size on every program-cache miss.
                     self._pkt_socket.set_page_size(self._pkt_page_bytes)
             if any(li > 0 and ids[li - 1] != k for li in layers_k):
-                sm["streams_in"] = _dev_zeros([batch, 1, hc, d], device)
+                # Residual handoff is row-major so the socket does not ship tile padding
+                # (see :meth:`_copy_streams_between_submeshes`). Tilized again after recv.
+                sm["streams_in"] = _dev_zeros([batch, 1, hc, d], device, layout=ttnn.ROW_MAJOR_LAYOUT)
                 sm["pkt_in"] = _dev_zeros([1, 1, 1, self._pkt_w], device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             self.submeshes_io.append(sm)
         # Where the global-last layer (num_layers-1) landed: its trace produces the final
@@ -1874,7 +1899,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     pkt = ttnn.broadcast(pkt, ttnn.MeshCoordinate(0, 0), cluster_axis=1)
             elif recv:
                 # Receive the residual streams + fused packet from the submesh holding
-                # the previous layer into the persistent buffers. Captured inside the
+                # the previous layer into the persistent buffers. Streams arrive
+                # row-major (no tile padding on the wire). Captured inside the
                 # trace, so the copies need no host-side dispatch at replay. Order must
                 # match the sender below.
                 _, receiver_socket = self.submesh_socket_pairs[(ids[li - 1], k)]
@@ -1907,7 +1933,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 dd = inputs_embeds.shape[-1]
                 streams = ttnn.repeat(ttnn.reshape(inputs_embeds, [b, 1, 1, dd]), ttnn.Shape([1, 1, cfg.hc_mult, 1]))
             elif recv:
-                streams = sm["streams_in"]
+                streams = ttnn.to_layout(sm["streams_in"], ttnn.TILE_LAYOUT)
             # else: reuse the ``streams`` carried from the prior layer on this submesh.
 
             streams = layer.decode_static(
@@ -1940,12 +1966,15 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 self._send_output(out)
             elif ids[li + 1] != k:
                 # Send the residual streams + fused packet to the submesh holding the
-                # next layer. Captured inside the trace, so dispatched on device at
-                # replay (no host round-trip). Order must match the receiver above.
+                # next layer. Streams go row-major to skip tile padding. Captured
+                # inside the trace, so dispatched on device at replay (no host
+                # round-trip). Order must match the receiver above.
                 sender_socket, _ = self.submesh_socket_pairs[(k, ids[li + 1])]
-                ttnn.experimental.send_direct_async(streams, sender_socket)
+                streams_rm = ttnn.to_layout(streams, ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.experimental.send_direct_async(streams_rm, sender_socket)
                 ttnn.experimental.send_direct_async(pkt, sender_socket)
                 streams.deallocate()
+                streams_rm.deallocate()
                 next_on_device = self._next_layer_on_submesh(li)
                 if next_on_device is not None:
                     self.layers[next_on_device].prefetch_weights()

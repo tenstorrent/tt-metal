@@ -6,10 +6,11 @@
 
 A device gets a single GCB, shared by every :class:`~.layers.LinearDecode` and
 :class:`~.layers.BatchedLinearDecode` on it: the attention block's four projections, its
-grouped output projection, its compressor's pair, and the MoE block's shared expert. This
-module owns the two things that has to be agreed on model-wide -- the weight layouts and the
-order the matmuls consume them -- so no single block can size a buffer against a layout
-another block does not use.
+grouped output projection, its compressor's pair, and the MoE block's shared expert. The
+router gate cannot join that ring (16-tile slabs vs a 32-tile page) and streams through
+:data:`HC_FN_GCB` instead. This module owns the two things that has to be agreed on
+model-wide -- the weight layouts and the order the matmuls consume them -- so no single
+block can size a buffer against a layout another block does not use.
 
 Why one buffer rather than one per shape:
 
@@ -37,10 +38,10 @@ wrong results rather than an error. ``DECODE_GCB_GROUP`` is that order.
 
 The hyper-connections' fused ``fn`` weight gets a *second* buffer on the same mapping
 (:data:`HC_FN_GCB`), because its 8-tile slab has no page in common with the 32-tile page
-above. TP4 balanced ``q_a`` / ``kv`` join that ring: their per-rank slabs are 16 and 8
-tiles on 64 receivers, which divide the 8-tile page and cannot join the shared group.
-One buffer for all of them, not one each: a GCB also costs ~176 B of the senders'
-1 KB state zone, so two per layer overflows that zone at the third layer.
+above. TP4 balanced ``q_a`` / ``kv`` and the MoE router gate join that ring: their slabs
+are 16 or 8 tiles on 64 receivers, which divide the 8-tile page and cannot join the
+shared group. One buffer for all of them, not one each: a GCB also costs ~176 B of the
+senders' 1 KB state zone, so two per layer overflows that zone at the third layer.
 
 Tensor-parallel decode *could* attach two further GCBs on this mapping (sequential
 ``o_a`` at 32 receivers, TP gate/up at ``N/TP`` receivers) via :func:`ensure_named_gcb`.
@@ -63,9 +64,9 @@ from .system_config import active_system_config
 # stream through it (see :func:`make_decode_prefetch_buffers`).
 HC_FN_GCB = "hc_fn"
 # Depth of the 8-tile ring. A TP4 layer queues attn_hc (1) + q_a (2) + kv (1) +
-# ffn_hc (1) = 5 pages, and the next layer on the chip may be staged before the
-# current one has drained; 8 leaves a couple of pages of slack without moving the
-# 4.6 KB page into the same class as the shared 18 KB ring.
+# ffn_hc (1) + router_gate (2) = 7 pages, and the next layer on the chip may be
+# staged before the current one has drained; 8 leaves a page of slack without
+# moving the 4.6 KB page into the same class as the shared 18 KB ring.
 HC_FN_GCB_PAGES = 8
 
 # Every prefetched decode weight, by name, with the layout ``decode_weight_layout`` reads.
@@ -114,6 +115,10 @@ DECODE_LAYOUTS = {
     "shared_gate_proj": {"K": 4096, "N": 2048, "partial_width_sharded": True, "k_blocks": 2, "n_blocks": 32},
     "shared_up_proj": {"K": 4096, "N": 2048, "partial_width_sharded": True, "k_blocks": 2, "n_blocks": 32},
     "shared_down_proj": {"K": 2048, "N": 4096},
+    # Router gate: [H, E] = [4096, 256]. A 64-core partial cut is 8x8 of [512, 32]
+    # (16-tile) slabs, which have no 32-tile page in common with DECODE_GCB_GROUP, so
+    # it streams through HC_FN_GCB. Deliberately absent from DECODE_GCB_GROUP.
+    "router_gate": {"K": 4096, "N": 256, "partial_width_sharded": True, "k_blocks": 8, "n_blocks": 8},
     # Both hyper-connections' fused fn projection: K = hc_mult * hidden_size against the
     # 24 pre/post/comb outputs padded to one tile. Large K and a single tile of N, so it
     # cuts K 64 ways onto the same 64 receivers and reduces onto one output core. Its
@@ -194,12 +199,14 @@ def balanced_qkv_layout(name: str, tp_size: int) -> dict:
 def hc_fn_ring_specs() -> list:
     """Layouts that stream through :data:`HC_FN_GCB`, in any order (page is their gcd).
 
-    Always includes the TP4 q_a/kv cuts so whoever builds the ring first -- attention
-    before the hyper-connections, on this decoder -- sizes it at 8 tiles rather than
-    at q_a's 16. Harmless at TP1: those layouts are not streamed, they only pin the page.
+    Always includes the TP4 q_a/kv cuts and the router gate so whoever builds the ring
+    first -- attention before the hyper-connections, or the router before either --
+    sizes it at 8 tiles rather than at a 16-tile slab. Harmless at TP1 for the q_a/kv
+    cuts: those layouts are not streamed, they only pin the page.
     """
     return [
         DECODE_LAYOUTS[HC_FN_GCB],
+        DECODE_LAYOUTS["router_gate"],
         balanced_qkv_layout("q_a_proj", 4),
         balanced_qkv_layout("kv_proj", 4),
     ]
