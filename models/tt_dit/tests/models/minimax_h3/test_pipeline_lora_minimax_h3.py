@@ -55,13 +55,13 @@ ASPECT_RATIO = (16, 9)
 PROMPT = CALIBRATED_FOX_PROMPT
 
 # Matches `test_pipeline_minimax_h3.py`'s sweep so the two are directly comparable at each point.
-DURATIONS_S = [5, 15]
+DURATIONS_S = [5, 10, 15]
 
 # Measured on this mesh and build at 49 forwards, seed 0, same prompt -- so the log carries its own
 # A/B rather than pointing at numbers from another day. Nothing here is a threshold.
 BASE_MODEL_REFERENCE = {
     5: "49 forwards: 66.4 s compute (denoise 54.6 s), CLIP mean 37.31",
-    15: "49 forwards: see test_pipeline_minimax_h3.py at the same point",
+    15: "49 forwards: 296.6 s compute (denoise 265.7 s), CLIP mean 35.67",
 }
 
 # Structural only. Four forwards should be far inside this; it exists to fail a run that silently
