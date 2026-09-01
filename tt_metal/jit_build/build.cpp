@@ -740,15 +740,26 @@ bool JitBuildState::need_link(const string& out_dir) const {
 }
 
 void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
-    string cmd{"cd " + out_dir + " && " + env_.gpp_};
+    // Links run through exec_command()/posix_spawn like compiles, not system():
+    // system() forks the full (multi-GB, many-fd) parent per link, and on hosts
+    // running several ranks a cold-cache link storm can starve the MPI runtime's
+    // liveness machinery into declaring a healthy rank dead (issue #55009). None
+    // of the link argv elements carry shell metacharacters, so tokenize_flags()
+    // splitting is sufficient; the previous "cd <out_dir> &&" becomes the
+    // working_dir argument.
+    std::vector<std::string> args = jit_build::utils::tokenize_flags(env_.gpp_);
     string lflags = this->lflags_;
     if (env_.get_rtoptions().get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
         lflags += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
     }
+    auto append_tokens = [&args](const std::string& flags) {
+        auto toks = jit_build::utils::tokenize_flags(flags);
+        args.insert(args.end(), std::make_move_iterator(toks.begin()), std::make_move_iterator(toks.end()));
+    };
 
     // Append user args
-    cmd += fmt::format("-{} ", settings ? settings->get_linker_opt_level() : this->default_linker_opt_level_);
+    args.push_back(fmt::format("-{}", settings ? settings->get_linker_opt_level() : this->default_linker_opt_level_));
 
     // Elf file has dependencies other than object files:
     // 1. Linker script
@@ -757,25 +768,27 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     if (!this->is_fw_) {
         link_deps.push_back(this->weakened_firmware_name_);
         if (!this->firmware_is_kernel_object_) {
-            cmd += "-Wl,--just-symbols=";
+            args.push_back("-Wl,--just-symbols=" + this->weakened_firmware_name_);
+        } else {
+            args.push_back(this->weakened_firmware_name_);
         }
-        cmd += this->weakened_firmware_name_ + " ";
     }
 
     // Append common args provided by the build state
-    cmd += lflags;
-    cmd += this->extra_link_objs_;
-    cmd += link_objs;
+    append_tokens(lflags);
+    append_tokens(this->extra_link_objs_);
+    append_tokens(link_objs);
     std::string elf_name = out_dir + this->target_name_ + ".elf";
     jit_build::utils::FileRenamer elf_file(elf_name);
-    cmd += "-o " + elf_file.path();
+    args.push_back("-o");
+    args.push_back(elf_file.path());
+    std::string cmd = fmt::format("cd {} && {}", out_dir, fmt::join(args, " "));
     if (env_.get_rtoptions().get_log_kernels_compilation_commands()) {
         log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     }
     jit_build::utils::FileRenamer log_file(elf_name + ".log");
     fs::remove(log_file.path());
-    bool result =
-        tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands());
+    bool result = tt::jit_build::utils::exec_command(args, out_dir, log_file.path());
     report_result(this->target_name_, "link", cmd, log_file.path(), result);
     jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
     std::ofstream hash_file(dephash_file.path());
