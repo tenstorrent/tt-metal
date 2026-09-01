@@ -21,7 +21,7 @@ A cluster descriptor is one host's chips. It has **no field naming that host**. 
 | SC36 filename token | hall **wrong** | file `bh-glx-120-d10u20` vs FSD `bh-glx-110-d10u20` |
 | Container / VM `gethostname()` | runtime-generated, unrelated to the machine | `7f3a91c2b4de`, `pod-fabric-worker-3` |
 
-If mock and FSD pack different `host[]` bytes, `PhysicalNodeId` graphs disagree and the solver sees two topologies. Parsing a name out of the filename cannot work (SC20 omits hall, SC36 disagrees). Do **not** parse `bh-glx-c01u02` at runtime.
+If mock and FSD pack different `cluster_id[]` bytes, `PhysicalNodeId` graphs disagree and the solver sees two topologies. Parsing a name out of the filename cannot work (SC20 omits hall, SC36 disagrees). Do **not** parse `bh-glx-c01u02` at runtime.
 
 The container / VM row is the second half of the problem. Even on live silicon, `gethostname()` is only the right answer when the process runs on bare metal. In a container it returns the container id; in a VM it returns whatever the guest was named. Both are stable strings that are *not* the identity of the accelerator group, so a hostname-only design breaks exactly where we are heading.
 
@@ -214,7 +214,7 @@ Log the resolved id and its source (`supplied` / `gethostname`) once at discover
 Both paths that can put a value on the descriptor — the YAML key and the discovery option — validate, so every cluster id on a descriptor is a legal one:
 
 - non-empty
-- `size() <= 128` (fills `PhysicalNodeId::host`, which is NUL-padded rather than NUL-terminated, so a full-length id needs no room for a terminator)
+- `size() <= 128` (fills `PhysicalNodeId::cluster_id`, which is NUL-padded rather than NUL-terminated, so a full-length id needs no room for a terminator)
 - every character in `[A-Za-z0-9._-]`, i.e. the §3 pattern
 
 Do **not** require it to match the YAML filename. The filename stays an asset-repo convention; the field is the id.
@@ -348,10 +348,10 @@ Slice 1 is reviewable with no metal or asset changes. Slices 3 and 4 are indepen
 | Component | Current hostname assumption | What it needs |
 |-----------|------------------------------|---------------|
 | FSD (`tt-cluster-descriptors`) | `hosts[].hostname` is the join key | its own `cluster_id` field, populated the same way, hostname kept for humans |
-| `PhysicalSystemDescriptor` / `ASICDescriptor` | `host_name` field, `HostName` type, `get_all_hostnames()` | rename to cluster id; the value already flows from `get_cluster_id()` after slice 3 |
-| `PhysicalNodeId` | `host[128]` NUL-padded name, `canonical_cluster_id_for_node_id` | keep the buffer; retire the DNS-label canonicalization once ids are not hostnames |
+| `PhysicalSystemDescriptor` / `ASICDescriptor` | `host_name` field, `HostName` type, `get_all_hostnames()`, `my_host_name()` | rename to cluster id; the value already flows from `get_cluster_id()` after slice 3. `TopologyMapper` deliberately does **not** do this rename ([`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) §6.1) |
+| `PhysicalNodeId` | `cluster_id[128]` NUL-padded, `canonical_cluster_id_for_node_id` | member already renamed; keep the buffer, retire the DNS-label canonicalization once ids are not hostnames |
 | Metal discovery | `get_host_name()`, filename basename, `resolve_hostname_uniqueness()` `_<rank>` suffix | id from UMD; uniqueness enforced by whoever assigns ids |
-| Rank bindings / launchers | map MPI ranks by hostname | map by `cluster_id` |
+| Rank bindings / launchers | map MPI ranks by hostname; `TopologyMappingConfig::hostname_to_asics` | map by `cluster_id` |
 | Distributed bring-up / logs / dashboards | print hostnames | print both while both exist |
 
 Until those land, `cluster_id` **must** stay hostname-valued (§3 pattern, §7 fill rule) — the FSD join and the mock/FSD `PhysicalNodeId` agreement both depend on it. Changing the value scheme before the FSD carries `cluster_id` would re-break the exact thing this plan fixes.
