@@ -6,6 +6,10 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "ckernel.h"
 
 namespace dataflow_kernel_lib {
 
@@ -66,6 +70,10 @@ FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) 
         constexpr uint32_t seed_words = seed_rows * face_size / 2;
         constexpr uint32_t seed_bytes = seed_rows * face_line_bytes;
 
+        Noc noc;
+        const uint8_t noc_id = noc.get_noc_id();
+        UnicastEndpoint local_l1;
+
         for (uint32_t j = 0; j < tile_faces; ++j) {
             // Seed rows of the face: two 16-bit indices per 32-bit word, every row identical.
             const uint32_t face_addr = tile_addr + j * face_bytes;
@@ -78,24 +86,33 @@ FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) 
                 }
             }
             // A baby-RISCV store can retire before its write lands in L1, and the RISCV core and
-            // the NoC are different L1 clients with no program-order guarantee between them. Read
-            // the last word back — a blocking load — so the seed is in L1 before the NoC reads it.
-            const uint32_t last_word = seed[seed_words - 1];
-            asm volatile("" ::"r"(last_word) : "memory");
+            // the NoC are different L1 clients with no program-order guarantee between them
+            // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). Read the last written word back
+            // so the seed is in L1 before the NoC reads it.
+            (void)ckernel::load_blocking(seed + (seed_words - 1));
 
             // Replicate the seed down the remaining rows of the face.
-            const uint64_t seed_noc_addr = get_noc_addr(face_addr);
             uint32_t dst_addr = face_addr + seed_bytes;
             for (uint32_t k = seed_rows; k < face_size; k += seed_rows) {
-                noc_async_read(seed_noc_addr, dst_addr, seed_bytes);
+                noc.async_read(
+                    local_l1,
+                    CoreLocalMem<uint32_t>(dst_addr),
+                    seed_bytes,
+                    {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = face_addr},
+                    {});
                 dst_addr += seed_bytes;
             }
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
         // The two lower faces are copies of the two upper ones.
-        noc_async_read(get_noc_addr(tile_addr), tile_addr + tile_faces * face_bytes, tile_faces * face_bytes);
-        noc_async_read_barrier();
+        noc.async_read(
+            local_l1,
+            CoreLocalMem<uint32_t>(tile_addr + tile_faces * face_bytes),
+            tile_faces * face_bytes,
+            {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = tile_addr},
+            {});
+        noc.async_read_barrier();
 
         dfb.push_back(one_tile);
         return;
