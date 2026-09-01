@@ -262,7 +262,7 @@
     wh_llmbox:
       timeout: 20
       tier: 3
-  owner_id: U08GEGWHQJF # Adam Roberge
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
 - name: ViT unit tests

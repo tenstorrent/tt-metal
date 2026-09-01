@@ -48,6 +48,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "single_core_compute_runners.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -1647,5 +1648,104 @@ TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstTinyTile) {
         }
     }
 }
+
+// ============================================================================
+// Id-free (2.0) tilize / pack_untilize / pack_untilize_dest, validated against the gold_standard_tilize /
+// gold_standard_untilize host goldens (exact, bitwise), not a legacy kernel. Single Float16_b tile. Runs on
+// Blackhole (BH-only API). tilize: row-major c_0 -> tiled c_16; (pack_)untilize: tiled c_0 -> row-major c_16.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixTilizeIdFreeGolden) {
+    constexpr std::uint32_t num_tiles = 1;
+    auto src = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result = unit_tests::llk::single_core::run_unary(
+        *this->devices_.at(0),
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/tilize_2_0.cpp");
+
+    ::unit_tests::compute::GoldenConfig config{
+        .num_tiles_r_dim = 1, .num_tiles_c_dim = 1, .face_r_dim = 16, .face_c_dim = 16, .num_faces = 4};
+    auto golden = ::unit_tests::compute::gold_standard_tilize(src, config);
+    EXPECT_EQ(golden, result);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeIdFreeGolden) {
+    constexpr std::uint32_t num_tiles = 1;
+    auto src = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result = unit_tests::llk::single_core::run_unary(
+        *this->devices_.at(0),
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_2_0.cpp");
+
+    ::unit_tests::compute::GoldenConfig config{
+        .num_tiles_r_dim = 1, .num_tiles_c_dim = 1, .face_r_dim = 16, .face_c_dim = 16, .num_faces = 4};
+    auto golden = ::unit_tests::compute::gold_standard_untilize(src, config);
+    EXPECT_EQ(golden, result);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeDestIdFreeGolden) {
+    constexpr std::uint32_t num_tiles = 1;
+    auto src = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result = unit_tests::llk::single_core::run_unary(
+        *this->devices_.at(0),
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_dest_2_0.cpp");
+
+    ::unit_tests::compute::GoldenConfig config{
+        .num_tiles_r_dim = 1, .num_tiles_c_dim = 1, .face_r_dim = 16, .face_c_dim = 16, .num_faces = 4};
+    auto golden = ::unit_tests::compute::gold_standard_untilize(src, config);
+    EXPECT_EQ(golden, result);
+}
+
+// Id-free (2.0) pack_untilize with block_ct_dim = 4 (> 1). This executes pack_untilize_block4_2_0.cpp -- the
+// only 2.0 kernel exercising the block>1 window: it reads 4 tiled input tiles in ONE pack_untilize_block<4,4>
+// call at in.l1_address + c * tile_stride_words(...) and writes one row-major row 4 tiles wide at the
+// full_ct_dim * tile_stride_words(...) output stride. Validated against gold_standard_untilize for a 1x4 tile
+// block (exact). (The partial block-float per-tile stride is covered separately by the copy_block Bfp8 partial-
+// tile test in test_copy_block_matmul_partials.cpp.)
+TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeBlock4IdFreeGolden) {
+    constexpr std::uint32_t num_tiles = 4;  // one 1x4 pack_untilize_block<4,4> window
+    auto src = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result = unit_tests::llk::single_core::run_unary(
+        *this->devices_.at(0),
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_block4_2_0.cpp",
+        /*cb_depth_tiles=*/num_tiles);
+
+    ::unit_tests::compute::GoldenConfig config{
+        .num_tiles_r_dim = 1, .num_tiles_c_dim = 4, .face_r_dim = 16, .face_c_dim = 16, .num_faces = 4};
+    auto golden = ::unit_tests::compute::gold_standard_untilize(src, config);
+    EXPECT_EQ(golden, result);
+}
+
+// NOTE: no distinguishing test for tilize_block's restored input_tile_index / output_tile_index params.
+// The restored parameters default to 0, in which case tile_index folds to `t` and the generated code is
+// byte-identical to before (covered by TensixTilizeIdFreeGolden above). Observing a NONZERO index cleanly
+// would require a block-configured, wide row-major tilize harness: column-tile b of an N-wide row-major
+// input sits at a b*TILE_WIDTH offset with an N*TILE_WIDTH per-row stride, which only tilizes correctly when
+// the unpack MOP is configured for block=N (as legacy's single llk_unpack_tilize_block(base, block, index)
+// call is). The id-free tilize_block uses a per-tile llk_unpack_tilize loop with block=1 init, so an
+// input_tile_index-addressed nonzero column tile reads the input as contiguous standalone tiles instead of a
+// wide block and cannot match gold_standard_tilize. The restored params are correct-for-parity but not
+// cleanly device-observable via this path (same resolution as the D0/D1/Copilot#2 unobservable fixes).
 
 }  // namespace tt::tt_metal
