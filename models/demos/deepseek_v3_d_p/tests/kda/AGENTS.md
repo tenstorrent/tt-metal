@@ -34,10 +34,10 @@ tests/
 ├── checkpoint_utils.py                 — Indexed Kimi-K3 layer loading for tests.
 ├── test_cache_fingerprints.py           — Persistent checkpoint-content, config, and placement identities.
 ├── test_host_config.py                 — Host-only recurrence and program-config validation.
+├── test_weight_schema.py               — Host-only TT weight canonicalization and validation.
 ├── utils.py                            — Case builders, reconstruction, and device-case support.
 ├── checkpoint/
-│   └── test_checkpoint.py              — Indexed-shard loading, failures, and weight
-│                                         validation, and padded K3 A_log normalization.
+│   └── test_layer_checkpoint.py        — Indexed loading and failure contracts for one KDA layer.
 ├── operations/
 │   ├── test_chunk.py                   — chunk recurrence accuracy, grouped invariance, and
 │   │                                     bit-identical implementation determinism.
@@ -75,7 +75,8 @@ CPU-reference tests live beside the implementation:
 models/demos/deepseek_v3_d_p/reference/kda/tests/
 ├── test_config.py                       — Config mapping and validation contracts.
 ├── test_layer.py                        — Transition accuracy and bit-identical determinism.
-└── test_ops.py                          — Torch operation identities and accuracy checks.
+├── test_ops.py                          — Torch operation identities and accuracy checks.
+└── test_weights.py                      — Reference weight-name and shape validation.
 ```
 
 ## Commands

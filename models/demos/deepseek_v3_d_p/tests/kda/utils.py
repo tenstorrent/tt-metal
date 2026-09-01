@@ -303,14 +303,19 @@ def kimi_k3_tensor_cache_path(
     return Path(ttnn.CONFIG.model_cache_path) / "kimi_k3" / checkpoint_identity / layout
 
 
-def make_config() -> KDAConfig:
+def make_config(
+    *,
+    num_heads: int = 2,
+    use_full_rank_gate: bool = False,
+) -> KDAConfig:
     return KDAConfig(
         hidden_size=64,
-        num_heads=2,
+        num_heads=num_heads,
         head_k_dim=32,
         head_v_dim=32,
         conv_kernel_size=4,
         norm_eps=1e-5,
+        use_full_rank_gate=use_full_rank_gate,
     )
 
 
