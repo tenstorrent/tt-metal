@@ -20,8 +20,8 @@ Priorities are stated per plan and do not follow the numbering: plan 2 is delibe
 ## Sequencing
 
 1. **Plan 1** — self-contained, no solver changes, immediate reduction in retry churn. Ship first.
-2. **Plan 3, §4(h) measurement** — check whether the per-grouping enumeration cap is being hit on the
-   validation MGDs. The answer decides whether anchored enumeration is a prerequisite or a follow-up.
+2. **Plan 3, §4(h)** — delete `kMaxPlacementsPerGrouping` and enumerate the complete candidate pool.
+   Small and independent of the rest of plan 3.
 3. **Plan 3** — the adjacency-guided search, behind a fallback to the existing path.
 4. **Plan 2** — needs the session-tightening fix in the solver bridge; its payoff shrinks once plans 1
    and 3 have removed most retries. Do it for the encode-once win, not for correctness.
