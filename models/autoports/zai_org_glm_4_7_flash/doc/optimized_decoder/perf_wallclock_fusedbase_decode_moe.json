@@ -1,0 +1,16 @@
+{
+ "impl": "fusedbase",
+ "kind": "moe",
+ "mode": "decode (traced, warmed, batch 1, fixed position 1023)",
+ "context_depth": 1024,
+ "iterations": 32,
+ "expert_dtype": "DataType.BFLOAT8_B",
+ "cache_dtype": "DataType.BFLOAT16",
+ "wall_s": 0.0331,
+ "ms_per_token": 1.034,
+ "tokens_per_s": 966.7,
+ "signposts": [
+  "PERF_DECODE_MOE_FUSEDBASE",
+  "PERF_DECODE_MOE_FUSEDBASE_END"
+ ]
+}

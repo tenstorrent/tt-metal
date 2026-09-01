@@ -1,0 +1,67 @@
+{
+ "kind": "dense",
+ "advertised_context": 202752,
+ "prefill_seq_len": 202751,
+ "prefill_wall_s": 39.9,
+ "prefill_tokens_per_s": 5086.2,
+ "cache_pcc_vs_linear_ref": 0.9999417984833127,
+ "windows": {
+  "start": {
+   "rows": [
+    0,
+    31
+   ],
+   "pcc_all_rows": 0.9998431559477918,
+   "pcc_min_ok_row": 0.9992110340424146,
+   "rows_at_bar": 32,
+   "explained": [],
+   "unexplained": []
+  },
+  "middle": {
+   "rows": [
+    101376,
+    101407
+   ],
+   "pcc_all_rows": 0.9976745125705933,
+   "pcc_min_ok_row": 0.9949151453478716,
+   "rows_at_bar": 32,
+   "explained": [],
+   "unexplained": []
+  },
+  "end": {
+   "rows": [
+    202719,
+    202750
+   ],
+   "pcc_all_rows": 0.9941973500359088,
+   "pcc_min_ok_row": 0.9901497067777091,
+   "rows_at_bar": 30,
+   "explained": [],
+   "unexplained": [
+    {
+     "row": 202719,
+     "pcc": 0.9872557821806804
+    },
+    {
+     "row": 202747,
+     "pcc": 0.9853380069284868
+    }
+   ]
+  }
+ },
+ "decode_max_position": {
+  "position": 202751,
+  "pcc": 0.9999267707240285,
+  "router_tie": false,
+  "first_call_wall_s": 0.024
+ },
+ "arm": {
+  "decoder": "optimized",
+  "weights": "real_checkpoint",
+  "expert_dtype": "bf4",
+  "cache_dtype": "bf8",
+  "attn_dtype_env": "<class default>",
+  "mlp_dtype_env": "<class default>",
+  "pcc_bar": 0.99
+ }
+}

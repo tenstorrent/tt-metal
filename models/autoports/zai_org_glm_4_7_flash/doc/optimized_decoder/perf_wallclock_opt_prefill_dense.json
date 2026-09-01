@@ -1,0 +1,15 @@
+{
+ "impl": "opt",
+ "kind": "dense",
+ "mode": "prefill (warmed, non-traced)",
+ "seq_len": 2048,
+ "prefill_chunk_size": 1024,
+ "expert_dtype": "DataType.BFLOAT4_B",
+ "cache_dtype": "DataType.BFLOAT8_B",
+ "wall_s": 0.0103,
+ "tokens_per_s": 198005.6,
+ "signposts": [
+  "PERF_PREFILL_DENSE_OPT",
+  "PERF_PREFILL_DENSE_OPT_END"
+ ]
+}

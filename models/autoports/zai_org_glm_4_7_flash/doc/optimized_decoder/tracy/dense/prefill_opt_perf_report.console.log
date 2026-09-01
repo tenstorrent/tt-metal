@@ -1,0 +1,13 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using user-specified architecture: p150 (CSV detected blackhole)
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_PREFILL_DENSE_OPT'.
+Using operations until 'PERF_PREFILL_DENSE_OPT_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/zai_org_glm_4_7_flash/doc/optimized_decoder/tracy/dense/prefill_opt_perf_report.csv
+Overall DRAM roofline (modeled ops): 9.8% (50 GB/s)
+Warning: Unclassified operation 'PagedFillCacheDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'UntilizeCodegenDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/zai_org_glm_4_7_flash/doc/optimized_decoder/tracy/dense/prefill_opt_perf_report_stacked.csv
+Plotting PNG stacked report to models/autoports/zai_org_glm_4_7_flash/doc/optimized_decoder/tracy/dense/prefill_opt_perf_report_stacked.png

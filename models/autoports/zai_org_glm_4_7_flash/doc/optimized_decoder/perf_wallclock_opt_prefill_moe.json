@@ -1,0 +1,15 @@
+{
+ "impl": "opt",
+ "kind": "moe",
+ "mode": "prefill (warmed, non-traced)",
+ "seq_len": 2048,
+ "prefill_chunk_size": 1024,
+ "expert_dtype": "DataType.BFLOAT4_B",
+ "cache_dtype": "DataType.BFLOAT8_B",
+ "wall_s": 0.1255,
+ "tokens_per_s": 16324.8,
+ "signposts": [
+  "PERF_PREFILL_MOE_OPT",
+  "PERF_PREFILL_MOE_OPT_END"
+ ]
+}

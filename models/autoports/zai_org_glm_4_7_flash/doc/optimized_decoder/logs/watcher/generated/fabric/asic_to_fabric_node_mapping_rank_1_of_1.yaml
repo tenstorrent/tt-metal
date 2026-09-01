@@ -1,0 +1,38 @@
+asic_to_fabric_node_mapping:
+  hostnames:
+    - hostname: tt-quietbox
+      mesh:
+        - mesh: 0
+        - chips:
+            - umd_chip_id: 0
+              asic_position:
+                tray_id: 1
+                asic_location: 1
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 1
+              asic_id: 154095680226977
+            - umd_chip_id: 1
+              asic_position:
+                tray_id: 2
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 0
+              asic_id: 154095680226976
+            - umd_chip_id: 2
+              asic_position:
+                tray_id: 3
+                asic_location: 1
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 2
+              asic_id: 154095680357697
+            - umd_chip_id: 3
+              asic_position:
+                tray_id: 4
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 3
+              asic_id: 154095680357696

@@ -1,0 +1,75 @@
+{
+ "kind": "dense",
+ "advertised_context": 202752,
+ "prefill_seq_len": 202751,
+ "prefill_wall_s": 39.9,
+ "prefill_tokens_per_s": 5085.5,
+ "cache_pcc_vs_linear_ref": 0.9999417984833127,
+ "windows": {
+  "start": {
+   "rows": [
+    0,
+    31
+   ],
+   "pcc_all_rows": 0.9991582437358145,
+   "pcc_min_ok_row": 0.9986207234760172,
+   "rows_at_bar": 32,
+   "explained": [],
+   "unexplained": []
+  },
+  "middle": {
+   "rows": [
+    101376,
+    101407
+   ],
+   "pcc_all_rows": 0.9970007469553989,
+   "pcc_min_ok_row": 0.9941276099614694,
+   "rows_at_bar": 32,
+   "explained": [],
+   "unexplained": []
+  },
+  "end": {
+   "rows": [
+    202719,
+    202750
+   ],
+   "pcc_all_rows": 0.9934891495960739,
+   "pcc_min_ok_row": 0.9914571905998729,
+   "rows_at_bar": 28,
+   "explained": [],
+   "unexplained": [
+    {
+     "row": 202719,
+     "pcc": 0.9867332451430953
+    },
+    {
+     "row": 202721,
+     "pcc": 0.989867805242935
+    },
+    {
+     "row": 202738,
+     "pcc": 0.9888571109835701
+    },
+    {
+     "row": 202747,
+     "pcc": 0.9848478154756383
+    }
+   ]
+  }
+ },
+ "decode_max_position": {
+  "position": 202751,
+  "pcc": 0.9986536465508054,
+  "router_tie": false,
+  "first_call_wall_s": 0.049
+ },
+ "arm": {
+  "decoder": "optimized",
+  "weights": "real_checkpoint",
+  "expert_dtype": "bf4",
+  "cache_dtype": "bf8",
+  "attn_dtype_env": "<class default>",
+  "mlp_dtype_env": "bf4",
+  "pcc_bar": 0.99
+ }
+}

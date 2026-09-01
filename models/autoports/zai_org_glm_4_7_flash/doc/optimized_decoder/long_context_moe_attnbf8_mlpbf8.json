@@ -1,0 +1,96 @@
+{
+ "kind": "moe",
+ "advertised_context": 202752,
+ "prefill_seq_len": 202751,
+ "prefill_wall_s": 86.4,
+ "prefill_tokens_per_s": 2347.7,
+ "cache_pcc_vs_linear_ref": 0.9999600478195854,
+ "windows": {
+  "start": {
+   "rows": [
+    0,
+    31
+   ],
+   "pcc_all_rows": 0.9988868178532592,
+   "pcc_min_ok_row": 0.9998720788996273,
+   "rows_at_bar": 30,
+   "explained": [
+    {
+     "row": 18,
+     "pcc": 0.9786105049924605,
+     "why": "routing flip",
+     "alt_expert_set_pcc": 0.9999384042655403
+    },
+    {
+     "row": 24,
+     "pcc": 0.9793427453573688,
+     "why": "routing flip (sub-ulp tie)",
+     "alt_expert_set_pcc": 0.9999474886612087
+    }
+   ],
+   "unexplained": []
+  },
+  "middle": {
+   "rows": [
+    101376,
+    101407
+   ],
+   "pcc_all_rows": 0.9997247744901355,
+   "pcc_min_ok_row": 0.9996953984811552,
+   "rows_at_bar": 32,
+   "explained": [],
+   "unexplained": []
+  },
+  "end": {
+   "rows": [
+    202719,
+    202750
+   ],
+   "pcc_all_rows": 0.9949272828645335,
+   "pcc_min_ok_row": 0.9982285102499165,
+   "rows_at_bar": 28,
+   "explained": [
+    {
+     "row": 202721,
+     "pcc": 0.9691797119534438,
+     "why": "routing flip (sub-ulp tie)",
+     "alt_expert_set_pcc": 0.998321970742795
+    },
+    {
+     "row": 202731,
+     "pcc": 0.9724911678487471,
+     "why": "routing flip (sub-ulp tie)",
+     "alt_expert_set_pcc": 0.9983148399585258
+    },
+    {
+     "row": 202739,
+     "pcc": 0.9726096127103966,
+     "why": "routing flip",
+     "alt_expert_set_pcc": 0.9983451681666231
+    },
+    {
+     "row": 202746,
+     "pcc": 0.966508985857775,
+     "why": "routing flip (sub-ulp tie)",
+     "alt_expert_set_pcc": 0.9983417960658513
+    }
+   ],
+   "unexplained": []
+  }
+ },
+ "decode_max_position": {
+  "position": 202751,
+  "pcc": 0.999900437519463,
+  "router_tie": false,
+  "first_call_wall_s": 0.029
+ },
+ "arm": {
+  "decoder": "optimized",
+  "weights": "synthetic",
+  "expert_dtype": "bf8",
+  "cache_dtype": "bf16",
+  "attn_dtype_env": "bf8",
+  "mlp_dtype_env": "bf8",
+  "pcc_bar": 0.995
+ }
+}

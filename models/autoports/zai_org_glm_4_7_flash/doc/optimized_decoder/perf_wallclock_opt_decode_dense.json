@@ -1,0 +1,16 @@
+{
+ "impl": "opt",
+ "kind": "dense",
+ "mode": "decode (traced, warmed, batch 1, fixed position 1023)",
+ "context_depth": 1024,
+ "iterations": 32,
+ "expert_dtype": "DataType.BFLOAT4_B",
+ "cache_dtype": "DataType.BFLOAT8_B",
+ "wall_s": 0.0143,
+ "ms_per_token": 0.447,
+ "tokens_per_s": 2237.2,
+ "signposts": [
+  "PERF_DECODE_DENSE_OPT",
+  "PERF_DECODE_DENSE_OPT_END"
+ ]
+}

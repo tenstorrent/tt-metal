@@ -1,0 +1,26 @@
+Total % [%],Op Code,Device Time Sum [μs],Op Count,Op Category,Min FLOPs [%],Max FLOPs [%],Mean FLOPs [%],Std FLOPs [%],Weighted Mean FLOPs [%]
+37.55,MatmulDeviceOperation (in0:l1_interleaved),4529.44,96,Compute,4.40,14.83,7.01,3.32,5.21
+24.21,MatmulDeviceOperation (in0:width_sharded),2920.10,128,Compute,45.86,69.17,56.65,9.66,61.10
+8.85,SdpaDecodeDeviceOperation (in0:dram_interleaved),1067.30,32,Compute,,,,,
+5.51,LayerNormDeviceOperation (in0:width_sharded),665.04,123,Compute,,,,,
+3.14,MatmulDeviceOperation (in0:dram_interleaved),378.38,32,Compute,12.66,17.35,13.60,1.27,13.60
+2.47,UntilizeCodegenDeviceOperation (in0:dram_interleaved),297.62,64,Other,,,,,
+2.37,TransposeDeviceOperation (in0:dram_interleaved),286.40,96,TM,,,,,
+2.15,UntilizeCodegenDeviceOperation (in0:l1_interleaved),259.70,17,Other,,,,,
+1.96,SliceDeviceOperation (in0:l1_interleaved),236.60,192,TM,,,,,
+1.70,InterleavedToShardedDeviceOperation (in0:l1_interleaved),204.85,156,DM,,,,,
+1.35,ShardedToInterleavedDeviceOperation (in0:width_sharded),162.29,154,DM,,,,,
+1.03,BinaryNgDeviceOperation (in0:l1_interleaved),124.09,32,Compute,,,,,
+0.93,ReshapeViewDeviceOperation (in0:l1_interleaved),111.57,32,TM,,,,,
+0.91,TransposeDeviceOperation (in0:l1_interleaved),109.30,32,TM,,,,,
+0.88,TilizeWithValPaddingDeviceOperation (in0:dram_interleaved),106.64,34,TM,,,,,
+0.85,TilizeWithValPaddingDeviceOperation (in0:l1_interleaved),102.86,17,TM,,,,,
+0.71,BinaryNgDeviceOperation (in0:width_sharded),85.08,64,Compute,,,,,
+0.68,InterleavedToShardedDeviceOperation (in0:dram_interleaved),82.48,115,DM,,,,,
+0.62,PagedUpdateCacheDeviceOperation (in0:dram_interleaved),74.61,17,DM,,,,,
+0.54,RotaryEmbeddingLlamaDeviceOperation (in0:height_sharded),65.50,34,Compute,,,,,
+0.42,NLPConcatHeadsDecodeDeviceOperation (in0:height_sharded),50.93,32,TM,,,,,
+0.37,ConcatDeviceOperation (in0:dram_interleaved),44.45,32,TM,,,,,
+0.34,ConcatDeviceOperation (in0:l1_interleaved),40.46,32,TM,,,,,
+0.31,EmbeddingsDeviceOperation (in0:dram_interleaved),37.33,34,Compute,,,,,
+0.15,ShardedToInterleavedDeviceOperation (in0:height_sharded),17.94,34,DM,,,,,

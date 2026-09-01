@@ -1,0 +1,177 @@
+{
+ "kind": "moe",
+ "advertised_context": 202752,
+ "prefill_seq_len": 202751,
+ "prefill_wall_s": 51.5,
+ "prefill_tokens_per_s": 3939.6,
+ "cache_pcc_vs_linear_ref": 0.9999367414453452,
+ "windows": {
+  "start": {
+   "rows": [
+    0,
+    31
+   ],
+   "pcc_all_rows": 0.9934619144278082,
+   "pcc_min_ok_row": 0.9957998210022317,
+   "rows_at_bar": 28,
+   "explained": [
+    {
+     "row": 8,
+     "pcc": 0.9698184165731798,
+     "why": "routing flip",
+     "alt_expert_set_pcc": 0.996841078821647
+    },
+    {
+     "row": 10,
+     "pcc": 0.9649315955879721,
+     "why": "routing flip (sub-ulp tie)",
+     "alt_expert_set_pcc": 0.9970546914547642
+    },
+    {
+     "row": 13,
+     "pcc": 0.972580133696692,
+     "why": "routing flip",
+     "alt_expert_set_pcc": 0.9973382621902825
+    },
+    {
+     "row": 20,
+     "pcc": 0.9677404118858454,
+     "why": "routing flip (sub-ulp tie)",
+     "alt_expert_set_pcc": 0.9973809303088919
+    }
+   ],
+   "unexplained": []
+  },
+  "middle": {
+   "rows": [
+    101376,
+    101407
+   ],
+   "pcc_all_rows": 0.9916558783122262,
+   "pcc_min_ok_row": 0.9966959231094121,
+   "rows_at_bar": 25,
+   "explained": [
+    {
+     "row": 101377,
+     "pcc": 0.9731087283710357,
+     "why": "routing flip",
+     "alt_expert_set_pcc": 0.9970522442928037
+    },
+    {
+     "row": 101386,
+     "pcc": 0.97134345747844,
+     "why": "routing flip (sub-ulp tie)",
+     "alt_expert_set_pcc": 0.9972102485729615
+    },
+    {
+     "row": 101387,
+     "pcc": 0.9761525053471636,
+     "why": "routing flip",
+     "alt_expert_set_pcc": 0.9973887345027759
+    },
+    {
+     "row": 101394,
+     "pcc": 0.9787447154079099,
+     "why": "routing flip",
+     "alt_expert_set_pcc": 0.9973570154960512
+    },
+    {
+     "row": 101405,
+     "pcc": 0.9686946446858298,
+     "why": "routing flip (sub-ulp tie)",
+     "alt_expert_set_pcc": 0.9970368681226737
+    },
+    {
+     "row": 101406,
+     "pcc": 0.9735145542714,
+     "why": "routing flip",
+     "alt_expert_set_pcc": 0.9977692911914109
+    }
+   ],
+   "unexplained": [
+    {
+     "row": 101393,
+     "pcc": 0.9714153695106862,
+     "best_alt_pcc": 0.9757859727024,
+     "tie": false
+    }
+   ]
+  },
+  "end": {
+   "rows": [
+    202719,
+    202750
+   ],
+   "pcc_all_rows": 0.9882202247486765,
+   "pcc_min_ok_row": 0.9952140671606395,
+   "rows_at_bar": 24,
+   "explained": [
+    {
+     "row": 202731,
+     "pcc": 0.9694781276721677,
+     "why": "routing flip",
+     "alt_expert_set_pcc": 0.9958881351654981
+    },
+    {
+     "row": 202733,
+     "pcc": 0.9747555106742967,
+     "why": "routing flip (sub-ulp tie)",
+     "alt_expert_set_pcc": 0.9963799092036799
+    },
+    {
+     "row": 202746,
+     "pcc": 0.9718229911580814,
+     "why": "routing flip",
+     "alt_expert_set_pcc": 0.9954983927318658
+    },
+    {
+     "row": 202747,
+     "pcc": 0.9649757394555538,
+     "why": "routing flip",
+     "alt_expert_set_pcc": 0.996068573644088
+    },
+    {
+     "row": 202748,
+     "pcc": 0.9692820578639014,
+     "why": "routing flip",
+     "alt_expert_set_pcc": 0.996692540859552
+    },
+    {
+     "row": 202749,
+     "pcc": 0.9660060609054897,
+     "why": "routing flip",
+     "alt_expert_set_pcc": 0.9958244601751567
+    }
+   ],
+   "unexplained": [
+    {
+     "row": 202734,
+     "pcc": 0.9655343191256592,
+     "best_alt_pcc": 0.9686340971734989,
+     "tie": false
+    },
+    {
+     "row": 202745,
+     "pcc": 0.941197290590894,
+     "best_alt_pcc": 0.9691694337532097,
+     "tie": true
+    }
+   ]
+  }
+ },
+ "decode_max_position": {
+  "position": 202751,
+  "pcc": 0.9971375813563709,
+  "router_tie": false,
+  "first_call_wall_s": 0.079
+ },
+ "arm": {
+  "decoder": "optimized",
+  "weights": "real_checkpoint",
+  "expert_dtype": "bf4",
+  "cache_dtype": "bf8",
+  "attn_dtype_env": "<class default>",
+  "mlp_dtype_env": "<class default>",
+  "pcc_bar": 0.99
+ }
+}

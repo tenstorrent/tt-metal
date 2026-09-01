@@ -39,15 +39,94 @@ import ttnn
 from models.autoports.zai_org_glm_4_7_flash.tests import utils
 from models.autoports.zai_org_glm_4_7_flash.tt.functional_decoder import FunctionalDecoder, PagedCacheConfig
 
-if os.environ.get("GLM47_DECODER", "functional") == "fused":
+_DECODER = os.environ.get("GLM47_DECODER", "functional")
+if _DECODER == "fused":
     from models.autoports.zai_org_glm_4_7_flash.tt.fused_decoder import FusedDecoder as DecoderCls
 
     DOC_DIR = Path(__file__).resolve().parents[1] / "doc" / "fused_decoder"
+elif _DECODER == "optimized":
+    from models.autoports.zai_org_glm_4_7_flash.tt.optimized_decoder import OptimizedDecoder as DecoderCls
+
+    DOC_DIR = Path(__file__).resolve().parents[1] / "doc" / "optimized_decoder"
 else:
     DecoderCls = FunctionalDecoder
     DOC_DIR = Path(__file__).resolve().parents[1] / "doc" / "functional_decoder"
-PCC_BAR = 0.995
+# Ladder arms: expert dtype defaults to bfloat8_b for every decoder so the
+# ladder stays directly comparable across stages (the optimized decoder's
+# constructor default is the bf4 deployment arm; that arm has its own
+# short-context real-weight coverage at bar 0.99). Cache dtype selects the
+# latent-cache arm (bf8 = the full-model capacity dtype).
+
+
+def _decoder_kwargs():
+    import ttnn as _ttnn
+
+    name = os.environ.get("GLM47_EXPERT_DTYPE", "bf8")
+    return {"expert_dtype": {"bf16": _ttnn.bfloat16, "bf8": _ttnn.bfloat8_b, "bf4": _ttnn.bfloat4_b}[name]}
+
+
+def _cache_dtype():
+    import ttnn as _ttnn
+
+    return {"bf16": _ttnn.bfloat16, "bf8": _ttnn.bfloat8_b}[os.environ.get("GLM47_CACHE_DTYPE", "bf16")]
+
+
+# Attention / MLP weight dtype arms for the optimized decoder
+# (GLM47_ATTN_DTYPE / GLM47_MLP_DTYPE = bf8|bf4; unset keeps class defaults).
+if _DECODER == "optimized":
+    import ttnn as _ttnn_mod
+
+    _dt = {"bf8": _ttnn_mod.bfloat8_b, "bf4": _ttnn_mod.bfloat4_b}
+    if os.environ.get("GLM47_ATTN_DTYPE"):
+        DecoderCls.attn_weight_dtype = _dt[os.environ["GLM47_ATTN_DTYPE"]]
+    if os.environ.get("GLM47_MLP_DTYPE"):
+        DecoderCls.mlp_gateup_dtype = _dt[os.environ["GLM47_MLP_DTYPE"]]
+        DecoderCls.mlp_down_dtype = _dt[os.environ["GLM47_MLP_DTYPE"]]
+        DecoderCls.dense_mlp_dtype = _dt[os.environ["GLM47_MLP_DTYPE"]]
+
+
+def _layer_sd(cfg, layer_idx):
+    """Synthetic per-layer weights by default; GLM47_REAL_WEIGHTS=1 loads the
+    real checkpoint layer (for real-weight long-context policy evidence)."""
+    if os.environ.get("GLM47_REAL_WEIGHTS"):
+        return utils.load_real_layer_state_dict(cfg, layer_idx)
+    return utils.synth_layer_state_dict(cfg, layer_idx)
+
+
+PCC_BAR = float(os.environ.get("GLM47_PCC_BAR", "0.995"))
 FULL_CONTEXT = 202752
+
+
+def _arm_metadata():
+    """Provenance for every evidence JSON: which decoder/weights/dtype arm."""
+    return {
+        "decoder": _DECODER,
+        "weights": "real_checkpoint" if os.environ.get("GLM47_REAL_WEIGHTS") else "synthetic",
+        "expert_dtype": os.environ.get("GLM47_EXPERT_DTYPE", "bf8"),
+        "cache_dtype": os.environ.get("GLM47_CACHE_DTYPE", "bf16"),
+        "attn_dtype_env": os.environ.get("GLM47_ATTN_DTYPE", "<class default>"),
+        "mlp_dtype_env": os.environ.get("GLM47_MLP_DTYPE", "<class default>"),
+        "pcc_bar": PCC_BAR,
+    }
+
+
+def _arm_suffix():
+    """Filename suffix so non-default arms never overwrite the canonical
+    (synthetic, default-env) evidence files."""
+    parts = []
+    if os.environ.get("GLM47_REAL_WEIGHTS"):
+        parts.append("real")
+    for env, default in (
+        ("GLM47_EXPERT_DTYPE", "bf8"),
+        ("GLM47_CACHE_DTYPE", "bf16"),
+        ("GLM47_ATTN_DTYPE", None),
+        ("GLM47_MLP_DTYPE", None),
+    ):
+        v = os.environ.get(env)
+        if v and v != default:
+            parts.append(f"{env.split('_')[1].lower()}{v}")
+    return ("_" + "_".join(parts)) if parts else ""
+
 
 pytestmark = pytest.mark.long
 
@@ -60,7 +139,7 @@ def cfg():
 def test_absorbed_reference_matches_hf(cfg):
     """CPU-only: the absorbed-MLA window reference is an exact refactoring of
     the HF layer; certify it before trusting it at 202k."""
-    sd = utils.synth_layer_state_dict(cfg, 1)
+    sd = _layer_sd(cfg, 1)
     layer = utils.build_hf_layer(cfg, 1, sd)
     S = 256
     x = utils.synth_activations(cfg, 1, S, seed=7)
@@ -76,7 +155,7 @@ def test_absorbed_reference_matches_hf(cfg):
 def test_prefill_8k_vs_hf(cfg):
     """Mid-length anchor: full HF reference at a non-aligned 8191 tokens."""
     S, n_decode = 8191, 2
-    sd = utils.synth_layer_state_dict(cfg, 1)
+    sd = _layer_sd(cfg, 1)
     layer = utils.build_hf_layer(cfg, 1, sd)
     x = utils.synth_activations(cfg, 1, S + n_decode, seed=7)
     t0 = time.perf_counter()
@@ -95,8 +174,9 @@ def test_prefill_8k_vs_hf(cfg):
             max_context=16384,
             paged_config=paged,
             prefill_chunk_size=2048,
+            **_decoder_kwargs(),
         )
-        cache = dec.allocate_kv_cache()
+        cache = dec.allocate_kv_cache(dtype=_cache_dtype())
         pt_torch = utils.make_page_table(1, paged.max_num_blocks, seed=3)
         pt = ttnn.from_torch(pt_torch, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
         x_tt = ttnn.from_torch(x[:, :S].unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -145,7 +225,7 @@ def test_full_context_202k(cfg, kind):
     S = FULL_CONTEXT - 1  # 202751: longest valid non-aligned prefill; the last
     # position (202751) is exercised through the decode path below.
     layer_idx = utils.LAYER_KINDS[kind]
-    sd = utils.synth_layer_state_dict(cfg, layer_idx)
+    sd = _layer_sd(cfg, layer_idx)
     layer = utils.build_hf_layer(cfg, layer_idx, sd)
     x = utils.synth_activations(cfg, layer_idx, FULL_CONTEXT, seed=7)
     evidence = {"kind": kind, "advertised_context": FULL_CONTEXT, "prefill_seq_len": S}
@@ -163,8 +243,9 @@ def test_full_context_202k(cfg, kind):
             max_context=FULL_CONTEXT,
             paged_config=paged,
             prefill_chunk_size=2048,
+            **_decoder_kwargs(),
         )
-        cache = dec.allocate_kv_cache()
+        cache = dec.allocate_kv_cache(dtype=_cache_dtype())
         pt_torch = utils.make_page_table(1, paged.max_num_blocks, seed=3)
         pt = ttnn.from_torch(pt_torch, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
         x_tt = ttnn.from_torch(x[:, :S].unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -294,9 +375,11 @@ def test_full_context_202k(cfg, kind):
     finally:
         ttnn.close_device(device)
 
+    evidence["arm"] = _arm_metadata()
     DOC_DIR.mkdir(parents=True, exist_ok=True)
-    (DOC_DIR / f"long_context_{kind}.json").write_text(json.dumps(evidence, indent=1))
-    print(f"wrote {DOC_DIR / f'long_context_{kind}.json'}")
+    out_name = f"long_context_{kind}{_arm_suffix()}.json"
+    (DOC_DIR / out_name).write_text(json.dumps(evidence, indent=1))
+    print(f"wrote {DOC_DIR / out_name}")
     assert not failures, failures
 
 
@@ -306,7 +389,7 @@ def test_full_context_aligned_202752(cfg):
     final 32 output rows (positions 202720..202751) with the same per-row
     routing-flip proof as the 202751 run."""
     S = FULL_CONTEXT
-    sd = utils.synth_layer_state_dict(cfg, 1)
+    sd = _layer_sd(cfg, 1)
     layer = utils.build_hf_layer(cfg, 1, sd)
     x = utils.synth_activations(cfg, 1, S, seed=7)
     failures = []
@@ -324,8 +407,9 @@ def test_full_context_aligned_202752(cfg):
             max_context=S,
             paged_config=paged,
             prefill_chunk_size=2048,
+            **_decoder_kwargs(),
         )
-        cache = dec.allocate_kv_cache()
+        cache = dec.allocate_kv_cache(dtype=_cache_dtype())
         pt_torch = utils.make_page_table(1, paged.max_num_blocks, seed=3)
         pt = ttnn.from_torch(pt_torch, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
         x_tt = ttnn.from_torch(x.unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -380,7 +464,9 @@ def test_full_context_aligned_202752(cfg):
     finally:
         ttnn.close_device(device)
 
+    evidence["arm"] = _arm_metadata()
     DOC_DIR.mkdir(parents=True, exist_ok=True)
-    (DOC_DIR / "long_context_aligned_202752.json").write_text(json.dumps(evidence, indent=1))
-    print(f"wrote {DOC_DIR / 'long_context_aligned_202752.json'}")
+    out_name = f"long_context_aligned_202752{_arm_suffix()}.json"
+    (DOC_DIR / out_name).write_text(json.dumps(evidence, indent=1))
+    print(f"wrote {DOC_DIR / out_name}")
     assert not failures, failures

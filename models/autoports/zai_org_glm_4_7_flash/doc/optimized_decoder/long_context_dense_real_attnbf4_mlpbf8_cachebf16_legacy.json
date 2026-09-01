@@ -1,0 +1,58 @@
+{
+ "kind": "dense",
+ "advertised_context": 202752,
+ "prefill_seq_len": 202751,
+ "prefill_wall_s": 70.4,
+ "prefill_tokens_per_s": 2879.6,
+ "cache_pcc_vs_linear_ref": 0.9999626007778396,
+ "windows": {
+  "start": {
+   "rows": [
+    0,
+    31
+   ],
+   "pcc_all_rows": 0.9998398886781086,
+   "pcc_min_ok_row": 0.999196154051733,
+   "rows_at_bar": 32,
+   "explained": [],
+   "unexplained": []
+  },
+  "middle": {
+   "rows": [
+    101376,
+    101407
+   ],
+   "pcc_all_rows": 0.9976968260872175,
+   "pcc_min_ok_row": 0.9948547191631743,
+   "rows_at_bar": 32,
+   "explained": [],
+   "unexplained": []
+  },
+  "end": {
+   "rows": [
+    202719,
+    202750
+   ],
+   "pcc_all_rows": 0.9942929067192955,
+   "pcc_min_ok_row": 0.9901677373174048,
+   "rows_at_bar": 30,
+   "explained": [],
+   "unexplained": [
+    {
+     "row": 202719,
+     "pcc": 0.9874681317193774
+    },
+    {
+     "row": 202747,
+     "pcc": 0.9855131635192107
+    }
+   ]
+  }
+ },
+ "decode_max_position": {
+  "position": 202751,
+  "pcc": 0.9999304905165572,
+  "router_tie": false,
+  "first_call_wall_s": 0.023
+ }
+}

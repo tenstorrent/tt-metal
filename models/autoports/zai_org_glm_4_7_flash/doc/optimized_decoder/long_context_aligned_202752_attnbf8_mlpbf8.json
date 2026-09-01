@@ -1,0 +1,50 @@
+{
+ "kind": "moe",
+ "prefill_seq_len": 202752,
+ "prefill_wall_s": 86.4,
+ "cache_pcc_vs_linear_ref": 0.9999600478457706,
+ "final_window": {
+  "rows": [
+   202720,
+   202751
+  ],
+  "pcc_all_rows": 0.9949291447388712,
+  "rows_at_bar": 28,
+  "explained": [
+   {
+    "row": 202721,
+    "pcc": 0.9691797119534438,
+    "tie": true,
+    "alt_expert_set_pcc": 0.998321970742795
+   },
+   {
+    "row": 202731,
+    "pcc": 0.9724911678487471,
+    "tie": true,
+    "alt_expert_set_pcc": 0.9983148399585258
+   },
+   {
+    "row": 202739,
+    "pcc": 0.9726096124762571,
+    "tie": false,
+    "alt_expert_set_pcc": 0.9983451681666231
+   },
+   {
+    "row": 202746,
+    "pcc": 0.966508985857775,
+    "tie": true,
+    "alt_expert_set_pcc": 0.9983417960658513
+   }
+  ],
+  "unexplained": []
+ },
+ "arm": {
+  "decoder": "optimized",
+  "weights": "synthetic",
+  "expert_dtype": "bf8",
+  "cache_dtype": "bf16",
+  "attn_dtype_env": "bf8",
+  "mlp_dtype_env": "bf8",
+  "pcc_bar": 0.995
+ }
+}

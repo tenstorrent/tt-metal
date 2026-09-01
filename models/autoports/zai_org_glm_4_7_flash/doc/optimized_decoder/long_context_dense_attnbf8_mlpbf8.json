@@ -1,0 +1,58 @@
+{
+ "kind": "dense",
+ "advertised_context": 202752,
+ "prefill_seq_len": 202751,
+ "prefill_wall_s": 70.5,
+ "prefill_tokens_per_s": 2877.1,
+ "cache_pcc_vs_linear_ref": 0.9999590931017103,
+ "windows": {
+  "start": {
+   "rows": [
+    0,
+    31
+   ],
+   "pcc_all_rows": 0.9999678235208936,
+   "pcc_min_ok_row": 0.999927537736727,
+   "rows_at_bar": 32,
+   "explained": [],
+   "unexplained": []
+  },
+  "middle": {
+   "rows": [
+    101376,
+    101407
+   ],
+   "pcc_all_rows": 0.9999329384554161,
+   "pcc_min_ok_row": 0.9999256730459368,
+   "rows_at_bar": 32,
+   "explained": [],
+   "unexplained": []
+  },
+  "end": {
+   "rows": [
+    202719,
+    202750
+   ],
+   "pcc_all_rows": 0.9997006588645587,
+   "pcc_min_ok_row": 0.999679168844053,
+   "rows_at_bar": 32,
+   "explained": [],
+   "unexplained": []
+  }
+ },
+ "decode_max_position": {
+  "position": 202751,
+  "pcc": 0.9999507071775527,
+  "router_tie": false,
+  "first_call_wall_s": 0.021
+ },
+ "arm": {
+  "decoder": "optimized",
+  "weights": "synthetic",
+  "expert_dtype": "bf8",
+  "cache_dtype": "bf16",
+  "attn_dtype_env": "bf8",
+  "mlp_dtype_env": "bf8",
+  "pcc_bar": 0.995
+ }
+}

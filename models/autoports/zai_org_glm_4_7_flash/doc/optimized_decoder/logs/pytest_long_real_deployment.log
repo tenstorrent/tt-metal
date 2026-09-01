@@ -1,0 +1,505 @@
+2026-09-01 11:45:31.566 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/stisi/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/stisi/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, anyio-4.14.2, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 2 items
+
+models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py::test_full_context_202k[moe] 2026-09-01 11:45:35.184 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-01 11:45:35.184 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-01 11:45:35.184 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-01 11:45:35.184 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-01 11:45:35.197 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-01 11:45:35.197 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-01 11:45:35.231 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-01 11:45:35.231 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-09-01 11:45:35.231 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-09-01 11:45:35.231 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-01 11:45:35.232 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-01 11:45:35.526 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-01 11:45:35.628 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-01 11:45:35.628 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-01 11:45:35.628 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-01 11:45:35.628 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-01 11:45:35.628 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-01 11:45:35.669 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+  chunk 1/99 t=0s (+0.0s)
+  chunk 11/99 t=0s (+0.0s)
+  chunk 21/99 t=1s (+0.2s)
+  chunk 31/99 t=3s (+0.2s)
+  chunk 41/99 t=5s (+0.3s)
+  chunk 51/99 t=9s (+0.4s)
+  chunk 61/99 t=13s (+0.5s)
+  chunk 71/99 t=19s (+0.6s)
+  chunk 81/99 t=24s (+0.6s)
+  chunk 91/99 t=31s (+0.7s)
+  chunk 99/99 t=37s (+0.8s)
+[transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+[moe] full-context prefill S=202751: 51s (3939 tok/s)
+[moe] latent cache PCC vs linear reference: 0.999937
+[moe] window start rows 0..31: agg=0.993462 rows>=bar=28/32 explained=4 unexplained=0
+[moe] window middle rows 101376..101407: agg=0.991656 rows>=bar=25/32 explained=6 unexplained=1
+[moe] window end rows 202719..202750: agg=0.988220 rows>=bar=24/32 explained=6 unexplained=2
+[moe] decode at pos 202751 (full 202k cache): PCC=0.997138 tie=False
+wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/optimized_decoder/long_context_moe_real_expertbf4_cachebf8.json
+FAILED
+models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py::test_full_context_202k[dense] 2026-09-01 11:46:43.713 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+  chunk 1/99 t=0s (+0.0s)
+  chunk 11/99 t=0s (+0.0s)
+  chunk 21/99 t=0s (+0.0s)
+  chunk 31/99 t=0s (+0.0s)
+  chunk 41/99 t=0s (+0.0s)
+  chunk 51/99 t=1s (+0.1s)
+  chunk 61/99 t=2s (+0.2s)
+  chunk 71/99 t=5s (+0.3s)
+  chunk 81/99 t=8s (+0.3s)
+  chunk 91/99 t=11s (+0.4s)
+  chunk 99/99 t=15s (+0.5s)
+[dense] full-context prefill S=202751: 40s (5085 tok/s)
+[dense] latent cache PCC vs linear reference: 0.999942
+[dense] window start rows 0..31: agg=0.999843 rows>=bar=32/32 explained=0 unexplained=0
+[dense] window middle rows 101376..101407: agg=0.997675 rows>=bar=32/32 explained=0 unexplained=0
+[dense] window end rows 202719..202750: agg=0.994197 rows>=bar=30/32 explained=0 unexplained=2
+[dense] decode at pos 202751 (full 202k cache): PCC=0.999927 tie=False
+wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/optimized_decoder/long_context_dense_real_expertbf4_cachebf8.json
+FAILED
+
+=================================== FAILURES ===================================
+_________________________ test_full_context_202k[moe] __________________________
+
+cfg = Glm4MoeLiteConfig {
+  "architectures": [
+    "Glm4MoeLiteForCausalLM"
+  ],
+  "attention_bias": false,
+  "attention_dro...d": "noaux_tc",
+  "transformers_version": "5.12.1",
+  "use_cache": true,
+  "v_head_dim": 256,
+  "vocab_size": 154880
+}
+
+kind = 'moe'
+
+    @pytest.mark.parametrize("kind", ["moe", "dense"])
+    def test_full_context_202k(cfg, kind):
+        """Full-context capability proof for one layer kind.
+
+        dense is the numerics control: no routing discreteness, so every window row
+        must meet the bar directly - this isolates the MLA/flash/rope path at full
+        length. moe additionally exhibits discrete top-4 routing flips when the
+        (synthetic, diffuse) attention output at ~1e5 keys perturbs router scores
+        by more than a bf16 ulp; every below-bar moe row must therefore be exactly
+        reproduced by an alternate top-4 subset of the reference top-6 experts
+        (utils.explain_row_as_routing_flip) - proving the row is a routing flip,
+        not an attention/cache numerics bug.
+        """
+        S = FULL_CONTEXT - 1  # 202751: longest valid non-aligned prefill; the last
+        # position (202751) is exercised through the decode path below.
+        layer_idx = utils.LAYER_KINDS[kind]
+        sd = _layer_sd(cfg, layer_idx)
+        layer = utils.build_hf_layer(cfg, layer_idx, sd)
+        x = utils.synth_activations(cfg, layer_idx, FULL_CONTEXT, seed=7)
+        evidence = {"kind": kind, "advertised_context": FULL_CONTEXT, "prefill_seq_len": S}
+        failures = []
+
+        device = ttnn.open_device(device_id=0, l1_small_size=32768, trace_region_size=0)
+        try:
+            paged = PagedCacheConfig.for_context(FULL_CONTEXT, 1)
+            dec = DecoderCls.from_state_dict(
+                sd,
+                hf_config=cfg,
+                layer_idx=layer_idx,
+                mesh_device=device,
+                max_batch_size=1,
+                max_context=FULL_CONTEXT,
+                paged_config=paged,
+                prefill_chunk_size=2048,
+                **_decoder_kwargs(),
+            )
+            cache = dec.allocate_kv_cache(dtype=_cache_dtype())
+            pt_torch = utils.make_page_table(1, paged.max_num_blocks, seed=3)
+            pt = ttnn.from_torch(pt_torch, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            x_tt = ttnn.from_torch(x[:, :S].unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+            t_start = time.perf_counter()
+            last = [t_start]
+
+            def progress(i, n):
+                now = time.perf_counter()
+                if i % 10 == 0 or i == n - 1:
+                    print(f"  chunk {i + 1}/{n} t={now - t_start:.0f}s (+{now - last[0]:.1f}s)", flush=True)
+                last[0] = now
+
+            out = dec.prefill_forward(x_tt, kv_cache=cache, page_table=pt, user_id=0, seq_len=S, progress_cb=progress)
+            ttnn.synchronize_device(device)
+            wall = time.perf_counter() - t_start
+            evidence["prefill_wall_s"] = round(wall, 1)
+            evidence["prefill_tokens_per_s"] = round(S / wall, 1)
+            print(f"[{kind}] full-context prefill S={S}: {wall:.0f}s ({S / wall:.0f} tok/s)")
+            got = ttnn.to_torch(out).float()[0, 0]
+            ttnn.deallocate(out)
+            ttnn.deallocate(x_tt)
+
+            # 1. latent cache vs exact linear reference
+            kvpe_ref = utils.torch_latent_cache_reference(cfg, sd, x[0])
+            cache_torch = ttnn.to_torch(cache).float()
+            cache_rows = utils.gather_user_cache(cache_torch, pt_torch, 0, S, paged.block_size)
+            del cache_torch
+            p_cache = utils.pcc(kvpe_ref[:S], cache_rows)
+            evidence["cache_pcc_vs_linear_ref"] = p_cache
+            print(f"[{kind}] latent cache PCC vs linear reference: {p_cache:.6f}")
+            if p_cache < 0.999:
+                failures.append(f"cache PCC {p_cache:.6f} < 0.999")
+            del cache_rows
+
+            # 2. full-layer window analysis (start / middle / end-of-sequence rows)
+            windows = {"start": 0, "middle": 101376, "end": S - 32}
+            evidence["windows"] = {}
+            for name, r0 in windows.items():
+                rows = list(range(r0, r0 + 32))
+                ref_rows, tie, res_rows, h2_rows = utils.torch_absorbed_window_reference(
+                    cfg, sd, layer, x[0], kvpe_ref, rows, return_parts=True
+                )
+                row_pcc = [utils.pcc(ref_rows[i], got[rows[i]]) for i in range(32)]
+                below = [i for i in range(32) if row_pcc[i] < PCC_BAR]
+                explained, unexplained = [], []
+                for i in below:
+                    # Every below-bar moe row must be exactly reproduced by an
+                    # alternate top-4 expert subset (tie status is an annotation,
+                    # not a bypass: a tie flip IS a 4th<->5th routing flip and must
+                    # pass the same reconstruction proof).
+                    if kind == "moe":
+                        p_alt, subset = utils.explain_row_as_routing_flip(
+                            cfg, sd, h2_rows[i], res_rows[i], got[rows[i]], PCC_BAR
+                        )
+                        if subset is not None:
+                            explained.append(
+                                {
+                                    "row": rows[i],
+                                    "pcc": row_pcc[i],
+                                    "why": "routing flip" + (" (sub-ulp tie)" if tie[i] else ""),
+                                    "alt_expert_set_pcc": p_alt,
+                                }
+                            )
+                            continue
+                        unexplained.append({"row": rows[i], "pcc": row_pcc[i], "best_alt_pcc": p_alt, "tie": bool(tie[i])})
+                    else:
+                        unexplained.append({"row": rows[i], "pcc": row_pcc[i]})
+                ok_rows = [p for i, p in enumerate(row_pcc) if i not in below]
+                evidence["windows"][name] = {
+                    "rows": [r0, r0 + 31],
+                    "pcc_all_rows": utils.pcc(ref_rows, got[rows]),
+                    "pcc_min_ok_row": min(ok_rows) if ok_rows else None,
+                    "rows_at_bar": 32 - len(below),
+                    "explained": explained,
+                    "unexplained": unexplained,
+                }
+                print(
+                    f"[{kind}] window {name} rows {r0}..{r0+31}: agg={evidence['windows'][name]['pcc_all_rows']:.6f} "
+                    f"rows>=bar={32-len(below)}/32 explained={len(explained)} unexplained={len(unexplained)}"
+                )
+                if unexplained:
+                    failures.append(f"window {name}: unexplained rows {unexplained}")
+                if 32 - len(below) < 26:
+                    failures.append(f"window {name}: only {32 - len(below)}/32 rows at bar")
+            del got
+
+            # 3. decode at the maximum position, attending the full cache
+            pos = S  # 202751
+            xd = ttnn.from_torch(
+                x[:, pos : pos + 1].unsqueeze(0).permute(0, 2, 1, 3),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            cur = ttnn.from_torch(torch.tensor([pos], dtype=torch.int32), device=device)
+            rot = ttnn.from_torch(torch.tensor([[pos]], dtype=torch.uint32), device=device)
+            t0 = time.perf_counter()
+            outd = dec.decode_forward(xd, kv_cache=cache, page_table=pt, cur_pos_tensor=cur, rot_idxs=rot)
+            ttnn.synchronize_device(device)
+            t_decode = time.perf_counter() - t0
+            got_d = ttnn.to_torch(outd).float()[0, 0, 0]
+            ref_d, tie_d, res_d, h2_d = utils.torch_absorbed_window_reference(
+                cfg, sd, layer, x[0], kvpe_ref, [pos], return_parts=True
+            )
+            p_dec = utils.pcc(ref_d[0], got_d)
+            dec_entry = {
+                "position": pos,
+                "pcc": p_dec,
+                "router_tie": bool(tie_d[0]),
+                "first_call_wall_s": round(t_decode, 3),
+            }
+            if p_dec < PCC_BAR:
+                # Same rule as the window analysis: tie status is an annotation,
+                # not a bypass; a below-bar moe decode row must pass the
+                # alternate-top-4 reconstruction proof.
+                if kind == "moe":
+                    p_alt, subset = utils.explain_row_as_routing_flip(cfg, sd, h2_d[0], res_d[0], got_d, PCC_BAR)
+                    dec_entry["routing_flip_explained"] = subset is not None
+                    dec_entry["alt_expert_set_pcc"] = p_alt
+                    if subset is None:
+                        failures.append(f"decode at {pos}: PCC {p_dec:.6f}, no explanation")
+                else:
+                    failures.append(f"decode at {pos}: PCC {p_dec:.6f}")
+            evidence["decode_max_position"] = dec_entry
+            print(f"[{kind}] decode at pos {pos} (full 202k cache): PCC={p_dec:.6f} tie={bool(tie_d[0])}")
+        finally:
+            ttnn.close_device(device)
+
+        evidence["arm"] = _arm_metadata()
+        DOC_DIR.mkdir(parents=True, exist_ok=True)
+        out_name = f"long_context_{kind}{_arm_suffix()}.json"
+        (DOC_DIR / out_name).write_text(json.dumps(evidence, indent=1))
+        print(f"wrote {DOC_DIR / out_name}")
+>       assert not failures, failures
+E       AssertionError: ["window middle: unexplained rows [{'row': 101393, 'pcc': 0.9714153695106862, 'best_alt_pcc': 0.9757859727024, 'tie': False}]", 'window middle: only 25/32 rows at bar', "window end: unexplained rows [{'row': 202734, 'pcc': 0.9655343191256592, 'best_alt_pcc': 0.9686340971734989, 'tie': False}, {'row': 202745, 'pcc': 0.941197290590894, 'best_alt_pcc': 0.9691694337532097, 'tie': True}]", 'window end: only 24/32 rows at bar']
+E       assert not ["window middle: unexplained rows [{'row': 101393, 'pcc': 0.9714153695106862, 'best_alt_pcc': 0.9757859727024, 'tie': False}]", 'window middle: only 25/32 rows at bar', "window end: unexplained rows [{'row': 202734, 'pcc': 0.9655343191256592, 'best_alt_pcc': 0.9686340971734989, 'tie': False}, {'row': 202745, 'pcc': 0.941197290590894, 'best_alt_pcc': 0.9691694337532097, 'tie': True}]", 'window end: only 24/32 rows at bar']
+
+models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py:384: AssertionError
+________________________ test_full_context_202k[dense] _________________________
+
+cfg = Glm4MoeLiteConfig {
+  "architectures": [
+    "Glm4MoeLiteForCausalLM"
+  ],
+  "attention_bias": false,
+  "attention_dro...d": "noaux_tc",
+  "transformers_version": "5.12.1",
+  "use_cache": true,
+  "v_head_dim": 256,
+  "vocab_size": 154880
+}
+
+kind = 'dense'
+
+    @pytest.mark.parametrize("kind", ["moe", "dense"])
+    def test_full_context_202k(cfg, kind):
+        """Full-context capability proof for one layer kind.
+
+        dense is the numerics control: no routing discreteness, so every window row
+        must meet the bar directly - this isolates the MLA/flash/rope path at full
+        length. moe additionally exhibits discrete top-4 routing flips when the
+        (synthetic, diffuse) attention output at ~1e5 keys perturbs router scores
+        by more than a bf16 ulp; every below-bar moe row must therefore be exactly
+        reproduced by an alternate top-4 subset of the reference top-6 experts
+        (utils.explain_row_as_routing_flip) - proving the row is a routing flip,
+        not an attention/cache numerics bug.
+        """
+        S = FULL_CONTEXT - 1  # 202751: longest valid non-aligned prefill; the last
+        # position (202751) is exercised through the decode path below.
+        layer_idx = utils.LAYER_KINDS[kind]
+        sd = _layer_sd(cfg, layer_idx)
+        layer = utils.build_hf_layer(cfg, layer_idx, sd)
+        x = utils.synth_activations(cfg, layer_idx, FULL_CONTEXT, seed=7)
+        evidence = {"kind": kind, "advertised_context": FULL_CONTEXT, "prefill_seq_len": S}
+        failures = []
+
+        device = ttnn.open_device(device_id=0, l1_small_size=32768, trace_region_size=0)
+        try:
+            paged = PagedCacheConfig.for_context(FULL_CONTEXT, 1)
+            dec = DecoderCls.from_state_dict(
+                sd,
+                hf_config=cfg,
+                layer_idx=layer_idx,
+                mesh_device=device,
+                max_batch_size=1,
+                max_context=FULL_CONTEXT,
+                paged_config=paged,
+                prefill_chunk_size=2048,
+                **_decoder_kwargs(),
+            )
+            cache = dec.allocate_kv_cache(dtype=_cache_dtype())
+            pt_torch = utils.make_page_table(1, paged.max_num_blocks, seed=3)
+            pt = ttnn.from_torch(pt_torch, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            x_tt = ttnn.from_torch(x[:, :S].unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+            t_start = time.perf_counter()
+            last = [t_start]
+
+            def progress(i, n):
+                now = time.perf_counter()
+                if i % 10 == 0 or i == n - 1:
+                    print(f"  chunk {i + 1}/{n} t={now - t_start:.0f}s (+{now - last[0]:.1f}s)", flush=True)
+                last[0] = now
+
+            out = dec.prefill_forward(x_tt, kv_cache=cache, page_table=pt, user_id=0, seq_len=S, progress_cb=progress)
+            ttnn.synchronize_device(device)
+            wall = time.perf_counter() - t_start
+            evidence["prefill_wall_s"] = round(wall, 1)
+            evidence["prefill_tokens_per_s"] = round(S / wall, 1)
+            print(f"[{kind}] full-context prefill S={S}: {wall:.0f}s ({S / wall:.0f} tok/s)")
+            got = ttnn.to_torch(out).float()[0, 0]
+            ttnn.deallocate(out)
+            ttnn.deallocate(x_tt)
+
+            # 1. latent cache vs exact linear reference
+            kvpe_ref = utils.torch_latent_cache_reference(cfg, sd, x[0])
+            cache_torch = ttnn.to_torch(cache).float()
+            cache_rows = utils.gather_user_cache(cache_torch, pt_torch, 0, S, paged.block_size)
+            del cache_torch
+            p_cache = utils.pcc(kvpe_ref[:S], cache_rows)
+            evidence["cache_pcc_vs_linear_ref"] = p_cache
+            print(f"[{kind}] latent cache PCC vs linear reference: {p_cache:.6f}")
+            if p_cache < 0.999:
+                failures.append(f"cache PCC {p_cache:.6f} < 0.999")
+            del cache_rows
+
+            # 2. full-layer window analysis (start / middle / end-of-sequence rows)
+            windows = {"start": 0, "middle": 101376, "end": S - 32}
+            evidence["windows"] = {}
+            for name, r0 in windows.items():
+                rows = list(range(r0, r0 + 32))
+                ref_rows, tie, res_rows, h2_rows = utils.torch_absorbed_window_reference(
+                    cfg, sd, layer, x[0], kvpe_ref, rows, return_parts=True
+                )
+                row_pcc = [utils.pcc(ref_rows[i], got[rows[i]]) for i in range(32)]
+                below = [i for i in range(32) if row_pcc[i] < PCC_BAR]
+                explained, unexplained = [], []
+                for i in below:
+                    # Every below-bar moe row must be exactly reproduced by an
+                    # alternate top-4 expert subset (tie status is an annotation,
+                    # not a bypass: a tie flip IS a 4th<->5th routing flip and must
+                    # pass the same reconstruction proof).
+                    if kind == "moe":
+                        p_alt, subset = utils.explain_row_as_routing_flip(
+                            cfg, sd, h2_rows[i], res_rows[i], got[rows[i]], PCC_BAR
+                        )
+                        if subset is not None:
+                            explained.append(
+                                {
+                                    "row": rows[i],
+                                    "pcc": row_pcc[i],
+                                    "why": "routing flip" + (" (sub-ulp tie)" if tie[i] else ""),
+                                    "alt_expert_set_pcc": p_alt,
+                                }
+                            )
+                            continue
+                        unexplained.append({"row": rows[i], "pcc": row_pcc[i], "best_alt_pcc": p_alt, "tie": bool(tie[i])})
+                    else:
+                        unexplained.append({"row": rows[i], "pcc": row_pcc[i]})
+                ok_rows = [p for i, p in enumerate(row_pcc) if i not in below]
+                evidence["windows"][name] = {
+                    "rows": [r0, r0 + 31],
+                    "pcc_all_rows": utils.pcc(ref_rows, got[rows]),
+                    "pcc_min_ok_row": min(ok_rows) if ok_rows else None,
+                    "rows_at_bar": 32 - len(below),
+                    "explained": explained,
+                    "unexplained": unexplained,
+                }
+                print(
+                    f"[{kind}] window {name} rows {r0}..{r0+31}: agg={evidence['windows'][name]['pcc_all_rows']:.6f} "
+                    f"rows>=bar={32-len(below)}/32 explained={len(explained)} unexplained={len(unexplained)}"
+                )
+                if unexplained:
+                    failures.append(f"window {name}: unexplained rows {unexplained}")
+                if 32 - len(below) < 26:
+                    failures.append(f"window {name}: only {32 - len(below)}/32 rows at bar")
+            del got
+
+            # 3. decode at the maximum position, attending the full cache
+            pos = S  # 202751
+            xd = ttnn.from_torch(
+                x[:, pos : pos + 1].unsqueeze(0).permute(0, 2, 1, 3),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            cur = ttnn.from_torch(torch.tensor([pos], dtype=torch.int32), device=device)
+            rot = ttnn.from_torch(torch.tensor([[pos]], dtype=torch.uint32), device=device)
+            t0 = time.perf_counter()
+            outd = dec.decode_forward(xd, kv_cache=cache, page_table=pt, cur_pos_tensor=cur, rot_idxs=rot)
+            ttnn.synchronize_device(device)
+            t_decode = time.perf_counter() - t0
+            got_d = ttnn.to_torch(outd).float()[0, 0, 0]
+            ref_d, tie_d, res_d, h2_d = utils.torch_absorbed_window_reference(
+                cfg, sd, layer, x[0], kvpe_ref, [pos], return_parts=True
+            )
+            p_dec = utils.pcc(ref_d[0], got_d)
+            dec_entry = {
+                "position": pos,
+                "pcc": p_dec,
+                "router_tie": bool(tie_d[0]),
+                "first_call_wall_s": round(t_decode, 3),
+            }
+            if p_dec < PCC_BAR:
+                # Same rule as the window analysis: tie status is an annotation,
+                # not a bypass; a below-bar moe decode row must pass the
+                # alternate-top-4 reconstruction proof.
+                if kind == "moe":
+                    p_alt, subset = utils.explain_row_as_routing_flip(cfg, sd, h2_d[0], res_d[0], got_d, PCC_BAR)
+                    dec_entry["routing_flip_explained"] = subset is not None
+                    dec_entry["alt_expert_set_pcc"] = p_alt
+                    if subset is None:
+                        failures.append(f"decode at {pos}: PCC {p_dec:.6f}, no explanation")
+                else:
+                    failures.append(f"decode at {pos}: PCC {p_dec:.6f}")
+            evidence["decode_max_position"] = dec_entry
+            print(f"[{kind}] decode at pos {pos} (full 202k cache): PCC={p_dec:.6f} tie={bool(tie_d[0])}")
+        finally:
+            ttnn.close_device(device)
+
+        evidence["arm"] = _arm_metadata()
+        DOC_DIR.mkdir(parents=True, exist_ok=True)
+        out_name = f"long_context_{kind}{_arm_suffix()}.json"
+        (DOC_DIR / out_name).write_text(json.dumps(evidence, indent=1))
+        print(f"wrote {DOC_DIR / out_name}")
+>       assert not failures, failures
+E       AssertionError: ["window end: unexplained rows [{'row': 202719, 'pcc': 0.9872557821806804}, {'row': 202747, 'pcc': 0.9853380069284868}]"]
+E       assert not ["window end: unexplained rows [{'row': 202719, 'pcc': 0.9872557821806804}, {'row': 202747, 'pcc': 0.9853380069284868}]"]
+
+models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py:384: AssertionError
+- generated xml file: /home/stisi/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+68.89s call     models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py::test_full_context_202k[moe]
+50.82s call     models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py::test_full_context_202k[dense]
+0.79s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py::test_full_context_202k[moe]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py::test_full_context_202k[dense]
+
+(2 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+FAILED models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py::test_full_context_202k[moe]
+FAILED models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py::test_full_context_202k[dense]
+======================== 2 failed in 120.75s (0:02:00) =========================
+nanobind: leaked 2 instances!
+ - leaked instance 0x78c47b5dab08 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x78c47b0138e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 253 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "compute_output_specs"
+ - leaked function "sfpu_nan"
+ - leaked function ""
+ - leaked function "update_tensor_topology"
+ - leaked function "__ne__"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-09-01 11:47:35.038 | info     |    BuildKernels | JIT cache stats: 1079/1079 hits (100.0%) [1079 cached, 2232 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-01 11:47:35.038 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-01 11:47:35.057 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-01 11:47:35.057 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-01 11:47:35.522 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-01 11:47:35.522 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-01 11:47:35.522 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

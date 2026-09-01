@@ -1,0 +1,43 @@
+{
+ "workload": {
+  "profile": "single_moe_decoder_layer_traced_decode",
+  "prompt_len": 1023,
+  "gen_len": 32,
+  "batch": 1,
+  "note": "one GLM-4.7-Flash MoE decoder layer (layer kind covering 46/47 layers), deployment dtypes: bf4 attention + bf4 shared expert + bf4 routed experts, bf8 dense MLP + prefill flat copies, bf8 latent cache, LoFi decode"
+ },
+ "ttft_ms": null,
+ "decode_ms_per_token_e2e": 0.491,
+ "decode_ms_per_token_device": 0.3337,
+ "roofline_ms_per_token_estimate": 0.0784,
+ "dense_layer_decode_ms_per_token_e2e": 0.447,
+ "prefill_s2048_ms": {
+  "moe": 125.5,
+  "dense": 10.3
+ },
+ "baseline_fused": {
+  "decode_ms_per_token_e2e": {
+   "moe": 1.034,
+   "dense": 0.969
+  },
+  "prefill_s2048_ms": {
+   "moe": 210.0,
+   "dense": 15.2
+  }
+ },
+ "roofline_bytes_per_step_mb": {
+  "attention_weights_bf4": 12.5,
+  "shared_expert_bf4": 5.3,
+  "routed_top4_experts_bf4": 21.2,
+  "router_fp32": 0.5,
+  "latent_cache_read_ctx1024_bf8": 0.6,
+  "total": 40.2
+ },
+ "named_limitations": [
+  "per-op traced-replay dispatch cost (~2.3 us/op over ~68 ops) dominates the e2e-vs-device gap; every further packing/fusion candidate was measured or has a recorded blocker (the +6.7 ops vs fused are measured winning-candidate glue)",
+  "M=1-tile decode matmuls are launch/latency-bound on Blackhole: dominant DRAM-sharded rows run at 33-61% DRAM utilization despite swept in0_block_w/geometry",
+  "sparse_matmul pays an op-internal full-output zero-fill (~18 us/step, FillPadDeviceOperation), known since the fused stage",
+  "sparse_matmul out_subblock_w>1 corrupts multi-group outputs in non-indexed mode (repro in work_log.md), blocking a faster union/prefill subblock shape",
+  "ttnn.topk k=4 runs internally as k=32 plus slices; routing-weight pick chain has a ~15 us single-core latency floor (gather was 37 us; replaced by an 18 us embedding-table chain)"
+ ]
+}

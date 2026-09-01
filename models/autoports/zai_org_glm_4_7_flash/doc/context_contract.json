@@ -115,5 +115,92 @@
   "stage": "functional-decoder",
   "evidence": "doc/functional_decoder/README.md, doc/functional_decoder/long_context_moe.json, doc/functional_decoder/long_context_dense.json",
   "date": "2026-08-31"
+ },
+ "optimized_decoder": {
+  "supported_context": 202752,
+  "max_valid_position": 202751,
+  "tested_prefill_context": 202751,
+  "tested_decode_position": 202751,
+  "tested_non_aligned_lengths": [
+   17,
+   65,
+   509,
+   1057,
+   3000,
+   202751
+  ],
+  "capability_reduction": "none",
+  "kv_cache_contract": "identical geometry/ops/indexing to fused_decoder; dtype is now a tested parameter: bfloat16 (comparability arm, same bars as fused) and bfloat8_b (deployment arm; prefill fill tensors typecast to the cache dtype before paged_fill_cache, decode paged_update_cache keeps bf16 inputs; real-weight 202k evidence equal to bf16 within 0.0004 window-agg PCC and equal to the fused real-weight control)",
+  "weight_dtype_policy": {
+   "attention_decode_dram_sharded_copies_and_absorbed_kv_b": "bfloat4_b",
+   "attention_prefill_flat_copies": "bfloat8_b",
+   "shared_expert": "bfloat4_b",
+   "dense_mlp": "bfloat8_b (bf4 measured and rejected: real-weight 202k dense control regression for a ~0.006 ms/tok model-level win)",
+   "routed_experts": "bfloat4_b",
+   "router_gate": "float32",
+   "norms_activations": "bfloat16"
+  },
+  "weight_footprint_delta": "decode DRAM-sharded copies add ~0.55 GiB over 47 layers at the final dtypes (bf4 attention copies ~9.9 MB + bf4 shared_down ~1.8 MB per moe layer; the dense layer adds its bf8 down copy) on top of the fused stage's wq_b_heads prefill copy; full-model projection at the final policy ~17.5 GiB weights (copies included) + 5.8 GiB bf8 latent cache (or 10.9 GiB bf16) - fits 32 GiB at batch 1 with margin",
+  "long_context_evidence": {
+   "comparability_arm_synth_bf8attn_bf8exp_bf16cache": {
+    "moe": {
+     "prefill_wall_s": 86.3,
+     "cache_pcc": 0.999936,
+     "window_agg_pcc": {
+      "start": 0.998887,
+      "middle": 0.999725,
+      "end": 0.994927
+     },
+     "rows_at_bar": "30/32, 32/32, 28/32 + 4 explained flips, 0 unexplained",
+     "decode_at_202751_pcc": 0.9999
+    },
+    "dense_control": {
+     "prefill_wall_s": 71.1,
+     "cache_pcc": 0.999959,
+     "window_agg_pcc": {
+      "start": 0.999968,
+      "middle": 0.999933,
+      "end": 0.999701
+     },
+     "all_rows_at_bar": true,
+     "decode_at_202751_pcc": 0.999951
+    },
+    "evidence": "long_context_{moe,dense}_attnbf8_mlpbf8.json, long_context_aligned_202752_attnbf8_mlpbf8.json"
+   },
+   "deployment_arm_real_weights_bf4attn_bf4sharedexp_bf4exp_bf8cache_bar_0.99": {
+    "moe": {
+     "prefill_wall_s": 51.4,
+     "window_agg": {
+      "start": 0.993462,
+      "middle": 0.991656,
+      "end": 0.98822
+     },
+     "rows_at_bar": "28/32, 25/32, 24/32 (vs fused control end 23/32)",
+     "decode_at_202751_pcc": 0.997138,
+     "fused_real_control_decode": 0.997777
+    },
+    "dense": {
+     "window_agg": {
+      "start": 0.999843,
+      "middle": 0.997675,
+      "end": 0.994197
+     },
+     "rows_at_bar_end": "30/32 (vs fused control 29/32)",
+     "decode_at_202751_pcc": 0.999927,
+     "fused_real_control_decode": 0.999992
+    },
+    "evidence": "long_context_{moe,dense}_real_expertbf4_cachebf8.json (+ bit-identical rerun log); every JSON carries an arm provenance block"
+   }
+  },
+  "notes": [
+   "The optimized decoder is equal-or-better than the fused real-weight control on every 202k window row; sub-0.99 end-window rows at full context are a property of the real checkpoint (present in the fused baseline) and of flip-reconstruction under bf4-expert noise, not an optimization regression.",
+   "decode_forward returns the residual width-sharded in L1 (layer-stacking contract); interleaved inputs are resharded automatically.",
+   "Synthetic-weight suites run the bf8-attention/bf8-MLP/bf16-cache comparability arm at the 0.995 bar; gaussian weights lose ~2x more than the checkpoint to bf4 block quantization (OPT-012)."
+  ],
+  "provenance": {
+   "stage": "optimized-decoder",
+   "evidence": "doc/optimized_decoder/README.md, doc/optimized_decoder/long_context_*.json, doc/optimized_decoder/perf_summary.json",
+   "date": "2026-09-01"
+  }
  }
 }

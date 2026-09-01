@@ -1,0 +1,194 @@
+2026-09-01 11:44:12.768 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/stisi/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/stisi/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, anyio-4.14.2, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 26 items / 3 deselected / 23 selected
+
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_optimized_path_constructed 2026-09-01 11:44:13.470 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-01 11:44:13.470 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-01 11:44:13.470 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-01 11:44:13.470 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-01 11:44:13.483 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-01 11:44:13.484 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-01 11:44:13.544 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-01 11:44:13.544 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-09-01 11:44:13.544 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-09-01 11:44:13.544 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-01 11:44:13.545 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-01 11:44:13.818 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-01 11:44:13.919 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-01 11:44:13.919 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-01 11:44:13.919 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-01 11:44:13.919 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-01 11:44:13.919 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-01 11:44:13.960 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+optimized-path construction audit OK
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-17] [transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+[moe] optimized prefill S=17 PCC=0.999904
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-64] [moe] optimized prefill S=64 PCC=0.999330
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-65] [moe] optimized prefill S=65 PCC=0.999338
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-512] [moe] optimized prefill S=512 PCC=0.999475
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-1024] [moe] optimized prefill S=1024 PCC=0.999427
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-1057] [moe] optimized prefill S=1057 PCC=0.999444
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-3000] [moe] optimized prefill S=3000 PCC=0.999427
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[dense-17] [dense] optimized prefill S=17 PCC=0.999959
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[dense-512] [dense] optimized prefill S=512 PCC=0.999985
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[dense-3000] [dense] optimized prefill S=3000 PCC=0.999987
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_pcc[moe] [moe] decode steps: 509:0.96812, 510:0.99987, 511:0.99990, 512:0.99990, 513:0.99990, 514:0.99989, 515:0.99989, 516:0.99990 | agg=0.99584
+  pos 509 PCC 0.96812 exempted: sub-ulp router tie (gap=1.08e-03)
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_pcc[dense] [dense] decode steps: 509:0.99995, 510:0.99995, 511:0.99995, 512:0.99995, 513:0.99995, 514:0.99995, 515:0.99995, 516:0.99995 | agg=0.99995
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_cache_content optimized cache PCC=0.999961
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_bf8_cache_prefill_decode [moe] optimized bf8-cache prefill S=509 PCC=0.999235
+[moe] bf8 cache content PCC=0.999938
+[moe] decode steps: 509:0.99989, 510:0.99987, 511:0.99990, 512:0.99990 | agg=0.99989
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_batch_mixed_positions user 0 pos 33 PCC=0.99984
+user 1 pos 64 PCC=0.99985
+user 2 pos 96 PCC=0.99989
+user 3 pos 130 PCC=0.99987
+user 4 pos 200 PCC=0.99988
+user 5 pos 257 PCC=0.99990
+user 6 pos 300 PCC=0.99990
+user 7 pos 380 PCC=0.99988
+user 0 pos 34 PCC=0.99985
+user 1 pos 65 PCC=0.99985
+user 2 pos 97 PCC=0.99987
+user 3 pos 131 PCC=0.99987
+user 4 pos 201 PCC=0.99989
+user 5 pos 258 PCC=0.99988
+user 6 pos 301 PCC=0.99989
+user 7 pos 381 PCC=0.99990
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_batch32 optimized batch32 decode: 31 users >= 0.995, 1 tie-exempt
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_traced_and_deterministic optimized traced replay pos=129 PCC=0.999901
+optimized traced replay pos=130 PCC=0.999880
+optimized traced replay pos=131 PCC=0.999899
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_traced_stress optimized traced stress: 96 replays OK (3 tie-exempt)
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_traced_dense optimized dense traced replay pos=129 PCC=0.999948
+optimized dense traced replay pos=130 PCC=0.999948
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_batch8_bf8_cache bf8-cache user 0 pos 33 PCC=0.99984
+bf8-cache user 1 pos 64 PCC=0.99985
+bf8-cache user 2 pos 96 PCC=0.99988
+bf8-cache user 3 pos 130 PCC=0.99987
+bf8-cache user 4 pos 200 PCC=0.99988
+bf8-cache user 5 pos 257 PCC=0.99990
+bf8-cache user 6 pos 300 PCC=0.99990
+bf8-cache user 7 pos 380 PCC=0.99988
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_deterministic PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_runtime_no_host_fallback PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/stisi/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+9.32s call     models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_batch32
+7.93s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_optimized_path_constructed
+7.33s call     models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_batch_mixed_positions
+7.26s call     models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_batch8_bf8_cache
+5.88s call     models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_bf8_cache_prefill_decode
+1.42s call     models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-3000]
+1.26s call     models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[dense-3000]
+0.48s call     models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_pcc[moe]
+0.42s call     models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-1057]
+0.42s call     models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-1024]
+0.30s call     models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_traced_stress
+0.24s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_batch_mixed_positions
+0.24s call     models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-512]
+0.24s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_batch32
+0.23s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_traced_and_deterministic
+0.23s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_deterministic
+0.23s call     models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_traced_and_deterministic
+0.21s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_traced_dense
+0.21s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-65]
+0.21s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-3000]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[dense-512]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[dense-3000]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-64]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_batch8_bf8_cache
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_pcc[dense]
+=========================== short test summary info ============================
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_optimized_path_constructed
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-17]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-64]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-65]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-512]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-1024]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-1057]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[moe-3000]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[dense-17]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[dense-512]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_pcc[dense-3000]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_pcc[moe]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_pcc[dense]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_cache_content
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_bf8_cache_prefill_decode
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_batch_mixed_positions
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_batch32
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_traced_and_deterministic
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_traced_stress
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_traced_dense
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_decode_batch8_bf8_cache
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_prefill_deterministic
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py::test_runtime_no_host_fallback
+====================== 23 passed, 3 deselected in 47.99s =======================
+nanobind: leaked 2 instances!
+ - leaked instance 0x73e868ea2988 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x73e868adb908 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 253 functions!
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function "update_tensor_topology"
+ - leaked function "contains"
+ - leaked function "__ne__"
+ - leaked function "set_program_cache_misses_allowed"
+ - leaked function "from_json"
+ - leaked function "extract_shard"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-09-01 11:45:03.166 | info     |    BuildKernels | JIT cache stats: 1582/1582 hits (100.0%) [1582 cached, 1577 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-01 11:45:03.166 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-01 11:45:03.204 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-01 11:45:03.204 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-01 11:45:03.708 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-01 11:45:03.709 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-01 11:45:03.709 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)
