@@ -101,8 +101,9 @@ def test_tp4_pipeline_handoff_replicates_all_ranks(mesh_device, reset_seeds) -> 
     for step in range(64):
         reference = torch.full((1, 1, 4, 4096), float(step), dtype=torch.bfloat16)
         source = _to_tt_replicated(reference, sender)
-        output = ttnn.allocate_tensor_on_device(source.spec, receiver)
-        ttnn.experimental.send_direct_async(source, send_socket)
+        source_rm = ttnn.to_layout(source, ttnn.ROW_MAJOR_LAYOUT)
+        output = ttnn.allocate_tensor_on_device(source_rm.spec, receiver)
+        ttnn.experimental.send_direct_async(source_rm, send_socket)
         ttnn.experimental.recv_direct_async(output, recv_socket)
 
         copies = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(receiver, dim=0))
@@ -115,6 +116,7 @@ def test_tp4_pipeline_handoff_replicates_all_ranks(mesh_device, reset_seeds) -> 
                 msg=lambda msg: f"step {step}, TP rank {rank}: {msg}",
             )
         source.deallocate(True)
+        source_rm.deallocate(True)
         output.deallocate(True)
 
 
@@ -151,6 +153,13 @@ def test_decoder_layer_decode_static_pcc_tp4(mesh_device, reset_seeds, tmp_path,
     cache = _weight_cache(layer_idx)
     weights = _build_layer_weights(loader, layer_idx, layer_type)
     is_hash = cfg.mlp_layer_types[layer_idx] == "hash_moe"
+    use_prefetcher = ttnn.experimental.is_tensor_prefetcher_supported(submesh)
+    prefetch_buffers = None
+    if use_prefetcher:
+        # Same shallower ring as the TP1 decoder-layer PCC: the 256-token cache sits in
+        # L1 beside the weights, and the production 16-page depth leaves SDPA nowhere to
+        # sit. One mapping is passed into attention and MoE so they share the 64-core GCB.
+        prefetch_buffers = make_decode_prefetch_buffers(submesh, ttnn.bfloat4_b, num_prefetch_pages=8)
     gate = None
     if is_hash:
         gate = DeepSeekV4HashRouter(
@@ -161,6 +170,9 @@ def test_decoder_layer_decode_static_pcc_tp4(mesh_device, reset_seeds, tmp_path,
             },
             submesh,
             cache=cache.sub("mlp") if cache else None,
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
+            weight_dtype=ttnn.bfloat4_b,
         )
     experts = DeepSeekV4PreloadedExperts(
         cfg,
@@ -170,13 +182,6 @@ def test_decoder_layer_decode_static_pcc_tp4(mesh_device, reset_seeds, tmp_path,
         cache=cache.sub("mlp") if cache else None,
         tp_size=TP_SIZE,
     )
-    use_prefetcher = ttnn.experimental.is_tensor_prefetcher_supported(submesh)
-    prefetch_buffers = None
-    if use_prefetcher:
-        # Same shallower ring as the TP1 decoder-layer PCC: the 256-token cache sits in
-        # L1 beside the weights, and the production 16-page depth leaves SDPA nowhere to
-        # sit. One mapping is passed into attention and MoE so they share the 64-core GCB.
-        prefetch_buffers = make_decode_prefetch_buffers(submesh, ttnn.bfloat4_b, num_prefetch_pages=8)
     layer = DeepSeekV4DecoderLayer(
         cfg,
         layer_idx,
