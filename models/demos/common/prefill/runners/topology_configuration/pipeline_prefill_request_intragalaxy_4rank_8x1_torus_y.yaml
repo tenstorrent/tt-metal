@@ -1,0 +1,49 @@
+# NOTE: the TT_VISIBLE_DEVICES lists below were read off bh-glx-b03u02 and are PER-GALAXY. Another
+# 32-chip galaxy enumerates differently (verified on bh-glx-110-a04u02) and a wrong map does NOT error --
+# it builds stages that are not columns. Regenerate for your host with
+#   python /data/kmabee/mistral4_pp4_perf/scripts/gen_pp4_binding.py [--profile]
+# TORUS-Y variant of pipeline_prefill_request_intragalaxy_4rank_8x1.yaml (SP axis wraps; see that file
+# and the torus_y mesh-graph descriptor for the why).
+#
+# 4-stage intra-galaxy pipeline prefill at stage shape [8,1] (SP=8 x TP=1): one 8x4 galaxy carved into
+# 4 Z-connected COLUMN sub-meshes; the hidden state hops stage->stage over the Z-link MeshSocket.
+# Request mode — rank 0 serves an external prefill_producer. Model selected by PREFILL_MANIFEST.
+#
+# Why [8,1] and not the [2,4] of pipeline_prefill_request_intragalaxy_4rank.yaml: [8,1] is the stage
+# shape every single-process Mistral Small 4 pipeline measurement uses (test_prefill_pipeline_concurrent
+# `8x1`, and the PP_HANDOFF none/host bracket), so a D2D number measured here is directly comparable
+# to those. [2,4] would also need a weight cache and tuned matmul configs that do not exist for it.
+#
+# TT_VISIBLE_DEVICES: one logical COLUMN of the 8x4 galaxy per rank, in the mesh's own row-major
+# order. A column spans TWO trays (4 chips from each), so these sets are NOT tray ids and cannot be
+# derived from Generate2x4SliceToPCIeDeviceMapping. They were read off a live 8x4 mesh opened with
+# single_bh_galaxy_torus_xy_graph_descriptor via create_submeshes(MeshShape(8,1)) — the identical
+# carving the single-process test uses. Full mesh row-major order for reference:
+#   row0: 0  4  28 24      row4: 11 15 23 19
+#   row1: 1  5  29 25      row5: 10 14 22 18
+#   row2: 2  6  30 26      row6: 9  13 21 17
+#   row3: 3  7  31 27      row7: 8  12 20 16
+
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: "0,1,2,3,11,10,9,8"}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: "4,5,6,7,15,14,13,12"}}
+  - {rank: 2, mesh_id: 2, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: "28,29,30,31,23,22,21,20"}}
+  - {rank: 3, mesh_id: 3, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: "24,25,26,27,19,18,17,16"}}
+
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_4x8x1_z_chain_torus_y_graph_descriptor.textproto
+
+global_env:
+  # Torus on the SP axis, matched by the descriptor's dim_types [RING, LINE]. This makes the stage's
+  # ring-attention collectives Ring, as they are in the single-process 8x1 measurements (whose submeshes
+  # come out of an 8x4 mesh opened FABRIC_2D_TORUS_XY) -- the last remaining difference between the two
+  # setups at a given window. A torus mode still routes the D2D MeshSocket (all FABRIC_2D_TORUS_* are
+  # 2D fabric); the plain-2d sibling binding is the fallback if it does not.
+  PREFILL_FABRIC_MODE: "2d_torus_y"
+  PREFILL_SP: "8"
+  PREFILL_TP: "1"
+  PREFILL_MAX_SEQ_LEN: "10240"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  # Only 12B of metadata transits the queue, so reducing its size has no effect on transfer speed.
+  # Keeping it default (64KB) clashes with the MoE FFN L1 allocation.
+  PREFILL_PP_D2D_FIFO_BYTES: "32768"
+  LOGURU_LEVEL: "INFO"
