@@ -11,6 +11,7 @@ allocator scans for per-core occupied ranges, and outside HYBRID there are no pe
 allocators to scan.
 """
 
+import gc
 import os
 
 import pytest
@@ -29,5 +30,9 @@ def hybrid_mesh_device():
     os.environ["TT_METAL_ALLOCATOR_MODE_HYBRID"] = "1"
     mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1))
     yield mesh
+    # A test that asserted on a refused allocation leaves the exception's traceback holding its
+    # frame, and the tensors in it, in a cycle. Free them while the device is still open: a tensor
+    # collected after close aborts the process from its destructor.
+    gc.collect()
     ttnn.close_mesh_device(mesh)
     os.environ.pop("TT_METAL_ALLOCATOR_MODE_HYBRID", None)
