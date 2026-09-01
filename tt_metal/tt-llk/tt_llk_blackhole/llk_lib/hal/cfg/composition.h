@@ -29,12 +29,13 @@ inline constexpr std::uint32_t word_addr = []
 /**
  * @brief One field assignment, not yet written to hardware.
  *
- * Use @ref set to construct one. Assignments from different generated structs
+ * Use @ref set to construct one. Assignments from different generated classes
  * can be combined when their fields occupy the same physical CFG word.
  */
 template <const Field& F, Sec S>
-struct FieldAssignment
+class FieldAssignment
 {
+public:
     static_assert(F.width <= 32, "field wider than 32b cannot be assigned through a single value");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
 
@@ -54,8 +55,9 @@ struct FieldAssignment
  * instructions without constructing an opcode at runtime.
  */
 template <const Field& F, Sec S, std::uint32_t Value>
-struct ConstantFieldAssignment
+class ConstantFieldAssignment
 {
+public:
     static_assert(F.width <= 32, "field wider than 32b cannot be assigned through a single value");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
     static_assert(Value <= ((std::uint64_t {1} << F.width) - 1u), "value exceeds field width");
@@ -75,8 +77,9 @@ struct ConstantFieldAssignment
  * between automatically grouped assignment runs.
  */
 template <const Field& F, Sec S, typename Source>
-struct GprWrite
+class GprWrite
 {
+public:
     static_assert(F.file == RegisterFile::State, "GPR-backed CFG writes require a state-CFG destination");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
     static_assert(F.shamt(S) == 0, "GPR-backed CFG writes must start at the beginning of a CFG word");
@@ -116,8 +119,9 @@ namespace detail
  * RMWCIB byte writes at compile time.
  */
 template <RegisterFile File, std::uint32_t Addr, std::uint32_t Mask>
-struct ConfigWord
+class ConfigWord
 {
+public:
     static constexpr RegisterFile file  = File;
     static constexpr std::uint32_t addr = Addr;
     static constexpr std::uint32_t mask = Mask;
@@ -133,8 +137,9 @@ struct ConfigWord
  * it avoids extending encoded temporary lifetimes across later word updates.
  */
 template <typename Assignment>
-struct SingleFieldWord
+class SingleFieldWord
 {
+public:
     static constexpr RegisterFile file  = Assignment::file;
     static constexpr std::uint32_t addr = Assignment::addr;
     static constexpr std::uint32_t mask = Assignment::mask;

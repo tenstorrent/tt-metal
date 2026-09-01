@@ -13,13 +13,13 @@ namespace hal::cfg
 {
 
 template <const Field& F, Sec S>
-struct FieldAssignment;
+class FieldAssignment;
 
 template <const Field& F, Sec S, std::uint32_t Value>
-struct ConstantFieldAssignment;
+class ConstantFieldAssignment;
 
 template <const Field& F, Sec S, typename Source>
-struct GprWrite;
+class GprWrite;
 
 } // namespace hal::cfg
 
@@ -27,27 +27,27 @@ namespace hal::cfg::detail
 {
 
 template <typename T>
-struct is_field_assignment : std::false_type
+class is_field_assignment : public std::false_type
 {
 };
 
 template <const Field& F, Sec S>
-struct is_field_assignment<FieldAssignment<F, S>> : std::true_type
+class is_field_assignment<FieldAssignment<F, S>> : public std::true_type
 {
 };
 
 template <const Field& F, Sec S, std::uint32_t Value>
-struct is_field_assignment<ConstantFieldAssignment<F, S, Value>> : std::true_type
+class is_field_assignment<ConstantFieldAssignment<F, S, Value>> : public std::true_type
 {
 };
 
 template <typename T>
-struct is_constant_field_assignment : std::false_type
+class is_constant_field_assignment : public std::false_type
 {
 };
 
 template <const Field& F, Sec S, std::uint32_t Value>
-struct is_constant_field_assignment<ConstantFieldAssignment<F, S, Value>> : std::true_type
+class is_constant_field_assignment<ConstantFieldAssignment<F, S, Value>> : public std::true_type
 {
 };
 
@@ -58,12 +58,12 @@ template <typename T>
 inline constexpr bool is_constant_field_assignment_v = is_constant_field_assignment<T>::value;
 
 template <typename T>
-struct is_gpr_write : std::false_type
+class is_gpr_write : public std::false_type
 {
 };
 
 template <const Field& F, Sec S, typename Source>
-struct is_gpr_write<GprWrite<F, S, Source>> : std::true_type
+class is_gpr_write<GprWrite<F, S, Source>> : public std::true_type
 {
 };
 
@@ -77,21 +77,22 @@ template <typename Lhs, typename Rhs>
 inline constexpr bool assignments_share_word_v = Lhs::file == Rhs::file && Lhs::addr == Rhs::addr;
 
 template <typename... Assignments>
-struct assignment_groups_disjoint;
+class assignment_groups_disjoint;
 
 template <>
-struct assignment_groups_disjoint<> : std::true_type
+class assignment_groups_disjoint<> : public std::true_type
 {
 };
 
 template <typename Assignment>
-struct assignment_groups_disjoint<Assignment> : std::true_type
+class assignment_groups_disjoint<Assignment> : public std::true_type
 {
 };
 
 template <typename First, typename... Rest>
-struct assignment_groups_disjoint<First, Rest...>
-    : std::bool_constant<((!assignments_share_word_v<First, Rest> || ((First::mask & Rest::mask) == 0u)) && ...) && assignment_groups_disjoint<Rest...>::value>
+class assignment_groups_disjoint<First, Rest...>
+    : public std::bool_constant<
+          ((!assignments_share_word_v<First, Rest> || ((First::mask & Rest::mask) == 0u)) && ...) && assignment_groups_disjoint<Rest...>::value>
 {
 };
 
@@ -121,21 +122,21 @@ inline constexpr bool write_operations_disjoint_pair()
 }
 
 template <typename... Operations>
-struct write_operations_disjoint;
+class write_operations_disjoint;
 
 template <>
-struct write_operations_disjoint<> : std::true_type
+class write_operations_disjoint<> : public std::true_type
 {
 };
 
 template <typename Operation>
-struct write_operations_disjoint<Operation> : std::true_type
+class write_operations_disjoint<Operation> : public std::true_type
 {
 };
 
 template <typename First, typename... Rest>
-struct write_operations_disjoint<First, Rest...>
-    : std::bool_constant<(write_operations_disjoint_pair<First, Rest>() && ...) && write_operations_disjoint<Rest...>::value>
+class write_operations_disjoint<First, Rest...>
+    : public std::bool_constant<(write_operations_disjoint_pair<First, Rest>() && ...) && write_operations_disjoint<Rest...>::value>
 {
 };
 
