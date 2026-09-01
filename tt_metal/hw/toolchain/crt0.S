@@ -7,14 +7,12 @@
 	.type _start,@function
 	/* s1 is coordinates.  */
 _start:
-#if 0 /* TODO: Enable gprel in quasar runtime #32892  */
 	.option push
 	.option norelax
 	// Initialize global pointer,
 	lui gp,%hi(__global_pointer$)
 	addi gp,gp,%lo(__global_pointer$)
 	.option pop
-#endif
 
 	/* Compute TP and SP at either end of the locals */
 	lui	tp,%hi(__local_base)

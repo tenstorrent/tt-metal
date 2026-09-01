@@ -315,6 +315,7 @@ FORCE_INLINE void update_worker_completion_count_on_dispatch_d() {
 
 template <uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
+    // The prefetcher publishes these credits with a NoC atomic.
     volatile tt_l1_ptr uint32_t* sem_addr = uncached_l1_ptr<uint32_t>(get_semaphore<programmable_core_type>(sem_id));
 
     WAYPOINT("DAPW");
@@ -336,7 +337,9 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
 template <uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 #ifdef ARCH_QUASAR
-    Semaphore<programmable_core_type>(sem_id).up(n);
+    // Semaphore<programmable_core_type>(sem_id).up(n);
+    auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<programmable_core_type>(sem_id));
+    *sem_addr += n;
 #else
     dispatch_s_noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore<programmable_core_type>(sem_id)), n, my_noc_index);
 #endif

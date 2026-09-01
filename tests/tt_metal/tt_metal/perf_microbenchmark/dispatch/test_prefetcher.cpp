@@ -468,6 +468,52 @@ protected:
     // Exec Buf Configuration
     bool use_exec_buf_{};
 
+    // Builds RELAY_PAGED_PACKED sub-commands over interleaved DRAM and models the resulting reads into
+    // device_data for validation. Shared by the correctness fixture and the cycle benchmark.
+    std::vector<CQPrefetchRelayPagedPackedSubCmd> build_sub_cmds(
+        const std::vector<uint32_t>& lengths,
+        Common::DeviceData& device_data,
+        uint32_t log_packed_read_page_size,
+        uint32_t n_sub_cmds) {
+        uint32_t page_size_bytes = 1 << log_packed_read_page_size;
+        uint32_t page_offset = 0;
+        std::vector<CQPrefetchRelayPagedPackedSubCmd> sub_cmds;
+        sub_cmds.reserve(n_sub_cmds);
+        for (auto length : lengths) {
+            CQPrefetchRelayPagedPackedSubCmd sub_cmd{};
+            sub_cmd.start_page = (uint16_t)page_offset;
+            sub_cmd.log_page_size = log_packed_read_page_size;
+            sub_cmd.base_addr = dram_base_;
+            sub_cmd.length = length;
+            sub_cmds.push_back(sub_cmd);
+            page_offset += (length + page_size_bytes - 1) / page_size_bytes;
+
+            // Model the packed paged read in this function by updating worker data with interleaved/paged DRAM data,
+            // for validation later.
+            uint32_t length_words = length / sizeof(uint32_t);
+            uint32_t base_addr_words = (sub_cmd.base_addr - dram_base_) / sizeof(uint32_t);
+            uint32_t page_size_words = page_size_bytes / sizeof(uint32_t);
+
+            // Get data from DRAM map, add to all workers, but only set valid for cores included in workers range.
+            uint32_t page_idx = sub_cmd.start_page;
+            for (uint32_t i = 0; i < length_words; i += page_size_words) {
+                uint32_t dram_bank_id = page_idx % num_banks_;
+                auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
+                CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
+                uint32_t bank_offset = base_addr_words + (page_size_words * (page_idx / num_banks_));
+
+                uint32_t words = (page_size_words > length_words - i) ? length_words - i : page_size_words;
+
+                DeviceDataUpdater::update_read(
+                    this->worker_start(), device_data, bank_core, dram_bank_id, bank_offset, words, tt::CoreType::DRAM);
+
+                page_idx++;
+            }
+        }
+
+        return sub_cmds;
+    }
+
     void init_params(const PagedReadParams& p) {
         page_size_ = p.page_size;
         num_pages_ = p.num_pages;
@@ -1424,50 +1470,6 @@ public:
 class PrefetcherPackedReadTestFixture : virtual public BasePrefetcherTestFixture {
     const bool relay_max_packed_paged_submcds = true;  // TODO: randomize?
 protected:
-    std::vector<CQPrefetchRelayPagedPackedSubCmd> build_sub_cmds(
-        const std::vector<uint32_t>& lengths,
-        Common::DeviceData& device_data,
-        uint32_t log_packed_read_page_size,
-        uint32_t n_sub_cmds) {
-        uint32_t count = 0;
-        uint32_t page_size_bytes = 1 << log_packed_read_page_size;
-        std::vector<CQPrefetchRelayPagedPackedSubCmd> sub_cmds;
-        sub_cmds.reserve(n_sub_cmds);
-        for (auto length : lengths) {
-            CQPrefetchRelayPagedPackedSubCmd sub_cmd{};
-            sub_cmd.start_page = 0;
-            sub_cmd.log_page_size = log_packed_read_page_size;
-            sub_cmd.base_addr = dram_base_ + count * page_size_bytes;
-            sub_cmd.length = length;
-            sub_cmds.push_back(sub_cmd);
-            count++;
-
-            // Model the packed paged read in this function by updating worker data with interleaved/paged DRAM data,
-            // for validation later.
-            uint32_t length_words = length / sizeof(uint32_t);
-            uint32_t base_addr_words = (sub_cmd.base_addr - dram_base_) / sizeof(uint32_t);
-            uint32_t page_size_words = page_size_bytes / sizeof(uint32_t);
-
-            // Get data from DRAM map, add to all workers, but only set valid for cores included in workers range.
-            uint32_t page_idx = sub_cmd.start_page;
-            for (uint32_t i = 0; i < length_words; i += page_size_words) {
-                uint32_t dram_bank_id = page_idx % num_banks_;
-                auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
-                CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
-                uint32_t bank_offset = base_addr_words + (page_size_words * (page_idx / num_banks_));
-
-                uint32_t words = (page_size_words > length_words - i) ? length_words - i : page_size_words;
-
-                DeviceDataUpdater::update_read(
-                    this->worker_start(), device_data, bank_core, dram_bank_id, bank_offset, words, tt::CoreType::DRAM);
-
-                page_idx++;
-            }
-        }
-
-        return sub_cmds;
-    }
-
     std::vector<HostMemDeviceCommand> generate_packed_read_commands(
         const CoreCoord first_worker, const uint32_t dram_alignment, Common::DeviceData& device_data) {
         // Compute NOC encoding once
@@ -3137,6 +3139,10 @@ class SDPrefetchRingbufferReadTestFixture : public SDPrefetchTestBase<Prefetcher
 class PrefetcherRelayLinearCycleBenchmarkFixture : public BasePrefetcherTestFixture {
 public:
     void run_relay_linear_payload_sweep() {
+#if FD_BENCH_PF_TIMELINE && FD_BENCH_CMD != FD_BENCH_CMD_RELAY_LINEAR
+        GTEST_SKIP() << "kernels built with FD_BENCH_CMD=RELAY_PAGED_PACKED: the prefetcher would emit no "
+                        "rows. Rebuild with FD_BENCH_CMD_RELAY_LINEAR.";
+#endif
         const uint32_t payload_bytes = get_page_size() * get_num_pages();
         ASSERT_EQ(payload_bytes % sizeof(uint32_t), 0u);
 
@@ -3175,9 +3181,10 @@ public:
         const CoreCoord first_worker_virt = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
         const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_worker_virt);
 
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         std::vector<HostMemDeviceCommand> commands_per_iteration;
-        commands_per_iteration.push_back(
-            CommandBuilder::build_prefetch_relay_linear_read<false, false>(noc_xy, dst_addr, l1_base, payload_bytes));
+        commands_per_iteration.push_back(CommandBuilder::build_prefetch_relay_linear_read<false, false>(
+            metal_ctx, noc_xy, dst_addr, l1_base, payload_bytes));
 
         log_info(
             tt::LogTest,
@@ -3188,6 +3195,57 @@ public:
         zero_bench_region();
         execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), get_num_iterations());
         report_relay_linear_sections(payload_bytes);
+    }
+
+    // Kernel-binary dispatch shape. tt_metal emits one RELAY_PAGED_PACKED sub-command per kernel per core
+    // group and pages them at PROGRAM_PAGE_SIZE (tt_metal/impl/program/dispatch.cpp), so page_size is the
+    // per-sub-command length and num_pages is the sub-command count.
+    //
+    // The dispatcher side is NOT the kernel-binary shape: real dispatch pairs this with WRITE_PACKED_LARGE,
+    // while build_prefetch_relay_paged_packed emits WRITE_LINEAR. Quote these numbers as a realistic
+    // prefetcher command against a simplified dispatcher.
+    void run_relay_paged_packed_sweep() {
+#if FD_BENCH_PF_TIMELINE && FD_BENCH_CMD != FD_BENCH_CMD_RELAY_PAGED_PACKED
+        GTEST_SKIP() << "kernels built with FD_BENCH_CMD=RELAY_LINEAR: the prefetcher would emit no rows. "
+                        "Rebuild with FD_BENCH_CMD_RELAY_PAGED_PACKED.";
+#endif
+        const uint32_t sub_cmd_length = get_page_size();
+        const uint32_t n_sub_cmds = get_num_pages();
+        const uint32_t total_length = sub_cmd_length * n_sub_cmds;
+        ASSERT_LE(n_sub_cmds, CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS);
+
+        const CoreCoord first_worker = this->worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/false);
+        const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+        ASSERT_EQ(sub_cmd_length % MetalContext::instance().hal().get_alignment(HalMemType::DRAM), 0u);
+
+        Common::DeviceData device_data(
+            device_, worker_range, l1_base, dram_base_, nullptr, false, get_dram_data_size_words(), cfg_);
+
+        const uint32_t dst_addr = device_data.get_result_data_addr(first_worker, 0);
+        const std::vector<uint32_t> lengths(n_sub_cmds, sub_cmd_length);
+        const std::vector<CQPrefetchRelayPagedPackedSubCmd> sub_cmds =
+            build_sub_cmds(lengths, device_data, HostMemDeviceCommand::LOG2_PROGRAM_PAGE_SIZE, n_sub_cmds);
+
+        const CoreCoord first_worker_virt = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
+        const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_worker_virt);
+
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+        std::vector<HostMemDeviceCommand> commands_per_iteration;
+        commands_per_iteration.push_back(CommandBuilder::build_prefetch_relay_paged_packed<false, false>(
+            metal_ctx, sub_cmds, noc_xy, dst_addr, total_length));
+
+        log_info(
+            tt::LogTest,
+            "RelayPagedPackedCycleBenchmark sub_cmd_bytes={} n_sub_cmds={} total_bytes={} iterations={}",
+            sub_cmd_length,
+            n_sub_cmds,
+            total_length,
+            get_num_iterations());
+        warmup_before_snapshot();
+        zero_bench_region();
+        execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), get_num_iterations());
+        report_relay_linear_sections(total_length);
     }
 
 private:
@@ -3314,6 +3372,121 @@ private:
             dp_rows,
             dp_dropped_chunk);
 
+        // Prefetcher HPM counters. The kernel zeroes them at entry and is relaunched per test case, so the
+        // value read here already covers exactly this payload's run. Normalized by N, not pf_rows, so it
+        // works at rung 0 where no prefetcher rows are committed. Labels follow the csrw selectors in
+        // cq_prefetch.cpp -- change one and change the other.
+        const uint32_t hpm0 = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrHpm0];
+        const uint32_t hpm1 = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrHpm1];
+        const uint32_t hpm2 = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrHpm2];
+        const uint32_t hpm3 = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrHpm3];
+        const uint32_t hpm_cmds = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrHpmCmds];
+        const uint32_t hpm_cycles = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrHpmCycles];
+        const uint32_t hpm_instret = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrHpmInstret];
+        if (hpm_cmds != 0) {
+            const double c = static_cast<double>(hpm_cmds);
+            log_info(
+                tt::LogTest,
+                "CopyBench payload_bytes={}: hpm/cmd proc_cyc={:.1f} instret={:.1f} ipc={:.3f} "
+                "dcache_blocked={:.1f} stall_icache={:.1f} long_lat={:.1f} dcache_miss_event={:.1f} "
+                "stall_total={:.1f} (process_cmd calls={})",
+                payload_bytes,
+                hpm_cycles / c,
+                hpm_instret / c,
+                hpm_cycles ? static_cast<double>(hpm_instret) / hpm_cycles : 0.0,
+                hpm0 / c,
+                hpm1 / c,
+                hpm2 / c,
+                hpm3 / c,
+                // The core is single-issue in-order, so cycles beyond instructions retired are stall.
+                hpm_cycles > hpm_instret ? (hpm_cycles - hpm_instret) / c : 0.0,
+                hpm_cmds);
+            // Each cycle counter is bracketed around process_cmd() alone, so none can exceed the cycles
+            // spent there. If one does, the bracket does not cover the counted window.
+            if (hpm0 > hpm_cycles || hpm1 > hpm_cycles || hpm2 > hpm_cycles || hpm3 > hpm_cycles) {
+                log_warning(
+                    tt::LogTest,
+                    "CopyBench payload_bytes={}: an HPM cycle counter exceeds bracketed cycles ({}) -- values "
+                    "are not per-command",
+                    payload_bytes,
+                    hpm_cycles);
+            }
+        }
+
+        // The RELAY_INLINE_NOFLUSH commands, which carry the dispatch command downstream. Reported apart from
+        // the payload command so neither population is a blend of the two.
+        const uint32_t inl_cmds = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrInlCmds];
+        if (inl_cmds != 0) {
+            const double c = static_cast<double>(inl_cmds);
+            const uint32_t inl_cyc = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrInlCycles];
+            const uint32_t inl_ins = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrInlInstret];
+            log_info(
+                tt::LogTest,
+                "CopyBench payload_bytes={}: inline/cmd proc_cyc={:.1f} instret={:.1f} ipc={:.3f} "
+                "dcache_blocked={:.1f} stall_icache={:.1f} long_lat={:.1f} dcache_miss_event={:.2f} "
+                "stall_total={:.1f} (calls={})",
+                payload_bytes,
+                inl_cyc / c,
+                inl_ins / c,
+                inl_cyc ? static_cast<double>(inl_ins) / inl_cyc : 0.0,
+                pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrInl0] / c,
+                pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrInl1] / c,
+                pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrInl2] / c,
+                pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrInl3] / c,
+                inl_cyc > inl_ins ? (inl_cyc - inl_ins) / c : 0.0,
+                inl_cmds);
+        }
+
+        // fetch_q_get_cmds, bracketed separately. fetch + inline + payload should account for the period;
+        // the shortfall is loop overhead plus the calls the buckets skip.
+        const uint32_t fet_cmds = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrFetCmds];
+        if (fet_cmds != 0) {
+            const double c = static_cast<double>(fet_cmds);
+            const uint32_t fet_cyc = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrFetCycles];
+            const uint32_t fet_ins = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrFetInstret];
+            log_info(
+                tt::LogTest,
+                "CopyBench payload_bytes={}: fetch/call proc_cyc={:.1f} instret={:.1f} ipc={:.3f} "
+                "dcache_blocked={:.1f} stall_icache={:.1f} long_lat={:.1f} dcache_miss_event={:.2f} "
+                "stall_total={:.1f} (calls={})",
+                payload_bytes,
+                fet_cyc / c,
+                fet_ins / c,
+                fet_cyc ? static_cast<double>(fet_ins) / fet_cyc : 0.0,
+                pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrFet0] / c,
+                pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrFet1] / c,
+                pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrFet2] / c,
+                pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrFet3] / c,
+                fet_cyc > fet_ins ? (fet_cyc - fet_ins) / c : 0.0,
+                fet_cmds);
+
+            const uint32_t blk_cmds = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrFetBlkCmds];
+            const uint32_t blk_cyc = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrFetBlkCycles];
+            log_info(
+                tt::LogTest,
+                "CopyBench payload_bytes={}: fetch blocked-on-host calls={} total_cyc={} mean={:.0f} "
+                "(excluded from fetch/call above)",
+                payload_bytes,
+                blk_cmds,
+                blk_cyc,
+                blk_cmds ? static_cast<double>(blk_cyc) / blk_cmds : 0.0);
+
+            // Closure check (§ period decomposition): all three regions are totals over the whole run, so
+            // dividing by iterations puts them in the same units as the period.
+            const uint32_t hpm_cyc_t = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrHpmCycles];
+            const uint32_t inl_cyc_t = pf[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrInlCycles];
+            const double per_iter = static_cast<double>(hpm_cyc_t + inl_cyc_t + fet_cyc) / n;
+            log_info(
+                tt::LogTest,
+                "CopyBench payload_bytes={}: closure fetch+inline+payload={:.1f} of period={:.1f} "
+                "({:.1f}% accounted, residual={:.1f})",
+                payload_bytes,
+                per_iter,
+                mean_period,
+                mean_period != 0.0 ? 100.0 * per_iter / mean_period : 0.0,
+                mean_period - per_iter);
+        }
+
         // Section breakdown needs the prefetcher timeline; absent under rung 0 (FD_BENCH_PF_TIMELINE off),
         // where pf_commit_row() never ran and pf_rows stays 0.
         const bool pf_available = (pf_dropped_row == 0) && (pf_rows >= n);
@@ -3374,7 +3547,7 @@ private:
         double sum_read_latency = 0;
         // FD_BENCH_PF_FETCH_WAYPOINTS (2026-08-13 re-add): fetch_q_get_cmds's CQ read barrier and uncached
         // fetchq pointer stores. Zero when the flag is off, same inference rule as the dp_timeline sums.
-        double sum_fetch_read_wait = 0, sum_fetch_ptr_ops = 0;
+        double sum_commit_row = 0, sum_cmd_read = 0, sum_fetch_total = 0;
         // Per-row iteration_total, kept to test whether the prefetcher is ever starved by the host writing
         // fetchq entries -- a spin on an empty PrefetchQ lands in prefetch_external and would inflate it on
         // the emulator only. Host lag concentrates at the start (all 201 entries are pushed in one loop), so
@@ -3442,8 +3615,9 @@ private:
             sum_pub_acq += pf_row_word(row, fd_copy_bench::kPfPubAcqTotal);
             sum_header_write += pf_row_word(row, fd_copy_bench::kPfHeaderWrite);
             sum_read_latency += pf_row_word(row, fd_copy_bench::kPfReadLatency);
-            sum_fetch_read_wait += pf_row_word(row, fd_copy_bench::kPfFetchReadWait);
-            sum_fetch_ptr_ops += pf_row_word(row, fd_copy_bench::kPfFetchPtrOps);
+            sum_commit_row += pf_row_word(row, fd_copy_bench::kPfCommitRow);
+            sum_cmd_read += pf_row_word(row, fd_copy_bench::kPfCmdRead);
+            sum_fetch_total += pf_row_word(row, fd_copy_bench::kPfFetchTotal);
 
             sum_header += header;
             sum_relay_cmd += relay_cmd;
@@ -3557,20 +3731,29 @@ private:
             sum_header_write / m,
             (sum_header_acq + sum_pub_acq) / m);
 
-        // FD_BENCH_PF_FETCH_WAYPOINTS (2026-08-13 re-add): re-verifying the 14 cyc / 12 cyc Tensix-dispatch
-        // falsification numbers on whichever core type is currently running. Zero (and this line not
-        // printed) when the flag is off -- same inference-from-nonzero rule as the dp_timeline block above.
-        if (sum_fetch_read_wait != 0.0 || sum_fetch_ptr_ops != 0.0) {
+        // FD_BENCH_PF_FETCH_WAYPOINTS. cmd_read encloses ONE load, so in an instret run its value IS the
+        // execution count and cycles/count is the per-load cost. Zero (and this line not printed) when the
+        // flag is off.
+        if (sum_commit_row != 0.0 || sum_cmd_read != 0.0 || sum_fetch_total != 0.0) {
+            const double ext = sum_prefetch_external / m;
+            const double ft = sum_fetch_total / m;
+            const double crow = sum_commit_row / m;
+            const double cr = sum_cmd_read / m;
+            // commit_row is pure instrumentation that lands inside prefetch_external (pf_commit_row runs
+            // after kPfProcessExit, so relay_cmd does not contain it). ext_net subtracts it, which is the
+            // only prefetch_external figure comparable across arches -- on Quasar the staging row costs a
+            // cold 64 B fill that BH's write-through cache does not pay.
             log_info(
                 tt::LogTest,
-                "CopyBench payload_bytes={}: fetch_read_wait={:.1f} fetch_ptr_ops={:.1f} (of "
-                "prefetch_external {:.1f}, {:.1f}% + {:.1f}%)",
+                "CopyBench payload_bytes={}: prefetch_external={:.1f} commit_row={:.1f} ({:.1f}%) "
+                "ext_net={:.1f} | fetch_total={:.1f} cmd_read={:.1f}",
                 payload_bytes,
-                sum_fetch_read_wait / m,
-                sum_fetch_ptr_ops / m,
-                sum_prefetch_external / m,
-                100.0 * (sum_fetch_read_wait / m) / (sum_prefetch_external / m),
-                100.0 * (sum_fetch_ptr_ops / m) / (sum_prefetch_external / m));
+                ext,
+                crow,
+                ext != 0.0 ? 100.0 * crow / ext : 0.0,
+                ext - crow,
+                ft,
+                cr);
         }
 
         // Intrinsic read cost, for the cross-arch read comparison. dram_read_exposed is only the part the
@@ -3634,10 +3817,15 @@ private:
     }
 };
 
+// Separate suite so the paged-packed sweep gets its own parameter list; the measurement machinery is shared.
+class PrefetcherRelayPagedPackedCycleBenchmarkFixture : public PrefetcherRelayLinearCycleBenchmarkFixture {};
+
 // Quasar FD fixtures
 class BasePrefetcherQuasarSimulatorTestFixture : public Common::QuasarSimulatorVariant<BasePrefetcherTestFixture> {};
 class PrefetcherRelayLinearCycleBenchmarkQuasarSimulatorTestFixture
     : public Common::QuasarSimulatorVariant<PrefetcherRelayLinearCycleBenchmarkFixture> {};
+class PrefetcherRelayPagedPackedCycleBenchmarkQuasarSimulatorTestFixture
+    : public Common::QuasarSimulatorVariant<PrefetcherRelayPagedPackedCycleBenchmarkFixture> {};
 class PrefetcherPackedReadQuasarSimulatorTestFixture
     : public Common::QuasarSimulatorVariant<PrefetcherPackedReadTestFixture> {};
 class PrefetcherLinearPackedReadQuasarSimulatorTestFixture
@@ -4305,6 +4493,13 @@ TEST_P(PrefetcherRelayLinearCycleBenchmarkFixture, RelayLinearPayloadSweep) {
     run_relay_linear_payload_sweep();
 }
 
+TEST_P(PrefetcherRelayPagedPackedCycleBenchmarkFixture, RelayPagedPackedSweep) {
+    log_info(
+        tt::LogTest,
+        "PrefetcherRelayPagedPackedCycleBenchmarkFixture - RelayPagedPackedSweep (Fast Dispatch) - Test Start");
+    run_relay_paged_packed_sweep();
+}
+
 // This tests random configurations of commands like CQ_PREFETCH_CMD_RELAY_LINEAR, CQ_PREFETCH_CMD_RELAY_PAGED,
 // CQ_PREFETCH_CMD_RELAY_INLINE etc
 TEST_P(RandomTestFixture, RandomTest) {
@@ -4629,6 +4824,14 @@ TEST_P(PrefetcherRelayLinearCycleBenchmarkQuasarSimulatorTestFixture, RelayLinea
         "PrefetcherRelayLinearCycleBenchmarkQuasarSimulatorTestFixture - RelayLinearPayloadSweep (Quasar simulator FD) "
         "- Test Start");
     run_relay_linear_payload_sweep();
+}
+
+TEST_P(PrefetcherRelayPagedPackedCycleBenchmarkQuasarSimulatorTestFixture, RelayPagedPackedSweep) {
+    log_info(
+        tt::LogTest,
+        "PrefetcherRelayPagedPackedCycleBenchmarkQuasarSimulatorTestFixture - RelayPagedPackedSweep (Quasar simulator "
+        "FD) - Test Start");
+    run_relay_paged_packed_sweep();
 }
 
 TEST_P(PrefetcherHostQuasarSimulatorTestFixture, HostTest) {
@@ -5016,6 +5219,11 @@ INSTANTIATE_TEST_SUITE_P(
     PrefetcherCycleBenchmarkTests,
     PrefetcherRelayLinearCycleBenchmarkFixture,
     ::testing::Values(
+        PagedReadParams{1 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{2 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{4 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{8 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{16 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
         PagedReadParams{32 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
         PagedReadParams{48 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
         PagedReadParams{64 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
@@ -5025,6 +5233,40 @@ INSTANTIATE_TEST_SUITE_P(
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_iterations) +
                "iter_relay_linear";
     });
+
+// Models uncached (prefetcher-cache-miss) program dispatch, which emits one sub-command per kernel binary
+// per processor with a fixed 2 KB page size. page_size = per-sub-command length (kernel size, spanning the
+// 256 B - 12 KB range of test_pgm_dispatch.cpp), num_pages = sub-command count.
+//
+// A 3x3 grid that separates the three cost terms:
+//   256 vs 2048  - one page per sub-command in both, so the structure is identical and only bytes differ.
+//   2048 vs 12288 - 1 vs 6 pages per sub-command, giving the per-page slope.
+//   1 / 5 / 35   - sub-command count. 1 is the fixed-overhead intercept, 5 is one kernel group with all
+//                  tt-1xx processors, 35 is CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS.
+// The two 35-count rows at 2048 and 12288 are the only cells whose total exceeds scratch_db_half_size
+// (64 KB) and so reach the double-buffered path.
+#define RELAY_PAGED_PACKED_BENCH_PARAMS                                                            \
+    PagedReadParams{256, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},                             \
+        PagedReadParams{256, 5, 100, Common::DRAM_DATA_SIZE_WORDS, false},                         \
+        PagedReadParams{256, 35, 100, Common::DRAM_DATA_SIZE_WORDS, false},                        \
+        PagedReadParams{2 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},                    \
+        PagedReadParams{2 * 1024, 5, 100, Common::DRAM_DATA_SIZE_WORDS, false},                    \
+        PagedReadParams{2 * 1024, 35, 100, Common::DRAM_DATA_SIZE_WORDS, false},                   \
+        PagedReadParams{12 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},                   \
+        PagedReadParams{12 * 1024, 5, 100, Common::DRAM_DATA_SIZE_WORDS, false}, PagedReadParams { \
+        12 * 1024, 35, 100, Common::DRAM_DATA_SIZE_WORDS, false                                    \
+    }
+
+static std::string relay_paged_packed_bench_name(const testing::TestParamInfo<PagedReadParams>& info) {
+    return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "subcmds_" +
+           std::to_string(info.param.num_iterations) + "iter_relay_paged_packed";
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    PrefetcherCycleBenchmarkTests,
+    PrefetcherRelayPagedPackedCycleBenchmarkFixture,
+    ::testing::Values(RELAY_PAGED_PACKED_BENCH_PARAMS),
+    relay_paged_packed_bench_name);
 
 // PrefetcherThroughputTestFixture test - Runs only with exec buff disabled
 INSTANTIATE_TEST_SUITE_P(
@@ -5060,6 +5302,11 @@ INSTANTIATE_TEST_SUITE_P(
     QuasarSimulatorPrefetcherTests,
     PrefetcherRelayLinearCycleBenchmarkQuasarSimulatorTestFixture,
     ::testing::Values(
+        PagedReadParams{1 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{2 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{4 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{8 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{16 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
         PagedReadParams{32 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
         PagedReadParams{48 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
         PagedReadParams{64 * 1024, 1, 100, Common::DRAM_DATA_SIZE_WORDS, false},
@@ -5069,6 +5316,12 @@ INSTANTIATE_TEST_SUITE_P(
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_iterations) +
                "iter_relay_linear";
     });
+
+INSTANTIATE_TEST_SUITE_P(
+    QuasarSimulatorPrefetcherTests,
+    PrefetcherRelayPagedPackedCycleBenchmarkQuasarSimulatorTestFixture,
+    ::testing::Values(RELAY_PAGED_PACKED_BENCH_PARAMS),
+    relay_paged_packed_bench_name);
 
 INSTANTIATE_TEST_SUITE_P(
     QuasarSimulatorPrefetcherTests,

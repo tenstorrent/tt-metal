@@ -64,9 +64,18 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
     return diff > 0;
 }
 
+<<<<<<< HEAD
 // On Quasar, an L1 word shared with another agent must use the uncached alias, on both the writing and
 // the reading side: NoC writes and atomics do not snoop the DM caches, and the NIU reads TL1 directly.
 // No-op on BH/WH.
+=======
+// Choosing the view on Quasar; both sides of a word must agree. No-op on BH/WH.
+//   Local CPU store, same-tile DM to DM: cached. DM caches are coherent with each other.
+//   NoC atomic: uncached unless the increment sets the snoop bit, which FD leaves off because empherical
+//   experiments snooping was some cycles more expensive than uncached poll.
+//   With it off a cached poll never sees the update.
+//   Read back by the NIU as a transfer source: uncached. The NIU reads TL1, outside DM coherence.
+>>>>>>> 0219f39d96e (optimizations)
 constexpr FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
 #ifdef ARCH_QUASAR
     return addr + MEM_L1_UNCACHED_BASE;
@@ -95,7 +104,8 @@ FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
 // Returns a pointer to the L1 worker completion counter for `stream`. Workers signal completion
 // into L1 (DISPATCH_MESSAGE_ADDR) on Quasar rather than NOC stream registers. `completion_counter_offset`
 // selects this CQ's range of counters, when multiple CQs share this dispatch core. `first_stream_used`
-// is the index of the first stream used by this CQ.
+// is the index of the first stream used by this CQ. Workers increment it with a NoC atomic, so every
+// access to it uses the uncached view.
 FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(
     uint32_t stream, uint32_t first_stream_used, uint32_t completion_counter_offset) {
     return uncached_l1_ptr<uint32_t>(
@@ -339,8 +349,13 @@ template <
 class CBWriter {
 public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
+<<<<<<< HEAD
         volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
+=======
+        volatile tt_l1_ptr uint32_t* sem_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>((get_semaphore<programmable_core_type>(my_sem_id)));
+>>>>>>> 0219f39d96e (optimizations)
 
         WAYPOINT("DAPW");
         // Use a wrapping compare here to compare distance
@@ -357,8 +372,8 @@ public:
     // Wait for all n pages to be available. If the consumer is using blocks, it may never return all pages at once
     // unless it calls release_all_pages to return partially-consumed blocks.
     FORCE_INLINE void wait_all_pages(uint32_t n) {
-        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
+        volatile tt_l1_ptr uint32_t* sem_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>((get_semaphore<programmable_core_type>(my_sem_id)));
 
         // Downstream component sets the MSB as a terminate bit
         // Mask that off to avoid a race between the sem count and terminate
@@ -737,6 +752,7 @@ constexpr uint32_t l1_to_local_cache_copy_chunk = 6;
 // NOTE: CAREFUL USING THIS FUNCTION
 // It is call "careful_copy" because you need to be careful...
 // It copies beyond count by up to 5 elements make sure src and dst addresses are safe
+<<<<<<< HEAD
 // first_line_invalidated says the caller already invalidated the line holding l1_ptr, so this skips it. Set it
 // only when the source cannot have wrapped away from the command header whose invalidate covers that line.
 template <
@@ -744,10 +760,14 @@ template <
     uint32_t l1_cache_elements_rounded,
     bool invalidate_source = false,
     bool first_line_invalidated = false>
+=======
+template <uint32_t l1_to_local_cache_copy_chunk, uint32_t l1_cache_elements_rounded, bool invalidate_source = false>
+>>>>>>> 0219f39d96e (optimizations)
 FORCE_INLINE void careful_copy_from_l1_to_local_cache(
     volatile uint32_t tt_l1_ptr* l1_ptr, uint32_t count, uint32_t* l1_cache) {
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     if constexpr (invalidate_source) {
+<<<<<<< HEAD
         // The source arrived over the NoC, which does not snoop, so a cached copy left over from an earlier
         // ring wrap is stale. Range covers the up-to-chunk-1 elements this function reads past count.
         uintptr_t start = reinterpret_cast<uintptr_t>(l1_ptr);
@@ -760,6 +780,13 @@ FORCE_INLINE void careful_copy_from_l1_to_local_cache(
             size = skipped < size ? size - skipped : 0;
         }
         invalidate_l2_cache_range(start, size);
+=======
+        // Upstream relayed the source by NoC write, which does not snoop, so a cached copy left over from an
+        // earlier ring wrap is stale. Range covers the up-to-chunk-1 elements this function reads past count.
+        // Prefetcher callers leave this off: both of its fetch paths already invalidate the extent they read.
+        invalidate_l2_cache_range(
+            reinterpret_cast<uintptr_t>(l1_ptr), sizeof(uint32_t) * (count + l1_to_local_cache_copy_chunk - 1));
+>>>>>>> 0219f39d96e (optimizations)
     }
 #endif
     uint32_t n = 0;

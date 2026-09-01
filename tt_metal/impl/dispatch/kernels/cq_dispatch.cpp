@@ -194,9 +194,12 @@ struct NocReleasePolicy {
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
 #ifdef ARCH_QUASAR
-        Semaphore<programmable_core_type>(sem_id).up(pages);
-        // auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr
-        // uint32_t*>(get_semaphore<programmable_core_type>(sem_id)); *sem_addr += pages;
+        // get_semaphore() returns an offset into this core's L1, so this local store
+        // works only because prefetcher and dispatcher are on same dispatch engines sharing one L1.
+        // A split _h/_d build must go over the NoC instead. See the checklist at the top of cq_prefetch.cpp.
+        // Non-atomic RMW, so exactly one agent may ever increment this semaphore.
+        auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<programmable_core_type>(sem_id));
+        *sem_addr += pages;
 #else
         uint32_t sem_addr = get_semaphore<programmable_core_type>(sem_id);
         noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), pages, noc_idx);
@@ -532,6 +535,11 @@ void process_exec_buf_end_d() { relay_to_next_cb(cmd_ptr, sizeof(CQDispatchCmd))
 // Note that for non-paged writes, the number of writes per page is always 1
 // This means each noc_write frees up a page
 void process_write_linear(uint32_t num_mcast_dests) {
+    // Chunk index for per-chunk waypoints. Function-scoped local, not a static: it is only live within
+    // one command and must not carry state or a reset obligation across calls. Unused on the FABRIC_RELAY
+    // path, which does not go through the per-chunk credit wait below.
+    [[maybe_unused]] uint32_t fd_bench_chunk = 0;
+
     volatile tt_l1_ptr CQDispatchCmdLarge* cmd = reinterpret_cast<volatile tt_l1_ptr CQDispatchCmdLarge*>(cmd_ptr);
     bool multicast = num_mcast_dests > 0;
     if (not multicast) {
@@ -727,7 +735,11 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
     ASSERT(count <= (mcast ? packed_write_max_multicast_sub_cmds : packed_write_max_unicast_sub_cmds));
     constexpr uint32_t sub_cmd_size = sizeof(WritePackedSubCmd);
     // Copying in a burst is about a 30% net gain vs reading one value per loop below
+<<<<<<< HEAD
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true, true>(
+=======
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true>(
+>>>>>>> 0219f39d96e (optimizations)
         reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cmd_ptr + sizeof(CQDispatchCmd)),
         count * sub_cmd_size / sizeof(uint32_t),
         l1_cache);
@@ -858,7 +870,11 @@ void process_write_packed_large(uint32_t* l1_cache) {
     data_ptr = round_up_pow2(data_ptr, L1_ALIGNMENT);
 
     constexpr uint32_t sub_cmd_size = sizeof(CQDispatchWritePackedLargeSubCmd);
+<<<<<<< HEAD
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true, true>(
+=======
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true>(
+>>>>>>> 0219f39d96e (optimizations)
         reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cmd_ptr + sizeof(CQDispatchCmd)),
         count * sub_cmd_size / sizeof(uint32_t),
         l1_cache);
@@ -990,7 +1006,11 @@ void process_write_packed_large_unicast(uint32_t* l1_cache) {
     data_ptr = round_up_pow2(data_ptr, L1_ALIGNMENT);
 
     constexpr uint32_t sub_cmd_size = sizeof(CQDispatchWritePackedLargeUnicastSubCmd);
+<<<<<<< HEAD
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true, true>(
+=======
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded, true>(
+>>>>>>> 0219f39d96e (optimizations)
         reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cmd_ptr + sizeof(CQDispatchCmd)),
         count * sub_cmd_size / sizeof(uint32_t),
         l1_cache);
@@ -1104,6 +1124,7 @@ static void process_wait() {
     uint32_t heartbeat = 0;
     if (wait_memory) {
         uintptr_t addr = load_aligned<uint32_t>(&cmd->wait.addr);
+        // Worker completion counter, incremented by workers with a NoC atomic.
         volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(addr));
         // DPRINT("DISPATCH WAIT 0x{:08x} count {}\n", addr, count);
         do {
@@ -1138,11 +1159,15 @@ static void process_wait() {
     }
     if (clear_memory) {
         uintptr_t addr = load_aligned<uint32_t>(&cmd->wait.addr);
+        // Same counter as above; a cached store here would race the workers' atomics.
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(addr)) = 0;
     }
     if (notify_prefetch) {
 #ifdef ARCH_QUASAR
-        Semaphore<programmable_core_type>(upstream_sync_sem).up(1);
+        // Semaphore<programmable_core_type>(upstream_sync_sem).up(1);
+        auto* sem_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<programmable_core_type>(upstream_sync_sem));
+        *sem_addr += 1;
 #else
         noc_semaphore_inc(
             get_noc_addr_helper(upstream_noc_xy, get_semaphore<programmable_core_type>(upstream_sync_sem)),
@@ -1301,7 +1326,11 @@ re_run_command:
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     // Upstream relays this command by NoC write, which does not snoop, so the header must be dropped before
     // it is read cached. Sized to CQDispatchCmdLarge because the variant is unknown until cmd_id is read.
+<<<<<<< HEAD
     // CPU reads past this window carry their own invalidate; payload handed to the NIU needs none.
+=======
+    // Sub-command arrays past the header are covered by careful_copy's own invalidate.
+>>>>>>> 0219f39d96e (optimizations)
     invalidate_l2_cache_range(cmd_ptr, sizeof(CQDispatchCmdLarge));
 #endif
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
