@@ -581,7 +581,13 @@ class ModelArgs:
         # _set_model_specific_params(); these defaults preserve existing behaviour for
         # every model (q/k chunk 0 => op auto-selects, forced framework compute config).
         self.sdpa_decode_q_chunk_size = 0
-        self.sdpa_decode_k_chunk_size = 0
+        # Measured on Wormhole at 32k context, 16 q heads / 4 kv heads, head_dim 128: the
+        # operation's automatic choice runs at 0.2408 ms and a chunk of 256 at 0.2309 ms, 4.1%
+        # faster, over 36 calls per token. Every legal value (0/32/64/128/256/512) was measured
+        # 25 times and every one that ran agreed to 4 decimal places against a torch reference,
+        # so this changes scheduling only. Note k_chunk_size=32 silently returns all zeros --
+        # it equals the KV page size and appears to be untested upstream.
+        self.sdpa_decode_k_chunk_size = 256
         self.sdpa_decode_use_default_compute_config = False
         self.use_hf_rope = use_hf_rope
 
@@ -788,7 +794,18 @@ class ModelArgs:
 
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
             self.prefill_rows = 8
-            self.attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
+            # This grid places BOTH the attention norm's output and the QKV matmul's input, so
+            # the two always agree and no reshard is inserted. It also caps the matmul's
+            # in0_block_w, since dram_matmul_config derives that as
+            # find_largest_divisor(k // (TILE * num_cores), max_divisor=8): at the 32 cores this
+            # used to yield, each core held 4 tiles of K and the chunk was capped at 4. Eight
+            # cores gives each core 16 tiles, so the chunk reaches 8 and the matmul's internal
+            # loop drops from 32 trips to 16.
+            #
+            # Measured, 128 rounds: this norm shape (32 x 4096) costs 46.07 us on 32 cores and
+            # 39.33 us on 8, and the QKV matmul 0.0666 ms on 32 cores against 0.0600 ms on 8 --
+            # both operations get faster, so lowering the count is not a trade.
+            self.attn_input_grid = ttnn.CoreGrid(x=8, y=1)
             self.mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
@@ -799,10 +816,19 @@ class ModelArgs:
                 if self.is_galaxy
                 else self.find_prefill_grid(self.prefill_rows, self.hidden_dim // ttnn.TILE_SIZE)
             )
+            # 8 rather than the 64 this used to yield. The grid caps ff1/ff3's in0_block_w, since
+            # dram_matmul_config derives it as find_largest_divisor(k // (TILE * num_cores),
+            # max_divisor=8): at 64 cores each core held 2 tiles of K so the chunk was capped at
+            # 2 and the matmul ran 64 trips round its inner loop; at 8 cores it holds 16 tiles,
+            # the chunk reaches 8, and the loop drops to 16 trips. Measured 95.8 -> 63.3 us per
+            # call, 72 calls per token.
+            #
+            # A first attempt at this regressed, because the grid also sets ff1/ff3's per_core_N
+            # and the elementwise SiLU(ff1)*ff3 inherited that placement, costing more than the
+            # matmuls saved (perf_report2.txt). mlp.py now produces that multiply directly into
+            # w2's layout instead of inheriting, so the two are no longer coupled.
             self.mlp_core_grid = (
-                self.dram_shard_core_grid_for_k(self.dim)
-                if self.is_galaxy
-                else self.dram_shard_core_grid_for_k_and_n(self.dim, self.hidden_dim // self.num_devices)
+                self.dram_shard_core_grid_for_k(self.dim) if self.is_galaxy else ttnn.CoreGrid(x=8, y=1)
             )
 
             self.mlp2_core_grid = (
@@ -1333,11 +1359,16 @@ class ModelArgs:
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
                     )
                 else:
+                    # Input on mlp_core_grid (8 cores) so in0_block_w reaches 8; result spread
+                    # over mlp2_core_grid instead, which is where ff2 wants it anyway -- so the
+                    # elementwise SiLU(ff1)*ff3 both reads and writes on that grid and nothing
+                    # is redistributed anywhere in the chain.
                     return self.dram_matmul_config(
                         m=self.tile_padded_batch_rows,
                         k=self.dim,
                         n=self.hidden_dim // self.cluster_shape[1],
                         num_cores=self.mlp_core_grid.num_cores,
+                        out_num_cores=self.mlp2_core_grid.num_cores,
                     )
         elif mode == Mode.PREFILL:
             return self.matmul_config(
@@ -1430,7 +1461,20 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
             else:
-                return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+                # Named explicitly rather than left to the generic width-sharded config, which
+                # would place the result on the same cores as the activation. The program config
+                # above spreads it over mlp2_core_grid, and the two must agree: the factory reads
+                # the output's core set straight off this tensor's shard spec.
+                return ttnn.create_sharded_memory_config(
+                    (
+                        self.tile_padded_batch_rows,
+                        self.hidden_dim // self.cluster_shape[1] // self.mlp2_core_grid.num_cores,
+                    ),
+                    self.mlp2_core_grid,
+                    ttnn.ShardStrategy.WIDTH,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
         elif mode == Mode.PREFILL:
             return ttnn.DRAM_MEMORY_CONFIG
         else:
@@ -3585,7 +3629,25 @@ class ModelArgs:
                 return i
         return 1  # Fallback to 1 if no divisor found
 
-    def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None, fused_activation=None):
+    def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None, fused_activation=None, out_num_cores=None):
+        """`out_num_cores` lets the result be spread over a different core count than the input.
+
+        The two are independent in the framework: the program factory reads the input's core set
+        from the activation tensor's shard spec and the output's from the output tensor's
+        (matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp:949-951), and the op's own
+        validation only requires the two agree on buffer type and memory layout, not on core
+        count (matmul_device_operation.cpp:1207-1218).
+
+        Tying them together costs real time. `num_cores` sets in0_block_w, so a low count is what
+        lets the inner loop take big bites: at 8 cores each holds 16 tiles of K and in0_block_w
+        reaches 8, versus 2 at 64 cores, which measured 95.8 -> 63.3 us per call on the ff1/ff3
+        shape. But it also sets per_core_N, so a low count strands the result on few cores, and
+        the elementwise op that consumes it is pure data movement -- it went 3.3 -> 21.8 us per
+        call, costing more than the matmul saved (perf_report2.txt). Splitting the two lets each
+        side take the count that suits it. The spreading itself is not extra work: compute always
+        happens on the 12 DRAM-adjacent cores and is redistributed from there regardless, so a
+        wider destination is the same step aimed differently.
+        """
         # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
         if num_cores is None:
             # num_cores = self.dram_shard_core_grid_for_k(k).num_cores
@@ -3597,7 +3659,7 @@ class ModelArgs:
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores)),
             per_core_M=math.ceil(m / ttnn.TILE_SIZE),
-            per_core_N=math.ceil(n / (ttnn.TILE_SIZE * num_cores)),
+            per_core_N=math.ceil(n / (ttnn.TILE_SIZE * (out_num_cores or num_cores))),
             fused_activation=fused_activation,
         )
 

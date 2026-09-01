@@ -302,15 +302,27 @@ class MLP(LightweightModule):
                     ),
                 )
 
+        # This used to inherit w1_out's placement, which tied it to whatever core count ff1/ff3
+        # ran on. Those two want opposite things: measured at 32k decode, ff1/ff3 cost 95.8 us
+        # each on 64 cores and 63.3 on 8, while this multiply costs 3.3 us on 64 cores and 21.8
+        # on 8 -- it is pure data movement with no arithmetic to hide latency, so it scales with
+        # core count. Inheriting cost 1.99 ms/token when ff1/ff3 moved to 8 cores and wiped out
+        # their 2.35 ms gain (perf_report2.txt).
+        #
+        # Producing directly into w2's layout decouples them and costs nothing extra: the
+        # to_memory_config below wanted that layout anyway, so it becomes the no-op its comment
+        # already describes rather than a real redistribution.
+        decode_rearranged = mode == Mode.DECODE and not TG and self.prefetcher is None
+        mul_mem_cfg = self.args.get_mlp_binary_mult_mem_config(mode) if decode_rearranged else w1_out.memory_config()
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
             input_tensor_a_activations=[self.activation_type],
             dtype=activation_dtype or ttnn.bfloat8_b,
-            memory_config=w1_out.memory_config(),
+            memory_config=mul_mem_cfg,
         )
 
-        if mode == Mode.DECODE and not TG and self.prefetcher is None:
+        if decode_rearranged:
             # w2 may use a different core grid, this is a no-op if they already match
             w2_in = ttnn.to_memory_config(w2_in, self.args.get_mlp_binary_mult_mem_config(mode))
 
