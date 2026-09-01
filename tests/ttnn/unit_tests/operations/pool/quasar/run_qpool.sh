@@ -4,6 +4,8 @@
 #   ./run_qpool.sh              debug: ONE hand-picked trace (test_qpool_debug.py CONFIG block);
 #                               300s timeout doubles as the hang detector
 #   ./run_qpool.sh sweep        channel-width sweep (test_qpool_sweep.py), per-case verdicts
+#   ./run_qpool.sh matrix       kernel/geometry/forced-wide/sharding matrix (test_qpool_matrix),
+#                               per-case verdicts; QPOOL_ONLY=name1,name2 runs a subset
 #   ./run_qpool.sh span         span(T) = prologue + marginal*T fit at the tree's current
 #                               num_threads (test_qpool_span.py + qpool_span_report.py)
 #   ./run_qpool.sh span-ab      full threads A/B: measure at num_threads=4, rebuild at 1,
@@ -102,11 +104,22 @@ debug)
 sweep)
     sim_env
     set +e
-    timeout --foreground "$TIMEOUT_SWEEP_S" pytest -q -s "$SCRIPT_DIR/test_qpool_sweep.py" "$@"
+    timeout --foreground "$TIMEOUT_SWEEP_S" pytest -q -s -k test_qpool_c_sweep "$SCRIPT_DIR/test_qpool_sweep.py" "$@"
     rc=$?
     set -e
     if [[ $rc -eq 124 ]]; then
         echo "run_qpool: TIMED OUT after ${TIMEOUT_SWEEP_S}s — the last 'QPOOL-SWEEP: C=...' banner names the hung case."
+    fi
+    exit $rc
+    ;;
+matrix)
+    sim_env
+    set +e
+    timeout --foreground "$TIMEOUT_SWEEP_S" pytest -q -s -k test_qpool_matrix "$SCRIPT_DIR/test_qpool_sweep.py" "$@"
+    rc=$?
+    set -e
+    if [[ $rc -eq 124 ]]; then
+        echo "run_qpool: TIMED OUT after ${TIMEOUT_SWEEP_S}s — the last 'QPOOL-MATRIX:' banner names the hung case."
     fi
     exit $rc
     ;;
@@ -134,7 +147,7 @@ span-ab)
     echo "run_qpool: traces at $OUT_DIR/span_T{1,4}.tsv (tree restored to num_threads=4 and rebuilt)"
     ;;
 *)
-    echo "run_qpool: unknown mode '$MODE' (debug|sweep|span|span-ab)" >&2
+    echo "run_qpool: unknown mode '$MODE' (debug|sweep|matrix|span|span-ab)" >&2
     exit 2
     ;;
 esac
