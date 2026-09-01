@@ -34,6 +34,8 @@ case "${MODEL}" in
   kimi27)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MGD="${MGD_DIR}/pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto"
+    # Its MGD is the only sc4 one declaring both axes RING, so it is the only leg that can wrap.
+    FABRIC_MODE=2d_torus_xy
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
     # Dense MLA: one device cache, so the manifest's model + depth are all the producer needs. The runner
     # needs the weight path on top: the K2.7 adapter inherits K2.6's reference default.
@@ -45,6 +47,7 @@ case "${MODEL}" in
     # LINE/LINE variant: GLM-5.2's MoE all_to_all deadlocks in warmup under the torus fabric modes on
     # multi-galaxy pipeline prefill, so the descriptor declares no wrap and the fabric mode stays 2d.
     MGD="${MGD_DIR}/pipeline_prefill_4galaxy_connected_fabric2d_mesh_graph_descriptor.textproto"
+    FABRIC_MODE=2d
     MANIFEST="${MANIFEST_DIR}/glm52.json"
     # Sparse DSA: TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over the
     # 21 `full` layers), both PCC'd. The trace must be the indexer-K dump -- the adapter's default golden
@@ -126,7 +129,7 @@ python3 "${TTRUN_PY}" \
     export PYTHONPATH='${TT_METAL_HOME}'; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
-    export PREFILL_FABRIC_MODE=2d; \
+    export PREFILL_FABRIC_MODE=${FABRIC_MODE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     export PREFILL_ENABLE_MIGRATION=1; \
     export PREFILL_MOCK_MIGRATION=1; \
