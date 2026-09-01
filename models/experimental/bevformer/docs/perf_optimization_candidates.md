@@ -11,6 +11,28 @@ Numbers quoted below as *cost* come from the baseline profile
 historical. Gap/wall figures are not comparable across runs — see
 [PERF.md](PERF.md#the-gap-column-is-not-reliable).
 
+**Accuracy budget.** Everything landed up to stage 05 is correctness-preserving: PCC moved
+0.999608 → 0.999611 across five stages, i.e. not at all. Two items now on the list are not —
+[1e's statistical sibling](#a-statistical-bound-instead-of-a-worst-case-one) drops queries, and
+[candidate 13](#candidate-13--dtype-and-math-fidelity) spends mantissa — so what they are allowed to
+cost has to come from somewhere.
+
+It already does. The gates live in [`tests/pcc/`](../tests/pcc/), per module and per config, each
+case carrying `expected_pcc` plus `expected_abs_error`, `expected_rel_error` and
+`expected_high_error_ratio`. For the profiled configuration:
+
+| gate | `expected_pcc` | measured at stage 05 | headroom |
+|---|---:|---:|---:|
+| [`test_encoder.py`](../tests/pcc/test_encoder.py) `nuscenes_base`, 100×100, 6 layers | **0.997** | 0.999611 | **0.0026** |
+| [`test_layer.py`](../tests/pcc/test_layer.py) `nuscenes_base`, 100×100 | 0.997 | — | — |
+| [`test_spatial_cross_attention.py`](../tests/pcc/test_spatial_cross_attention.py) `nuscenes_base`, 100×100 | 0.999 | — | — |
+
+So a lossy change is ranked against **0.997 at the encoder**, and the three error columns bound the
+shape of the deviation, not just its correlation. Two rules follow, and neither is optional: report
+PCC **per change** so a batch cannot hide which one spent the budget, and **do not relax a threshold
+to make a change pass** — a lowered gate is the change failing, recorded as if it had succeeded. Note
+the tighter per-module gates (SCA at 0.999) bind before the encoder's 0.997 does.
+
 ## Candidates
 
 | # | candidate | targets | measured cost at baseline | effort | risk | status |
@@ -27,12 +49,14 @@ historical. Gap/wall figures are not comparable across runs — see
 | [3](#candidate-3--tile-padding-waste) | fold the offset normalizer into the Linear | kernel | **−32.7 ms kernel** | S | low | **landed — [05](perf_reports/05-offset-normalizer-folded.md)** |
 | [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | — | — | — | **moot — deleted by [04](perf_reports/04-fused-msda.md)** |
 | [5](#candidate-5--data-movement-vs-compute) | shrink the data-movement / compute ratio | kernel | **220.8 ms** DM vs **220.7 ms** compute (~1:1) | M | low | todo — analysis |
-| [6](#candidate-6--permute-by-reformulation) | drop permute/reshape by reformulation or weight reorder | kernel | **139.8 ms** reshape+permute | M | med | todo |
+| [6](#candidate-6--permutereshape-by-reformulation) | drop permute/reshape by reformulation or weight reorder | kernel | **139.8 ms** reshape+permute | M | med | todo |
 | [7](#candidate-7--l1-vs-dram) | place operands in L1 instead of DRAM | kernel | unknown; expected small | S | low | todo — likely small |
 | [8](#candidate-8--fuse-binaryng) | fuse `BinaryNg` into its producers | kernel | **48.2 ms** (10.6%) | M | med | todo |
 | [9](#candidate-9--trace-capture) | trace capture the encoder | gap | ≤9 ms/layer | M | low | parked behind 1b/1e |
 | [10](#candidate-10--msdaoperation-itself) | `MSDAOperation` device time | kernel | **167.8 ms** (36.7% of layer) | ? | ? | todo — upstream |
-| [11](#candidate-11--msda-layout-prep) | absorb MSDA permute/reshape into the op | kernel | **~103 ms** per-level layout prep | L | med | todo — after 6 |
+| [11](#candidate-11--absorb-msda-layout-prep) | absorb MSDA permute/reshape into the op | kernel | **~103 ms** per-level layout prep | L | med | todo — after 6 |
+| [12](#candidate-12--one-fused-call-for-all-levels) | multi-level fused op: 4 SCA launches → 1 | kernel | 4× launch + 4× per-level prep | L | med | todo — upstream, with 10 |
+| [13](#candidate-13--dtype-and-math-fidelity) | bfloat8_b weights, bfloat16 activations | kernel | unmeasured; **spends accuracy** | S | med | todo — needs an accuracy budget |
 
 Ordering rationale is at the [bottom](#ordering).
 
@@ -612,8 +636,8 @@ Matmul is 1.0%. The compute side is the fused sampler and elementwise, not GEMM.
 side is layout: getting a tensor into the contract the next op accepts, then converting it back.
 A change that deletes a permute and inserts an untilize has not moved this ratio.
 
-The ratio is how you decide which of [6](#candidate-6--permute-by-reformulation) /
-[8](#candidate-8--fuse-binaryng) / [11](#candidate-11--msda-layout-prep) is worth doing, and it is
+The ratio is how you decide which of [6](#candidate-6--permutereshape-by-reformulation) /
+[8](#candidate-8--fuse-binaryng) / [11](#candidate-11--absorb-msda-layout-prep) is worth doing, and it is
 how you know you are done.
 
 ### How to measure it
@@ -629,18 +653,18 @@ stage-05 CSV (`2026_08_28_10_23_13`) and sum **kernel ms**:
    "how many permutes" but "which compute's contract forced this shuffle." Group by producer →
    consumer pair, using the signposts already in the layer (`TT MS Deformable Attn Module`,
    `MSDA Fused Core`, SCA rebatch). The ~103 ms of per-level prep around the fused op
-   ([candidate 10](#candidate-10--msdaoperation-itself) / [11](#candidate-11--msda-layout-prep))
+   ([candidate 10](#candidate-10--msdaoperation-itself) / [11](#candidate-11--absorb-msda-layout-prep))
    should fall out as one group.
 3. **Split necessary from accidental.** Necessary = the next compute's device-op validation
    rejects any other layout (the fused MSDA's ROW_MAJOR / INTERLEAVED / `(N, H, W, D)` contract is
    the current example). Accidental = the tensor was stored in an order that a weight reorder or a
-   different reshape would have avoided ([candidate 6](#candidate-6--permute-by-reformulation)).
+   different reshape would have avoided ([candidate 6](#candidate-6--permutereshape-by-reformulation)).
    Only the accidental bucket is a model-side win.
 4. **Optional: bound vs compute.** If a `noc.csv` / Tracy capture is available, mark each
    data-movement group as DRAM-bandwidth-bound or just launch-heavy. Bandwidth-bound groups are
    the ones that would move if the tensor lived in L1 ([candidate 7](#candidate-7--l1-vs-dram));
    launch-heavy groups are the ones that disappear only when the op count drops (fusion, [8](#candidate-8--fuse-binaryng)
-   and [11](#candidate-11--msda-layout-prep)).
+   and [11](#candidate-11--absorb-msda-layout-prep)).
 5. **Re-measure the ratio after every landed change.** The headline number is
    `data-movement_ms / compute_ms`. Stage 05 is ~1.00. A real win moves it down; a shuffle that
    trades Permute for Untilize leaves it where it is.
@@ -689,9 +713,39 @@ A reshape of a Linear's output that only splits a trailing multiple (`embed → 
 `heads*L*P → (heads, L, P)`) is a view in the right layout and is not the cost. The cost is the
 **axis move** that follows it. If the Linear emits head-major, that axis move is gone.
 
+### What a weight reorder cannot reach
+
+**The untilize on `value` is forced by the op, not by BEVFormer's storage order.** `value` comes out
+of `value_proj`, a matmul, so it is TILE; the fused op enforces ROW_MAJOR with `TT_FATAL`
+([tt_ms_deformable_attention.py:43-44](../tt/tt_ms_deformable_attention.py#L43-L44)). The
+`to_layout` at [L51](../tt/tt_ms_deformable_attention.py#L51) therefore survives every reorder this
+candidate can make — no weight permutation makes a matmul emit ROW_MAJOR — and `value` is the ~92 MB
+tensor in [candidate 7](#candidate-7--l1-vs-dram)'s size table.
+
+So scope 6 to the permute at [L50](../tt/tt_ms_deformable_attention.py#L50), not the untilize behind
+it. Killing that untilize needs the op to accept TILE input, which is
+[candidate 11](#candidate-11--absorb-msda-layout-prep) route 1 — and this is the strongest argument
+for route 1, stronger than the one 11 currently makes for itself.
+
+### Free hoists in the same function, worth taking either way
+
+Not reformulation, just work sitting inside the level loop that has no reason to be there
+([`_fused_msda_level`](../tt/tt_ms_deformable_attention.py#L36-L70)):
+
+- `attn`'s `to_layout(ROW_MAJOR)` runs **per level** ([L61](../tt/tt_ms_deformable_attention.py#L61))
+  while `sampling_grids`' identical conversion is already hoisted above the loop
+  ([L117](../tt/tt_ms_deformable_attention.py#L117)). Same asymmetry for the three `typecast` guards
+  at [L63-68](../tt/tt_ms_deformable_attention.py#L63-L68).
+- `grid` and `attn` are **sliced, then permuted**, per level. Permuting the full tensor once and
+  slicing after is the same data through a quarter of the launches.
+
+Same bytes, fewer launches. Whether that shows up depends on whether these groups are launch-bound
+or bandwidth-bound — [candidate 5](#candidate-5--data-movement-vs-compute)'s optional noc pass is
+what tells you, and this is a cheap place to test that classification before betting 11 on it.
+
 ### What this is not
 
-This is not [candidate 11](#candidate-11--msda-layout-prep). 6 asks whether the shuffle can be
+This is not [candidate 11](#candidate-11--absorb-msda-layout-prep). 6 asks whether the shuffle can be
 deleted by changing how weights and activations are stored. 11 asks what to do with the shuffle
 that remains after that — fold it into a specialized kernel or into the fused op. Sequence 6
 first. Writing a new reshape op for a permute that a weight reorder would have deleted is the
@@ -777,7 +831,7 @@ Walk producer → consumer pairs, not op names:
    the current example). One kernel, or fold the constants away entirely.
 4. Do not fuse across a layout change. A `BinaryNg` that sits between an Untilize and a Tilize
    is not an epilogue — the layout ops are the cost, and
-   [candidate 5](#candidate-5--data-movement-vs-compute) / [6](#candidate-6--permute-by-reformulation)
+   [candidate 5](#candidate-5--data-movement-vs-compute) / [6](#candidate-6--permutereshape-by-reformulation)
    own those, not this entry.
 5. Check whether the binary is already a candidate for deletion by a weight fold, the way
    candidate 3 deleted the `div`. `* 2 - 1` on the sampling grid is the obvious next fold: the
@@ -844,15 +898,15 @@ Also in the region and cheaper to attack from this side: **~103 ms of per-level 
 (`Untilize`/`Transpose`/`Slice`/`Permute`/`Tilize`, ×4). Some is genuinely per-level; the
 tilize↔untilize churn around each call is not obviously necessary and is model-side work. That
 prep is now [candidate 5](#candidate-5--data-movement-vs-compute) (measure),
-[candidate 6](#candidate-6--permute-by-reformulation) (delete by storage order), and
-[candidate 11](#candidate-11--msda-layout-prep) (fold what remains into a kernel). This entry
+[candidate 6](#candidate-6--permutereshape-by-reformulation) (delete by storage order), and
+[candidate 11](#candidate-11--absorb-msda-layout-prep) (fold what remains into a kernel). This entry
 owns the fused op's device time, not the shuffle around it.
 
 ## Candidate 11 — absorb MSDA layout prep
 
 New, and last, because it is a kernel — the same class of work as
 [candidate 10](#candidate-10--msdaoperation-itself), aimed at the shuffle that 10 left on the
-table. Do not start it before [candidate 6](#candidate-6--permute-by-reformulation) has tried to
+table. Do not start it before [candidate 6](#candidate-6--permutereshape-by-reformulation) has tried to
 delete the permutes by changing how the tensors are stored. Whatever 6 cannot remove is the
 scope here.
 
@@ -879,6 +933,12 @@ been split out. Together they are the reason data-movement still matches compute
 sample-weight-reduce tail.
 
 Two routes, in the order they should be tried:
+
+Route 1 is worth more than this entry originally argued: [candidate 6](#what-a-weight-reorder-cannot-reach)
+establishes that the untilize of the ~92 MB `value` tensor **cannot** be deleted by any weight
+reorder, because a matmul emits TILE and the op demands ROW_MAJOR. Accepting TILE input is the only
+thing that removes it. And [candidate 12](#candidate-12--one-fused-call-for-all-levels) wants a
+contract change to the same op — take both to upstream in one conversation.
 
 1. **Relax the fused op's input/output contract** so it accepts the native BEVFormer layouts —
    `(bs, H*W, heads, D)`, `(bs, Q, heads, P, 2)`, `(bs, Q, heads, P)` in, `(bs, Q, embed)` out —
@@ -907,6 +967,110 @@ Work items:
 - [ ] Check `vadv2` before picking a contract. If it already feeds the op in today's layout,
       a new reshape op (route 2) does not break it; a contract change (route 1) needs a
       compatible default.
+
+## Candidate 12 — one fused call for all levels
+
+**Untracked until now, and it may be the largest single item left.** SCA runs **four**
+`multi_scale_deformable_attn` launches, one per pyramid level
+([tt_ms_deformable_attention.py:122-132](../tt/tt_ms_deformable_attention.py#L122-L132)), because the
+op is `num_levels == 1` only. That one constraint costs three things at once:
+
+| what | why the level count drives it |
+|---|---|
+| 4 launches instead of 1 | [candidate 10](#candidate-10--msdaoperation-itself) already shows the op carries real launch/packing overhead — +45% per sample vs bare `grid_sample`, and VADv2's measured `N*Q >= 1024` floor |
+| **4× the per-level prep** | the ~103 ms in [candidate 11](#candidate-11--absorb-msda-layout-prep) is *per level*; one level is one prep |
+| 3 `ttnn.add`s | combining the per-level outputs — row 4 of [candidate 8](#candidate-8--fuse-binaryng) |
+
+### Why it fell through the cracks
+
+[Candidate 2](#candidate-2--fused-msda) recorded it as blocker 1 ("a per-level call plus a host-side
+weighted sum … or a follow-up to the op"), took the per-level route, and nothing inherited the
+follow-up. 10 owns the op's device time but scopes itself to the single-level kernel; 11 asks the op
+to relax its *layout* contract but never its *level* contract. Three entries, and the item sat
+between all of them.
+
+### What the op would have to grow
+
+The reference MSDA formulation flattens all levels into one value tensor and indexes with
+`level_start_index`; this op instead takes `(N, H, W, D)`, so the level count is baked into the
+operand shape. A multi-level contract means either a list of value tensors plus their shapes, or the
+flattened value plus `level_start_index` and `spatial_shapes` — the second is what mmcv does and what
+`sampling_locations` is already normalized for. `attention_weights` needs no change at all: it is
+already softmaxed jointly over `L*P` ([stage 04](perf_reports/04-fused-msda.md) established that the
+joint sum decomposes exactly), so a multi-level kernel just stops decomposing it.
+
+This is **upstream** work, same as 10, and it should be sequenced with 10's microbenchmark: if the
+launch overhead is what 10 suspects, collapsing four launches into one is where that finding cashes
+out. File them together, with one set of numbers.
+
+- [ ] Fold into 10's microbenchmark: measure 4 single-level calls at SCA's per-level shapes against
+      one call over the same total sampled points. That delta is what 12 is worth, and it is
+      measurable **before** any op change.
+- [ ] Only if the delta is real: raise the multi-level contract upstream, together with 11's
+      layout-contract ask. Two contract changes to one op are one negotiation, not two.
+- [ ] Check in-tree callers before proposing a signature change — `vadv2` runs `num_levels == 1` and
+      must keep working.
+
+## Candidate 13 — dtype and math fidelity
+
+**Unpriced, and the first item on this list that spends accuracy.** Everything today is bfloat16:
+`DEFAULT_DTYPE` in [model_preprocessing.py](../tt/model_preprocessing.py) sets weights and biases,
+and every activation follows. The working hypothesis from the precision discussion is
+**bfloat16 activations + bfloat8_b weights + HiFi2**, validated afterwards against PCC and device
+time.
+
+### One part of that hypothesis is already true
+
+**BEVFormer's matmuls already run HiFi2.** No call site passes `compute_kernel_config` — none of the
+seven `ttnn.linear` / `ttnn.matmul` sites carries one — and with bf16 inputs, no `program_config` and
+no user core grid, matmul defaults to `MathFidelity::HiFi2`
+([matmul_device_operation.cpp:2798-2799](../../../../ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp#L2798-L2799)).
+So "move to HiFi2" is a no-op here, not a change. Setting it explicitly is still worth doing — as
+documentation, and because the default is conditional — but do not book a win against it.
+
+**And there is a trap in the same code.** Fidelity drops to `LoFi` when `are_inputs_low_precision_df`
+holds, which requires **both** operands to be bfloat8_b/bfloat4_b. bf8_b weights against bf16
+activations keeps HiFi2, which is the hypothesis. But if activations are ever lowered too, fidelity
+silently drops to LoFi in the same step — two precision changes landing as one, with one PCC number
+between them. Pin `compute_kernel_config` explicitly before touching activation dtype.
+
+### Where the win would actually come from
+
+Not from matmul. **Matmul is 1.0% of the layer** — the arithmetic is not the cost, and that has been
+true since the baseline. The reason to care about dtype is
+[candidate 5](#candidate-5--data-movement-vs-compute): **48.3% of the layer is data movement**, which
+is bytes, and bfloat8_b is half the bytes of bfloat16. Every Permute, Untilize, Tilize and Slice on a
+bf8_b tensor moves half as much.
+
+The catch is the fused op, which requires **bfloat16** (`TT_FATAL`, see
+[candidate 2's contract](#op-contract)). `value`, `grid` and `attn` must be bf16 at the op boundary,
+so a bf8_b `value` buys a cheaper permute and then pays a typecast — and the typecast reads and
+writes the whole tensor, which is roughly what the permute cost in the first place. **Expect that to
+cancel.** The honest scope is weights, plus the tensors that never reach the op: the FFN pair and
+`output_proj`.
+
+So: small, and worth pricing precisely because "half the bytes on 48% of the layer" sounds much
+bigger than it is going to be.
+
+### Work items
+
+- [ ] Set `compute_kernel_config` explicitly at all seven matmul sites at today's dtypes. Expect
+      **zero** change — that is the point. It pins the conditional default and makes every later
+      comparison honest.
+- [ ] Flip `DEFAULT_DTYPE` for weights only (bfloat8_b), keep activations bfloat16, measure PCC and
+      kernel time. This is the cheap half of the hypothesis and it is one line; weights are small, so
+      expect a small number.
+- [ ] Per-tensor, not global: list every tensor that never crosses the fused op's bf16 boundary and
+      price bf8_b on those alone. A global flip either hits the op's `TT_FATAL` or silently inserts
+      typecasts — both make the measurement meaningless.
+- [ ] Report PCC **per change**, never for the batch, against the gates in
+      [`tests/pcc/`](../tests/pcc/) — encoder 0.997, SCA 0.999, and the abs/rel/high-error columns
+      alongside them (see [accuracy budget](#candidates)). Stage 05 measures 0.999611, so the encoder
+      headroom is 0.0026 and the per-module gates bind first. Do not relax a threshold to make a
+      dtype change pass.
+
+Do not sequence any other candidate behind this one. It is independent of 5/6/11 and, unlike them, it
+is not correctness-preserving.
 
 ---
 
@@ -938,12 +1102,19 @@ Work items:
     and the `* 2 - 1` fold. Independent of 6; can run in parallel once 5 has named the sites.
 13. **7** — L1 vs DRAM. Expected small; do not block anything on it. Reject-with-numbers or keep
     the operands that actually fit.
-14. **10** — **167.8 ms, 36.7% of the layer.** Microbenchmark it; the answer likely belongs
-    upstream rather than in this model. Independent of 5–8.
+14. **10 + 12** — **167.8 ms, 36.7% of the layer**, and four launches where one would do. One
+    microbenchmark answers both: per-sample cost against bare `grid_sample`, and 4 single-level
+    calls against one call over the same points. Independent of 5–8, and the answer likely belongs
+    upstream rather than in this model.
 15. **11** — absorb whatever shuffle 6 could not delete into the fused op or a specialized
     MSDA-reshape kernel. After 6, and after 5's optional noc pass has said whether that shuffle
-    is launch-bound or bandwidth-bound.
-16. **9** — needs 1b or 1e, and is worth ≤9 ms/layer rather than the 218 ms first claimed. Only revisit if
+    is launch-bound or bandwidth-bound. Its route 1 also carries 6's forced untilize and 12's level
+    contract — one upstream conversation, three asks.
+16. **13** — dtype. Independent of everything above and cheap to try, but it is the first lossy
+    change on the list, so it is ranked last on purpose: land the correctness-preserving work first
+    and spend the 0.0026 of encoder [PCC headroom](#candidates) knowingly. Note one third of the
+    hypothesis (HiFi2) is already the running default.
+17. **9** — needs 1b or 1e, and is worth ≤9 ms/layer rather than the 218 ms first claimed. Only revisit if
    an encoder-harness measurement shows per-forward host time the layer profile does not — and that
    harness would have to fix the gap column first (see [PERF.md](PERF.md#the-gap-column-is-not-reliable)).
 
@@ -970,12 +1141,20 @@ kernel by deleting the layout churn around the sampler rather than by making ari
 item ([candidate 10](#candidate-10--msdaoperation-itself)), but it is no longer the only live
 question: data-movement and compute are now ~1:1, and the model-side half of that (permute,
 reshape, BinaryNg, the MSDA pre/post shuffle) is [5](#candidate-5--data-movement-vs-compute)–[8](#candidate-8--fuse-binaryng)
-and [11](#candidate-11--msda-layout-prep). 10 is an op-level question; those five are not.
+and [11](#candidate-11--absorb-msda-layout-prep). 10 is an op-level question; those five are not.
 
-Two lessons this backlog got wrong and should not repeat:
+Four lessons this backlog got wrong and should not repeat:
 
 - **Sequence rewrites before the cleanups inside them.** 4 was ranked first for being cheap; 2
   deleted it.
 - **Grep the tree for prior art before deriving an op contract.** `vadv2` had a working
   `multi_scale_deformable_attn` call site, a measured shape floor, and the offset-normalizer fold —
   all three relevant, none referenced here until stage 04.
+- **A blocker deferred inside a landed entry needs a home, or it disappears.** 2 recorded the
+  single-level limitation, shipped the per-level workaround, and no entry inherited it; 10 and 11
+  each assumed the other owned it. It is [12](#candidate-12--one-fused-call-for-all-levels) now, and
+  it may be the largest item left. When a candidate lands *around* a constraint, open the entry for
+  the constraint in the same commit.
+- **Read the op's defaults before proposing to change them.** HiFi2 was proposed as a change;
+  matmul has been running HiFi2 all along, by a conditional default no call site overrides
+  ([13](#candidate-13--dtype-and-math-fidelity)). Verify the current value, then propose.
