@@ -2153,6 +2153,15 @@ struct PerfDebugProfiler::FabricSyncState {
             // is exact. Cross-lane it is not: per-core anchors are one-shot fits whose ppm error
             // integrates to tens of us, which is the same trap the eth tracker documents.
             int64_t off = 0;
+            // The published cross-device corrections AS THEY STOOD WHEN THIS ROUND SOLVED.
+            // publish_fabric_sync_corrections() reruns every 40 ms, so the correction is time-varying
+            // and a record materialised mid-run gets the value current THEN. Reading it once at
+            // teardown and applying it to draws spanning the whole run leaves a residual equal to how
+            // far the offset drifted since -- measured: the residual tracked each link's offset SPAN
+            // at a constant 1.19x (0->3 15534 cy / 13.7 us, 0->1 8035 cy / 7.1 us, 1->2 3985 cy /
+            // 3.5 us). Sampling per draw is what makes the two ends coincide.
+            int64_t corr_i = 0;
+            int64_t corr_r = 0;
         };
         std::vector<Draw> draws;
     };
@@ -2519,7 +2528,7 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
                             static_cast<int64_t>(r.t1[i]) - static_cast<int64_t>(mid),
                             r.t2[i] - r.t0[i], mid});
                         if (e.draws.size() < FabricSyncState::kMaxDraws) {
-                            e.draws.push_back({r.t0[i], r.t1[i], r.t2[i], 0});
+                            e.draws.push_back({r.t0[i], r.t1[i], r.t2[i], 0, 0, 0});
                         }
                     }
                     if (trips.size() < 4) {
@@ -2547,8 +2556,12 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
                     e.have = true;
                     // Backfill this round's draws with the offset the round solved to, so the render can
                     // put the echo on the initiator's clock without reaching for a global average.
+                    const int64_t corr_i_now = perf_debug::get_zone_ts_correction(e.init.chip);
+                    const int64_t corr_r_now = perf_debug::get_zone_ts_correction(e.resp.chip);
                     for (size_t k = draws_before; k < e.draws.size(); k++) {
                         e.draws[k].off = sol.offset;
+                        e.draws[k].corr_i = corr_i_now;
+                        e.draws[k].corr_r = corr_r_now;
                     }
                     e.series.emplace_back(sol.mid_ref, sol.offset);
                     if (e.series.size() > 256) {
@@ -2898,6 +2911,21 @@ void PerfDebugProfiler::compose_device_anchors_from_root() {
         ctx.anchor_host = root_host_anchor_;
         ctx.anchor_dev = static_cast<uint64_t>(dev_at_root_anchor);
         ctx.anchor_valid = true;
+        // REFRESH THE SNAPSHOT. st->anchors is captured early in start_fabric_sync -- before this
+        // composition runs -- so it records these devices while they are still unanchored. Left stale,
+        // publish_fabric_sync_corrections() hits its "a device without an anchor cannot take a
+        // correction" guard and returns forever, and EVERY zone_ts_correction stays 0. That is exactly
+        // what was measured (CORRDBG early-return: chip 1 has no valid ANCHOR SNAPSHOT), and it is why
+        // the cross-device residual accumulated into a smooth 6 us ramp instead of being re-zeroed at
+        // each 40 ms publish. The guard is right; the snapshot was stale.
+        if (fabric_sync_ != nullptr) {
+            FabricSyncState::Anchor an;
+            an.valid = true;
+            an.host_ns = ctx.anchor_host;
+            an.dev = ctx.anchor_dev;
+            an.f = ctx.freq_ghz;
+            fabric_sync_->anchors[ctx.chip_id] = an;
+        }
         n_comp++;
         log_info(
             tt::LogMetal,
@@ -2922,6 +2950,11 @@ void PerfDebugProfiler::compose_device_anchors_from_root() {
 }
 
 void PerfDebugProfiler::publish_fabric_sync_corrections() {
+    // CORRDBG: say which branch is taken, ONCE each. The corrections were measured to be 0 on every
+    // chip, and "it never reaches the write" has several possible causes -- let the log distinguish
+    // them instead of deriving which one it must be.
+    static bool dbg_any = false, dbg_all = false, dbg_pub = false, dbg_root = false, dbg_chip = false,
+                dbg_write = false;
     auto* st = fabric_sync_;
     if (st == nullptr) {
         return;
@@ -2931,6 +2964,10 @@ void PerfDebugProfiler::publish_fabric_sync_corrections() {
         any = any || (e.in_tree && e.have);
     }
     if (!any) {
+        if (!dbg_any) {
+            dbg_any = true;
+            log_info(tt::LogMetal, "[perf-debug profiler] CORRDBG early-return: no in-tree edge has solved yet");
+        }
         return;
     }
     // delta[chip] = chip clock MINUS root clock, composed from each edge's latest solved offset
@@ -2965,17 +3002,40 @@ void PerfDebugProfiler::publish_fabric_sync_corrections() {
         }
     }
     if (!all || !st->publish) {
+        if (!all && !dbg_all) {
+            dbg_all = true;
+            log_info(tt::LogMetal, "[perf-debug profiler] CORRDBG early-return: !all (a chip has no composed path)");
+        }
+        if (!st->publish && !dbg_pub) {
+            dbg_pub = true;
+            log_info(tt::LogMetal, "[perf-debug profiler] CORRDBG early-return: !publish (measure-only policy)");
+        }
         return;
     }
     // corr = (anchor-implied delta) - (measured delta); root = 0 by construction
     const auto ra = st->anchors.find(st->root);
     if (ra == st->anchors.end() || !ra->second.valid) {
+        if (!dbg_root) {
+            dbg_root = true;
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] CORRDBG early-return: ROOT chip {} has no valid anchor snapshot",
+                st->root);
+        }
         return;
     }
     std::unordered_map<uint32_t, int64_t> corr;
     for (const auto& [chip, d] : delta) {
         const auto a = st->anchors.find(chip);
         if (a == st->anchors.end() || !a->second.valid) {
+            if (!dbg_chip) {
+                dbg_chip = true;
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] CORRDBG early-return: chip {} has no valid ANCHOR SNAPSHOT (the "
+                    "snapshot is taken early in start_fabric_sync, before compose_device_anchors_from_root)",
+                    chip);
+            }
             return;  // a device without an anchor cannot take a correction against one
         }
         const double anchor_implied =
@@ -2994,6 +3054,18 @@ void PerfDebugProfiler::publish_fabric_sync_corrections() {
     }
     for (const auto& [chip, c] : corr) {
         perf_debug::set_zone_ts_correction(chip, c + st->baseline);
+    }
+    if (!dbg_write) {
+        dbg_write = true;
+        for (const auto& [chip, c] : corr) {
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] CORRDBG WRITE chip {}: corr {} + baseline {} = {} cy",
+                chip,
+                c,
+                st->baseline,
+                c + st->baseline);
+        }
     }
 }
 
@@ -3209,8 +3281,10 @@ void PerfDebugProfiler::render_fabric_sync_into_tracy() {
         // The record path already does exactly this at materialization (perf_debug_receiver.cpp:
         // `r.ts - r.dur + corr`), but this render draws straight from st->edges at teardown and never
         // passes through it. Same store, same convention: corrected = raw + get_zone_ts_correction(chip).
-        const int64_t corr_init = perf_debug::get_zone_ts_correction(e.init.chip);
-        const int64_t corr_resp = perf_debug::get_zone_ts_correction(e.resp.chip);
+        // Per-draw corrections are used below; these remain only as the fallback for a draw that
+        // solved before any correction had been published.
+        const int64_t corr_init_fallback = perf_debug::get_zone_ts_correction(e.init.chip);
+        const int64_t corr_resp_fallback = perf_debug::get_zone_ts_correction(e.resp.chip);
 
         // ---- initiator lane: the RTT box + the echo CARRIED ONTO THIS CLOCK ----
         // t1 lives on the responder's clock; t1 - offset puts it on the initiator's. Both endpoints
@@ -3232,13 +3306,14 @@ void PerfDebugProfiler::render_fabric_sync_into_tracy() {
             // check, and a correction common to both endpoints cannot change it. Only the DRAWN
             // timestamps are corrected.
             const int64_t t1_on_init = static_cast<int64_t>(dr.t1) - dr.off;
+            const int64_t ci = dr.corr_i != 0 ? dr.corr_i : corr_init_fallback;
             items.push_back(
-                {static_cast<uint64_t>(static_cast<int64_t>(dr.t0) + corr_init),
-                 static_cast<uint64_t>(static_cast<int64_t>(dr.t2) + corr_init),
+                {static_cast<uint64_t>(static_cast<int64_t>(dr.t0) + ci),
+                 static_cast<uint64_t>(static_cast<int64_t>(dr.t2) + ci),
                  kRtt,
                  true});
             if (t1_on_init > 0) {
-                items.push_back({static_cast<uint64_t>(t1_on_init + corr_init), 0, kEchoOn, false});
+                items.push_back({static_cast<uint64_t>(t1_on_init + ci), 0, kEchoOn, false});
                 total++;
                 inside +=
                     (static_cast<uint64_t>(t1_on_init) >= dr.t0 && static_cast<uint64_t>(t1_on_init) <= dr.t2) ? 1 : 0;
@@ -3283,7 +3358,8 @@ void PerfDebugProfiler::render_fabric_sync_into_tracy() {
         std::vector<uint64_t> t1s;
         t1s.reserve(e.draws.size());
         for (const auto& dr : e.draws) {
-            t1s.push_back(dr.t1);
+            const int64_t cr = dr.corr_r != 0 ? dr.corr_r : corr_resp_fallback;
+            t1s.push_back(static_cast<uint64_t>(static_cast<int64_t>(dr.t1) + cr));
         }
         std::sort(t1s.begin(), t1s.end());
         for (uint64_t t1 : t1s) {
@@ -3296,7 +3372,7 @@ void PerfDebugProfiler::render_fabric_sync_into_tracy() {
             pe.risc = 0;
             pe.id = 0;
             pe.name = kEchoRaw;
-            pe.timestamp = static_cast<uint64_t>(static_cast<int64_t>(t1) + corr_resp);
+            pe.timestamp = t1;  // already corrected per-draw when t1s was built
             pe.num_values = 0;
             tracy_->HandleWorkerEvent(pe);
             marks++;
