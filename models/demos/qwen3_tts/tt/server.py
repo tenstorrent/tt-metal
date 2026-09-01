@@ -1728,11 +1728,14 @@ def generate_codes_ttnn(
         print(f"  Avg Talker decode:              {sum(talker_times_ms)/len(talker_times_ms):.1f} ms/frame")
     if cp_times_ms:
         print(f"  Avg CodePredictor:              {sum(cp_times_ms)/len(cp_times_ms):.1f} ms/frame")
-    frame_breakdown_avg_ms = (
+    # ar_decode_loop owns the per-frame timers and returns the averages; the local sums
+    # above are never written, so recomputing from them always yielded {} and the whole
+    # breakdown below silently never printed. Prefer the helper's result.
+    frame_breakdown_avg_ms = frame_breakdown_avg_ms_helper or (
         {k: v / frame_breakdown_frames for k, v in frame_breakdown_sums.items()} if frame_breakdown_frames > 0 else {}
     )
     if frame_breakdown_avg_ms:
-        print(f"  --- Frame breakdown (avg ms/frame, {frame_breakdown_frames} frames) ---")
+        print("  --- Frame breakdown (avg ms/frame) ---")
         print(f"    CP input prep (D2H talker hidden + embed): {frame_breakdown_avg_ms['cp_input_prep_ms']:.2f}")
         print(f"    CP KV + mask restore H2D:                  {frame_breakdown_avg_ms['cp_kv_restore_ms']:.2f}")
         print(f"    CP prefill trace + 1st sample:             {frame_breakdown_avg_ms['cp_prefill_ms']:.2f}")
