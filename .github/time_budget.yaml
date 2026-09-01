@@ -395,12 +395,7 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts. A leg's timeout bounds the test
-    # step only -- checkout and "Setup multihost job" are separate steps with their own limits, so a
-    # leg's runner setup is not inside the number budgeted here.
-    # 488 -> 525 covers the eight Mistral-Small-4-119B entries plus 2 min on the shared KV cache
-    # table entry Mistral now rides. Current file sum is 518.
-    bh_sc1: 525
+    bh_sc1: 488
     bh_sc1_high_power: 166
     wh_n150: 500
     wh_n150_civ2: 300

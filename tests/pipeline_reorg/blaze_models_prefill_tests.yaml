@@ -735,8 +735,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # measured 73 s of tests on run 32793561151, plus runner setup
-      timeout: 11
+      # 2.6 min on run 33425317777, covering both the 5k and 25k rows; 7 is ~2.7x.
+      timeout: 7
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
@@ -757,9 +757,10 @@
   test_group: module
   skus:
     bh_sc1:
-      # 13 scenarios (verified by --collect-only). Measured 1164 s (19.4 min) for all 13, plus
-      # runner setup; 30 was not enough when the same leg ran 21 min, so this keeps a real margin.
-      timeout: 32
+      # 13.0 min on run 33425317777 for all 13 scenarios (verified by --collect-only); 22 is ~1.7x.
+      # The old 32 was sized against 20.9 min on run 32884863854, before the weight cache was staged
+      # -- a warm cache is what took this leg under 15.
+      timeout: 22
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
@@ -776,10 +777,9 @@
   test_group: module
   skus:
     bh_sc1:
-      # the row here is the shared-harness one (smoke, perf, pcc x determinism x
-      # iterations), not the 4-case row this number was measured against -- left generous until CI
-      # reports its own time
-      timeout: 14
+      # 2.0 min on run 33425317777, the shared-harness row (smoke, perf, pcc x determinism x
+      # iterations); 6 is ~3x.
+      timeout: 6
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
@@ -796,8 +796,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # measured 144 s of tests, plus runner setup
-      timeout: 12
+      # 4.5 min on run 33425317777, covering both the 5k and 25k rows; 10 is ~2.2x.
+      timeout: 10
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
@@ -818,9 +818,9 @@
   test_group: module
   skus:
     bh_sc1:
-      # Full-model PCC gated per stage on npcc, heavier than the 5.4 min smoke row it replaces;
-      # never yet completed on CI -- generous until it reports a time.
-      timeout: 20
+      # 3.9 min on run 33425317777, the first run this leg completed on CI; 12 is ~3x. Full-model
+      # PCC gated per stage on npcc, heavier than the 5.4 min smoke row it replaces.
+      timeout: 12
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
@@ -850,8 +850,9 @@
   test_group: module
   skus:
     bh_sc1:
-      # 11.9 min on CI at L36/full55k (18 chunks x 35 layers, each a host readback); 24 is ~2x.
-      timeout: 24
+      # 10.9 min on run 33425317777 at L36/full55k (18 chunks x 35 layers, each a host readback);
+      # 20 is ~1.8x.
+      timeout: 20
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
@@ -879,8 +880,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # 4:33 on CI vs the untraced twin's 11:54 (KV assert only); 12 is ~2.6x.
-      timeout: 12
+      # 4.9 min on run 33425317777 vs the untraced twin's 10.9 (KV assert only); 10 is ~2x.
+      timeout: 10
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
