@@ -740,7 +740,8 @@ class TtPrefillRuntime:
     def _stage_trace_inputs(
         self, input_tensor: ttnn.Tensor, metadata_msg: ttnn.Tensor, mtp_tokens: Optional[ttnn.Tensor] = None
     ) -> None:
-        """Copy one chunk's inputs into the captured persistent buffers and free them before the replay."""
+        """Copy one chunk's inputs into the captured persistent buffers before the replay, freeing only
+        the operands this runtime owns."""
         if self._trace_mtp_tokens is not None:
             assert mtp_tokens is not None, "MTP is on but no lookahead tensor arrived with this chunk"
             ttnn.copy(mtp_tokens, self._trace_mtp_tokens)
@@ -754,7 +755,6 @@ class TtPrefillRuntime:
         ttnn.copy(model_input, self._trace_input)
         ttnn.deallocate(model_input)
         self._metadata_from_msg(metadata_msg)
-        ttnn.deallocate(metadata_msg)
 
     @property
     def trace_metadata_msg(self) -> Optional[ttnn.Tensor]:
@@ -943,7 +943,9 @@ class TtPrefillRuntime:
         warm_mtp_tokens = None
         if self._trace_mtp_tokens is not None:
             warm_mtp_tokens = self.make_mtp_tokens_input([0] * (chunk + self._num_mtp_tokens()))
-        self._stage_trace_inputs(self.make_chunk_input([0] * chunk), self._meta_words_dev(words), warm_mtp_tokens)
+        warm_metadata_msg = self._meta_words_dev(words)
+        self._stage_trace_inputs(self.make_chunk_input([0] * chunk), warm_metadata_msg, warm_mtp_tokens)
+        ttnn.deallocate(warm_metadata_msg)
         # Keep the output: send_warmup_inputs needs its spec.
         self._send_warmup_activation = self._forward_traced(kv_caches)
         ttnn.synchronize_device(self.mesh_device)
