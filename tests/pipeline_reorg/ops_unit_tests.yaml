@@ -101,6 +101,22 @@
   team: ttnn
   category: experimental
 
+- name: ttnn attn_res_weighted_reduce_nc unit tests
+  # The test file sits in a directory no group suite globs, so this row is the only thing
+  # that runs it. That is deliberate: the op is brought up and measured on Blackhole P150b
+  # alone, and every group suite that would otherwise collect it runs -x on SKUs it has
+  # never executed on, where a failure would abort tests belonging to someone else.
+  # The per-test timeout sits below the step timeout so a hang is reported as a
+  # pytest stack dump rather than an opaque step kill, with room left over for the
+  # report to be written.
+  cmd: 'pytest tests/ttnn/unit_tests/operations/experimental/test_attn_res_weighted_reduce_nc.py -xv --timeout=60'
+  skus:
+    bh_p150b_civ2:
+      timeout: 3
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: ttnn
+  category: experimental
+
 - name: ttnn nightly experimental tests (blackhole - viommu)
   # Tests opt in with @pytest.mark.requires_host_iommu, allowing operation developers to add IOMMU coverage
   # without changing this infra-owned command. Keep the search roots aligned with the non-IOMMU suites above.
