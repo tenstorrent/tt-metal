@@ -173,6 +173,7 @@ class TtPrefillRuntime:
         # callback. Everything happens before the first request; there is no lazy or repeat capture.
         #   _controller       — SubDeviceTraceController driving the segmented capture/replay
         #   _trace_input      — persistent per-chunk input buffer (captured address; updated in place)
+        #   _input_is_caller_filled — set by claim_persistent_input(); the caller fills _trace_input itself
         #   _trace_metadata   — 3 persistent 1-element uint32 tensors (slot_id, actual_start, actual_end)
         #   _trace_metadata_msg — persistent packed uint32 tensor holding the same three words (plus
         #                       provided_levels on a downstream MTP rank);
@@ -188,6 +189,7 @@ class TtPrefillRuntime:
         #                       publishes it here and set_layer_completion_sink()'s callback reads it.
         self._controller = None
         self._trace_input = None
+        self._input_is_caller_filled = False
         self._trace_metadata = None
         self._trace_metadata_msg = None
         self._trace_d2h_service = None
@@ -565,6 +567,14 @@ class TtPrefillRuntime:
         """
         return num_mtp_tokens(self.config.mtp_levels)
 
+    def claim_persistent_input(self) -> ttnn.Tensor | None:
+        """Hand the traced forward's input buffer to the caller, which then fills it directly.
+        None when this runtime is not tracing, or keeps no single buffer for the whole input."""
+        if self.config.dflash_enabled and not self.config.is_first_rank:
+            return None
+        self._input_is_caller_filled = self._trace_input is not None
+        return self._trace_input
+
     def make_chunk_input(self, token_ids: list[int]) -> ttnn.Tensor:
         """Build one chunk's device input for `prefill_chunk`: `chunk_size` SP-sharded token ids on the
         first rank, or a placeholder hidden-state activation on a non-first rank, which receives the
@@ -752,8 +762,9 @@ class TtPrefillRuntime:
             ttnn.deallocate(input_tensor)
             ttnn.copy(partial, self._trace_partial_in)
             ttnn.deallocate(partial)
-        ttnn.copy(model_input, self._trace_input)
-        ttnn.deallocate(model_input)
+        if not self._input_is_caller_filled:
+            ttnn.copy(model_input, self._trace_input)
+            ttnn.deallocate(model_input)
         self._metadata_from_msg(metadata_msg)
 
     @property
@@ -914,6 +925,7 @@ class TtPrefillRuntime:
                 num_mtp_tokens=self._num_mtp_tokens(),
                 num_levels=self.config.mtp_levels,
             )
+        self._input_is_caller_filled = False
         # Per-element metadata: (slot_id, actual_start, actual_end), seeded for chunk 0.
         # ChunkMetadata, not a bare tuple: Mistral needs a 4th field (the llama4 query-scale buffer)
         # whose lifetime matches these scalars. None elsewhere, and fields 0-2 are unchanged.
