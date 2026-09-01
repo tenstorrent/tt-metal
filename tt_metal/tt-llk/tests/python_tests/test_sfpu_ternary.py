@@ -417,13 +417,18 @@ def _cat_b_cells(applies=lambda _in_fmt, _out_fmt, _dest_acc: True):
     )
 
 
-# What driving the ternary specials found on a Blackhole p150, once both goldens modelled the Dest
-# write and the pack (which accounted for 10 cells on its own). Keyed by (op, operand), scoped to
-# the specials_in class -- every entry is a non-finite *operand*, and the pole class agreed
-# everywhere. Non-strict, so each case still executes and reports XPASS if behaviour changes, and
-# derived from the delivery gates rather than listed so a cell drifting in or out shows up.
+# What driving the ternary specials found, once both goldens modelled the Dest write and the pack
+# (which accounted for 10 cells on its own). Keyed by (op, operand), scoped to the specials_in
+# class -- every entry is a non-finite *operand*, and the pole class agreed everywhere.
+# Non-strict, so each case still executes and reports XPASS if behaviour changes, and derived from
+# the delivery gates rather than listed so a cell drifting in or out shows up.
 #
-# TWO CAUSES, NOT FOUR:
+# The first two causes were measured on a Blackhole p150 and are arch-independent. The third is
+# Wormhole-only and carries a _TERNARY_EDGE_ARCH_GATE entry; it was found by running this sweep
+# on an n300, which is why the gate exists at all -- a divergence measured on one arch must not
+# silently excuse the other.
+#
+# THREE CAUSES, NOT FIVE:
 #
 #   c = NaN through the reciprocal (addcdiv and snake_beta, operand C). Both build the divide on
 #   SFPARECIP, which returns +0 for 1/NaN instead of propagating, so the result is `a` where the
@@ -436,12 +441,49 @@ def _cat_b_cells(applies=lambda _in_fmt, _out_fmt, _dest_acc: True):
 #   polynomial does there is an LLK decision with no ISA ruling. Scoped to the cells where a NaN
 #   *survives to L1*, from nan_survives_to_l1() rather than transcribed: where it does not, the
 #   golden's NaN packs to the same +inf and the two agree by substitution.
+#
+#   a = NaN wrapping to an exact zero in the software RNE (lerp, operand A, Wormhole only). See
+#   _LERP_RNE_WRAP_NOTE: this one is a defect in a *shared* conversion helper, not in lerp, so it
+#   is the entry most likely to be resolved by a kernel fix rather than by an ISA ruling.
+
+
+def _software_rne_path(_in_fmt, _out_fmt, dest_acc):
+    """True where calculate_lerp() takes its `if constexpr (!is_fp32_dest_acc_en)` branch.
+
+    That branch is the op's only caller of float32_to_bf16_rne, and the lerp divergence lives
+    entirely inside that routine -- so the Dest width, not a format property, is what scopes it.
+    Measured on an n300: dest_acc=No diverges, dest_acc=Yes agrees on the same probe values.
+    """
+    return dest_acc == DestAccumulation.No
+
+
 _TERNARY_EDGE_KNOWN_DIVERGENCES = {
     (MathOperation.SfpuAddcdiv, Operand.C): _cat_b_cells(),
     (MathOperation.SfpuSnakeBeta, Operand.C): _cat_b_cells(),
     (MathOperation.SfpuSnakeBeta, Operand.A): _cat_b_cells(nan_survives_to_l1),
     (MathOperation.SfpuSnakeBeta, Operand.B): _cat_b_cells(nan_survives_to_l1),
+    (MathOperation.SfpuLerp, Operand.A): _cat_b_cells(_software_rne_path),
 }
+
+# The arch each divergence was measured on, for the ones that are not arch-independent. Absent
+# means every arch, which is the case for the reciprocal and sin entries above -- both are
+# properties of a primitive's documented behaviour rather than of a NaN bit pattern.
+#
+# Wormhole only, and *asserted* on Blackhole rather than assumed: float32_to_bf16_rne leaves the
+# canonical 0x7fc00000 unchanged (0x7fc00000 + 0x7fff = 0x7fc07fff, which masks straight back),
+# so on the arch that promises that pattern the wrap cannot happen. If a Blackhole run ever does
+# hit it, this gate is what makes that a fresh failure instead of a silent xfail.
+_TERNARY_EDGE_ARCH_GATE = {
+    (MathOperation.SfpuLerp, Operand.A): (ChipArchitecture.WORMHOLE,),
+}
+
+_LERP_RNE_WRAP_NOTE = (
+    "float32_to_bf16_rne() has no non-finite guard: it rounds by adding 0x7fff + lsb to the raw "
+    "fp32 bits, and on a NaN whose pattern is 0xffff8000 or above that add carries out of bit 31 "
+    "and the mask leaves 0x00000000, so the NaN becomes an exact +0. The canonical 0x7fc00000 is "
+    "untouched by the same add, which is why this is Wormhole-only -- SFPMAD leaves a generated "
+    "NaN's pattern open there where Blackhole promises the canonical one"
+)
 
 _RECIPROCAL_NAN_NOTE = (
     "the kernel's reciprocal returns +0 for 1/NaN instead of propagating, so the quotient "
@@ -470,6 +512,17 @@ _TERNARY_EDGE_REASON = {
         Operand.B,
     ): "As operand A: the non-finite reaches the same "
     "sin through the b*a product.",
+    (
+        MathOperation.SfpuLerp,
+        Operand.A,
+    ): f"lerp(NaN, b, c) returns an exact 0 instead of a non-finite when c is a power of two "
+    f"of magnitude >= 0.5, on the dest_acc=No path only ({_LERP_RNE_WRAP_NOTE}). Measured on an "
+    "n300 with a = NaN, b = 1.0: c in 0.5, 1, 2, 4, 8, 16 all give 0, while every non-power-of-"
+    "two c and every c below 0.5 give the packed infinity the golden expects, and a = +/-inf "
+    "agrees throughout -- so this is the NaN probe on that one path. The multiply by a power of "
+    "two is what preserves the NaN's high mantissa bits all the way into the round; a "
+    "non-power-of-two c perturbs them and the carry stops short. Not lerp's defect: the wrap is "
+    "in a conversion helper the binary ops share, so a fix belongs there.",
 }
 
 assert set(_TERNARY_EDGE_REASON) == set(_TERNARY_EDGE_KNOWN_DIVERGENCES), (
@@ -479,6 +532,10 @@ assert set(_TERNARY_EDGE_REASON) == set(_TERNARY_EDGE_KNOWN_DIVERGENCES), (
 assert all(
     cells for cells in _TERNARY_EDGE_KNOWN_DIVERGENCES.values()
 ), "an (op, operand) claiming a divergence with no cell to apply it to is a dead xfail"
+assert set(_TERNARY_EDGE_ARCH_GATE) <= set(_TERNARY_EDGE_KNOWN_DIVERGENCES), (
+    "_TERNARY_EDGE_ARCH_GATE names (op, operand) pairs with no divergence to scope: "
+    f"{set(_TERNARY_EDGE_ARCH_GATE) - set(_TERNARY_EDGE_KNOWN_DIVERGENCES)}"
+)
 
 
 @pytest.mark.nightly
@@ -504,8 +561,13 @@ def test_sfpu_ternary_operand_edges(
     # divergence is a non-finite operand, and the pole class shares neither the cause nor the
     # cells. Where the class is empty the variant skips below and the marker never fires.
     reason = _TERNARY_EDGE_REASON.get((mathop, operand))
+    # The arch gate defaults to every arch, so an entry without one behaves exactly as before.
+    arch_ok = TestConfig.CHIP_ARCH in _TERNARY_EDGE_ARCH_GATE.get(
+        (mathop, operand), (TestConfig.CHIP_ARCH,)
+    )
     if (
         reason is not None
+        and arch_ok
         and edge_class == _TERNARY_EDGE_CLASS_SPECIALS
         and (formats.input_format, formats.output_format, dest_acc)
         in _TERNARY_EDGE_KNOWN_DIVERGENCES[(mathop, operand)]
