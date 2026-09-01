@@ -3984,6 +3984,25 @@ def _measure_backstop(repo_root: Path) -> int:
     return adaptive_timer(repo_root, "profile", env_key="PERF_MCP_MEASURE_BACKSTOP")
 
 
+# One refusal is worth a retry; two identical ones are not a blip. Env-tunable like the wedge
+# counter beside it, so an operator on a flaky link can allow more without editing source.
+_MAX_AUTH_STRIKES = max(1, int(os.environ.get("PERF_MCP_MAX_AUTH_STRIKES", "2") or "2"))
+
+
+def _agent_auth_failure(kernel_log) -> str | None:
+    """The phrase the agent used to say it was refused, or None if this round was let in.
+
+    Reads the round's own transcript rather than re-deriving a cause: the client writes its refusal
+    there verbatim, and quoting it is what tells an operator whether to re-login, check an API key
+    or call their org -- three different actions this tool must not guess between.
+    """
+    try:
+        from agent.probes import detect_auth_failure
+    except Exception:  # noqa: BLE001 -- a check that cannot load must not stop the run
+        return None
+    return detect_auth_failure("\n".join(_tail_lines(str(kernel_log) + ".agent.log", 60)))
+
+
 def _tail_lines(path, n: int = 6) -> list:
     """Last n lines of a log, for watchdog evidence. Raw text matters: a repeated error line
     is what distinguishes a spin loop from progress."""
@@ -4990,6 +5009,7 @@ def optimize_pipeline(
     stall_sec = adaptive_timer(repo_root, "round", env_key="PERF_MCP_ROUND_STALL_SEC", mult=0.5)
     max_wedge = int(os.environ.get("PERF_MCP_MAX_WEDGE_STRIKES", "2") or "2")
     wedge_strikes = 0
+    auth_strikes = 0
     round_cmd = [
         _resolve_claude_bin(),
         "-p",
@@ -5020,6 +5040,28 @@ def optimize_pipeline(
             can_stop = True
             break
         wedged = _run_round_with_watchdog(round_cmd, repo_root, devices, kernel_log, stall_sec)
+        # A ROUND THAT WAS NEVER LET IN IS NOT A ROUND THAT FOUND NOTHING. An expired or rejected
+        # credential produces a round that runs, writes a transcript and exits cleanly having done
+        # nothing, which the loop cannot tell from an agent that looked and found no win -- so it
+        # spent all ten rounds of a 7h37m run on it and reported "no kernel attempts recorded",
+        # which reads as "already optimal" rather than "nobody was allowed in". Two in a row,
+        # because a single blip is worth one retry and two identical refusals are not a blip.
+        _auth = _agent_auth_failure(kernel_log)
+        if _auth:
+            auth_strikes += 1
+            print(
+                "  [optimize/cc] round %d could not authenticate (%s) — retrying once" % (rounds + 1, _auth)
+                if auth_strikes < _MAX_AUTH_STRIKES
+                else "  [optimize/cc] STOPPING: the agent cannot authenticate (%s). "
+                "Nothing was tried and nothing can be, so the remaining rounds are not run. "
+                "Re-authenticate (`claude /login`) and start again." % _auth,
+                flush=True,
+            )
+            if auth_strikes >= _MAX_AUTH_STRIKES:
+                halted = True
+                break
+        else:
+            auth_strikes = 0
         if wedged:
             wedge_strikes += 1
             if wedge_strikes >= max_wedge:

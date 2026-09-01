@@ -994,6 +994,38 @@ def detect_overheat(log_text: str) -> str | None:
     return m.group(0) if m else None
 
 
+# The agent's own words when its credentials will not serve it. Plain substrings, not a pattern:
+# these are the client's message text, and matching them literally is what keeps a rewording from
+# silently turning the check off -- a miss must look like a miss, not like a clean run.
+_AGENT_AUTH_FAILURES = (
+    "Failed to authenticate",
+    "Access Denied",
+    "Invalid API key",
+    "authentication_error",
+    "OAuth token has expired",
+)
+
+
+def detect_auth_failure(log_text: str) -> str | None:
+    """The agent could not authenticate, so nothing it was asked to do can have happened.
+
+    An expired or rejected credential produces a round that runs, writes a transcript and exits
+    cleanly, having done nothing -- indistinguishable, to the loop, from an agent that looked and
+    found no win. A credential that lapsed overnight therefore burned all ten rounds of a 7h37m run
+    and the report said "no kernel attempts recorded", which reads as "the model is already optimal"
+    rather than "nobody was allowed in".
+
+    Returns the matched phrase so the caller can quote the agent verbatim instead of paraphrasing a
+    cause it did not observe; None when the text carries no such failure.
+    """
+    if not log_text:
+        return None
+    for phrase in _AGENT_AUTH_FAILURES:
+        if phrase in log_text:
+            return phrase
+    return None
+
+
 def _max_asic_temp(data) -> float | None:
     temps: list[float] = []
 
@@ -1227,7 +1259,6 @@ def _execute(
 
         def _thermal_watch_sample(state, label):
             return None
-
 
     with open(log_path, "w") as log_fh:
         proc = subprocess.Popen(
