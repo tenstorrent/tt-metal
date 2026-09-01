@@ -74,13 +74,14 @@ on:
         description: "PAT with actions:read+write on tenstorrent/tt-blaze."
         required: true
 
+
+permissions: {}
+
 jobs:
   blaze-ci:
     name: tt-blaze CI (gpt-oss temporal multiuser Loudbox bucket)
-    runs-on: ubuntu-latest
-    # The poll loop must outlive its own deadline so it can report WHY it gave up;
-    # if the runner killed it first, the failure would read as an infra timeout.
-    # Update with the actual timeout needed
+    runs-on: ubuntu-slim
+    # Long timeout to accommodate waiting for the loudbox to become available
     timeout-minutes: 360
     outputs:
       blaze-run-url: ${{ steps.dispatch.outputs.blaze-run-url }}
@@ -130,6 +131,18 @@ jobs:
           DISPATCH_ID="metal-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "dispatch-id: ${DISPATCH_ID}"
 
+          # Persisted BEFORE the dispatch, not after the poll loop resolves a run
+          # id. A cancellation landing between `gh workflow run` and the run
+          # becoming visible to `gh run list` -- up to GRACE_SECONDS, the window
+          # this loop explicitly tolerates -- would otherwise leave the cleanup
+          # step with no id and let a live blaze run keep a Loudbox for a merge
+          # group that no longer exists. With the token persisted first, cleanup
+          # can find the run by correlation even though this step never did.
+          # Written before dispatch rather than after so a cancellation DURING
+          # the dispatch call is covered too: the run may or may not have been
+          # created, and searching for it is the only way to tell.
+          echo "BLAZE_DISPATCH_ID=${DISPATCH_ID}" >> "$GITHUB_ENV"
+
           # Scope: the gpt-oss-temporal-multiuser Loudbox bucket only, NOT
           # tt-blaze's whole merge gate. `bh-loudbox-run-all=false` flips
           # tt-blaze's Loudbox job from "every gate bucket" to "the ones selected
@@ -155,6 +168,12 @@ jobs:
             echo "- ❌ tt-blaze — dispatch rejected" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+
+          # Lets cleanup distinguish "a run is out there" from "the dispatch was
+          # rejected, so finding nothing is expected" -- the difference between
+          # a warning worth acting on and pure noise on an already-reported
+          # failure.
+          echo "BLAZE_DISPATCHED=1" >> "$GITHUB_ENV"
 
           echo "Dispatched ${BLAZE_REPO} ${BLAZE_WORKFLOW} on ${BLAZE_REF} (gpt-oss-temporal-multiuser bucket)"
           echo "  tt-metal commit:  ${METAL_REF}"
@@ -282,11 +301,85 @@ jobs:
       # Dequeuing a PR cancels this job but not the run it started, which would
       # otherwise keep occupying constrained P150/Loudbox runners for hours on
       # behalf of a merge group that no longer exists.
-      - name: Cancel the tt-blaze run if this job was cancelled
-        if: cancelled() && env.BLAZE_RUN_ID != ''
+      #
+      # Gated on the DISPATCH ID, not the run id: the run id only exists once
+      # the poll loop has seen the run, so gating on it would skip cleanup for
+      # exactly the cancellations that happen during the indexing window.
+      #
+      # failure() as well as cancelled(): the wait-timeout path exits 1, which
+      # is a failure and not a cancellation, and at that moment the blaze run is
+      # by definition STILL RUNNING -- the timeout is what proves it. Leaving it
+      # alive is the same Loudbox leak dequeuing causes. The other failure paths
+      # (dispatch rejected, blaze concluded red, bucket assertion) are harmless
+      # here: the status check below turns them into no-ops.
+      - name: Cancel the tt-blaze run if this job did not finish cleanly
+        if: (cancelled() || failure()) && env.BLAZE_DISPATCH_ID != ''
         env:
           GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
         shell: bash
         run: |
-          echo "Cancelling tt-blaze run ${BLAZE_RUN_ID}"
-          gh run cancel "$BLAZE_RUN_ID" --repo "$BLAZE_REPO" || true
+          set -uo pipefail
+
+          # A cancelled job is not given unlimited time to wind down, so this is
+          # deliberately short: ~2 min of retries, well inside the runner's
+          # post-cancellation grace. It does not need to cover the full
+          # GRACE_SECONDS indexing window of the main loop -- most cancellations
+          # resolve on the first attempt, and a bounded best effort beats the
+          # previous unconditional skip.
+          RETRIES=8
+          RETRY_SLEEP=15
+
+          # If the dispatch never reported success there is most likely nothing
+          # to find, so do not spend the full budget proving it -- but still
+          # look, because a cancellation that killed `gh workflow run` mid-call
+          # leaves the same unset flag and MAY have created a run.
+          [ "${BLAZE_DISPATCHED:-}" = "1" ] || RETRIES=2
+
+          run_id="${BLAZE_RUN_ID:-}"
+
+          if [ -z "$run_id" ]; then
+            # Cancelled before the poll loop resolved an id. The dispatch may or
+            # may not have created a run; correlating on the token is the only
+            # way to find out, and finding nothing is a legitimate outcome.
+            echo "No run id recorded yet; searching ${BLAZE_REPO} for a run carrying '${BLAZE_DISPATCH_ID}'"
+            for attempt in $(seq 1 "$RETRIES"); do
+              run_id=$(gh run list --repo "$BLAZE_REPO" --workflow "$BLAZE_WORKFLOW" \
+                         --event workflow_dispatch --limit 100 \
+                         --json databaseId,displayTitle,name \
+                         --jq "[.[] | select(((.displayTitle // \"\") + \" \" + (.name // \"\")) | contains(\"${BLAZE_DISPATCH_ID}\"))] | .[0].databaseId // empty" \
+                       2>/dev/null || echo "")
+              [ -n "$run_id" ] && break
+              echo "  attempt ${attempt}/${RETRIES}: not indexed yet"
+              [ "$attempt" -lt "$RETRIES" ] && sleep "$RETRY_SLEEP"
+            done
+          fi
+
+          if [ -z "$run_id" ]; then
+            if [ "${BLAZE_DISPATCHED:-}" = "1" ]; then
+              # The dispatch landed, so a run almost certainly exists and is
+              # simply not indexed yet. It may be holding a Loudbox, and nothing
+              # further here can reach it.
+              echo "::warning::No tt-blaze run carrying '${BLAZE_DISPATCH_ID}' became visible before this step had to give up. The dispatch did land, so that run is likely still going and must be cancelled manually: https://github.com/${BLAZE_REPO}/actions/workflows/${BLAZE_WORKFLOW}"
+            else
+              # The dispatch was rejected (or never got that far), so there is
+              # nothing to leak. Do not raise a warning on top of the error the
+              # dispatch step already reported.
+              echo "Dispatch never landed, so no tt-blaze run exists to cancel."
+            fi
+            exit 0
+          fi
+
+          # Only a run that is still alive needs cancelling. On the timeout path
+          # it will be, which is the whole point; on the "blaze concluded red"
+          # and bucket-assertion paths it is already finished, and cancelling a
+          # completed run is a pointless API call that reads in the log like
+          # something went wrong.
+          status=$(gh run view "$run_id" --repo "$BLAZE_REPO" --json status --jq .status 2>/dev/null || echo "")
+          if [ "$status" = "completed" ]; then
+            echo "tt-blaze run ${run_id} already finished; nothing to cancel."
+            exit 0
+          fi
+
+          # An unreadable status is not proof it finished -- try the cancel.
+          echo "Cancelling tt-blaze run ${run_id} (status: ${status:-unknown})"
+          gh run cancel "$run_id" --repo "$BLAZE_REPO" || true
