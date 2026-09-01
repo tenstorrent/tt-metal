@@ -21,16 +21,16 @@ RM = ttnn.ROW_MAJOR_LAYOUT
 TL = ttnn.TILE_LAYOUT
 
 
-def _case(shape, layout, dim, keepdim, dtype):
+def _case(shape, layout, dim, keepdim, dtype, error_msg=None):
     """Single argmax test case tuple (readable shorthand for parametrization)."""
-    return (shape, layout, dim, keepdim, dtype)
+    return (shape, layout, dim, keepdim, dtype, error_msg)
 
 
 def _argmax_misc_and_rank_special():
     return [
         _case([], RM, None, True, torch.bfloat16),
         _case([32], RM, -1, False, torch.float32),
-        _case([32, 0], RM, 1, True, torch.bfloat16),
+        _case([32, 0], RM, 1, True, torch.bfloat16, "Expected reduction dim 1 to have non-zero size"),
         _case([64], RM, -1, True, torch.bfloat16),
         _case([1, 512], RM, -1, True, torch.float32),
         _case([1, 1024], RM, -1, True, torch.int32),
@@ -126,10 +126,10 @@ def argmax_torch_ttnn_cases():
 
 
 @pytest.mark.parametrize(
-    argnames="tensor_shape, tensor_layout, dim, keepdim, dtype",
+    argnames="tensor_shape, tensor_layout, dim, keepdim, dtype, error_msg",
     argvalues=list(argmax_torch_ttnn_cases()),
 )
-def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, dtype):
+def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, dtype, error_msg, expect_error):
     """
     Test the compatibility of the torch and ttnn output for argmax of different
     tensor shapes, dim values, and data types.
@@ -175,14 +175,23 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, dtype):
 
     ttnn_errored = False
     ttnn_error_msg = ""
-    try:
-        if dim is not None:
-            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
-        else:
-            ttnn_result = ttnn_op(ttnn_tensor)
-    except RuntimeError as e:
+    if error_msg:
+        with expect_error(RuntimeError, error_msg):
+            if dim is not None:
+                ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
+            else:
+                ttnn_result = ttnn_op(ttnn_tensor)
         ttnn_errored = True
-        ttnn_error_msg = str(e)
+        ttnn_error_msg = error_msg
+    else:
+        try:
+            if dim is not None:
+                ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
+            else:
+                ttnn_result = ttnn_op(ttnn_tensor)
+        except RuntimeError as e:
+            ttnn_errored = True
+            ttnn_error_msg = str(e)
 
     assert (
         torch_errored == ttnn_errored

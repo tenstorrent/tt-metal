@@ -49,6 +49,7 @@
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/buffer.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -242,15 +243,14 @@ bool check_is_close(
     TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
 }
 
-auto CreateDramBuffer(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, tt::DataFormat dformat, uint32_t num_tiles) {
+auto CreateDramBuffer(distributed::MeshDevice& mesh_device, tt::DataFormat dformat, uint32_t num_tiles) {
     uint32_t single_tile_size = tile_size(dformat);
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
     distributed::DeviceLocalBufferConfig dram_config{
         .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
     distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size};
 
-    return distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    return distributed::MeshBuffer::create(buffer_config, dram_config, &mesh_device);
 }
 
 CBHandle CreateCircularBufferHelper(
@@ -281,7 +281,7 @@ void get_packed_tilized_input_output_pair(
     std::vector<uint32_t>& packed_tilized_output);
 
 void run_single_core_unary_broadcast_quasar(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const UnaryBroadcastConfig& test_config) {
+    distributed::MeshDevice& mesh_device, const UnaryBroadcastConfig& test_config) {
     const experimental::NodeCoord node{0, 0};
 
     constexpr uint32_t num_tiles = 32;
@@ -293,9 +293,8 @@ void run_single_core_unary_broadcast_quasar(
     const uint32_t out_tile_size = tile_size(out_t);
     const uint32_t dfb_num_entries = block_size * 2;
 
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(in_tile_size, num_tiles));
-    auto out_tensor =
-        MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(out_tile_size, num_tiles));
+    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(in_tile_size, num_tiles));
+    auto out_tensor = MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(out_tile_size, num_tiles));
 
     const experimental::DFBSpecName SRC_DFB{"src_dfb"};
     const experimental::DFBSpecName DST_DFB{"dst_dfb"};
@@ -318,7 +317,7 @@ void run_single_core_unary_broadcast_quasar(
     };
 
     experimental::DataMovementHardwareConfig reader_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         reader_hw_config = experimental::DataMovementGen1Config{
@@ -335,7 +334,7 @@ void run_single_core_unary_broadcast_quasar(
     };
 
     experimental::DataMovementHardwareConfig writer_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         writer_hw_config = experimental::DataMovementGen1Config{
@@ -390,9 +389,9 @@ void run_single_core_unary_broadcast_quasar(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    const uint32_t src_dram_addr = static_cast<uint32_t>(in_tensor.mesh_buffer().get_reference_buffer()->address());
+    const uint32_t src_dram_addr = static_cast<uint32_t>(in_tensor.address());
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -418,12 +417,12 @@ void run_single_core_unary_broadcast_quasar(
     std::vector<uint32_t> golden_packed_tilized_output;
     get_packed_tilized_input_output_pair(
         in_t, out_t, num_tiles, test_config.broadcast_dim, packed_tilized_input, golden_packed_tilized_output);
-    tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), packed_tilized_input);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), packed_tilized_input);
 
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), dest_buffer_data);
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), dest_buffer_data);
 
     ASSERT_TRUE(check_is_close(golden_packed_tilized_output, dest_buffer_data, out_t, "unary_broadcast_dram_out"));
 }
@@ -455,14 +454,13 @@ void get_packed_tilized_input_output_pair(
     }
 }
 
-void run_single_core_unary_broadcast(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const UnaryBroadcastConfig& test_config) {
+void run_single_core_unary_broadcast(distributed::MeshDevice& mesh_device, const UnaryBroadcastConfig& test_config) {
     if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
         run_single_core_unary_broadcast_quasar(mesh_device, test_config);
         return;
     }
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
@@ -576,7 +574,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
                     broadcast_dim_to_type.at(test_config.broadcast_dim),
                     test_config.in_t,
                     test_config.out_t);
-                run_single_core_unary_broadcast(this->devices_.at(0), test_config);
+                run_single_core_unary_broadcast(*this->devices_.at(0), test_config);
             }
         }
     }
@@ -610,7 +608,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDfb) 
                 broadcast_dim_to_type.at(test_config.broadcast_dim),
                 test_config.in_t,
                 test_config.out_t);
-            run_single_core_unary_broadcast(this->devices_.at(0), test_config);
+            run_single_core_unary_broadcast(this->device(), test_config);
         }
     }
 }
