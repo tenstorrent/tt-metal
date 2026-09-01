@@ -57,7 +57,9 @@ def _fields(buf):
         elif wt == 2:
             n, pos = _read_varint(buf, pos)
             if pos + n > len(buf):
-                raise ValueError(f"truncated length-delimited field at offset {pos} (want {n} B, {len(buf) - pos} left)")
+                raise ValueError(
+                    f"truncated length-delimited field at offset {pos} (want {n} B, {len(buf) - pos} left)"
+                )
             val = buf[pos : pos + n]
             pos += n
         elif wt == 5:

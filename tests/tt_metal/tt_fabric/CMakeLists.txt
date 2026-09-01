@@ -1,10 +1,7 @@
 # Include source file lists (module owners maintain sources.cmake)
 include(sources.cmake)
 
-add_executable(
-    fabric_unit_tests
-    ${UNIT_TESTS_FABRIC_SRC}
-)
+add_executable(fabric_unit_tests ${UNIT_TESTS_FABRIC_SRC})
 
 target_link_libraries(
     fabric_unit_tests
