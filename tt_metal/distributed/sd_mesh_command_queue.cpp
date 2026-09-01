@@ -234,6 +234,15 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
     // generation. LaunchProgram / DispatchCompiledProgramToDevice below only register (defer flag set
     // by the outer begin_mesh_dispatch). See tt-emule docs/fiber-engine.md.
 
+    if (configure_only_) {
+        // Write each program image to L1 without sending a go signal. Since no core runs,
+        // do not record this as a previous workload that a later dispatch must wait for.
+        for (auto* device : local_devices) {
+            tt_metal::experimental::ConfigureProgramWithoutLaunch(device, program);
+        }
+        return;
+    }
+
     // First device: full LaunchProgram (compiles, finalizes, allocates CBs, dispatches)
     tt_metal::detail::LaunchProgram(local_devices[0], program, false);
 
