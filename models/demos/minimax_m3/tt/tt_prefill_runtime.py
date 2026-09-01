@@ -105,7 +105,8 @@ class TtPrefillRuntime:
 
         self.model_built = False
         self.compiled = False
-        # Per-layer LayerAck callback, registered via set_layer_ack_channel() after compile.
+        # Per-layer callback with no setter: tests/perf/profile_prefill.py assigns it directly to
+        # hook the profiler between layers.
         self._on_layer_complete = None
         # Per-layer completion sink for pipelined prefill, registered via set_layer_completion_sink().
         self._layer_completion_sink = None
@@ -305,19 +306,18 @@ class TtPrefillRuntime:
             actual_start: absolute KV pos of the chunk's first token (the cache write offset).
             actual_end: absolute KV pos past the chunk's last real (non-pad) token.
             request_id: the engine's chunk counter, part of the runner's call contract. Only the
-                pipelined layer-completion sink needs it (to build a globally-dense
-                seq = request_id * num_layers + layer_idx); this runtime's single-rank LayerAck
-                channel carries no payload, so it is accepted and ignored.
+                layer-completion sink needs it, to build a globally-dense
+                seq = request_id * num_layers + layer_idx.
             d2h_service: the device-side per-layer ack transport. This runtime emits acks only through
-                the host callback (set_layer_ack_channel), so a caller asking for the D2H path gets a
+                the host callback (set_layer_completion_sink), so a caller asking for the D2H path gets a
                 loud error rather than silently missing acks.
             record_dev: the chunk's metadata tensor, passed on every call and unused here (it is the
                 record the D2H ack would carry).
         """
         if d2h_service is not None:
             raise NotImplementedError(
-                "MiniMax-M3 prefill emits layer acks via set_layer_ack_channel, not the D2H path; "
-                "run with PREFILL_ENABLE_LAYER_ACK=0 or wire the D2H ack into this runtime."
+                "MiniMax-M3 prefill emits layer acks through the host callback, not the D2H path; "
+                "run with PREFILL_LAYER_ACK_D2H=0 or wire the D2H ack into this runtime."
             )
         assert self.model_built, "build the model before prefill_chunk()"
         assert 0 <= slot_id < self.config.num_users, f"slot_id {slot_id} out of range [0, {self.config.num_users})"
@@ -378,17 +378,6 @@ class TtPrefillRuntime:
                 out.deallocate(True)
             return None
         return out  # logits [1,1,chunk_local,vocab_shard], SP-sharded on seq / TP-sharded on vocab
-
-    def set_layer_ack_channel(self, layer_ack_channel) -> None:
-        """Register the per-layer LayerAck channel (engine-created + owned). ``prefill_chunk`` bumps it
-        once per layer (``inject(1)``); the scheduler reads the delta. The ack carries no payload. Called
-        by the engine in single-rank request mode."""
-        assert self.compiled, "Call compile() before set_layer_ack_channel()"
-
-        def on_layer_complete(layer_idx: int) -> None:
-            layer_ack_channel.inject(1)
-
-        self._on_layer_complete = on_layer_complete
 
     def set_layer_completion_sink(self, sink) -> None:
         """Register a per-layer completion sink for pipelined (multi-rank) prefill. ``sink`` is called once
