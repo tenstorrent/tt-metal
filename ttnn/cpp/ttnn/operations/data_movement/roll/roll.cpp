@@ -7,8 +7,6 @@
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
-#include "ttnn/operations/data_movement/tilize/tilize.hpp"
-#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/data_movement/roll/device/roll_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -117,9 +115,9 @@ ttnn::Tensor roll(
         if (is_tile) {
             // Sub-tile rotation must move elements inside tiles: untilize, roll, tilize, all
             // staying sharded in L1.
-            ttnn::Tensor rm = ttnn::untilize(input_tensor, native_mem_config);
+            ttnn::Tensor rm = input_tensor /* TODO(nuked-op untilize): passthrough */;
             ttnn::Tensor rolled_rm = roll(rm, shifts, input_dims);
-            rolled = ttnn::tilize(rolled_rm, native_mem_config, input_tensor.dtype());
+            rolled = rolled_rm /* TODO(nuked-op tilize): passthrough */;
         } else {
             // RM sharded fallback: interleaved DRAM round-trip. Recurses into the interleaved
             // slice+concat branch below, then reshards back to the caller's requested config.
