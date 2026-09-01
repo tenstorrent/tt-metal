@@ -282,6 +282,8 @@
 
 - name: ttnn nightly data_movement tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 50
@@ -309,6 +311,8 @@
 - name: ttnn nightly data_movement tests (post-commit suite)
   # Measured: bh_p100 ~28 min, bh_p150b ~57 min, wh_n300 ~66 min, wh_n150 ~89 min.
   cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=300'
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 120
