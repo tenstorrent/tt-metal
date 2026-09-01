@@ -52,11 +52,9 @@ higher clock. That difference is the same order as several of the optimisations 
 II, so the two stay separate columns throughout and **neither backfills the other's
 missing cells**. Accuracy is unaffected — PCC matches to ten digits across both.
 
-**The n300 result is one Wormhole B0 chip.** The card reports two (`n300 L` and
-`n300 R`) and the model uses the local one. Nothing in this port is multi-chip: no
-collectives, no fabric, no mesh device. So the compute behind every Wormhole figure
-below is a single 8 × 8 grid — which is what an N150 provides. An N150 is therefore
-*predictable* from these numbers and is not *reported* as measured anywhere.
+**The n300 result is one Wormhole B0 chip** — nothing in this port is multi-chip, so
+it's the same compute an N150 would provide. `docs/VALIDATION.md`'s *device matrix* has
+the full reasoning and what that does and doesn't leave open.
 
 ### Test counts
 
@@ -391,31 +389,16 @@ cause is now established and whose remedy is known but does not yet land cleanly
    itself is fine — §4). Not root-caused.
 3. **Device buffers allocated while a trace is live get corrupted, and can hang the
    board.** TTNN warns about it — *"Allocating device buffers is unsafe due to the
-   existence of an active trace"* — and this port has now been bitten by both halves.
-
-   **The corruption is diagnosed and its remedy is known, but not landed.**
-   Interleaved synthesis returns audio peaking at 72
-   against a batch path peaking at 0.001; per-chunk comparison against a no-trace
-   reference showed chunk 0 clean (waveform PCC `0.99999994`) and chunk 1 with a
-   *bit-identical mel* (PCC `1.0`) but waveform PCC `0.011` — which localises it to
-   the state carried across the seam rather than to either stage. Parking those four
-   tensors on the host fixes the audio, but it hangs `test_streaming_perf` on
-   Blackhole, so it is not in the tree.
-   `docs/VALIDATION.md` has the full account and what else was tried.
-
-   **The separate n300 hang is now root-caused, and it is upstream of the port.**
-   `test_device_streaming_first_audio_latency` wedges n300 and is skipped there (§5)
-   because re-seeding a trace's persistent buffers *after that trace has executed*
-   hangs Wormhole. The test captures once and re-seeds per pass, so passes 2-4 hit it.
-   It reproduces in four calls with no flow decoder, no vocoder and no allocation under
-   a live trace, and Blackhole runs the same sequence in under a second.
-   `docs/VALIDATION.md` has the reproduction and what was ruled out along the way
-   (trace region size, warm-before-capture ordering, and the fix above).
-
-   It also constrains the design: the flow decoder and vocoder must be warmed *before*
-   the AR decode trace is captured — doing it the other way round hangs Blackhole too —
-   and the first-audio measurement is at one utterance length rather than swept,
-   because a second length reproduces the hang.
+   existence of an active trace"* — and this port has been bitten by two distinct
+   symptoms of it, unrelated to each other beyond sharing that cause. One:
+   `synthesize_streaming`'s interleaved audio gets corrupted across a chunk seam,
+   diagnosed with a known remedy that is not landed — it hangs a Blackhole perf test.
+   Two, separately: `test_device_streaming_first_audio_latency` hangs Wormhole,
+   now root-caused as an upstream TTNN defect (re-seeding a trace's persistent buffers
+   after it has executed) rather than anything this port did.
+   `docs/VALIDATION.md` has both full accounts, including what was ruled out for each
+   and the design constraint the second one leaves (the flow decoder and vocoder must
+   be warmed before the AR decode trace is captured).
 
 4. **An n300/Blackhole streaming amplitude difference on one synthetic case**, found
    while diagnosing the above and not yet explained. Which figure is wrong is not
