@@ -48,13 +48,7 @@ file(
     sort/device/kernels/*.hpp
     split/device/kernels/*.cpp
     slice/device/kernels/*.cpp
-    tilize/device/kernels/*.cpp
-    tilize_with_val_padding/device/kernels/*.cpp
     transpose/device/kernels/*.cpp
-    untilize/device/kernels/*.cpp
-    untilize/codegen/kernels/*.cpp
-    untilize/codegen/kernels/*.h
-    untilize_with_unpadding/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_data_movement
@@ -73,15 +67,6 @@ target_sources(
             reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
             reshape_view/device/device/rm_reshape_interleaved.cpp
             reshape_view/device/hostdevcommon/common.hpp
-            tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_singlecore.cpp
-            tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_multicore.cpp
-            untilize/device/kernels/dataflow/reader_unary_start_id.cpp
-            untilize/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multi_core.cpp
-            tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp
-            tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
-            untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
-            tilize/device/kernels/compute/tilize_wh.cpp
-            untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp
             # bcast/
             bcast/bcast_nanobind.hpp
             bcast/device/bcast_device_operation.hpp
@@ -272,25 +257,6 @@ target_sources(
             # stack/
             stack/stack.hpp
             stack/stack_nanobind.hpp
-            # tilize/
-            tilize/tilize.hpp
-            tilize/tilize_nanobind.hpp
-            tilize/device/tilize_device_operation.hpp
-            tilize/device/tilize_device_operation_types.hpp
-            tilize/device/tilize_multi_core_block_program_factory.hpp
-            tilize/device/tilize_multi_core_default_program_factory.hpp
-            tilize/device/tilize_multi_core_sharded_program_factory.hpp
-            tilize/device/tilize_multi_core_sharded_retile_program_factory.hpp
-            tilize/device/tilize_single_core_program_factory.hpp
-            # tilize_with_val_padding/
-            tilize_with_val_padding/tilize_with_val_padding_nanobind.hpp
-            tilize_with_val_padding/device/tilize_with_val_padding_device_operation_types.hpp
-            tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.hpp
-            tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_block_interleaved_program_factory.hpp
-            tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_default_program_factory.hpp
-            tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_sharded_program_factory.hpp
-            tilize_with_val_padding/device/factories/tilize_with_val_padding_shared_variables.hpp
-            tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.hpp
             # transpose/
             transpose/transpose_nanobind.hpp
             transpose/device/transpose_cn_program_factory.hpp
@@ -307,28 +273,6 @@ target_sources(
             # unsqueeze/
             unsqueeze/unsqueeze.hpp
             unsqueeze/unsqueeze_nanobind.hpp
-            # untilize/
-            untilize/untilize_nanobind.hpp
-            untilize/device/untilize_device_operation.hpp
-            untilize/device/untilize_device_operation_types.hpp
-            untilize/device/factories/untilize_multi_core_block_program_factory.hpp
-            untilize/device/factories/untilize_multi_core_input_and_output_nd_shard_type_and_shard_spec_identical_program_factory.hpp
-            untilize/device/factories/untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.hpp
-            untilize/device/factories/untilize_multi_core_nd_shard_input_program_factory.hpp
-            untilize/device/factories/untilize_multi_core_parallelize_column_program_factory.hpp
-            untilize/device/factories/untilize_multi_core_program_factory.hpp
-            untilize/device/factories/untilize_multi_core_sub_core_grids_program_factory.hpp
-            untilize/device/factories/untilize_single_core_program_factory.hpp
-            # untilize_with_unpadding/
-            untilize_with_unpadding/untilize_with_unpadding_nanobind.hpp
-            untilize_with_unpadding/device/untilize_with_unpadding_device_operation.hpp
-            untilize_with_unpadding/device/untilize_with_unpadding_device_operation_types.hpp
-            untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory.hpp
-            untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_interleaved_program_factory.hpp
-            untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_sharded_program_factory.hpp
-            untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_shared_variables.hpp
-            untilize_with_unpadding/device/factories/untilize_with_unpadding_single_core_program_factory.hpp
-            untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory.hpp
             # view/
             view/view.hpp
             view/view_nanobind.hpp

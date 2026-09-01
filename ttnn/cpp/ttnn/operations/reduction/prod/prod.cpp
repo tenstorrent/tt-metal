@@ -15,7 +15,6 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/functions.hpp"
 
 namespace ttnn::operations::reduction {
@@ -24,8 +23,7 @@ inline Tensor compute_prod_all(const Tensor& input_a, const MemoryConfig& output
     auto formatted_input_tensor = input_a;
     if (formatted_input_tensor.layout() != Layout::TILE) {
         auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_a.padded_shape());
-        formatted_input_tensor =
-            ttnn::tilize_with_val_padding(input_a, a_pad_shape, PadValue(1.0f), input_a.memory_config());
+        formatted_input_tensor = input_a /* TODO(nuked-op tilize_with_val_padding): passthrough */;
     }
 
     return tt::operations::primary::prod_all(formatted_input_tensor, output_mem_config);
@@ -36,7 +34,7 @@ inline Tensor compute_prod_nc(const Tensor& temp, int64_t dim, const MemoryConfi
     auto formatted_input_tensor = temp;
     if (formatted_input_tensor.layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(temp.padded_shape());
-        formatted_input_tensor = ttnn::tilize_with_val_padding(temp, a_pad_shape, PadValue(1.0f), temp.memory_config());
+        formatted_input_tensor = temp /* TODO(nuked-op tilize_with_val_padding): passthrough */;
     }
     // Apply prod
     ttsl::SmallVector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};

@@ -128,21 +128,6 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     split/split.cpp
     squeeze/squeeze.cpp
     stack/stack.cpp
-    tilize/device/tilize_device_operation.cpp
-    tilize/device/tilize_multi_core_block_program_factory.cpp
-    tilize/device/tilize_multi_core_default_program_factory.cpp
-    tilize/device/tilize_multi_core_retile_program_factory.cpp
-    tilize/device/tilize_single_core_program_factory.cpp
-    tilize/device/tilize_multi_core_sharded_program_factory.cpp
-    tilize/device/tilize_multi_core_sharded_retile_program_factory.cpp
-    tilize/tilize.cpp
-    tilize_with_val_padding/device/tilize_with_val_padding_device_operation.cpp
-    tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.cpp
-    tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_block_interleaved_program_factory.cpp
-    tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_default_program_factory.cpp
-    tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_sharded_program_factory.cpp
-    tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.cpp
-    tilize_with_val_padding/tilize_with_val_padding.cpp
     transpose/device/transpose_device_operation.cpp
     transpose/device/transpose_cn_program_factory.cpp
     transpose/device/transpose_hc_rm_program_factory.cpp
@@ -155,27 +140,6 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     transpose/device/transpose_utils.cpp
     transpose/transpose.cpp
     unsqueeze/unsqueeze.cpp
-    untilize/device/untilize_device_operation.cpp
-    untilize/device/untilize_device_operation_types.cpp
-    untilize/device/factories/untilize_multi_core_parallelize_column_program_factory.cpp
-    untilize/device/factories/untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.cpp
-    untilize/device/factories/untilize_multi_core_input_and_output_nd_shard_type_and_shard_spec_identical_program_factory.cpp
-    untilize/device/factories/untilize_multi_core_sub_core_grids_program_factory.cpp
-    untilize/device/factories/untilize_single_core_program_factory.cpp
-    untilize/device/factories/untilize_multi_core_block_program_factory.cpp
-    untilize/device/factories/untilize_multi_core_program_factory.cpp
-    untilize/device/factories/untilize_multi_core_nd_shard_input_program_factory.cpp
-    untilize/codegen/untilize_codegen_device_operation.cpp
-    untilize/codegen/untilize_codegen_program_factory.cpp
-    untilize/codegen/untilize_codegen_supported.cpp
-    untilize/untilize.cpp
-    untilize_with_unpadding/device/untilize_with_unpadding_device_operation.cpp
-    untilize_with_unpadding/device/factories/untilize_with_unpadding_single_core_program_factory.cpp
-    untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_interleaved_program_factory.cpp
-    untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_sharded_program_factory.cpp
-    untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory.cpp
-    untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory.cpp
-    untilize_with_unpadding/untilize_with_unpadding.cpp
     view/view.cpp
     sort/sort.cpp
     sort/device/sort_device_operation.cpp
@@ -210,11 +174,7 @@ set(TTNN_OP_DATA_MOVEMENT_API_HEADERS
     sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp
     sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp
     slice/slice.hpp
-    tilize_with_val_padding/tilize_with_val_padding.hpp
-    tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp
     transpose/transpose.hpp
-    untilize/untilize.hpp
-    untilize_with_unpadding/untilize_with_unpadding.hpp
 )
 
 # Registered on the shared `ttnn` Python module target from
@@ -262,12 +222,8 @@ set(TTNN_OP_DATA_MOVEMENT_NANOBIND_SRCS
     split/split_nanobind.cpp
     squeeze/squeeze_nanobind.cpp
     stack/stack_nanobind.cpp
-    tilize/tilize_nanobind.cpp
-    tilize_with_val_padding/tilize_with_val_padding_nanobind.cpp
     transpose/transpose_nanobind.cpp
     unsqueeze/unsqueeze_nanobind.cpp
-    untilize/untilize_nanobind.cpp
-    untilize_with_unpadding/untilize_with_unpadding_nanobind.cpp
     view/view_nanobind.cpp
     sort/sort_nanobind.cpp
     gather/gather_nanobind.cpp

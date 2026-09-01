@@ -14,8 +14,6 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/reduction/prod/prod.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
@@ -1635,9 +1633,9 @@ namespace ttnn::operations::unary_backward {
 Tensor change_layout_to_tile(const Tensor& input_tensor, const MemoryConfig& /*output_mem_config*/) {
     auto formatted_input_tensor = input_tensor;
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-        formatted_input_tensor =
-            ttnn::tilize_with_val_padding(input_tensor, a_pad_shape, PadValue(1.0f), input_tensor.memory_config());
+        [[maybe_unused]] auto a_pad_shape =
+            ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+        formatted_input_tensor = input_tensor /* TODO(nuked-op tilize_with_val_padding): passthrough */;
     }
     return formatted_input_tensor;
 }
@@ -1750,7 +1748,7 @@ std::vector<Tensor> prod_bw(
             // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout.
             // untilize may drop tile padding (returning padded_shape == logical_shape), so decide whether
             // padding is required from the tensor *after* untilize rather than before.
-            tensor_2 = ttnn::untilize(tensor_2, tensor_1.memory_config());
+            /* TODO(nuked-op untilize): passthrough */ (void)0;
             if (tensor_2.padded_shape() != padded_shape) {
                 tensor_2 = ttnn::pad(
                     tensor_2,
@@ -1800,7 +1798,7 @@ std::vector<Tensor> prod_bw(
         // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout.
         // untilize may drop tile padding (returning padded_shape == logical_shape), so decide whether
         // padding is required from the tensor *after* untilize rather than before.
-        tensor_2 = ttnn::untilize(tensor_2, tensor_1.memory_config());
+        /* TODO(nuked-op untilize): passthrough */ (void)0;
         if (tensor_2.padded_shape() != padded_shape) {
             tensor_2 = ttnn::pad(
                 tensor_2,

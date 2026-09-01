@@ -11,7 +11,6 @@
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace reduce_op_utils {
@@ -64,15 +63,8 @@ Tensor reduce_min(
     Tensor input = input_tensor;
     if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR && input.storage_type() == ttnn::StorageType::DEVICE) {
         // Changing layout to TILE with +inf padding
-        auto pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input.padded_shape());
-        input = ttnn::tilize_with_val_padding(
-            input,
-            pad_shape,
-            std::numeric_limits<float>::infinity(),
-            output_mem_config,
-            std::nullopt,
-            true,
-            sub_core_grids);
+        [[maybe_unused]] auto pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input.padded_shape());
+        /* TODO(nuked-op tilize_with_val_padding): passthrough */ (void)0;
     }
     return detail::reduce(
         input,
@@ -108,7 +100,8 @@ Tensor reduce(
 
     auto parallelization_strategy = ttnn::prim::get_parallelization_strategy(input_tensor, reduce_dim);
     auto is_multicore_hw = parallelization_strategy == tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_HW;
-    const ttnn::PadValue pad_value = reduce_op_utils::get_tilize_pad_value(reduce_math, input_tensor.dtype());
+    [[maybe_unused]] const ttnn::PadValue pad_value =
+        reduce_op_utils::get_tilize_pad_value(reduce_math, input_tensor.dtype());
 
     TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "Expected input tensor to be on device");
     TT_FATAL(
@@ -197,8 +190,7 @@ Tensor reduce(
     Tensor prepared_input = input_tensor;
     if (!use_rm_dense) {
         auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-        prepared_input = ttnn::tilize_with_val_padding(
-            input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
+        prepared_input = input_tensor /* TODO(nuked-op tilize_with_val_padding): passthrough */;
     }
 
     // A non-unity scalar is applied after the reduction (see requires_post_mul() in common.hpp):
