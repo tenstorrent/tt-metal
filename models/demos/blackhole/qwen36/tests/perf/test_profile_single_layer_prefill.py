@@ -46,13 +46,12 @@ READING THE REPORT
 so a bare invocation prints "No device operations found". Always pass the range explicitly::
 
     tt-perf-report --start-signpost start --end-signpost stop <ops_perf_results_*.csv>   # whole layer
-    tt-perf-report --start-signpost mlp_start --end-signpost mlp_stop <csv>              # MLP only
 
-The measured iteration emits FOUR signposts -- ``start``, ``mlp_start``, ``mlp_stop``, ``stop`` --
-because a "single layer" number is dominated by the wrong half if you are working on the MLP:
-MEASURED at seq 2048, T3K TP=8, 27B, the layer is 8,157us of which the MLP block is 2,667us
-(32.7%) and GDN + attention_norm is the other 67.3%. ``--print-signposts`` lists what a capture has.
-See ``perf_signposts.install_mlp_signposts`` for exactly which ops fall inside the MLP bracket.
+The measured iteration emits TWO signposts -- ``start`` and ``stop`` -- bracketing the whole layer.
+``--print-signposts`` lists what a capture has. For an MLP-only number, profile
+``test_profile_mlp.py``, whose window is the FFN block alone: a "single layer" number is dominated
+by the wrong half if you are working on the MLP. MEASURED at seq 2048, T3K TP=8, 27B, the layer is
+8,157us of which the MLP block is 2,667us (32.7%) and GDN + attention_norm is the other 67.3%.
 """
 
 from __future__ import annotations
@@ -66,7 +65,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
-from models.demos.blackhole.qwen36.tests.perf.perf_signposts import install_attention_signposts, install_mlp_signposts
 
 # 4 layers gives pattern G,G,G,F -- the smallest build containing both kernel types.
 NUM_LAYERS = 4
@@ -235,13 +233,7 @@ def test_profile_single_layer_prefill(mesh_device, device_params, seq_len, layer
     for _ in range(NUM_WARMUP_ITERS):
         _run_prefill_step(mesh_device, f)
 
-    # Nested MLP signposts only on the measured iteration, so the warmup stays unmarked like before.
-    restores = [g(f.layer) for g in (install_attention_signposts, install_mlp_signposts)] if use_signpost else []
-    try:
-        _run_prefill_step(mesh_device, f, use_signpost=use_signpost)
-    finally:
-        for r in restores:
-            r()
+    _run_prefill_step(mesh_device, f, use_signpost=use_signpost)
 
     ttnn.deallocate(f.x)
     ttnn.deallocate(f.cos)
