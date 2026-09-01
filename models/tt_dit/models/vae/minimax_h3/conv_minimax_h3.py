@@ -75,9 +75,10 @@ _H3_ENCODER_BLOCKINGS = {
 _H3_BLOCKING_ENTRIES = {
     (in_c, out_c, kernel): blocking
     for (in_c, out_c), blocking in _H3_ENCODER_BLOCKINGS.items()
-    # The k1 shortcuts keep the fallback: a 1x1x1 conv is a matmul and cheap either way.
+    # kernel (1, 1, 1) is deliberately absent here; the k1 shortcuts get their own entries below.
     for kernel in ((3, 3, 3), (1, 3, 3))
 }
+
 register_conv3d_configs(_H3_BLOCKING_ENTRIES)
 # register_conv3d_configs only updates the bf16 fallback table, but get_conv3d_config
 # short-circuits to _FP32_BLOCKINGS when the weights are fp32 -- so for an fp32 encoder the
@@ -85,6 +86,25 @@ register_conv3d_configs(_H3_BLOCKING_ENTRIES)
 # swept value that lands in conv3d.py itself wins over these entries.
 for _key, _blocking in _H3_BLOCKING_ENTRIES.items():
     _FP32_BLOCKINGS.setdefault(_key, _blocking)
+
+# k1 shortcut convs, **bf16 only**. These were originally left on the fallback on the
+# assumption that a 1x1x1 conv is a matmul and cheap either way -- false at block1's
+# resolution, where the (32, 32, 1, 1, 1) fallback forces one output pixel of M per work
+# unit: 182 ms measured under trace against ~0.95 ms here, and 36 ms inside the eager
+# encoder. Swept with T_out_block ranging (the stock combo builder pins T to 1 for kT = 1
+# kernels, which is how the shape was missed), then **correctness-checked against torch
+# conv3d** -- which the sweep does not do, and which matters: the raw sweep winner
+# (128, 256, 17, 2, 8) is marginally faster but SILENTLY WRONG (PCC 0.4% at T = 17, NaN at
+# T = 1; its 17 * 2 * 8 = 272-patch M block is not tile-aligned). This entry is the fastest
+# blocking that scores PCC 99.999% at both shapes the encoder runs it at, T = 17 (clip,
+# 0.95 ms) and T = 1 (keyframe, 0.32 ms vs the fallback's 10.4 ms): M = 16 * 1 * 32 = 512
+# patches, exactly 16 tiles, whole 128-channel K in one block.
+#
+# Deliberately NOT seeded into _FP32_BLOCKINGS: the k1 sweep and the correctness check ran
+# bf16 alone, and a k1 sweep blocking at fp32 (doubled circular buffers) hung the device --
+# fp32 keeps the default it always had. The b3/b5 shortcuts also keep the default
+# everywhere: at 32^2 and 16^2 spatial they measure 1-2 ms and are not worth a table row.
+register_conv3d_configs({(128, 256, (1, 1, 1)): (128, 256, 16, 1, 32)})  # b1_res0 conv_shortcut
 
 
 class MiniMaxH3CausalConv3d(Module):
