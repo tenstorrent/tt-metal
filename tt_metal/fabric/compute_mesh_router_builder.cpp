@@ -958,6 +958,13 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             defines["FABRIC_ROUTER_SYNC_HOOK"] = "1";
             const char* pm = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_PRESCALER_MASK");
             defines["FABRIC_ROUTER_SYNC_PRESCALER_MASK"] = (pm != nullptr && *pm != '\0') ? pm : "63";
+            // DIAGNOSTIC / A-B CONTROL: restore the pre-fix behaviour where the responder answers
+            // a doorbell only on its own deadline. Kept so the doorbell fix can be measured against
+            // its own baseline from one build.
+            const char* sd = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_SLOW_DOORBELL");
+            if (sd != nullptr && *sd != '\0' && *sd != '0') {
+                defines["FABRIC_ROUTER_SYNC_SLOW_DOORBELL"] = "1";
+            }
             // DIAGNOSTIC: tick but never transmit. Splits the tick path from the eth traffic when
             // chasing the "eth core will not go active again" crash in the next profiler session.
             const char* ns = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_NO_SEND");

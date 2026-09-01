@@ -75,6 +75,9 @@ using namespace tt::tt_fabric::router_sync;
 
 // Private state: RISC-local memory (fast, and correctly NOT shared with anyone).
 inline uint32_t g_prescaler = 0;
+// Latched sample count for a configured RESPONDER, 0 otherwise. Set from the host config on the
+// deadline path; the doorbell fast path below reads only this, so it never touches cfg L1.
+inline uint32_t g_responder_n = 0;
 inline uint64_t g_deadline = 0;
 // Initiator: last round STARTED. Responder: round of the last doorbell SERVED (compared against the
 // 17-bit wire round, so a re-detected doorbell from an aborted round can never re-trigger).
@@ -292,6 +295,19 @@ inline void poll() {
         if (((++g_prescaler) & (FABRIC_ROUTER_SYNC_PRESCALER_MASK)) != 0) [[likely]] {
             return;
         }
+#if !defined(FABRIC_ROUTER_SYNC_SLOW_DOORBELL)
+        // RESPONDER DOORBELL FAST PATH. Answer a ping on every prescaler expiry instead of only on
+        // our own deadline. Without this the responder notices a doorbell once per interval, so
+        // sample 0's wait is the PHASE OFFSET between the two routers' independently-advancing
+        // deadlines -- measured ~194 us at 100 Hz, but drifting, and bounded only by first_wait
+        // (1.55 ms). Both routers spin inside the round, so that offset is blocked forwarding time
+        // on both ends, and it is what the fabric-bandwidth cost of syncing actually buys.
+        // responder_service() self-checks the doorbell tag and returns immediately when there is
+        // none, so the added cost per expiry is one call plus one L1 tag read.
+        if (g_responder_n != 0) {
+            responder_service<TXQ, BLK>(g_responder_n);
+        }
+#endif
         const uint64_t now = now64();
         if (now < g_deadline) [[likely]] {
             return;
@@ -301,12 +317,14 @@ inline void poll() {
         invalidate_l1_cache();
         if (b->cfg.magic != kCfgMagic || (b->cfg.flags & kFlagEnabled) == 0) {
             publish_state(1);  // unconfigured / disabled by flags
+            g_responder_n = 0;  // disarm the doorbell fast path with the rest of the hook
             g_deadline = now + kIdleRecheck;
             return;
         }
         const uint64_t interval = (static_cast<uint64_t>(b->cfg.interval_hi) << 32) | b->cfg.interval_lo;
         if (interval == 0) {
             publish_state(2);  // configured, interval 0 = disabled
+            g_responder_n = 0;  // disarm the doorbell fast path with the rest of the hook
             g_deadline = now + kIdleRecheck;
             return;
         }
@@ -319,9 +337,11 @@ inline void poll() {
         }
         if (b->cfg.flags & kFlagInitiator) {
             publish_state(4);
+            g_responder_n = 0;
             initiator_round<TXQ, BLK>(n);
         } else {
             publish_state(5);
+            g_responder_n = n;  // arm the doorbell fast path
             responder_service<TXQ, BLK>(n);
         }
         // `now +`, not `+=`: a long-idle or long-paused router must not replay a backlog of rounds.

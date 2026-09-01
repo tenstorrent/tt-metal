@@ -2152,6 +2152,9 @@ struct PerfDebugProfiler::FabricSyncState {
         uint64_t rounds_solved = 0, rounds_partial = 0, rounds_dropped = 0;
         uint64_t trips_total = 0;
         uint64_t rtt_min = ~0ull;
+        // Sample-0 trip stats. This is the BLOCKED-ROUTER cost of a round, not its accuracy: both
+        // routers spin inside the hook for the round's width, and sample 0 dominates it.
+        uint64_t rtt0_min = ~0ull, rtt0_max = 0, rtt0_sum = 0, rtt0_n = 0;
         int64_t off_min = 0, off_max = 0;
         double residual_last = 0.0;
         uint64_t stray_samples = 0;  // which/side mismatches (should stay 0)
@@ -2558,6 +2561,12 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
                     complete ? e.rounds_solved++ : e.rounds_partial++;
                     e.trips_total += sol.n_total;
                     e.rtt_min = std::min(e.rtt_min, sol.rtt_min);
+                    if (sol.rtt_first != 0) {
+                        e.rtt0_min = std::min(e.rtt0_min, sol.rtt_first);
+                        e.rtt0_max = std::max(e.rtt0_max, sol.rtt_first);
+                        e.rtt0_sum += sol.rtt_first;
+                        e.rtt0_n++;
+                    }
                     e.residual_last = sol.residual_rms;
                     if (!e.have) {
                         e.off_min = e.off_max = sol.offset;
@@ -3436,11 +3445,27 @@ void PerfDebugProfiler::stop_fabric_sync() {
         log_info(
             tt::LogMetal,
             "[perf-debug profiler] FABRIC SYNC {} -> {} FINAL: {} rounds solved ({} partial, {} dropped, "
-            "{} stray), offset last {} cy span {} cy, rtt_min {} cy, rate {:+.3f} ppm | device init "
+            "{} stray), offset last {} cy span {} cy, rtt_min {} cy, rtt0 min/mean/max {}/{}/{} cy, "
+            "rate {:+.3f} ppm | device init "
             "ok/fail {}/{} resp {}/{}{}",
-            e.init.chip, e.resp.chip, e.rounds_solved, e.rounds_partial, e.rounds_dropped, e.stray_samples,
-            e.off_last, e.off_max - e.off_min, e.rtt_min == ~0ull ? 0ull : e.rtt_min, (e.rate - 1.0) * 1e6,
-            stat_i >> 8, stat_i & 0xFF, stat_r >> 8, stat_r & 0xFF, e.in_tree ? "" : " [closure]");
+            e.init.chip,
+            e.resp.chip,
+            e.rounds_solved,
+            e.rounds_partial,
+            e.rounds_dropped,
+            e.stray_samples,
+            e.off_last,
+            e.off_max - e.off_min,
+            e.rtt_min == ~0ull ? 0ull : e.rtt_min,
+            e.rtt0_min == ~0ull ? 0ull : e.rtt0_min,
+            e.rtt0_n ? e.rtt0_sum / e.rtt0_n : 0ull,
+            e.rtt0_max,
+            (e.rate - 1.0) * 1e6,
+            stat_i >> 8,
+            stat_i & 0xFF,
+            stat_r >> 8,
+            stat_r & 0xFF,
+            e.in_tree ? "" : " [closure]");
     }
     log_fabric_sync_closure(true);
     render_fabric_sync_into_tracy();

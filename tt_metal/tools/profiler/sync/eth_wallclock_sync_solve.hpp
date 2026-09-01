@@ -45,6 +45,10 @@ struct EthSyncSolution {
     double rate = 1.0;      // receiver cycles per sender cycle (1.0 == identical rate)
     uint64_t rtt_min = 0;
     uint64_t rtt_med = 0;
+    // Sample 0's round trip, captured before the sort below. It is NOT an accuracy quantity -- the
+    // keep_frac filter almost always discards it -- but it IS the cost quantity: sample 0 carries the
+    // responder's doorbell-notice latency, and the initiator's router is blocked for its whole width.
+    uint64_t rtt_first = 0;
     int64_t offset_spread = 0;  // max-min offset across kept trips: the honest error bar
     double residual_rms = 0.0;  // cycles about the fitted line
 };
@@ -79,6 +83,7 @@ inline EthSyncSolution solve(std::vector<Trip> trips, double keep_frac = 0.25) {
         return s;
     }
 
+    s.rtt_first = trips.front().rtt;  // trips arrive in SAMPLE order; must be read before the sort
     std::sort(trips.begin(), trips.end(), [](const Trip& a, const Trip& b) { return a.rtt < b.rtt; });
     s.rtt_min = trips.front().rtt;
     s.rtt_med = trips[trips.size() / 2].rtt;

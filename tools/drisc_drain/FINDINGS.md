@@ -6460,3 +6460,75 @@ What survives and what does not:
 distribution, not a value. UNDONE -- the operating-point decision does not depend on it (100 Hz
 passes in both samples with room; 250 Hz does not), but any future attempt to raise the rate toward
 the 250 Hz ceiling absolutely does, and must not start from the single-sample table.
+
+---
+
+## Responder doorbell fix: helps the targeted metric, does NOT yet show a bandwidth win -- and REFUTES the phase-alignment story
+
+`initiator_round()` and `responder_service()` both loop all n samples inside ONE call, spin-waiting
+on `wait_tag()`. Neither router forwards for the round's width, so a round's duration is blocked
+forwarding time on BOTH ends. Sample 0 dominates it: samples 1..15 return in ~845 cy each (~9.4 us
+total) while sample 0 ran ~194 us.
+
+Root cause of sample 0: `poll()` only enters the hook when `now >= g_deadline`, and the deadline
+advances by `interval` (1/HZ), so a RESPONDER noticed a doorbell only once per interval. FIX: call
+`responder_service()` on every prescaler expiry (it self-checks the ping tag and returns
+immediately when there is no doorbell, so the added cost is one call + one L1 tag read). Gated by
+`FABRIC_ROUTER_SYNC_SLOW_DOORBELL` as an opt-OUT so both arms come from ONE build.
+`EthSyncSolution::rtt_first` now carries sample 0's trip (captured BEFORE the rtt sort) and the
+per-edge FINAL line prints `rtt0 min/mean/max` -- sample 0 is a COST quantity, not an accuracy one.
+
+### Measured directly: sample-0 wait, 3 reps per arm, arms ALTERNATED
+
+Per-link rtt0 mean, cycles (@1.35 GHz, 260k cy = 193 us):
+
+| arm  | rep | link A | link B      | link C     | link D  |
+|------|-----|--------|-------------|------------|---------|
+| slow | 1   | 23678  | 237862      | 259026     | 260238  |
+| slow | 2   | 20414  | 235376      | 255542     | 261749  |
+| slow | 3   | 18729  | 236092      | 254579     | 258028  |
+| fast | 1   | 18869  | **182940**  | **16788**  | 252076  |
+| fast | 2   | 22345  | **184311**  | **19113**  | 259614  |
+| fast | 3   | 25380  | **178455**  | **18135**  | 259711  |
+
+Aggregate over 12 link-runs per arm: slow mean 193442 / **median 237862**; fast mean 119811 /
+**median 25380**. Median improves **9.4x**. The 194 us the GUI shows is confirmed exactly
+(260238 cy = 193 us).
+
+### What this refutes
+**Per-link rtt0 is REPRODUCIBLE to about 2% across reps** -- 235376/236092/237862 on one link,
+254579/255542/259026 on another. It is a STABLE STRUCTURAL PROPERTY OF EACH LINK, not a per-run
+phase draw. Therefore the earlier claim that deadline phase alignment explains the -3.20% ->
+-8.43% bandwidth swing is **WRONG and withdrawn**: rtt0 holds steady across reps while the 4-link
+bandwidth number swings 4-7 points *within each arm*. Whatever drives that variance, it is not
+this. (The remedy for the headroom table is therefore still "more repeats", as originally
+written -- the "we were sampling a hidden variable" reframing was mine and it does not survive.)
+
+### The fix does NOT demonstrate a bandwidth win
+Worst 4-link row per run: slow {-5.79, -8.08, -4.34} mean **-6.07**; fast {-1.32, -5.66, -8.92}
+mean **-5.30**. The fast arm's SPREAD IS WIDER (7.6 vs 3.7 points) and its worst run is worse than
+every slow run. At n=3 a 0.77-point mean difference is far inside that noise. **No bandwidth claim
+is supported.** Geomeans (slow 1.0028/1.0003/1.0039, fast 1.0110/1.0035/1.0019) say the same.
+
+### Why 2 of 4 links did not improve -- UNTESTED
+Links A and C responded to the fix; B partially; D not at all (~259k cy in both arms). A prescaler
+expiry happens every 64 ROUTER LOOP ITERATIONS, so its wall-clock period scales with how slow the
+loop is under load. The plausible reading is that the stubborn links are the ones this test drives
+hardest: their router loops are slow enough that 64 iterations still span ~190-260 us, so the
+doorbell is no fresher than before. Testable by lowering `FABRIC_ROUTER_SYNC_PRESCALER_MASK` on
+those links. NOT DONE.
+
+### Accuracy is untouched (the trade is safe)
+`rtt_min` 839-846 cy in BOTH arms; residual median 3.3 -> 2.7 cy (n=84 each); closure ~-60 cy both;
+losslessness exact in both -- 4465 and 4536 rounds, **0 partial, 0 dropped, 0 stray**.
+
+### Consequences
+1. **Keep the fix.** It improves the quantity it targets by 9.4x at the median, costs nothing in
+   accuracy, and removes a real unbounded wait on the links where it works.
+2. **Do not claim a bandwidth improvement from it.** n=3 does not support one.
+3. **The 1.55 ms `first_wait` tail is still in the code and still reachable** on the links the fix
+   did not help. A round that silently blocks a router for up to 1.55 ms, succeeding and raising
+   no error, is the same shape as the eth wedge this branch spent a session chasing: a resident
+   kernel holding a resource with nothing reporting it. `rtt0 max` is the watch signal -- it
+   already reaches 735731 cy (545 us).
+4. The 4-link bandwidth variance is now an OPEN question with no candidate mechanism.
