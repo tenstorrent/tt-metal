@@ -22,6 +22,7 @@ import asyncio
 import functools
 import inspect
 import os
+import sys
 
 _DEFAULT_EVERY_S = 30
 _ENV_EVERY_S = "MCP_PROGRESS_EVERY_S"
@@ -103,13 +104,24 @@ def install(mcp) -> bool:
     """Make every tool registered on `mcp` from now on report progress. Idempotent.
 
     Applied where tools are registered rather than tool by tool, so no signature changes and no
-    server has to remember to do it for each new tool. Returns False when the installed mcp offers
-    no Context to report through, leaving the server exactly as it was.
+    server has to remember to do it for each new tool.
+
+    Returns False, and SAYS SO on stderr, when the installed mcp offers no Context to report
+    through. There is deliberately no fallback: a long silence window was tried and is the wrong
+    shape -- it cannot tell work from a hang, only wait longer before guessing -- and keeping one
+    as a quiet backstop would mean the report can lose its roofline again with nothing said. If
+    this cannot be installed, the operator is told, because the next long call will be cut off.
     """
     if getattr(mcp, "_progress_installed", False):
         return True
     context_cls = _context_class()
     if context_cls is None:
+        print(
+            "  [mcp-progress] this mcp build exposes no Context: tools cannot report progress, so "
+            "the client will abort any call that runs past its silence window",
+            file=sys.stderr,
+            flush=True,
+        )
         return False
     raw_tool = mcp.tool
     every_s = _every_s()
