@@ -28,23 +28,23 @@ namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
 // Derived geometry. One-liners off the two structs the framework passes everywhere, named because
 // `aligned_page_size()` as "the token size" is not self-evident.
-uint32_t ring_extent(const CombineFabric2dParams& args) {
+inline uint32_t ring_extent(const CombineFabric2dParams& args) {
     return args.device->shape()[static_cast<int32_t>(args.axis)];
 }
 
-uint32_t token_size_bytes(const CombineFabric2dInputs& tensor_args) {
+inline uint32_t token_size_bytes(const CombineFabric2dInputs& tensor_args) {
     return static_cast<uint32_t>(tensor_args.dispatched_buffer.buffer()->aligned_page_size());
 }
 
-uint32_t num_routed_experts(const CombineFabric2dInputs& tensor_args) {
+inline uint32_t num_routed_experts(const CombineFabric2dInputs& tensor_args) {
     return static_cast<uint32_t>(tensor_args.expert_token_counts.logical_shape()[-1]);
 }
 
-uint32_t num_dispatch_groups(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
+inline uint32_t num_dispatch_groups(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
     return num_routed_experts(tensor_args) / (args.experts_per_chip * ring_extent(args));
 }
 
-uint32_t my_row(const CombineFabric2dParams& args, const ttnn::MeshCoordinate& coord) {
+inline uint32_t my_row(const CombineFabric2dParams& args, const ttnn::MeshCoordinate& coord) {
     return coord[static_cast<int32_t>(args.axis)];
 }
 
