@@ -141,6 +141,8 @@ private:
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
     mutable std::unordered_map<MeshCoordinateRange, std::vector<IDevice*>> local_devices_by_range_;
+    mutable std::optional<CoreCoord> compute_with_storage_grid_size_;
+    mutable std::optional<uint32_t> l1_size_per_core_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;

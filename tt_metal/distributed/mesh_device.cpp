@@ -251,8 +251,13 @@ bool MeshDeviceImpl::is_remote_only() const {
 }
 
 uint32_t MeshDeviceImpl::l1_size_per_core() const {
-    return validate_and_get_reference_value(
-        this->get_devices(), [](const auto* device) { return device->l1_size_per_core(); });
+    // Cached for the same reason as compute_with_storage_grid_size(): fixed for the life of the mesh,
+    // and circular buffer validation asks for it once per program per enqueue.
+    if (!l1_size_per_core_.has_value()) {
+        l1_size_per_core_ = validate_and_get_reference_value(
+            this->get_devices(), [](const auto* device) { return device->l1_size_per_core(); });
+    }
+    return *l1_size_per_core_;
 }
 
 uint32_t MeshDeviceImpl::dram_size_per_channel() const {
@@ -883,8 +888,14 @@ DeviceIds MeshDeviceImpl::get_device_ids() const {
 size_t MeshDeviceImpl::num_devices() const { return view_->num_devices(); }
 
 CoreCoord MeshDeviceImpl::compute_with_storage_grid_size() const {
-    return validate_and_get_reference_value(
-        this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
+    // Fixed once the devices are open, but the cross-device agreement check walks the whole mesh and
+    // rebuilds the device list to do it. Dispatch asks for this once per program per enqueue (circular
+    // buffer validation), so establish agreement on first use and answer from the cache after that.
+    if (!compute_with_storage_grid_size_.has_value()) {
+        compute_with_storage_grid_size_ = validate_and_get_reference_value(
+            this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
+    }
+    return *compute_with_storage_grid_size_;
 }
 
 tt::ARCH MeshDeviceImpl::arch() const { return tt_metal::MetalContext::instance().get_cluster().arch(); }
@@ -958,6 +969,8 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
     auto new_view = std::make_unique<MeshDeviceView>(new_shape, new_device_order, new_fabric_node_ids);
     view_ = std::move(new_view);
     local_devices_by_range_.clear();
+    compute_with_storage_grid_size_.reset();
+    l1_size_per_core_.reset();
 }
 
 bool MeshDeviceImpl::close() {
