@@ -17,6 +17,11 @@ Sibling plans: [Plan 1 — PGD-shape-aware inter-mesh constraints](TOPOLOGY_MAPP
 
 "Seam" is used throughout and is not a codebase term; §3 defines it and says exactly what it means.
 
+**This does not replace the inter-mesh solve.** §4 states the architecture — two coupled passes — and
+the rule that fixes what the DFS is allowed to decide: *the DFS decides properties of the region set;
+the inter-mesh solve decides properties of the labelling.* §4(c) and §4(e) are the in/out lists.
+§6 records optimizations under consideration and is explicitly undecided.
+
 ---
 
 ## 1. Where placements are chosen today
@@ -143,7 +148,154 @@ Three things stay where they are:
 | Whether the logical mesh's internal shape fits the region | The intra-mesh solve, `map_multi_mesh_to_physical:3550+` |
 | Whether the region is the *right* region for that logical mesh | [Plan 1](TOPOLOGY_MAPPER_PLAN_1_PGD_SHAPE_INTERMESH_CONSTRAINTS.md) — shape-class domain filter |
 
-## 4. Design — adjacency-guided mixed-shape DFS
+## 4. Architecture: two coupled passes, and what the DFS is allowed to decide
+
+### (a) Verdict: stay two-pass, redraw the boundary
+
+The obvious reading of this plan is that the DFS subsumes the inter-mesh solve — it assigns logical
+meshes to physical regions, so why keep `map_multi_mesh_to_physical` at all? **Because the bug is
+premature commitment, not the existence of stages.** What breaks today is Phase B discarding the
+candidate pool (§1, §2); that is a lossy handoff, and the cheap fix is to stop losing information, not
+to collapse the pipeline. Keeping the pool alive gets the whole benefit without touching the boundary.
+
+Three things argue against merging the labelling into the DFS:
+
+**Symmetry.** A DFS that assigns logical meshes as it places will, on failure, re-derive the same region
+set repeatedly with permuted labels; it has no mechanism to recognise it has already tried this
+equivalence class. SAT rejects the class at once via learned clauses. Nogoods recorded against an
+*unlabelled region set* are also strictly stronger than nogoods against a labelled assignment.
+
+**Intra-mesh failures are frequently not the placement's fault.** Channel-count validation, MGD
+pinnings, and rank binding can all fail on a region set that is perfectly good. The cheap repair is to
+permute labels; only when *every* labelling fails is the placement to blame. A single-pass DFS cannot
+tell those apart and will re-place when it should have relabelled.
+
+**Blast radius.** `map_multi_mesh_to_physical` has one production caller
+(`tt_metal/fabric/topology_mapper.cpp:531`) but roughly thirty-five call sites in
+`tests/tt_metal/tt_fabric/fabric_router/test_topology_mapper_utils.cpp`, and `map_multi_mesh_to_physical_n`
+plus `TopologyMappingEnumerationSession` are documented public API sharing the same SAT path
+(`topology_mapper_utils.hpp:591–637`). Deleting the stage means rewriting the mapper's test suite and
+providing DFS equivalents for the enumeration entry points.
+
+So: two passes, coupled as a coroutine rather than pipelined.
+
+```
+PASS 1  adjacency-guided DFS  (§5)
+        → a chip-disjoint, seam-feasible set of physical regions
+        → labels only where a pinning already forces one
+                    │
+                    ▼
+PASS 2  map_multi_mesh_to_physical + intra-mesh solve
+        → completes the labelling, embeds each mesh, checks exit nodes,
+          channel counts, rank bindings, per-chip MGD pinnings
+```
+
+Pass 2 is near-identity work in the common case, because pass 1 already guaranteed the seams. It exists
+to permute when intra-mesh rejects something, and to check the constraints the DFS deliberately cannot
+see. §6(c) proposes — but does not adopt — a feedback edge back into pass 1.
+
+### (b) The rule that decides scope
+
+> The DFS decides properties of the **region set**. Pass 2 decides properties of the **labelling**.
+
+Everything below follows from that one line, and it is the test to apply to anything proposed for the
+DFS later. A property is a region-set property if it can be evaluated without knowing which logical mesh
+sits on which region — footprint, disjointness, physical adjacency. A property is a labelling property
+if changing which mesh sits where can change the answer — rank binding, exit-node identity, intra-mesh
+fit.
+
+### (c) In scope — the DFS determines these
+
+| Decision | Why it belongs to the region set |
+| --- | --- |
+| Which PGD grouping variant (shape/topology) backs each mesh | Determines the footprint itself |
+| Where each grouping lands on PSD chips | This *is* the region |
+| Chip disjointness across all placed regions | Occupancy mask; native to a backtracking search |
+| Seam existence between placed region pairs | Purely physical: does an ethernet link cross? (§3) |
+| PGD↔MGD shape compatibility | Filters which candidates can serve which mesh |
+| **MGD pinnings, mesh-level projection** | See (d) — a pinning is a *given*, not a search decision |
+| Host locality | Soft only: value-ordering bias (§5(e)), never a constraint |
+
+### (d) MGD pinnings: a given, not a decision
+
+Pinnings are the one case where partial labelling is free, which is why they belong in the DFS despite
+labelling being pass 2's job. A `PinningConstraint` names both a fabric node and an ASIC position, so it
+answers two different questions at two different granularities:
+
+| Granularity | Question answered | Consumer |
+| --- | --- | --- |
+| Mesh-level projection | *Which region must host logical mesh A?* — whichever region contains that ASIC position | **DFS**: seeds and pre-labels that mesh |
+| Chip-level | *Which ASIC does fabric node (A, chip 3) occupy?* | Intra-mesh solve, `add_pinning_constraints` (`topology_mapper_utils.cpp:3616`) |
+
+The DFS takes only the projection. It performs no search to obtain it — the pinning states it — so the
+"DFS does not label" rule is intact. The payoff is large: a pinned mesh is a fixed anchor, which removes
+the seed symmetry problem (§5(g)) and gives the search a most-constrained starting point for free.
+
+The DFS output is therefore a region set with a *partial* labelling: pinned meshes bound, everything
+else anonymous. Pass 2 completes it.
+
+### (e) Out of scope — the DFS must not determine these
+
+| Deferred to pass 2 | Rationale | Where it happens |
+| --- | --- | --- |
+| Labelling of unpinned meshes | Labelling property; SAT handles permutation and symmetry far better (§4(a)) | `map_multi_mesh_to_physical` |
+| Exit node selection — *which chip* faces the neighbour | Labelling property, and orientation is a joint constraint across all of a mesh's neighbours | `add_exit_node_constraints` (`3023`) |
+| MGD intra-mesh embedding, fabric node → ASIC | Independent of seam feasibility at region granularity | `solve_topology_mapping`, `3652` |
+| Per-chip MGD pinnings | Chip granularity; see (d) | `add_pinning_constraints` (`3616`) |
+| **Rank bindings** | A rank binding constrains a *label* — "mesh A lives on rank 3". The DFS has no labels for unpinned meshes, so it cannot evaluate it without doing pass 2's job | Rank-binding identity path in `build_inter_mesh_constraints` |
+| Channel counts, STRICT vs RELAXED | Deferred by §5(j); existence-only is the weakest predicate that kills #54623 | Inter-mesh validation |
+| PGD↔MGD node orientation | Frozen pre-placement and seam-blind; see (g) | `add_pgd_pinning_preferred_constraints` (`2957`), soft |
+
+Rank bindings deserve the explicit note because they look like a placement property. They are not. The
+most a region-set pass could do is a counting feasibility check — the multiset of host ranks covered
+must be able to satisfy the demand — and that is a Hall-type bound, not a binding. It is not worth
+building: rank-binding failures are exactly the case pass 2 repairs by relabelling, at no cost to the
+DFS.
+
+### (f) One seam predicate, two consumers
+
+The seam predicate of §3 and the exit-node domain computed by `add_exit_node_constraints` are the same
+function evaluated at different times. That function builds, for a region pair, the set of ASICs in one
+region having links toward the other:
+
+```3060:3062:tt_metal/fabric/topology_mapper_utils.cpp
+            // Use the mapped physical mesh ID as the key (which is the same as dst_exit_node.mesh_id)
+            valid_physical_exit_nodes_by_mesh[dst_exit_node.mesh_id].insert(src_exit_node.asic_id);
+```
+
+The DFS needs the same set — non-empty is exactly its seam test. **Extract it once and share it.** The
+DFS uses non-emptiness as its generator (§5(c)); pass 2 uses the set itself as the required domain.
+
+Two consequences, both good. The DFS structurally cannot hand pass 2 a region pair that will fail the
+exit-node check, so the `"exit node constraints cannot be satisfied"` rejection at
+`topology_mapper_utils.cpp:3611` becomes unreachable from this path. And the two stages stop carrying
+two definitions of a usable seam that can drift apart.
+
+### (g) Suppress the seam-blind PGD preference
+
+The PGD↔MGD node correspondence is composed at *match* time, before placement:
+
+```1113:1115:tt_metal/fabric/physical_grouping_descriptor_matching.cpp
+                    committed.mesh_node_to_asic_position =
+                        compose_mesh_node_to_asic_position_from_pgd_match(committed, match.mapping.target_to_global);
+                    return committed;
+```
+
+At that moment nobody knows where the region will land or who its neighbours will be, so the orientation
+it encodes is seam-blind by construction, and every placement of that grouping inherits it. It reaches
+the intra-mesh solve as a soft preference, deliberately added after the hard constraints
+(`topology_mapper_utils.cpp:3632–3645`), so it cannot cause a failure — but on a mesh that has seams it
+biases toward a neighbour-ignorant orientation that the hard exit constraints must then undo.
+
+Proposed: skip `add_pgd_pinning_preferred_constraints` for meshes with a non-empty exit-node graph, and
+keep it for interior meshes where it is a genuine tie-break. Small, independently testable, and it does
+not depend on the DFS landing.
+
+**Do not promote this pinning to a hard constraint.** A 4x4 MESH has eight topologically equivalent
+orientations; today the solver picks whichever satisfies the seams. Hard-pinning would pick one blind
+and convert a cheap local repair into a whole-placement backtrack.
+
+## 5. Design — adjacency-guided mixed-shape DFS
 
 Keep Phase A untouched and delete Phase B from this path. Index the pool, then grow one placement over
 all shapes at once, ordered by the MGD's own graph.
@@ -374,7 +526,7 @@ auto constraints = build_pgd_to_psd_constraints(grouping, physical_graph, psd, s
 with `open_boundary(R) = { d : ∃ c ∈ R with (c,d) ∈ flat_graph, d ∉ R }`.
 
 Constraint 2 *is* the seam predicate from §3, and `min_count = 1` is exactly the existence-only choice
-made in §4(j) — the constraint form and the design decision agree for free.
+made in §5(j) — the constraint form and the design decision agree for free.
 
 Why this is cheap. Cardinality is real CNF, step 8 of `topology_sat_encode_hard_constraints`
 (`topology_solver_sat.cpp:1179`), not a post-hoc check. Its literals are collected *after* domain
@@ -441,13 +593,79 @@ try S4_a = [c2..c5]
 
 Three search nodes. The propagation does the work, not the enumeration.
 
-## 5. Ownership and function passing
+## 6. DFS optimizations
+
+### (a) Status
+
+**Open — the option space below is recorded, not decided.** Nothing here is committed to the v1
+implementation. The design in §5 is deliberately the lightest thing that can work: connected growth,
+domain filtering, a union bound, chronological backtracking. Every entry below is a *response to a
+measured symptom*, and the symptom has to show up first.
+
+The guard rail: v1 ships with node-count, wall-clock, and deepest-depth counters. An optimization is
+adopted when a validation MGD (§10) demonstrates the symptom it targets, and not before. This section
+exists so that when a symptom appears the response is already thought through.
+
+### (b) Candidates, grouped by the symptom they answer
+
+| # | Optimization | Symptom it answers | Cost / risk |
+| --- | --- | --- | --- |
+| 1 | **Shared seam cache** — memoize the region-pair link set (§4(f)) lazily, keyed by candidate pair | Seam evaluation is the DFS inner loop | Bounded by `touches` size; almost certainly worth doing in v1 |
+| 2 | **State memoization** — hash on `(placed mesh set, occupied chip bitset)`, skip states already refuted | The same partial state is reached by different assignment orders | Hashing a bitset per node; memory grows with search |
+| 3 | **Anchored enumeration** (§5(i)) — generate candidates next to the frontier instead of filtering a global pool | Pools large enough that global filtering dominates | Per-node solver calls; already documented as a contingency |
+| 4 | **Conflict-directed backjumping** — jump to the deepest assignment implicated in the failure | Chronological backtracking thrashes on a long pipeline | Requires conflict provenance tracking through propagation |
+| 5 | **Full Hall matching** instead of the §5(d) union bound | Union bound admits states that die a few levels deeper | Bipartite matching per node; §5(d) says explicitly to wait for evidence |
+| 6 | **Bidirectional growth** — seed both ends of a pipeline and meet in the middle | Long path MGDs walk far before finding a dead end | Two frontiers to merge; already raised in §12 |
+| 7 | **Signature-class seed ordering → pruning** (§5(g)) | Symmetric dead ends rediscovered per image | Pruning risks losing solutions; needs an isomorphism proof first |
+| 8 | **Randomized restarts** | Heavy-tailed runtime; one bad early choice dominates | Loses determinism unless seeded; needs a reproducibility story |
+
+Two candidates are cheap enough to be near-default (1 and, plausibly, 2). The rest are escalations.
+
+### (c) Proposed, not adopted: pass-2 → pass-1 loopback
+
+Recorded as a possibility. **Not part of the current design.**
+
+Pass 1 cannot see the labelling properties in §4(e), so pass 2 can still fail on a region set the DFS
+considers valid — a rank binding that no labelling satisfies, or an intra-mesh embedding that fails for
+every permutation. Today that is terminal for the placement. The proposal is to make it recoverable:
+
+```
+pass 1 (DFS)  ──── region set ────►  pass 2 (label + intra-mesh)
+     ▲                                        │
+     └──── nogood on the REGION SET ◄─────────┘
+              (only after ALL labellings fail)
+```
+
+The DFS becomes a resumable generator rather than a one-shot call, and resumes from its trail instead of
+restarting. The nogood is recorded against the *unlabelled* set, which is what makes it strong — it
+refutes every labelling at once, and §4(a) already argues that this granularity is the reason to keep
+labelling in SAT.
+
+**Why it is attractive.** It closes the last completeness gap without moving any decision into the DFS,
+and it costs nothing on the common path, where pass 2 accepts the first region set.
+
+**Why it is not adopted.** It converts a clean stage boundary into a control-flow cycle, which is the
+most expensive kind of coupling to debug and the hardest to reason about when it misbehaves. It requires
+pass 2 to distinguish "no labelling exists" from "this labelling failed", which is not a distinction the
+current code makes. And it needs a global budget across the cycle, otherwise a pathological MGD can
+alternate between passes indefinitely.
+
+**The cheaper alternative, and the default.** Fail with the §5(f) diagnostic — deepest partial
+assignment plus the specific mesh and seam that could not be satisfied — and let a human read it. If the
+counters show pass-2 rejection of a DFS region set is common rather than rare, revisit.
+
+**Decision gate.** Instrument first: count how often pass 2 rejects a DFS-produced region set for a
+labelling-property reason. If that is ~0 across the MGD corpus, this stays unbuilt permanently. That
+same counter is the falsification test for §4(a) — if pass 2 *never* permutes, the labelling stage is
+dead weight and the argument for two passes weakens.
+
+## 7. Ownership and function passing
 
 | Concern | Owner | Notes |
 | --- | --- | --- |
 | Candidate pool (unpacked) | New `enumerate_all_candidates_in_psd(groupings, psd, flat_graph)` in `physical_grouping_descriptor_matching.cpp` | Extract Phase A (`1730–1789`) into its own function; `solve_for_many_groupings_to_psd_heterogeneous` calls it too, so the packer keeps working unchanged |
-| Placement cap | `kMaxPlacementsPerGrouping` (`1663`) deleted; `enumerate_distinct_placements_for_grouping` passes `0` | Inherits the solver's own 500k backstop. No replacement bookkeeping (§4(h)) |
-| Anchored placement | New `enumerate_placements_anchored` beside `enumerate_distinct_placements_for_grouping` (`1514`) | Seeds `initial_constraints` with a forbidden set plus one at-least-1 cardinality per placed neighbour; no solver change. Contingency only (§4(i)) |
+| Placement cap | `kMaxPlacementsPerGrouping` (`1663`) deleted; `enumerate_distinct_placements_for_grouping` passes `0` | Inherits the solver's own 500k backstop. No replacement bookkeeping (§5(h)) |
+| Anchored placement | New `enumerate_placements_anchored` beside `enumerate_distinct_placements_for_grouping` (`1514`) | Seeds `initial_constraints` with a forbidden set plus one at-least-1 cardinality per placed neighbour; no solver change. Contingency only (§5(i)) |
 | Pool indices | New `PlacementIndex` struct, anonymous namespace in `topology_mapper_utils.cpp`, built in Phase 3 beside `group_bits_by_name` (`927`) | Owns `pool`, `pool_by_shape`, `pool_by_chip`, `touches`, `touches_bits`; built from `flat_graph`, which Phase 3 already holds |
 | Full logical mesh graph | `get_requested_intermesh_from_mgd` result used **unfiltered** (`1007`) | The existing `build_mgd_mesh_level_subgraph_for_mesh_descriptor_name` (`1037`) shape filter is simply not applied on this path |
 | Shape of each logical mesh | `logical_mesh_id_to_mgd_instance_name` (`1522`) + `get_valid_groupings_for_mgd` keys | Already the key space `placements_by_shape` uses |
@@ -459,7 +677,7 @@ Three search nodes. The propagation does the work, not the enumeration.
 `PlacementIndex` and the search stay in the anonymous namespace in `topology_mapper_utils.cpp`. Nothing
 here needs to appear in a public header.
 
-## 6. What this displaces
+## 8. What this displaces
 
 | Phase | Fate |
 | --- | --- |
@@ -472,7 +690,7 @@ here needs to appear in a public header.
 The per-shape SAT is subsumed rather than lost: it embedded the same-shape subgraph into a fixed tiling,
 and the new search embeds the *whole* graph into the whole pool.
 
-## 7. Interaction with Plans 1 and 2
+## 9. Interaction with Plans 1 and 2
 
 Complementary, and the relationship gets stronger rather than weaker.
 
@@ -486,7 +704,7 @@ the retry loop that [Plan 2](TOPOLOGY_MAPPER_PLAN_2_INCREMENTAL_INTERMESH_SOLVE.
 Plan 2's value therefore drops further if this lands. It remains an encode-once performance win, not a
 correctness fix.
 
-## 8. Validation
+## 10. Validation
 
 - **The 8-chip chain from §2**, as a direct unit test in
   `tests/tt_metal/tt_fabric/fabric_router/test_topology_mapper_utils.cpp`. It fails today and must pass
@@ -498,25 +716,33 @@ correctness fix.
   resolves to ≥1 channel. The degree-4 router mesh is the sharpest case, three of its four seams being
   cross-shape.
 - **`llama_8b_4galaxy_unpinned_mesh_graph_descriptor.textproto`**: no pinnings, so it exercises the
-  unpinned seed and symmetry-ordering path from §4(g).
-- **Pool sizing**, per §4(h): log the per-shape pool size for the validation MGDs once the cap is
+  unpinned seed and symmetry-ordering path from §5(g).
+- **Pool sizing**, per §5(h): log the per-shape pool size for the validation MGDs once the cap is
   deleted, confirming pools stay in the tens-to-low-hundreds range the trait constraints predict.
 - Extend the `bh-heterogeneous` group in
   `tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh` with a boundary-resolution assertion
   rather than only `TestGalaxyLayoutCheck`.
+- **Counters, shipped with v1** (§6(a)): search nodes expanded, wall-clock, deepest depth reached, and
+  how often pass 2 rejects a DFS region set for a labelling-property reason. These are the evidence
+  gates for every §6(b) optimization and for the §6(c) loopback; without them each is a guess.
+- **Pinned vs unpinned pairing.** Run `llama_8b_4galaxy_unpinned_mesh_graph_descriptor.textproto`
+  against its pinned sibling and compare node counts. The pinned MGD exercises the §4(d) seed path and
+  should be dramatically cheaper; if it is not, the pinning projection is not being applied.
 
-## 9. Risks
+## 11. Risks
 
 | Risk | Mitigation |
 | --- | --- |
-| DFS thrashes on a hard instance; no completeness guarantee within budget | Wall-clock budget plus fallback to the existing Phase 5/6 path (§4(f)) |
-| Pool truncation makes a satisfiable MGD report failure | Delete the cap (§4(h)); trait constraints keep real pools far below it anyway |
-| A future PGD leaves slot labels unspecified, so pools are large | Anchored placement via existing constraints (§4(i)) |
-| Symmetry multiplies dead ends on unpinned MGDs | Signature-ordered seeds (§4(g)); pinned MGDs are unaffected |
-| Loss of an explicit objective — the search returns *a* solution, not a good one | Host-locality as value-ordering bias (§4(e)). Max coverage was the wrong objective anyway |
-| `touches` build or memory blows up at SC36 scale | Edge-list-driven construction, not pairwise (§4(a)); measure before assuming |
+| DFS thrashes on a hard instance; no completeness guarantee within budget | Wall-clock budget plus fallback to the existing Phase 5/6 path (§5(f)) |
+| Pool truncation makes a satisfiable MGD report failure | Delete the cap (§5(h)); trait constraints keep real pools far below it anyway |
+| A future PGD leaves slot labels unspecified, so pools are large | Anchored placement via existing constraints (§5(i)) |
+| Symmetry multiplies dead ends on unpinned MGDs | Signature-ordered seeds (§5(g)); pinned MGDs are unaffected |
+| Loss of an explicit objective — the search returns *a* solution, not a good one | Host-locality as value-ordering bias (§5(e)). Max coverage was the wrong objective anyway |
+| `touches` build or memory blows up at SC36 scale | Edge-list-driven construction, not pairwise (§5(a)); measure before assuming |
+| Pass 2 rejects a region set the DFS considers valid, and there is no recovery | Accepted for v1: fail with the §5(f) diagnostic. §6(c) records the loopback as the escalation, gated on the §10 counter |
+| Scope creep pulls labelling properties into the DFS one at a time | §4(b) is the single test to apply; §4(e) records each exclusion with its reason so the argument does not have to be re-litigated |
 
-## 10. Open questions
+## 12. Open questions
 
 - **What should the seed be for an unpinned MGD?** Most-constrained-mesh-first is right, but its
   *placement* choice is unconstrained, so symmetry ordering carries the whole load. Pinned MGDs get this
@@ -528,10 +754,20 @@ correctness fix.
   trigger for deleting Phases 5–6: the new search handles every MGD in the `bh-heterogeneous` group
   within budget for a full release cycle.
 - **When does the deferred channel-count check get picked up?** Proposed: the first MGD whose seams
-  resolve to a non-zero but insufficient channel count under STRICT inter-mesh validation (§4(j)).
+  resolve to a non-zero but insufficient channel count under STRICT inter-mesh validation (§5(j)).
 - **Where does #52016 (pipeline-stage adjacency in MGD) intersect?** If stage adjacency becomes explicit,
   seams gain direction — ordered pipeline hops rather than undirected boundaries — and both the ordering
-  heuristic in §4(b) and the predicate in §3 could use it.
+  heuristic in §5(b) and the predicate in §3 could use it.
+- **Does pass 2 ever actually permute?** The whole two-pass argument in §4(a) rests on relabelling being
+  a real repair. If the counter in §10 shows pass 2 always accepts the DFS labelling unchanged, the
+  labelling stage is dead weight and collapsing the passes becomes defensible — with evidence rather
+  than as a bet.
+- **Is a rank-count feasibility bound worth adding to the DFS?** §4(e) says no: a Hall-type check on
+  host-rank supply versus demand is the most a label-free pass can do, and pass 2 repairs those failures
+  by relabelling anyway. Revisit only if rank-binding rejections turn out to dominate pass-2 failures.
+- **Does the seam-blind preference suppression in §4(g) stand alone?** It needs neither the DFS nor
+  Plan 1, so it could ship first as an independent change. Worth confirming it does not regress
+  interior-mesh determinism, which is the one thing the preference currently buys.
 - **Does the joint SAT from #54623 still have a role?** It becomes the escalation if the DFS proves
   inadequate, not the first move. The DFS is strictly less new machinery: encoding chip-disjointness in
   the SAT needs an at-most-one primitive that `MappingConstraints` does not have today
