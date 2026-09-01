@@ -229,6 +229,44 @@ _RE_DFB_NAMED = re.compile(r"(\w+)\s*=\s*get_arg\(\s*args::dfb_(\w+)\s*\)")
 # A Storage built straight from the argument rather than through a named constant:
 #   u::Storage<S> s1(get_arg(args::dfb_s1));
 _RE_STORAGE_INLINE = re.compile(r"u::Storage<[^;]*?>\s+(\w+)\s*\(\s*get_arg\(\s*args::dfb_(\w+)\s*\)\s*\)")
+
+
+# u::ComputeBlock<Shape, kDfbFoo> name = <expression>;
+#
+# The shim form: a compute intermediate names its buffer in its own declaration instead of
+# through a u::Storage. It is scanned rather than matched by a regex because the SHAPE may
+# itself carry angle brackets (u::Shape<2, 4>), and the id is the last top-level template
+# argument -- a non-greedy `[^;]*?>` stops at the wrong bracket and would read the shape's
+# `4` as a buffer id. Silently, which is the failure this whole function exists to avoid.
+_RE_COMPUTE_BLOCK_OPEN = re.compile(r"u::ComputeBlock\s*<")
+
+
+def _compute_block_dfbs(src):
+    """Yield (variable, dfb constant) for every shim declaration in `src`."""
+    for m in _RE_COMPUTE_BLOCK_OPEN.finditer(src):
+        i = m.end()  # just past the '<'
+        depth, args, start = 1, [], i
+        while i < len(src) and depth:
+            c = src[i]
+            if c == "<":
+                depth += 1
+            elif c == ">":
+                depth -= 1
+                if not depth:
+                    args.append(src[start:i])
+            elif c == "," and depth == 1:
+                args.append(src[start:i])
+                start = i + 1
+            elif c == ";":
+                break  # ran past the declaration; not a shim
+            i += 1
+        if depth or len(args) != 2:
+            continue  # u::ComputeBlock<S> or something unparsed -- not the shim form
+        tail = re.match(r"\s+(\w+)\s*=", src[i:])
+        if tail:
+            yield tail.group(1), args[1].strip()
+
+
 _RE_PRODUCED = re.compile(
     r"(?:u::Block[\w<>: ]*|u::RetainedBlock[\w<>: ]*|auto)\s+(\w+)\s*=\s*(\w+)\.(?:store|accumulate)\("
 )
@@ -299,6 +337,11 @@ def derive_roles(kernel_source, defines):
             storages[var] = dfb_const[dfb]
     for var, name in _RE_STORAGE_INLINE.findall(src):
         storages[var] = name
+    # A shim-declared buffer is a compute intermediate by construction: it has no Storage,
+    # so no noc call can name it, so the role lookup below can only ever land on INTERMED.
+    for var, dfb in _compute_block_dfbs(src):
+        if dfb in dfb_const:
+            storages[var] = dfb_const[dfb]
     # Block variable -> every Storage it could have come from. A name is reused across
     # preprocessor branches (`u::Block result` in each), so this is one-to-many rather than
     # one-to-one, and every candidate gets the role: they all drain the same way.

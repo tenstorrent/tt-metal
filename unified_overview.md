@@ -57,7 +57,7 @@ gives the programmer fine grain control for manually synchronizing the noc.
 construction against the depth the host configured. It is agnostic to how many
 back buffers it has, and since it is shared across threads, double-buffering is
 still the right rule of thumb so that DM threads can start fetching the next
-`Block` which compute is using the current.
+`Block` while compute is using the current.
 
 `Block<S>` is **move-only evidence that a Storage was produced into** -- it comes back from
 anything that has already pushed. Move-only so it reaches exactly one consumer; consumers
@@ -70,6 +70,28 @@ take it by value. A `Block` must be moved on to either
 That destructor is the whole protocol in one place: the pop happens at end of scope, so the
 kernel never writes `cb_pop_front` and never forgets it. `ComputeBlock` is also the
 expression leaf, so the value flows straight into the compute layer.
+
+A pure-compute intermediate can name its buffer on the declaration instead, which leaves the
+initialiser as nothing but the expression:
+
+```cpp
+u::ComputeBlock<X, kDfbSq> sq = x * x;        // instead of a separate
+                                             //   u::Storage<X> sq_storage(kDfbSq);
+                                             //   u::ComputeBlock sq = sq_storage.store(x * x);
+```
+
+`ComputeBlock<S, DfbId>` is a constructor spelled as a type: it adds no state and no
+behaviour, and *derives* from `ComputeBlock<S>`, so it decays wherever the library takes a
+block and every signature stays single-parameter. The shape has to be written out -- C++17
+cannot deduce one class template argument while another is supplied -- and `Storage::store`
+checks it against the expression, so a wrong one is a compile error. It takes an expression
+only: a `Block` is a pushed obligation rather than a value, and that constructor is deleted.
+
+Two audiences read that declaration, which is the thing to know before removing one. The
+kernel is also where the HOST discovers each buffer's endpoints -- `derive_roles` in
+`unified_harness.py` parses the source, so that a launcher never restates a thread number the
+kernel already states (a wrong one is silent on Gen1 and a hang on Gen2). A new way to
+declare a buffer has to be taught to that parser in the same change.
 
 In an assert build a `Block` that is destroyed without reaching a consumer aborts -- a
 dropped output block is otherwise a silent hang. `RetainedBlock<S>` is the escape for state
