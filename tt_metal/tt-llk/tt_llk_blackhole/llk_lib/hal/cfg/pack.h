@@ -8,12 +8,23 @@
 #include <cstdint>
 
 #include "detail/for_each.h"
+#include "detail/invalid_index.h"
 #include "field.h"
 
 namespace hal
 {
 namespace cfg
 {
+namespace detail
+{
+
+inline constexpr std::uint32_t PackerCount                 = 1;
+inline constexpr std::uint32_t PackerRegisterCount         = 2;
+inline constexpr std::uint32_t TileSetMappingRegisterCount = 4;
+inline constexpr std::uint32_t TileSetMappingEntryCount    = 16;
+
+} // namespace detail
+
 // ============================================================
 // PACKER
 // ============================================================
@@ -79,7 +90,7 @@ private:
     template <std::uint32_t RegIndex>
     static constexpr PackerAddrCtrlEntry make()
     {
-        static_assert(RegIndex < 2, "packer address-control register index out of range");
+        static_assert(RegIndex < detail::PackerRegisterCount, "packer address-control register index out of range");
         if constexpr (RegIndex == 0)
         {
             return {
@@ -100,11 +111,6 @@ private:
         }
     }
 
-    [[noreturn]] static PackerAddrCtrlEntry invalid_index()
-    {
-        __builtin_trap();
-    }
-
 public:
     template <std::uint32_t RegIndex>
     constexpr PackerAddrCtrlEntry operator[](detail::CompileTimeIndex<RegIndex>) const
@@ -114,18 +120,18 @@ public:
 
     constexpr PackerAddrCtrlEntry operator[](PackerReg reg) const
     {
-        return reg == PackerReg::Reg0 ? make<0>() : reg == PackerReg::Reg1 ? make<1>() : invalid_index();
+        return reg == PackerReg::Reg0 ? make<0>() : reg == PackerReg::Reg1 ? make<1>() : detail::invalid_index<PackerAddrCtrlEntry>();
     }
 
     constexpr PackerAddrCtrlEntry operator[](std::uint32_t reg) const
     {
-        return reg == 0 ? make<0>() : reg == 1 ? make<1>() : invalid_index();
+        return reg == 0 ? make<0>() : reg == 1 ? make<1>() : detail::invalid_index<PackerAddrCtrlEntry>();
     }
 
     template <typename Function>
     constexpr void forEach(Function&& function) const
     {
-        detail::for_each_index<2>(static_cast<Function&&>(function));
+        detail::for_each_index<detail::PackerRegisterCount>(static_cast<Function&&>(function));
     }
 };
 
@@ -135,7 +141,7 @@ private:
     template <std::uint32_t RegIndex>
     static constexpr const Field& get()
     {
-        static_assert(RegIndex < 2, "packer address-base register index out of range");
+        static_assert(RegIndex < detail::PackerRegisterCount, "packer address-base register index out of range");
         if constexpr (RegIndex == 0)
         {
             return Pck0AddrBaseReg0::Base;
@@ -144,11 +150,6 @@ private:
         {
             return Pck0AddrBaseReg1::Base;
         }
-    }
-
-    [[noreturn]] static const Field& invalid_index()
-    {
-        __builtin_trap();
     }
 
 public:
@@ -160,18 +161,18 @@ public:
 
     constexpr const Field& operator[](PackerReg reg) const
     {
-        return reg == PackerReg::Reg0 ? get<0>() : reg == PackerReg::Reg1 ? get<1>() : invalid_index();
+        return reg == PackerReg::Reg0 ? get<0>() : reg == PackerReg::Reg1 ? get<1>() : detail::invalid_index<const Field&>();
     }
 
     constexpr const Field& operator[](std::uint32_t reg) const
     {
-        return reg == 0 ? get<0>() : reg == 1 ? get<1>() : invalid_index();
+        return reg == 0 ? get<0>() : reg == 1 ? get<1>() : detail::invalid_index<const Field&>();
     }
 
     template <typename Function>
     constexpr void forEach(Function&& function) const
     {
-        detail::for_each_index<2>(static_cast<Function&&>(function));
+        detail::for_each_index<detail::PackerRegisterCount>(static_cast<Function&&>(function));
     }
 };
 
@@ -184,23 +185,17 @@ public:
 
 class PackerFields
 {
-private:
-    [[noreturn]] static PackerEntry invalid_index()
-    {
-        __builtin_trap();
-    }
-
 public:
     template <std::uint32_t PackerIndex>
     constexpr PackerEntry operator[](detail::CompileTimeIndex<PackerIndex>) const
     {
-        static_assert(PackerIndex == 0, "Blackhole exposes address configuration only for packer 0");
+        static_assert(PackerIndex < detail::PackerCount, "Blackhole exposes address configuration only for packer 0");
         return {};
     }
 
     constexpr PackerEntry operator[](std::uint32_t packer) const
     {
-        return packer == 0 ? PackerEntry {} : invalid_index();
+        return packer < detail::PackerCount ? PackerEntry {} : detail::invalid_index<PackerEntry>();
     }
 };
 
@@ -249,27 +244,22 @@ private:
     class Fields
     {
     public:
-        static_assert(MappingIndex < 4, "tile row-set mapping index out of range");
-        static_assert(SetIndex < 16, "tile row-set set index out of range");
+        static_assert(MappingIndex < detail::TileSetMappingRegisterCount, "tile row-set mapping index out of range");
+        static_assert(SetIndex < detail::TileSetMappingEntryCount, "tile row-set set index out of range");
 
         static constexpr Field Value {RegisterScope::State, 32, 20 + MappingIndex, 0, 2 * SetIndex, 2, 1, 0}; // Two Bit Mask Set Index (2b)
     };
 
-    [[noreturn]] static const Field& invalid_index()
-    {
-        __builtin_trap();
-    }
-
     template <std::uint32_t MappingIndex, std::uint32_t SetIndex = 0>
     static constexpr const Field& select(std::uint32_t set_index)
     {
-        if constexpr (SetIndex < 16)
+        if constexpr (SetIndex < detail::TileSetMappingEntryCount)
         {
             return set_index == SetIndex ? Fields<MappingIndex, SetIndex>::Value : select<MappingIndex, SetIndex + 1>(set_index);
         }
         else
         {
-            return invalid_index();
+            return detail::invalid_index<const Field&>();
         }
     }
 
@@ -277,12 +267,12 @@ public:
     template <std::uint32_t SetIndex>
     constexpr const Field& operator[](detail::CompileTimeIndex<SetIndex>) const
     {
-        static_assert(SetIndex < 16, "tile row-set set index out of range");
+        static_assert(SetIndex < detail::TileSetMappingEntryCount, "tile row-set set index out of range");
         return mapping_index == 0   ? Fields<0, SetIndex>::Value
                : mapping_index == 1 ? Fields<1, SetIndex>::Value
                : mapping_index == 2 ? Fields<2, SetIndex>::Value
                : mapping_index == 3 ? Fields<3, SetIndex>::Value
-                                    : invalid_index();
+                                    : detail::invalid_index<const Field&>();
     }
 
     constexpr const Field& operator[](std::uint32_t set_index) const
@@ -291,41 +281,35 @@ public:
                : mapping_index == 1 ? select<1>(set_index)
                : mapping_index == 2 ? select<2>(set_index)
                : mapping_index == 3 ? select<3>(set_index)
-                                    : invalid_index();
+                                    : detail::invalid_index<const Field&>();
     }
 
     template <typename Function>
     constexpr void forEach(Function&& function) const
     {
-        detail::for_each_index<16>(static_cast<Function&&>(function));
+        detail::for_each_index<detail::TileSetMappingEntryCount>(static_cast<Function&&>(function));
     }
 };
 
 class TileRowSetMappingFields
 {
-private:
-    [[noreturn]] static TileRowSetMappingRow invalid_index()
-    {
-        __builtin_trap();
-    }
-
 public:
     template <std::uint32_t MappingIndex>
     constexpr TileRowSetMappingRow operator[](detail::CompileTimeIndex<MappingIndex>) const
     {
-        static_assert(MappingIndex < 4, "tile row-set mapping index out of range");
+        static_assert(MappingIndex < detail::TileSetMappingRegisterCount, "tile row-set mapping index out of range");
         return {MappingIndex};
     }
 
     constexpr TileRowSetMappingRow operator[](std::uint32_t mapping_index) const
     {
-        return mapping_index < 4 ? TileRowSetMappingRow {mapping_index} : invalid_index();
+        return mapping_index < detail::TileSetMappingRegisterCount ? TileRowSetMappingRow {mapping_index} : detail::invalid_index<TileRowSetMappingRow>();
     }
 
     template <typename Function>
     constexpr void forEach(Function&& function) const
     {
-        detail::for_each_index<4>(static_cast<Function&&>(function));
+        detail::for_each_index<detail::TileSetMappingRegisterCount>(static_cast<Function&&>(function));
     }
 };
 
@@ -388,10 +372,13 @@ public:
     static constexpr Field mask {RegisterScope::State, 32, 27, 0, 0, 16, 1, 0}; // Row mask (16b)
 };
 
+/**
+ * @brief These registers are used to control Z-mask calculatios, auto-generated 'last word' bit, and tile position generator, which, in turn, controls bias
+ * and edge masking.
+ */
 class PackCounters
-{ // These registers are used to control Z-mask calculatios, auto-generated 'last word' bit, and tile position generator, which, in turn, controls bias and edge
+{
 public:
-    // masking.
     static constexpr Field pack_per_xy_plane {RegisterScope::State, 32, 28, 0, 0, 8, 4, 32}; // Number of pack instructions per one XY plane (8b)
     static constexpr Field pack_reads_per_xy_plane {
         RegisterScope::State, 32, 28, 0, 8, 8, 4, 32}; // Number of pack reads from destination registers per XY plane (8b)
@@ -417,27 +404,22 @@ private:
     class Fields
     {
     public:
-        static_assert(MappingIndex < 4, "tile face-set mapping index out of range");
-        static_assert(SetIndex < 16, "tile face-set set index out of range");
+        static_assert(MappingIndex < detail::TileSetMappingRegisterCount, "tile face-set mapping index out of range");
+        static_assert(SetIndex < detail::TileSetMappingEntryCount, "tile face-set set index out of range");
 
         static constexpr Field Value {RegisterScope::State, 32, 36 + MappingIndex, 0, 2 * SetIndex, 2, 1, 0}; // Two Bit Face Mask Set Index (2b)
     };
 
-    [[noreturn]] static const Field& invalid_index()
-    {
-        __builtin_trap();
-    }
-
     template <std::uint32_t MappingIndex, std::uint32_t SetIndex = 0>
     static constexpr const Field& select(std::uint32_t set_index)
     {
-        if constexpr (SetIndex < 16)
+        if constexpr (SetIndex < detail::TileSetMappingEntryCount)
         {
             return set_index == SetIndex ? Fields<MappingIndex, SetIndex>::Value : select<MappingIndex, SetIndex + 1>(set_index);
         }
         else
         {
-            return invalid_index();
+            return detail::invalid_index<const Field&>();
         }
     }
 
@@ -445,12 +427,12 @@ public:
     template <std::uint32_t SetIndex>
     constexpr const Field& operator[](detail::CompileTimeIndex<SetIndex>) const
     {
-        static_assert(SetIndex < 16, "tile face-set set index out of range");
+        static_assert(SetIndex < detail::TileSetMappingEntryCount, "tile face-set set index out of range");
         return mapping_index == 0   ? Fields<0, SetIndex>::Value
                : mapping_index == 1 ? Fields<1, SetIndex>::Value
                : mapping_index == 2 ? Fields<2, SetIndex>::Value
                : mapping_index == 3 ? Fields<3, SetIndex>::Value
-                                    : invalid_index();
+                                    : detail::invalid_index<const Field&>();
     }
 
     constexpr const Field& operator[](std::uint32_t set_index) const
@@ -459,41 +441,35 @@ public:
                : mapping_index == 1 ? select<1>(set_index)
                : mapping_index == 2 ? select<2>(set_index)
                : mapping_index == 3 ? select<3>(set_index)
-                                    : invalid_index();
+                                    : detail::invalid_index<const Field&>();
     }
 
     template <typename Function>
     constexpr void forEach(Function&& function) const
     {
-        detail::for_each_index<16>(static_cast<Function&&>(function));
+        detail::for_each_index<detail::TileSetMappingEntryCount>(static_cast<Function&&>(function));
     }
 };
 
 class TileFaceSetMappingFields
 {
-private:
-    [[noreturn]] static TileFaceSetMappingRow invalid_index()
-    {
-        __builtin_trap();
-    }
-
 public:
     template <std::uint32_t MappingIndex>
     constexpr TileFaceSetMappingRow operator[](detail::CompileTimeIndex<MappingIndex>) const
     {
-        static_assert(MappingIndex < 4, "tile face-set mapping index out of range");
+        static_assert(MappingIndex < detail::TileSetMappingRegisterCount, "tile face-set mapping index out of range");
         return {MappingIndex};
     }
 
     constexpr TileFaceSetMappingRow operator[](std::uint32_t mapping_index) const
     {
-        return mapping_index < 4 ? TileFaceSetMappingRow {mapping_index} : invalid_index();
+        return mapping_index < detail::TileSetMappingRegisterCount ? TileFaceSetMappingRow {mapping_index} : detail::invalid_index<TileFaceSetMappingRow>();
     }
 
     template <typename Function>
     constexpr void forEach(Function&& function) const
     {
-        detail::for_each_index<4>(static_cast<Function&&>(function));
+        detail::for_each_index<detail::TileSetMappingRegisterCount>(static_cast<Function&&>(function));
     }
 };
 
