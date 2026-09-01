@@ -356,6 +356,7 @@ from ttnn.device import (
     get_l1_alignment,
     get_optimal_dram_bank_to_logical_worker_assignment,
     enable_asynchronous_slow_dispatch,
+    set_configure_only,
     disable_asynchronous_slow_dispatch,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
