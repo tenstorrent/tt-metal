@@ -215,7 +215,8 @@ inline void validate_inverse_scale_inline(const LiftingForwardPlan& plan) {
 
     const size_t padded_begin = output_signal.begin + pad;
     const size_t padded_end = output_signal.end + pad;
-    const IndexInterval target_even{.begin = ceil_div(padded_begin, size_t{2}), .end = ceil_div(padded_end, size_t{2})};
+    const IndexInterval target_even{
+        .begin = tt::div_up(padded_begin, size_t{2}), .end = tt::div_up(padded_end, size_t{2})};
     const IndexInterval target_odd{.begin = padded_begin / 2, .end = padded_end / 2};
     const std::vector<RequiredStreams> required = propagate_requirements(plan, target_even, target_odd);
 
@@ -354,7 +355,7 @@ inline void validate_inverse_scale_inline(const LiftingForwardPlan& plan) {
     const LiftingInversePlan& plan, const uint32_t requested_chunk_count) {
     TT_FATAL(requested_chunk_count > 0, "ILWT chunk count must be non-zero");
     constexpr size_t output_group_elements = 2 * device_protocol::kLwtGroupOutputElements;
-    const size_t output_group_count = std::max(ceil_div(plan.original_length, output_group_elements), size_t{1});
+    const size_t output_group_count = std::max(tt::div_up(plan.original_length, output_group_elements), size_t{1});
     const size_t chunk_count = std::min(static_cast<size_t>(requested_chunk_count), output_group_count);
     const size_t base_groups = output_group_count / chunk_count;
     const size_t extra_groups = output_group_count % chunk_count;
@@ -415,7 +416,7 @@ template <typename Scheme>
 
     constexpr size_t output_group_elements = 2 * device_protocol::kLwtGroupOutputElements;
     const uint32_t final_group_count =
-        static_cast<uint32_t>(std::max(ceil_div(full_plan.original_length, output_group_elements), size_t{1}));
+        static_cast<uint32_t>(std::max(tt::div_up(full_plan.original_length, output_group_elements), size_t{1}));
     uint32_t chunk_count = std::min(final_group_count, core_limit);
     std::vector<IlwtChunkPlan> chunks;
     uint32_t workspace_elements = 0;
@@ -460,7 +461,7 @@ template <typename Scheme>
     }
 
     const uint32_t groups_per_chunk =
-        static_cast<uint32_t>(ceil_div(static_cast<size_t>(final_group_count), chunks.size()));
+        static_cast<uint32_t>(tt::div_up(static_cast<size_t>(final_group_count), chunks.size()));
     const auto max_dependency =
         std::max_element(chunks.begin(), chunks.end(), [](const IlwtChunkPlan& lhs, const IlwtChunkPlan& rhs) {
             return lhs.dependency_overhead < rhs.dependency_overhead;

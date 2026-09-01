@@ -7,13 +7,10 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "tt-metalium/math.hpp"
 #include "ttnn/operations/wavelet/common/storage_contract.hpp"
 
 namespace ttnn::operations::wavelet {
-
-[[nodiscard]] constexpr size_t ceil_div(const size_t numerator, const size_t denominator) noexcept {
-    return denominator == 0 ? 0 : numerator / denominator + static_cast<size_t>(numerator % denominator != 0);
-}
 
 struct SignalBuffer {
     size_t length{0};
@@ -27,7 +24,7 @@ struct Signal {
 };
 
 [[nodiscard]] constexpr Signal make_split_signal(const SignalBuffer& input, const size_t source_length) noexcept {
-    const size_t even_len = ceil_div(source_length, size_t{2});
+    const size_t even_len = tt::div_up(source_length, size_t{2});
     const size_t odd_len = source_length / 2;
 
     return Signal{
