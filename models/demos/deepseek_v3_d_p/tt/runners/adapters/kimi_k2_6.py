@@ -3,11 +3,6 @@
 
 """Kimi-K2.6 prefill adapter.
 
-Load-bearing for Kimi-K2.7, not just K2.6: ``KimiK27Adapter`` subclasses this class, and inherits
-``hf_model_default`` and the three ``reference_*_cls`` properties from it -- so the vendored
-``reference/kimi_k2_6/`` modeling code is also K2.7's reference model. Do not delete either when
-retiring K2.6 from CI; K2.7 stands on them.
-
 Same architecture as DeepSeek-V3 (MLA + MoE), so it subclasses ``MLAPrefillAdapter``
 and only overrides what differs: a single expert group with a device gate routes the
 MoE routing all-gather's semaphores to L1_SMALL (so they don't pin the main-L1 floor
