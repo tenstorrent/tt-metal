@@ -2,17 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
-#include "ttnn/operations/transformer/sdpa/device/sdpa_interleaved_cb_ids.hpp"
+#include "ttnn/operations/experimental/quasar/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/math.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <bit>
 #include <map>
@@ -22,8 +21,9 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
-namespace ttnn::prim {
+namespace ttnn::prim::qsr {
 
 // Chain management structures for KV store-and-forward optimization
 struct CoreHeadWork {
@@ -181,73 +181,9 @@ uint32_t attention_sink_tile_count(bool use_attention_sink, bool use_streaming_c
     return use_streaming_compute ? 1 : q_chunk_tiles;
 }
 
-// TensorAccessorArgs placeholder rule for optional tensors: nullptr when absent, so the accessor
-// chain stays intact and kernels compile against it but never read it.
-tt::tt_metal::Buffer* buffer_or_null(const std::optional<Tensor>& t) {
-    return t.has_value() ? t.value().buffer() : nullptr;
-}
-
-// Windowed (block-diagonal) CB allocation and runtime values, split out of create_descriptor (which
-// sits at clang-tidy's cognitive-complexity limit). The allocators are create_descriptor's CB lambdas.
-struct WindowedSetup {
-    tt::tt_metal::Buffer* cu_window_buffer = nullptr;
-    tt::tt_metal::Buffer* q_offset_buffer = nullptr;
-    uint32_t cu_window_seqlens_eles = 0;
-    // Global row index of Q row 0. Non-zero only when Q is a sequence-parallel shard of a longer
-    // sequence: Q and the output are addressed locally, while cu_window_seqlens and K/V stay global,
-    // so the writer's mask generator needs the shard's origin to find the right windows.
-    uint32_t q_token_offset = 0;
-};
-
-template <typename AllocateTileCb, typename AllocateCb>
-WindowedSetup setup_windowed_cbs(
-    const SDPAParams& attrs,
-    const SDPAInputs& tensors,
-    sdpa_cb::CBIds& cb_ids,
-    const AllocateTileCb& allocate_tile_cb,
-    const AllocateCb& allocate_cb) {
-    WindowedSetup w;
-    // When NOT windowed, fall back to a valid CB id (q_in): the writer's windowed block is gated by
-    // `if constexpr`, but in a non-template function the discarded branch is still compiled, so
-    // get_tile_size/get_dataformat on this id must be well-formed (an inactive id would
-    // constexpr-fault on unpack_tile_size[-1]).
-    cb_ids.cu_window_seqlens = cb_ids.q_in;
-    cb_ids.windowed_q_offset = cb_ids.q_in;
-    cb_ids.windowed_cu_reader = cb_ids.q_in;
-    cb_ids.windowed_k_range = cb_ids.q_in;
-    if (!attrs.is_windowed) {
-        return w;
-    }
-    // 1-tile CB holding cu_window_seqlens, loaded once by the writer.
-    const auto& cu = tensors.cu_window_seqlens.value();
-    tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
-    cb_ids.cu_window_seqlens = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
-    // K-range narrowing: the reader gets its OWN cu_window copy (sharing the writer's CB would put
-    // two producers on one CB), and a small reader->compute ctrl CB carrying each Q chunk's
-    // {k_lo, k_hi} (double-buffered so the reader can run a Q chunk ahead; sparse_sdpa precedent).
-    cb_ids.windowed_cu_reader = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
-    constexpr uint32_t k_range_page_size = 16;
-    cb_ids.windowed_k_range = allocate_cb(k_range_page_size, 2, tt::DataFormat::Int32);
-    w.cu_window_buffer = cu.buffer();
-    w.cu_window_seqlens_eles = cu.logical_shape()[-1];
-    w.q_token_offset = attrs.windowed_q_token_offset;
-    if (tensors.windowed_q_token_offset_tensor.has_value()) {
-        // Per-device form: the writer reads the value at runtime, so the scalar baked into the
-        // program is unused. Kept identical across devices, which is the point -- one program.
-        // The offset gets its own 1-tile CB: every other CB has a producer/consumer contract with
-        // another kernel that a writer-side reserve/push would break (borrowing the reader-produced
-        // chunk_start_idx_writer CB deadlocked).
-        const auto& off = tensors.windowed_q_token_offset_tensor.value();
-        tt::DataFormat off_df = tt::tt_metal::datatype_to_dataformat_converter(off.dtype());
-        cb_ids.windowed_q_offset = allocate_tile_cb(1, tt::tile_size(off_df), off_df);
-        w.q_offset_buffer = off.buffer();
-    }
-    return w;
-}
-
 }  // namespace
 
-ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -421,18 +357,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    auto* q_buffer = input_tensor_q.buffer();
-    auto* k_buffer = input_tensor_k.buffer();
-    auto* v_buffer = input_tensor_v.buffer();
-    auto* mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
-    auto* attention_sink_buffer = attention_sink.has_value() ? attention_sink.value().buffer() : nullptr;
-    // page_table and chunk_start_idx must be BufferBindings (not raw address writes);
-    // otherwise their addresses go stale on descriptor cache hits.
-    auto* page_table_buffer = is_chunked ? page_table.value().buffer() : nullptr;
-    auto* chunk_start_idx_buffer = flexible_chunked ? tensor_args.chunk_start_idx_tensor.value().buffer() : nullptr;
-
-    auto* out0_buffer = output_tensor.buffer();
-
     bool use_attention_sink = attention_sink.has_value();
 
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
@@ -485,13 +409,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
     // (apply_provided_mask_streaming) and must win over the structured lightweight palette: forcing
-    // lightweight_mask false (via !use_provided_mask below) routes cb_mask_in sizing/dtype to the
+    // lightweight_mask false (via !use_provided_mask below) routes mask_in sizing/dtype to the
     // full Sq×Sk provided-mask branch instead of the 1–4-tile palette.
     const bool lightweight_causal = is_causal && !use_provided_mask && !is_windowed && !has_sliding_window;
     const bool lightweight_streaming_mask = use_streaming_compute && !use_provided_mask && !is_windowed &&
                                             (is_causal || has_sliding_window || generated_padding_mask);
     const bool lightweight_mask = lightweight_causal || lightweight_streaming_mask;
-    // Non-causal partial-tile K (Sk % TILE != 0) needs a partial-tile mask in cb_mask_in.
+    // Non-causal partial-tile K (Sk % TILE != 0) needs a partial-tile mask in mask_in.
     // Not used for a dense provided mask (the reader neginf-fills padded positions in the mask).
     const uint32_t k_partial_col =
         (use_streaming_compute && generated_padding_mask && !use_provided_mask && (Sk % TILE_HEIGHT != 0))
@@ -538,12 +462,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
-    // Streaming: shrink cb_out to a 2-slot ping-pong (see sdpa_subblock_utils.hpp).
+    // Streaming: shrink the out DFB to a 2-slot ping-pong (see sdpa_subblock_utils.hpp).
     if (use_streaming_compute) {
         out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, vDHt);
         TT_FATAL(
             Sq_chunk_t % out_out_subblock_h == 0,
-            "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
+            "Streaming out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
             Sq_chunk_t,
             out_out_subblock_h);
     }
@@ -590,182 +514,69 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     const bool use_zigzag_balancing = is_causal;
 
-    std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
-                                                      B,
-                                                      NQH,
-                                                      NKH,
-                                                      NVH,
-                                                      Sqt,
-                                                      Skt,
-                                                      valid_Sqt,
-                                                      valid_Skt,
-                                                      DHt,
-                                                      vDHt,
-                                                      Sq_chunk_t,
-                                                      q_num_chunks,
-                                                      Sk_chunk_t,
-                                                      k_num_chunks,
-                                                      num_cores,
-                                                      static_cast<uint32_t>(is_causal),
-                                                      static_cast<uint32_t>(use_provided_mask),
-                                                      static_cast<uint32_t>(broadcast_provided_mask_batch),
-                                                      static_cast<uint32_t>(broadcast_provided_mask_heads),
-                                                      static_cast<uint32_t>(generated_padding_mask),
-                                                      static_cast<uint32_t>(is_chunked),
-                                                      block_size_t,
-                                                      page_table_stick_size,
-                                                      static_cast<uint32_t>(use_attention_sink),
-                                                      static_cast<uint32_t>(use_mla),
-                                                      static_cast<uint32_t>(mla_kv_overlap),
-                                                      qk_out_subblock_h,
-                                                      sliding_window_size.value_or(0),
-                                                      static_cast<uint32_t>(use_streaming_compute)};
+    // ---- Metal 2.0 named resources ----
 
-    // Placeholder semaphore IDs for KV chain forwarding (will be filled later if enabled)
-    // Add these BEFORE TensorAccessorArgs to keep indexing consistent with kernel expectations
-    const auto sem_args_offset = reader_compile_time_args.size();
-    reader_compile_time_args.push_back(0);  // sender_semaphore_id placeholder
-    reader_compile_time_args.push_back(0);  // receiver_semaphore_id placeholder
-    reader_compile_time_args.push_back(0);  // valid_semaphore_id placeholder
-    reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
-    reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 33
-    reader_compile_time_args.push_back(static_cast<uint32_t>(is_windowed));           // arg 34: K-range narrowing
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(attn_mask.has_value() ? attn_mask->buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(attention_sink.has_value() ? attention_sink->buffer() : nullptr)
-        .append_to(reader_compile_time_args);
-    TensorAccessorArgs(flexible_chunked ? tensor_args.chunk_start_idx_tensor.value().buffer() : nullptr)
-        .append_to(reader_compile_time_args);
-    // Windowed K-range narrowing: the reader needs its own view of cu_window_seqlens and the per-device
-    // Q-offset tensor to compute each Q chunk's [k_lo, k_hi) — same placeholder rule as the writer's pair.
-    TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(reader_compile_time_args);
-    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor))
-        .append_to(reader_compile_time_args);
+    const DFBSpecName Q_IN{"q_in"};
+    const DFBSpecName K_IN{"k_in"};
+    const DFBSpecName V_IN{"v_in"};
+    const DFBSpecName MASK_IN{"mask_in"};
+    const DFBSpecName CU_WINDOW{"cu_window_seqlens"};
+    const DFBSpecName IDENTITY_SCALE_IN{"identity_scale_in"};
+    const DFBSpecName COL_IDENTITY{"col_identity"};
+    const DFBSpecName PAGE_TABLE{"page_table"};
+    const DFBSpecName CHUNK_START_IDX_COMPUTE{"chunk_start_idx_compute"};
+    const DFBSpecName CHUNK_START_IDX_WRITER{"chunk_start_idx_writer"};
+    const DFBSpecName ATTENTION_SINK{"attention_sink"};
+    const DFBSpecName RECIP_SCRATCH{"recip_scratch"};
+    const DFBSpecName QK_IM{"qk_im"};
+    const DFBSpecName OUT_IM_A{"out_im_A"};
+    const DFBSpecName OUT_IM_B{"out_im_B"};
+    const DFBSpecName MAX_A{"max_A"};
+    const DFBSpecName MAX_B{"max_B"};
+    const DFBSpecName SUM_A{"sum_A"};
+    const DFBSpecName SUM_B{"sum_B"};
+    const DFBSpecName EXP_MAX_DIFF{"exp_max_diff"};
+    const DFBSpecName OUT{"out"};
+    // Windowed K-range narrowing (#54492): the reader's own cu_window copy, the {k_lo,k_hi} ctrl CB
+    // (reader -> compute), and the per-device Q-offset tensor CB.
+    const DFBSpecName WINDOWED_CU_READER{"windowed_cu_reader"};
+    const DFBSpecName WINDOWED_K_RANGE{"windowed_k_range"};
+    const DFBSpecName WINDOWED_Q_OFFSET{"windowed_q_offset"};
 
-    // Set up semaphore IDs for KV chain forwarding (non-causal only).
-    // In the descriptor pattern, semaphore IDs are explicit sequential integers
-    // matching the order they are pushed into desc.semaphores below.
-    uint32_t sender_semaphore_id = 0;
-    uint32_t receiver_semaphore_id = 0;
-    uint32_t valid_semaphore_id = 0;
+    const TensorParamName T_Q_IN{"q_in"};
+    const TensorParamName T_K_IN{"k_in"};
+    const TensorParamName T_V_IN{"v_in"};
+    const TensorParamName T_MASK{"mask"};
+    const TensorParamName T_PAGE_TABLE{"page_table"};
+    const TensorParamName T_ATTENTION_SINK{"attention_sink"};
+    const TensorParamName T_CHUNK_START_IDX{"chunk_start_idx"};
+    const TensorParamName T_OUT{"out"};
+    const TensorParamName T_CU_WINDOW{"cu_window_seqlens"};
+    const TensorParamName T_WINDOWED_Q_OFFSET{"windowed_q_token_offset"};
 
-    if (!is_causal) {
-        sender_semaphore_id = 0;
-        receiver_semaphore_id = 1;
-        valid_semaphore_id = 2;
+    const SemaphoreSpecName SEM_SENDER{"sender"};
+    const SemaphoreSpecName SEM_RECEIVER{"receiver"};
+    const SemaphoreSpecName SEM_VALID{"valid"};
 
-        // Update the placeholder compile-time args with actual semaphore IDs
-        reader_compile_time_args[sem_args_offset + 0] = sender_semaphore_id;
-        reader_compile_time_args[sem_args_offset + 1] = receiver_semaphore_id;
-        reader_compile_time_args[sem_args_offset + 2] = valid_semaphore_id;
+    // Conditional-binding predicates (mirror the legacy CB-allocation / kernel-touch conditions).
+    const bool kv_chain = !is_causal;
+    const bool needs_mask_cb =
+        use_provided_mask || is_causal || generated_padding_mask || sliding_window_size.value_or(0) > 0 || is_windowed;
+    const bool writer_produces_mask = needs_mask_cb && !use_provided_mask;
 
-        log_debug(
-            tt::LogOp,
-            "KV chain forwarding enabled - created semaphores: sender={}, receiver={}, valid={}",
-            sender_semaphore_id,
-            receiver_semaphore_id,
-            valid_semaphore_id);
-    }
-
-    std::vector<uint32_t> writer_compile_time_args = {
-        // interleaved accessor args
-        B,
-        NQH,
-        NKH,
-        Sqt,
-        valid_Sqt,
-        Sk,
-        DHt,
-        vDHt,
-        Sq_chunk_t,
-        q_num_chunks,
-        Sk_chunk_t,
-        k_num_chunks,
-        packed_identity_scalar,
-        scale_packed,
-        num_cores,
-        static_cast<uint32_t>(is_causal),
-        static_cast<uint32_t>(use_provided_mask),
-        static_cast<uint32_t>(generated_padding_mask),
-        static_cast<uint32_t>(is_chunked),
-        sliding_window_size.value_or(0),
-        static_cast<uint32_t>(lightweight_mask),       // arg 20: lightweight mask
-        static_cast<uint32_t>(use_streaming_compute),  // arg 21: row-grouped cb_out drain
-        out_out_subblock_h,                            // arg 22: drain group height
-        k_partial_col,                                 // arg 23: K partial-tile col (0 = no partial)
-        static_cast<uint32_t>(use_zigzag_balancing),   // arg 24
-        static_cast<uint32_t>(is_windowed),            // arg 25: windowed block-diagonal mask generation
-    };
-
-    // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the
-    // accessor offset chain stays intact. nullptr when not windowed (consistent placeholder).
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(writer_compile_time_args);
-    // Then the per-device Q-offset accessor. Same chain, same placeholder rule: nullptr when the caller
-    // passed the offset as a scalar (or is not windowed), in which case the writer never reads it.
-    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor))
-        .append_to(writer_compile_time_args);
-
-    std::vector<uint32_t> compute_compile_time_args = {
-        // matmul args
-        B,
-        NQH,
-        NKH,
-        Skt,  // Padded K tile count — used by standard SDPA path for loop bounds
-        DHt,
-        vDHt,
-        Sq_chunk_t,
-        q_num_chunks,
-        Sk_chunk_t,
-        k_num_chunks,
-        qk_in0_block_w,
-        qk_out_subblock_w,
-        qk_out_subblock_h,
-        qk_in0_num_subblocks,
-        qk_in1_num_subblocks,
-        qk_num_blocks,
-        out_in0_block_w,
-        out_out_subblock_w,
-        out_out_subblock_h,
-        out_in0_num_subblocks,
-        out_in1_num_subblocks,
-        out_num_blocks,
-        num_cores,
-        static_cast<uint32_t>(is_causal),
-        static_cast<uint32_t>(compute_use_provided_mask),
-        static_cast<uint32_t>(generated_padding_mask),
-        static_cast<uint32_t>(is_chunked),
-        scale_packed,
-        sliding_window_size.value_or(0),
-        static_cast<std::uint32_t>(use_attention_sink),
-        static_cast<std::uint32_t>(use_streaming_compute),  // arg 30
-        valid_Skt,                                    // arg 31: unpadded K tile count for streaming padded_k_tiles
-        k_partial_col,                                // arg 32: K partial-tile col (0 = no partial)
-        static_cast<uint32_t>(use_zigzag_balancing),  // arg 33: unified zigzag remap
-        static_cast<uint32_t>(is_windowed),           // arg 34: K-range narrowing (bounds from the ctrl CB)
-    };
-
-    std::map<std::string, std::string> defines_map;
-    defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
-    defines_map["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines_map["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
-    defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
-    defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    // Shared kernel defines (granularities + exp approx mode).
+    KernelSpec::CompilerOptions::Defines base_defines;
+    base_defines.insert({"STATS_GRANULARITY", std::to_string(stats_granularity)});
+    base_defines.insert({"SUB_EXP_GRANULARITY", std::to_string(sub_exp_granularity)});
+    base_defines.insert({"MUL_BCAST_GRANULARITY", std::to_string(mul_bcast_granularity)});
+    base_defines.insert({"DHT_GRANULARITY", std::to_string(dht_granularity)});
+    base_defines.insert({"REDUCE_GRANULARITY", std::to_string(reduce_granularity)});
+    base_defines.insert({"EXP_APPROX_MODE", std::to_string(exp_approx_mode)});
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
-
-    KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
-
-    // NOTE: Kernel descriptors are appended to the program descriptor after chain construction so that
-    // the mcast_enabled compile-time arg can be determined first.
-
-    // ---- Circular buffers ----
-
-    ProgramDescriptor desc;
 
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
@@ -809,117 +620,194 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "qk_im_data_format: {}", qk_im_df);
     log_debug(tt::LogOp, "sum_data_format: {}", sum_df);
 
-    sdpa_cb::CBIds cb_ids;
-    uint32_t next_cb_index = 0;
-    const auto allocate_cb = [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat data_format) -> uint32_t {
-        const uint32_t cb_index = next_cb_index++;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = page_size_bytes * num_pages,
-            .core_ranges = core_grid,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_index),
-                .data_format = data_format,
-                .page_size = page_size_bytes,
-            }}},
-        });
-        return cb_index;
-    };
-    const auto allocate_tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) -> uint32_t {
-        return allocate_cb(tile_size, num_tiles, data_format);
-    };
+    // ---- Dataflow buffers ----
 
-    cb_ids.q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
-    cb_ids.k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
-    cb_ids.v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
-
-    const bool needs_mask_cb =
-        use_provided_mask || is_causal || generated_padding_mask || sliding_window_size.value_or(0) > 0 || is_windowed;
-    // Only create mask buffer if it's going to be used.
+    Group<DataflowBufferSpec> dfbs = {
+        DataflowBufferSpec{
+            .unique_id = Q_IN, .entry_size = q_tile_size, .num_entries = q_tiles, .data_format_metadata = q_df},
+        DataflowBufferSpec{
+            .unique_id = K_IN, .entry_size = k_tile_size, .num_entries = k_tiles, .data_format_metadata = k_df},
+        DataflowBufferSpec{
+            .unique_id = V_IN, .entry_size = v_tile_size, .num_entries = v_tiles, .data_format_metadata = v_df},
+        DataflowBufferSpec{
+            .unique_id = IDENTITY_SCALE_IN,
+            .entry_size = scalar_tile_size,
+            .num_entries = scale_tiles,
+            .data_format_metadata = scalar_df},
+        DataflowBufferSpec{
+            .unique_id = COL_IDENTITY,
+            .entry_size = scalar_tile_size,
+            .num_entries = scale_tiles,
+            .data_format_metadata = scalar_df},
+        DataflowBufferSpec{
+            .unique_id = QK_IM,
+            .entry_size = qk_im_tile_size,
+            .num_entries = qk_tiles,
+            .data_format_metadata = qk_im_df},
+        DataflowBufferSpec{
+            .unique_id = OUT_IM_A,
+            .entry_size = im_tile_size,
+            .num_entries = out_im_tiles,
+            .data_format_metadata = im_df},
+        DataflowBufferSpec{
+            .unique_id = OUT_IM_B,
+            .entry_size = im_tile_size,
+            .num_entries = out_im_tiles,
+            .data_format_metadata = im_df},
+        DataflowBufferSpec{
+            .unique_id = MAX_A,
+            .entry_size = stats_tile_size,
+            .num_entries = statistics_tiles,
+            .data_format_metadata = stats_df},
+        DataflowBufferSpec{
+            .unique_id = MAX_B,
+            .entry_size = stats_tile_size,
+            .num_entries = statistics_tiles,
+            .data_format_metadata = stats_df},
+        DataflowBufferSpec{
+            .unique_id = SUM_A,
+            .entry_size = sum_tile_size,
+            .num_entries = statistics_tiles,
+            .data_format_metadata = sum_df},
+        DataflowBufferSpec{
+            .unique_id = SUM_B,
+            .entry_size = sum_tile_size,
+            .num_entries = statistics_tiles,
+            .data_format_metadata = sum_df},
+        DataflowBufferSpec{
+            .unique_id = EXP_MAX_DIFF,
+            .entry_size = stats_tile_size,
+            .num_entries = statistics_tiles,
+            .data_format_metadata = stats_df},
+        DataflowBufferSpec{
+            .unique_id = OUT, .entry_size = out_tile_size, .num_entries = out0_t, .data_format_metadata = out_df},
+    };
     if (needs_mask_cb) {
-        // Lightweight mask: Float16_b, mask_tiles already computed (1 for padding, 2 for causal).
-        // Legacy: full Sq×Sk double-buffered matrix in Bfp4_b.
-        tt::DataFormat actual_mask_df = lightweight_mask ? tt::DataFormat::Float16_b : mask_df;
-        uint32_t actual_mask_tile_size = tt::tile_size(actual_mask_df);
-        cb_ids.mask_in = allocate_tile_cb(mask_tiles, actual_mask_tile_size, actual_mask_df);
+        // Lightweight mask: Float16_b palette; legacy: full Sq×Sk matrix in mask_df.
+        const tt::DataFormat actual_mask_df = lightweight_mask ? tt::DataFormat::Float16_b : mask_df;
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = MASK_IN,
+            .entry_size = tt::tile_size(actual_mask_df),
+            .num_entries = mask_tiles,
+            .data_format_metadata = actual_mask_df});
     }
-
-    // Windowed (block-diagonal) CBs and runtime values; see setup_windowed_cbs above.
-    const WindowedSetup windowed =
-        setup_windowed_cbs(operation_attributes, tensor_args, cb_ids, allocate_tile_cb, allocate_cb);
-    tt::tt_metal::Buffer* const cu_window_buffer = windowed.cu_window_buffer;
-    tt::tt_metal::Buffer* const windowed_q_offset_buffer = windowed.q_offset_buffer;
-    const uint32_t cu_window_seqlens_eles = windowed.cu_window_seqlens_eles;
-    const uint32_t windowed_q_token_offset = windowed.q_token_offset;
-
-    cb_ids.identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-    cb_ids.col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-
+    // Windowed (block-diagonal) runtime values and #54492 K-range-narrowing buffers.
+    uint32_t cu_window_seqlens_eles = 0;
+    const uint32_t windowed_q_token_offset = operation_attributes.windowed_q_token_offset;
+    const bool windowed_q_offset_present = tensor_args.windowed_q_token_offset_tensor.has_value();
+    if (is_windowed) {
+        const auto& cu = tensor_args.cu_window_seqlens.value();
+        const tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
+        // Writer's cu_window copy (windowed-mask generation).
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = CU_WINDOW,
+            .entry_size = tt::tile_size(cu_df),
+            .num_entries = 1,
+            .data_format_metadata = cu_df});
+        cu_window_seqlens_eles = cu.logical_shape()[-1];
+        // K-range narrowing (#54492): the reader's OWN cu_window copy (a second producer on the writer's
+        // CB is illegal), plus a small reader->compute ctrl CB carrying each Q chunk's {k_lo, k_hi},
+        // double-buffered so the reader can run a Q chunk ahead.
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = WINDOWED_CU_READER,
+            .entry_size = tt::tile_size(cu_df),
+            .num_entries = 1,
+            .data_format_metadata = cu_df});
+        constexpr uint32_t k_range_page_size = 16;
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = WINDOWED_K_RANGE,
+            .entry_size = k_range_page_size,
+            .num_entries = 2,
+            .data_format_metadata = tt::DataFormat::Int32});
+        // Per-device Q-offset tensor CB (only when the offset arrives as a tensor).
+        if (windowed_q_offset_present) {
+            const auto& off = tensor_args.windowed_q_token_offset_tensor.value();
+            const tt::DataFormat off_df = tt::tt_metal::datatype_to_dataformat_converter(off.dtype());
+            dfbs.push_back(DataflowBufferSpec{
+                .unique_id = WINDOWED_Q_OFFSET,
+                .entry_size = tt::tile_size(off_df),
+                .num_entries = 1,
+                .data_format_metadata = off_df});
+        }
+    }
     if (is_chunked) {
-        cb_ids.page_table = allocate_cb(page_table_stick_size, 1, page_table_df);
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = PAGE_TABLE,
+            .entry_size = page_table_stick_size,
+            .num_entries = 1,
+            .data_format_metadata = page_table_df});
     }
     if (flexible_chunked) {
         constexpr uint32_t chunk_start_idx_page_size = 32;
-        cb_ids.chunk_start_idx_compute = allocate_cb(chunk_start_idx_page_size, 1, tt::DataFormat::Int32);
-        cb_ids.chunk_start_idx_writer = allocate_cb(chunk_start_idx_page_size, 1, tt::DataFormat::Int32);
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = CHUNK_START_IDX_COMPUTE,
+            .entry_size = chunk_start_idx_page_size,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::Int32});
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = CHUNK_START_IDX_WRITER,
+            .entry_size = chunk_start_idx_page_size,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::Int32});
     }
-
     if (use_attention_sink) {
-        tt::DataFormat sink_df = tt::tt_metal::datatype_to_dataformat_converter(attention_sink.value().dtype());
-        uint32_t sink_tile_size = tt::tile_size(sink_df);
-        log_debug(tt::LogOp, "attention_sink_tiles: {}", attention_sink_tiles);
+        const tt::DataFormat sink_df = tt::tt_metal::datatype_to_dataformat_converter(attention_sink.value().dtype());
+        const uint32_t sink_tile_size = tt::tile_size(sink_df);
         log_debug(tt::LogOp, "sink_tile_size: {}", sink_tile_size);
         log_debug(tt::LogOp, "sink_df: {}", sink_df);
-        cb_ids.attention_sink = allocate_tile_cb(attention_sink_tiles, sink_tile_size, sink_df);
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = ATTENTION_SINK,
+            .entry_size = sink_tile_size,
+            .num_entries = attention_sink_tiles,
+            .data_format_metadata = sink_df});
     }
-
-    // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
-    // No row buffers needed — cb_push_back_hold_wr_ptr writes directly to cb_qkt_im.
     if (use_streaming_compute) {
-        cb_ids.recip_scratch = allocate_tile_cb(1, im_tile_size, im_df);
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = RECIP_SCRATCH, .entry_size = im_tile_size, .num_entries = 1, .data_format_metadata = im_df});
     }
 
-    cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
-    cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    cb_ids.max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    cb_ids.max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    cb_ids.sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    cb_ids.sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
+    // ---- Tensor parameters ----
 
-    const auto reader_cb_compile_time_args = cb_ids.reader_compile_time_args();
-    const auto writer_cb_compile_time_args = cb_ids.writer_compile_time_args();
-    const auto compute_cb_compile_time_args = cb_ids.compute_compile_time_args();
-    reader_compile_time_args.insert(
-        reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
-    writer_compile_time_args.insert(
-        writer_compile_time_args.end(), writer_cb_compile_time_args.begin(), writer_cb_compile_time_args.end());
-    compute_compile_time_args.insert(
-        compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
-    TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
+    Group<TensorParameter> tensor_params = {
+        TensorParameter{.unique_id = T_Q_IN, .spec = input_tensor_q.tensor_spec()},
+        TensorParameter{.unique_id = T_K_IN, .spec = input_tensor_k.tensor_spec()},
+        TensorParameter{.unique_id = T_V_IN, .spec = input_tensor_v.tensor_spec()},
+        TensorParameter{.unique_id = T_OUT, .spec = output_tensor.tensor_spec()},
+    };
+    if (use_provided_mask) {
+        tensor_params.push_back(TensorParameter{.unique_id = T_MASK, .spec = attn_mask.value().tensor_spec()});
+    }
+    if (is_chunked) {
+        tensor_params.push_back(TensorParameter{.unique_id = T_PAGE_TABLE, .spec = page_table.value().tensor_spec()});
+    }
+    if (use_attention_sink) {
+        tensor_params.push_back(
+            TensorParameter{.unique_id = T_ATTENTION_SINK, .spec = attention_sink.value().tensor_spec()});
+    }
+    if (flexible_chunked) {
+        tensor_params.push_back(TensorParameter{
+            .unique_id = T_CHUNK_START_IDX, .spec = tensor_args.chunk_start_idx_tensor.value().tensor_spec()});
+    }
+    if (is_windowed) {
+        tensor_params.push_back(
+            TensorParameter{.unique_id = T_CU_WINDOW, .spec = tensor_args.cu_window_seqlens.value().tensor_spec()});
+        if (windowed_q_offset_present) {
+            tensor_params.push_back(TensorParameter{
+                .unique_id = T_WINDOWED_Q_OFFSET,
+                .spec = tensor_args.windowed_q_token_offset_tensor.value().tensor_spec()});
+        }
+    }
 
-    // Semaphores for KV chain forwarding (non-causal only).
-    // IDs match the order they were assigned above: sender=0, receiver=1, valid=2.
+    // ---- Semaphores (KV chain forwarding, non-causal only) ----
+    // sender / receiver default to 0 (INVALID); valid initializes to VALID (non-zero: WH/BH only, a
+    // deprecated capability slated for removal, mirrored here to preserve the legacy op's behavior).
+    Group<SemaphoreSpec> sems;
     if (!is_causal) {
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = sender_semaphore_id,
-            .core_type = tt::CoreType::WORKER,
-            .core_ranges = core_grid,
-            .initial_value = INVALID,
-        });
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = receiver_semaphore_id,
-            .core_type = tt::CoreType::WORKER,
-            .core_ranges = core_grid,
-            .initial_value = INVALID,
-        });
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = valid_semaphore_id,
-            .core_type = tt::CoreType::WORKER,
-            .core_ranges = core_grid,
-            .initial_value = VALID,
-        });
+        sems.push_back(SemaphoreSpec{.unique_id = SEM_SENDER, .target_nodes = core_grid});
+        sems.push_back(SemaphoreSpec{.unique_id = SEM_RECEIVER, .target_nodes = core_grid});
+        SemaphoreSpec valid_sem{.unique_id = SEM_VALID, .target_nodes = core_grid};
+        valid_sem.advanced_options.initial_value = VALID;
+        sems.push_back(valid_sem);
     }
 
     uint32_t num_phases = 1;
@@ -1410,45 +1298,432 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             total_multi_core_chains);
     }
 
-    // Update mcast_enabled compile-time arg now that chain construction is complete
-    reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
+    // mcast is enabled iff chain construction produced any mcast chains.
+    const uint32_t mcast_enabled_val = (mcast_chains > 0) ? 1 : 0;
 
-    // ---- Kernels (deferred until after chain construction for mcast_enabled flag) ----
+    // ---- Kernels ----
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = core_grid;
-    reader_desc.compile_time_args = reader_compile_time_args;
-    reader_desc.defines = defines;
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = core_grid;
-    writer_desc.compile_time_args = writer_compile_time_args;
-    writer_desc.defines = defines;
-    writer_desc.config = WriterConfigDescriptor{};
-
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp";
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = core_grid;
-    compute_desc.compile_time_args = compute_compile_time_args;
-    compute_desc.defines = defines;
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .math_approx_mode = math_approx_mode,
+    KernelSpec::CompileTimeArgs reader_cta = {
+        {"B", B},
+        {"NQH", NQH},
+        {"NKH", NKH},
+        {"NVH", NVH},
+        {"Sqt", Sqt},
+        {"Skt", Skt},
+        {"valid_Sqt", valid_Sqt},
+        {"valid_Skt", valid_Skt},
+        {"DHt", DHt},
+        {"vDHt", vDHt},
+        {"Sq_chunk_t", Sq_chunk_t},
+        {"q_num_chunks", q_num_chunks},
+        {"Sk_chunk_t", Sk_chunk_t},
+        {"k_num_chunks", k_num_chunks},
+        {"num_cores", num_cores},
+        {"is_causal", static_cast<uint32_t>(is_causal)},
+        {"use_provided_mask", static_cast<uint32_t>(use_provided_mask)},
+        {"broadcast_provided_mask_batch", static_cast<uint32_t>(broadcast_provided_mask_batch)},
+        {"broadcast_provided_mask_heads", static_cast<uint32_t>(broadcast_provided_mask_heads)},
+        {"use_padded_mask", static_cast<uint32_t>(generated_padding_mask)},
+        {"is_chunked", static_cast<uint32_t>(is_chunked)},
+        {"block_size_t", block_size_t},
+        {"page_table_stick_size", page_table_stick_size},
+        {"use_attention_sink", static_cast<uint32_t>(use_attention_sink)},
+        {"use_mla", static_cast<uint32_t>(use_mla)},
+        {"mla_kv_overlap", static_cast<uint32_t>(mla_kv_overlap)},
+        {"qk_subblock_h", qk_out_subblock_h},
+        {"sliding_window_size", sliding_window_size.value_or(0)},
+        {"use_streaming_compute", static_cast<uint32_t>(use_streaming_compute)},
+        {"mcast_enabled", mcast_enabled_val},
+        {"use_zigzag_balancing", static_cast<uint32_t>(use_zigzag_balancing)},
+        {"use_windowed_narrowing", static_cast<uint32_t>(is_windowed)},
     };
 
-    // Set reader rt args
+    Group<DFBBinding> reader_dfbs = {
+        DFBBinding{.dfb_spec_name = Q_IN, .accessor_name = "q_in", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = K_IN, .accessor_name = "k_in", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = V_IN, .accessor_name = "v_in", .endpoint_type = DFBEndpointType::PRODUCER},
+    };
+    Group<TensorBinding> reader_tensors = {
+        TensorBinding{.tensor_parameter_name = T_Q_IN, .accessor_name = "q_in"},
+        TensorBinding{.tensor_parameter_name = T_K_IN, .accessor_name = "k_in"},
+        TensorBinding{.tensor_parameter_name = T_V_IN, .accessor_name = "v_in"},
+    };
+    Group<SemaphoreBinding> reader_sems;
+    Group<std::string> reader_rta_names = {
+        "core_id",
+        "num_phases",
+        "chunked_q_chunk_offset_phase_1",
+        "read_offset_phase_1",
+        "global_q_start",
+        "global_q_count"};
+    KernelSpec::CompilerOptions::Defines reader_defines = base_defines;
+    if (use_provided_mask) {
+        reader_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = MASK_IN, .accessor_name = "mask_in", .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_tensors.push_back(TensorBinding{.tensor_parameter_name = T_MASK, .accessor_name = "mask"});
+        reader_defines.insert({"READER_PRODUCES_MASK", "1"});
+    }
+    if (use_attention_sink) {
+        reader_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = ATTENTION_SINK,
+            .accessor_name = "attention_sink",
+            .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_tensors.push_back(
+            TensorBinding{.tensor_parameter_name = T_ATTENTION_SINK, .accessor_name = "attention_sink"});
+        reader_defines.insert({"USE_ATTENTION_SINK", "1"});
+    }
+    if (is_chunked) {
+        // Page table is filled and read within the reader — self-loop.
+        reader_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = PAGE_TABLE, .accessor_name = "page_table", .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = PAGE_TABLE, .accessor_name = "page_table", .endpoint_type = DFBEndpointType::CONSUMER});
+        reader_tensors.push_back(TensorBinding{.tensor_parameter_name = T_PAGE_TABLE, .accessor_name = "page_table"});
+        reader_defines.insert({"IS_CHUNKED", "1"});
+    }
+    if (flexible_chunked) {
+        reader_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = CHUNK_START_IDX_COMPUTE,
+            .accessor_name = "chunk_start_idx_compute",
+            .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = CHUNK_START_IDX_WRITER,
+            .accessor_name = "chunk_start_idx_writer",
+            .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_tensors.push_back(
+            TensorBinding{.tensor_parameter_name = T_CHUNK_START_IDX, .accessor_name = "chunk_start_idx"});
+        reader_defines.insert({"FLEXIBLE_CHUNKED", "1"});
+    }
+    if (kv_chain) {
+        reader_sems = {
+            SemaphoreBinding{.semaphore_spec_name = SEM_SENDER, .accessor_name = "sender"},
+            SemaphoreBinding{.semaphore_spec_name = SEM_RECEIVER, .accessor_name = "receiver"},
+            SemaphoreBinding{.semaphore_spec_name = SEM_VALID, .accessor_name = "valid"},
+        };
+        reader_defines.insert({"KV_CHAIN", "1"});
+        for (const char* n :
+             {"is_chain_participant",
+              "is_injector",
+              "is_sink",
+              "chain_batch",
+              "chain_head",
+              "prev_physical_x",
+              "prev_physical_y",
+              "next_physical_x",
+              "next_physical_y",
+              "next_core_q_chunks",
+              "mcast_num_dests",
+              "mcast_sender_wait"}) {
+            reader_rta_names.push_back(n);
+        }
+    }
+    if (is_windowed) {
+        // #54492 K-range narrowing: the reader keeps its own cu_window copy (self-loop) and produces
+        // the {k_lo, k_hi} ctrl CB consumed by compute. It binds cu_window_seqlens under its own
+        // accessor, and the per-device Q-offset tensor when supplied (read into the cu copy's landing
+        // spot — no separate CB on the reader side).
+        reader_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = WINDOWED_CU_READER,
+            .accessor_name = "windowed_cu_reader",
+            .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = WINDOWED_CU_READER,
+            .accessor_name = "windowed_cu_reader",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+        reader_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = WINDOWED_K_RANGE,
+            .accessor_name = "windowed_k_range",
+            .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_tensors.push_back(TensorBinding{.tensor_parameter_name = T_CU_WINDOW, .accessor_name = "cu_window_reader"});
+        reader_defines.insert({"USE_WINDOWED_NARROWING", "1"});
+        reader_rta_names.push_back("cu_window_seqlens_eles");
+        reader_rta_names.push_back("windowed_q_tok_offset");
+        if (windowed_q_offset_present) {
+            reader_tensors.push_back(
+                TensorBinding{.tensor_parameter_name = T_WINDOWED_Q_OFFSET, .accessor_name = "windowed_q_offset"});
+            reader_defines.insert({"WINDOWED_Q_OFFSET_TENSOR", "1"});
+        }
+    }
+
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp",
+        .compiler_options = {.defines = reader_defines},
+        .dfb_bindings = reader_dfbs,
+        .semaphore_bindings = reader_sems,
+        .tensor_bindings = reader_tensors,
+        .compile_time_args = reader_cta,
+        .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
+
+    KernelSpec::CompileTimeArgs writer_cta = {
+        {"B", B},
+        {"NQH", NQH},
+        {"NKH", NKH},
+        {"Sqt", Sqt},
+        {"valid_Sqt", valid_Sqt},
+        {"unpadded_Sk", Sk},
+        {"DHt", DHt},
+        {"vDHt", vDHt},
+        {"Sq_chunk_t", Sq_chunk_t},
+        {"q_num_chunks", q_num_chunks},
+        {"Sk_chunk_t", Sk_chunk_t},
+        {"k_num_chunks", k_num_chunks},
+        {"identity_scalar_packed", packed_identity_scalar},
+        {"scale_val", scale_packed},
+        {"num_cores", num_cores},
+        {"is_causal", static_cast<uint32_t>(is_causal)},
+        {"use_provided_mask", static_cast<uint32_t>(use_provided_mask)},
+        {"use_padded_mask", static_cast<uint32_t>(generated_padding_mask)},
+        {"is_chunked", static_cast<uint32_t>(is_chunked)},
+        {"sliding_window_size", sliding_window_size.value_or(0)},
+        {"use_lightweight_mask", static_cast<uint32_t>(lightweight_mask)},
+        {"use_streaming_compute", static_cast<uint32_t>(use_streaming_compute)},
+        {"out_subblock_h", out_out_subblock_h},
+        {"k_partial_col", k_partial_col},
+        {"use_zigzag_balancing", static_cast<uint32_t>(use_zigzag_balancing)},
+        {"use_windowed_mask", static_cast<uint32_t>(is_windowed)},
+    };
+
+    Group<DFBBinding> writer_dfbs = {
+        DFBBinding{
+            .dfb_spec_name = IDENTITY_SCALE_IN,
+            .accessor_name = "identity_scale_in",
+            .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{
+            .dfb_spec_name = COL_IDENTITY, .accessor_name = "col_identity", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER},
+    };
+    Group<TensorBinding> writer_tensors = {
+        TensorBinding{.tensor_parameter_name = T_OUT, .accessor_name = "out"},
+    };
+    KernelSpec::CompilerOptions::Defines writer_defines = base_defines;
+    Group<std::string> writer_rta_names = {
+        "core_id",
+        "num_phases",
+        "use_chunk_start_idx_tensor",
+        "chunk_start_t_in_q_chunks_phase_1",
+        "write_offset_phase_1",
+        "chunk_start_t_in_q_chunks_phase_2",
+        "write_offset_phase_2",
+        "global_q_start",
+        "global_q_count",
+        "cu_window_seqlens_eles"};
+    if (writer_produces_mask) {
+        writer_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = MASK_IN, .accessor_name = "mask_in", .endpoint_type = DFBEndpointType::PRODUCER});
+        writer_defines.insert({"WRITER_PRODUCES_MASK", "1"});
+    }
+    if (is_windowed) {
+        // cu_window_seqlens is filled and read within the writer — self-loop.
+        writer_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = CU_WINDOW,
+            .accessor_name = "cu_window_seqlens",
+            .endpoint_type = DFBEndpointType::PRODUCER});
+        writer_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = CU_WINDOW,
+            .accessor_name = "cu_window_seqlens",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+        writer_tensors.push_back(
+            TensorBinding{.tensor_parameter_name = T_CU_WINDOW, .accessor_name = "cu_window_seqlens"});
+        writer_defines.insert({"USE_WINDOWED_MASK", "1"});
+        // #54492: per-Q-chunk K narrowing origin. Scalar via a named RTA; per-device via a dedicated
+        // self-loop CB fed by the windowed_q_token_offset tensor (writer reads it into its own CB).
+        writer_rta_names.push_back("windowed_q_tok_offset");
+        if (windowed_q_offset_present) {
+            writer_dfbs.push_back(DFBBinding{
+                .dfb_spec_name = WINDOWED_Q_OFFSET,
+                .accessor_name = "windowed_q_offset",
+                .endpoint_type = DFBEndpointType::PRODUCER});
+            writer_dfbs.push_back(DFBBinding{
+                .dfb_spec_name = WINDOWED_Q_OFFSET,
+                .accessor_name = "windowed_q_offset",
+                .endpoint_type = DFBEndpointType::CONSUMER});
+            writer_tensors.push_back(
+                TensorBinding{.tensor_parameter_name = T_WINDOWED_Q_OFFSET, .accessor_name = "windowed_q_offset"});
+            writer_defines.insert({"WINDOWED_Q_OFFSET_TENSOR", "1"});
+        }
+    }
+    if (flexible_chunked) {
+        writer_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = CHUNK_START_IDX_WRITER,
+            .accessor_name = "chunk_start_idx_writer",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+        writer_defines.insert({"FLEXIBLE_CHUNKED", "1"});
+    }
+
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp",
+        .compiler_options = {.defines = writer_defines},
+        .dfb_bindings = writer_dfbs,
+        .tensor_bindings = writer_tensors,
+        .compile_time_args = writer_cta,
+        .runtime_arg_schema = {.runtime_arg_names = writer_rta_names},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
+
+    KernelSpec::CompileTimeArgs compute_cta = {
+        {"B", B},
+        {"NQH", NQH},
+        {"NKH", NKH},
+        {"Skt", Skt},
+        {"DHt", DHt},
+        {"vDHt", vDHt},
+        {"Sq_chunk_t", Sq_chunk_t},
+        {"q_num_chunks", q_num_chunks},
+        {"Sk_chunk_t", Sk_chunk_t},
+        {"k_num_chunks", k_num_chunks},
+        {"qk_in0_block_w", qk_in0_block_w},
+        {"qk_subblock_w", qk_out_subblock_w},
+        {"qk_subblock_h", qk_out_subblock_h},
+        {"qk_in0_num_subblocks", qk_in0_num_subblocks},
+        {"qk_in1_num_subblocks", qk_in1_num_subblocks},
+        {"qk_num_blocks", qk_num_blocks},
+        {"out_in0_block_w", out_in0_block_w},
+        {"out_subblock_w", out_out_subblock_w},
+        {"out_subblock_h", out_out_subblock_h},
+        {"out_in0_num_subblocks", out_in0_num_subblocks},
+        {"out_in1_num_subblocks", out_in1_num_subblocks},
+        {"out_num_blocks", out_num_blocks},
+        {"num_cores", num_cores},
+        {"is_causal", static_cast<uint32_t>(is_causal)},
+        {"use_provided_mask", static_cast<uint32_t>(compute_use_provided_mask)},
+        {"use_padded_mask", static_cast<uint32_t>(generated_padding_mask)},
+        {"is_chunked", static_cast<uint32_t>(is_chunked)},
+        {"scale_fp32", scale_packed},
+        {"sliding_window_size", sliding_window_size.value_or(0)},
+        {"use_attention_sink", static_cast<uint32_t>(use_attention_sink)},
+        {"use_streaming_compute", static_cast<uint32_t>(use_streaming_compute)},
+        {"valid_Skt", valid_Skt},
+        {"k_partial_col", k_partial_col},
+        {"use_zigzag_balancing", static_cast<uint32_t>(use_zigzag_balancing)},
+        {"use_windowed_narrowing", static_cast<uint32_t>(is_windowed)},
+    };
+
+    Group<DFBBinding> compute_dfbs = {
+        DFBBinding{.dfb_spec_name = Q_IN, .accessor_name = "q_in", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{.dfb_spec_name = K_IN, .accessor_name = "k_in", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{.dfb_spec_name = V_IN, .accessor_name = "v_in", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{
+            .dfb_spec_name = IDENTITY_SCALE_IN,
+            .accessor_name = "identity_scale_in",
+            .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{
+            .dfb_spec_name = COL_IDENTITY, .accessor_name = "col_identity", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER},
+        // Compute-only intermediates: self-loop.
+        DFBBinding{.dfb_spec_name = QK_IM, .accessor_name = "qk_im", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = QK_IM, .accessor_name = "qk_im", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{.dfb_spec_name = OUT_IM_A, .accessor_name = "out_im_A", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = OUT_IM_A, .accessor_name = "out_im_A", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{.dfb_spec_name = OUT_IM_B, .accessor_name = "out_im_B", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = OUT_IM_B, .accessor_name = "out_im_B", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{.dfb_spec_name = MAX_A, .accessor_name = "max_A", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = MAX_A, .accessor_name = "max_A", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{.dfb_spec_name = MAX_B, .accessor_name = "max_B", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = MAX_B, .accessor_name = "max_B", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{.dfb_spec_name = SUM_A, .accessor_name = "sum_A", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = SUM_A, .accessor_name = "sum_A", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{.dfb_spec_name = SUM_B, .accessor_name = "sum_B", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = SUM_B, .accessor_name = "sum_B", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{
+            .dfb_spec_name = EXP_MAX_DIFF, .accessor_name = "exp_max_diff", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{
+            .dfb_spec_name = EXP_MAX_DIFF, .accessor_name = "exp_max_diff", .endpoint_type = DFBEndpointType::CONSUMER},
+    };
+    KernelSpec::CompilerOptions::Defines compute_defines = base_defines;
+    if (needs_mask_cb) {
+        compute_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = MASK_IN, .accessor_name = "mask_in", .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_defines.insert({"HAS_MASK", "1"});
+    }
+    if (use_attention_sink) {
+        compute_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = ATTENTION_SINK,
+            .accessor_name = "attention_sink",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_defines.insert({"USE_ATTENTION_SINK", "1"});
+    }
+    if (flexible_chunked) {
+        compute_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = CHUNK_START_IDX_COMPUTE,
+            .accessor_name = "chunk_start_idx_compute",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_defines.insert({"FLEXIBLE_CHUNKED", "1"});
+    }
+    if (use_streaming_compute) {
+        compute_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = RECIP_SCRATCH,
+            .accessor_name = "recip_scratch",
+            .endpoint_type = DFBEndpointType::PRODUCER});
+        compute_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = RECIP_SCRATCH,
+            .accessor_name = "recip_scratch",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_defines.insert({"USE_STREAMING_COMPUTE", "1"});
+    }
+    if (is_windowed) {
+        // #54492 K-range narrowing: compute consumes the reader-produced {k_lo, k_hi} ctrl CB.
+        compute_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = WINDOWED_K_RANGE,
+            .accessor_name = "windowed_k_range",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+        compute_defines.insert({"USE_WINDOWED_NARROWING", "1"});
+    }
+
+    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+    if (fp32_dest_acc_en) {
+        // qk_im / sum_A / sum_B are Float32 when enable_32_bit_dest is on; the validator requires an
+        // explicit unpack_modes entry for each Float32 DFB the compute consumes. Legacy defaulted to
+        // UnpackToSrc (no explicit unpack_to_dest_mode), preserved here.
+        auto& gen1 = std::get<ComputeGen1Config>(compute_hw);
+        gen1.unpack_modes.insert({QK_IM, tt::tt_metal::UnpackMode::UnpackToSrc});
+        gen1.unpack_modes.insert({SUM_A, tt::tt_metal::UnpackMode::UnpackToSrc});
+        gen1.unpack_modes.insert({SUM_B, tt::tt_metal::UnpackMode::UnpackToSrc});
+    }
+
+    KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source = "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/compute/sdpa.cpp",
+        .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings = compute_dfbs,
+        .compile_time_args = compute_cta,
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"core_id",
+                  "num_phases",
+                  "use_chunk_start_idx_tensor",
+                  "chunked_q_chunk_offset_phase_1",
+                  "chunked_q_chunk_offset_phase_2",
+                  "global_q_start",
+                  "global_q_count"}},
+        .hw_config = compute_hw,
+    };
+
+    // ---- ProgramSpec ----
+
+    ProgramSpec spec{
+        .name = "sdpa_quasar",
+        .kernels = {reader, writer, compute},
+        .dataflow_buffers = dfbs,
+        .semaphores = sems,
+        .tensor_parameters = tensor_params,
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = core_grid}},
+    };
+
+    // ---- ProgramRunArgs ----
+
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run{.kernel = READER};
+    KernelRunArgs writer_run{.kernel = WRITER};
+    KernelRunArgs compute_run{.kernel = COMPUTE};
+
+    const uint32_t use_chunk_start_idx_tensor = flexible_chunked ? 1u : 0u;
+
     for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
+        NodeCoord node = {i % grid_size.x, i / grid_size.x};
 
         // Global Q scheduling per-core range: contiguous slice of the flat (B, NQH, q_num_chunks) space.
         uint32_t global_q_start = i * global_q_base_chunks_per_core +
@@ -1462,95 +1737,105 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             global_q_count = total_q_chunks - global_q_start;
         }
 
-        log_debug(
-            tt::LogOp,
-            "core: {} x={} y={} global_q_start={} global_q_count={}",
-            i,
-            core.x,
-            core.y,
-            global_q_start,
-            global_q_count);
-
-        // Get chain info for this core
-        const auto& chain = core_chain_info[i];
-
-        KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(q_buffer);
-        reader_args.push_back(k_buffer);
-        reader_args.push_back(v_buffer);
-        reader_args.push_back(mask_buffer);
-        reader_args.push_back(page_table_buffer);
-        reader_args.push_back(attention_sink_buffer);
-        reader_args.push_back(chunk_start_idx_buffer);
-        reader_args.push_back(i);
-        reader_args.push_back(num_phases);
-        reader_args.push_back(chunked_q_chunk_offset);
-        reader_args.push_back(read_offset);  // read_offset
-
-        // Add chain metadata for non-causal case
-        if (!is_causal) {
-            reader_args.push_back(static_cast<uint32_t>(chain.participates));
-            reader_args.push_back(static_cast<uint32_t>(chain.is_injector));
-            reader_args.push_back(static_cast<uint32_t>(chain.is_sink));
-            reader_args.push_back(chain.batch);
-            reader_args.push_back(chain.head);
-            reader_args.push_back(chain.q_chunk_start);
-            reader_args.push_back(chain.q_chunk_count);
-            reader_args.push_back(static_cast<uint32_t>(chain.prev_physical.x));
-            reader_args.push_back(static_cast<uint32_t>(chain.prev_physical.y));
-            reader_args.push_back(static_cast<uint32_t>(chain.next_physical.x));
-            reader_args.push_back(static_cast<uint32_t>(chain.next_physical.y));
-            reader_args.push_back(chain.next_core_q_chunks);
-            reader_args.push_back(chain.mcast_num_dests);
-            reader_args.push_back(chain.mcast_sender_wait);
+        AddRuntimeArgsForNode(
+            reader_run.runtime_arg_values,
+            node,
+            {{"core_id", i},
+             {"num_phases", num_phases},
+             {"chunked_q_chunk_offset_phase_1", chunked_q_chunk_offset},
+             {"read_offset_phase_1", read_offset},
+             {"global_q_start", global_q_start},
+             {"global_q_count", global_q_count}});
+        if (kv_chain) {
+            const auto& chain = core_chain_info[i];
+            AddRuntimeArgsForNode(
+                reader_run.runtime_arg_values,
+                node,
+                {{"is_chain_participant", static_cast<uint32_t>(chain.participates)},
+                 {"is_injector", static_cast<uint32_t>(chain.is_injector)},
+                 {"is_sink", static_cast<uint32_t>(chain.is_sink)},
+                 {"chain_batch", chain.batch},
+                 {"chain_head", chain.head},
+                 {"prev_physical_x", static_cast<uint32_t>(chain.prev_physical.x)},
+                 {"prev_physical_y", static_cast<uint32_t>(chain.prev_physical.y)},
+                 {"next_physical_x", static_cast<uint32_t>(chain.next_physical.x)},
+                 {"next_physical_y", static_cast<uint32_t>(chain.next_physical.y)},
+                 {"next_core_q_chunks", chain.next_core_q_chunks},
+                 {"mcast_num_dests", chain.mcast_num_dests},
+                 {"mcast_sender_wait", chain.mcast_sender_wait}});
         }
 
-        // Global-Q tail (read by kernel after chain block when non-causal, immediately when causal).
-        reader_args.push_back(global_q_start);
-        reader_args.push_back(global_q_count);
+        AddRuntimeArgsForNode(
+            writer_run.runtime_arg_values,
+            node,
+            {{"core_id", i},
+             {"num_phases", num_phases},
+             {"use_chunk_start_idx_tensor", use_chunk_start_idx_tensor},
+             {"chunk_start_t_in_q_chunks_phase_1", chunked_q_chunk_offset},
+             {"write_offset_phase_1", write_offset},
+             {"chunk_start_t_in_q_chunks_phase_2", 0u},
+             {"write_offset_phase_2", 0u},
+             {"global_q_start", global_q_start},
+             {"global_q_count", global_q_count},
+             {"cu_window_seqlens_eles", cu_window_seqlens_eles}});
 
-        // Windowed K-range narrowing tail: same four values the writer gets at slots 10-13, so the
-        // reader resolves each Q chunk's global row range and windows identically.
-        reader_args.push_back(cu_window_buffer);
-        reader_args.push_back(cu_window_seqlens_eles);
-        reader_args.push_back(windowed_q_token_offset);
-        reader_args.push_back(windowed_q_offset_buffer);
+        // Windowed K-range narrowing (#54492): the reader and writer each resolve the per-Q-chunk
+        // K range from cu_window_seqlens + the (possibly per-device) Q origin; both need the element
+        // count and scalar origin. Addresses arrive via TensorBindings, not runtime args.
+        if (is_windowed) {
+            AddRuntimeArgsForNode(
+                reader_run.runtime_arg_values,
+                node,
+                {{"cu_window_seqlens_eles", cu_window_seqlens_eles},
+                 {"windowed_q_tok_offset", windowed_q_token_offset}});
+            AddRuntimeArgsForNode(
+                writer_run.runtime_arg_values, node, {{"windowed_q_tok_offset", windowed_q_token_offset}});
+        }
 
-        reader_desc.emplace_runtime_args(core, reader_args);
-
-        writer_desc.emplace_runtime_args(
-            core,
-            {out0_buffer,
-             i,
-             num_phases,                                       // 2
-             static_cast<uint32_t>(flexible_chunked ? 1 : 0),  // 3
-             chunked_q_chunk_offset,                           // 4: phase_1
-             write_offset,                                     // 5
-             0u,                                               // 6: phase_2 chunk_start (unused, num_phases==1)
-             0u,                                               // 7: phase_2 write_offset (unused, num_phases==1)
-             global_q_start,                                   // 8
-             global_q_count,                                   // 9
-             cu_window_buffer,                                 // 10: windowed mask src (nullptr if unused)
-             cu_window_seqlens_eles,                           // 11: window count + 1
-             windowed_q_token_offset,                          // 12: global origin of this Q shard (scalar)
-             windowed_q_offset_buffer});                       // 13: same, per-device (nullptr => use 12)
-
-        compute_desc.emplace_runtime_args(
-            core,
-            {i,
-             num_phases,                                       // 1
-             static_cast<uint32_t>(flexible_chunked ? 1 : 0),  // 2
-             chunked_q_chunk_offset,                           // 3: phase_1
-             0u,                                               // 4: phase_2 chunked offset (unused, num_phases==1)
-             global_q_start,                                   // 5
-             global_q_count});                                 // 6
+        AddRuntimeArgsForNode(
+            compute_run.runtime_arg_values,
+            node,
+            {{"core_id", i},
+             {"num_phases", num_phases},
+             {"use_chunk_start_idx_tensor", use_chunk_start_idx_tensor},
+             {"chunked_q_chunk_offset_phase_1", chunked_q_chunk_offset},
+             {"chunked_q_chunk_offset_phase_2", 0u},
+             {"global_q_start", global_q_start},
+             {"global_q_count", global_q_count}});
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    run_args.kernel_run_args = {reader_run, writer_run, compute_run};
 
-    return desc;
+    // Bind V against the persistent io tensor (input_tensor_v is a value_or temporary whose reference
+    // would dangle after this function returns); it aliases K in the MLA kv-overlap case.
+    const auto& v_binding_tensor = tensor_args.v.has_value() ? tensor_args.v.value() : tensor_args.k;
+    run_args.tensor_args = {
+        {T_Q_IN, input_tensor_q.mesh_tensor()},
+        {T_K_IN, input_tensor_k.mesh_tensor()},
+        {T_V_IN, v_binding_tensor.mesh_tensor()},
+        {T_OUT, output_tensor.mesh_tensor()},
+    };
+    if (use_provided_mask) {
+        run_args.tensor_args.insert({T_MASK, attn_mask.value().mesh_tensor()});
+    }
+    if (is_chunked) {
+        run_args.tensor_args.insert({T_PAGE_TABLE, page_table.value().mesh_tensor()});
+    }
+    if (use_attention_sink) {
+        run_args.tensor_args.insert({T_ATTENTION_SINK, attention_sink.value().mesh_tensor()});
+    }
+    if (flexible_chunked) {
+        run_args.tensor_args.insert({T_CHUNK_START_IDX, tensor_args.chunk_start_idx_tensor.value().mesh_tensor()});
+    }
+    if (is_windowed) {
+        run_args.tensor_args.insert({T_CU_WINDOW, tensor_args.cu_window_seqlens.value().mesh_tensor()});
+        if (windowed_q_offset_present) {
+            run_args.tensor_args.insert(
+                {T_WINDOWED_Q_OFFSET, tensor_args.windowed_q_token_offset_tensor.value().mesh_tensor()});
+        }
+    }
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-}  // namespace ttnn::prim
+}  // namespace ttnn::prim::qsr

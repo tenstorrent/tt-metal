@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 fork of compute/sdpa.cpp. The legacy original next to this file still serves
-// RingDistributedSDPADeviceOperation; this fork is bound by SDPAProgramFactory.
+// Metal 2.0 fork of operations/transformer/sdpa/device/kernels/compute/sdpa.cpp. The main-tree
+// original still serves RingDistributedSDPADeviceOperation; this fork is bound by
+// the quasar SDPAProgramFactory (ttnn::prim::qsr).
 
 #include <cstdint>
 

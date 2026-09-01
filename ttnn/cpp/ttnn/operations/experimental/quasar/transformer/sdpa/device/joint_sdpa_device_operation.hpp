@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,12 +9,13 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-#include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation_types.hpp"
+#include "ttnn/operations/experimental/quasar/transformer/sdpa/device/joint_sdpa_device_operation_types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 
-namespace ttnn::prim {
+namespace ttnn::prim::qsr {
 
 struct JointSDPADeviceOperation {
     using operation_attributes_t = JointSDPAParams;
@@ -23,7 +24,7 @@ struct JointSDPADeviceOperation {
     using tensor_return_value_t = JointSDPAResult;
 
     struct JointSDPAProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -50,4 +51,4 @@ JointSDPAResult joint_scaled_dot_product_attention(
     std::optional<float> scale = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
-}  // namespace ttnn::prim
+}  // namespace ttnn::prim::qsr

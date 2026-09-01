@@ -5,43 +5,60 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "experimental/kernel_args.h"
 #include "dataflow_common.hpp"
 
 void kernel_main() {
     Noc noc;
 
-    constexpr auto B = get_arg(args::B);
-    constexpr auto NH = get_arg(args::NH);
-    constexpr auto DHt = get_arg(args::DHt);
-    constexpr auto Sq_chunk_t = get_arg(args::Sq_chunk_t);
-    constexpr auto Sk_chunk_t = get_arg(args::Sk_chunk_t);
-    constexpr auto k_num_chunks = get_arg(args::k_num_chunks);
-    constexpr auto valid_Nt = get_arg(args::valid_Nt);
-    constexpr auto valid_Lt = get_arg(args::valid_Lt);
-    constexpr auto padded_Nqt = get_arg(args::padded_Nqt);
-    constexpr auto padded_Nkt = get_arg(args::padded_Nkt);
-    constexpr auto padded_Lqt = get_arg(args::padded_Lqt);
-    constexpr auto padded_Lkt = get_arg(args::padded_Lkt);
+    constexpr uint32_t B = get_compile_time_arg_val(0);
+    constexpr uint32_t NH = get_compile_time_arg_val(1);
+    constexpr uint32_t DHt = get_compile_time_arg_val(2);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(5);
+    constexpr uint32_t valid_Nt = get_compile_time_arg_val(6);
+    constexpr uint32_t valid_Lt = get_compile_time_arg_val(7);
+    constexpr uint32_t padded_Nqt = get_compile_time_arg_val(8);
+    constexpr uint32_t padded_Nkt = get_compile_time_arg_val(9);
+    constexpr uint32_t padded_Lqt = get_compile_time_arg_val(10);
+    constexpr uint32_t padded_Lkt = get_compile_time_arg_val(11);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(12);
 
-    const auto local_batch_start = get_arg(args::local_batch_start);
-    const auto local_batch_end = get_arg(args::local_batch_end);
-    const auto local_nh_start = get_arg(args::local_nh_start);
-    const auto local_nh_end = get_arg(args::local_nh_end);
-    const auto local_q_start = get_arg(args::local_q_start);
-    const auto local_q_end = get_arg(args::local_q_end);
+    constexpr auto q_args = TensorAccessorArgs<13>();
+    constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
+    constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    constexpr auto joint_q_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
+    constexpr auto joint_k_args = TensorAccessorArgs<joint_q_args.next_compile_time_args_offset()>();
+    constexpr auto joint_v_args = TensorAccessorArgs<joint_k_args.next_compile_time_args_offset()>();
 
-    // Q/K/V CBs are bound by name; the magic-number CB index is gone.
-    constexpr uint32_t q_tile_bytes = get_tile_size(dfb::q_in);
-    constexpr uint32_t k_tile_bytes = get_tile_size(dfb::k_in);
-    constexpr uint32_t v_tile_bytes = get_tile_size(dfb::v_in);
+    uint32_t argidx = 0;
+    const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t v_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t joint_q_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t joint_k_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t joint_v_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t local_batch_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t local_batch_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t local_nh_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t local_nh_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t local_q_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t local_q_end = get_arg_val<uint32_t>(argidx++);
 
-    const auto q_reader = TensorAccessor(tensor::input_q);
-    const auto k_reader = TensorAccessor(tensor::input_k);
-    const auto v_reader = TensorAccessor(tensor::input_v);
-    const auto joint_q_reader = TensorAccessor(tensor::joint_q);
-    const auto joint_k_reader = TensorAccessor(tensor::joint_k);
-    const auto joint_v_reader = TensorAccessor(tensor::joint_v);
+    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
+    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
+    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
+
+    constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
+    constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
+    constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
+
+    const auto q_reader = TensorAccessor(q_args, q_addr);
+    const auto k_reader = TensorAccessor(k_args, k_addr);
+    const auto v_reader = TensorAccessor(v_args, v_addr);
+    const auto joint_q_reader = TensorAccessor(joint_q_args, joint_q_addr);
+    const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr);
+    const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr);
 
     const auto input_tile_logical = TensorTileShape(B, NH, valid_Nt, DHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, valid_Lt, DHt);
@@ -60,7 +77,7 @@ void kernel_main() {
                 const auto q_slice = Slice(nb, nq, q_row_start_tile, q_row_end_tile, 0, DHt);
 
                 read_block(
-                    cat_q_generator, q_slice, q_row_end_tile, dfb::q_in, q_tile_bytes, false /*transpose*/
+                    cat_q_generator, q_slice, q_row_end_tile, cb_q_in, q_tile_bytes, false /*transpose*/
                 );
 
                 for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
@@ -69,11 +86,11 @@ void kernel_main() {
                     const auto kv_slice = Slice(nb, nq, kv_row_start_tile, kv_row_end_tile, 0, DHt);
 
                     read_block(
-                        cat_k_generator, kv_slice, kv_row_end_tile, dfb::k_in, k_tile_bytes, true /*transpose*/
+                        cat_k_generator, kv_slice, kv_row_end_tile, cb_k_in, k_tile_bytes, true /*transpose*/
                     );
 
                     read_block(
-                        cat_v_generator, kv_slice, kv_row_end_tile, dfb::v_in, v_tile_bytes, false /*transpose*/
+                        cat_v_generator, kv_slice, kv_row_end_tile, cb_v_in, v_tile_bytes, false /*transpose*/
                     );
                 }
             }

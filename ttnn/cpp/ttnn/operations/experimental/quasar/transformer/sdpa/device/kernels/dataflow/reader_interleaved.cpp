@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 fork of reader_interleaved.cpp. The legacy original next to this file still serves
-// RingDistributedSDPADeviceOperation; this fork is bound by SDPAProgramFactory.
+// Metal 2.0 fork of operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp.
+// The main-tree original still serves RingDistributedSDPADeviceOperation; this fork is bound by
+// the quasar SDPAProgramFactory (ttnn::prim::qsr).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
