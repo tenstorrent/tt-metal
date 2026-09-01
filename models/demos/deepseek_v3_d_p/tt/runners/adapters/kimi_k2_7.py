@@ -24,6 +24,10 @@ class KimiK27Adapter(KimiK26Adapter):
     # runtime through variant.model_config. The values are identical today -- this is about
     # having one place to change on the day they are not.
     model_config = KimiK27Config
+    # Not inherited: KimiK26Adapter points hf_model_default at the in-tree reference/kimi_k2_6 dir, so a
+    # PREFILL_MODEL=kimi_k2_7 run with no PREFILL_HF_MODEL would silently read K2.6's config. This dir
+    # is dot-free (trust_remote_code chokes on "." in a path) and ships the auto_map modules.
+    hf_model_default = "/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized"
     ttnn_cache_default = "/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill"
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320"
 
