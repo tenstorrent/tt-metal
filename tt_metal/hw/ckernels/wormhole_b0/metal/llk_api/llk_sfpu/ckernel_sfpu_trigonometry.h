@@ -314,6 +314,7 @@ inline void calculate_cosine() {
         sfpi::vFloat v = sfpi::dst_reg[0];
 
         // Force v * (1/PI) + 0.5 to compile as a single SFPMAD sequence for consistent instruction scheduling.
+        // #55060: Compiler should get this right.
         sfpi::vFloat half = sfpi::sFloat16b(0.5f);  // 0.5
         sfpi::vFloat inv_pi = sfpi::vConstFloatPrgm2;
         sfpi::vFloat neg_one = -1.0f;
@@ -326,6 +327,7 @@ inline void calculate_cosine() {
         // rounding_bias = sfpi::sFloat16b(0x1.8p23f);
         // j = __builtin_rvtt_sfpmad(v.get(), one, rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
 
+        // #55065: sfpi::round should offer no-int-debiasing.
         j = j + ROUNDING_BIAS;
 
         // At this point, the mantissa bits of j contain the rounded integer.

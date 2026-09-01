@@ -255,7 +255,10 @@ inline void calculate_cosine() {
     const float P0 = -0x1.92p+0f;   // representable as bf16
     const float P1 = -0x1.fbp-12f;  // representable as fp16
 
-    sfpi::vFloat C3, C2, C1, C0;
+    sfpi::vFloat C2, C1, C0;
+    float C3;  // Cannot keep this in a register in 7.73.0, which
+               // removes -1,of constant.  After sfpi 7.73.0
+               // lands we'll have vConstFloatPrgm3 to hold it
 
     if constexpr (is_fp32_dest_acc_en) {
         // Constants for sin(a) = a + a^3 (C0 + a^2 (C1 + a^2 (C2 + a^2 C3))) on [0, PI/2].
@@ -269,35 +272,27 @@ inline void calculate_cosine() {
         C0 = -0x1.5554a4p-3f;
     }
 
-    const float ROUNDING_BIAS = 12582912.0f;
-    const float NEG_ROUNDING_BIAS = -12582912.0f;
-
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
 
-        // Force v * (1/PI) + 0.5 to compile as a single SFPMAD sequence for consistent instruction scheduling.
-        sfpi::vFloat half = sfpi::sFloat16b(0.5f);
-        sfpi::vFloat inv_pi = sfpi::vConstFloatPrgm2;
-        sfpi::vFloat neg_one = -1.0f;
-
         // Start from j = v * (1 / PI) + 0.5; after bias-round and 2*j - 1, j is an odd quadrant index.
-        // ROUNDING_BIAS shifts mantissa bits to perform round-to-nearest.
-        sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat inv_pi = sfpi::vConstFloatPrgm2;
+        sfpi::vFloat j = v * inv_pi + 0.5f;
 
-        // sfpi::vFloat rounding_bias;
-        // rounding_bias = sfpi::sFloat16b(0x1.8p23f);
-        // j = __builtin_rvtt_sfpmad(v.get(), one, rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
-
-        j = j + ROUNDING_BIAS;
+        // rounding_bias shifts mantissa bits to perform round-to-nearest.
+        // #55065: sfpi::round should offer no int debiasing
+        sfpi::vFloat rounding_bias = 12582912.0f;
+        j = j + rounding_bias;
 
         // At this point, the mantissa bits of j contain the rounded integer.
         // Store for later; the LSB tracks quadrant parity for sign selection.
         sfpi::vInt q = sfpi::as<sfpi::vInt>(j);
 
-        j = j + NEG_ROUNDING_BIAS;
+        j = j - rounding_bias;
 
-        sfpi::vFloat two = sfpi::sFloat16b(2.0f);
-        j = __builtin_rvtt_sfpmad(j.get(), two.get(), neg_one.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        // #55060: Compiler optimizes to imul/iadd
+        j = __builtin_rvtt_sfpmad(
+            j.get(), sfpi::vFloat(2.0f).get(), sfpi::vFloat(-1.0f).get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
         // Four-stage Cody-Waite reduction; a = v + j * -PI / 2.
         // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
