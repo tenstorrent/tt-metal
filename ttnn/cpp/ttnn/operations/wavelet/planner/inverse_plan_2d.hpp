@@ -310,7 +310,7 @@ inline void append_axis_routes(
     LiftingInversePlan x_plan,
     const uint32_t core_limit,
     const uint64_t l1_budget_bytes,
-    const uint64_t inverse_coordination_penalty_cycles_per_core = 0) {
+    const uint64_t inverse_penalty_per_core = 0) {
     TT_FATAL(core_limit > 0, "2D ILWT requires at least one worker core");
     TT_FATAL(y_plan.original_length > 0 && x_plan.original_length > 0, "2D ILWT output shape must be positive");
     TT_FATAL(
@@ -350,10 +350,9 @@ inline void append_axis_routes(
                 l1_budget_bytes,
                 [&](const IndexRectangle output) { return inverse_2d_detail::build_chunk(y_plan, x_plan, output); },
                 [&](const Lwt2DChunkPlan& chunk) {
-                    return plan_2d_detail::estimate_chunk_latency_cycles(
-                        chunk, y_plan.forward_trace, x_plan.forward_trace, true);
+                    return plan_2d_detail::estimate_chunk_cost(chunk, y_plan.forward_trace, x_plan.forward_trace, true);
                 },
-                inverse_coordination_penalty_cycles_per_core);
+                inverse_penalty_per_core);
             if (!candidate.has_value()) {
                 continue;
             }
@@ -389,6 +388,7 @@ inline void append_axis_routes(
         .band = TiledShape2D::from_logical(
             Shape2D{.height = y_plan.coefficient_length, .width = x_plan.coefficient_length}),
     };
+    validate_lwt_2d_tiling_contract(tiling);
     return Ilwt2DExecutionPlan{
         .y_plan = std::move(y_plan),
         .x_plan = std::move(x_plan),
@@ -411,7 +411,7 @@ template <typename Scheme>
     const uint32_t core_limit,
     const uint64_t l1_budget_bytes,
     const BoundaryMode boundary_mode = BoundaryMode::kSymmetric,
-    const uint64_t inverse_coordination_penalty_cycles_per_core = 0) {
+    const uint64_t inverse_penalty_per_core = 0) {
     TT_FATAL(output_height > 0 && output_width > 0, "2D ILWT output dimensions must be positive");
     TT_FATAL(
         output_height <= kMax2DLogicalExtent && output_width <= kMax2DLogicalExtent,
@@ -440,7 +440,7 @@ template <typename Scheme>
         },
         core_limit,
         l1_budget_bytes,
-        inverse_coordination_penalty_cycles_per_core);
+        inverse_penalty_per_core);
 }
 
 [[nodiscard]] inline std::vector<uint32_t> build_ilwt_2d_chunk_config_words(const Ilwt2DExecutionPlan& plan) {
