@@ -19,7 +19,6 @@ Owner:
 
 from dataclasses import dataclass
 
-from additional_extra_provider import run as get_extra_provider
 from additional_provider import run as get_provider
 from triage import ScriptConfig, run_script, triage_field
 from ttexalens.context import Context
@@ -38,8 +37,12 @@ class AdditionalDirectoryRow:
 
 
 def run(args, context: Context) -> list[AdditionalDirectoryRow]:
-    # Both providers live in additional directories and are imported by bare module name, which
-    # only works because those directories were put on sys.path when the flag was resolved.
+    # additional_provider is a sibling, so a module-scope import of it works anywhere. This one
+    # lives in a *different* scripts directory, so it is imported here instead: by the time run()
+    # is called triage has put that directory on sys.path. At module scope it would be too early
+    # when this file is executed directly, and making that work is the script's own job.
+    from additional_extra_provider import run as get_extra_provider
+
     dependencies = ", ".join([get_provider(args, context), get_extra_provider(args, context)])
     print(f"{SUCCESS_MESSAGE} (dependencies: {dependencies})")
     return [AdditionalDirectoryRow(message=SUCCESS_MESSAGE, dependencies=dependencies)]

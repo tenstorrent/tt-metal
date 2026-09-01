@@ -551,6 +551,8 @@ def _warn_on_shadowed_module_names(directories: Sequence[str]) -> None:
 def resolve_scripts_directories(args: ScriptArguments) -> list[str]:
     requested: list[str] = args["--additional-scripts-directory"] or []
     for directory in requested:
+        if not directory:
+            raise TTTriageError("--additional-scripts-directory was given an empty value.")
         if not os.path.isdir(_normalize_path(directory)):
             raise TTTriageError(f"--additional-scripts-directory {directory} is not a directory.")
 
@@ -1007,6 +1009,9 @@ def run_script(
             raise FileNotFoundError(f"Script {script_path} does not exist. Looked in: {searched}.")
         script_path = found
 
+    # Add script path to list of directories
+    scripts_directories = _dedupe_directories([*scripts_directories, os.path.dirname(script_path)])
+
     # Load script and its dependencies (drives execution order).
     scripts = TriageScript.load_all(script_path, scripts_directories)
 
@@ -1015,7 +1020,7 @@ def run_script(
 
     # Parse arguments using every script's options
     if args is None:
-        all_scripts = TriageScript.discover_all([os.path.dirname(script_path), *scripts_directories])
+        all_scripts = TriageScript.discover_all(scripts_directories)
         # Ensure the target and its deps are present even if discovery missed them somehow.
         for path, script in scripts.items():
             all_scripts.setdefault(path, script)

@@ -9,6 +9,7 @@
 # exits at import, and a package __init__.py that must never be loaded as a script.
 
 import os
+import subprocess
 import sys
 
 import pytest
@@ -98,6 +99,40 @@ def test_flag_is_honoured_without_main():
     )
 
     assert [row.message for row in result] == [SUCCESS_MESSAGE]
+
+
+# docopt accepts any unambiguous abbreviation of a long option, so each of these reaches
+def test_script_run_directly_resolves_dependencies_in_every_scripts_directory():
+    """The documented standalone command, in a real subprocess.
+
+    A script run directly is never told its own directory, so triage has to add it to the scripts
+    directories itself, alongside the built-in one and whatever the flag named. Nothing here relies
+    on triage arranging the script's module-scope imports; the script does that for itself.
+    """
+    script = os.path.join(SCRIPTS_DIRECTORY, "check_additional_directory.py")
+
+    # --help makes run_script() print usage and exit 0, so no device is needed. Getting that far
+    # means the script and all three of its dependencies loaded, across all three directories.
+    result = subprocess.run(
+        [sys.executable, script, f"--additional-scripts-directory={EXTRA_SCRIPTS_DIRECTORY}", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        env={**os.environ, "PYTHONPATH": triage_home},
+    )
+
+    assert "ModuleNotFoundError" not in result.stderr, result.stderr
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+
+
+def test_empty_directory_value_is_rejected_rather_than_meaning_the_current_directory():
+    """`--additional-scripts-directory=` (an unset variable in a wrapper) must not adopt the cwd.
+
+    "" normalises to the working directory, which would quietly become a scripts directory - and
+    discovery imports every .py in a scripts directory.
+    """
+    with pytest.raises(TTTriageError, match="empty value"):  # allow-pytest.raises: no expect_error fixture
+        resolve_scripts_directories(make_args(""))
 
 
 def test_bare_dependency_names_resolve_in_every_searched_directory(scripts_directories):
