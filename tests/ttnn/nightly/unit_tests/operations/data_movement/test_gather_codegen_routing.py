@@ -299,3 +299,26 @@ def test_gather_codegen_refuses_a_non_default_tile(device, expect_error):
     kwargs = _materialize_index(shape, kwargs, ttnn.TILE_LAYOUT, device)
     with expect_error(RuntimeError, "does not support"):
         _force_codegen(xt, **kwargs)
+
+
+def test_gather_refuses_an_output_aliasing_an_operand(device, expect_error):
+    # Native's SingleRowMultiCore and codegen's tiled and streaming factories all split one tile-row
+    # across cores, and every core re-reads the whole row while its peers write their own output
+    # tiles, so a destination sharing a buffer with an operand races reads against writes. Refused
+    # for every entry rather than at the routing gate: the gate would only hand an aliased call to
+    # native, whose own wide-Wt factory splits rows the same way.
+    shape = [1, 1, 32, 64]
+    xt = ttnn.from_torch(_make_input(shape, ttnn.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    # An index shaped like the input is what lets out=input satisfy every other precondition, so the
+    # alias is the only thing left for the check to catch.
+    index = ttnn.from_torch(
+        torch.randint(0, shape[-1], shape, dtype=torch.int32),
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    for entry in (ttnn.gather, _force_codegen, _force_native):
+        with expect_error(RuntimeError, "must not alias the input tensor"):
+            entry(xt, -1, index, out=xt)
+    with expect_error(RuntimeError, "must not alias the index tensor"):
+        ttnn.gather(xt, -1, index, out=index)

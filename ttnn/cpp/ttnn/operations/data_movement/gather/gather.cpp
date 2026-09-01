@@ -223,6 +223,23 @@ Tensor gather_dispatch(
     std::optional<Tensor> optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const bool use_codegen) {
+    // Every route's writers re-read input and index pages while output pages are being written:
+    // native's SingleRowMultiCore and both of codegen's row-splitting factories spread a single row
+    // across cores, so one core's reads race another's writes as soon as an operand and the
+    // destination are the same buffer. Held here rather than at the routing gate so both routes
+    // answer for it -- rejecting an aliased call only where codegen serves it would route the same
+    // call to native, whose own wide-Wt factory (device/gather_device_operation.cpp) splits rows the
+    // same way, making the corruption depend on which route the call happened to take.
+    if (optional_output_tensor.has_value()) {
+        auto* out_buffer = optional_output_tensor.value().buffer();
+        TT_FATAL(
+            out_buffer != input_tensor.buffer(),
+            "gather: optional_output_tensor must not alias the input tensor's buffer");
+        TT_FATAL(
+            out_buffer != input_index_tensor.buffer(),
+            "gather: optional_output_tensor must not alias the index tensor's buffer");
+    }
+
     // Input tensor
     const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.logical_shape().rank();
