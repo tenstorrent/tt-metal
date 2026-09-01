@@ -22,7 +22,7 @@ import os
 import re
 import sys
 
-from jira_client import _env, _truthy, file_issue
+from jira_client import _commit_link, _env, _truthy, file_issue
 
 # The sim reporter renders every row with --gtest_filter= regardless of runner,
 # so the group's extension, not the separator, decides the runner.
@@ -81,6 +81,9 @@ def main():
     project = _env("JIRA_PROJECT_KEY", required=True)
     issue_type = _env("JIRA_ISSUE_TYPE", "Bug")
     dry = _truthy(_env("JIRA_DRY_RUN"))
+    # One owner for the whole board while the automation beds in. Unset it
+    # and the per-test owners in the map take over again.
+    default_assignee = _env("JIRA_ASSIGNEE_ACCOUNT_ID", "")
 
     detail = _env("RTL_SIM_DETAIL", "")
     sha = _env("RTL_SIM_SHA", "unknown")
@@ -116,7 +119,7 @@ def main():
         if runner == "gtest" and entry.get("filter") and entry["filter"] != filt:
             # Matched one component of a back2back batch; the batch is what ran.
             desc.append(f"Matched on:  {entry['filter']} (ran back-to-back with the other filters above)")
-        desc += [f"Commit:      {sha}", f"Sim results: {url}", f"Release run: {run_url}"]
+        desc += [f"Commit:      {_commit_link(sha)}", f"Sim results: {url}", f"Release run: {run_url}"]
         try:
             result = file_issue(
                 base=base,
@@ -129,7 +132,7 @@ def main():
                 labels=labels,
                 # Stable per-test label: this test owns one issue; reruns comment.
                 dedup_label="rtl-sim:" + _slug(f"{config}-{group}-{filt}"),
-                assignee=entry.get("assignee"),
+                assignee=default_assignee or entry.get("assignee"),
                 dry_run=dry,
             )
         except (SystemExit, Exception) as e:  # jira_client exits on API error
@@ -153,7 +156,7 @@ def main():
                 issue_type=issue_type,
                 description=(
                     "The 'RTL Sim CI test' check failed but reported no per-test detail.\n\n"
-                    f"Commit:      {sha}\n"
+                    f"Commit:      {_commit_link(sha)}\n"
                     f"Sim results: {url}\n"
                     f"Release run: {run_url}\n"
                 ),

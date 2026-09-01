@@ -9,6 +9,12 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+
+namespace tt::tt_metal {
+struct ProgramDescriptor;
+struct TileDescriptor;
+}  // namespace tt::tt_metal
 
 namespace ttnn::operations::data_movement {
 
@@ -51,13 +57,124 @@ uint32_t get_estimated_size_of_cbs(
 
 uint32_t get_max_l1_space(const Tensor& input_tensor_a);
 
+// One set of buffers, sized for a single block width.
+//
+// The `_multi_core_block[_interleaved]` tilize factories split work into blocks and hand cores one
+// of two block widths (the full width, and a narrower cliff-row width). A block's width fixes the
+// size of the buffers that carry it, and that size is a *correctness* property rather than a
+// performance one: the reader fills a whole block through one raw linear write starting at
+// `get_write_ptr()`, and `cb_push_back` requires the producer to write contiguously -- it only
+// wraps when the write pointer lands exactly on `fifo_limit` ("producer always writes into
+// contiguous memory, it cannot wrap"). A buffer whose size is not an exact multiple of the block
+// pushed into it therefore overruns into its neighbour rather than wrapping.
+//
+// So each block width gets its own set of buffers, with its own indices, sized for that width,
+// rather than one set of indices re-used at different sizes on disjoint cores (issue #51305). The
+// sets live on disjoint core ranges, so L1 usage is unchanged: a core allocates only the set
+// belonging to its own block width.
+//
+// This is shared rather than private to each factory because every factory using the model must
+// apply the *same* index and sizing rules -- a private copy can drift and reintroduce the
+// corruption the split prevents.
+struct BlockBufferSet {
+    uint8_t staging_index = 0;  // per-row DRAM-alignment staging buffer (reader-private scratchpad)
+    uint8_t input_index = 0;    // row-major block the reader fills and compute tilizes
+    uint8_t output_index = 0;   // tilized block compute produces and the writer drains
+    uint32_t block_tiles = 0;   // block width in tiles -- the page count of input/output
+    tt::tt_metal::CoreRangeSet core_ranges;
+
+    bool empty() const { return core_ranges.empty(); }
+};
+
+// The block work split plus the two buffer sets derived from it.
+//
+// Shared so both `_multi_core_block[_interleaved]` tilize factories apply one set of index and
+// sizing rules. A private copy per factory drifts, and a CB-index or sizing change landing in only
+// one of them silently reintroduces the overrun BlockBufferSet exists to prevent.
+//
+// Tile sizes are passed in rather than derived from a Tile: the factories compute them differently
+// (`Tile::get_tile_size`, which folds in runtime L1 alignment, versus the constexpr
+// `tt::tile_size`) and unifying that here would quietly change CB sizes.
+//
+// Call this only on a cache miss. It is **not** reproducible on a later cache hit: the block-size
+// limit folds in `get_max_l1_space`, which reads live L1 occupancy
+// (`lowest_occupied_compute_l1_address`), and the program cache does not key on that. Two calls
+// with identical attributes and tensor specs can therefore split differently, so anything the
+// cache-hit hook needs must be recorded in the program at miss time rather than recomputed.
+struct BlockPlan {
+    ttnn::BlockSplitWH split;
+    BlockBufferSet full;
+    BlockBufferSet cliffrow;
+
+    // Reader/writer kernels are emitted as one (reader, writer) pair per non-empty set, in
+    // full-then-cliffrow order, ahead of the compute kernels.
+    uint32_t num_dm_pairs() const { return (full.empty() ? 0u : 1u) + (cliffrow.empty() ? 0u : 1u); }
+};
+
+BlockPlan make_block_plan(
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    uint32_t input_single_tile_size,
+    uint32_t output_single_tile_size,
+    uint32_t tile_height,
+    uint32_t tile_width,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+
+// The buffer set whose block width this core was assigned. Asserts the core belongs to exactly one
+// set: an unmatched core silently defaulting to `full_set` would bind the wrong-width buffers, and
+// a downstream size check only catches that when the widths happen to differ numerically.
+const BlockBufferSet& buffer_set_for_core(const BlockPlan& plan, const tt::tt_metal::CoreCoord& core);
+
+// Union of two core ranges, either of which may be empty.
+tt::tt_metal::CoreRangeSet union_of(const tt::tt_metal::CoreRangeSet& a, const tt::tt_metal::CoreRangeSet& b);
+
+// Append the three CBDescriptors for one buffer set: staging, input, output.
+//
+// `tile` is the only factory-specific piece -- a factory that supports non-default tile shapes
+// passes its TileDescriptor so the input/output buffers carry it; one that is fixed to the
+// standard tile leaves it unset.
+void push_buffer_set(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const BlockBufferSet& set,
+    uint32_t input_single_tile_size,
+    uint32_t output_single_tile_size,
+    tt::DataFormat input_cb_data_format,
+    tt::DataFormat output_cb_data_format,
+    uint32_t dram_alignment,
+    uint32_t tile_height,
+    const std::optional<tt::tt_metal::TileDescriptor>& tile = std::nullopt);
+
+// reserved_l1_bytes_per_core: per-core L1 that is not yet allocated at the time of this
+// call but provably will be before the program's circular buffers are placed -- most
+// notably the op's own output buffer. Interleaved L1 buffers are allocated top-down while
+// static CBs grow bottom-up from the allocator base, so ignoring the pending output
+// buffer overestimates the room available to the CBs and can route to a factory whose
+// CBs then collide with it.
 bool is_enough_space(
     const Tensor& input_tensor_a,
     uint32_t input_single_tile_size,
     uint32_t output_single_tile_size,
     uint32_t num_tiles_per_row,
     uint32_t staging_bytes_per_tile = 0,
-    uint32_t fixed_staging_bytes = 0);
+    uint32_t fixed_staging_bytes = 0,
+    uint32_t reserved_l1_bytes_per_core = 0);
+
+// Per-core L1 footprint that `output_memory_config` will require for a tensor of
+// `output_padded_shape`/`output_dtype`, or 0 if it will not live in L1.
+//
+// If the TensorSpec cannot be constructed (unsupported dtype/layout combination) and
+// `require_constructible` is false, this falls back to reserving nothing -- the pre-existing
+// behavior for callers that treat a failed reservation as advisory. Callers that use the return
+// value to decide eligibility for a path with no other correctness backstop (e.g. concat's
+// unaligned-width routing) should pass `require_constructible = true` so an unconstructible spec
+// throws instead of silently making the eligibility check more permissive than it should be.
+uint32_t get_pending_l1_output_reservation(
+    const Tensor& input_tensor_a,
+    const ttnn::Shape& output_padded_shape,
+    const MemoryConfig& output_memory_config,
+    DataType output_dtype,
+    Layout output_layout,
+    bool require_constructible = false);
 
 ttnn::Tensor pad_to_tile_vol(
     const ttnn::Tensor& tensor, float value, bool use_multicore, const std::optional<MemoryConfig>& memory_config);
@@ -127,7 +244,7 @@ public:
             if (p2(args...)) {
                 *t2_required = true;
             }
-            return *t1_required or *t2_required;
+            return *t1_required or * t2_required;
         };
 
         auto merged_pre_transform = [t1 = this->pre_transform_,

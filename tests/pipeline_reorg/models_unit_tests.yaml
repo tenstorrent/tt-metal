@@ -28,16 +28,16 @@
     pytest --timeout 300 models/tt_transformers/tests/test_attention_prefill.py
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 400 models/tt_transformers/tests/test_decoder_prefill.py
-    # pytest --timeout 500 models/tt_transformers/tests/test_model.py -k full
+    pytest --timeout 500 models/tt_transformers/tests/test_model.py -k full
     # pytest --timeout 500 models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
   model: llama3.1-8b
   model_family: Llama
   skus:
     wh_n150:
-      timeout: 30
+      timeout: 40
       tier: 1
     wh_llmbox_perf:
-      timeout: 12
+      timeout: 18
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -102,13 +102,13 @@
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_class_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py
-    # pytest --timeout 900 models/tt_transformers/tests/test_model.py -k quick
+    pytest --timeout 900 models/tt_transformers/tests/test_model.py -k quick
     # pytest --timeout 900 models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer"
   model: llama3.2-90b-vision
   model_family: Llama
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 28
       tier: 2
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
@@ -225,13 +225,13 @@
     pytest --timeout 600 models/tt_transformers/tests/test_rms_norm.py
     pytest --timeout 600 models/tt_transformers/tests/test_decoder.py
     pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
-    #pytest --timeout 600 models/tt_transformers/tests/test_model.py -k full
+    pytest --timeout 600 models/tt_transformers/tests/test_model.py -k full
     #pytest --timeout 600 models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
   model: mistral-7b
   model_family: Mistral
   skus:
     wh_n150:
-      timeout: 20
+      timeout: 28
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -621,10 +621,11 @@
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_decoder_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k quick
   model: llama3.3-70b-galaxy
   skus:
     wh_galaxy_perf:
-      timeout: 30
+      timeout: 40
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
@@ -1339,7 +1340,7 @@
 
 - name: TT-DiT Wan2.2-I2V-A14B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=45
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "is_fsdp1"
@@ -1352,7 +1353,7 @@
     #   timeout: 120
     #   tier: 1
     wh_galaxy:
-      timeout: 40
+      timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -1557,7 +1558,7 @@
 
 - name: On-device sampling unit tests
   cmd: |
-    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap or topk_route_mirror_parity"
+    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap or topk_authoritative_route_decision"
   model: tt-model-sampling
   skus:
     wh_n150:

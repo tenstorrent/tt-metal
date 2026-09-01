@@ -199,6 +199,7 @@ scaleout:
     wh_n300_civ2: 15
     wh_llmbox_civ2: 65
     bh_loudbox: 195
+    bh_loudbox_civ2_viommu: 45
     bh_p300: 195
     bh_quietbox_2: 195
   stress:
@@ -322,7 +323,7 @@ models:
   merge_gate:
     wh_galaxy_merge_gate: 5
   sanity:
-    wh_galaxy_perf: 10
+    wh_galaxy_perf: 8
     wh_n300_civ2: 5
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
@@ -359,9 +360,9 @@ models:
     bh_quietbox_2: 42
   unit_tier1:
     wh_llmbox: 150
-    wh_n150: 110
-    wh_galaxy: 240
-    wh_galaxy_perf: 60
+    wh_n150: 118
+    wh_galaxy: 260
+    wh_galaxy_perf: 65
     bh_p150: 20
     bh_quietbox_2: 390
     bh_galaxy: 75
@@ -369,7 +370,7 @@ models:
     bh_sc4: 50
   unit_tier2:
     wh_llmbox: 114
-    wh_llmbox_perf: 172
+    wh_llmbox_perf: 191
     wh_n150: 82
     wh_n300: 30
     wh_galaxy_perf: 80
