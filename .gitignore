@@ -156,7 +156,10 @@ models/experimental/petr/resources/*.pth
 *.out
 *.err
 
-.claude
+# Keep personal Claude state ignored; share only project instructions and skills.
+.claude/*
+!.claude/CLAUDE.md
+!.claude/skills
 .cursor/.DS_store
 
 # Generated rank binding files (machine-specific, regenerated at runtime via generate_rank_bindings.py)
