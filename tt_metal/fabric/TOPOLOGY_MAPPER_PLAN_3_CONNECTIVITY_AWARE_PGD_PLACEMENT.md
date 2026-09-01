@@ -314,38 +314,86 @@ representative from each signature class first, then the rest. If measurement la
 really are isomorphic, promoting this to a prune is a one-line change — but it needs evidence first,
 because the machine is not guaranteed vertex-transitive under that signature.
 
-### (h) Pool completeness — the one real prerequisite
+### (h) Delete `kMaxPlacementsPerGrouping`
 
-Today `kMaxPlacementsPerGrouping = 1024` bounds a pool feeding a coverage heuristic, so truncation costs
-a slightly worse tiling. Under this plan the pool *is* the search space, and truncation can turn a
-satisfiable MGD into a reported failure.
+The cap is 1024 placements per grouping. It exists to stop Phase B's set packing from choking on a big
+pool. Phase B is gone from this path, so the reason for the cap is gone too. Under this plan the pool
+*is* the search space, and silently truncating it can turn a solvable MGD into a reported failure.
 
-**Measure first.** `solve_for_many_groupings_to_psd_heterogeneous` already logs the per-grouping count
-and warns when the cap is hit (`1741–1754`). Run the router-pipeline MGD and check whether
-`"per-grouping enumeration cap hit"` fires for the 60× `4x1` shape on 352 chips. The PGD slot-label
-constraints from `build_pgd_to_psd_constraints` may keep it well under 1024; if they do not, the cap is
-a prerequisite rather than a follow-up.
+**Delete it, and pass `0` instead.** `solve_topology_mapping_n` treats `0` as "enumerate everything",
+capped by its own backstop `kTopologyMappingEnumerateSolutionsHardCap = 500000`
+(`topology_solver.tpp:44`, applied at `1160–1162`). There is also already an
+`solve_topology_mapping_all` entry point that does exactly this.
 
-**The fix, if needed: anchored enumeration.** Rather than raising the cap globally, enumerate lazily
-around the frontier. This needs no solver change, because `build_pgd_to_psd_constraints`
-(`physical_grouping_descriptor_matching.cpp:1412`) already takes an `initial_constraints` argument that
-`enumerate_distinct_placements_for_grouping` currently passes empty (`1520`):
+**Real pools are tiny, so this costs nothing.** Every PGD grouping node is pinned to an exact
+`(asic_location, tray_id)`:
 
-```cpp
-// New entry point beside enumerate_distinct_placements_for_grouping.
-std::vector<MappingResult<uint32_t, AsicID>> enumerate_placements_anchored(
-    const GroupingInfo& grouping_info,
-    const AdjacencyGraph<AsicID>& physical_graph,
-    const PhysicalSystemDescriptor& psd,
-    const std::set<AsicID>& allowed_chips,   // frontier neighbourhood
-    size_t max_solutions);
+```proto
+{ id: 0 location { asic_location: ASIC_LOCATION_5 tray_id: TRAY_1 } },
+{ id: 1 location { asic_location: ASIC_LOCATION_6 tray_id: TRAY_1 } },
 ```
 
-The body seeds `MappingConstraints` with `add_required_constraint(node, allowed_chips)` for every
-grouping node — the `(TargetNode, const std::set<GlobalNode>&)` overload already exists — and then calls
-the existing path. Memoize by `(grouping, allowed_chips)`.
+`build_pgd_to_psd_constraints` turns those into `add_required_trait_constraint` domain restrictions
+(`1467–1483`), so a grouping node can only land on a chip carrying that exact label — roughly one chip
+per host. A `tray_1` grouping is therefore rigid: choose the host and the placement is decided.
+Composite shapes are built from those same labelled trays. Pools land in the tens to low hundreds, far
+below 1024, so the cap almost certainly never fires today.
 
-### (i) Deferred: channel counts and STRICT/RELAXED
+Enumeration is also incremental AllSAT — `SatSearchEngine::search_n` keeps one solver, encodes once, and
+appends a blocking clause per model — so the cost of enumerating a small set completely is small.
+
+**No new bookkeeping.** Do not replace the cap with truncation tracking, a wall-clock guard, or a config
+knob. The 500k backstop is orders of magnitude above any real pool, and if it ever fires the solver
+already says so. Adding machinery for a case that cannot happen is the accretion this plan is trying to
+remove.
+
+### (i) Contingency: anchored placement, expressed with existing constraints
+
+Only needed if some future PGD leaves slot labels unspecified, so domains do not collapse and the pool
+is genuinely large. In that case, do not enumerate every placement of a shape across the whole machine.
+Ask the solver for placements *next to where we already are*.
+
+Both halves of that question are already expressible — no solver changes, no new primitives:
+
+```cpp
+MappingConstraints<uint32_t, AsicID> seed;
+
+// 1. Stay off chips we have already used.
+seed.add_forbidden_constraint(all_grouping_nodes, occupied_chips);
+
+// 2. Touch each already-placed neighbour region R: at least one grouping node must land
+//    on a chip that has an ethernet link into R.
+for (const auto& R : placed_neighbour_regions) {
+    seed.add_cardinality_constraint(all_grouping_nodes, open_boundary(R), /*min_count=*/1);
+}
+
+// 3. Hand it to the existing path, which already accepts initial constraints.
+auto constraints = build_pgd_to_psd_constraints(grouping, physical_graph, psd, std::move(seed));
+```
+
+with `open_boundary(R) = { d : ∃ c ∈ R with (c,d) ∈ flat_graph, d ∉ R }`.
+
+Constraint 2 *is* the seam predicate from §3, and `min_count = 1` is exactly the existence-only choice
+made in §4(j) — the constraint form and the design decision agree for free.
+
+Why this is cheap. Cardinality is real CNF, step 8 of `topology_sat_encode_hard_constraints`
+(`topology_solver_sat.cpp:1179`), not a post-hoc check. Its literals are collected *after* domain
+filtering and AC-3 (`1074–1091`), so the trait constraints have already shrunk each node's domain to
+about one chip per host. A `4x4` grouping against a ~30-chip boundary produces tens of literals against
+a cap of `kMaxCardinalityLiterals = 4096`, and overflow fails loudly rather than silently.
+
+Why it is the contingency and not the default. `topology_sat_encode_hard_constraints` rebuilds domains,
+runs AC-3, and emits CNF on every call. One anchored solve is small; thousands of them inside a
+backtracking search is a different cost, and it is the aggregate that would need measuring. With the cap
+deleted, enumerating the complete pool once and letting the DFS work on set operations avoids per-node
+solver calls entirely.
+
+Two honest limits. `min_count` counts grouping *nodes* landing in the boundary, not ethernet links
+crossing it, so it is a lower-bound proxy if channel counts are ever wanted. And the seed is passed
+before `build_pgd_to_psd_constraints` adds its trait constraints, so verify the pending-forbidden path
+(`topology_solver.hpp:792`) behaves when `valid_mappings_` is not yet populated.
+
+### (j) Deferred: channel counts and STRICT/RELAXED
 
 > **TODO — defer channel counts for the placement-time seam predicate.**
 > Start at **existence only**: `link_count(Ri, Rj) >= 1`, regardless of the seam's declared
@@ -374,7 +422,7 @@ the existing path. Memoize by `(grouping, allowed_chips)`.
 > against the seam's declared count. Keep the accessor count-shaped (`std::size_t link_count(a, b)` with
 > an early-out at 1) so that is a threshold change, not a data-structure change.
 
-### (j) Worked trace on the 8-chip example
+### (k) Worked trace on the 8-chip example
 
 ```
 order: S4_a (largest shape, degree 2) → S2_a → S2_b
@@ -398,7 +446,8 @@ Three search nodes. The propagation does the work, not the enumeration.
 | Concern | Owner | Notes |
 | --- | --- | --- |
 | Candidate pool (unpacked) | New `enumerate_all_candidates_in_psd(groupings, psd, flat_graph)` in `physical_grouping_descriptor_matching.cpp` | Extract Phase A (`1730–1789`) into its own function; `solve_for_many_groupings_to_psd_heterogeneous` calls it too, so the packer keeps working unchanged |
-| Anchored enumeration | New `enumerate_placements_anchored` beside `enumerate_distinct_placements_for_grouping` (`1514`) | Seeds `initial_constraints`; no solver change. Only needed if §4(h) measurement says the cap is hit |
+| Placement cap | `kMaxPlacementsPerGrouping` (`1663`) deleted; `enumerate_distinct_placements_for_grouping` passes `0` | Inherits the solver's own 500k backstop. No replacement bookkeeping (§4(h)) |
+| Anchored placement | New `enumerate_placements_anchored` beside `enumerate_distinct_placements_for_grouping` (`1514`) | Seeds `initial_constraints` with a forbidden set plus one at-least-1 cardinality per placed neighbour; no solver change. Contingency only (§4(i)) |
 | Pool indices | New `PlacementIndex` struct, anonymous namespace in `topology_mapper_utils.cpp`, built in Phase 3 beside `group_bits_by_name` (`927`) | Owns `pool`, `pool_by_shape`, `pool_by_chip`, `touches`, `touches_bits`; built from `flat_graph`, which Phase 3 already holds |
 | Full logical mesh graph | `get_requested_intermesh_from_mgd` result used **unfiltered** (`1007`) | The existing `build_mgd_mesh_level_subgraph_for_mesh_descriptor_name` (`1037`) shape filter is simply not applied on this path |
 | Shape of each logical mesh | `logical_mesh_id_to_mgd_instance_name` (`1522`) + `get_valid_groupings_for_mgd` keys | Already the key space `placements_by_shape` uses |
@@ -450,8 +499,8 @@ correctness fix.
   cross-shape.
 - **`llama_8b_4galaxy_unpinned_mesh_graph_descriptor.textproto`**: no pinnings, so it exercises the
   unpinned seed and symmetry-ordering path from §4(g).
-- **Pool sizing**, per §4(h): assert the enumeration cap warning does not fire for the validation MGDs,
-  so cap truncation cannot silently weaken the search.
+- **Pool sizing**, per §4(h): log the per-shape pool size for the validation MGDs once the cap is
+  deleted, confirming pools stay in the tens-to-low-hundreds range the trait constraints predict.
 - Extend the `bh-heterogeneous` group in
   `tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh` with a boundary-resolution assertion
   rather than only `TestGalaxyLayoutCheck`.
@@ -461,7 +510,8 @@ correctness fix.
 | Risk | Mitigation |
 | --- | --- |
 | DFS thrashes on a hard instance; no completeness guarantee within budget | Wall-clock budget plus fallback to the existing Phase 5/6 path (§4(f)) |
-| Pool truncation at 1024 makes a satisfiable MGD report failure | Measure first (§4(h)); anchored enumeration if the cap is hit |
+| Pool truncation makes a satisfiable MGD report failure | Delete the cap (§4(h)); trait constraints keep real pools far below it anyway |
+| A future PGD leaves slot labels unspecified, so pools are large | Anchored placement via existing constraints (§4(i)) |
 | Symmetry multiplies dead ends on unpinned MGDs | Signature-ordered seeds (§4(g)); pinned MGDs are unaffected |
 | Loss of an explicit objective — the search returns *a* solution, not a good one | Host-locality as value-ordering bias (§4(e)). Max coverage was the wrong objective anyway |
 | `touches` build or memory blows up at SC36 scale | Edge-list-driven construction, not pairwise (§4(a)); measure before assuming |
@@ -478,7 +528,7 @@ correctness fix.
   trigger for deleting Phases 5–6: the new search handles every MGD in the `bh-heterogeneous` group
   within budget for a full release cycle.
 - **When does the deferred channel-count check get picked up?** Proposed: the first MGD whose seams
-  resolve to a non-zero but insufficient channel count under STRICT inter-mesh validation (§4(i)).
+  resolve to a non-zero but insufficient channel count under STRICT inter-mesh validation (§4(j)).
 - **Where does #52016 (pipeline-stage adjacency in MGD) intersect?** If stage adjacency becomes explicit,
   seams gain direction — ordered pipeline hops rather than undirected boundaries — and both the ordering
   heuristic in §4(b) and the predicate in §3 could use it.
