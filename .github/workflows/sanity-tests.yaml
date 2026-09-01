@@ -83,6 +83,11 @@ on:
         default: true
         type: boolean
         description: "Run model sanity tests (WH Galaxy)"
+      run-llk-sanity-tests:
+        required: false
+        default: false
+        type: boolean
+        description: "Run LLK sanity tests: tt-llk python_tests smoke (WH+BH) and the Quasar compile check. Opt-in, like run-models-sanity-tests."
       enable-watcher:
         required: false
         type: boolean
@@ -197,6 +202,11 @@ on:
         default: true
         type: boolean
         description: "Run model sanity tests (WH Galaxy)"
+      run-llk-sanity-tests:
+        required: false
+        default: false
+        type: boolean
+        description: "Run LLK sanity tests: tt-llk python_tests smoke (WH+BH) and the Quasar compile check"
       enable-watcher:
         required: false
         default: false
@@ -286,6 +296,7 @@ jobs:
       ci-test-docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
       basic-docker-image: ${{ needs.build-artifact.outputs.basic-dev-docker-image }}
       test-docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
+      llk-ci-docker-image: ${{ needs.build-artifact.outputs.llk-ci-docker-image }}
 
   # Single SKU list that gates every suite (L2-nightly style). Each impl filters this list against
   # its own tests yaml via prepare_test_matrix.py, so an empty intersection just yields no jobs.
@@ -541,6 +552,47 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
       summary-scope: ${{ inputs.platform }}
 
+  # LLK sanity (tt-llk python_tests smoke, WH + BH). Opt-in: like models-sanity-tests
+  # the gate requires an explicit true, so a push to main and the scheduled runs leave
+  # this leg out (`inputs` is null on those events).
+  llk-sanity-tests:
+    needs: [resolve-docker-pull-refs, generate-sku-matrix]
+    if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' &&
+     (needs.generate-sku-matrix.outputs.run-wormhole == 'true' || needs.generate-sku-matrix.outputs.run-blackhole == 'true') &&
+     toJSON(inputs.run-llk-sanity-tests) == 'true' }}
+    secrets: inherit
+    uses: ./.github/workflows/llk-smoke-impl.yaml
+    with:
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+      # sanity-skus, same as ttnn-sanity-tests. llk_pr_gate_tests.yaml references only
+      # wh_n150_civ2 and bh_p150b_civ2_viommu, so every other SKU in the list produces no
+      # matrix row, and a sim-only run yields none at all (the arch gate above also stops
+      # that case before the impl is reached).
+      enabled-skus: ${{ needs.generate-sku-matrix.outputs.sanity-skus }}
+      # Deliberately the PR gate's marker set, so this leg starts out as coverage the LLK
+      # team already keeps green. Widening it here (dropping `not nightly` / `not accuracy`)
+      # is a separate call about sanity's time budget, not a side effect of wiring it up.
+      pytest-markers: "not perf and not nightly and not quasar and not accuracy"
+      per-test-timeout: 15
+      ref: ${{ inputs.ref || github.sha }}
+
+  # LLK Quasar build check (compile-only, no hardware). Mirrors pr-gate's llk-build-quasar.
+  llk-build-quasar:
+    needs: [resolve-docker-pull-refs]
+    if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' && toJSON(inputs.run-llk-sanity-tests) == 'true' }}
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    timeout-minutes: 20
+    container:
+      image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: ./.github/actions/llk-compile-quasar
+        with:
+          pytest-markers: "quasar"
+
   # ── AI run summary ────────────────────────────────────────────────
   # Aggregates the per-leg ai-job-summary artifacts from the sanity impls this
   # workflow invokes (galaxy-sanity-impl is driven by galaxy-sanity.yaml and is
@@ -567,6 +619,14 @@ jobs:
       - runtime-sim-sanity-tests
       - blackhole-multi-card-fast-sanity-tests
       - models-sanity-tests
+      # Both LLK legs contribute their `result` to run-result, but neither adds rows to
+      # expected-jobs: llk-smoke-impl declares no workflow-level `matrix` output (unlike
+      # ttnn-sanity-tests-impl et al) and llk-build-quasar is a plain job with none. The
+      # aggregation jq selects non-null matrices, so this is safe, not silent breakage —
+      # it just means a dead runner on an LLK leg is not synthesized as INFRA_FAILURE.
+      # Exposing `matrix` from llk-smoke-impl would close that gap.
+      - llk-sanity-tests
+      - llk-build-quasar
     # Reports on a run that failed — the case the summary exists for — but not
     # on one that was cancelled: an aborted run has no outcome to summarize, and
     # asking for one spends an LLM call to say it stopped early.
