@@ -107,8 +107,12 @@ def test_model_inference(
     instruct = False  # True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
 
-    # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
-    # Also avoid comparing PCC for dummy weights
+    # KV cache PCC is not measured today: no (weights, layers) pair satisfies both
+    # conditions, since "quick" is ("random", 1) and "full" is ("instruct", None).
+    # Unreachable since the flag was introduced, so final_k_cache_pcc /
+    # final_v_cache_pcc below have never been evaluated. Enabling it (drop the
+    # dummy-weights term, as the Galaxy copy does) arms those thresholds for every
+    # model running -k quick and should be done in its own PR.
     cache_pcc = layers == 1 and not dummy_weights
 
     # Setup prefetcher
@@ -450,8 +454,8 @@ def test_model_inference(
             if cache_pcc:
                 for l in range(model_args.n_layers):
                     pytorch_layer_present = [
-                        reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                        reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                        reference_model.cache_k[l].clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                        reference_model.cache_v[l].clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
                     ]
                     tt_layer_present = []
                     if paged_attention:

@@ -394,12 +394,13 @@ def test_llama_model_inference(
                     reference_token=reference_token,
                     device_token=tt_out_tok,
                 )
-                next_token_id = next_token.squeeze(1).tolist()[0]
-                all_outputs.append(next_token_id)
+                # Feed one shared trajectory, but keep logging the token the device
+                # actually sampled so the two generations stay comparable.
+                all_outputs.append(tt_out_tok.squeeze(1).tolist()[0])
                 tt_decode_input = embd(next_token)
 
                 if run_ref_pt:
-                    all_outputs_ref.append(next_token_id)
+                    all_outputs_ref.append(next_token.squeeze(1).tolist()[0])
                     pt_decode_input = tt_decode_input
             # Measure PCC if also running reference model
             if run_ref_pt:
