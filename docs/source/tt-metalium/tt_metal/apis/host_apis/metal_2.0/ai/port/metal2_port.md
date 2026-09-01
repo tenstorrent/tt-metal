@@ -871,6 +871,8 @@ The helper returns SUCCESS / FAILURE + key errors. On FAILURE, common causes:
 
 **Before you trust any green, confirm the legality checks are live.** Grep the test log for `METAL2_CHECKS_FORCED` and expect **both** markers ([Ensure the Metal 2.0 host-side legality checks are enabled](#ensure-the-metal-20-host-side-legality-checks-are-enabled)). A passing test with the checks bypassed is the most expensive false green in this procedure: it means every spec mistake you made is still sitting in the port, and the next person to meet it will be debugging a model, not a port. If the markers are missing, stop and fix the forcing before you read a single test result.
 
+**Run every test with Watcher on** — `export TT_METAL_WATCHER=10` once, before the first run. It is the runtime's device-side assertion layer; without it a bad NoC address or buffer overrun hangs the card silently. Two traps: `=0` *enables* it (`unset` is the only way off), and flipping it costs a full kernel recompile. [Details](../shared/workspace_setup.md#watcher--on-for-every-test-run).
+
 Run the op's correctness tests the same way — in the background, reading the log ([Running builds and tests](#running-builds-and-tests-without-flooding-your-context)) — over the **confirmed test set** from [Locate and confirm the op's tests](#locate-and-confirm-the-ops-tests). Two layers:
 
 ```bash
