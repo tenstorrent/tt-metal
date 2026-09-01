@@ -43,6 +43,25 @@
 #include <array>
 #include <cstdint>
 
+#define CACHE_ICACHE_MISS (0x2 | (0x1 << 8))
+#define CACHE_DCACHE_MISS (0x2 | (0x1 << 9))
+#define STALL_LOAD_USE (0x1 | (0x1 << 8))
+#define STALL_LONG_LAT (0x1 | (0x1 << 9))
+#define STALL_CSR (0x1 | (0x1 << 10))
+#define STALL_ICACHE (0x1 | (0x1 << 11))
+#define STALL_DCACHE (0x1 | (0x1 << 12))
+#define STALL_REPLAY (0x1 | (0x1 << 16))
+// Branch mispredict, control-flow target mispredict and flush, OR'd into one counter.
+#define MISPREDICT_BR (0x1 | (0x7 << 13))
+
+// The command the benchmark sweeps. Everything else the prefetcher sees is fixed overhead, so the HPM
+// counters split on this and the two populations stop blending.
+#if FD_BENCH_CMD == FD_BENCH_CMD_RELAY_LINEAR
+constexpr uint32_t fd_bench_payload_cmd = CQ_PREFETCH_CMD_RELAY_LINEAR;
+#else
+constexpr uint32_t fd_bench_payload_cmd = CQ_PREFETCH_CMD_RELAY_PAGED_PACKED;
+#endif
+
 constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT;  // for NOC PCIe alignment
 static_assert(sizeof(CQPrefetchCmd) <= CQ_PREFETCH_CMD_BARE_MIN_SIZE);
 static_assert(sizeof(CQPrefetchCmdLarge) <= CQ_PREFETCH_CMD_BARE_MIN_SIZE);
@@ -332,6 +351,13 @@ constexpr bool specialize_paged_read_loop = false;
 #else
 constexpr bool specialize_paged_read_loop = true;
 #endif
+
+FORCE_INLINE void reset_to_zero() {
+    asm volatile("csrw 0xB03, zero");
+    asm volatile("csrw 0xB04, zero");
+    asm volatile("csrw 0xB05, zero");
+    asm volatile("csrw 0xB06, zero");
+}
 
 // Whether every interleaved bank carries the same base offset, for DRAM and for L1. That is what lets the relay_paged
 // read loop fold the offset into the row address and stop reprogramming the source address per read. The bank tables
@@ -631,9 +657,6 @@ FORCE_INLINE uint32_t read_from_pcie(
         fence);
 #endif
 
-#if FD_BENCH_PF_FETCH_WAYPOINTS
-    uint32_t fd_bench_fetch_ptr_ops_t0 = fd_copy_bench::bench_cycle();
-#endif
     *prefetch_q_rd_ptr = 0U;
 
     // Tell host we read. Store the cached-form pointer value so host comparisons against
@@ -642,9 +665,6 @@ FORCE_INLINE uint32_t read_from_pcie(
     // NOC poll reads stale). l1_uncached_addr/l1_cached_addr are identity on WH/BH.
     *uncached_l1_ptr<uint32_t>(prefetch_q_rd_ptr_addr) = l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
     *uncached_l1_ptr<uint32_t>(prefetch_q_pcie_rd_ptr_addr) = pcie_read_ptr;
-#if FD_BENCH_PF_FETCH_WAYPOINTS
-    fd_copy_bench::g_pf_fetch_ptr_ops += fd_copy_bench::bench_cycle() - fd_bench_fetch_ptr_ops_t0;
-#endif
 
     ++prefetch_q_rd_ptr;
 
@@ -889,14 +909,13 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                     fence,
                     cmd_ptr);
 #endif
-
-#if FD_BENCH_PF_FETCH_WAYPOINTS
-                uint32_t fd_bench_fetch_wait_t0 = fd_copy_bench::bench_cycle();
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+                // NoC reads land in TL1 without snooping the DM cache, so lines this ring region left
+                // cached from an earlier wrap are stale. Every command the prefetcher reads comes through
+                // here.
+                invalidate_l2_cache_range(inflight[idx].read_start, inflight[idx].reserved_size);
 #endif
                 noc_async_read_barrier_with_trid(inflight[idx].trid);
-#if FD_BENCH_PF_FETCH_WAYPOINTS
-                fd_copy_bench::g_pf_fetch_read_wait += fd_copy_bench::bench_cycle() - fd_bench_fetch_wait_t0;
-#endif
 
 #if ENABLE_PREFETCH_DPRINTS
                 if (inflight[idx].read_start < cmd_ptr) {
@@ -1931,10 +1950,10 @@ void noc_read_64bit_any_len(uint32_t src_noc_addr, uint64_t src_addr, uint32_t d
 }
 
 uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_ptr) {
-#if FD_BENCH_PF_TIMELINE
+#if FD_BENCH_PF_LINEAR
     fd_copy_bench::pf_mark(fd_copy_bench::kPfLinearEnter, fd_copy_bench::bench_cycle());
 #endif
-#if FD_BENCH_PF_CHUNK_WAYPOINTS
+#if FD_BENCH_PF_LINEAR_CHUNKS
     // Reset here, not at commit: the helpers these accumulate inside are shared with other command types,
     // so anything they contributed must be discarded rather than charged to this row.
     fd_copy_bench::pf_linear_accum_reset();
@@ -1943,11 +1962,11 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
     // This ensures that a previous cmd using the scratch buf has finished
     // Quasar helper waits for iDMA before releasing dispatcher pages.
     // #if !defined(ARCH_QUASAR)
-#if FD_BENCH_PF_TIMELINE
+#if FD_BENCH_PF_LINEAR
     const uint32_t fd_bench_ef0 = fd_copy_bench::bench_cycle();
 #endif
     noc_async_writes_flushed();
-#if FD_BENCH_PF_TIMELINE
+#if FD_BENCH_PF_LINEAR
     // Drains the PREVIOUS command's payload writes -- publish only issues them. Charged to the previous row.
     fd_copy_bench::pf_mark(fd_copy_bench::kPfEntryFlush, fd_copy_bench::bench_cycle() - fd_bench_ef0);
 #endif
@@ -1970,7 +1989,7 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
     uint32_t scratch_read_addr = scratch_db_top[0];
     uint32_t amt_to_read = (scratch_db_half_size > wlength) ? wlength : scratch_db_half_size;
     noc_async_read_set_trid(RELAY_LINEAR_TRIDS[0]);
-#if FD_BENCH_PF_CHUNK_WAYPOINTS
+#if FD_BENCH_PF_LINEAR_CHUNKS
     fd_copy_bench::g_pf_read_issue = fd_copy_bench::bench_cycle();
 #endif
     noc_read_64bit_any_len<true>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
@@ -1987,9 +2006,8 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
         uint32_t read_length = (wlength > max_batch_size) ? max_batch_size : wlength;
         wlength -= read_length;
         while (read_length != 0) {
-            // Quasar helper waits for iDMA before releasing dispatcher pages. Measured at 15 cyc, so it is
-            // deliberately left un-instrumented and sits in relay_internal.
             noc_async_writes_flushed();
+
             db_toggle ^= 1;
             scratch_read_addr = scratch_db_top[db_toggle];
             scratch_write_addr = scratch_db_top[db_toggle ^ 1];
@@ -2000,11 +2018,11 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
             noc_read_64bit_any_len<false>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
             read_addr += amt_to_read;
 
-#if FD_BENCH_PF_CHUNK_WAYPOINTS
+#if FD_BENCH_PF_LINEAR_CHUNKS
             const uint32_t fd_bench_r0 = fd_copy_bench::bench_cycle();
 #endif
             noc_async_read_barrier_with_trid(RELAY_LINEAR_TRIDS[db_toggle ^ 1]);
-#if FD_BENCH_PF_CHUNK_WAYPOINTS
+#if FD_BENCH_PF_LINEAR_CHUNKS
             const uint32_t fd_bench_r1 = fd_copy_bench::bench_cycle();
             fd_copy_bench::g_pf_dram_read += fd_bench_r1 - fd_bench_r0;
             fd_copy_bench::pf_read_latency_capture(fd_bench_r1);
@@ -2017,7 +2035,7 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
                 write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
             DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
 #endif
-#if FD_BENCH_PF_CHUNK_WAYPOINTS
+#if FD_BENCH_PF_LINEAR_CHUNKS
             fd_copy_bench::g_pf_publish += fd_copy_bench::bench_cycle() - fd_bench_p0;
 #endif
 
@@ -2027,11 +2045,11 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
 
     // Final chunk's DRAM read barrier. Unlike the in-loop one this has no successor read to overlap with,
     // so it is expected to be the largest read wait of the command.
-#if FD_BENCH_PF_CHUNK_WAYPOINTS
+#if FD_BENCH_PF_LINEAR_CHUNKS
     const uint32_t fd_bench_tr0 = fd_copy_bench::bench_cycle();
 #endif
     noc_async_read_barrier_with_trid(RELAY_LINEAR_TRIDS[db_toggle]);
-#if FD_BENCH_PF_CHUNK_WAYPOINTS
+#if FD_BENCH_PF_LINEAR_CHUNKS
     const uint32_t fd_bench_tr1 = fd_copy_bench::bench_cycle();
     fd_copy_bench::g_pf_dram_read += fd_bench_tr1 - fd_bench_tr0;
     // Single-chunk transfers never enter the loop, so this is where the prime read retires.
@@ -2040,7 +2058,7 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
 
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_to_read;
-#if FD_BENCH_PF_CHUNK_WAYPOINTS
+#if FD_BENCH_PF_LINEAR_CHUNKS
     const uint32_t fd_bench_tp0 = fd_copy_bench::bench_cycle();
 #endif
 #if defined(ARCH_QUASAR)
@@ -2051,15 +2069,15 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH
     DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
 #endif
-#if FD_BENCH_PF_CHUNK_WAYPOINTS
+#if FD_BENCH_PF_LINEAR_CHUNKS
     fd_copy_bench::g_pf_publish += fd_copy_bench::bench_cycle() - fd_bench_tp0;
 #endif
     noc_async_read_set_trid(0U);
 
-#if FD_BENCH_PF_TIMELINE
+#if FD_BENCH_PF_LINEAR
     fd_copy_bench::pf_mark(fd_copy_bench::kPfLinearExit, fd_copy_bench::bench_cycle());
 #endif
-#if FD_BENCH_PF_CHUNK_WAYPOINTS
+#if FD_BENCH_PF_LINEAR_CHUNKS
     fd_copy_bench::pf_linear_accum_store();
 #endif
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
@@ -2136,6 +2154,11 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
                 pages_to_read--;
             }
         }
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        // Same as fetch_q_get_cmds: the NoC read does not snoop. Safe ahead of the barrier because nothing
+        // reads the region until it returns.
+        invalidate_l2_cache_range(cmd_ptr, initial_read_length);
+#endif
         noc_async_read_barrier_with_trid(1);
         // update length always after barrier to make sure data in cmddat_q
         exec_buf_state.page_id = page_id;
@@ -2144,6 +2167,10 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
         exec_buf_state.read_ptr = read_ptr;
     } else {
         ASSERT(exec_buf_state.length == 0);
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        // As above; prefetch_length is the extent the previous call issued.
+        invalidate_l2_cache_range(cmd_ptr, exec_buf_state.prefetch_length);
+#endif
         // add barrier to wait for prefetch noc read to complete
         noc_async_read_barrier_with_trid(1);
         // update always after barrier to make sure data in cmddat_q
@@ -2745,9 +2772,15 @@ bool process_cmd(
 #endif
     volatile CQPrefetchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQPrefetchCmd tt_l1_ptr*>(cmd_ptr);
     bool done = false;
+#if FD_BENCH_PF_FETCH_WAYPOINTS
+    uint32_t fd_bench_cr0 = fd_copy_bench::bench_cycle();
+#endif
     const uint32_t cmd_id = cmd->base.cmd_id;
+#if FD_BENCH_PF_FETCH_WAYPOINTS
+    fd_copy_bench::g_pf_cmd_read += fd_copy_bench::bench_cycle() - fd_bench_cr0;
+#endif
 #if FD_BENCH_VALIDATE_STREAM
-    if (cmd_id != CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH && cmd_id != CQ_PREFETCH_CMD_RELAY_LINEAR) {
+    if (cmd_id != CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH && cmd_id != fd_bench_payload_cmd) {
         ++fd_copy_bench::staging()[fd_copy_bench::kPfCountersOff + fd_copy_bench::kCtrUnexpectedCmd];
     }
 #endif
@@ -2755,13 +2788,19 @@ bool process_cmd(
     switch (cmd_id) {
         case CQ_PREFETCH_CMD_RELAY_LINEAR:
             // DPRINT("relay_linear: {}\n", cmd_ptr);
-#if FD_BENCH_PF_TIMELINE
+#if FD_BENCH_PF_LINEAR
             fd_copy_bench::pf_mark(fd_copy_bench::kPfProcessEnter, fd_copy_bench::bench_cycle());
 #endif
             stride = process_relay_linear_cmd(cmd_ptr, downstream_data_ptr);
-#if FD_BENCH_PF_TIMELINE
+#if FD_BENCH_PF_LINEAR
             fd_copy_bench::pf_mark(fd_copy_bench::kPfProcessExit, fd_copy_bench::bench_cycle());
-            fd_copy_bench::pf_commit_row();
+            {
+                // Outside relay_cmd, so this lands in the prefetch_external residual. Measured here so
+                // that term can be subtracted; reported one row late (see kPfCommitRow).
+                const uint32_t fd_bench_cr0 = fd_copy_bench::bench_cycle();
+                fd_copy_bench::pf_commit_row();
+                fd_copy_bench::g_pf_commit_row = fd_copy_bench::bench_cycle() - fd_bench_cr0;
+            }
 #endif
             break;
 
@@ -2782,12 +2821,27 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_RELAY_PAGED_PACKED:
             // DPRINT("relay_paged_packed\n");
+#if FD_BENCH_PF_PAGED_PACKED
+            fd_copy_bench::pf_mark(fd_copy_bench::kPfProcessEnter, fd_copy_bench::bench_cycle());
+#endif
             if (exec_buf) {
                 stride =
                     process_exec_buf_relay_paged_packed_cmd(cmd_ptr, downstream_data_ptr, l1_cache, exec_buf_state);
             } else {
                 stride = process_relay_paged_packed_cmd<cmddat_wrap_enable>(cmd_ptr, downstream_data_ptr, l1_cache);
             }
+#if FD_BENCH_PF_PAGED_PACKED
+            // Mirrors the RELAY_LINEAR case: without the commit the prefetcher emits no rows at all, so
+            // iteration_total and the lockstep self-check against the dispatcher period are unavailable.
+            // relay_cmd is measured here at the switch, so the full header/relay_cmd/prefetch_external
+            // decomposition works without instrumenting the handler's interior.
+            fd_copy_bench::pf_mark(fd_copy_bench::kPfProcessExit, fd_copy_bench::bench_cycle());
+            {
+                const uint32_t fd_bench_cr0 = fd_copy_bench::bench_cycle();
+                fd_copy_bench::pf_commit_row();
+                fd_copy_bench::g_pf_commit_row = fd_copy_bench::bench_cycle() - fd_bench_cr0;
+            }
+#endif
             break;
 
         case CQ_PREFETCH_CMD_RELAY_INLINE:
@@ -3471,6 +3525,13 @@ void kernel_main_hd() {
     uint32_t l1_cache[l1_cache_elements_rounded];
     PrefetchExecBufState exec_buf_state;
 
+    asm volatile("csrw 0x323, %0" ::"r"(STALL_DCACHE));
+    asm volatile("csrw 0x324, %0" ::"r"(STALL_ICACHE));
+    asm volatile("csrw 0x325, %0" ::"r"(STALL_LONG_LAT));
+    asm volatile("csrw 0x326, %0" ::"r"(CACHE_DCACHE_MISS));
+
+    reset_to_zero();
+
     // Must precede any downstream traffic. Only these three qualify for the cached pool: every writer is
     // a co-resident DM using a local AMO. The downstream_* credits publish payload, so they must ride the
     // NoC with it; my_upstream_cb_sem_id is host-written. A NoC write must never target the pool.
@@ -3490,12 +3551,39 @@ void kernel_main_hd() {
     while (!done) {
         DeviceZoneScopedN("CQ-PREFETCH");
         constexpr uint32_t preamble_size = 0;
+#if FD_BENCH_PF_FETCH_WAYPOINTS
+        uint32_t fd_bench_fetch_total_t0 = fd_copy_bench::bench_cycle();
+#endif
+#if FD_BENCH_PF_HPM
+        fd_copy_bench::pf_hpm_enter();
+#endif
         fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
+#if FD_BENCH_PF_HPM
+        fd_copy_bench::pf_hpm_accum(fd_copy_bench::kBucketFetch);
+#endif
+#if FD_BENCH_PF_FETCH_WAYPOINTS
+        fd_copy_bench::g_pf_fetch_total += fd_copy_bench::bench_cycle() - fd_bench_fetch_total_t0;
+#endif
 
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
 
         uint32_t stride;
+#if FD_BENCH_PF_HPM
+        fd_copy_bench::pf_hpm_enter();
+        // Read inside the bracket: this is the header line's first touch, and moving it ahead of pf_hpm_enter
+        // would take the compulsory miss out of the measured window. Split on the header command rather than
+        // on fd_bench_payload_cmd so the classification does not depend on how the build was configured.
+        const uint8_t fd_bench_cmd_id = *reinterpret_cast<volatile uint8_t tt_l1_ptr*>(cmd_ptr);
+        const uint32_t fd_bench_bucket =
+            (fd_bench_cmd_id == CQ_PREFETCH_CMD_RELAY_PAGED_PACKED || fd_bench_cmd_id == CQ_PREFETCH_CMD_RELAY_LINEAR)
+                ? fd_copy_bench::kBucketPayload
+                : (fd_bench_cmd_id == CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH ? fd_copy_bench::kBucketInline
+                                                                           : fd_copy_bench::kBucketSkip);
+#endif
         done = process_cmd<false, false>(cmd_ptr, downstream_data_ptr, stride, l1_cache, exec_buf_state);
+#if FD_BENCH_PF_HPM
+        fd_copy_bench::pf_hpm_accum(fd_bench_bucket);
+#endif
         cmd_ptr += stride;
     }
 }

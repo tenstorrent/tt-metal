@@ -180,6 +180,7 @@ SECTIONS {
     *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
 
     *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
+    __SDATA_BEGIN__ = .;
     *(.sdata .sdata.* .gnu.linkonce.s.*)
     *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
 
@@ -219,6 +220,9 @@ SECTIONS {
     . = ALIGN(4);
     __ldm_bss_end = .;
   } :data
+  /* Standard RISC-V gp placement: centres the +/-2KB window over the small-data sections so global
+     accesses relax from lui+lw to a single gp-relative load. crt0.S loads gp from this symbol.  */
+  PROVIDE(__global_pointer$ = MIN(__SDATA_BEGIN__ + 0x800, MAX(__ldm_data_start + 0x800, __ldm_bss_end - 0x800)));
 #if defined(TYPE_KERNEL)
   __stack_base_offset = IF_TLS(0)IF_NOT_TLS((ABSOLUTE(__ldm_bss_end) - ABSOLUTE(__stack_base_lwm)) / 4);
 #endif

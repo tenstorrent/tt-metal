@@ -534,6 +534,11 @@ void process_exec_buf_end_d() { relay_to_next_cb(cmd_ptr, sizeof(CQDispatchCmd))
 // Note that for non-paged writes, the number of writes per page is always 1
 // This means each noc_write frees up a page
 void process_write_linear(uint32_t num_mcast_dests) {
+    // Chunk index for per-chunk waypoints. Function-scoped local, not a static: it is only live within
+    // one command and must not carry state or a reset obligation across calls. Unused on the FABRIC_RELAY
+    // path, which does not go through the per-chunk credit wait below.
+    [[maybe_unused]] uint32_t fd_bench_chunk = 0;
+
     volatile tt_l1_ptr CQDispatchCmdLarge* cmd = reinterpret_cast<volatile tt_l1_ptr CQDispatchCmdLarge*>(cmd_ptr);
     bool multicast = num_mcast_dests > 0;
     if (not multicast) {
