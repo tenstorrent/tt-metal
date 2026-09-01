@@ -360,9 +360,15 @@ public:
             // Quasar fast dispatch force-enables (no host hugepages on the
             // simulator); an explicit TT_METAL_DRAM_BACKED_CQ=0 is rejected at
             // kernel compile time by the guards in cq_dispatch/cq_prefetch.
-            // The watcher NoC sanitizer decodes XY operands; reject the
-            // effective runtime state until it is ATT-aware.
-            TT_FATAL(!params.rtoptions.get_watcher_enabled(), "TT_METAL_NOC_ATT does not support the watcher yet");
+            // The watcher NoC sanitizer decodes XY operands, so it cannot run
+            // under ATT. The rest of the watcher (waypoints, live asserts,
+            // stack checks) never decodes an address and is the only
+            // device-side observability ATT has today - allow it when the
+            // sanitizer is explicitly disabled.
+            TT_FATAL(
+                !params.rtoptions.get_watcher_enabled() || params.rtoptions.watcher_noc_sanitize_disabled(),
+                "TT_METAL_NOC_ATT supports the watcher only with the NoC sanitizer disabled "
+                "(TT_METAL_WATCHER_DISABLE_SANITIZE_NOC=1)");
             defines.push_back("NOC_ATT_ENABLED");
             defines.push_back("NOC_API_V3");
             static const bool att_program_for_test = std::getenv("TT_METAL_ATT_PROGRAM_FOR_TEST") != nullptr;
