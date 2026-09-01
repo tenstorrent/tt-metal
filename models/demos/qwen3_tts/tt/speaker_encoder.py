@@ -483,14 +483,13 @@ class SpeakerEncoder(LightweightModule):
         batch = int(x_nlc.shape[0])
         channels = int(x_nlc.shape[2])
 
-        # Squeeze over sequence length: [B, L, C] -> [B, 1, 1, C] for linear.
-        y = ttnn.mean(x_nlc, dim=1, keepdim=True)
+        # Squeeze over sequence length into L1 so the first SE linear has no DRAM→L1 Copy.
+        se_l1 = ttnn.L1_MEMORY_CONFIG
+        y = ttnn.mean(x_nlc, dim=1, keepdim=True, memory_config=se_l1)
         y = ttnn.reshape(y, (batch, 1, 1, channels))
 
         w1, b1 = self._ensure_pointwise_linear_params(conv1_weight, conv1_bias)
         w2, b2 = self._ensure_pointwise_linear_params(conv2_weight, conv2_bias)
-        # Tiny [1,1,C] SE activations stay in L1 so in0 is not DRAM-interleaved.
-        se_l1 = ttnn.L1_MEMORY_CONFIG
         y = self._tuned_linear(y, w1, b1, ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), se_l1)
         y = self._tuned_linear(y, w2, b2, ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID), se_l1)
         y = ttnn.reshape(y, (batch, 1, int(y.shape[-1])))
