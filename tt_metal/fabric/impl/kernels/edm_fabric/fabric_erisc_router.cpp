@@ -1626,15 +1626,14 @@ void run_coordinated_context_switch_to_base_firmware(
             // the register starts climbing (that climb is tracked separately as R3 = w6).
             *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_REG_AT_RETRAIN_END_ADDR) = fs22_now;  // word[5]  R2
             // [#45872 STREAM-22 RESTORE] Hardware resets STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE to SIZE (=32)
-            // at retrain-finish (same mechanism as ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD). Restore to the pre-retrain
-            // value saved at ACK time (w11) so the send-gate check (free_slots != 32) correctly reflects
-            // outstanding packets and the sender is not permanently blocked.
-            {
-                const uint32_t fs22_saved =
-                    *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_AT_DOWN_ADDR);  // w11
-                init_ptr_val(
-                    static_cast<uint32_t>(sender_channel_free_slots_stream_ids[0]), static_cast<int32_t>(fs22_saved));
-            }
+            // at retrain-finish (same mechanism as ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD). Restore to exact_free_now
+            // (w8 = sender's CPU-side free-slot count, frozen at ACK time since the sender is quiesced).
+            // Using w8 instead of the stream register snapshot (w11) avoids the NoC credit write race:
+            // at ACK time some credit writes may still be in-flight to the stream register, causing w11
+            // to under-count occupied slots. The sender's CPU counter (w8) is updated before each NOC
+            // write, so it accurately reflects all outstanding sends.
+            init_ptr_val(
+                static_cast<uint32_t>(sender_channel_free_slots_stream_ids[0]), static_cast<int32_t>(exact_free_now));
             // NOTE: w13/w14 are now the read-pointer @ begin/finish (written from the speedy step). The former
             // EXACT_FREE_AT_UP / TX_AT_UP writes here are removed to avoid clobbering them.
         }
