@@ -756,7 +756,7 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
         return;
     }
 
-    if (tt::IsProgramRealtimeProfilerActive()) {
+    if (tt::IsProgramRealtimeProfilerActive(extract_context_id(mesh_device_))) {
         for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
             const uint32_t wait_count = expected_num_workers_completed_[*sub_device_id];
             for (auto* device : mesh_device_->get_devices()) {
