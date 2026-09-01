@@ -346,6 +346,40 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "RingJointSDPA attention_sink requires streaming compute; set fp32_dest_acc_en=false");
     }
 
+    if (tensor_args.reference_kv.has_value()) {
+        // Reference-frame delivery: a replicated per-device frame (frame `reference_frame_idx`) attended
+        // by every query. Only meaningful with the windowed sparse-frames path.
+        const auto& reference_kv = tensor_args.reference_kv.value();
+        const auto& q_shape = input_tensor_q.logical_shape();
+        TT_FATAL(
+            args.has_sparse_frames() && args.reference_frame_idx.has_value(),
+            "RingJointSDPA reference_kv requires the sparse-frames path and reference_frame_idx");
+        TT_FATAL(!has_joint_tensors, "RingJointSDPA reference_kv does not support joint attention tensors");
+        TT_FATAL(reference_kv.storage_type() == StorageType::DEVICE, "reference_kv must be on device");
+        TT_FATAL(reference_kv.buffer() != nullptr, "reference_kv must be allocated on device");
+        TT_FATAL(reference_kv.layout() == Layout::TILE, "reference_kv must be tilized");
+        TT_FATAL(
+            reference_kv.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "reference_kv must be in DRAM");
+        const auto& ref_shape = reference_kv.logical_shape();
+        TT_FATAL(ref_shape.rank() == 4, "reference_kv must have rank 4, got rank {}", ref_shape.rank());
+        TT_FATAL(
+            ref_shape[1] == q_shape[1],
+            "reference_kv local num_heads must match Q. Got reference_kv: {}, Q: {}",
+            ref_shape[1],
+            q_shape[1]);
+        // Stacked K|V on the seq dim: rows [0, tpf) are K, rows [tpf, 2*tpf) are V.
+        TT_FATAL(
+            ref_shape[2] == 2u * args.tokens_per_frame.value(),
+            "reference_kv seq dim must equal 2*tokens_per_frame ({}) for stacked K|V, got {}",
+            2u * args.tokens_per_frame.value(),
+            ref_shape[2]);
+        TT_FATAL(
+            args.reference_frame_idx.value() < args.num_frames_padded.value(),
+            "reference_frame_idx ({}) must be < num_frames_padded ({})",
+            args.reference_frame_idx.value(),
+            args.num_frames_padded.value());
+    }
+
     std::vector<Tensor> sdpa_input_tensors = {input_tensor_q, gathered_input_tensor_k};
     if (has_gathered_v) {
         sdpa_input_tensors.push_back(tensor_args.gathered_v.value());
@@ -1134,6 +1168,55 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
 }
 
+// Windowed gather: derive the gather radius (in shards) from the packed frame mask. For each ring
+// device, take the farthest shard holding ANY k-frame that the device's local q-frames attend; W = max
+// over devices. This covers every attended shard, so the windowed gather is correct for any mask (it
+// over-gathers the windowed+reference pattern to near-full since the reference frame is far -- a later
+// pass excludes the globally-attended reference and broadcasts it separately for the bandwidth win).
+// 0 means full-ring gather (dense path).
+static uint32_t compute_sparse_window_radius(
+    const std::vector<uint32_t>& mask, uint32_t nf_pad, uint32_t tpf, uint32_t ring_size) {
+    if (tpf == 0 || ring_size <= 1) {
+        return 0;
+    }
+    const uint32_t per_dev = (nf_pad * tpf) / ring_size;  // padded per-device tokens (shards evenly)
+    if (per_dev == 0) {
+        return 0;
+    }
+    auto attends = [&](uint32_t q, uint32_t k) -> bool {
+        const uint32_t bit = q * nf_pad + k;
+        return (bit / 32u < mask.size()) && ((mask[bit / 32u] >> (bit % 32u)) & 1u);
+    };
+    auto absdiff = [](uint32_t a, uint32_t b) -> uint32_t { return a > b ? a - b : b - a; };
+    uint32_t radius = 0;
+    for (uint32_t d = 0; d < ring_size; ++d) {
+        const uint32_t lo_f = (d * per_dev) / tpf;
+        const uint32_t hi_f = ((d + 1u) * per_dev - 1u) / tpf;
+        for (uint32_t k = 0; k < nf_pad; ++k) {
+            bool any = false;
+            for (uint32_t q = lo_f; q <= hi_f && q < nf_pad; ++q) {
+                if (attends(q, k)) {
+                    any = true;
+                    break;
+                }
+            }
+            if (!any) {
+                continue;
+            }
+            // Shards spanned by k-frame k; the farthest from this device bounds the required radius.
+            const uint32_t shard_lo = (k * tpf) / per_dev;
+            const uint32_t shard_hi = ((k + 1u) * tpf - 1u) / per_dev;
+            const uint32_t dist_lo = absdiff(d, shard_lo);
+            const uint32_t dist_hi = absdiff(d, shard_hi);
+            const uint32_t dist = dist_lo > dist_hi ? dist_lo : dist_hi;
+            if (dist > radius) {
+                radius = dist;
+            }
+        }
+    }
+    return radius;
+}
+
 RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
@@ -1174,7 +1257,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<uint32_t> sliding_window_size,
     const std::optional<uint32_t> tokens_per_frame,
     const std::optional<uint32_t> num_frames_padded,
-    std::vector<uint32_t> sparse_frame_mask) {
+    std::vector<uint32_t> sparse_frame_mask,
+    const std::optional<ttnn::Tensor>& reference_kv,
+    std::optional<uint32_t> reference_frame_idx) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     const bool sparse_frames =
@@ -1226,7 +1311,16 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         multi_device_global_semaphore,
         subdevice_id,
         cluster_axis,
-        core_allocation_strategy};
+        core_allocation_strategy,
+        // Windowed gather radius: the mask-derived window span (excludes the reference frame, delivered
+        // separately). 0 for the dense path = full-ring gather.
+        /*window_radius=*/
+        sparse_frames ? compute_sparse_window_radius(
+                            sparse_frame_mask,
+                            num_frames_padded.value(),
+                            tokens_per_frame.value(),
+                            static_cast<uint32_t>(num_devices))
+                      : 0u};
     std::vector<Tensor> all_gather_input_tensors = {input_tensor_k};
     std::vector<std::optional<Tensor>> all_gather_output_tensors = {persistent_output_buffer_k};
     if (input_tensor_v.has_value()) {
@@ -1319,7 +1413,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         sliding_window_size,
         tokens_per_frame,
         num_frames_padded,
-        std::move(sparse_frame_mask));
+        std::move(sparse_frame_mask),
+        reference_frame_idx);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
@@ -1331,6 +1426,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .gathered_k = persistent_output_buffer_k,
         .gathered_v = persistent_output_buffer_v,
         .attention_sink = attention_sink,
+        .reference_kv = reference_kv,
         // Declaration order in RingJointSDPAInputs: gathered_joint_k/v precede slot_id/kv_actual_isl,
         // and C++20 requires designated initializers in declaration order.
         .gathered_joint_k = resolved_gathered_joint_k,

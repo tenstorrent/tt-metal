@@ -6,7 +6,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
-#include "api/debug/assert.h"
 #include "api/tensor/tensor_accessor.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -48,8 +47,6 @@ void kernel_main() {
     // out accessor, then the cu_window accessor chained immediately after it (before the CB-id block).
     constexpr auto out_args = TensorAccessorArgs<26>();
     constexpr auto cu_window_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
-    // Per-device Q offset accessor, chained after cu_window so the offset chain stays intact.
-    constexpr auto q_offset_args = TensorAccessorArgs<cu_window_args.next_compile_time_args_offset()>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -69,24 +66,11 @@ void kernel_main() {
     const uint32_t global_q_count = get_arg_val<uint32_t>(9);
     const uint32_t cu_window_seqlens_addr = get_arg_val<uint32_t>(10);
     const uint32_t cu_window_seqlens_eles = get_arg_val<uint32_t>(11);
-    // Global row index of this tensor's first Q row. Non-zero when Q is a sequence-parallel shard:
-    // Q/output are addressed locally, but cu_window_seqlens and K/V are global, so the mask generator
-    // needs the shard's global origin. Windowed builds only: the ring-distributed factory shares this
-    // kernel, never sets use_windowed_mask, and supplies runtime args only through slot 11 — so slots
-    // 12/13 must not be read there (mirrors the reader's guarded windowed tail).
-    uint32_t q_tok_offset = 0;
-    // Per-device form: when a tensor was supplied its value wins, read below once cb_cu_window_in is
-    // available. Zero address means the caller used the scalar above.
-    uint32_t q_tok_offset_addr = 0;
-    if constexpr (use_windowed_mask) {
-        q_tok_offset = get_arg_val<uint32_t>(12);
-        q_tok_offset_addr = get_arg_val<uint32_t>(13);
-    }
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
 
-    constexpr uint32_t cb_arg_offset = q_offset_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_arg_offset = cu_window_args.next_compile_time_args_offset();
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -94,9 +78,6 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 4);
     // cu_window CB id lives in the CB-id block (appended by CBIds for windowed mode; inactive otherwise).
     constexpr uint32_t cb_cu_window_in = get_compile_time_arg_val(cb_arg_offset + 5);
-    // Dedicated 1-tile CB for the per-device Q-offset tensor; allocated only when that tensor is passed
-    // (q_in otherwise, same fallback rule as cb_cu_window_in), and only touched behind the runtime guard.
-    constexpr uint32_t cb_windowed_q_offset = get_compile_time_arg_val(cb_arg_offset + 6);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
@@ -137,26 +118,6 @@ void kernel_main() {
         noc.async_read(
             cu_window_reader, CoreLocalMem<uint32_t>(cb_cu.get_write_ptr()), cu_tile_bytes, {.page_id = 0}, {});
         noc.async_read_barrier();
-        // Per-device Q origin, if the caller passed it as a tensor. Lands in its own dedicated CB —
-        // every other CB here has a producer/consumer contract with another kernel that a writer-side
-        // reserve/push would break.
-        if (q_tok_offset_addr != 0) {
-            const auto q_offset_reader = TensorAccessor(q_offset_args, q_tok_offset_addr);
-            CircularBuffer cb_off(cb_windowed_q_offset);
-            cb_off.reserve_back(1);
-            const uint32_t off_ptr = cb_off.get_write_ptr();
-            noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(off_ptr), 4, {.page_id = 0}, {});
-            noc.async_read_barrier();
-            q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_ptr);
-        }
-        // Watcher-build guard for the offset contract the host cannot check in the tensor form (the
-        // per-device value lives on device, so validate() never sees it): the origin must be
-        // tile-aligned, and the Q shard must fit in the K sequence. Tile-granular -- the host's
-        // scalar-form check rounded up to whole tiles. Compiled out of non-watcher builds.
-        ASSERT(q_tok_offset % tt::constants::TILE_HEIGHT == 0);
-        ASSERT(
-            q_tok_offset / tt::constants::TILE_HEIGHT + valid_Sqt <=
-            (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT);
         cb_cu.push_back(1);
     }
 
@@ -223,8 +184,7 @@ void kernel_main() {
                 valid_Sqt,
                 windowed_valid_Skt,
                 k_num_chunks,
-                cu_window_seqlens_eles,
-                q_tok_offset);
+                cu_window_seqlens_eles);
 
             // Determine how many rows of OUT will be written. Both start and end rows are
             // capped by valid_Sqt, since Sq padding is independent of Sk padding.

@@ -477,6 +477,11 @@ void kernel_main() {
     constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 24);
     constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(cb_arg_offset + 25);
     constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 26);
+    // Reference-frame delivery CT scalars (factory pushes them right after the sparse ones). The writer
+    // reads no reference K; it only needs has_reference to size the loop (the q_work_bitmap drives output).
+    constexpr uint32_t has_reference = get_compile_time_arg_val(cb_arg_offset + 27);
+    (void)get_compile_time_arg_val(cb_arg_offset + 28);  // reference_frame_idx (unused by writer)
+    (void)get_compile_time_arg_val(cb_arg_offset + 29);  // num_reference_k_chunks (unused by writer)
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -630,19 +635,37 @@ void kernel_main() {
 
     // Track non-skipped iters so the first active iter starts with fresh accumulators (matches compute).
     bool seen_active_iter = false;
-    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
-    for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+    // Windowed gather: match the reader's iteration count (1 + fwd + bwd delivered shards; this equals
+    // ring_size for a dense gather but is fewer when the AG num_targets are clamped to a window radius).
+    const uint32_t sdpa_ring_iterations =
+        has_sliding_window ? 1u : (1u + fused_op_receiver.seq.expected[0] + fused_op_receiver.seq.expected[1]);
+    // Reference iteration: one extra pass at index sdpa_ring_iterations. The writer reads no reference K;
+    // it drains cb_out per q_chunk (the q_work_bitmap bit at this index drives which q_chunks output here).
+    // Pre-delivered, so it skips the sequencer sync (placeholder ring_id).
+    const uint32_t reference_iter = sdpa_ring_iterations;
+    const uint32_t total_iterations = sdpa_ring_iterations + (has_reference ? 1u : 0u);
+    for (uint32_t ring_iter = 0; ring_iter < total_iterations; ++ring_iter) {
+        const bool is_reference_iter = has_reference && (ring_iter == reference_iter);
         // Sliding compute consumes all local/halo source ranges in one logical pass, so the
         // writer sees exactly one final output per Q and never enters deferred staging.
-        uint32_t ring_id = has_sliding_window ? ring_index : fused_op_receiver.get_next_ring_id_and_sync();
+        uint32_t ring_id =
+            (is_reference_iter || has_sliding_window) ? ring_index : fused_op_receiver.get_next_ring_id_and_sync();
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so writer stays aligned with reader, compute, and all-gather.
         if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
         // Sharded joint: one L/P shard per ring iteration — process joint K/V on every iteration.
-        // Replicated joint: process joint when ring_id == ring_size-1.
-        const bool do_joint_kv = has_gathered_joint_k ? true : (ring_id == ring_size - 1);
+        // Replicated joint: process joint once per device. Full ring visits ring_size-1; a windowed
+        // gather may not, so fire on the last active windowed iteration instead (all kernels agree via
+        // active_ring_iter_mask). Data is local (replicated), so the choice of iteration is free.
+        const bool do_joint_kv =
+            is_reference_iter
+                ? false
+                : (has_gathered_joint_k
+                       ? true
+                       : (sdpa_ring_iterations < ring_size ? is_last_active_ring_iter(active_ring_iter_mask, ring_iter)
+                                                           : (ring_id == ring_size - 1)));
         uint32_t num_kv_chunks = num_local_k_chunks;
         if constexpr (has_joint_k) {
             if (do_joint_kv) {

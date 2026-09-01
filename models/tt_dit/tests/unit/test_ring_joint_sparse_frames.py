@@ -195,8 +195,14 @@ def _run_sparse_frames_op(
     sparse_frames_enabled: bool = True,
     force_allow_all: bool = False,
     allow_override: torch.Tensor | None = None,
+    reference_as_extra_k: bool = False,
 ):
-    """Build small Q/K/V, run the ring op with sparse computation enabled, compare to a pytorch ref."""
+    """Build small Q/K/V, run the ring op with sparse computation enabled, compare to a pytorch ref.
+
+    reference_as_extra_k: peel the reference frame (last real frame, attended by every query) out of the
+    spatial mask and deliver it as a replicated stacked reference_kv buffer processed as one extra ring
+    iteration. The spatial gather then only needs the window band. Golden is unchanged, so a match proves
+    window-only spatial + reference-as-extra-K == full windowed+reference."""
 
     assert tokens_per_frame % ttnn.TILE_SIZE == 0, "tokens_per_frame must be tile-aligned"
     n_pad = num_frames_padded * tokens_per_frame
@@ -242,6 +248,21 @@ def _run_sparse_frames_op(
         allow = torch.zeros(num_frames_padded, num_frames_padded, dtype=torch.uint8)
         allow[:num_frames_real, :num_frames_real] = 1
     gt = _torch_sdpa_ref(padded_Q, padded_K, padded_V, allow, tokens_per_frame=tokens_per_frame)[:, :, :real_n, :]
+
+    # Peel the reference frame out of the op's spatial mask so the windowed gather no longer needs the
+    # far reference shards; `allow` (hence `gt`) keeps the full pattern. The reference rides reference_kv.
+    ref_frame = num_frames_real - 1  # the last real frame is the reference (see _window_plan add_last)
+    if reference_as_extra_k:
+        assert add_last_frame, "reference delivery expects the add-last-frame (reference) pattern"
+        spatial_allow = allow.clone()
+        spatial_allow[:, ref_frame] = 0  # every query gets the reference via reference_kv, not spatial
+        # Reference frame's real tokens (< real_n), stacked [K frame | V frame] on the seq dim -> [b,nh,2*tpf,d].
+        ref_slice = slice(ref_frame * tokens_per_frame, (ref_frame + 1) * tokens_per_frame)
+        ref_K = padded_K[:, :, ref_slice, :].contiguous()
+        ref_V = padded_V[:, :, ref_slice, :].contiguous()
+        ref_kv_stacked = torch.cat([ref_K, ref_V], dim=2).contiguous()
+    else:
+        spatial_allow = allow
 
     # ------- Set up the ring op on device --------------------------------
     full_compute_grid = mesh_device.compute_with_storage_grid_size()
@@ -309,7 +330,17 @@ def _run_sparse_frames_op(
     persistent_output_buffer_k = _make_persistent_output_buffer()
     persistent_output_buffer_v = _make_persistent_output_buffer()
 
-    sparse_frame_mask = _pack_sparse_frame_mask(allow) if sparse_frames_enabled else []
+    sparse_frame_mask = _pack_sparse_frame_mask(spatial_allow) if sparse_frames_enabled else []
+
+    # Extra-K path: stacked reference_kv replicated on sp, sharded on heads (tp), like the spatial inputs.
+    tt_reference_kv = None
+    if reference_as_extra_k:
+        ref_shard_dims = [None, None]
+        ref_shard_dims[sp_axis] = None  # replicated across the ring
+        ref_shard_dims[tp_axis] = 1  # heads sharded
+        tt_reference_kv = _to_dev(ref_kv_stacked, ref_shard_dims)
+        del ref_K, ref_V, ref_kv_stacked
+        gc.collect()
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_compute_grid,
@@ -329,13 +360,14 @@ def _run_sparse_frames_op(
         tt_Q,
         tt_K,
         tt_V,
-        None,
+        None,  # no joint Q/K/V — reference rides reference_kv, not the joint path
         None,
         None,
         persistent_output_buffer_k=persistent_output_buffer_k,
         persistent_output_buffer_v=persistent_output_buffer_v,
         joint_strategy="rear",
         logical_n=real_n,  # true un-padded sequence length; padded region is beyond
+        logical_l=0,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
         dim=2,
@@ -350,6 +382,8 @@ def _run_sparse_frames_op(
         tokens_per_frame=tokens_per_frame if sparse_frames_enabled else None,
         num_frames_padded=num_frames_padded if sparse_frames_enabled else None,
         sparse_frame_mask=sparse_frame_mask,
+        reference_kv=tt_reference_kv,
+        reference_frame_idx=(ref_frame if reference_as_extra_k else None),
     )
 
     # Gather output back (sharded seq on sp, heads on tp).
@@ -636,6 +670,201 @@ class TestSparseFramesRing:
             k_chunk_size_tokens=tokens_per_frame // 2,
             sparse_frames_enabled=True,
             allow_override=allow_override,
+        )
+
+    @_MESH_TOPOLOGY
+    @pytest.mark.parametrize(
+        ("tokens_per_frame", "window"),
+        [
+            # No reference frame (add_last=False), so the window alone drives W. ~1 frame/shard with a
+            # +-2 window gives W=2 << ring_size -- exercises the genuinely-small-W windowed gather (the
+            # path never hit by the add_last tests, which keep W=full via the far reference frame).
+            pytest.param(128, 5, id="win5_w2"),
+            pytest.param(128, 3, id="win3_w1"),
+        ],
+    )
+    def test_windowed_small_radius(
+        self,
+        mesh_device,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
+        device_params,
+        all_gather_topology,
+        reset_seeds,
+        tokens_per_frame,
+        window,
+    ):
+        """Windowed gather with a genuinely small radius (no joint). Validates the build_ring_work_plan
+        window-bounding fix: without it, out-of-window active bits poison is_last_active_ring_iter and
+        the ring deadlocks. 1 frame/shard so nf_padded == sp_factor keeps the padded seq shard-even."""
+        _run_sparse_frames_op(
+            mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            tp_axis=tp_axis,
+            tp_factor=tp_factor,
+            num_links=num_links,
+            num_frames_real=sp_factor,
+            num_frames_padded=sp_factor,
+            tokens_per_frame=tokens_per_frame,
+            b=1,
+            nh=8,
+            d=128,
+            window=window,
+            add_last_frame=False,
+            all_gather_topology=all_gather_topology,
+            q_chunk_size_tokens=tokens_per_frame // 2,
+            k_chunk_size_tokens=tokens_per_frame // 2,
+            sparse_frames_enabled=True,
+        )
+
+    @_MESH_TOPOLOGY
+    @pytest.mark.parametrize(
+        ("tokens_per_frame", "nf_real_fn", "nf_padded_fn"),
+        [
+            # Fractional frames/shard (the real sp=32 regime): reference frame sits several shards away,
+            # so the windowed spatial gather (reference peeled) collapses W to the window span.
+            pytest.param(64, lambda sp: sp + sp // 2 - 2, lambda sp: sp + sp // 2, id="frac_1p5"),
+            # Whole frame/shard: reference still far from the low devices.
+            pytest.param(128, lambda sp: sp, lambda sp: sp, id="whole_1p0"),
+        ],
+    )
+    def test_reference_as_extra_k(
+        self,
+        mesh_device,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
+        device_params,
+        all_gather_topology,
+        reset_seeds,
+        tokens_per_frame,
+        nf_real_fn,
+        nf_padded_fn,
+    ):
+        """Windowed-CCL Phase 2 (extra-K): deliver the reference frame as a replicated stacked reference_kv
+        buffer processed as one extra ring iteration (no joint queries). Spatial gather is windowed (the
+        reference column is peeled from the mask). Same windowed+reference golden -> PCC match proves
+        window-only spatial gather + reference-as-extra-K == full windowed+reference."""
+        _run_sparse_frames_op(
+            mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            tp_axis=tp_axis,
+            tp_factor=tp_factor,
+            num_links=num_links,
+            num_frames_real=nf_real_fn(sp_factor),
+            num_frames_padded=nf_padded_fn(sp_factor),
+            tokens_per_frame=tokens_per_frame,
+            b=1,
+            nh=8,
+            d=128,
+            window=5,
+            add_last_frame=True,
+            all_gather_topology=all_gather_topology,
+            q_chunk_size_tokens=tokens_per_frame // 2,
+            k_chunk_size_tokens=tokens_per_frame // 2,
+            sparse_frames_enabled=True,
+            reference_as_extra_k=True,
+        )
+
+    @_MESH_TOPOLOGY_GALAXY
+    @pytest.mark.parametrize(
+        "tokens_per_frame",
+        # nf=6 frames on sp=8 -> 0.75 frames/shard (sub-frame).
+        # The reference frame lands on the far shards (6-7 of 8),
+        # so peeling it collapses the windowed spatial radius (W 7->4 here).
+        [pytest.param(2560, id="tpf2560_3chunks"), pytest.param(5120, id="tpf5120_6chunks")],
+    )
+    def test_reference_as_extra_k_sub_frame(
+        self,
+        mesh_device,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
+        device_params,
+        all_gather_topology,
+        reset_seeds,
+        tokens_per_frame,
+    ):
+        """Sub-frame (frames/shard < 1)."""
+        _run_sparse_frames_op(
+            mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            tp_axis=tp_axis,
+            tp_factor=tp_factor,
+            num_links=num_links,
+            num_frames_real=6,
+            num_frames_padded=6,
+            tokens_per_frame=tokens_per_frame,
+            b=1,
+            nh=8,
+            d=128,
+            window=5,
+            add_last_frame=True,
+            all_gather_topology=all_gather_topology,
+            # 160/160 matches the real 4x32 non-exp chunk sizes (ring_chunk_sizes(fsl, 32)); keeps the
+            # QK score buffer (Sq*Sk = 5*5 tiles) small enough for L1, unlike 640/640.
+            q_chunk_size_tokens=160,
+            k_chunk_size_tokens=160,
+            sparse_frames_enabled=True,
+            reference_as_extra_k=True,
+        )
+
+    @_MESH_TOPOLOGY_GALAXY
+    @pytest.mark.parametrize(
+        ("tokens_per_frame", "num_frames_real", "num_frames_padded", "q_chunk", "k_chunk", "reference"),
+        [
+            pytest.param(3840, 21, 22, 320, 320, False, id="sp8native_fsl3840"),
+            pytest.param(9600, 5, 6, 160, 160, True, id="sp32shapes_fsl9600"),
+        ],
+    )
+    def test_single_galaxy_mesh_configs(
+        self,
+        mesh_device,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
+        device_params,
+        all_gather_topology,
+        reset_seeds,
+        tokens_per_frame,
+        num_frames_real,
+        num_frames_padded,
+        q_chunk,
+        k_chunk,
+        reference,
+    ):
+        _run_sparse_frames_op(
+            mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            tp_axis=tp_axis,
+            tp_factor=tp_factor,
+            num_links=num_links,
+            num_frames_real=num_frames_real,
+            num_frames_padded=num_frames_padded,
+            tokens_per_frame=tokens_per_frame,
+            b=1,
+            nh=8,
+            d=128,
+            window=5,
+            add_last_frame=True,
+            all_gather_topology=all_gather_topology,
+            q_chunk_size_tokens=q_chunk,
+            k_chunk_size_tokens=k_chunk,
+            sparse_frames_enabled=True,
+            reference_as_extra_k=reference,
         )
 
     @_MESH_TOPOLOGY
