@@ -6380,3 +6380,52 @@ penalty. UNTESTED — do not quote as fact.
 2. **Always run a stock arm.** `SYNC_HZ=20` is not a control; it already carries hook cost.
 3. Any future rate change must be validated at `num_links=4`. A 1-link or 2-link harness will show
    a clean bill of health at rates that fail the golden check outright.
+
+---
+
+## Binary search 100..500 Hz: the ceiling is ~250 Hz but the last SAFE rate is 100 Hz
+
+Adaptive bisection, PASS = rc 0 AND zero FAIL rows, `tt-smi -r` before each arm, same short config.
+
+| level | HZ  | rc  | fail rows | overall geomean | verdict | bracket  |
+|-------|-----|-----|-----------|-----------------|---------|----------|
+| L1    | 300 | 134 | 1         | 0.9878          | FAIL    | 100..300 |
+| L2    | 200 | 0   | 0         | 0.9933          | PASS    | 200..300 |
+| L3    | 250 | 0   | 0         | 0.9926          | PASS    | 250..300 |
+
+Highest passing 250 Hz, lowest failing 300 Hz.
+
+### The threshold is PER-ROW, not a flat 10%
+`tolerance_percent` is **column 15 of `golden/golden_bandwidth_summary_blackhole_p150_x4.csv`**, read
+per golden entry at `tt_fabric_test_bandwidth_results.cpp:438-442` (`test_tolerance` defaults to 1.0
+only when no golden row matches). For MeshMulticast 4-link: **NOC_UNICAST_WRITE 10%,
+NOC_UNICAST_SCATTER_WRITE 12%, NOC_FUSED_UNICAST_ATOMIC_INC 12%**.
+
+Without this the results look self-contradictory: -11.18% PASSED at 250 Hz while -10.38% FAILED at
+500 Hz. Different rows, different tolerances. **Never eyeball these as a single percentage.**
+
+### Headroom, not pass/fail, is the number to steer by
+Margin of the worst 4-link row against its own tolerance:
+
+| HZ  | worst 4-link row  | diff    | tol | headroom  |
+|-----|-------------------|---------|-----|-----------|
+| 20  | SCATTER @2048     | -0.36%  | 12% | 11.6 pts  |
+| 100 | SCATTER @2048     | -3.20%  | 12% | **8.8**   |
+| 200 | SCATTER @4096     | -9.35%  | 12% | 2.7       |
+| 250 | SCATTER @4096     | -11.18% | 12% | **0.8**   |
+| 300 | SCATTER @2048     | -13.45% | 12% | -1.5 FAIL |
+| 500 | SCATTER @2048     | -19.64% | 12% | -7.6 FAIL |
+
+**250 Hz nominally passes but must not be shipped.** Its 0.8-point margin is below this harness's
+own run-to-run variance (~0.5 pts: the 20 Hz arm geomeaned 1.0105 in one sweep and 1.0122 in
+another) so it would flake in CI. 200 Hz at 2.7 pts has already spent most of the budget.
+
+Note L2/L3 geomeans are inverted (200 Hz 0.9933 vs 250 Hz 0.9926 — 200 "worse") by 0.07 pts, which
+is noise; the per-row headroom ordering is the one that is monotone and meaningful.
+
+### Consequences
+1. **100 Hz stands as the operating point** — 8.8 pts of headroom and 88% of the available residual
+   gain. The search confirms it rather than displacing it: nothing between 100 and 250 Hz buys
+   enough accuracy (44 -> ~40 ns) to justify spending 6 of the 8.8 points.
+2. Quote the ceiling as "~250 Hz, unusable" and the safe ceiling as ~100-150 Hz.
+3. Any future golden-threshold reasoning must read column 15 per row.
