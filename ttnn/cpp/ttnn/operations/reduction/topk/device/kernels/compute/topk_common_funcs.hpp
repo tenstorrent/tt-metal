@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/topk.h"
 
 // stable_sort selects the LLK's stable bitonic network: equal values keep the lowest index, so ties
 // are broken deterministically rather than by array position. It defaults to false so every existing

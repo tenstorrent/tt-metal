@@ -6,6 +6,7 @@
 // normalize -> scale. All stages live in the shared moe_gate_common_compute.hpp blocks, which are also
 // used by moe_hash_gate so the activation/normalize/scale logic exists in exactly one place.
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/device/kernels/compute/moe_gate_common_compute.hpp"
+#include "api/compute/topk.h"
 
 void kernel_main() {
     // Circular buffer indices

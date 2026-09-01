@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/topk.h"
 
 /**
  * @brief Before packing UInt16 value tiles from 32-bit DEST, move values into the packer-visible high half.
