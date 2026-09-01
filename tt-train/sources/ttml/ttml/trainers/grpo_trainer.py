@@ -399,6 +399,13 @@ class GRPOMonitor(TrainerCallback):
         for key, value in metrics.items():
             if key in _NON_CSV_KEYS:
                 continue
+            # ``step`` is the row identifier, always passed positionally to
+            # this hook and consumed by _log_console / _write_csv_row / wandb
+            # directly. Skip it here so it does not get cast to float by the
+            # aggregator (which would make the console log show ``step: 4.0``
+            # and wandb receive a float ``grpo/step``).
+            if key == "step":
+                continue
             if isinstance(value, (bool, int, float)) and not (isinstance(value, float) and math.isnan(value)):
                 self._running[key].push(float(value))
 
