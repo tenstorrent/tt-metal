@@ -21,7 +21,8 @@ void kernel_main() {
     DataflowBuffer dfb_in2(tt::CBIndex::c_2);  // input_c
     DataflowBuffer dfb_out(tt::CBIndex::c_3);
 
-    unary_op_init_common(dfb_in0.get_id(), dfb_out.get_id());
+    compute_kernel_hw_startup(dfb_in0.get_id(), dfb_out.get_id());
+    copy_init(dfb_in0.get_id());
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         dfb_in0.wait_front(num_tiles_per_cycle);
@@ -32,13 +33,13 @@ void kernel_main() {
 
         tile_regs_acquire();
 
-        copy_tile_init(dfb_in0.get_id());
+        copy_init(dfb_in0.get_id());
         copy_tile(dfb_in0.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_tile_init(dfb_in1.get_id());
+        copy_init(dfb_in1.get_id());
         copy_tile(dfb_in1.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        copy_tile_init(dfb_in2.get_id());
+        copy_init(dfb_in2.get_id());
         copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
         fill_tile_init();

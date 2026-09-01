@@ -2,11 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc, torch_random
+from models.common.utility_functions import comp_allclose_and_pcc, is_blackhole, torch_random
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42
@@ -458,6 +460,15 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     )
 
 
+skip_routed_topk_on_sim = pytest.mark.skipif(
+    is_blackhole() and bool(os.environ.get("TT_METAL_SIMULATOR")),
+    reason=(
+        "Large indices topk on BH needs SFPCONFIG instr_mod1=8, unmodeled by ttsim "
+        "(https://github.com/tenstorrent/ttsim-private/issues/798)"
+    ),
+)
+
+
 @pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize("dim", [1])
 @pytest.mark.parametrize("largest", [True])
@@ -468,12 +479,14 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
 #   (8192, 1024) k > 64 -> single-core, and Kt=32 exercises the multi-tile-k merge ramp
 #   bfloat8_b is paired with the large-k case: bfp8 unpack/pack reconfig plus the bfp8 L1 sizing
 #                path, which only matters when Kt is large
+
+
 @pytest.mark.parametrize(
     "dim2, k, dtype",
     [
         (8192, 50, ttnn.bfloat16),
-        (50257, 50, ttnn.bfloat16),
-        (8192, 1024, ttnn.bfloat16),
+        pytest.param(50257, 50, ttnn.bfloat16, marks=skip_routed_topk_on_sim),
+        pytest.param(8192, 1024, ttnn.bfloat16, marks=skip_routed_topk_on_sim),
         (8192, 1024, ttnn.bfloat8_b),
     ],
 )
@@ -547,6 +560,7 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 @pytest.mark.parametrize("k", [50])
 @pytest.mark.parametrize("largest", [True])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@skip_routed_topk_on_sim
 def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2]
@@ -973,18 +987,18 @@ def test_run_reduce_sum_h_after_max_pool(device, input_shape, kernel_size):
 
 
 @pytest.mark.parametrize(
-    argnames="tensor_shape, keepdim, dim, op",
+    argnames="tensor_shape, keepdim, dim, op, error_msg",
     argvalues=[
-        ([], True, None, "mean"),
-        ([], True, None, "std"),
-        ([32], False, -1, "sum"),
-        ([32, 0], True, 0, "max"),
-        ([0, 0, 0], True, 2, "min"),
-        ([0, 32, 0], False, -2, "std"),
-        ([32, 32, 32, 0], False, 3, "var"),
+        ([], True, None, "mean", None),
+        ([], True, None, "std", None),
+        ([32], False, -1, "sum", None),
+        ([32, 0], True, 0, "max", None),
+        ([0, 0, 0], True, 2, "min", "Expected reduction dim 2 to have non-zero size"),
+        ([0, 32, 0], False, -2, "std", None),
+        ([32, 32, 32, 0], False, 3, "var", None),
     ],
 )
-def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
+def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, error_msg, expect_error):
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes, keepdim, and dim values.
@@ -1010,10 +1024,15 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
         torch_errored = True
 
     ttnn_errored = False
-    try:
-        ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
-    except RuntimeError:
+    if error_msg:
+        with expect_error(RuntimeError, error_msg):
+            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
         ttnn_errored = True
+    else:
+        try:
+            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
+        except RuntimeError:
+            ttnn_errored = True
 
     assert torch_errored == ttnn_errored, f"torch: {torch_errored}, ttnn: {ttnn_errored}"
 

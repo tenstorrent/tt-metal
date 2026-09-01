@@ -229,7 +229,6 @@ def test_min_row_major(device, input_shape, dim, keepdim):
     )
 
 
-@pytest.mark.skip(reason="Skipping std test due to issue #32830")
 @pytest.mark.parametrize(
     "input_shape, dim",
     [
@@ -255,18 +254,19 @@ def test_std_row_major(device, input_shape, dim):
     output_tensor = ttnn.to_torch(output_tensor)
 
     # test for equivalance
+    # Tolerances taken from test_reduction.py::test_std: an RM input is tilized and dispatched
+    # to the same welford_reduce primitive as a TILE input (generic_reductions.cpp), so the TILE
+    # bounds apply. check_ulp keeps its default (False) like the TILE version.
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.99,
-        rtol=1e-06,
-        atol=1e-06,
-        frobenius_threshold=1e-09,
-        check_ulp=True,
+        rtol=0.01,
+        atol=0.01,
+        frobenius_threshold=0.005,
     )
 
 
-@pytest.mark.skip(reason="Skipping var test due to issue #32830")
 @pytest.mark.parametrize(
     "input_shape, dim",
     [
@@ -292,14 +292,17 @@ def test_var_row_major(device, input_shape, dim):
     output_tensor = ttnn.to_torch(output_tensor)
 
     # test for equivalance
+    # Tolerances lifted from test_reduction.py::test_var: an RM input is tilized and dispatched
+    # to the same welford_reduce primitive as a TILE input (generic_reductions.cpp), so the TILE
+    # bounds apply. check_ulp keeps its default (False) like the sibling; bf16 outputs cannot
+    # meet the previous 1e-06/1e-09 (sub-ULP) bounds.
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.99,
-        rtol=1e-06,
-        atol=1e-06,
-        frobenius_threshold=1e-09,
-        check_ulp=True,
+        rtol=0.01,
+        atol=0.01,
+        frobenius_threshold=0.007,
     )
 
 
@@ -715,8 +718,6 @@ def test_rm_reduce_interleaved_program_cache(device, reduce_op, shape, dim):
 )
 def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, output_layout, shape):
     """H reduce on tall ROW_MAJOR input — exercises the multi-shard H-axis-split + combine path."""
-    if fast_and_approximate_mode and reduce_op != "mean":
-        pytest.skip("fast_and_approximate_mode only affects mean")
     torch.manual_seed(0)
     torch_input = torch.rand(shape, dtype=torch.float32)
     torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=False)
@@ -725,17 +726,20 @@ def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, ou
     assert tt_input.layout == ttnn.ROW_MAJOR_LAYOUT
 
     ttnn_op = _OPS[reduce_op][1]
-    op_kwargs = {"dim": -2, "keepdim": False, "output_layout": output_layout}
-    if reduce_op == "mean":
-        op_kwargs["fast_and_approximate_mode"] = fast_and_approximate_mode
+    op_kwargs = {
+        "dim": -2,
+        "keepdim": False,
+        "output_layout": output_layout,
+        "fast_and_approximate_mode": fast_and_approximate_mode,
+    }
     tt_output = ttnn_op(tt_input, **op_kwargs)
     # None keeps the dense RM path's natural ROW_MAJOR output.
     assert tt_output.layout == (output_layout or ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(tt_output)
 
-    # Only mean has an accurate fp32 SFPU reduce; the FPU path truncates to TF32, roughly doubling
-    # the relative error at these depths.
-    rtol = 0.002 if (reduce_op == "mean" and not fast_and_approximate_mode) else 0.004
+    # Accurate SFPU (full fp32) vs FPU (tf32 truncation). The FPU path roughly doubles the relative
+    # error at these depths; Quasar has no SFPU reduce LLKs, so it always takes the FPU bound.
+    rtol = 0.004 if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR else 0.0011
     assert_numeric_metrics(
         torch_ref,
         output,

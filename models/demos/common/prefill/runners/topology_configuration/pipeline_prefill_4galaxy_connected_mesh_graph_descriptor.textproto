@@ -1,18 +1,3 @@
-# CONNECTED 4-galaxy mesh graph descriptor for the D2D-socket pipeline prefill.
-#
-# Four 8x4 BH-galaxy meshes chained mesh 0 <-> 1 <-> 2 <-> 3 by inter-galaxy fabric links, one per
-# pipeline boundary (rank r sends to rank r+1). Mirrors the decode superpod MGD's connection format
-# (consecutive mesh_ids, count:8 RELAXED, discovery / no pinnings) but with the prefill 8x4 geometry.
-#
-# Host order matters: discovery maps mesh 0 -> first --host, mesh 1 -> second, etc., and the chained
-# connections require consecutive hosts to be physically cabled. List the --host slots in the order
-# the galaxies are cabled in the superpod chain (verify with the UMD topology tool if a boundary's
-# fabric fails to train).
-#
-# dim_types [RING, RING]: each galaxy is an XY torus (rows/SP and cols/TP both wrap). This MUST be
-# paired with PREFILL_FABRIC_MODE=2d_torus_xy in the rank binding — a mismatch between the descriptor
-# wrap and the fabric mode hangs at fabric bring-up. Requires the 2d_torus_* modes from #48711.
-
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE

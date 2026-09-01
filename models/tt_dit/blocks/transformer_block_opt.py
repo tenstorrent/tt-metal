@@ -1,0 +1,423 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import ttnn
+
+from ..layers.feedforward import ParallelFeedForward
+from ..layers.linear import ColParallelLinear, prepare_chunked_linear_output
+from ..layers.module import Module
+from ..layers.normalization import DistributedLayerNorm
+from ..utils.substate import rename_substate
+from ..utils.tensor import as_bf16
+from .attention_opt import Attention
+
+if TYPE_CHECKING:
+    import torch
+
+    from ..parallel.config import DiTParallelConfig
+    from ..parallel.manager import CCLManager
+    from ..utils.padding import PaddingConfig
+
+
+# adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
+class TransformerBlock(Module):
+    def __init__(
+        self,
+        *,
+        dim: int,
+        modulation_dim: int | None = None,
+        num_heads: int,
+        head_dim: int,
+        context_pre_only: bool,
+        add_attention_to_output: bool = True,
+        context_head_scaling: bool = False,
+        ff_activation_fn: str = "gelu",
+        ff_mult: int = 4,
+        ff_bias: bool = True,
+        attention_proj_bias: bool = True,
+        time_norm_affine: bool = True,
+        mesh_device: ttnn.MeshDevice,
+        ccl_manager: CCLManager | None,
+        parallel_config: DiTParallelConfig,
+        padding_config: PaddingConfig | None,
+        attention_k_chunk_size: int = 512,
+        attention_q_chunk_size: int = 128,
+        is_fsdp: bool = False,
+        shard_prompt: bool = False,
+    ) -> None:
+        super().__init__()
+
+        if modulation_dim is None:
+            modulation_dim = dim
+
+        self.dim = dim
+        self.num_heads = num_heads
+        self.head_dim = head_dim
+        self.add_attention_to_output = add_attention_to_output
+
+        self.context_pre_only = context_pre_only
+        self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
+
+        # FSDP: shard weights on sequence parallel axis to reduce memory
+        fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
+
+        self.norm1_linear = (
+            ColParallelLinear(
+                modulation_dim,
+                6 * dim,
+                bias=True,
+                mesh_device=mesh_device,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                fsdp_mesh_axis=fsdp_mesh_axis,
+                ccl_manager=ccl_manager,
+            )
+            if time_norm_affine
+            else None
+        )
+
+        self.norm1_norm = DistributedLayerNorm(
+            dim,
+            norm_eps=1e-6,
+            norm_elementwise_affine=False,
+            bias=False,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+        )
+
+        context_norm_dim = 6 * dim if not context_pre_only else 2 * dim
+        self.norm1_context_linear = (
+            ColParallelLinear(
+                modulation_dim,
+                context_norm_dim,
+                bias=True,
+                mesh_device=mesh_device,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                fsdp_mesh_axis=fsdp_mesh_axis,
+                ccl_manager=ccl_manager,
+            )
+            if time_norm_affine
+            else None
+        )
+        self.norm1_context_norm = DistributedLayerNorm(
+            dim,
+            norm_eps=1e-6,
+            norm_elementwise_affine=False,
+            bias=False,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+        )
+
+        self.attn = Attention(
+            query_dim=dim,
+            head_dim=head_dim,
+            heads=num_heads,
+            out_dim=dim,
+            added_kv_proj_dim=dim,
+            context_pre_only=context_pre_only,
+            context_head_scaling=context_head_scaling,
+            proj_bias=attention_proj_bias,
+            eps=1e-6,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            padding_config=padding_config,
+            k_chunk_size=attention_k_chunk_size,
+            q_chunk_size=attention_q_chunk_size,
+            is_fsdp=is_fsdp,
+            shard_prompt=shard_prompt,
+        )
+
+        self.norm2 = DistributedLayerNorm(
+            dim,
+            norm_eps=1e-6,
+            norm_elementwise_affine=False,
+            bias=False,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+        )
+
+        self.ff = ParallelFeedForward(
+            dim=dim,
+            dim_out=dim,
+            mult=ff_mult,
+            bias=ff_bias,
+            activation_fn=ff_activation_fn,
+            mesh_device=mesh_device,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
+        )
+
+        self.norm2_context = None
+        self.ff_context = None
+
+        if not context_pre_only:
+            self.norm2_context = DistributedLayerNorm(
+                dim,
+                norm_eps=1e-6,
+                norm_elementwise_affine=False,
+                bias=False,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+            )
+            self.ff_context = ParallelFeedForward(
+                dim=dim,
+                dim_out=dim,
+                mult=ff_mult,
+                bias=ff_bias,
+                activation_fn=ff_activation_fn,
+                mesh_device=mesh_device,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                fsdp_mesh_axis=fsdp_mesh_axis,
+                ccl_manager=ccl_manager,
+            )
+
+        self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        device_grid = self.mesh_device.compute_with_storage_grid_size()
+        self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "norm1.linear", "norm1_linear")
+        rename_substate(state, "norm1.norm", "norm1_norm")
+        rename_substate(state, "norm1_context.linear", "norm1_context_linear")
+        rename_substate(state, "norm1_context.norm", "norm1_context_norm")
+        rename_substate(state, "ff.net.0.proj", "ff.ff1")
+        rename_substate(state, "ff.net.2", "ff.ff2")
+        rename_substate(state, "ff_context.net.0.proj", "ff_context.ff1")
+        rename_substate(state, "ff_context.net.2", "ff_context.ff2")
+
+        prepare_chunked_linear_output(
+            state,
+            prefix="norm1_linear",
+            device_count=self.parallel_config.tensor_parallel.factor,
+            chunks=6,
+        )
+        prepare_chunked_linear_output(
+            state,
+            prefix="norm1_context_linear",
+            device_count=self.parallel_config.tensor_parallel.factor,
+            chunks=2 if self.context_pre_only else 6,
+        )
+
+    def forward(
+        self,
+        spatial: ttnn.Tensor,
+        prompt: ttnn.Tensor,
+        time_embed: ttnn.Tensor,
+        spatial_sequence_length: int,
+        prompt_sequence_length: int,
+        *,
+        spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        temb_mod_params_img: tuple[ttnn.Tensor, ...] | None = None,
+        temb_mod_params_txt: tuple[ttnn.Tensor, ...] | None = None,
+        skip_time_embed_activation_fn: bool = False,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        """Run the model forward.
+
+        Args:
+            spatial: Tensor with shape [batch_size, spatial_sequence_length / sp_factor, query_dim / tp_factor].
+            prompt: Tensor with shape [batch_size, prompt_sequence_length, query_dim / tp_factor] (sequence is not sharded!).
+            time_embed: Tensor with shape [batch_size, 1, query_dim].
+            spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
+            prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim] (sequence is not sharded!).
+        """
+        assert len(spatial.shape) == 3
+        assert len(prompt.shape) == 3
+
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+
+        if not skip_time_embed_activation_fn:
+            time_embed = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Contract: scale params are consumed with +1 already applied (the norm computes
+        # (1 + scale) * x + shift). External callers pre-add 1 once and share the tuple across
+        # blocks; the internal-modulation path below pre-adds it here for parity.
+        if self.norm1_linear is not None:
+            assert temb_mod_params_img is None
+
+            spatial_time = self.norm1_linear(
+                time_embed,
+                core_grid=Attention.get_core_grid(
+                    time_embed.shape[-2], self.mesh_device.compute_with_storage_grid_size()
+                ),
+            )
+            s_shift_a, s_scale_a, s_gate_a, s_shift_f, s_scale_f, s_gate_f = _chunk_time3d(spatial_time, 6)
+            temb_mod_params_img = (s_shift_a, s_scale_a + 1, s_gate_a, s_shift_f, s_scale_f + 1, s_gate_f)
+
+        if self.norm1_context_linear is not None:
+            assert temb_mod_params_txt is None
+
+            prompt_time = self.norm1_context_linear(
+                time_embed,
+                core_grid=Attention.get_core_grid(
+                    time_embed.shape[-2], self.mesh_device.compute_with_storage_grid_size()
+                ),
+            )
+            if self.context_pre_only:
+                # layout: (scale_attn, shift_attn)
+                p_scale_a, p_shift_a = _chunk_time3d(prompt_time, 2)
+                temb_mod_params_txt = (p_scale_a + 1, p_shift_a)
+            else:
+                p_shift_a, p_scale_a, p_gate_a, p_shift_f, p_scale_f, p_gate_f = _chunk_time3d(prompt_time, 6)
+                temb_mod_params_txt = (p_shift_a, p_scale_a + 1, p_gate_a, p_shift_f, p_scale_f + 1, p_gate_f)
+
+        assert temb_mod_params_img is not None
+        assert temb_mod_params_txt is not None
+
+        (
+            spatial_shift_attn,
+            spatial_scale_attn,
+            spatial_gate_attn,
+            spatial_shift_ff,
+            spatial_scale_ff,
+            spatial_gate_ff,
+        ) = temb_mod_params_img
+
+        spatial_normed = ttnn.squeeze(
+            self.norm1_norm(
+                ttnn.unsqueeze(spatial, 0),
+                dynamic_weight=spatial_scale_attn,
+                dynamic_bias=spatial_shift_attn,
+            ),
+            0,
+        )
+
+        if self.context_pre_only:
+            prompt_scale_attn, prompt_shift_attn = temb_mod_params_txt
+            prompt_gate_attn = None
+            prompt_shift_ff = None
+            prompt_scale_ff = None
+            prompt_gate_ff = None
+        else:
+            (
+                prompt_shift_attn,
+                prompt_scale_attn,
+                prompt_gate_attn,
+                prompt_shift_ff,
+                prompt_scale_ff,
+                prompt_gate_ff,
+            ) = temb_mod_params_txt
+
+        prompt_normed = ttnn.squeeze(
+            self.norm1_context_norm(
+                ttnn.unsqueeze(prompt, 0),
+                dynamic_weight=prompt_scale_attn,
+                dynamic_bias=prompt_shift_attn,
+            ),
+            0,
+        )
+
+        is_ring = self.ccl_manager.topology == ttnn.Topology.Ring
+
+        # NOTE: workaround - addcmul is less accurate with fp32 gate input
+        spatial_gate_attn = as_bf16(spatial_gate_attn)
+        if prompt_gate_attn is not None:
+            prompt_gate_attn = as_bf16(prompt_gate_attn)
+
+        spatial, prompt_attn = self.attn.forward(
+            sequence_1=spatial_normed,
+            sequence_2=prompt_normed,
+            sequence_1_rope=spatial_rope,
+            sequence_2_rope=prompt_rope,
+            sequence_1_length=spatial_sequence_length,
+            sequence_2_length=prompt_sequence_length,
+            addcmul_spatial_residual=spatial,
+            addcmul_spatial_gate=spatial_gate_attn,
+            addcmul_prompt_residual=prompt if not self.context_pre_only else None,
+            addcmul_prompt_gate=prompt_gate_attn,
+        )
+
+        if prompt_attn is not None:
+            prompt = prompt_attn
+
+        spatial_normed = ttnn.squeeze(
+            self.norm2(
+                ttnn.unsqueeze(spatial, 0),
+                dynamic_weight=spatial_scale_ff,
+                dynamic_bias=spatial_shift_ff,
+            ),
+            0,
+        )
+
+        spatial_gate_ff = as_bf16(spatial_gate_ff)
+        if is_ring:
+            spatial = self.ff.forward_fused_addcmul(
+                spatial_normed,
+                spatial,
+                spatial_gate_ff,
+                scalar=1.0,
+                compute_kernel_config=self.ff_compute_kernel_config,
+                parallel_config=self.parallel_config,
+                core_grid=Attention.get_core_grid(
+                    spatial_normed.shape[-2], self.mesh_device.compute_with_storage_grid_size()
+                ),
+            )
+        else:
+            spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
+                spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+            )
+            spatial_ff = ttnn.squeeze(
+                self.ff(ttnn.unsqueeze(spatial_normed, 0), compute_kernel_config=self.ff_compute_kernel_config), 0
+            )
+            spatial = ttnn.addcmul(spatial, spatial_ff, spatial_gate_ff)
+
+        if self.context_pre_only:
+            return spatial, None
+
+        prompt_normed = ttnn.squeeze(
+            self.norm2_context(
+                ttnn.unsqueeze(prompt, 0),
+                dynamic_weight=prompt_scale_ff,
+                dynamic_bias=prompt_shift_ff,
+            ),
+            0,
+        )
+
+        prompt_gate_ff = as_bf16(prompt_gate_ff)
+        if is_ring:
+            prompt = self.ff_context.forward_fused_addcmul(
+                prompt_normed,
+                prompt,
+                prompt_gate_ff,
+                scalar=1.0,
+                compute_kernel_config=self.ff_compute_kernel_config,
+                parallel_config=self.parallel_config,
+                core_grid=Attention.get_core_grid(
+                    prompt_normed.shape[-2], self.mesh_device.compute_with_storage_grid_size()
+                ),
+            )
+        else:
+            prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
+                prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+            )
+            prompt_ff = ttnn.squeeze(
+                self.ff_context(ttnn.unsqueeze(prompt_normed, 0), compute_kernel_config=self.ff_compute_kernel_config),
+                0,
+            )
+            prompt = ttnn.addcmul(prompt, prompt_ff, prompt_gate_ff)
+
+        return spatial, prompt
+
+
+def _chunk_time3d(t: ttnn.Tensor, count: int) -> tuple[ttnn.Tensor]:
+    size = t.shape[-1] // count
+    return tuple(t[:, :, i * size : (i + 1) * size] for i in range(count))

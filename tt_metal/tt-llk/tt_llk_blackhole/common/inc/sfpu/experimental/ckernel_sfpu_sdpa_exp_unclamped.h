@@ -19,8 +19,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_lower_clamp_only_(sfpi::vFloat val)
     sfpi::vFloat xlog2      = (val * ONE_LN2 + 127.f);
 
     // Lower clamp only (xlog2 >= 0). Upper clamp is dead when val <= 0 (see file header).
-    sfpi::vFloat threshold_low = 0.f;
-    sfpi::vec_min_max(threshold_low, xlog2);
+    // One SFPSWAP via sfpi::max, unlike sfpi::vec_min_max's swap through a second operand.
+    xlog2 = sfpi::max(xlog2, 0.0f);
 
     sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
 

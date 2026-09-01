@@ -4,13 +4,13 @@
 """
 TTTv2 DeepSeek-R1-Distill-Qwen-14B demo — accuracy and performance measurement on N300 / T3K.
 
-Uses ``EagerDeepSeekR1Qwen14BExecutor`` / ``TracedDeepSeekR1Qwen14BExecutor`` directly (no vLLM adapter).
+Uses the model-owned ``DeepSeekR1Qwen14BExecutor`` directly (no vLLM adapter).
 
 **Mesh note.** DeepSeek-R1-Distill-Qwen-14B is a dense Qwen2.5-14B architecture: 40 attention heads and
-8 KV heads (both divide 2 and 8), so N300 (2 devices) and T3K (8 devices) are supported. **N150 (1 device)
-is NOT**: the 14B weights + distributed-LayerNorm circular buffer overflow a single Wormhole's L1 at the
-first forward (``_MIN_TP_DEVICES = 2`` — the model needs at least 2-way tensor parallelism). Consequently
-every ci-b1-DP factor (each DP group is a single device) cleanly skips — a genuine hardware-capacity guard.
+8 KV heads (both divide 2, 4, and 8), so TP2, TP4, and TP8 are supported. **TP1 is NOT**: the 14B weights +
+distributed-LayerNorm circular buffer overflow a single Wormhole's L1 at the first forward
+(``_MIN_TP_DEVICES = 2``). On a physical eight-device T3K this means DP2 uses two TP4 lanes and DP4 uses
+four TP2 lanes; DP8 and larger factors cleanly skip because they would require unsupported TP1 lanes.
 
 DeepSeek-R1-Distill-Qwen-14B is a **reasoning** model: the chat template appends ``<think>\\n`` and the
 model emits a ``<think>...</think>`` chain before the answer. ``<think>`` / ``</think>`` are NOT special
@@ -23,7 +23,7 @@ CI cases (parity with TTTv1 ``simple_text_demo.py``):
     batch-32         - short-context throughput (seq512/2048 / 200 decode)
     batch-32-ci      - CI-faithful batch-32 (seq2048 / 1024 decode; TTTv1 ci-32)
     eval-32          - 32-user cross-batch determinism (TTTv1 ci-eval-32)
-    ci-b1-DP-{2..32} - single-user data-parallel scaling smoke (TTTv1 ci-b1-DP-*); all skip (14B needs >=2 dev)
+    ci-b1-DP-{2..32} - single-user DP scaling smoke; DP2/DP4 run on T3K, DP8/16/32 capacity-skip
 
 Usage::
 
@@ -50,26 +50,31 @@ from pathlib import Path
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoConfig
 
 import ttnn
+from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.llm_runtime.lane_group import LaneGroupExecutor
 from models.common.models.deepseek_r1_distill_qwen_14b.executor import (
-    EagerDeepSeekR1Qwen14BExecutor,
-    TracedDeepSeekR1Qwen14BExecutor,
+    DeepSeekR1Qwen14BExecutor,
+    DeepSeekR1Qwen14BExecutorConfig,
 )
+from models.common.models.deepseek_r1_distill_qwen_14b.hf_adaptor import from_pretrained
 from models.common.models.deepseek_r1_distill_qwen_14b.model import (
     DEEPSEEK_R1_14B_ACCURACY,
     DEEPSEEK_R1_14B_PERFORMANCE,
     DeepSeekR1Qwen14B,
 )
-from models.common.models.executor import (
+from models.common.sampling.sampling_params import SamplingParams
+from models.common.tests.demos.cleanup_utils import cleanup_dp_model_case, cleanup_model_case
+from models.common.tests.demos.run_helpers import assert_no_special_tokens as assert_no_special_tokens_shared
+from models.common.tests.demos.run_helpers import (
     load_eval_repeat_prompts_batch32,
+    make_contiguous_page_table,
     run_eval_repeat_batch32,
     run_perf_benchmark,
     run_teacher_forcing,
 )
-from models.common.sampling.sampling_params import SamplingParams
-from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -237,9 +242,9 @@ def _sampling_bucket() -> str:
 
 # DeepSeek-R1-Distill-Qwen-14B needs at least this many devices of tensor parallelism: the 14B weights +
 # the distributed-LayerNorm circular buffer overflow a single Wormhole's L1 (1512864 B vs 1499136 B max)
-# at the first forward. N300 (2) is the minimum viable mesh (dim/2 shrinks the norm CB); T3K (8) shards
-# further. Consequence: no single-device config can run this model, so every ci-b1-DP factor (each DP
-# group is a single device) cleanly skips — a genuine hardware-capacity guard, not a masked failure.
+# at the first forward. TP2 is the minimum viable lane (dim/2 shrinks the norm CB), while TP4 and TP8
+# shard further. On an eight-device T3K, DP2/TP4 and DP4/TP2 are viable; DP8 and larger factors require
+# unsupported TP1 lanes and cleanly capacity-skip rather than masking a runtime failure.
 _MIN_TP_DEVICES = 2
 
 
@@ -296,7 +301,7 @@ def _ttnn_mesh_device_param_from_env() -> dict:
         )
     param = {
         "mesh_shape": shape,
-        "trace_region_size": 50_000_000,
+        "trace_region_size": 100_000_000 if env == "T3K" else 50_000_000,
         "num_command_queues": 1,
     }
     # TTTv2 multi-device executor dispatch (and the on-device sampling all-gather) stalls without an
@@ -545,20 +550,88 @@ def create_model(
             max_seq_len = 4096
 
     try:
-        model = DeepSeekR1Qwen14B.from_pretrained(
+        llm = from_pretrained(
             mesh_device,
-            hf_model,
+            hf_model=hf_model,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
-            num_layers=None,
+            n_layers=None,
             cache_dir=cache_dir,
-            precision=precision,
-            executor_mode=True,
+            optimizations=precision,
         )
     except Exception as e:
         pytest.skip(f"Could not build DeepSeek-R1-Distill-Qwen-14B model (weights / memory / mesh): {e}")
 
+    model = llm.model
+    model.demo_tokenizer = llm.tokenizer
     return model
+
+
+def create_executor(
+    model: DeepSeekR1Qwen14B,
+    *,
+    traced: bool,
+    device_sampling_enabled: bool,
+    trace_mode=None,
+) -> DeepSeekR1Qwen14BExecutor:
+    block_size = 32
+    max_num_blocks = ((model.config.max_seq_len + block_size - 1) // block_size) * model.config.max_batch_size
+    attention_config = model.config.block_configs[0].attention_config
+    if trace_mode is None:
+        trace_mode = "all" if traced else "none"
+    return DeepSeekR1Qwen14BExecutor(
+        model,
+        model.model_args,
+        DeepSeekR1Qwen14BExecutorConfig(
+            trace=TraceConfig(mode=trace_mode),
+            warmup=WarmupConfig(),
+            paged_kv_cache=PagedKVCacheConfig(
+                block_size=block_size,
+                max_num_blocks=max_num_blocks,
+                num_blocks=max_num_blocks,
+                dtype=attention_config.kv_cache_dtype,
+            ),
+            device_sampling_enabled=device_sampling_enabled,
+        ),
+    )
+
+
+def _warmup_demo_executor(
+    executor,
+    *,
+    kv_cache,
+    page_table,
+    prefill_compile_case=None,
+    prefill_sampling_params=None,
+):
+    config = executor.config if hasattr(executor, "config") else executor.lanes[0].config
+    can_sample_on_device = config.device_sampling_enabled
+    prefill_kwargs = {"kv_cache": kv_cache, "can_sample_on_device": can_sample_on_device}
+    decode_kwargs = {
+        "kv_cache": kv_cache,
+        "max_batch_size": int(
+            executor.max_batch_size if hasattr(executor, "max_batch_size") else executor.model.config.max_batch_size
+        ),
+        "num_blocks": int(page_table.shape[-1]),
+        "can_sample_on_device": can_sample_on_device,
+    }
+    executor.warmup_model_decode(enable_trace=False, **decode_kwargs)
+    executor.warmup_model_prefill(enable_trace=False, **prefill_kwargs)
+    if prefill_compile_case is not None:
+        tokens, prompt_lens = prefill_compile_case
+        executor.compile_prefill(
+            tokens=tokens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            empty_slots=list(range(tokens.shape[0])),
+            sampling_params=prefill_sampling_params,
+            execution=executor.eager_execution,
+        )
+    if config.trace.prefill_enabled:
+        executor.warmup_model_prefill(enable_trace=True, **prefill_kwargs)
+    if config.trace.decode_enabled:
+        executor.warmup_model_decode(enable_trace=True, **decode_kwargs)
 
 
 # =============================================================================
@@ -577,11 +650,9 @@ def create_model(
 #   ci-b1-DP-16 : max_seq_len=1024, max_generated_tokens=200,  stop_at_eos=True
 #   ci-b1-DP-32 : max_seq_len=1024, max_generated_tokens=200,  stop_at_eos=True
 #
-# Hardware feasibility: each DP group is one device (batch_size=1 per group), so
-# ``data_parallel == n_devices``. DeepSeek-R1-Distill-Qwen-14B needs >=2-way TP (a single device cannot
-# hold the 14B weights + distributed-norm CB — see _MIN_TP_DEVICES), so EVERY DP factor is inapplicable:
-# you cannot have both 1-device-per-user AND >=2-device TP. All factors cleanly ``pytest.skip`` (genuine
-# hardware-capacity guard). The case ids are present for parity with TTTv1 ``simple_text_demo.py``.
+# On the physical eight-device T3K, DP2 creates two TP4 lanes and DP4 creates four TP2 lanes.
+# Both are structurally supported. DP8 creates TP1 lanes, which are below the model's capacity
+# floor; DP16/32 cannot partition the host. The case IDs remain unchanged.
 _DP_SIZE_TABLE: dict[int, dict] = {
     2: {"max_seq_len": 1024, "max_generated_tokens": 200, "stop_at_eos": True},
     4: {"max_seq_len": 4096, "max_generated_tokens": 2048, "stop_at_eos": False},
@@ -591,25 +662,57 @@ _DP_SIZE_TABLE: dict[int, dict] = {
 }
 
 
-def create_dp_submeshes(mesh_device: ttnn.MeshDevice, data_parallel: int) -> list:
-    """Partition the open parent mesh into ``data_parallel`` disjoint row-submeshes.
-
-    Mirrors TTTv1 ``generator.create_submeshes`` minus the Galaxy reshape branch (no Galaxy reachable
-    here). For the single-user DP cases ``n // data_parallel == 1``, so each submesh is a ``(1,1)`` mesh.
-    Fabric stays owned by the parent — do NOT set fabric per-submesh.
-    """
-    if data_parallel == 1:
-        return [mesh_device]
+def _dp_lane_tp_or_skip(mesh_device: ttnn.MeshDevice, data_parallel: int) -> int:
+    """Return devices per lane for supported DeepSeek TP4/TP2 DP layouts."""
     n = mesh_device.get_num_devices()
-    assert n % data_parallel == 0, f"{n} devices not divisible by data_parallel={data_parallel}"
-    return mesh_device.create_submeshes(ttnn.MeshShape(1, n // data_parallel))
+    if n % data_parallel != 0:
+        pytest.skip(f"DP-{data_parallel} cannot partition {n} devices into equal lanes")
+    tensor_parallel = n // data_parallel
+    if tensor_parallel < _MIN_TP_DEVICES:
+        pytest.skip(
+            f"DP-{data_parallel} on {n} devices creates TP{tensor_parallel} lanes; "
+            f"DeepSeek-R1-Distill-Qwen-14B requires at least TP{_MIN_TP_DEVICES}"
+        )
+    if tensor_parallel not in (2, 4):
+        pytest.skip(f"DP-{data_parallel} on {n} devices creates unsupported TP{tensor_parallel} lanes")
+    return tensor_parallel
 
 
-def _dp_or_skip(mesh_device: ttnn.MeshDevice, data_parallel: int) -> None:
-    """Skip unless the mesh has exactly ``data_parallel`` single-device DP groups."""
-    n = mesh_device.get_num_devices()
-    if n % data_parallel != 0 or (n // data_parallel) != 1:
-        pytest.skip(f"DP-{data_parallel} needs {data_parallel} single-device groups; have {n} devices")
+def _create_dp_submeshes(mesh_device: ttnn.MeshDevice, data_parallel: int, tensor_parallel: int) -> list:
+    submeshes = list(mesh_device.create_submeshes(ttnn.MeshShape(1, tensor_parallel)))
+    if len(submeshes) != data_parallel:
+        raise ValueError(f"Expected {data_parallel} TP{tensor_parallel} submeshes, got {len(submeshes)}")
+    return submeshes
+
+
+def _dp_lane_cache_dir(cache_dir: Path, tensor_parallel: int) -> Path:
+    device_name = {2: "N300", 4: "N150x4"}.get(tensor_parallel, f"{tensor_parallel}dev")
+    lane_cache_dir = cache_dir.parent / device_name
+    lane_cache_dir.mkdir(parents=True, exist_ok=True)
+    return lane_cache_dir
+
+
+def _validate_dp_lane(
+    model: DeepSeekR1Qwen14B, lane: DeepSeekR1Qwen14BExecutor, tensor_parallel: int, max_seq_len: int
+) -> None:
+    config = model.config
+    attention = config.block_configs[0].attention_config
+    if config.num_devices != tensor_parallel:
+        raise ValueError(f"DP lane expected TP{tensor_parallel}, model uses TP{config.num_devices}")
+    if attention.n_heads % tensor_parallel or attention.n_kv_heads % tensor_parallel:
+        raise ValueError(
+            f"DP lane TP{tensor_parallel} does not divide DeepSeekR1Qwen14B heads "
+            f"({attention.n_heads}/{attention.n_kv_heads})"
+        )
+    if config.max_batch_size != 1:
+        raise ValueError(f"DP lane must have capacity 1, got {config.max_batch_size}")
+    expected_blocks = math.ceil(max_seq_len / 32)
+    cache_config = lane.config.paged_kv_cache
+    if cache_config.max_num_blocks != expected_blocks or cache_config.num_blocks != expected_blocks:
+        raise ValueError(
+            f"DP lane cache must contain {expected_blocks} blocks, got "
+            f"max={cache_config.max_num_blocks}, resolved={cache_config.num_blocks}"
+        )
 
 
 def assert_no_special_tokens(
@@ -628,25 +731,23 @@ def assert_no_special_tokens(
     the eos. ``<think>`` / ``</think>`` are ordinary tokens (not special ids) so a legitimate reasoning
     chain never trips the guard.
     """
-    if is_ci_env is None:
-        is_ci_env = os.environ.get("CI") == "true"
-    special = set(tokenizer.all_special_ids)
     stop = set()
     if tokenizer.eos_token_id is not None:
         stop.add(tokenizer.eos_token_id)
-    offenders = 0
+    truncated_outputs = []
     for out in generated_token_ids:
         seq = list(out)
         for i, t in enumerate(seq):
             if t in stop:
                 seq = seq[:i]
                 break
-        if any(t in special for t in seq):
-            offenders += 1
-    if offenders:
-        logger.warning(f"[{case_name}] model produced special tokens ({offenders}/{len(generated_token_ids)} users)")
-        if is_ci_env:
-            assert False, f"model produced special tokens ({offenders} users)"
+        truncated_outputs.append(seq)
+    assert_no_special_tokens_shared(
+        truncated_outputs,
+        tokenizer,
+        case_name=case_name,
+        is_ci_env=is_ci_env,
+    )
 
 
 def _run_dp_smoke(
@@ -658,108 +759,79 @@ def _run_dp_smoke(
     max_gen_tokens: int,
     stop_at_eos: bool,
 ) -> None:
-    """Single-user data-parallel scaling smoke across ``data_parallel`` submeshes.
-
-    Builds one model + one traced executor + one KV cache + one page table per submesh (one user each),
-    runs ``run_perf_benchmark`` per submesh sequentially, collects the per-submesh output, and asserts no
-    special tokens. Every executor and model is cleaned up in ``finally``.
-    """
-    _dp_or_skip(mesh_device, data_parallel)
-    # Each DP group is a single device (see _dp_or_skip: n // data_parallel == 1). DeepSeek-R1-Distill-
-    # Qwen-14B cannot run on a single device (needs >=2-way TP — see _skip_below_min_tp_devices), so every
-    # DP factor is inapplicable: you cannot have both 1-device-per-user AND >=2-device TP. Genuine
-    # hardware-capacity guard.
-    _skip_below_min_tp_devices(mesh_device.get_num_devices() // data_parallel)
-
+    """Run one user per supported TP lane through the migrated model-owned DP runtime."""
+    tensor_parallel = _dp_lane_tp_or_skip(mesh_device, data_parallel)
+    mesh_device.quiesce_devices()
+    submeshes = _create_dp_submeshes(mesh_device, data_parallel, tensor_parallel)
+    lane_cache_dir = _dp_lane_cache_dir(cache_dir, tensor_parallel)
     hf_model = os.environ.get("HF_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B")
-    _skip_unless_heads_divide_mesh(mesh_device, hf_model)
-    tokenizer = _load_tokenizer(hf_model)
     precision = DEEPSEEK_R1_14B_PERFORMANCE if optimizations == "performance" else DEEPSEEK_R1_14B_ACCURACY
-
-    submeshes = create_dp_submeshes(mesh_device, data_parallel)
-
-    # One prompt per DP group (load_input_prompts pads/truncates to the requested count).
     prompts = load_input_prompts(data_parallel)
-
     sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
-    _on_device_params = {
+    on_device_params = {
         "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
         "on_device_topk": SamplingParams(temperature=0.0, top_k=32, top_p=0.08),
     }
 
     models: list = []
-    executors: list = []
-    all_generated: list = []
+    lanes: list = []
+    group = None
     try:
-        for i, sm in enumerate(submeshes):
-            try:
-                model = DeepSeekR1Qwen14B.from_pretrained(
-                    sm,
-                    hf_model,
-                    max_batch_size=1,
-                    max_seq_len=max_seq_len,
-                    num_layers=None,
-                    cache_dir=cache_dir,
-                    precision=precision,
-                    executor_mode=True,
-                )
-            except Exception as e:
-                pytest.skip(f"Could not build DeepSeek-R1-Distill-Qwen-14B model (weights / memory / mesh): {e}")
-            models.append((model, sm))
-
-            traced_executor = TracedDeepSeekR1Qwen14BExecutor(model, sm)
-            executors.append(traced_executor)
-
-            ma = model.model_args
-            assert ma is not None
-
-            block_size = 32
-            n_dev_sm = sm.get_num_devices()
-            max_num_blocks_per_user = ma.max_seq_len // block_size
-            max_num_blocks = max_num_blocks_per_user * ma.max_batch_size  # max_batch_size == 1
-
-            kv_cache_shape = (max_num_blocks, ma.n_kv_heads // n_dev_sm, block_size, ma.head_dim)
-            kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-            page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(
-                ma.max_batch_size, max_num_blocks_per_user
-            )
-
-            input_tokens, prompt_lens = tokenize_prompts(prompts[i : i + 1], tokenizer)
-
-            sampling_params = (
-                _on_device_params[sampling_mode]
-                if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
-                else None
-            )
-            logger.info(
-                f"[ci-b1-DP-{data_parallel}] submesh {i} SAMPLING_MODE={sampling_mode} "
-                f"-> sampling_params={sampling_params}, stop_at_eos={stop_at_eos}"
-            )
-
-            result = run_perf_benchmark(
-                traced_executor,
-                tokens=input_tokens,
-                kv_cache=kv_cache,
-                page_table=page_table,
-                num_decode_tokens=max_gen_tokens,
+        for submesh in submeshes:
+            llm = from_pretrained(
+                submesh,
+                hf_model=hf_model,
                 max_batch_size=1,
-                prompt_lens=prompt_lens,
-                sampling_params=sampling_params,
+                max_seq_len=max_seq_len,
+                n_layers=None,
+                cache_dir=lane_cache_dir,
+                optimizations=precision,
             )
-            all_generated.append(result.generated_token_ids[0])
-            log_generated_text(prompts[i : i + 1], result.generated_token_ids, tokenizer)
+            model = llm.model
+            model.demo_tokenizer = llm.tokenizer
+            models.append((model, submesh))
+            lane = create_executor(
+                model,
+                traced=True,
+                device_sampling_enabled=sampling_mode in on_device_params,
+            )
+            lanes.append(lane)
+            _validate_dp_lane(model, lane, tensor_parallel, max_seq_len)
 
-        assert_no_special_tokens(all_generated, tokenizer, case_name=f"ci-b1-DP-{data_parallel}")
+        group = LaneGroupExecutor(lanes, mesh_device=mesh_device)
+        tokenizer = models[0][0].demo_tokenizer
+        kv_cache = group.allocate_kv_cache()
+        # Every lane owns an independent block pool; repeat the same lane-local block IDs for
+        # each global row rather than assigning cross-lane global block offsets.
+        page_table = make_contiguous_page_table(1, max_seq_len, 32).repeat(data_parallel, 1)
+        _warmup_demo_executor(group, kv_cache=kv_cache, page_table=page_table)
+        input_tokens, prompt_lens = tokenize_prompts(prompts, tokenizer)
+        sampling_params = (
+            on_device_params[sampling_mode]
+            if sampling_mode in on_device_params and getattr(models[0][0], "supports_on_device_sampling", False)
+            else None
+        )
+        logger.info(
+            f"[ci-b1-DP-{data_parallel}] TP={tensor_parallel}, SAMPLING_MODE={sampling_mode} "
+            f"-> sampling_params={sampling_params}, stop_at_eos={stop_at_eos}"
+        )
+        result = run_perf_benchmark(
+            group,
+            tokens=input_tokens,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            num_decode_tokens=max_gen_tokens,
+            max_batch_size=data_parallel,
+            prompt_lens=prompt_lens,
+            sampling_params=sampling_params,
+            prefill_sampling_params=None,
+        )
+        assert len(result.generated_token_ids) == data_parallel
+        assert all(result.generated_token_ids), f"ci-b1-DP-{data_parallel}: every TP lane must return output"
+        log_generated_text(prompts, result.generated_token_ids, tokenizer)
+        assert_no_special_tokens(result.generated_token_ids, tokenizer, case_name=f"ci-b1-DP-{data_parallel}")
     finally:
-        for ex in executors:
-            ex.cleanup()
-        for model, sm in models:
-            cleanup_model_case(model, sm)
-        # When data_parallel > 1 we carved child submeshes off the fixture-owned parent mesh. Those
-        # submeshes share the parent's command queue, so the parent cannot be closed while they remain in
-        # use. Drain the parent + submesh CQs before teardown.
-        if data_parallel > 1:
-            mesh_device.quiesce_devices()
+        cleanup_dp_model_case(group, lanes, models, mesh_device, submeshes)
 
 
 # =============================================================================
@@ -873,14 +945,15 @@ def test_deepseek_r1_qwen_14b(test_config, mesh_device, optimizations):
             # 32-user cross-batch determinism (self-consistency under prompt rotation).
             _run_eval_repeat_batch32(model, mesh_device)
     finally:
-        cleanup_model_case(model, mesh_device)
+        if model is not None:
+            cleanup_model_case(model, mesh_device)
 
 
 def _run_token_accuracy(model: DeepSeekR1Qwen14B, mesh_device, expected):
     """Teacher-forcing token accuracy vs ``.refpt`` (CPU-generated)."""
     hf_model = os.environ.get("HF_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B")
     reference_tokens, top5_tokens, prompt_len, metadata = load_reference_data(hf_model)
-    tokenizer = _load_tokenizer(hf_model)
+    tokenizer = model.demo_tokenizer
 
     if reference_tokens.dim() > 1:
         reference_tokens = reference_tokens.squeeze()
@@ -901,20 +974,13 @@ def _run_token_accuracy(model: DeepSeekR1Qwen14B, mesh_device, expected):
 
     prompt_tokens = reference_tokens[:prompt_len].unsqueeze(0)
 
-    executor = EagerDeepSeekR1Qwen14BExecutor(model, mesh_device)
-    ma = model.model_args
-    assert ma is not None
-
-    max_batch_size = ma.max_batch_size
+    executor = create_executor(model, traced=False, device_sampling_enabled=False)
+    max_batch_size = model.config.max_batch_size
     prompt_tokens = prompt_tokens.repeat(max_batch_size, 1)
-    max_seq_len = ma.max_seq_len
+    max_seq_len = model.config.max_seq_len
     block_size = 32
-    max_num_blocks_per_user = max_seq_len // block_size
-    max_num_blocks = max_num_blocks_per_user * max_batch_size
-
-    kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
-    kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
+    kv_cache = executor.allocate_kv_cache()
+    page_table = make_contiguous_page_table(max_batch_size, max_seq_len, block_size)
 
     target_top5 = select_teacher_forcing_top5_slice(
         top5_tokens,
@@ -924,21 +990,24 @@ def _run_token_accuracy(model: DeepSeekR1Qwen14B, mesh_device, expected):
     )
     is_ci_env = os.environ.get("CI") == "true"
     profiler = BenchmarkProfiler()
-    profiler.start("run")
-    # run_teacher_forcing times the prefill + per-step (teacher-forced) decode loop and, given the
-    # profiler, brackets the "inference_prefill" / "inference_decode" steps itself — so the returned
-    # result carries prefill/decode throughput alongside accuracy for CI benchmark-data emission.
-    result = run_teacher_forcing(
-        executor,
-        prompt_tokens=prompt_tokens,
-        reference_tokens=reference_tokens,
-        top5_tokens=target_top5,
-        kv_cache=kv_cache,
-        page_table=page_table,
-        max_batch_size=max_batch_size,
-        profiler=profiler,
-    )
-    profiler.end("run")
+    try:
+        profiler.start("run")
+        # run_teacher_forcing times the prefill + per-step (teacher-forced) decode loop and, given the
+        # profiler, brackets the "inference_prefill" / "inference_decode" steps itself — so the returned
+        # result carries prefill/decode throughput alongside accuracy for CI benchmark-data emission.
+        result = run_teacher_forcing(
+            executor,
+            prompt_tokens=prompt_tokens,
+            reference_tokens=reference_tokens,
+            top5_tokens=target_top5,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            max_batch_size=max_batch_size,
+            profiler=profiler,
+        )
+        profiler.end("run")
+    finally:
+        executor.cleanup()
 
     top1 = result.top1_accuracy() * 100
     top5 = result.top5_accuracy() * 100
@@ -973,7 +1042,7 @@ def _run_token_accuracy(model: DeepSeekR1Qwen14B, mesh_device, expected):
             ml_model_name=hf_model,
             ml_model_type="llm",
             device_name=get_device_name(mesh_device),
-            num_layers=ma.n_layers,
+            num_layers=model.config.n_layers,
             batch_size=1,
             input_sequence_length=prompt_len,
             output_sequence_length=num_target,
@@ -1018,7 +1087,7 @@ def _run_perf_benchmark(
     max_prefill_len: int | None = None,
     num_decode_tokens: int | None = None,
 ):
-    """Timed prefill + decode (``TracedDeepSeekR1Qwen14BExecutor``).
+    """Timed prefill + decode with the traced model-owned executor.
 
     Prefill uses each prompt's natural token length (TTTv1 ``preprocess_inputs_prefill`` semantics — the
     executor buckets to ``get_padded_prefill_len``); decode runs for ``num_decode_tokens`` steps (default
@@ -1030,7 +1099,7 @@ def _run_perf_benchmark(
     never overruns the page table (the ``batch-32-ci`` leg requests 1024).
     """
     hf_model = os.environ.get("HF_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B")
-    tokenizer = _load_tokenizer(hf_model)
+    tokenizer = model.demo_tokenizer
 
     # On-device sampling toggle (SAMPLING_MODE env):
     #   host            -> sampling_params=None (host-argmax; full-vocab all-gather + PCIe readback/step)
@@ -1049,32 +1118,25 @@ def _run_perf_benchmark(
         if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
         else None
     )
+    pipeline_readback = os.environ.get("PIPELINE_READBACK", "1").lower() not in ("0", "false", "no")
     logger.info(f"[{case_name}] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
+    logger.info(f"[{case_name}] PIPELINE_READBACK={pipeline_readback}")
 
-    # Batched-prefill A/B knob (parity caveat #12): set DISABLE_BATCHED_PREFILL=1 to force the sequential
-    # per-user prefill loop (the pre-feature baseline) for before/after TTFT comparison.
-    if os.environ.get("DISABLE_BATCHED_PREFILL") and model.model_args is not None:
-        model.model_args.disable_batched_prefill = True
-
-    # Free-running perf run: enable the executor's on-device decode loop on the on-device sampling path
-    # (inert on host / force-argmax; gated to the top-k path by _decode_loop_active). This is the #49284
-    # shared on-device decode loop — it must be active on the perf path for the T3K decode gate.
-    traced_executor = TracedDeepSeekR1Qwen14BExecutor(
-        model, mesh_device, ondevice_decode_loop=sampling_params is not None
+    # Free-running perf run: enable the executor's on-device decode loop on the on-device sampling
+    # path (inert on host/force-argmax; gated to the top-k path by _decode_loop_active). This is the
+    # shared #49284 decode-loop fix; it must be active on the perf path for on-device decode parity.
+    traced_executor = create_executor(
+        model,
+        traced=True,
+        device_sampling_enabled=sampling_params is not None,
     )
     try:
-        ma = model.model_args
-        assert ma is not None
-
         block_size = 32
-        max_seq_len = ma.max_seq_len
-        max_batch_size = ma.max_batch_size
-        max_num_blocks_per_user = max_seq_len // block_size
-        max_num_blocks = max_num_blocks_per_user * max_batch_size
-
-        kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
-        kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-        page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
+        max_seq_len = model.config.max_seq_len
+        max_batch_size = model.config.max_batch_size
+        kv_cache = traced_executor.allocate_kv_cache()
+        page_table = make_contiguous_page_table(max_batch_size, max_seq_len, block_size)
+        _warmup_demo_executor(traced_executor, kv_cache=kv_cache, page_table=page_table)
 
         # Decode-token budget, clamped to the KV-cache headroom. Prompts bucket to ~128 and we keep a
         # 16-token margin, so the high-water decode position stays inside max_seq_len.
@@ -1106,6 +1168,8 @@ def _run_perf_benchmark(
             max_batch_size=max_batch_size,
             prompt_lens=prompt_lens,
             sampling_params=sampling_params,
+            prefill_sampling_params=None if mesh_device.get_num_devices() > 1 else sampling_params,
+            pipeline_readback=pipeline_readback,
             profiler=profiler,
         )
         profiler.end("run")
@@ -1139,7 +1203,7 @@ def _run_perf_benchmark(
                 ml_model_name=hf_model,
                 ml_model_type="llm",
                 device_name=get_device_name(mesh_device),
-                num_layers=ma.n_layers,
+                num_layers=model.config.n_layers,
                 batch_size=result.batch_size,
                 input_sequence_length=prefill_seq_len,
                 output_sequence_length=effective_decode,
@@ -1184,46 +1248,40 @@ def _run_eval_repeat_batch32(model: DeepSeekR1Qwen14B, mesh_device):
     prefill ON and OFF, and any on-device flip is identical ON vs OFF (prefill-independent).
     """
     hf_model = os.environ.get("HF_MODEL", "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B")
-    tokenizer = _load_tokenizer(hf_model)
+    tokenizer = model.demo_tokenizer
 
-    # DeepSeek-R1 chat generation ends at <｜end▁of▁sentence｜> (the eos). The model opening a NEW turn
-    # (<｜User｜>) is a de-facto response terminator as well, but it is not in the tokenizer's eos set.
-    # Augment the tokenizer stop set (the mechanism ``hf_stop_ids`` reads) with <｜User｜> so the
-    # determinism runner truncates a degenerate turn-restart there — same pattern as the qwen ports'
-    # <|im_start|> augmentation. Without this, a fixed-budget greedy continuation of the numeric eval
-    # prompts can hallucinate a new turn deep in decode; which of the two equally-valid prefill numerics
-    # (batched vs sequential) hits it is a near-tie. <｜User｜> is a legitimate response terminator so
-    # truncating there is correct, not a loosening; cross-batch consistency is still asserted on the
-    # truncated (real-response) tokens.
+    # DeepSeek uses <｜User｜> as a new-turn boundary. It is not a global generation
+    # default, but eval-32 treats it as a local terminator before determinism comparison.
     user_turn_id = tokenizer.convert_tokens_to_ids("<｜User｜>")
     if isinstance(user_turn_id, int) and user_turn_id >= 0:
         existing = list(getattr(tokenizer, "stop_tokens", None) or [])
         tokenizer.stop_tokens = list({*existing, user_turn_id})
 
-    ma = model.model_args
-    assert ma is not None
-
-    # Batched-prefill A/B knob (parity caveat #12): DISABLE_BATCHED_PREFILL=1 forces the pure per-bucket
-    # sequential prefill so eval-32 can be validated both ON and OFF.
-    if os.environ.get("DISABLE_BATCHED_PREFILL"):
-        ma.disable_batched_prefill = True
-
     block_size = 32
-    max_seq_len = ma.max_seq_len
-    max_batch_size = ma.max_batch_size
-    max_num_blocks_per_user = max_seq_len // block_size
-    max_num_blocks = max_num_blocks_per_user * max_batch_size
-
-    kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
-    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
+    max_seq_len = model.config.max_seq_len
+    max_batch_size = model.config.max_batch_size
+    page_table = make_contiguous_page_table(max_batch_size, max_seq_len, block_size)
 
     # Fresh traced executor + zeroed KV cache per repeat (driver owns the lifecycle), so the rotated
     # batches are fully independent — see run_eval_repeat_batch32 for why reuse corrupts the 3rd repeat.
     def make_executor():
-        return TracedDeepSeekR1Qwen14BExecutor(model, mesh_device)
+        return create_executor(
+            model,
+            traced=True,
+            device_sampling_enabled=sampling_params is not None,
+            trace_mode="decode_only",
+        )
 
     def allocate_kv_cache(executor):
-        return executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
+        kv_cache = executor.allocate_kv_cache()
+        _warmup_demo_executor(
+            executor,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            prefill_compile_case=representative_prefill,
+            prefill_sampling_params=sampling_params,
+        )
+        return kv_cache
 
     # TTTv1 ci-eval-32 numeric prompts (parity).
     prompts = load_eval_repeat_prompts_batch32()
@@ -1241,6 +1299,11 @@ def _run_eval_repeat_batch32(model: DeepSeekR1Qwen14B, mesh_device):
         if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
         else None
     )
+    # Static warmup covers the model's regular graph families, but this heterogeneous
+    # workload produces data-dependent batched signatures (30 q128 rows and 2 q1024
+    # rows). Register one representative rotation before traced warmup activates the
+    # program gate. Prompt rotation preserves that signature multiset for every repeat.
+    representative_prefill = tokenize_fn(prompts)
     logger.info(f"[eval-32] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
 
     run_eval_repeat_batch32(

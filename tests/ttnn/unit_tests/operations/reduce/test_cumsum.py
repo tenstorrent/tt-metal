@@ -183,8 +183,12 @@ def test_cumsum_backward(size, dim, dtypes, device):
     assert_cumsum_quality(torch_input_tensor.grad, tt_input_grad_cpu)
 
 
+# The preallocated `out` tensor must live on device: the on-device check in
+# validate_output_tensor fires before any other validation, so a host `out`
+# would mask the check each row targets. Each row asserts the exact message of
+# the check it exercises.
 @pytest.mark.parametrize(
-    "dim, input_shape, output_shape, torch_dtype, input_dtype, output_dtype, memory_config, layout",
+    "dim, input_shape, output_shape, torch_dtype, input_dtype, output_dtype, memory_config, layout, error_msg",
     [
         (
             -10,
@@ -195,6 +199,7 @@ def test_cumsum_backward(size, dim, dtypes, device):
             ttnn.bfloat16,
             ttnn.DRAM_MEMORY_CONFIG,
             ttnn.Layout.TILE,
+            "The requested accumulation axis is -10, while the input tensor has rank 9",
         ),  # input_rank vs dim
         (
             10,
@@ -205,6 +210,7 @@ def test_cumsum_backward(size, dim, dtypes, device):
             ttnn.bfloat16,
             ttnn.DRAM_MEMORY_CONFIG,
             ttnn.Layout.TILE,
+            "The requested accumulation axis is 10, while the input tensor has rank 9",
         ),  # input_rank vs dim
         (
             3,
@@ -215,6 +221,7 @@ def test_cumsum_backward(size, dim, dtypes, device):
             ttnn.bfloat16,
             ttnn.DRAM_MEMORY_CONFIG,
             ttnn.Layout.TILE,
+            "Shape mismatch: input tensor shape",
         ),  # input_shape vs output_shape
         (
             3,
@@ -225,6 +232,7 @@ def test_cumsum_backward(size, dim, dtypes, device):
             ttnn.bfloat16,
             ttnn.DRAM_MEMORY_CONFIG,
             ttnn.Layout.TILE,
+            "Shape mismatch: input tensor shape",
         ),  # input_shape vs output_shape
         (
             3,
@@ -235,6 +243,7 @@ def test_cumsum_backward(size, dim, dtypes, device):
             ttnn.bfloat16,
             ttnn.DRAM_MEMORY_CONFIG,
             ttnn.Layout.ROW_MAJOR,
+            "The provided input tensor has a non-tile layout: ROW_MAJOR",
         ),  # unsupported layout
     ],
 )
@@ -247,13 +256,15 @@ def test_cumsum_failing_cases(
     output_dtype,
     memory_config,
     layout,
+    error_msg,
     device,
+    expect_error,
 ):
     torch.manual_seed(0)
     torch_input_tensor = torch.randn(input_shape, dtype=torch_dtype)
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, layout=layout, device=device, memory_config=memory_config
     )
-    ttnn_preallocated_tensor = ttnn.zeros(output_shape, dtype=output_dtype)
-    with pytest.raises(RuntimeError):
+    ttnn_preallocated_tensor = ttnn.zeros(output_shape, dtype=output_dtype, layout=ttnn.Layout.TILE, device=device)
+    with expect_error(RuntimeError, error_msg):
         ttnn.cumsum(ttnn_input_tensor, memory_config=memory_config, dim=dim, out=ttnn_preallocated_tensor)

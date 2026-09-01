@@ -115,7 +115,7 @@ void RunSparseMcastPerPage(BaseFabricFixture* fixture, RoutingDirection dir, uin
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_rt_args);
 
     // One receiver per writing chip; each polls its own offset (base + slot*payload).
-    std::vector<std::pair<std::shared_ptr<tt_metal::distributed::MeshDevice>, tt_metal::Program>> receiver_programs;
+    std::vector<std::shared_ptr<tt_metal::distributed::MeshDevice>> receiver_devices;
     std::vector<uint32_t> receiver_rt_args = {payload, num_packets, time_seed};
     for (uint32_t slot = 0; slot < num_dests; slot++) {
         auto receiver_device = fixture->get_device(writing_physical_devices[slot]);
@@ -138,14 +138,13 @@ void RunSparseMcastPerPage(BaseFabricFixture* fixture, RoutingDirection dir, uin
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = receiver_ct_args});
         tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_rt_args);
-        fixture->RunProgramNonblocking(receiver_device, receiver_program);
-        receiver_programs.emplace_back(receiver_device, std::move(receiver_program));
+        fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
+        receiver_devices.push_back(receiver_device);
     }
 
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
-    for (auto& [dev, prog] : receiver_programs) {
-        fixture->WaitForSingleProgramDone(dev, prog);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    for (const auto& dev : receiver_devices) {
+        fixture->WaitForSingleProgramDone(dev);
     }
 
     std::vector<uint32_t> sender_status;
@@ -158,7 +157,7 @@ void RunSparseMcastPerPage(BaseFabricFixture* fixture, RoutingDirection dir, uin
         CoreType::WORKER);
     EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
 
-    for (auto& [dev, _] : receiver_programs) {
+    for (const auto& dev : receiver_devices) {
         std::vector<uint32_t> recv_status;
         tt_metal::slow_dispatch::ReadFromL1(
             *dev,

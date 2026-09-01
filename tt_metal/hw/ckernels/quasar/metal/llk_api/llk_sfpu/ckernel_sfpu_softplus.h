@@ -138,7 +138,7 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
  *       vConstNeg1/LREG11 == -1.0, re-established per launch by @ref _init_sfpu_config_reg_, so there
  *       is no op-specific init step to pair with.
  */
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = SFPU_ITERATIONS>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_softplus(std::uint32_t beta, std::uint32_t beta_reciprocal, std::uint32_t threshold)
 {
     const float beta_f            = Converter::as_float(beta);

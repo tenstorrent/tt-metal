@@ -9,7 +9,7 @@ Whisper generation functions using the functional whisper implementation from tt
 import time
 import zlib
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import List, Optional, Tuple, Union
 
 import torch
@@ -36,6 +36,48 @@ class GenerationParams:
     logprob_threshold: Optional[float] = -2.0
     no_speech_threshold: Optional[float] = 0.6
     return_timestamps: bool = False
+
+
+@dataclass
+class PerfMetrics:
+    """Wall-clock timings for a single generate() call.
+
+    Returned in place of the loose (ttft, decode_throughput) pair when
+    return_perf_metrics=True, so that new measurements can be added without
+    changing the arity of the returned/yielded tuple.
+
+    Stage times are in seconds. feature_extract_s covers host-side feature
+    extraction only; encoder_s covers encoder input preprocessing, the encoder
+    stack, and the device synchronize that makes the encoder result observable.
+
+    total_audio_s is the audio actually processed, i.e. each item's duration capped
+    at the feature extractor's chunk_length, since anything past that window is
+    truncated before the encoder sees it. Note the converse is not corrected for:
+    an item shorter than the window still costs a full padded window of encoder
+    work, so the throughput properties read low on short clips.
+    """
+
+    feature_extract_s: float = 0.0
+    encoder_s: float = 0.0
+    total_audio_s: float = 0.0  # capped at the feature extractor's chunk_length per item
+    ttft: float = 0.0
+    decode_throughput: float = 0.0  # tokens/s/user
+    # True only when the encoder ran as a clean trace replay, i.e. steady state. False for the
+    # two outlier paths: the call that captures a bucket's trace (runs the encoder eagerly to
+    # warm up, then again under capture) and a call whose replay failed and fell back to eager.
+    # Both inflate encoder_s, so exclude them from steady-state throughput reporting. Always
+    # True when encoder tracing is disabled, since then every call is alike.
+    encoder_trace_hit: bool = True
+
+    @property
+    def feature_extract_throughput(self) -> float:
+        """Audio seconds processed per wall-clock second during feature extraction."""
+        return self.total_audio_s / self.feature_extract_s if self.feature_extract_s > 0 else 0.0
+
+    @property
+    def encoder_throughput(self) -> float:
+        """Audio seconds processed per wall-clock second by the encoder."""
+        return self.total_audio_s / self.encoder_s if self.encoder_s > 0 else 0.0
 
 
 # Default values for quality metrics
@@ -694,10 +736,12 @@ class WhisperGenerator:
             task: Task type ("transcribe" or "translate") (batch-homogeneous)
             prompt: Optional prompt to guide style/spelling (batch-homogeneous)
             stream_generation: Whether to stream tokens
-            return_perf_metrics: Whether to return performance metrics
+            return_perf_metrics: Whether to return a PerfMetrics alongside the transcription
 
         Returns:
-            Generated transcription and metrics
+            (transcription, avg_logprobs, no_speech_probs) when return_perf_metrics is False,
+            or (transcription, avg_logprobs, no_speech_probs, PerfMetrics) when it is True.
+            The streaming path yields the same tuples with a trailing is_final flag.
         """
         if generation_params is None:
             generation_params = [GenerationParams() for _ in range(len(current_batch))]
@@ -743,14 +787,20 @@ class WhisperGenerator:
             all_input_features.append(inputs.input_features)
 
         input_features = torch.cat(all_input_features, dim=0)
+        feature_extract_s = time.time() - start_encode
         del all_input_features
         unpadded_batch_size = input_features.shape[0]
         assert (
             unpadded_batch_size <= 2 * self.mesh_device.get_num_devices()
         ), "Only batch size (per device) 1 or 2 is supported for inference"
 
-        # Calculate audio durations for timestamp capping
-        audio_durations = self._calculate_audio_duration(current_batch) if any(return_timestamps) else None
+        # Calculate audio durations for timestamp capping. Durations are also reported as
+        # PerfMetrics.total_audio_s, so compute them unconditionally (host-side arithmetic).
+        all_audio_durations = self._calculate_audio_duration(current_batch)
+        audio_durations = all_audio_durations if any(return_timestamps) else None
+
+        # Stamped after the host-side work above so that encoder_s covers device work only.
+        start_encoder = time.time()
 
         # Compute encoder embeddings
         input_embeds = ttnn_optimized_functional_whisper.preprocess_encoder_inputs(
@@ -764,12 +814,36 @@ class WhisperGenerator:
 
         # Run encoder (optional trace replay per batch/seq-length bucket; see _run_encoder_traced_or_eager)
         trace_key = self._get_batch_size_per_device(unpadded_batch_size)
+        # encoder_trace_hit must mean "this call was a plain trace replay", i.e. steady state.
+        # That needs the bucket sampled on both sides of the call, because the helper mutates it:
+        # a capture adds the key (warm-up, pays an extra eager pass) and a failed replay pops it
+        # and falls back to eager (recovery). Requiring the key before AND after excludes both,
+        # leaving True only for a clean replay.
+        had_trace = trace_key in self.encoder_trace_state.trace_id_encoder
         encoder_output = self._run_encoder_traced_or_eager(trace_key, input_embeds)
+        encoder_trace_hit = (not self.enable_encoder_trace) or (
+            had_trace and trace_key in self.encoder_trace_state.trace_id_encoder
+        )
 
         # Copy encoder output to pre-allocated tensor
         ttnn.copy(encoder_output, self.encoder_hidden_states_per_size[trace_key])
+        # Encoder work is enqueued asynchronously on the eager and capture paths, so this
+        # synchronize is what makes encoder_s a measure of compute rather than of enqueue.
         ttnn.synchronize_device(self.mesh_device)
+        encoder_s = time.time() - start_encoder
         logger.info(f"Time to encoder states: {(time.time() - start_encode)*1000:.3f}ms")
+
+        # The feature extractor pads or truncates every item to a fixed chunk_length window
+        # (30s for Whisper), so only that much of a longer clip ever reaches the encoder. Cap
+        # per item: summing raw durations would over-report the throughput properties by the
+        # truncated remainder (a 90s clip would read 3x fast).
+        chunk_s = getattr(self.feature_extractor, "chunk_length", 30)
+        perf_metrics = PerfMetrics(
+            feature_extract_s=feature_extract_s,
+            encoder_s=encoder_s,
+            total_audio_s=sum(min(d, chunk_s) for d in all_audio_durations),
+            encoder_trace_hit=encoder_trace_hit,
+        )
 
         # Collect temperatures to try: flatten per-request temps to unique sequence
         temps_to_try = []
@@ -786,6 +860,7 @@ class WhisperGenerator:
             return self._generate_with_temperature(
                 temperature=temperature,
                 start_encode=start_encode,
+                perf_metrics=perf_metrics,
                 unpadded_batch_size=unpadded_batch_size,
                 return_perf_metrics=return_perf_metrics,
                 return_timestamps=return_timestamps,
@@ -807,6 +882,7 @@ class WhisperGenerator:
                 output = self._generate_with_temperature(
                     temperature=temperature,
                     start_encode=start_encode,
+                    perf_metrics=perf_metrics,
                     unpadded_batch_size=unpadded_batch_size,
                     return_perf_metrics=return_perf_metrics,
                     return_timestamps=return_timestamps,
@@ -819,7 +895,7 @@ class WhisperGenerator:
 
                 # Non-streaming generation - consume the generator
                 if return_perf_metrics:
-                    result_data, avg_logprobs, no_speech_probs, ttft, throughput = next(output)
+                    result_data, avg_logprobs, no_speech_probs, attempt_perf = next(output)
                 else:
                     result_data, avg_logprobs, no_speech_probs = next(output)
 
@@ -860,7 +936,7 @@ class WhisperGenerator:
                 if all_good:
                     logger.info(f"Generation successful with temperature {temperature}")
                     if return_perf_metrics:
-                        return (result_data, avg_logprobs, no_speech_probs, ttft, throughput)
+                        return (result_data, avg_logprobs, no_speech_probs, attempt_perf)
                     else:
                         return (result_data, avg_logprobs, no_speech_probs)
 
@@ -876,7 +952,7 @@ class WhisperGenerator:
                 if avg_compression < best_quality_score:
                     best_quality_score = avg_compression
                     if return_perf_metrics:
-                        best_output = (result_data, avg_logprobs, no_speech_probs, ttft, throughput)
+                        best_output = (result_data, avg_logprobs, no_speech_probs, attempt_perf)
                     else:
                         best_output = (result_data, avg_logprobs, no_speech_probs)
 
@@ -896,8 +972,7 @@ class WhisperGenerator:
                         empty_segments,
                         torch.zeros(unpadded_batch_size),
                         torch.zeros(unpadded_batch_size),
-                        0.0,
-                        0.0,
+                        perf_metrics,
                     )
                 else:
                     return (empty_segments, torch.zeros(unpadded_batch_size), torch.zeros(unpadded_batch_size))
@@ -907,8 +982,7 @@ class WhisperGenerator:
                         [""] * unpadded_batch_size,
                         torch.zeros(unpadded_batch_size),
                         torch.zeros(unpadded_batch_size),
-                        0.0,
-                        0.0,
+                        perf_metrics,
                     )
                 else:
                     return (
@@ -921,6 +995,7 @@ class WhisperGenerator:
         self,
         temperature,
         start_encode,
+        perf_metrics,
         unpadded_batch_size,
         return_perf_metrics=False,
         return_timestamps=False,
@@ -1038,6 +1113,10 @@ class WhisperGenerator:
         ttft = 0.0
         avg_decode_throughput = 0.0
 
+        def _perf():
+            """Combine the caller's stage timings with this attempt's decode timings."""
+            return replace(perf_metrics, ttft=ttft, decode_throughput=avg_decode_throughput)
+
         # Run prefill pass for KV cache mode to populate cache with the full forced prefix (with or without text prompt)
         # Batched path: one preprocess over full prefix (decode_pos=None) + one decoder(decoder_prefill=True).
         if self.kv_cache_per_batch_size[trace_key] and prefix_len > 1:
@@ -1109,7 +1188,7 @@ class WhisperGenerator:
                 current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
 
                 if return_perf_metrics:
-                    yield ttnn_transcription, current_avg_logprob, no_speech_probs, ttft, 0.0, False
+                    yield ttnn_transcription, current_avg_logprob, no_speech_probs, _perf(), False
                 else:
                     yield ttnn_transcription, current_avg_logprob, no_speech_probs, False
             # Non-streaming: nothing to decode here — the token ID was already appended to
@@ -1374,7 +1453,7 @@ class WhisperGenerator:
                 # Timestamps will be processed at the end if return_timestamps=True
                 # is_final=False indicates this is an intermediate token, not the final result
                 if return_perf_metrics:
-                    yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, ttft, avg_decode_throughput, False
+                    yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, _perf(), False
                 else:
                     yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, False
 
@@ -1439,9 +1518,9 @@ class WhisperGenerator:
             # For streaming mode, include is_final=True to mark this as the final result
             if return_perf_metrics:
                 if streaming:
-                    yield final_result, avg_logprob, no_speech_probs, ttft, avg_decode_throughput, True
+                    yield final_result, avg_logprob, no_speech_probs, _perf(), True
                 else:
-                    yield final_result, avg_logprob, no_speech_probs, ttft, avg_decode_throughput
+                    yield final_result, avg_logprob, no_speech_probs, _perf()
             else:
                 if streaming:
                     yield final_result, avg_logprob, no_speech_probs, True
@@ -1467,12 +1546,12 @@ class WhisperGenerator:
             if streaming:
                 # is_final=True indicates this is the final batch-decoded result
                 if return_perf_metrics:
-                    yield final_output, avg_logprob, no_speech_probs, ttft, avg_decode_throughput, True
+                    yield final_output, avg_logprob, no_speech_probs, _perf(), True
                 else:
                     yield final_output, avg_logprob, no_speech_probs, True
             else:
                 if return_perf_metrics:
-                    yield (final_output, avg_logprob, no_speech_probs, ttft, avg_decode_throughput)
+                    yield (final_output, avg_logprob, no_speech_probs, _perf())
                 else:
                     yield (final_output, avg_logprob, no_speech_probs)
 

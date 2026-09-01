@@ -41,10 +41,6 @@
 #include <tt-metalium/distributed.hpp>
 
 namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 using std::map;
 using std::vector;
@@ -593,7 +589,10 @@ bool single_core_binary(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
+    Program& program = workload.get_programs().at(device_range);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -625,10 +624,9 @@ bool single_core_binary(
     };
     experimental::SetProgramRunArgs(program, params);
 
-    auto* dev = mesh_device->get_devices()[0];
     std::vector<uint32_t> first_result;
     for (uint32_t run = 0; run < num_runs; ++run) {
-        tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
+        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
         std::vector<uint32_t> packed_result;
         if (!read_and_validate_binary_result(cq, output_dram_buffer, zero_coord, stimulus, &packed_result)) {

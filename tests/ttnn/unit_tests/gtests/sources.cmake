@@ -30,8 +30,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_graph_query_op_runtime.cpp
     test_launch_operation.cpp
     test_matmul.cpp
-    test_matmul_multicore.cpp
-    test_matmul_sweep.cpp
+    test_normalization.cpp
     test_reduction.cpp
     test_relational_int.cpp
     test_rsub_int.cpp
@@ -39,6 +38,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_gelu_fw_ulp.cpp
     test_tanh_bw_ulp.cpp
     test_tanh_fw_ulp.cpp
+    test_work_split_tilize.cpp
 )
 
 set(UNIT_TESTS_TTNN_CCL_SOURCES

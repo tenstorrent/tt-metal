@@ -41,7 +41,6 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto* device = mesh_device->get_devices()[0];
     const auto& hal = MetalContext::instance().hal();
     const bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
     // Watcher pause kernels use Metal 2.0 on all architectures.
@@ -59,7 +58,8 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     }
 
     // Write runtime args
-    uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
+    const auto device_id = mesh_device->get_device_ids()[0];
+    uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
     uint32_t delay_cycles = clk_mhz * 500000;  // .5 seconds
     std::vector<experimental::KernelSpec> kernel_specs;
     std::vector<experimental::KernelSpecName> kernel_names;
@@ -134,7 +134,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     vector<std::string> expected_strings;
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            CoreCoord virtual_core = device->worker_core_from_logical_core({x, y});
+            CoreCoord virtual_core = mesh_device->worker_core_from_logical_core({x, y});
             uint32_t num_processors =
                 is_quasar ? hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 0)  // DMs only
                           : hal.get_num_risc_processors(HalProgrammableCoreType::TENSIX);      // all 5

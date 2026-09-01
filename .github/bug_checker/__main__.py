@@ -53,6 +53,15 @@ def main() -> int:
         help="Post findings as PR comments (requires --pr).",
     )
     parser.add_argument(
+        "--quiet-if-clean",
+        action="store_true",
+        help=(
+            "Skip posting a PR comment when the run has nothing to report "
+            "(no findings, no failed rules, no truncated-diff warnings). "
+            "Findings, failures, and truncation warnings still post normally."
+        ),
+    )
+    parser.add_argument(
         "--labels",
         type=str,
         nargs="*",
@@ -129,6 +138,7 @@ def main() -> int:
                 pr_info=pr_info,
                 sarif_path=sarif_path,
                 post_comments=args.post_comments,
+                suppress_empty_result=args.quiet_if_clean,
             )
     except BugCheckFailed:
         return 1

@@ -18,7 +18,8 @@ void kernel_main() {
 
     CircularBuffer cb_intermed(intermed_cb_id);
 
-    init_sfpu(intermed_cb_id, intermed_cb_id);
+    compute_kernel_hw_startup(intermed_cb_id, intermed_cb_id);
+    copy_init(intermed_cb_id);
 
     // rand_tile's internal interval is inclusive. Use the largest FP32 value
     // below 1.0 so that Bernoulli's `random < probability` comparison still

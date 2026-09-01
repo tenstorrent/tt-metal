@@ -20,6 +20,11 @@
  * Configures UNP_A stride registers and programs the MOP for tilizing
  * block_ct_dim tiles from row-major L1 data into face format in SrcA.
  *
+ * The operand gets a BFD id allocated from the unpack partition (Unp0 / UNPACR0) and its table
+ * entry is programmed here; the DFB id is used only to fetch buffer info, never as the BFD id.
+ * One init burns 1 unpack-partition id — the standard wrap contract (re-init before re-execute)
+ * applies.
+ *
  * @param operand       The input dataflow buffer identifier.
  * @param full_ct_dim   Number of tiles in a full row of the input tensor.
  * @param block_ct_dim  Number of tiles per MOP invocation (defaults to 1).
@@ -36,17 +41,13 @@ inline void llk_unpack_tilize_init(
         "only 1x32 and 2x32 tiny tiles supported for unpack tilize on Quasar");
 
     if (tensor_shape.total_num_faces() == NUM_FACES) {
-        _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(operand_id, full_ct_dim, block_ct_dim, tensor_shape);
+        llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
+        _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), full_ct_dim, block_ct_dim, tensor_shape);
     } else {
-        const tdma_descriptor_t td_val = ckernel::trisc::construct_tdma_desc<ckernel::trisc::L1AccessMode::Strided>(
-            tensor_shape,
-            get_local_dfb_interface(operand_id).tc_slots[0].base_addr,
-            unpack_src_format[operand_id],
-            operand_id,
-            unpack_dst_format[operand_id]);
-        ckernel::trisc::_configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
+        llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(operand_id);
         _llk_unpack_tilize_strided_init_small_faces_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
-            operand_id, tensor_shape, full_ct_dim, block_ct_dim);
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape, full_ct_dim, block_ct_dim);
     }
 }
 
@@ -107,9 +108,9 @@ inline void llk_unpack_tilize_uninit([[maybe_unused]] const std::uint32_t operan
  * path) and UNP_B (scalar path) so that each subsequent llk_unpack_tilizeA_B call produces one
  * tilized srcA tile alongside the reloaded srcB scalar tile required by the reduce math op.
  *
- * On Quasar, operand A's buffer descriptor is reprogrammed to y_dim=1, z_dim=1
- * required by the UNPACR_STRIDE tilize sequence, overriding the configuration
- * set by llk_unpack_hw_configure.
+ * On Quasar, operand A's buffer descriptor is programmed in Strided mode (y_dim=1, z_dim=1)
+ * required by the UNPACR_STRIDE tilize sequence; operand B gets a normal Continuous descriptor.
+ * Both ids come from the unpack BFD partition — DFB ids never double as BFD ids.
  *
  * @tparam neginf_srcA      No effect on Quasar; accepted for API compatibility with WH/BH.
  * @tparam reload_srcB      Must be true on Quasar (asserted true, srcB is reloaded every iteration for reduce);
@@ -138,18 +139,17 @@ inline void llk_unpack_tilizeA_B_init(
 
     const ckernel::TensorShape tensor_shape_A = get_operand_tensor_shape(operandA_id);
 
-    // UNPACR_STRIDE used in unpack_tilize_operands_reduce requires the following buffer descriptor configuration:
-    // Overwrite the buffer descriptor configuration from llk_unpack_hw_configure for operandA.
-    const tdma_descriptor_t td_val = ckernel::trisc::construct_tdma_desc<ckernel::trisc::L1AccessMode::Strided>(
-        tensor_shape_A,
-        get_local_dfb_interface(operandA_id).tc_slots[0].base_addr,
-        unpack_src_format[operandA_id],
-        operandA_id,
-        unpack_dst_format[operandA_id]);
-    ckernel::trisc::_configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
+    // UNPACR_STRIDE used in unpack_tilize_operands_reduce requires a Strided buffer descriptor
+    // (y_dim=1, z_dim=1) for operandA; operandB (scalar srcB) uses a Continuous descriptor.
+    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(operandA_id);
+    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
 
 #if defined(REDUCE_OP)
-    _llk_unpack_reduce_col_tilizeA_strided_init_<REDUCE_OP>(operandA_id, operandB_id, ct_dim, tensor_shape_A);
+    _llk_unpack_reduce_col_tilizeA_strided_init_<REDUCE_OP>(
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+        ct_dim,
+        tensor_shape_A);
 #endif
 }
 

@@ -1,0 +1,56 @@
+# Fabric sanity test matrix — consumed by .github/workflows/fabric-sanity-tests-impl.yaml.
+# Single source of truth for fabric coverage in the sanity pipeline: WH N300, T3K
+# llmbox, and BH multi-card (QB2 / P300). Wired into sanity-tests.yaml via the
+# `fabric-sanity-tests` job.
+#
+# Each entry: name, cmd, skus{sku: {timeout}}, team, owner_id.
+# `arch` is derived from the SKU inline in the impl workflow's ARCH_NAME
+# expression (bh_* -> blackhole, wh_* -> wormhole_b0), not authored per entry.
+# upload_benchmarks: true opts in to SFTP upload of fabric BW / latency CSVs
+#   (mainline environment; only on refs/heads/main).
+# For max allowed timeout refer to .github/time_budget.yaml (scaleout -> sanity).
+
+- name: t3k fabric tests
+  # Also runs in tests/pipeline_reorg/fabric_tests.yaml
+  # under tm-fabric-tests; the duplication is intentional (sanity gate vs.
+  # deeper fabric pipeline).
+  cmd: |
+    source tests/scripts/t3000/run_t3000_unit_tests.sh
+    run_t3000_ttfabric_tests
+  skus:
+    wh_llmbox_civ2:
+      timeout: 30
+  team: scaleout
+  owner_id: U06US5C7M7X # Sean Nijjar
+  upload_benchmarks: true
+
+- name: WH N300 fabric sanity
+  # Subset of run_cpp_fabric_tests.sh: Fabric1D/2D fixtures + control-plane
+  # topology validation + one YAML-driven sanity_common run. Kept lightweight
+  # for the sanity time budget.
+  cmd: |
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MeshGraphValidation*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+  team: scaleout
+  owner_id: U08RRAU5E15 # Ridvan Song
+
+- name: fabric fast unit tests (1D, 2D, single erisc)
+  # Multi-card BH smoke: Fabric1D/2D fixtures, FabricMuxV2 smoke, and a
+  # DISABLE_MULTI_AERISC repeat of the 1D pass.
+  cmd: |
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*FabricMuxV2Smoke*Fixture.*"
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+  team: scaleout
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar

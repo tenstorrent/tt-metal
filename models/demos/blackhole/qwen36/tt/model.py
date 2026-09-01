@@ -525,7 +525,13 @@ class Qwen36Model:
 
     @classmethod
     def from_pretrained(
-        cls, device, max_batch_size=1, max_seq_len=2048, n_layers=None, layer_indices=None, hf_model=None
+        cls,
+        device,
+        max_batch_size=1,
+        max_seq_len=2048,
+        n_layers=None,
+        layer_indices=None,
+        hf_model=None,
     ):
         # HF_MODEL env var (hub or local path) is canonical; hf_model sets it for back-compat.
         if hf_model is not None:
@@ -553,11 +559,19 @@ class Qwen36Model:
             args.n_layers = n_layers
             args.attention_type_list = args.attention_type_list[:n_layers]
 
+        # NOTE: the warm-ttnn-cache HF-load skip is DISABLED for qwen3.6.
+        # Its Gated-DeltaNet loader consumes conv weights on the host without a cache_file_name --
+        # gdn/weights.py::load_conv_weight does ttnn.from_torch(state_dict[name], ...) for q/k/v_conv in
+        # every DeltaNet layer, and gdn/tp.py derives taps the same way -- so a dataless placeholder
+        # feeds those layers garbage while the HF load is skipped. This is the same failure that made
+        # the vision demo emit token soup, on the text path. Re-enabling needs those conv weights either
+        # cache-backed or captured to the sidecar via an is_host_weight predicate. (#45400 review)
+        cache_path = args.weight_cache_path()
         logger.info("Loading + remapping weights via Qwen36ModelArgs.load_state_dict()...")
         state_dict = args.load_state_dict()
 
-        cache_path = args.weight_cache_path()
-        return cls(device, args, state_dict, tensor_cache_path=cache_path)
+        model = cls(device, args, state_dict, tensor_cache_path=cache_path)
+        return model
 
     def prefill_tp(self, token_ids, valid_len=None, vision_tokens=None):
         """Tensor-parallel full-model prefill (num_devices>1). Stateless: runs the

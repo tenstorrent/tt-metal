@@ -35,7 +35,6 @@ CONFIGS = [
 ]
 
 
-@pytest.mark.timeout(240)
 @pytest.mark.parametrize("in_h,in_w,C,kernel,stride,padding", [c[:6] for c in CONFIGS], ids=[c[6] for c in CONFIGS])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_scratch_pack_dprint(mesh_device, in_h, in_w, C, kernel, stride, padding):

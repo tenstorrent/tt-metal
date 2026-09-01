@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+
 import shutil
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import profiler
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
@@ -28,23 +30,32 @@ def cleanup_cache():
     report_and_clear()
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+
+    if not on_ci:
+        return False
+    return True
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
         pytest.param(
             (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="linear"),
-            id="linear-2x2",
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-2x2",
         ),
         # Blackhole forms whole-box meshes only, so the 2x2 case above never runs on an 8-chip
         # loudbox -- it is a 4-device QuietBox / Wormhole shape. 2x4 makes this test actually
         # executable there, which is where the Kimi weight caches are exercised.
         pytest.param(
             (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="linear"),
-            id="linear-2x4",
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],

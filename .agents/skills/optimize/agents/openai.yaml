@@ -1,0 +1,7 @@
+interface:
+  display_name: "Optimize"
+  short_description: "Optimize runnable TTNN code with perf evidence"
+  default_prompt: "Use $optimize to improve runnable TTNN code while preserving correctness, profile warmed prefill and decode with tt-perf-report evidence, apply layout/precision/sharding/program-config improvements, and leave a concise work log plus final performance report."
+
+policy:
+  allow_implicit_invocation: true

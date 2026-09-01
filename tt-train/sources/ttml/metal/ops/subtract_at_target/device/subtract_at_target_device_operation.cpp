@@ -5,6 +5,7 @@
 #include "subtract_at_target_device_operation.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <limits>
 
 #include "subtract_at_target_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -50,6 +51,29 @@ void SubtractAtTargetDeviceOperation::validate_on_program_cache_miss(
         "SubtractAtTarget: input must be rank 4, got rank {}",
         tensor_args.input.logical_shape().rank());
 
+    // The reader walks one row-major target page per batch-channel slice of the input
+    // (page = tile_row / Ht over NC * Ht rows) and sizes each page read from the target's
+    // inner dim, while the program cache is keyed on the input shape alone. Pinning both the
+    // target's page width and its page count to the input keeps every page index the reader
+    // can form inside the target allocation, and keeps a cached program valid for the target
+    // tensor it runs with.
+    const auto& target_shape = tensor_args.target.logical_shape();
+    TT_FATAL(
+        target_shape[-1] == tensor_args.input.logical_shape()[-2],
+        "SubtractAtTarget: target inner dim ({}) must equal input sequence dim ({})",
+        target_shape[-1],
+        tensor_args.input.logical_shape()[-2]);
+    const auto& input_padded_shape = tensor_args.input.padded_shape();
+    const uint64_t input_nc_pages =
+        input_padded_shape.volume() / (static_cast<uint64_t>(input_padded_shape[-2]) * input_padded_shape[-1]);
+    const uint64_t target_pages = target_shape.volume() / target_shape[-1];
+    TT_FATAL(
+        target_pages == input_nc_pages,
+        "SubtractAtTarget: target must supply one page per input batch-channel slice, got {} page(s) for {} "
+        "slice(s)",
+        target_pages,
+        input_nc_pages);
+
     TT_FATAL(args.local_V > 0U, "SubtractAtTarget: local_V must be > 0");
 
     if (args.cluster_axis.has_value()) {
@@ -89,11 +113,17 @@ SubtractAtTargetDeviceOperation::tensor_return_value_t SubtractAtTargetDeviceOpe
 }
 
 ttsl::hash::hash_t SubtractAtTargetDeviceOperation::compute_program_hash(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    // first_v / local_V / cluster_axis / subtract_value only affect runtime args (they're patched
-    // by override_runtime_arguments per coord); they don't change the compiled kernel binary.
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // first_v / local_V / subtract_value only affect runtime args (they're patched by
+    // override_runtime_arguments per coord). cluster_axis, however, determines the mesh-workload
+    // structure (one program per TP slab when set vs one per coordinate when unset) and the
+    // program-to-coordinate mapping, so it must be part of the hash. value_or keeps nullopt
+    // distinct from axis 0 (an optional hashes its payload directly, so nullopt and 0 would
+    // otherwise collide); the sentinel can never be a valid axis.
     return tt::tt_metal::operation::hash_operation<SubtractAtTargetDeviceOperation>(
-        tensor_args.input.dtype(), tensor_args.input.logical_shape());
+        args.cluster_axis.value_or(std::numeric_limits<uint32_t>::max()),
+        tensor_args.input.dtype(),
+        tensor_args.input.logical_shape());
 }
 
 }  // namespace ttml::metal::ops::subtract_at_target::device

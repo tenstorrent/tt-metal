@@ -6,14 +6,13 @@
 
 #include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <optional>
 #include <vector>
 
 #include "context.hpp"
 
 namespace tt::tt_metal {
-class IDevice;
 class Program;
 
 namespace tools::mem_bench {
@@ -24,10 +23,10 @@ struct Context;
 
 namespace tt::tt_metal::tools::mem_bench {
 
-std::vector<uint32_t> read_cores(tt::tt_metal::IDevice* device, const CoreRange& cores, uint32_t addr);
+std::vector<uint32_t> read_cores(distributed::MeshDevice* device, const CoreRange& cores, uint32_t addr);
 
 std::optional<CoreRange> configure_kernels(
-    tt::tt_metal::IDevice* device,
+    distributed::MeshDevice* device,
     tt::tt_metal::Program& program,
     const Context& context,
     uint32_t start_y,

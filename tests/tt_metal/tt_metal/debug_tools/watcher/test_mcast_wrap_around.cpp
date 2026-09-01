@@ -17,6 +17,7 @@
 #include <cstdint>
 #include "debug_tools_fixture.hpp"
 #include "impl/context/metal_context.hpp"
+#include "mesh_device.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -42,8 +43,8 @@ void DoHostMcastWrite(ChipId chip_id, CoreCoord core_start, CoreCoord core_end) 
 }  // namespace
 
 TEST_F(MeshWatcherFixture, HostMcastWrapAroundY_Down) {
-    auto* device = this->devices_[0]->get_devices()[0];
-    ChipId chip_id = device->id();
+    distributed::MeshDevice* device = this->devices_[0].get();
+    ChipId chip_id = device->get_device_ids()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.y < 2) {
@@ -59,8 +60,8 @@ TEST_F(MeshWatcherFixture, HostMcastWrapAroundY_Down) {
 }
 
 TEST_F(MeshWatcherFixture, HostMcastWrapAroundY_Up) {
-    auto* device = this->devices_[0]->get_devices()[0];
-    ChipId chip_id = device->id();
+    distributed::MeshDevice* device = this->devices_[0].get();
+    ChipId chip_id = device->get_device_ids()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.y < 2) {
@@ -76,8 +77,8 @@ TEST_F(MeshWatcherFixture, HostMcastWrapAroundY_Up) {
 }
 
 TEST_F(MeshWatcherFixture, HostMcastWrapAroundX_Right) {
-    auto* device = this->devices_[0]->get_devices()[0];
-    ChipId chip_id = device->id();
+    distributed::MeshDevice* device = this->devices_[0].get();
+    ChipId chip_id = device->get_device_ids()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.x < 2) {
@@ -93,8 +94,8 @@ TEST_F(MeshWatcherFixture, HostMcastWrapAroundX_Right) {
 }
 
 TEST_F(MeshWatcherFixture, HostMcastWrapAroundX_Left) {
-    auto* device = this->devices_[0]->get_devices()[0];
-    ChipId chip_id = device->id();
+    distributed::MeshDevice* device = this->devices_[0].get();
+    ChipId chip_id = device->get_device_ids()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.x < 2) {
@@ -110,8 +111,8 @@ TEST_F(MeshWatcherFixture, HostMcastWrapAroundX_Left) {
 }
 
 TEST_F(MeshWatcherFixture, HostMcastWrapAroundXY_DownRight) {
-    auto* device = this->devices_[0]->get_devices()[0];
-    ChipId chip_id = device->id();
+    distributed::MeshDevice* device = this->devices_[0].get();
+    ChipId chip_id = device->get_device_ids()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.x < 2 || grid.y < 2) {
@@ -127,8 +128,8 @@ TEST_F(MeshWatcherFixture, HostMcastWrapAroundXY_DownRight) {
 }
 
 TEST_F(MeshWatcherFixture, HostMcastWrapAroundXY_UpLeft) {
-    auto* device = this->devices_[0]->get_devices()[0];
-    ChipId chip_id = device->id();
+    distributed::MeshDevice* device = this->devices_[0].get();
+    ChipId chip_id = device->get_device_ids()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
 
     if (grid.x < 2 || grid.y < 2) {

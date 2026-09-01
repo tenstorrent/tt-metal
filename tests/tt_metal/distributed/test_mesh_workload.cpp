@@ -11,6 +11,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <map>
@@ -18,6 +20,7 @@
 #include <optional>
 #include <random>
 #include <stdexcept>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -44,14 +47,13 @@
 #include <tt-metalium/runtime_args_data.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/worker_config_buffer.hpp"
 #include <tt_stl/span.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <distributed/mesh_device_impl.hpp>
-#include <tt-metalium/experimental/dispatch_context.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -182,6 +184,199 @@ void validate_sems(
 using MeshWorkloadTest2x4 = MeshDevice2x4Fixture;
 using MeshWorkloadTest4x8 = MeshDevice4x8Fixture;
 using MeshWorkloadTestSuite = GenericMeshDeviceFixture;
+
+// A worker still reading its kernel config must not have that config overwritten, including on devices left out of the
+// workloads that follow. The host holds one device's worker while other devices run enough workloads to wrap the
+// mesh-wide config ring back onto the held worker's region.
+TEST_F(MeshWorkloadTest4x8, UnusedDeviceKernelConfigNotOverwritten) {
+    if (mesh_device_->arch() == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Host-to-L1 release handshake is not supported on Quasar data movement cores";
+    }
+
+    // Fillers stop as soon as the ring frees the held slot. Extra ones use up the launch-message slots, which would
+    // fence the probe on its own account and hide any overwrite.
+    constexpr uint32_t max_fillers = 5;
+    constexpr uint32_t release_value = 0x67216721;
+    constexpr uint32_t started_value = 0x5a5a5a5a;
+    constexpr CoreCoord core = {0, 0};
+    const CoreRangeSet core_set(CoreRange(core, core));
+    const std::string blank_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp";
+
+    // The victim is the last device in the mesh; the fillers take every device outside its column.
+    const uint32_t last_row = mesh_device_->num_rows() - 1;
+    const uint32_t last_col = mesh_device_->num_cols() - 1;
+    const MeshCoordinate victim_coord(last_row, last_col);
+    const MeshCoordinateRange victim_range(victim_coord, victim_coord);
+    const MeshCoordinateRange other_devices(MeshCoordinate(0, 0), MeshCoordinate(last_row, last_col - 1));
+    auto& cq = mesh_device_->mesh_command_queue();
+    auto* victim = mesh_device_->impl().get_device(victim_coord);
+
+    // Program circular buffers start at the unreserved base and grow up, so the flags go just past the probe's.
+    constexpr uint32_t cb_num_pages = 3;
+    constexpr uint32_t cb_page_size = tile_size(tt::DataFormat::Float16_b);
+    const uint32_t l1_unreserved_base = victim->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t release_addr = l1_unreserved_base + cb_num_pages * cb_page_size;
+    const uint32_t started_addr = release_addr + sizeof(uint32_t);
+
+    const uint32_t kernel_config_base =
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+    const uint32_t ring_size = l1_unreserved_base - kernel_config_base;
+    // Kernel::validate_runtime_args_size caps a Tensix kernel at max_runtime_args_tensix minus two watcher words.
+    constexpr uint32_t max_rt_args_per_kernel = 4096 - 2;
+    // Runtime args are the cheapest way to take up ring space, and a quarter of the ring per kernel makes the ring,
+    // rather than the launch-message slots, run out first.
+    const uint32_t rt_args_per_kernel = std::min<uint32_t>(ring_size / 4 / sizeof(uint32_t), max_rt_args_per_kernel);
+
+    auto write_word = [&](uint32_t addr, uint32_t value) {
+        std::vector<uint32_t> word = {value};
+        ::tt::tt_metal::detail::WriteToDeviceL1(victim, core, addr, word);
+    };
+    // Kernels on one core store their runtime args back to back, so each one added here claims another quarter ring.
+    auto add_padded_kernel =
+        [&](Program& program, const std::string& path, DataMovementProcessor processor, std::vector<uint32_t> args) {
+            args.resize(rt_args_per_kernel, 0);
+            const auto kernel = CreateKernel(
+                program,
+                path,
+                core_set,
+                DataMovementConfig{
+                    .processor = processor,
+                    .noc = processor == DataMovementProcessor::RISCV_0 ? NOC::RISCV_0_default : NOC::RISCV_1_default});
+            SetRuntimeArgs(program, kernel, core_set, args);
+        };
+    auto poll_until = [](std::chrono::seconds timeout, auto&& predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (predicate()) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return false;
+    };
+    // Which ring slots the host still considers in use; the checks below use it to confirm the setup worked.
+    auto queued_slots = [&]() {
+        return cq.get_config_buffer_mgr(0).get_queued_entry_indices(
+            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
+    };
+
+    // Holds the victim's worker until the host releases it. Two kernels make it half the ring, so the filler that later
+    // reuses that space covers only half of it and leaves room for the probe.
+    Program wait_program;
+    add_padded_kernel(
+        wait_program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/wait_for_host_l1_write.cpp",
+        DataMovementProcessor::RISCV_0,
+        {release_addr, release_value, started_addr, started_value});
+    add_padded_kernel(wait_program, blank_kernel, DataMovementProcessor::RISCV_1, {});
+    MeshWorkload waiting_workload;
+    waiting_workload.add_program(victim_range, std::move(wait_program));
+
+    // The probe is the workload whose config would land on the held worker's region: small enough to fit the freed
+    // space without a wait of its own, and its circular buffer is the pattern the host looks for in L1.
+    Program probe_program;
+    initialize_dummy_circular_buffers(
+        probe_program,
+        core_set,
+        {CBConfig{
+            .cb_id = 0,
+            .num_pages = cb_num_pages,
+            .page_size = cb_page_size,
+            .data_format = tt::DataFormat::Float16_b}});
+    CreateKernel(
+        probe_program,
+        blank_kernel,
+        core_set,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    MeshWorkload probe_workload;
+    probe_workload.add_program(victim_range, std::move(probe_program));
+
+    // Fillers skip the victim and are half the held workload's size, so a few of them use up the ring.
+    std::vector<MeshWorkload> fillers(max_fillers);
+    for (uint32_t i = 0; i < max_fillers; i++) {
+        Program filler_program;
+        add_padded_kernel(filler_program, blank_kernel, DataMovementProcessor::RISCV_0, {i + 1});
+        fillers[i].add_program(other_devices, std::move(filler_program));
+    }
+
+    // First pass compiles and caches everything, so the real run below is pure dispatch. The release flag is set up
+    // front, so the waiting kernel exits right away here.
+    write_word(release_addr, release_value);
+    EnqueueMeshWorkload(cq, waiting_workload, false);
+    for (auto& filler : fillers) {
+        EnqueueMeshWorkload(cq, filler, false);
+    }
+    EnqueueMeshWorkload(cq, probe_workload, false);
+    Finish(cq);
+
+    // Slots are only freed once the ring runs out of room, so the first pass leaves its own marked as in use. They
+    // would sit ahead of the held workload and soak up the fillers instead.
+    cq.get_config_buffer_mgr(0).mark_completely_full(0);
+
+    // Zero the ring so any circular buffer pattern seen later must come from a new write.
+    std::vector<uint32_t> ring_zeros(ring_size / sizeof(uint32_t), 0);
+    ::tt::tt_metal::detail::WriteToDeviceL1(victim, core, kernel_config_base, ring_zeros);
+
+    // A failed check must still release the worker, or the mesh stays stuck. Running the release twice is harmless.
+    auto release = [&]() {
+        write_word(release_addr, release_value);
+        Finish(cq);
+    };
+    struct ReleaseOnExit {
+        decltype(release)& fn;
+        ~ReleaseOnExit() { fn(); }
+    } release_on_exit{release};
+
+    write_word(release_addr, 0);
+    write_word(started_addr, 0);
+    EnqueueMeshWorkload(cq, waiting_workload, false);
+    // The reset above leaves the held workload as the ring's only slot in use.
+    const auto held_slots = queued_slots();
+    ASSERT_EQ(held_slots.size(), 1u) << "Held workload does not own the only ring slot";
+    ASSERT_TRUE(poll_until(std::chrono::seconds(30), [&]() {
+        std::vector<uint32_t> started;
+        ::tt::tt_metal::detail::ReadFromDeviceL1(victim, core, started_addr, sizeof(uint32_t), started);
+        return started.at(0) == started_value;
+    })) << "Victim worker never started";
+
+    // Enqueue fillers until the ring reuses the held slot. From here on the ring considers the victim's region free
+    // even though its worker is still reading that region.
+    bool held_slot_reused = false;
+    for (auto& filler : fillers) {
+        EnqueueMeshWorkload(cq, filler, false);
+        const auto slots = queued_slots();
+        held_slot_reused = std::find(slots.begin(), slots.end(), held_slots.front()) == slots.end();
+        if (held_slot_reused) {
+            break;
+        }
+    }
+    ASSERT_TRUE(held_slot_reused) << "Ring never reused the held slot after " << max_fillers << " fillers; ring is "
+                                  << ring_size << " bytes from " << kernel_config_base << " and reached "
+                                  << cq.get_config_buffer_mgr(0).get_last_slot_addr(HalProgrammableCoreType::TENSIX);
+
+    // The probe must fit the freed space without a wait of its own, since such a wait would hold its write back for
+    // reasons of its own. A wait frees slots, so only the probe's slot may appear.
+    const size_t slots_before_probe = queued_slots().size();
+    EnqueueMeshWorkload(cq, probe_workload, false);
+    ASSERT_EQ(queued_slots().size(), slots_before_probe + 1)
+        << "Probe reserved with a wait of its own, so this run cannot show the missing wait";
+
+    const uint32_t probe_cb_base = probe_workload.get_cb_base_addr(mesh_device_, core, CoreType::WORKER);
+    auto probe_config_written = [&]() {
+        std::vector<uint32_t> cb_config;
+        ::tt::tt_metal::detail::ReadFromDeviceL1(
+            victim, core, probe_cb_base, UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t), cb_config);
+        return cb_config.at(1) == cb_num_pages * cb_page_size && cb_config.at(2) == cb_num_pages;
+    };
+
+    // The held worker is still reading this region, so nothing may write kernel config over it.
+    const bool written_while_held = poll_until(std::chrono::seconds(2), probe_config_written);
+    release();
+
+    EXPECT_FALSE(written_while_held) << "Kernel config overwrote a region a busy worker was still reading";
+    // The config does land once the worker is released, so the check above read the right address.
+    EXPECT_TRUE(probe_config_written());
+}
 
 // Parameterized: runs once with either submesh (index 0 or 1) executing the program.
 class MeshWorkloadTestSuiteSubmeshFixture : public MeshWorkloadTestSuite, public ::testing::WithParamInterface<int> {};

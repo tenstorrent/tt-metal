@@ -20,13 +20,16 @@ enum class p_dim_stride_target
 };
 
 /**
- * @brief Programs unpacker L1 info and source register format.
+ * @brief Programs the unpacker source register format.
+ *
+ * L1 buffer info is not programmed here: it lives in buffer descriptors, which op inits
+ * program via the per-TRISC allocator (see llk_bfd_alloc.h).
  *
  * @tparam UNP_SEL: Selects which unpacker to configure, values = <p_unpacr::UNP_A/UNP_B/UNP_S/UNP_DEST>
- * @param tdma_desc_src: Contains source register format.
+ * @param reg_data_format: Source register (out) data format.
  */
 template <std::uint32_t UNP_SEL>
-inline void _llk_unpack_hw_configure_(const tdma_descriptor_t& tdma_desc_src)
+inline void _llk_unpack_hw_configure_(const DataFormat reg_data_format)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_S) || (UNP_SEL == p_unpacr::UNP_DEST),
@@ -36,42 +39,42 @@ inline void _llk_unpack_hw_configure_(const tdma_descriptor_t& tdma_desc_src)
     // Program src formats
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
-        cfg_rmw(THCON_UNPACKER0_REG0_OUT_DATA_FORMAT_RMW, static_cast<std::uint8_t>(tdma_desc_src.reg_data_format));
+        cfg_rmw(THCON_UNPACKER0_REG0_OUT_DATA_FORMAT_RMW, static_cast<std::uint8_t>(reg_data_format));
     }
     else if constexpr (UNP_SEL == p_unpacr::UNP_B)
     {
-        cfg_rmw(THCON_UNPACKER1_REG0_OUT_DATA_FORMAT_RMW, static_cast<std::uint8_t>(tdma_desc_src.reg_data_format));
+        cfg_rmw(THCON_UNPACKER1_REG0_OUT_DATA_FORMAT_RMW, static_cast<std::uint8_t>(reg_data_format));
     }
     else if constexpr (UNP_SEL == p_unpacr::UNP_S)
     {
-        cfg_rmw(THCON_UNPACKER2_REG0_OUT_DATA_FORMAT_RMW, static_cast<std::uint8_t>(tdma_desc_src.reg_data_format));
+        cfg_rmw(THCON_UNPACKER2_REG0_OUT_DATA_FORMAT_RMW, static_cast<std::uint8_t>(reg_data_format));
     }
 }
 
 // RT: make defines to aggregate _llk_unpack_hw_configure_ calls into one
 /**
- * @brief Programs unpacker L1 info and source register format for a unary operation.
+ * @brief Programs the source register format for a unary operation.
  *
  * @tparam UNP_SEL: Selects which unpacker to configure, values = <p_unpacr::UNP_A/UNP_B/UNP_S>
- * @param tdma_desc_src: Contains L1 buffer descriptor information and source register format for the source register.
+ * @param reg_data_format_src: Source register (out) data format.
  */
 template <std::uint32_t UNP_SEL>
-inline void _llk_unpack_configure_unary_(const tdma_descriptor_t& tdma_desc_src)
+inline void _llk_unpack_configure_unary_(const DataFormat reg_data_format_src)
 {
-    _llk_unpack_hw_configure_<UNP_SEL>(tdma_desc_src);
+    _llk_unpack_hw_configure_<UNP_SEL>(reg_data_format_src);
 }
 
 /**
- * @brief Programs unpacker L1 info and source register format for a binary operation.
+ * @brief Programs the source register format for a binary operation.
  *
  * @tparam UNP_SEL_0/1: Selects which unpacker to configure, values = <p_unpacr::UNP_A/UNP_B/UNP_S>
- * @param tdma_desc_src0/1: Contains L1 buffer descriptor information and source register format for the source register.
+ * @param reg_data_format_src0/1: Source register (out) data format for each unpacker.
  */
 template <std::uint32_t UNP_SEL_0, std::uint32_t UNP_SEL_1>
-inline void _llk_unpack_configure_binary_(const tdma_descriptor_t& tdma_desc_src0, const tdma_descriptor_t& tdma_desc_src1)
+inline void _llk_unpack_configure_binary_(const DataFormat reg_data_format_src0, const DataFormat reg_data_format_src1)
 {
-    _llk_unpack_hw_configure_<UNP_SEL_0>(tdma_desc_src0);
-    _llk_unpack_hw_configure_<UNP_SEL_1>(tdma_desc_src1);
+    _llk_unpack_hw_configure_<UNP_SEL_0>(reg_data_format_src0);
+    _llk_unpack_hw_configure_<UNP_SEL_1>(reg_data_format_src1);
 }
 
 /**

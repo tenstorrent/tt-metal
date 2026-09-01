@@ -32,8 +32,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_intermediates import TtMoEIntermediates
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
-from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE, TtRoutedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, TtSharedExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 # Four similarly-named dimensions, shown for Kimi-K3, the only variant where all four differ:
@@ -73,16 +73,24 @@ class TtMoe(LightweightModule):
         experts_per_chip: int,
         use_latent_moe: bool = False,
         latent_use_norm: bool = True,
+        routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
     ) -> bool:
         """Check if MoE cache is complete (gate + routed experts + shared expert [+ latent proj]).
 
         ``use_latent_moe`` must be passed for Kimi-K3, otherwise a cache missing the latent
         projections would be reported complete and __init__ would then fail loading them.
+
+        routed_expert_weights_dtype: dtype the routed experts were/will be BUILT at.
+        as_tensor stamps it into the tensorbin filename, so the completeness check must pin the
+        same value it will later request -- otherwise a stale cache at another dtype reports
+        complete and the empty placeholder is loaded as the weights.
         """
         prefix = f"layer_{layer_idx}"
         if not TtMoEGatePrefill.check_cache_complete(cache_path, f"{prefix}.gate"):
             return False
-        if not TtRoutedExpert.check_cache_complete(cache_path, f"{prefix}.routed_expert", experts_per_chip):
+        if not TtRoutedExpert.check_cache_complete(
+            cache_path, f"{prefix}.routed_expert", experts_per_chip, routed_expert_weights_dtype
+        ):
             return False
         if not TtSharedExpert.check_cache_complete(cache_path, f"{prefix}.shared_expert"):
             return False
@@ -198,9 +206,13 @@ class TtMoe(LightweightModule):
         routed_expert_weights: list[dict] = None,
         shared_expert_weights: dict = None,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
-        routed_expert_weights_dtype=ttnn.bfloat4_b,
+        routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+        routed_expert_activation=ttnn.RoutedExpertActivation.Silu,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
+        shared_expert_activation: str = ACTIVATION_SILU,
+        shared_expert_situ_beta: float | None = None,
+        shared_expert_situ_linear_beta: float | None = None,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
@@ -244,6 +256,11 @@ class TtMoe(LightweightModule):
             routed_expert_weights_dtype: Data type for routed expert weights
             shared_expert_activations_dtype: Data type for shared expert activations
             shared_expert_weights_dtype: Data type for shared expert weights
+            shared_expert_activation: GLU activation the shared expert runs -- "silu" (default) or
+                "situ" for Kimi-K3's SiTU-GLU. Independent of routed_expert_activation: the two
+                sites run different ops (Python-composed vs fused kernel) at different widths.
+            shared_expert_situ_beta / shared_expert_situ_linear_beta: SiTU softcap betas, required
+                when shared_expert_activation == "situ".
             gate_weights: Dict with "weight" and "e_score_correction_bias" keys for gate
             gate_fallback_mode: Fallback mode for gate (default: HOST_ALL)
             overlap_shared_expert_with_dispatch: If True, run the shared expert and dispatch
@@ -267,6 +284,9 @@ class TtMoe(LightweightModule):
                 (K3: latent_moe_use_norm=True).
             rms_norm_eps: eps for that latent norm. Passed explicitly because
                 TtDistributedRmsNorm defaults to 1e-6 while K3's config says 1e-5.
+            routed_expert_activation: GLU activation the fused routed-expert kernel runs.
+                Defaults to SiLU (DeepSeek / K2.6 / GLM). Kimi-K3 passes SituGlu. Routed only --
+                the shared expert takes shared_expert_activation, which is a separate knob.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -482,7 +502,7 @@ class TtMoe(LightweightModule):
             weights_dtype=routed_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
-            activation=ttnn.RoutedExpertActivation.Silu,
+            activation=routed_expert_activation,
         )
 
         # Initialize shared expert (col axis: axis 1)
@@ -500,6 +520,9 @@ class TtMoe(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.shared_expert",
             subdevice_id=self.shared_sd_id,
             subdevice_cores=self.shared_sd_cores,
+            activation=shared_expert_activation,
+            situ_beta=shared_expert_situ_beta,
+            situ_linear_beta=shared_expert_situ_linear_beta,
         )
 
         self.latent_projections = (

@@ -10,6 +10,10 @@ from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
+from fuser.quasar.unpacker.unpack_a import (
+    _uses_upk_to_dest_semaphores,
+    upk_to_dest_math_ack,
+)
 from fuser.tile_loop import LoopBlockRow, TileLoop
 
 
@@ -67,10 +71,9 @@ class DatacopyFpu(Fpu):
         block: BlockData,
     ) -> str:
         if compute_unit.unpack_to_dest.value:
-            return (
-                "_llk_sync_wait_<p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::UNPACK_MATH);\n"
-                "_llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);\n"
-            )
+            if not _uses_upk_to_dest_semaphores(config):
+                return ""
+            return upk_to_dest_math_ack()
 
         return f"_llk_math_eltwise_unary_datacopy_({block.tile_id_block});\n"
 

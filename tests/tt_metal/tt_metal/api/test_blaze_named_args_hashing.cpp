@@ -95,19 +95,19 @@ const CoreCoord kCore1{1, 0};
 // Tier 1a -- hash_named_args_schema() directly
 // ============================================================================
 
-TEST(NamedArgsHashSchema, EmptyEqualsEmpty) {
+TEST(NamedArgsHashSchema, CPU_EmptyEqualsEmpty) {
     EXPECT_EQ(blaze_hash_schema(NamedKernelArgs{}), blaze_hash_schema(NamedKernelArgs{}))
         << "Two empty schemas must hash identically";
 }
 
 // --- value-insensitivity: same schema, different runtime values => SAME hash ---
 
-TEST(NamedArgsHashSchema, CommonScalarValueInsensitive) {
+TEST(NamedArgsHashSchema, CPU_CommonScalarValueInsensitive) {
     EXPECT_EQ(blaze_hash_schema(blaze_common_scalar("a.x", 1)), blaze_hash_schema(blaze_common_scalar("a.x", 999)))
         << "Common-scalar value is runtime data and must not affect the schema hash";
 }
 
-TEST(NamedArgsHashSchema, PerCoreScalarValueInsensitive) {
+TEST(NamedArgsHashSchema, CPU_PerCoreScalarValueInsensitive) {
     // Same name, different per-core values AND a different core set / core count.
     // None of the value data (nor the number of cores it targets) is part of the schema.
     EXPECT_EQ(
@@ -116,14 +116,14 @@ TEST(NamedArgsHashSchema, PerCoreScalarValueInsensitive) {
         << "Per-core-scalar values and core count are runtime data and must not affect the schema hash";
 }
 
-TEST(NamedArgsHashSchema, CommonArrayValueInsensitive) {
+TEST(NamedArgsHashSchema, CPU_CommonArrayValueInsensitive) {
     EXPECT_EQ(
         blaze_hash_schema(blaze_common_array("a.x", {1, 2, 3})),
         blaze_hash_schema(blaze_common_array("a.x", {9, 8, 7})))
         << "Common-array values are runtime data; only the array LENGTH is schema";
 }
 
-TEST(NamedArgsHashSchema, PerCoreArrayValueInsensitive) {
+TEST(NamedArgsHashSchema, CPU_PerCoreArrayValueInsensitive) {
     // Same name, same per-core array WIDTH (3), different values and different core count.
     EXPECT_EQ(
         blaze_hash_schema(blaze_per_core_array("a.x", {{kCore0, {1, 2, 3}}})),
@@ -133,17 +133,17 @@ TEST(NamedArgsHashSchema, PerCoreArrayValueInsensitive) {
 
 // --- schema-sensitivity: any schema difference => DIFFERENT hash ---
 
-TEST(NamedArgsHashSchema, DifferentFieldNameDiffers) {
+TEST(NamedArgsHashSchema, CPU_DifferentFieldNameDiffers) {
     EXPECT_NE(blaze_hash_schema(blaze_common_scalar("a.x", 0)), blaze_hash_schema(blaze_common_scalar("a.y", 0)))
         << "Different field name => different generated header => different hash";
 }
 
-TEST(NamedArgsHashSchema, DifferentNamespaceDiffers) {
+TEST(NamedArgsHashSchema, CPU_DifferentNamespaceDiffers) {
     EXPECT_NE(blaze_hash_schema(blaze_common_scalar("a.x", 0)), blaze_hash_schema(blaze_common_scalar("b.x", 0)))
         << "Different namespace => different generated header => different hash";
 }
 
-TEST(NamedArgsHashSchema, CommonVsPerCoreScalarDiffers) {
+TEST(NamedArgsHashSchema, CPU_CommonVsPerCoreScalarDiffers) {
     // Same name "a.x", but common-dispatch vs per-core-dispatch => different Arg descriptor.
     EXPECT_NE(
         blaze_hash_schema(blaze_common_scalar("a.x", 0)),
@@ -151,19 +151,19 @@ TEST(NamedArgsHashSchema, CommonVsPerCoreScalarDiffers) {
         << "Dispatch kind (common vs per-core) is schema and must change the hash";
 }
 
-TEST(NamedArgsHashSchema, ScalarVsArrayKindDiffers) {
+TEST(NamedArgsHashSchema, CPU_ScalarVsArrayKindDiffers) {
     // Same name "a.x", common dispatch, but scalar (Arg) vs length-1 array (ArrayArg).
     EXPECT_NE(blaze_hash_schema(blaze_common_scalar("a.x", 0)), blaze_hash_schema(blaze_common_array("a.x", {0})))
         << "Scalar vs array kind is schema and must change the hash even at length 1";
 }
 
-TEST(NamedArgsHashSchema, CommonArrayLengthDiffers) {
+TEST(NamedArgsHashSchema, CPU_CommonArrayLengthDiffers) {
     EXPECT_NE(
         blaze_hash_schema(blaze_common_array("a.x", {0, 0})), blaze_hash_schema(blaze_common_array("a.x", {0, 0, 0})))
         << "Common-array length is baked into the header and must change the hash";
 }
 
-TEST(NamedArgsHashSchema, PerCoreArrayLengthDiffers) {
+TEST(NamedArgsHashSchema, CPU_PerCoreArrayLengthDiffers) {
     // Regression: the per-core-array variant was entirely absent from the old hashers.
     EXPECT_NE(
         blaze_hash_schema(blaze_per_core_array("a.x", {{kCore0, {0, 0}}})),
@@ -171,7 +171,7 @@ TEST(NamedArgsHashSchema, PerCoreArrayLengthDiffers) {
         << "Per-core-array width is schema and must change the hash";
 }
 
-TEST(NamedArgsHashSchema, PerCoreArrayNameDiffers) {
+TEST(NamedArgsHashSchema, CPU_PerCoreArrayNameDiffers) {
     // Regression: names in the per-core-array variant were never hashed before WS5.
     EXPECT_NE(
         blaze_hash_schema(blaze_per_core_array("a.x", {{kCore0, {0, 0}}})),
@@ -179,7 +179,7 @@ TEST(NamedArgsHashSchema, PerCoreArrayNameDiffers) {
         << "Per-core-array field name is schema and must change the hash";
 }
 
-TEST(NamedArgsHashSchema, OrderSwapDiffers) {
+TEST(NamedArgsHashSchema, CPU_OrderSwapDiffers) {
     // Two common scalars in swapped order. Order determines the assigned RT-arg indices,
     // so [a.x, b.y] and [b.y, a.x] generate different headers.
     NamedKernelArgs ab{.named_common_runtime_args = {{"a.x", 0}, {"b.y", 0}}};
@@ -188,7 +188,7 @@ TEST(NamedArgsHashSchema, OrderSwapDiffers) {
         << "Order within a section shifts indices => different hash";
 }
 
-TEST(NamedArgsHashSchema, CountCollisionGuard) {
+TEST(NamedArgsHashSchema, CPU_CountCollisionGuard) {
     // Two names ["a","b"] must not collide with a single concatenated name ["ab"].
     // Per-section counts are hashed first precisely to prevent this.
     NamedKernelArgs two{.named_common_runtime_args = {{"a", 0}, {"b", 0}}};
@@ -200,13 +200,13 @@ TEST(NamedArgsHashSchema, CountCollisionGuard) {
 // Tier 1b -- hash_kernel_descriptor via public std::hash<ProgramDescriptor>
 // ============================================================================
 
-TEST(NamedArgsHashProgramDescriptor, SchemaDifferenceChangesProgramHash) {
+TEST(NamedArgsHashProgramDescriptor, CPU_SchemaDifferenceChangesProgramHash) {
     // Two descriptors identical except for a named-arg field name.
     EXPECT_NE(blaze_program_hash(blaze_common_scalar("a.x", 0)), blaze_program_hash(blaze_common_scalar("a.y", 0)))
         << "A named-arg schema difference must propagate into the program hash";
 }
 
-TEST(NamedArgsHashProgramDescriptor, PerCoreArrayLengthChangesProgramHash) {
+TEST(NamedArgsHashProgramDescriptor, CPU_PerCoreArrayLengthChangesProgramHash) {
     // Regression: the per-core-array variant was missing from the descriptor hasher
     // before WS5, so a change here would previously have collided.
     EXPECT_NE(
@@ -215,7 +215,7 @@ TEST(NamedArgsHashProgramDescriptor, PerCoreArrayLengthChangesProgramHash) {
         << "A per-core-array schema difference must propagate into the program hash";
 }
 
-TEST(NamedArgsHashProgramDescriptor, ValueOnlyDifferenceKeepsProgramHash) {
+TEST(NamedArgsHashProgramDescriptor, CPU_ValueOnlyDifferenceKeepsProgramHash) {
     // Identical schema across all four variants, differing only in runtime values
     // (and per-core core count). The program hash must be unchanged so the cache hits.
     NamedKernelArgs a{

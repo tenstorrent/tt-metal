@@ -14,9 +14,9 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-template <bool legacy_compat = true>
+template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void recip_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (APPROX, DST_ACCUM_MODE, legacy_compat)));
+    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (APPROX, is_fp32_dest_acc_en, legacy_compat)));
 }
 // clang-format off
 /**
@@ -34,13 +34,13 @@ ALWI void recip_tile_init() {
  * | vector_mode | Specifies the vector mode for computation (e.g., Row, Column). (default: VectorMode::RC) | VectorMode | Subject to specific hardware/kernel limits          | False    |
  */
 // clang-format on
-template <bool legacy_compat = true>
+template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_reciprocal,
-        (APPROX, DST_ACCUM_MODE, 8 /*ITERATIONS*/, legacy_compat),
+        (APPROX, is_fp32_dest_acc_en, 8 /*ITERATIONS*/, legacy_compat),
         idst,
         vector_mode));
 }

@@ -659,7 +659,11 @@ def run(
     try:
         start_time = start_measuring_time()
         output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, **op_kwargs)
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor,
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
         e2e_perf = stop_measuring_time(start_time)
     except Exception:
         input_tensor_a = ttnn.from_torch(
@@ -680,7 +684,11 @@ def run(
         fallback_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
         start_time = start_measuring_time()
         output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, **fallback_kwargs)
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor,
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
         e2e_perf = stop_measuring_time(start_time)
 
     # Slice output back to original shape in case tile padding expanded it

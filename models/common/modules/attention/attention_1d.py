@@ -967,6 +967,13 @@ class Attention1D(LightweightModule):
         k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
         v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
 
+        if k_fill_sliced.dtype != keys.dtype or v_fill_sliced.dtype != values.dtype:
+            raise ValueError(
+                "paged KV cache prefill requires K/V fill tensors to already match the cache dtype: "
+                f"k_fill={k_fill_sliced.dtype}, keys={keys.dtype}, "
+                f"v_fill={v_fill_sliced.dtype}, values={values.dtype}"
+            )
+
         ttnn.experimental.paged_fill_cache(keys, k_fill_sliced, fill_page_table, batch_idx=user_id)
         ttnn.experimental.paged_fill_cache(values, v_fill_sliced, fill_page_table, batch_idx=user_id)
 
@@ -980,12 +987,11 @@ class Attention1D(LightweightModule):
         """Batched prefill KV fill — one fill call per user (loop), mirroring TTTv1 attention.py
         L1013-1040.
 
-        ``k_fill`` / ``v_fill`` are ``[batch_size, n_kv_heads, per_user_seq_len, head_dim]`` and
-        ``user_id`` is the list of *local* valid row indices (padded slots are excluded). ``batch_idx``
-        is a scalar per call because ``paged_fill_cache`` reads ``batch_idx_ptr[0]`` for all rows — a
-        per-row batch_idx in one call is unsupported. The executor builds ``page_table`` with one row
-        per local user, so local row ``i`` selects that user's physical blocks. Device-verified
-        correct (kernel probe E: per-slot readback pcc 1.0).
+        ``k_fill`` / ``v_fill`` are ``[batch_size, n_kv_heads, per_user_seq_len, head_dim]``.
+        Eager execution supplies active local ``user_id`` rows, while trace capture deliberately
+        supplies every padded row to keep one stable graph. Planner-owned padded page-table rows are
+        all ``-1``, the paged-fill skip sentinel, so those captured calls issue no KV writes.
+        ``batch_idx`` is scalar because ``paged_fill_cache`` reads ``batch_idx_ptr[0]`` for all rows.
         """
         cfg = self.config
         is_paged = cfg.paged_attention_config is not None

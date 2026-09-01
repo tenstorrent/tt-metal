@@ -40,7 +40,6 @@ void kernel_main() {
     CircularBuffer cb0(cb0_id);
 
     // TODO #24995: Instead of page by page transfers, we can transfer bank by bank
-
     // Small pages. We pack multiple pages into a single packet.
     uint32_t page_index = page_start_offset;
     if constexpr (num_pages_per_packet > 0) {

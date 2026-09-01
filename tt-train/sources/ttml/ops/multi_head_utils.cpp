@@ -26,6 +26,7 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_
         num_heads,
         num_heads,
         /* transpose_k */ false,
+        /* kv_tied */ false,
         /* memory_config */ std::nullopt,
         /* optional_output_tensors */ std::nullopt);
 
@@ -97,6 +98,7 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> groupe
         /*num_q_heads=*/num_heads,
         /*num_kv_heads=*/num_groups,
         /*transpose_k_heads=*/false,
+        /*kv_tied=*/false,
         /*memory_config=*/std::nullopt,
         /*optional_output_tensors=*/std::nullopt);
 

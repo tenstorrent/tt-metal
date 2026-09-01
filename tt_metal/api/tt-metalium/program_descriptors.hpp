@@ -105,6 +105,8 @@ struct ComputeConfigDescriptor {
     UnpackToDestModes unpack_to_dest_mode;
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
+    // See ComputeConfig::enable_trisc2_rvv.
+    bool enable_trisc2_rvv = false;
 };
 
 // Declares that a specific per-core runtime arg position holds a buffer base address

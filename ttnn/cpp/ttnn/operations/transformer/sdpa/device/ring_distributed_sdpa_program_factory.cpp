@@ -300,6 +300,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     reader_compile_time_args.push_back(0);  // valid_semaphore_id
     reader_compile_time_args.push_back(0);  // mcast_enabled
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 33
+    reader_compile_time_args.push_back(0);  // arg 34: use_windowed_narrowing — ring is never windowed
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -309,6 +310,8 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         .append_to(reader_compile_time_args);                  // page table
     TensorAccessorArgs().append_to(reader_compile_time_args);  // attention sink (not used in ring)
     TensorAccessorArgs().append_to(reader_compile_time_args);  // chunk_start_idx_tensor (ring has no flexible chunked)
+    TensorAccessorArgs().append_to(reader_compile_time_args);  // cu_window_seqlens (ring is never windowed)
+    TensorAccessorArgs().append_to(reader_compile_time_args);  // windowed_q_token_offset_tensor (never windowed)
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
@@ -339,9 +342,10 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 24
         0,  // arg 25: use_windowed_mask — ring never uses windowed (block-diagonal) attention
     };
-    // out accessor, then the cu_window accessor chained right after it (mirrors the regular factory so the
-    // writer's accessor offset chain stays intact). Ring is never windowed → nullptr placeholder accessor.
+    // out accessor, then the cu_window and Q-offset accessors chained right after it (mirrors the regular
+    // factory so the writer's accessor offset chain stays intact). Ring is never windowed → placeholders.
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs().append_to(writer_compile_time_args);
     TensorAccessorArgs().append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
@@ -380,6 +384,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         valid_Skt,  // arg 31: unpadded K tiles for streaming padded_k_tiles
         0u,         // arg 32: k_partial_col - unused on ring's non-streaming path
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 33: unified zigzag remap
+        0,                                            // arg 34: use_windowed_narrowing — ring is never windowed
     };
     std::map<std::string, std::string> defines_map;
     defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -438,11 +443,14 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     };
 
     cb_ids.q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
-    // Ring is never windowed, but the writer's windowed block (gated by `if constexpr`) is still compiled
-    // in a non-template function, so get_tile_size(cb_cu_window_in) must resolve to a valid CB id rather
-    // than the `inactive` sentinel (which constexpr-faults on unpack_tile_size[-1]). Mirror the regular
-    // factory and point it at q_in.
+    // Ring is never windowed, but the writer's and reader's windowed blocks (gated by `if constexpr`)
+    // are still compiled in non-template functions, so their get_tile_size calls must resolve to valid
+    // CB ids rather than the `inactive` sentinel (which constexpr-faults on unpack_tile_size[-1]).
+    // Mirror the regular factory and point them all at q_in.
     cb_ids.cu_window_seqlens = cb_ids.q_in;
+    cb_ids.windowed_q_offset = cb_ids.q_in;
+    cb_ids.windowed_cu_reader = cb_ids.q_in;
+    cb_ids.windowed_k_range = cb_ids.q_in;
     cb_ids.k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
     cb_ids.v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
     cb_ids.mask_in = allocate_tile_cb(mask_tiles, mask_tile_size, mask_df);

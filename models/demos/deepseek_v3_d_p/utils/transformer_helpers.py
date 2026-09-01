@@ -13,6 +13,7 @@ Provides:
 """
 
 import gc
+import inspect
 import json
 import os
 from copy import deepcopy
@@ -211,6 +212,189 @@ def create_hf_model(variant, config, num_layers, n_routed_experts=None):
 
     model = variant.reference_model_cls(test_config)
     return model.eval().to(torch.bfloat16)
+
+
+def reference_rope(hf_model, hidden_states, position_ids):
+    """The reference ``(cos, sin)``, built in fp32 from the CONFIG rather than copied from the model.
+
+    A reference instantiated in bf16 carries a bf16 ``inv_freq`` buffer and ``.float()`` cannot
+    recover the lost bits; the resulting ~4.4e-4 frequency error is a phase error that grows with
+    position. Depends only on the positions, so build it once per run.
+    """
+    rotary = getattr(hf_model, "rotary_emb", None)
+    assert rotary is not None, f"{type(hf_model).__name__} exposes no rotary_emb to build rope from"
+    # Check the signature rather than catching: a bare `except` would also swallow a genuine
+    # construction failure and silently fall back to the bf16 buffer this function exists to avoid.
+    rotary_cls = type(rotary)
+    if "config" in inspect.signature(rotary_cls.__init__).parameters:
+        rotary_f32 = rotary_cls(config=hf_model.config).float()
+    else:
+        # A rotary predating `config=` cannot be rebuilt, so the bf16 buffer is unavoidable and the
+        # table this returns carries the position-dependent error this function exists to remove.
+        # Not fatal: the four DeepseekV3/Kimi rotaries in reference/ are exactly these classes, and
+        # their vendored layers compute rope internally, so they never reach here -- raising would
+        # be a latent break for them if that ever changed. Say so loudly instead of silently
+        # returning a table that looks fixed.
+        logger.warning(
+            f"{rotary_cls.__name__} does not accept `config=`, so the reference rope falls back to "
+            f"the model's bf16 inv_freq buffer. Long-context PCC from this reference stays subject "
+            f"to the ~4.4e-4 frequency error; give this class a config-based constructor to fix it."
+        )
+        rotary_f32 = deepcopy(rotary).float()
+    # `forward` reads this tensor only for device and dtype (transformers 5.12), so pass a view --
+    # a full fp32 copy of the hidden states is ~251 MB at seq 15360.
+    probe = hidden_states[:1, :1].float()
+    with torch.no_grad():
+        return rotary_f32(probe, position_ids)
+
+
+def layer_wants_position_embeddings(hf_layer) -> bool:
+    """Does this reference decoder layer take ``position_embeddings``?
+
+    The predicate that decides whether a rope table has to be built at all. Layers differ across
+    transformers generations: a transformers-5.x layer (e.g. Mistral4) REQUIRES the caller to pass
+    ``(cos, sin)``, while an older or vendored layer (e.g. DeepSeekV3) computes rope internally from
+    ``position_ids`` and exposes no top-level ``rotary_emb`` to build one from. Asking the signature
+    keeps both working; assuming either shape breaks the other.
+    """
+    return "position_embeddings" in inspect.signature(hf_layer.forward).parameters
+
+
+def reference_position_embeddings(hf_model, hidden_states, position_ids, num_layers: int):
+    """The reference rope table for a whole run, or ``None`` when no layer takes one.
+
+    Built once: it depends only on the positions, and building per layer would construct a rotary
+    module and a full fp32 copy of the hidden states each time (~251 MB at seq 15360).
+
+    Returns None rather than raising for a reference whose layers compute rope internally --
+    DeepSeekV3's vendored layer does, and its model exposes no top-level ``rotary_emb``, so asking
+    unconditionally asserted on exactly the models that never needed a table.
+    """
+    if not num_layers or not layer_wants_position_embeddings(hf_model.layers[0]):
+        return None
+    return reference_rope(hf_model, hidden_states, position_ids)
+
+
+def decoder_layer_kwargs(
+    hf_layer, hf_model, hidden_states, attention_mask, position_ids, cache, use_cache=True, position_embeddings=None
+):
+    """Keyword arguments for calling one reference decoder layer, bound to ITS OWN signature.
+
+    Reference layers differ across transformers generations and getting it wrong fails in two
+    distinct ways, neither of which points at the cause:
+
+      * the cache kwarg is ``past_key_value`` on the vendored DeepSeek/Kimi layers and
+        ``past_key_values`` on transformers >= 5. The wrong name lands silently in ``**kwargs``, so
+        no KV is ever captured and a later cache comparison comes up empty or mis-shaped;
+      * transformers >= 5 moved rope to the MODEL level and made ``position_embeddings`` required, so
+        omitting it raises ``TypeError: cannot unpack non-iterable NoneType`` from inside attention.
+
+    Pass ``position_embeddings`` from ``reference_rope`` -- it depends only on the positions, so
+    building it per layer is wasted work. Omitted, it is built here for this one call.
+    """
+    params = inspect.signature(hf_layer.forward).parameters
+    kwargs = {
+        "attention_mask": attention_mask,
+        "position_ids": position_ids,
+        "use_cache": use_cache,
+    }
+    kwargs["past_key_values" if "past_key_values" in params else "past_key_value"] = cache
+    if "position_embeddings" in params:  # == layer_wants_position_embeddings(hf_layer)
+        cos, sin = (
+            position_embeddings
+            if position_embeddings is not None
+            else reference_rope(hf_model, hidden_states, position_ids)
+        )
+        kwargs["position_embeddings"] = (cos.to(hidden_states.dtype), sin.to(hidden_states.dtype))
+    return kwargs
+
+
+def derive_mla_kvpe(hf_layer, hidden_states, position_embeddings, config):
+    """Compressed MLA KV line [b, 1, seq, kv_lora_rank + qk_rope_head_dim] from a decoder layer.
+
+    For references that cache expanded per-head keys rather than the MLA latent. Mirrors what
+    MLAReference caches: ``kv_a_layernorm(latent)`` concatenated with the ROPE-rotated pe part,
+    computed with the layer's own weights and its own rope convention.
+
+    Call this while the layer's weights are still loaded -- the layer-by-layer reference frees
+    them right after the forward.
+    """
+    import sys
+
+    from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_to_halfsplit_perm
+
+    attn = hf_layer.self_attn
+    kv_lora_rank, rope_dim = config.kv_lora_rank, config.qk_rope_head_dim
+    with torch.no_grad():
+        # fp32: accumulating the norm + projection in bf16 costs ~2e-3 of PCC against the device's
+        # own KVPE, enough to fail a 0.999 bar with nothing actually wrong.
+        norm_f = deepcopy(hf_layer.input_layernorm).float()
+        proj_f = deepcopy(attn.kv_a_proj_with_mqa).float()
+        kv_norm_f = deepcopy(attn.kv_a_layernorm).float()
+        normed = norm_f(hidden_states.float())
+        compressed = proj_f(normed)
+        latent, k_pe = torch.split(compressed, [kv_lora_rank, rope_dim], dim=-1)
+        bsz, seq_len = hidden_states.shape[0], hidden_states.shape[1]
+        k_nope = kv_norm_f(latent).view(bsz, 1, seq_len, kv_lora_rank)
+        k_pe = k_pe.view(bsz, 1, seq_len, rope_dim)
+
+        assert position_embeddings is not None, "need (cos, sin) to rotate the pe part"
+        cos, sin = (c.float() for c in position_embeddings)
+        # Use the layer's OWN rope convention, resolved from the attention's own module rather than
+        # any one variant's: Mistral sets rope_interleave=True and applies
+        # apply_rotary_pos_emb_interleave; getting this wrong silently rotates the wrong pairs.
+        attn_module = sys.modules[type(attn).__module__]
+        fn_name = (
+            "apply_rotary_pos_emb_interleave" if getattr(config, "rope_interleave", False) else "apply_rotary_pos_emb"
+        )
+        _apply = getattr(attn_module, fn_name, None)
+        assert _apply is not None, f"{attn_module.__name__} exposes no {fn_name} to rotate the pe part"
+        _q_unused, k_pe = _apply(k_pe, k_pe, cos, sin)
+
+        # The rotated pe is in the HF half-split basis; MLAReference and the device both store the
+        # Meta-interleaved one. The permutation between them cancels in q.k, which is why attention
+        # output PCC is ~1.0 either way while the stored pe compares at ~0.03 without it.
+        perm = torch.argsort(interleaved_to_halfsplit_perm(rope_dim))
+        k_pe = k_pe[..., perm]
+
+        kvpe = k_pe.new_empty(bsz, 1, seq_len, kv_lora_rank + rope_dim)
+        kvpe[:, :, :, :kv_lora_rank] = k_nope
+        kvpe[:, :, :, kv_lora_rank:] = k_pe
+    return kvpe
+
+
+def mla_kvpe_width(config) -> int | None:
+    """Width of the row the device caches per token: kv_lora_rank + qk_rope_head_dim.
+
+    None when the config is not MLA, so callers can skip a layout check that does not apply.
+    """
+    kv, rope = getattr(config, "kv_lora_rank", None), getattr(config, "qk_rope_head_dim", None)
+    return None if kv is None or rope is None else kv + rope
+
+
+def reference_kvpe_for_layer(hf_layer, layer_idx, layer_input, layer_kwargs, ref_cache, config):
+    """This layer's reference KVPE in the layout the DEVICE stores: [b, 1, seq, kv_lora_rank + pe].
+
+    A vendored MLAReference caches that line directly, so it is used as-is. A stock transformers
+    attention (`Mistral4Attention`) caches EXPANDED per-head keys -- [b, n_heads, seq, head_dim] --
+    which does not correspond to the device's latent cache in rank OR width. Comparing the two does
+    not merely fail, it fails *quietly*: a `[..., :kv_lora_rank]` slice of a 128-wide last dim just
+    clamps to 128, and what reaches comp_pcc is a shape error rather than a number. Derive the
+    latent from the layer's own modules in that case.
+    """
+    width = mla_kvpe_width(config)
+    cached = hf_cache_layer_kv(ref_cache, layer_idx)[0]
+    if width is None:
+        return cached  # not an MLA config; nothing to derive
+    if cached is not None and cached.shape[-1] == width:
+        return cached
+    if layer_idx == 0:
+        logger.info(
+            f"Reference caches expanded KV (last dim "
+            f"{None if cached is None else cached.shape[-1]} != {width}); "
+            "deriving the compressed MLA KVPE line from each layer instead"
+        )
+    return derive_mla_kvpe(hf_layer, layer_input, layer_kwargs.get("position_embeddings"), config)
 
 
 def extract_layer_state_dict(variant, full_sd, layer_idx, hf_layer):
@@ -507,7 +691,7 @@ def load_and_compute_layer_by_layer(
 
     # Initialize outputs
     ref_snapshots = [] if compute_reference else None
-    ref_kvpe_list = None
+    ref_kvpe_list = [] if compute_reference else None
     ref_cache = None
 
     # Create hf_model only if computing reference
@@ -568,6 +752,16 @@ def load_and_compute_layer_by_layer(
     first_k_dense = config.first_k_dense_replace
     n_routed = config.n_routed_experts
 
+    # Once for the whole reference: identical across layers, and each build would otherwise construct
+    # a rotary module and a full fp32 copy of the hidden states.
+    #
+    # Only when a layer actually takes position_embeddings. A vendored reference such as DeepSeekV3
+    # computes rope internally and exposes no top-level rotary_emb, so building this unconditionally
+    # asserts on exactly the models that never needed it.
+    ref_position_embeddings = (
+        reference_position_embeddings(hf_model, h_ref, position_ids, num_layers) if compute_reference else None
+    )
+
     for i in range(num_layers):
         logger.info(f"Processing layer {i}/{num_layers}...")
 
@@ -578,16 +772,30 @@ def load_and_compute_layer_by_layer(
             layer_with_prefix = {f"layers.{i}.{k}": v for k, v in layer_dequant.items()}
             hf_model.load_state_dict(layer_with_prefix, strict=False)
 
+            layer_input = h_ref
+            layer_kwargs = decoder_layer_kwargs(
+                hf_model.layers[i],
+                hf_model,
+                h_ref,
+                attention_mask,
+                position_ids,
+                ref_cache,
+                position_embeddings=ref_position_embeddings,
+            )
             with torch.no_grad():
-                layer_out = hf_model.layers[i](
-                    h_ref,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_value=ref_cache,
-                    use_cache=True,
-                )
-                h_ref = layer_out[0]
+                layer_out = hf_model.layers[i](layer_input, **layer_kwargs)
+                h_ref = layer_out[0] if isinstance(layer_out, (tuple, list)) else layer_out
             ref_snapshots.append(h_ref)
+
+            # Capture the reference KVPE *here*, while this layer's weights are still loaded: they
+            # are freed a few lines below, and for a stock attention the line has to be derived from
+            # them (see reference_kvpe_for_layer). Doing it after the loop -- which is what the
+            # earlier `hf_cache_layer_kv` one-liner did -- can only read back the cache, which for
+            # Mistral holds per-head keys and made all 72 per-layer KVPE rows unusable.
+            ref_kvpe_list.append(
+                reference_kvpe_for_layer(hf_model.layers[i], i, layer_input, layer_kwargs, ref_cache, config)
+            )
+            del layer_input, layer_kwargs
 
             # Clear layer weights from hf_model
             for param in hf_model.layers[i].parameters():
@@ -683,10 +891,6 @@ def load_and_compute_layer_by_layer(
         gc.collect()
         _log_memory(f"After layer {i} cleared")
         logger.debug(f"Layer {i} processed, cache cleared")
-
-    # Extract KVPE if computed reference
-    if compute_reference:
-        ref_kvpe_list = [hf_cache_layer_kv(ref_cache, i)[0] for i in range(num_layers)]
 
     # --- Process Norm ---
     logger.info("Processing norm...")
@@ -788,9 +992,39 @@ def _ref_cache_dir(variant) -> Path:
     return Path(os.environ.get(env, f"/tmp/{variant.name}_transformer_ref_cache"))
 
 
-def check_reference_cache_exists(variant, cache_key: ReferenceCacheKey) -> bool:
+def _ref_cache_kvpe_width(cache_path: Path) -> int | None:
+    """Last-dim width of the first stored KVPE entry, or None if it cannot be determined."""
+    try:
+        try:
+            cached = torch.load(cache_path, weights_only=True, mmap=True)
+        except (RuntimeError, TypeError):  # not zipfile-serialized, or older torch without mmap
+            cached = torch.load(cache_path, weights_only=True)
+        kvpe = cached.get("ref_kvpe_list")
+        return None if not kvpe else kvpe[0].shape[-1]
+    except Exception as e:  # a cache we cannot read is handled by the normal load path
+        logger.debug(f"Could not inspect KVPE width of {cache_path}: {e}")
+        return None
+
+
+def check_reference_cache_exists(variant, cache_key: ReferenceCacheKey, expected_kvpe_width: int | None = None) -> bool:
+    """Whether a reusable reference cache exists for `cache_key`.
+
+    `expected_kvpe_width` (kv_lora_rank + qk_rope_head_dim) additionally rejects a file whose
+    stored KVPE predates `reference_kvpe_for_layer` -- i.e. holds expanded per-head keys instead of
+    the compressed MLA line. ReferenceCacheKey covers everything that changes reference *values*
+    but nothing about their *layout*, so without this a stale file is reused silently and every
+    per-layer KVPE row errors out. Treated as a miss, which recomputes the reference (~6 s/layer).
+    """
     cache_path = _ref_cache_dir(variant) / f"{cache_key}.pt"
     exists = cache_path.exists()
+    if exists and expected_kvpe_width is not None:
+        stale = _ref_cache_kvpe_width(cache_path)
+        if stale is not None and stale != expected_kvpe_width:
+            logger.warning(
+                f"Reference cache {cache_path.name} stores KVPE of width {stale}, expected "
+                f"{expected_kvpe_width} (pre-compressed-line format) -- recomputing the reference"
+            )
+            return False
     if exists:
         logger.info(f"Reference cache found: {cache_path}")
     else:

@@ -19,11 +19,12 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
     assert_equal,
+    collect_accuracy_and_determinism_results,
 )
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True),
+    pytest.mark.use_module_device({"l1_small_size": 24576}),
 ]
 
 _BATCH = 1
@@ -177,43 +178,6 @@ def _reference(
     )
 
 
-def _collect_accuracy_and_determinism_results(
-    device: ttnn.Device,
-    run: Callable[[], ttnn.Tensor],
-    *,
-    count: int = 3,
-) -> tuple[ttnn.Tensor, torch.Tensor, torch.Tensor]:
-    assert count > 1
-    reference_output = run()
-    mismatch_scratch = ttnn.empty(
-        reference_output.shape,
-        dtype=ttnn.bfloat16,
-        layout=reference_output.layout,
-        device=device,
-        memory_config=reference_output.memory_config(),
-    )
-    mismatch_marker = None
-    for _ in range(1, count):
-        output_tt = run()
-        ttnn.ne(reference_output, output_tt, dtype=ttnn.bfloat16, output_tensor=mismatch_scratch)
-        current_mismatch = ttnn.max(mismatch_scratch)
-        ttnn.deallocate(output_tt)
-        if mismatch_marker is None:
-            mismatch_marker = current_mismatch
-        else:
-            updated_marker = ttnn.maximum(mismatch_marker, current_mismatch)
-            ttnn.deallocate(mismatch_marker)
-            ttnn.deallocate(current_mismatch)
-            mismatch_marker = updated_marker
-
-    assert mismatch_marker is not None
-    reference_output_host = ttnn.to_torch(reference_output).clone()
-    mismatch_marker_host = ttnn.to_torch(mismatch_marker).clone()
-    ttnn.deallocate(mismatch_scratch)
-    ttnn.deallocate(mismatch_marker)
-    return reference_output, reference_output_host, mismatch_marker_host
-
-
 def _assert_output_contract(
     output_tt: ttnn.Tensor,
     output: torch.Tensor,
@@ -272,11 +236,11 @@ def test_sigmoid_gated_rms_norm_is_accurate_and_deterministic(
     )
     input_snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in device_inputs)
 
-    def run() -> ttnn.Tensor:
+    def run() -> tuple[ttnn.Tensor]:
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            return _run(input_tt, gate_tt, weight_tt, output_dtype=output_dtype)
+            return (_run(input_tt, gate_tt, weight_tt, output_dtype=output_dtype),)
 
-    output_tt, output, mismatch_marker = _collect_accuracy_and_determinism_results(device, run)
+    (output_tt,), (output,), mismatch_marker = collect_accuracy_and_determinism_results(device, run)
     _assert_output_contract(
         output_tt,
         output,
@@ -317,18 +281,20 @@ def test_sigmoid_gated_rms_norm_production_is_accurate_and_deterministic(
     )
     compute_kernel_config = _production_compute_kernel_config(device)
 
-    def run() -> ttnn.Tensor:
+    def run() -> tuple[ttnn.Tensor]:
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            return _run(
-                input_tt,
-                gate_tt,
-                weight_tt,
-                num_heads=case.num_heads,
-                compute_kernel_config=compute_kernel_config,
-                output_dtype=_PRODUCTION_OUTPUT_DTYPE,
+            return (
+                _run(
+                    input_tt,
+                    gate_tt,
+                    weight_tt,
+                    num_heads=case.num_heads,
+                    compute_kernel_config=compute_kernel_config,
+                    output_dtype=_PRODUCTION_OUTPUT_DTYPE,
+                ),
             )
 
-    output_tt, output, mismatch_marker = _collect_accuracy_and_determinism_results(device, run)
+    (output_tt,), (output,), mismatch_marker = collect_accuracy_and_determinism_results(device, run)
     _assert_output_contract(
         output_tt,
         output,
@@ -392,7 +358,7 @@ def test_sigmoid_gated_rms_norm_production_performance(device: ttnn.Device, case
     )
 
 
-def test_sigmoid_gated_rms_norm_program_key_includes_epsilon(device: ttnn.Device) -> None:
+def test_sigmoid_gated_rms_norm_program_key_includes_epsilon(device: ttnn.Device, isolated_program_cache: None) -> None:
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(
         device, batch=1, sequence=32, num_heads=2, value_dim=64, seed=1321
     )
@@ -404,7 +370,9 @@ def test_sigmoid_gated_rms_norm_program_key_includes_epsilon(device: ttnn.Device
     assert device.num_program_cache_entries() == entries + 1
 
 
-def test_sigmoid_gated_rms_norm_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
+def test_sigmoid_gated_rms_norm_cache_hit_rebinds_fresh_tensors(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     host_a, device_inputs_a = _device_inputs(device, batch=1, sequence=32, num_heads=2, value_dim=64, seed=1911)
     host_b, device_inputs_b = _device_inputs(device, batch=1, sequence=32, num_heads=2, value_dim=64, seed=1912)
 
@@ -444,7 +412,9 @@ def test_sigmoid_gated_rms_norm_cache_hit_rebinds_fresh_tensors(device: ttnn.Dev
     assert not torch.equal(actual_a, actual_b)
 
 
-def test_sigmoid_gated_rms_norm_default_compute_config_matches_explicit_defaults(device: ttnn.Device) -> None:
+def test_sigmoid_gated_rms_norm_default_compute_config_matches_explicit_defaults(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(device, seed=817)
     implicit = ttnn.to_torch(_run(input_tt, gate_tt, weight_tt))
     entries = device.num_program_cache_entries()
@@ -462,7 +432,9 @@ def test_sigmoid_gated_rms_norm_default_compute_config_matches_explicit_defaults
     assert_bit_identical(implicit, explicit, name="implicit vs explicit production compute defaults")
 
 
-def test_sigmoid_gated_rms_norm_exact_math_changes_program_and_output(device: ttnn.Device) -> None:
+def test_sigmoid_gated_rms_norm_exact_math_changes_program_and_output(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(device, seed=818)
     approximate = ttnn.to_torch(_run(input_tt, gate_tt, weight_tt))
     entries = device.num_program_cache_entries()

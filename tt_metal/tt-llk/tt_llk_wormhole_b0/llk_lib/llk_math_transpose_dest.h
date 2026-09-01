@@ -45,10 +45,8 @@ inline void transpose_dest_32b()
     // We must disable this for the SrcA format switching approach to control MOVD2B/MOVB2D behavior.
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
 
-    // The 32b hi16/lo16 MOV sequence must not flush datums with a zero low byte; own the Src
-    // zero-substitution flag via the math state tracker. Asserted here (execute) so it survives any
-    // llk_math_hw_configure that ran after the init; skip-if-set keeps it cheap.
-    math::_configure_mov_ops_zero_flag_state_();
+    // Zero-flag PRESERVE for the hi16/lo16 MOV sequence is established by the caller
+    // (_llk_math_transpose_dest_), covering both the 32-bit and 16-bit paths.
 
     // Transpose all the low 16 bit elements of all faces and put them in SrcA.
     // Eventually Dest=0, SrcA=0.
@@ -178,6 +176,13 @@ inline void _llk_math_transpose_dest_(const std::uint32_t dst_index)
     // Wait condition SRCB_VLD is required as MOVD2B doesn't automatically wait
     // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+
+    // Both paths run a MOVD2B/MOVB2D/MOVA2D transpose sequence that flushes any datum with a zero low
+    // byte (e.g. bf16 0x4400 = 768.0) when the Src zero-substitution flag is at the operand DEFAULT,
+    // corrupting ordinary finite values (same hazard as reduce_row_perform_transpose). transpose_dest
+    // owns the PRESERVE policy here — asserted in execute (not init) so it survives any
+    // llk_math_hw_configure that ran after the init; skip-if-set keeps it cheap.
+    math::_configure_preserve_zero_flag_state_();
 
     if constexpr (is_32bit)
     {

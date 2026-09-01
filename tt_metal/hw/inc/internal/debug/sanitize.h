@@ -210,15 +210,19 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write,
 #endif
 
 #if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
-    if (write && (addr < MEM_MAP_READ_ONLY_END)) {
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+    constexpr uint32_t read_only_end = DISPATCH_MEM_MAP_END;
+#else
+    constexpr uint32_t read_only_end = MEM_MAP_READ_ONLY_END;
+#endif
+    if (write && (addr < read_only_end)) {
         return DebugSanitizeNocAddrMailbox;
     }
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     // The read-only region is aliased into the uncached view; a write there hits the same reserved
     // memory. Only local buffers use the alias (remote targets are physical, bounded above). Raw
     // address kept for reporting.
-    if (is_local_buffer && write && addr >= MEM_L1_UNCACHED_BASE &&
-        addr < MEM_L1_UNCACHED_BASE + MEM_MAP_READ_ONLY_END) {
+    if (is_local_buffer && write && addr >= MEM_L1_UNCACHED_BASE && addr < MEM_L1_UNCACHED_BASE + read_only_end) {
         return DebugSanitizeNocAddrMailbox;
     }
 #endif

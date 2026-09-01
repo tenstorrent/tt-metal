@@ -30,7 +30,8 @@ void kernel_main() {
 
     CircularBuffer cb_output(output_cb_id);
 
-    init_sfpu(output_cb_id, output_cb_id);
+    compute_kernel_hw_startup(output_cb_id, output_cb_id);
+    copy_init(output_cb_id);
 
     rand_tile_init(seed, start_id);
     for (uint32_t i = start_id; i < end_id; ++i) {

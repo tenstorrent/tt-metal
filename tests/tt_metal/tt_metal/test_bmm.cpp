@@ -12,6 +12,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tilize_utils.hpp>
@@ -278,8 +279,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
         GTEST_SKIP() << "This test requires at least 2 worker nodes.";
     }
 
-    IDevice* dev = mesh_device.get_devices()[0];
-
     BmmParams p;
     p.Mt = 2; p.Kt = 2; p.Nt = 2;
     p.B_total = 2;      // total batches across both cores
@@ -335,7 +334,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     detail::WriteToBuffer(*tensors.src0.mesh_buffer().get_reference_buffer(), src0_vec);
     detail::WriteToBuffer(*tensors.src1.mesh_buffer().get_reference_buffer(), src1_vec);
 
-    detail::LaunchProgram(dev, program, true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
     detail::ReadFromBuffer(*tensors.dst.mesh_buffer().get_reference_buffer(), result_vec);

@@ -39,26 +39,21 @@ static vector<uint32_t> run_fp8_typecast(
     const vector<uint32_t>& src_vec,
     uint32_t num_tiles,
     bool fp32_dest_acc_en) {
-    IDevice* dev = mesh_device.get_devices()[0];
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
 
     uint32_t input_tile_size = tt::tile_size(input_fmt);
     uint32_t output_tile_size = tt::tile_size(output_fmt);
 
-    InterleavedBufferConfig src_config{
-        .device = dev,
-        .size = num_tiles * input_tile_size,
-        .page_size = num_tiles * input_tile_size,
-        .buffer_type = BufferType::DRAM};
-    auto src_buffer = CreateBuffer(src_config);
+    auto src_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_tiles * input_tile_size},
+        {.page_size = num_tiles * input_tile_size, .buffer_type = BufferType::DRAM},
+        &mesh_device);
 
-    InterleavedBufferConfig dst_config{
-        .device = dev,
-        .size = num_tiles * output_tile_size,
-        .page_size = num_tiles * output_tile_size,
-        .buffer_type = BufferType::DRAM};
-    auto dst_buffer = CreateBuffer(dst_config);
+    auto dst_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_tiles * output_tile_size},
+        {.page_size = num_tiles * output_tile_size, .buffer_type = BufferType::DRAM},
+        &mesh_device);
 
     CircularBufferConfig cb_src_config = CircularBufferConfig(input_tile_size, {{tt::CBIndex::c_0, input_fmt}})
                                              .set_page_size(tt::CBIndex::c_0, input_tile_size);
@@ -86,7 +81,8 @@ static vector<uint32_t> run_fp8_typecast(
         core,
         ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {num_tiles}});
 
-    detail::WriteToBuffer(src_buffer, src_vec);
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, /*blocking=*/true);
     SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0, num_tiles});
     SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, num_tiles});
 
@@ -96,12 +92,11 @@ static vector<uint32_t> run_fp8_typecast(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     workload.add_program(device_range, std::move(program));
-    auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
     vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_buffer, /*blocking=*/true);
     return result_vec;
 }
 

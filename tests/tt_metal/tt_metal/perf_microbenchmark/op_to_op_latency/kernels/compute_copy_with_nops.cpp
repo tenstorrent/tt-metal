@@ -39,6 +39,7 @@
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 #include "tools/profiler/kernel_profiler.hpp"
@@ -55,8 +56,8 @@ void kernel_main() {
     // no barrier between reps. Matches the reader/writer unroll so the whole op runs un-synced.
     const uint32_t workload_repeat = get_arg_val<uint32_t>(2) > 0 ? get_arg_val<uint32_t>(2) : 1;
 
-    unary_op_init_common(cb_in, cb_out);
-    copy_tile_init(cb_in);
+    compute_kernel_hw_startup(cb_in, cb_out);
+    copy_init(cb_in);
 
     // Device 2.0 CB handles for the flow-control ops (wait/reserve/push/pop). The tile-copy /
     // pack LLK calls below still take the raw CB ids.

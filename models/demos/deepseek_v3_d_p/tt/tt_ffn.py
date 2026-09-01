@@ -17,7 +17,13 @@ from typing import Optional
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import COMPUTE_KERNEL_CONFIG_HIFI2, TtSharedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import (
+    ACTIVATION_SILU,
+    ACTIVATION_SITU,
+    COMPUTE_KERNEL_CONFIG_HIFI2,
+    TtSharedExpert,
+    situ_glu,
+)
 
 # DeepSeek 671B FFN dimensions
 EMB_DIM = 7168
@@ -35,6 +41,7 @@ class TtFfn(TtSharedExpert):
         gate_out = x @ gate_proj
         up_out   = x @ up_proj
         activated = silu(gate_out) * up_out          (fused via ttnn.mul)
+                    -- or SiTU-GLU (ttnn.situ_glu) when activation == "situ"
         output_full = activated @ down_proj
         output = reduce_scatter(output_full)         (only when TP > 1)
     """
@@ -52,8 +59,11 @@ class TtFfn(TtSharedExpert):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        activation: str = ACTIVATION_SILU,
+        situ_beta: Optional[float] = None,
+        situ_linear_beta: Optional[float] = None,
     ):
-        """Initialize TtFfn — same signature as before, no sub-device parameters."""
+        """Initialize TtFfn — same signature as before plus the GLU activation, no sub-device parameters."""
         super().__init__(
             mesh_device=mesh_device,
             emb_dim=emb_dim,
@@ -66,6 +76,9 @@ class TtFfn(TtSharedExpert):
             compute_kernel_config=compute_kernel_config,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=cache_name_prefix,
+            activation=activation,
+            situ_beta=situ_beta,
+            situ_linear_beta=situ_linear_beta,
             # subdevice_id / subdevice_cores intentionally left as defaults (None) —
             # TtFfn's overridden forward() does not use them.
         )
@@ -130,13 +143,19 @@ class TtFfn(TtSharedExpert):
         up_out = ttnn.matmul(x, self.up_proj, compute_kernel_config=self.compute_kernel_config)
         logger.debug(f"After up_proj matmul: {up_out.shape}")
 
-        # Step 3: SiLU activation and element-wise multiplication (fused)
-        activated = ttnn.mul(
-            gate_out,
-            up_out,
-            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-        )
-        logger.debug(f"After SiLU fusion: {activated.shape}")
+        # Step 3: GLU activation and element-wise multiplication
+        if self.activation == ACTIVATION_SITU:
+            # No sub-device here, so ttnn.situ_glu's L1 fast path is in play -- but it is bounded on
+            # the per-chip width, and K3's 33792 is 8448 at TP=4, past the 3072 bound. So the
+            # intermediates land in DRAM anyway. Correctness first; #53625 tracks perf.
+            activated = situ_glu(gate_out, up_out, self.situ_beta, self.situ_linear_beta)
+        else:
+            activated = ttnn.mul(
+                gate_out,
+                up_out,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            )
+        logger.debug(f"After {self.activation} activation: {activated.shape}")
 
         # Step 4: Down projection
         output_full = ttnn.matmul(activated, self.down_proj, compute_kernel_config=self.compute_kernel_config)

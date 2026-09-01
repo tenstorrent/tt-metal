@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import torch
 from loguru import logger
@@ -15,6 +17,14 @@ from loguru import logger
 import ttnn
 
 _SAME_SAMPLING_PARAMS = object()
+
+
+def make_contiguous_page_table(batch_size: int, max_seq_len: int, block_size: int = 32) -> torch.Tensor:
+    """Create a contiguous demo page table with one disjoint block range per user."""
+    if min(batch_size, max_seq_len, block_size) <= 0:
+        raise ValueError("page-table dimensions must be positive")
+    blocks_per_user = (max_seq_len + block_size - 1) // block_size
+    return torch.arange(batch_size * blocks_per_user, dtype=torch.int32).reshape(batch_size, blocks_per_user)
 
 
 @dataclass
@@ -154,7 +164,7 @@ def _compile_prefill_and_decode(
         )
         return
 
-    prefill_output = execution_target.compile_prefill(
+    execution_target.compile_prefill(
         tokens=prefill_tokens,
         page_table=prefill_page_table,
         kv_cache=kv_cache,
@@ -164,10 +174,6 @@ def _compile_prefill_and_decode(
         sampling_params=None,
     )
     decode_tokens = torch.zeros(batch_size, dtype=torch.long, device=prefill_tokens.device)
-    if isinstance(prefill_output, tuple):
-        decode_tokens = prefill_output[0].view(-1)[:batch_size].to(dtype=torch.long, device=prefill_tokens.device)
-    elif prefill_output is not None:
-        decode_tokens = torch.argmax(prefill_output[:, -1:, :], dim=-1).view(-1)
 
     execution_target.compile_decode(
         tokens=decode_tokens,
@@ -486,18 +492,12 @@ def run_perf_benchmark(
             )
             output, _ = _split_output(decode_output)
 
+            completed_host_output = None
             if can_pipeline_readback:
                 host_output, read_events = _submit_decode_read(execution_target, decode_output)
                 if pending_read_events is not None:
                     _synchronize_read_events(pending_read_events)
-                    _consume_sampled_output(
-                        execution_target,
-                        pending_host_output,
-                        batch_size,
-                        cluster_shape,
-                        generated_token_ids,
-                        process_host_output=True,
-                    )
+                    completed_host_output = pending_host_output
                 pending_host_output = host_output
                 pending_read_events = read_events
 
@@ -509,8 +509,18 @@ def run_perf_benchmark(
                 compile_time = elapsed
             else:
                 decode_iteration_times.append(elapsed)
-                if sampling_params is None:
+                if sampling_params is None or can_pipeline_readback:
                     decode_times.append(elapsed)
+
+            if completed_host_output is not None:
+                _consume_sampled_output(
+                    execution_target,
+                    completed_host_output,
+                    batch_size,
+                    cluster_shape,
+                    generated_token_ids,
+                    process_host_output=True,
+                )
 
             if sampling_params is None:
                 if isinstance(output, torch.Tensor) and output.dim() >= 2:
@@ -545,7 +555,7 @@ def run_perf_benchmark(
                 generated_token_ids,
                 process_host_output=True,
             )
-        if sampled_decode_start is not None:
+        if sampled_decode_start is not None and not can_pipeline_readback:
             _synchronize_target(execution_target)
             sampled_decode_time = time.perf_counter() - sampled_decode_start
             decode_times = [sampled_decode_time / (num_decode_tokens - 1)] * (num_decode_tokens - 1)
@@ -575,6 +585,7 @@ def _add_token_ids(target: set[int], value) -> None:
 def _stop_token_ids(tokenizer) -> set[int]:
     stop_ids: set[int] = set()
     _add_token_ids(stop_ids, getattr(tokenizer, "eos_token_id", None))
+    _add_token_ids(stop_ids, getattr(tokenizer, "stop_tokens", None))
     convert_tokens_to_ids = getattr(tokenizer, "convert_tokens_to_ids", None)
     if callable(convert_tokens_to_ids):
         eot_id = convert_tokens_to_ids("<|eot_id|>")
@@ -597,9 +608,9 @@ def assert_no_special_tokens(
     case_name: str = "",
     is_ci_env: bool | None = None,
 ) -> None:
-    """Warn on generated special tokens locally and fail only under CI=true."""
+    """Warn locally; fail under CI or ``TT_DEMO_STRICT_SPECIAL_TOKENS=1``."""
     if is_ci_env is None:
-        is_ci_env = os.environ.get("CI") == "true"
+        is_ci_env = os.environ.get("CI") == "true" or os.environ.get("TT_DEMO_STRICT_SPECIAL_TOKENS") == "1"
 
     special_ids = set(getattr(tokenizer, "all_special_ids", []) or [])
     stop_ids = _stop_token_ids(tokenizer)
@@ -617,3 +628,172 @@ def assert_no_special_tokens(
     logger.warning(message)
     if is_ci_env:
         raise AssertionError(message)
+
+
+def load_eval_repeat_prompts_batch32() -> list[str]:
+    """The 32 numeric sequence-continuation prompts TTTv1's ci-eval-32 uses (parity)."""
+    path = Path("models/tt_transformers/demo/sample_prompts/eval_repeat_prompts_batch32.json")
+    with open(path) as f:
+        data = json.load(f)
+    return [entry["prompt"] for entry in data]
+
+
+def rotate_prompts(all_prompts: list[str], repeat: int) -> list[str]:
+    """Rotate the prompt->slot assignment by ``repeat``: slot j holds prompt (j+repeat)%N."""
+    n = len(all_prompts)
+    return [all_prompts[(j + repeat) % n] for j in range(n)]
+
+
+def truncate_at_stop(ids: list[int], stop_ids: set[int]) -> list[int]:
+    """Prefix of ``ids`` up to (excluding) the first id in ``stop_ids``."""
+    out: list[int] = []
+    for t in ids:
+        if t in stop_ids:
+            break
+        out.append(t)
+    return out
+
+
+def hf_stop_ids(tokenizer, hf_model_id: str | None = None) -> set[int]:
+    """Best-effort stop-token id set for an HF ``AutoTokenizer``.
+
+    Raw HF tokenizers have no ``.stop_tokens`` (that only exists on the TTTv1 wrapped
+    tokenizer). Build the set from ``eos_token_id`` (int|list|None), and — when an
+    ``hf_model_id`` is supplied — also fold in the model's ``generation_config`` eos ids,
+    since chat models (e.g. Llama-3 Instruct) often carry extra eot ids there rather than
+    on ``eos_token_id``. Missing/empty -> empty set (truncation simply runs full length).
+    """
+    stop: set[int] = set()
+
+    def _add(value) -> None:
+        if value is None:
+            return
+        if isinstance(value, bool):  # guard: bool is an int subclass
+            return
+        if isinstance(value, int):
+            stop.add(int(value))
+        elif isinstance(value, (list, tuple, set)):
+            for e in value:
+                _add(e)
+
+    _add(getattr(tokenizer, "eos_token_id", None))
+    # tt_transformers ModelArgs.tokenizer augments the HF tokenizer with ``stop_tokens``
+    # (eos + any extra eot ids); raw HF AutoTokenizers don't have it (getattr -> None).
+    _add(getattr(tokenizer, "stop_tokens", None))
+    if hf_model_id is not None:
+        try:
+            from transformers import GenerationConfig
+
+            gen_cfg = GenerationConfig.from_pretrained(hf_model_id)
+            _add(getattr(gen_cfg, "eos_token_id", None))
+        except Exception as e:  # generation_config absent / unreadable — eos_token_id is enough
+            logger.debug(f"ci-eval-32: could not read generation_config eos ids for {hf_model_id}: {e}")
+    return stop
+
+
+def assert_cross_batch_consistency(per_repeat_outputs: list[list[list[int]]]) -> None:
+    """Assert prompt-position invariance across repeats.
+
+    ``per_repeat_outputs[b][u]`` = truncated token-id list for slot ``u`` of repeat ``b``.
+    With slot j of repeat b holding prompt (j+b)%N (see ``rotate_prompts``), the same prompt
+    sits at slot (offset+1)%N of repeat b and slot offset of repeat b+1 — so those two
+    outputs must be identical if no per-user state leaks.
+    """
+    num_batches = len(per_repeat_outputs)
+    assert num_batches >= 2, "cross-batch consistency needs >=2 repeats"
+    n = len(per_repeat_outputs[0])
+    failed, total = 0, 0
+    first_failure = None
+    for b in range(num_batches - 1):
+        cur, nxt = per_repeat_outputs[b], per_repeat_outputs[b + 1]
+        for offset in range(n):
+            total += 1
+            if cur[(offset + 1) % n] != nxt[offset]:
+                failed += 1
+                if first_failure is None:
+                    first_failure = (b, offset)
+    assert failed == 0, (
+        f"ci-eval-32: {failed}/{total} cross-batch consistency checks failed "
+        f"(first at repeat {first_failure[0]}->{first_failure[0] + 1}, offset {first_failure[1]})"
+    )
+
+
+def run_eval_repeat_batch32(
+    *,
+    make_executor,
+    allocate_kv_cache,
+    page_table: torch.Tensor,
+    prompts: list[str],
+    tokenizer,
+    tokenize_fn,
+    num_decode_tokens: int,
+    max_batch_size: int,
+    sampling_params=None,
+    repeat_batches: int = 3,
+    hf_model_id: str | None = None,
+) -> None:
+    """Drive the ci-eval-32 determinism case, building a fresh traced executor per repeat.
+
+    Each repeat builds its own traced executor (``make_executor()``) and its own zeroed KV
+    cache (``allocate_kv_cache(executor)``), so the rotated batches are fully independent —
+    no shared device or host state can leak across repeats. The executor is cleaned up after
+    each repeat. (The model is bit-deterministic across repeats either way; fresh-per-repeat
+    is simply the cleanest independence guarantee for a determinism test, and the trace
+    recapture cost is negligible at batch-32.)
+
+    Args:
+        make_executor: Zero-arg callable returning a fresh traced executor
+            (``run_perf_benchmark`` requires traced). Called once per repeat.
+        allocate_kv_cache: Callable(executor) -> fresh zeroed kv_cache bound on that executor.
+        page_table: Fixed contiguous page table (shared across repeats).
+        prompts: The N (=max_batch_size) prompts to rotate (TTTv1 ci-eval-32 numeric prompts;
+            see the module note above re: degenerate-output sensitivity on small models).
+        tokenizer: HF tokenizer (for stop / special ids).
+        tokenize_fn: Callable(list[str]) -> (tokens, prompt_lens).
+        num_decode_tokens: Decode steps per repeat.
+        max_batch_size: Padded batch (== len(prompts) for this fixed-32 case).
+        sampling_params: None -> host argmax (deterministic, mesh-agnostic default).
+        repeat_batches: Number of rotated repeats (TTTv1 uses 3).
+        hf_model_id: Optional, to enrich stop ids from generation_config.
+    """
+    assert (
+        len(prompts) == max_batch_size
+    ), f"ci-eval-32 expects len(prompts)==max_batch_size; got {len(prompts)} vs {max_batch_size}"
+    stop_ids = hf_stop_ids(tokenizer, hf_model_id)
+    special_ids = set(getattr(tokenizer, "all_special_ids", []) or [])
+    # Garbage guard targets only special tokens that are NOT recognized stops: a legitimate
+    # stop is removed by truncation, so anything special left in the body is degenerate output.
+    garbage_ids = special_ids - stop_ids
+    logger.info(
+        f"ci-eval-32: repeat_batches={repeat_batches}, N={len(prompts)}, "
+        f"stop_ids={sorted(stop_ids)}, |special_ids|={len(special_ids)}, sampling_params={sampling_params}"
+    )
+
+    per_repeat: list[list[list[int]]] = []
+    for i in range(repeat_batches):
+        traced_executor = make_executor()
+        try:
+            kv_cache = allocate_kv_cache(traced_executor)
+            rotated = rotate_prompts(prompts, i)
+            tokens, prompt_lens = tokenize_fn(rotated)
+            result = run_perf_benchmark(
+                traced_executor,
+                tokens=tokens,
+                kv_cache=kv_cache,
+                page_table=page_table,
+                num_decode_tokens=num_decode_tokens,
+                max_batch_size=max_batch_size,
+                prompt_lens=prompt_lens,
+                sampling_params=sampling_params,
+            )
+        finally:
+            traced_executor.cleanup()
+        truncated = [truncate_at_stop(ids, stop_ids) for ids in result.generated_token_ids]
+        for u, ids in enumerate(truncated):
+            bad = set(ids) & garbage_ids
+            assert not bad, f"ci-eval-32: user {u} produced special token(s) {sorted(bad)} mid-stream"
+        per_repeat.append(truncated)
+        logger.info(f"ci-eval-32 repeat {i}: truncated lengths = {[len(t) for t in truncated]}")
+
+    assert_cross_batch_consistency(per_repeat)
+    logger.info(f"ci-eval-32: all {(repeat_batches - 1) * len(prompts)} cross-batch consistency checks passed")

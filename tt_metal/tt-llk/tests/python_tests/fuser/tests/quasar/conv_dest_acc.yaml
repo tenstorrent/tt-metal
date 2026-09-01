@@ -1,0 +1,51 @@
+# Convolution with dest accumulation enabled and Float32 intermediates.
+# Tests the higher-precision accumulation path for conv-like matmul workloads.
+
+dest_acc: true
+
+operands:
+  - name: "activations"
+    dims: [128, 256]
+    format: "Float16_b"
+  - name: "weights"
+    dims: [256, 128]
+    format: "Float16_b"
+  - name: "bias"
+    dims: [128, 128]
+    format: "Float16_b"
+  - name: "conv_result"
+    dims: [128, 128]
+    format: "Float32"
+  - name: "output"
+    dims: [128, 128]
+    format: "Float32"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "activations"
+        src_b: "weights"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
+    block_size: [64, 64]
+    pack:
+      - output: "conv_result"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "conv_result"
+        src_b: "bias"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        broadcast_type: "ROW"
+        broadcast_tile: 0
+        math_fidelity: "LoFi"
+      - type: "UnarySfpu"
+        operation: "Relu"
+        iterations: 32
+    block_size: [64, 64]
+    pack:
+      - output: "output"
+        packer: "Packer"

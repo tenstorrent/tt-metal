@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import shlex
 import subprocess
+import tempfile
 from collections import namedtuple
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +21,8 @@ from .tile_constants import (
     DEFAULT_TILE_R_DIM,
 )
 from .tile_shape import construct_tile_shape
+
+TEMP_DIR = Path(tempfile.gettempdir())
 
 torch.set_printoptions(linewidth=500, sci_mode=False, precision=2, threshold=10000)
 
@@ -98,6 +103,44 @@ tolerances = {
 # rounding noise stays below it while any real signal stays above.
 PCC_SIGNAL_FLOOR = 1e-6
 
+# Relative accumulation error the LoFi MVMUL adds per K-tile, as a fraction of the mean
+# accumulated magnitude. Calibrated across formats on Blackhole (worst observed ~0.0034 at
+# kt=16, bfp2/bfp0), rounded up for headroom.
+MATMUL_ACC_REL_ERR_PER_KT = 0.005
+
+
+def matmul_acc_atol(
+    golden_tensor,
+    kt_dim: int,
+    output_data_format: DataFormat = DataFormat.Float16_b,
+) -> float:
+    """K-aware atol floor for a LoFi matmul golden, to pass to ``passed_test``.
+
+    A single LoFi MVMUL accumulates the whole K-deep sum in a bf16 DEST, so noise grows
+    ~linearly in the number of K-tiles — more than the format's flat atol allows on small
+    outputs at large kt. Scale the floor by ``kt_dim * mean|nonzero golden|``, never below
+    the format default, and leave rtol alone; PCC stays the real gate.
+
+    Why not simply ``tolerances[fmt].atol * kt_dim``: that scales the wrong quantity. The
+    error this floor covers is a *relative* accumulation error, so it tracks the magnitude
+    of the accumulated sum, which itself grows with K -- while ``tolerances[fmt].atol`` is a
+    fixed absolute number tuned for single-element ops and says nothing about the golden's
+    scale. For a uniform[0, 1] stimuli matmul at kt=16 the golden entries average ~1e2, so
+    the real error is O(1) while ``0.05 * 16 == 0.8`` still under-covers it; on a golden of
+    small magnitude the same product is far too loose. Two separate axes -- the format's
+    flat floor and the K-scaled one -- hence the ``max`` rather than a product.
+
+    The mean excludes zeros so a golden carrying structural zeros -- the bfp0 "zero tile"
+    of the compressed matmuls -- cannot deflate it.
+    """
+    active = golden_tensor.abs().flatten()
+    active = active[active > 0]
+    mean_active = active.mean().item() if active.numel() else 0.0
+    return max(
+        tolerances[output_data_format].atol,
+        MATMUL_ACC_REL_ERR_PER_KT * kt_dim * mean_active,
+    )
+
 
 def print_faces(operand1, tile_shape=None):
     if tile_shape is None:
@@ -143,12 +186,19 @@ def print_faces(operand1, tile_shape=None):
 
 
 def run_shell_command(
-    command: str, cwd: str | None = None, stdin_data: str | bytes = None, text=True
+    command: str | Sequence[str],
+    cwd: str | None = None,
+    stdin_data: str | bytes = None,
+    text=True,
 ):
+    """Run a command. A string uses ``shell=True`` (legacy). A sequence is
+    executed with ``shell=False`` so path arguments are not re-split.
+    """
+    use_shell = isinstance(command, str)
     result = subprocess.run(
         command,
         cwd=cwd,
-        shell=True,
+        shell=use_shell,
         text=text,
         input=stdin_data,
         stdout=subprocess.DEVNULL,
@@ -156,7 +206,12 @@ def run_shell_command(
     )
 
     if result.returncode != 0:
-        raise RuntimeError(f"Command:\n{command}\n\nCommand's stderr:\n{result.stderr}")
+        pretty = (
+            command
+            if use_shell
+            else " ".join(shlex.quote(str(part)) for part in command)
+        )
+        raise RuntimeError(f"Command:\n{pretty}\n\nCommand's stderr:\n{result.stderr}")
     return result
 
 
@@ -595,7 +650,7 @@ def passed_test(
         is_valid = is_close | is_nan
         # `|` does not short-circuit, so only reach for the lattice when the tolerance
         # check has actually rejected something. Near-exact suites (test_unary_datacopy,
-        # test_sfpu_binary_float) accept every element here and would otherwise pay for a
+        # test_eltwise_binary_sfpu_float) accept every element here and would otherwise pay for a
         # second full-tensor compare that cannot change the verdict.
         if not torch.all(is_valid):
             is_valid = is_valid | _bfp_block_aware_compare(
@@ -781,7 +836,7 @@ def create_directories(dirs: list[Path]):
         return
 
     # Acquire lock and create using os.makedirs (more robust than pathlib.mkdir)
-    lock = FileLock("/tmp/tt-llk-build.lock")
+    lock = FileLock(TEMP_DIR / "tt-llk-build.lock")
     with lock:
         for dir in dirs:
             os.makedirs(dir, exist_ok=True)

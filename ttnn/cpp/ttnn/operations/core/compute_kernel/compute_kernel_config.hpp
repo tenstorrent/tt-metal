@@ -70,9 +70,6 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
 // The result's per-DFB unpack_modes table is left default for the program factory to set.
 // bfp_pack_precision_mode is likewise left default (rarely set non-default).
 //
-// The following Gen2-only TEMPORARY field is also not set here; a use site that needs
-// it should set it on the returned config instead:
-//   enable_2x_src_register
 tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
     tt::ARCH arch, const ComputeKernelConfig& config);
 

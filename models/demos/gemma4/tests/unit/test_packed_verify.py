@@ -345,13 +345,41 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
     # confident-flips=0 still failed a match-rate gate). Use a fixed in-vocab
     # arithmetic sequence, identical across users. warmup_prefill=False avoids
     # the TP>1 prefill-warmup sampling path (see the correctness test above).
+    #
+    # Chunk the prefill by user count. A single pass at the local full-sweep
+    # default (B=32 × ctx=2048 = 65k virtual tokens) disables prefill trace for
+    # OOM risk and has bus-errored on BH 1x8 with DRAM-sharded matmuls. Stay
+    # under the same 32k virtual-token ceiling used by the prefill-trace policy.
+    from models.demos.gemma4.tt.generator_trace import GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS
+
     vocab_hi = min(2000, int(target.vocab_size) - 1)
     span = max(1, vocab_hi - 10)
     base = (torch.arange(ctx, dtype=torch.int32) % span) + 10
     in_pt = base.unsqueeze(0).expand(Bmax, ctx).contiguous()
-    generator.prefill_forward_text(
-        in_pt, page_table=page_table_torch, kv_cache=tt_kv_cache, prompt_lens=[ctx] * Bmax, warmup_prefill=False
-    )
+    # Stay *strictly below* the 32k ceiling (16×2048 == 32768 still hangs/bus-errors).
+    max_users_per_prefill = max(1, (GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS - 1) // max(ctx, 1))
+    # Floor to a power of two (matches SUPPORTED_PREFILL_BATCH_SIZES), then
+    # shrink until the virtual-token product is under the cap.
+    p2 = 1
+    while (p2 << 1) <= max_users_per_prefill:
+        p2 <<= 1
+    max_users_per_prefill = p2
+    while max_users_per_prefill > 1 and max_users_per_prefill * ctx >= GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS:
+        max_users_per_prefill //= 2
+    if max_users_per_prefill < Bmax:
+        logger.info(
+            f"Chunking packed-verify bench prefill: Bmax={Bmax} ctx={ctx} "
+            f"→ {max_users_per_prefill} users/pass (cap={GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS} tokens)"
+        )
+    for start in range(0, Bmax, max_users_per_prefill):
+        end = min(start + max_users_per_prefill, Bmax)
+        generator.prefill_forward_text(
+            in_pt[start:end],
+            page_table=page_table_torch[start:end],
+            kv_cache=tt_kv_cache,
+            prompt_lens=[ctx] * (end - start),
+            warmup_prefill=False,
+        )
 
     c = ctx  # committed/anchor position; verify P fresh positions c..c+K
     S_k = max_seq_len

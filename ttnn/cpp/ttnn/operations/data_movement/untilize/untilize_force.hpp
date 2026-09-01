@@ -18,7 +18,7 @@ namespace ttnn::operations::data_movement::detail {
 // native over its supported scope and faster on device, and neither is observable through an entry
 // point that silently picks one. They are bound only under `ttnn._ttnn.operations.data_movement`
 // and are deliberately not registered into the `ttnn.*` namespace, so they are reachable from
-// tests and the port's sweep harness without being part of the public API. This header is likewise
+// tests and benchmarking without being part of the public API. This header is likewise
 // kept out of the installed `api` file set, and they sit in `detail` rather than alongside the real
 // op entries so that a caller reaching for one has to say so.
 //

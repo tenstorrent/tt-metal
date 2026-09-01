@@ -35,8 +35,8 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/compute_kernel_api.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/compressed_custom_mm.h"
+#include "api/compute/experimental/custom_mm.h"
+#include "api/compute/experimental/compressed_custom_mm.h"
 using namespace ckernel;
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_silu.h"
@@ -977,7 +977,7 @@ struct MatmulExpertCompressedDRAM {
 
                         reconfig_full_operand_srca(CTArgs::cb_out_silu);
                         pack_reconfig_data_format<true>(CTArgs::cb_out_silu);
-                        copy_tile_to_dst_init_short(CTArgs::cb_out_silu);
+                        copy_init(CTArgs::cb_out_silu);
                         silu_tile_init();
 
                         cb_reserve_back(CTArgs::cb_out_silu, 1);

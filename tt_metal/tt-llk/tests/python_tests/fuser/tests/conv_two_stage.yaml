@@ -1,0 +1,44 @@
+# Two back-to-back 1x1 convolutions: models a bottleneck's reduce-expand
+# pattern (e.g. 256->64->256 channel projection).
+
+operands:
+  - name: "input"
+    dims: [128, 256]
+    format: "Float16_b"
+  - name: "weights_reduce"
+    dims: [256, 64]
+    format: "Float16_b"
+  - name: "weights_expand"
+    dims: [64, 256]
+    format: "Float16_b"
+  - name: "intermediate"
+    dims: [128, 64]
+    format: "Float16_b"
+  - name: "output"
+    dims: [128, 256]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "input"
+        src_b: "weights_reduce"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
+    block_size: [64, 64]
+    pack:
+      - output: "intermediate"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "intermediate"
+        src_b: "weights_expand"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
+    block_size: [64, 64]
+    pack:
+      - output: "output"
+        packer: "Packer"

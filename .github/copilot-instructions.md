@@ -147,6 +147,10 @@ Additionally, where they apply, raise these at 🟢 SUGGESTION — never block o
 Do not attempt to write the Summary for the author; state what is missing and why a
 reviewer needs it.
 
+If a PR description claims a performance improvement but includes no performance
+measurement, raise a 🟡 IMPORTANT finding asking for benchmark evidence in the
+description (for example, before/after numbers and the measurement setup).
+
 ## Testing Expectations
 
 - New public API → unit test in the nearest `tests/` target

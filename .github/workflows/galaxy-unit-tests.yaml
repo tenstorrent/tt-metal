@@ -15,7 +15,6 @@ on:
           - multiprocess
 #          - prefetcher
           - distributed-ops
-          - tttv2
       platform:
         required: false
         type: choice

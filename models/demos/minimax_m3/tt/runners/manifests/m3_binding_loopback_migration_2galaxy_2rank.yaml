@@ -1,0 +1,41 @@
+# MiniMax-M3 — 2-galaxy 2-stage loopback migration rank binding (derived from
+# topology_configuration/pipeline_prefill_request_2rank.yaml + the intragalaxy loopback binding).
+# Each rank is a full 8x4 galaxy owning 30 layers; rank 0 publishes the merged 60-layer 9-config table.
+#
+# Launch (endpoint with workers on BOTH hosts must already be up):
+#   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+#     models/demos/minimax_m3/tt/runners/manifests/m3_binding_loopback_migration_2galaxy_2rank.yaml \
+#     <hostA>:1,<hostB>:1
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {}}
+
+mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_2galaxy_connected_mesh_graph_descriptor.textproto
+
+global_env:
+  # Absolute so every rank resolves it regardless of cwd; tt-run expands ${VARS} from the launch shell.
+  PREFILL_MANIFEST: "${TT_METAL_HOME}/models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json"
+
+  PREFILL_FABRIC_MODE: "2d_torus_xy"
+  PREFILL_SP: "8"
+  PREFILL_TP: "4"
+  PREFILL_CHUNK_SIZE: "5120"
+  PREFILL_MAX_SEQ_LEN: "10240"
+  PREFILL_H2D_SERVICE_ID: "m3_prefill"
+  # Every dst slot must exist in the table: src 0,1 -> dst 2,3.
+  PREFILL_NUM_USERS: "4"
+  PREFILL_TRACE_DIR: "/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240"
+
+  PREFILL_ENABLE_MIGRATION: "1"
+  PREFILL_ENABLE_LAYER_ACK: "1"
+  PREFILL_USE_TRACE: "1"
+  PREFILL_MIGRATION_WAIT_READY_MS: "300000"
+  # Table on shared storage — num_ranks>1 rejects per-host paths like /tmp. Device map stays host-local.
+  PREFILL_MIGRATION_TABLE_PATH: "/data/philei/tmp/m3_kv_chunk_table_pp.pb"
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/m3_kv_device_map.json"
+  PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"
+  PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
+  PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
+  PREFILL_MIGRATION_CLIENT_DIR: "${PREFILL_MIGRATION_CLIENT_DIR}"
+
+  LOGURU_LEVEL: "INFO"

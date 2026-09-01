@@ -84,14 +84,15 @@ jobs:
       - name: Approve PR
         if: steps.verify.outputs.safe == 'true'
         env:
-          # Must be a token for an account in tenstorrent/codeowner-bypass.
-          # Reuses the existing codeowners bypass PAT — already a member of
-          # tenstorrent/codeowner-bypass. See codeowners-group-analysis.yaml.
+          # Must be a token for an account listed as a CODEOWNERS owner on the
+          # file paths this workflow covers (sfpi-info.sh, sfpi-version,
+          # ttsim-version, pipeline_reorg/, third_party/umd, third_party/tracy —
+          # see #53814). Reuses the existing codeowners-group-analysis PAT.
           GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           # Use REST API instead of `gh pr review` to avoid GraphQL rate limits.
-          # Same PAT, same approving account, same CODEOWNERS bypass — just different transport.
+          # Same PAT, same approving account, same narrow CODEOWNERS ownership — just different transport.
           curl -s -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
@@ -163,7 +164,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           # Use REST API instead of `gh pr review` to avoid GraphQL rate limits.
-          # Same PAT, same approving account, same CODEOWNERS bypass — just different transport.
+          # Same PAT, same approving account, same narrow CODEOWNERS ownership — just different transport.
           curl -s -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \

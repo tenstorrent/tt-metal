@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -26,7 +27,9 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 
+#include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/llrt.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -234,7 +237,7 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
         SetRuntimeArgs(
             prog, kernel, svc_core, {(uint32_t)stop_addr, (uint32_t)counter_addr, (uint32_t)service_done_addr});
 
-        tt::tt_metal::detail::CompileProgram(device, prog, /*force_slow_dispatch=*/true);
+        prog.impl().compile(device, /*force_slow_dispatch=*/true);
         tt::tt_metal::detail::WriteRuntimeArgsToDevice(device, prog, /*force_slow_dispatch=*/true);
         tt::tt_metal::detail::LaunchProgram(
             device, prog, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
@@ -335,6 +338,97 @@ TEST_F(ServiceCoreFdFixture, ServiceCoreAllocatorCorrectness) {
         MetalContext::instance().get_service_core_manager().allocate_l1(device, core, k1p5MB), std::runtime_error);
 
     MetalContext::instance().get_service_core_manager().release(device, {core});
+}
+
+// A sharded L1 buffer may live on a claimed service core. Such a core has L1 but no allocator
+// bank -- it is a dispatch-column core, outside the compute grid -- and buffer construction
+// validates shard cores against the bank map, so it has to ask ServiceCoreManager before rejecting
+// one. This is how MeshSocket places its config buffer (see create_socket_config_buffer), which
+// then reserves that span via reserve_l1_to_top so the two allocators stay disjoint.
+TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1BufferOnClaimedCore) {
+    auto& mesh_device = this->devices_[0];
+    IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
+
+    auto claimable = MetalContext::instance().get_service_core_manager().get_claimable_cores(device);
+    const CoreCoord core = claimable[0];
+    ASSERT_FALSE(device->allocator_impl()->has_bank(BufferType::L1, core))
+        << "a claimable dispatch-column core is not expected to own an L1 bank";
+
+    // Qualified: in this namespace an unqualified ShardedBufferConfig is the mesh-level one.
+    constexpr uint32_t kPageSize = 1024;
+    const tt::tt_metal::ShardedBufferConfig config{
+        .device = device,
+        .size = kPageSize,
+        .page_size = kPageSize,
+        .buffer_type = BufferType::L1,
+        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
+        .shard_parameters = ShardSpecBuffer(
+            CoreRangeSet(CoreRange(core, core)),
+            {1, kPageSize / sizeof(uint32_t)},
+            ShardOrientation::ROW_MAJOR,
+            {1, 1},
+            {1, kPageSize / sizeof(uint32_t)})};
+
+    // Unclaimed, it is just a core the allocator knows nothing about.
+    EXPECT_ANY_THROW(tt::tt_metal::CreateBuffer(config));
+
+    MetalContext::instance().get_service_core_manager().claim(device, {core});
+    EXPECT_NO_THROW(tt::tt_metal::CreateBuffer(config));
+    MetalContext::instance().get_service_core_manager().release(device, {core});
+
+    // Released, it is rejected again -- the exception is the claim, not the coordinate.
+    EXPECT_ANY_THROW(tt::tt_metal::CreateBuffer(config));
+}
+
+// The same exception reached through MeshBuffer::create(), which is how every socket path actually
+// builds its config buffer. Without an explicit address the backing buffer is constructed against
+// the MeshDevice itself (mesh_buffer.cpp:149), so this covers the flatten-and-union branch of the
+// validation that the device-local case above cannot reach; initialize_device_buffers() then
+// re-validates the same shard spec per coordinate, against that coordinate's own device.
+//
+// Buffer shape mirrors create_socket_config_buffer() with one core, so what is under test is the
+// claim lookup rather than an incidental layout difference.
+TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1MeshBufferOnClaimedCore) {
+    auto& mesh_device = this->devices_[0];
+    const auto devices = mesh_device->get_devices();
+    auto& svc = MetalContext::instance().get_service_core_manager();
+
+    // One coordinate for the whole mesh: MeshBuffer applies a single shard spec on every device, so
+    // the core has to be claimable -- and claimed -- on all of them.
+    const CoreCoord core = svc.get_claimable_cores(devices[0]).front();
+    for (IDevice* device : devices) {
+        const auto claimable = svc.get_claimable_cores(device);
+        if (std::find(claimable.begin(), claimable.end(), core) == claimable.end()) {
+            GTEST_SKIP() << "service core " << core.str() << " is not claimable on device " << device->id()
+                         << "; a mesh-wide shard spec needs one coordinate valid everywhere";
+        }
+    }
+
+    constexpr uint32_t kPageSize = 1024;
+    const DeviceLocalBufferConfig local_config{
+        .page_size = kPageSize,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(
+            ShardSpecBuffer(CoreRangeSet(CoreRange(core, core)), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1}),
+            TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = std::nullopt,
+        .sub_device_id = std::nullopt,
+    };
+    const MeshBufferConfig mesh_config = ReplicatedBufferConfig{.size = kPageSize};
+
+    // Unclaimed, it is just a core the allocator knows nothing about.
+    EXPECT_ANY_THROW(MeshBuffer::create(mesh_config, local_config, mesh_device.get()));
+
+    for (IDevice* device : devices) {
+        svc.claim(device, {core});
+    }
+    EXPECT_NO_THROW(MeshBuffer::create(mesh_config, local_config, mesh_device.get()));
+    for (IDevice* device : devices) {
+        svc.release(device, {core});
+    }
+
+    // Released, it is rejected again -- the exception is the claim, not the coordinate.
+    EXPECT_ANY_THROW(MeshBuffer::create(mesh_config, local_config, mesh_device.get()));
 }
 
 // Actual use case: Launch a persistent service kernel on a claimed FD idle core while simultaneously

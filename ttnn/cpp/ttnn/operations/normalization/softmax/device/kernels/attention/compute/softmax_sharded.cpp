@@ -207,7 +207,7 @@ void kernel_main() {
         pack_reconfig_data_format(dfb_exps);
         // exp(x)
         index_subblock_w_offset = 0;
-        copy_tile_to_dst_init_short(dfb_in0);
+        copy_init(dfb_in0);
         exp_tile_init<EXP_APPROX>();
         for (std::uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();

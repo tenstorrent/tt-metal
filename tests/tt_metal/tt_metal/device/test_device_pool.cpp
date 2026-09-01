@@ -21,12 +21,8 @@ namespace tt::tt_metal {
 using namespace tt;
 
 void CloseDevicesInPool() {
-    auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
-    std::map<ChipId, IDevice*> chip_id_to_device;
-    for (const auto& dev : devices) {
-        chip_id_to_device[dev->id()] = dev;
-    }
-    detail::CloseDevices(chip_id_to_device);
+    auto& device_manager = *MetalContext::instance().device_manager();
+    device_manager.close_devices(device_manager.get_all_active_devices());
 }
 
 TEST(DevicePool, DevicePoolOpenClose) {

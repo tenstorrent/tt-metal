@@ -9,6 +9,14 @@ on:
       package-artifact-name:
         required: true
         type: string
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Image with the packages already installed. When set it replaces
+          docker-image and the download and install steps are skipped. Empty
+          means the artifact path, which is what forks always get.
       enabled-skus:
         required: true
         type: string
@@ -87,7 +95,8 @@ jobs:
     timeout-minutes: 45
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      # A prebuilt image already carries the packages and needs no Harbor prefix.
+      image: ${{ inputs.prebuilt-image || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
@@ -109,12 +118,14 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - uses: ./.github/actions/download-artifact-with-retry
+        if: ${{ inputs.prebuilt-image == '' }}
         timeout-minutes: 15
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/
 
       - name: Install packages
+        if: ${{ inputs.prebuilt-image == '' }}
         timeout-minutes: 10
         run: |
           # Ideally only ${{ inputs.product }}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.

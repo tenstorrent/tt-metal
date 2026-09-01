@@ -11,7 +11,29 @@
 #include "ckernel.h"
 #endif
 
+#if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
+extern thread_local uint32_t hw_thread_idx;
+#endif
+
 namespace internal_ {
+
+#if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
+inline __attribute__((always_inline)) uint32_t read_hw_thread_idx() {
+#if defined(COMPILE_FOR_TRISC)
+    uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
+    uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
+    return NUM_DM_CORES + NUM_TRISC_CORES * neo_id + trisc_id;
+#else
+    uint64_t hartid;
+    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    return static_cast<uint32_t>(hartid);
+#endif
+}
+
+// Fills ::hw_thread_idx for the calling hardware thread. Must run once per thread before anything calls
+// get_hw_thread_idx().
+inline __attribute__((always_inline)) void init_hw_thread_idx() { hw_thread_idx = read_hw_thread_idx(); }
+#endif
 
 // Internal API - not for direct use in kernels
 // Returns the hardware thread index for the current processor
@@ -27,6 +49,9 @@ namespace internal_ {
 //   Index 16-19: NEO2 Cluster (TRISC0-TRISC3)
 //   Index 20-23: NEO3 Cluster (TRISC0-TRISC3)
 //
+// On Quasar this serves the cached index, so it is valid only once init_hw_thread_idx() has run on this
+// thread.
+//
 // Blackhole/Wormhole (tt-1xx) Tensix:
 //   Index 0: BRISC  (DM0)
 //   Index 1: NCRISC (DM1)
@@ -38,14 +63,8 @@ namespace internal_ {
 // ETH Wormhole: Index 0
 // ETH Blackhole/Quasar: Index 0 to 1
 inline __attribute__((always_inline)) uint32_t get_hw_thread_idx() {
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC)
-    uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
-    uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
-    return NUM_DM_CORES + NUM_TRISC_CORES * neo_id + trisc_id;
-#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    uint64_t hartid;
-    asm volatile("csrr %0, mhartid" : "=r"(hartid));
-    return static_cast<uint32_t>(hartid);
+#if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
+    return hw_thread_idx;
 #else
     return PROCESSOR_INDEX;
 #endif

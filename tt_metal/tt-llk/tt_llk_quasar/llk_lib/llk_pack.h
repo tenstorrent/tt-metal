@@ -20,7 +20,7 @@ using namespace ckernel;
  * _llk_pack_srcs_config_ / _llk_pack_srcs_ in llk_srcs.h instead.
  *
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- *        stored in the buffer descriptor table, values = 16 - 31
+ *        stored in the buffer descriptor table; allocated from the pack TRISC partition [16,24) at op-init time (see llk_bfd_alloc.h)
  * @param num_tiles: Number of tiles to pack at a time.
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
@@ -54,7 +54,7 @@ inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uin
  * Programs the pack MOP.
  *
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- *        stored in the buffer descriptor table, values = 16 - 31
+ *        stored in the buffer descriptor table; allocated from the pack TRISC partition [16,24) at op-init time (see llk_bfd_alloc.h)
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @param num_tiles: Number of tiles to pack at a time.
  * @note @ref _llk_pack_ is the matching execute call on this thread.

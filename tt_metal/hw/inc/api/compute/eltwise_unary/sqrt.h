@@ -30,13 +30,13 @@ ALWI void sqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(sqrt, sfpu::sqrt_init, (APP
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool FAST_APPROX = false>
+template <bool FAST_APPROX = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sqrt_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_sqrt,
-        (APPROX, 8 /*ITERATIONS*/, DST_ACCUM_MODE, FAST_APPROX),
+        (APPROX, 8 /*ITERATIONS*/, is_fp32_dest_acc_en, FAST_APPROX),
         idst,
         VectorMode::RC));
 }

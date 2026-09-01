@@ -49,7 +49,15 @@ ttnn.attach_golden_function(ttnn.lerp, golden_function=_golden_function_lerp)
 def _golden_function_mac(input_tensor_a, input_tensor_b, input_tensor_c, *args, **kwargs):
     import torch
 
-    return torch.add(torch.mul(input_tensor_a, input_tensor_b), input_tensor_c)
+    # The device path is a fused multiply-add: SFPMAD accumulates in fp32 and rounds once on
+    # store. Rounding the product to the input dtype before the add rounds twice and drifts up
+    # to 2 ULP from the fused result, so accumulate in fp32 here and round once as well.
+    def promote(x):
+        return x.float() if torch.is_tensor(x) else x
+
+    out_dtype = next(x.dtype for x in (input_tensor_a, input_tensor_b, input_tensor_c) if torch.is_tensor(x))
+    result = torch.add(torch.mul(promote(input_tensor_a), promote(input_tensor_b)), promote(input_tensor_c))
+    return result.to(out_dtype)
 
 
 ttnn.attach_golden_function(ttnn.mac, golden_function=_golden_function_mac)

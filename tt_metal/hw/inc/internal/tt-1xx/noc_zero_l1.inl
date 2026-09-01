@@ -12,9 +12,14 @@
 template <typename Dst>
 inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const dst_args_t<Dst>& args) const {
     static_assert(
-        std::is_same_v<Dst, CircularBuffer> || std::is_same_v<Dst, DataflowBuffer>,
-        "noc.async_write_zeros local-L1 overload accepts CircularBuffer or DataflowBuffer only. "
-        "Use the TensorAccessor overload for DRAM.");
+        noc_zero_l1_endpoint_v<Dst>,
+        "noc.async_write_zeros: unsupported local-L1 destination. Supported: CircularBuffer, "
+        "DataflowBuffer, CoreLocalMem, Scratchpad, LocalTensorAccessor. Use the TensorAccessor overload for DRAM.");
+
+    if constexpr (is_scratchpad_v<Dst>) {
+        ASSERT(static_cast<uint64_t>(args.offset_bytes) + size_bytes <= dst.size_in_bytes());
+    }
+    ASSERT(get_dst_ptr<AddressType::LOCAL_L1>(dst, args) % NOC_L1_READ_ALIGNMENT_BYTES == 0);
 
     UnicastEndpoint zeros_ep;
     const auto zeros_src = noc_traits_t<UnicastEndpoint>::src_args_type{

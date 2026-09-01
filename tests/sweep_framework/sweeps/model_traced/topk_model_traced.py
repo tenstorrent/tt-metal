@@ -226,7 +226,11 @@ def run(
     if ttnn_indices_tensor is not None:
         topk_kwargs["indices_tensor"] = ttnn_indices_tensor
     topk_result = ttnn.topk(input_tensor_a, k=k_val, dim=dim_val, **topk_kwargs)
-    output_tensor = mesh_tensor_to_torch(topk_result[0], device if is_mesh_device else None)
+    output_tensor = mesh_tensor_to_torch(
+        topk_result[0],
+        device if is_mesh_device else None,
+        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     if is_mesh_device:

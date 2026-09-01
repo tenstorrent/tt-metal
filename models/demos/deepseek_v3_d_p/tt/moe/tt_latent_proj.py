@@ -35,6 +35,7 @@ Structurally this is the same shape as ``ttMLA._q_a_latent`` (``q_a_proj`` 7168-
 ``q_a_layernorm`` on the latent); the difference is only which collective each side needs.
 """
 
+import math
 from pathlib import Path
 from typing import Optional
 
@@ -43,11 +44,44 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+# Both projections are the shared expert's shapes with a narrower latent -- down_proj is its gate
+# (K 224 tiles, N 28) and up_proj its down (K 28, N 224) -- so the block rules measured there apply
+# unchanged rather than being re-derived here.
+from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import _in0_block_w, _out_subblock
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 
 # Cache-file basenames. Kept as a tuple so check_cache_complete and the writer cannot drift.
 _PROJ_NAMES = ("down_proj", "up_proj")
+
+
+def _program_config(grid: ttnn.CoreCoord, m: int, k: int, n: int):
+    """2D program config for one latent projection, derived for the 640-token prefill chunk.
+
+    Takes the matmul's M, K and N in elements and tiles them here, so callers pass dimensions they
+    already hold rather than each dividing by the tile side.
+
+    Both projections otherwise take a default that tiles them badly: the down projection measured
+    178.0us on 100 cores against 56.4us for this one on the same 100 cores, and the up projection
+    108.4us on 75 cores against 62.8us on 110. Occupancy is only half of it -- the down projection's
+    3.2x comes entirely from the per-core block.
+    """
+    m_tiles, k_tiles, n_tiles = (d // ttnn.TILE_SIZE for d in (m, k, n))
+    per_core_M = math.ceil(m_tiles / grid.y)
+    per_core_N = math.ceil(n_tiles / grid.x)
+    subblock_h, subblock_w = _out_subblock(per_core_M, per_core_N, deep_k=k_tiles >= 2 * n_tiles)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=_in0_block_w(k_tiles),
+        out_subblock_h=subblock_h,
+        out_subblock_w=subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fuse_batch=False,
+        fused_activation=None,
+    )
 
 
 class TtLatentMoeProjections(LightweightModule):
@@ -321,7 +355,17 @@ class TtLatentMoeProjections(LightweightModule):
             "It must run AFTER TtMoe's all-gather of x."
         )
 
-        latent = ttnn.matmul(x, self.down_proj, compute_kernel_config=self.compute_kernel_config)
+        latent = ttnn.matmul(
+            x,
+            self.down_proj,
+            program_config=_program_config(
+                self.mesh_device.compute_with_storage_grid_size(),
+                x.padded_shape[-2],
+                self.emb_dim,
+                self.routed_emb_dim // self.tp_factor,
+            ),
+            compute_kernel_config=self.compute_kernel_config,
+        )
         logger.debug(f"[LatentMoe.to_latent] after down_proj: {latent.shape}")
 
         if self.tp_factor > 1:
@@ -358,7 +402,17 @@ class TtLatentMoeProjections(LightweightModule):
             y = self.norm(y)
             logger.debug(f"[LatentMoe.from_latent] after latent norm: {y.shape}")
 
-        out_full = ttnn.matmul(y, self.up_proj, compute_kernel_config=self.compute_kernel_config)
+        out_full = ttnn.matmul(
+            y,
+            self.up_proj,
+            program_config=_program_config(
+                self.mesh_device.compute_with_storage_grid_size(),
+                y.padded_shape[-2],
+                expected_in,
+                self.emb_dim,
+            ),
+            compute_kernel_config=self.compute_kernel_config,
+        )
         logger.debug(f"[LatentMoe.from_latent] after up_proj: {out_full.shape}")
 
         if self.tp_factor > 1:

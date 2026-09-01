@@ -132,8 +132,9 @@ MLAQKVAssembleBwDeviceOperation::spec_return_value_t MLAQKVAssembleBwDeviceOpera
     const ttnn::Shape dkv_up_shape({B, 1U, S, args.n_heads * (args.qk_nope_dim + args.v_dim)});
     const ttnn::Shape dk_pe_shape({B, 1U, S, args.qk_rope_dim});
 
-    // Each output inherits from its primary input source. Validation requires all three
-    // inputs share dtype + memory_config, so these layouts are equal in practice.
+    // dq_pre inherits dQ's placement; dkv_up and dk_pe inherit dK's. Inputs may
+    // sit in different memory configs (only interleaved is required); the program
+    // hash keys each input's memory config independently.
     auto dq_layout = tt::tt_metal::TensorLayout(dQ.dtype(), tt::tt_metal::Layout::TILE, dQ.memory_config());
     auto dk_layout = tt::tt_metal::TensorLayout(dK.dtype(), tt::tt_metal::Layout::TILE, dK.memory_config());
     output_specs.emplace_back(dq_pre_shape, dq_layout);
@@ -155,12 +156,17 @@ MLAQKVAssembleBwDeviceOperation::tensor_return_value_t MLAQKVAssembleBwDeviceOpe
 
 ttsl::hash::hash_t MLAQKVAssembleBwDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Memory configs are hashed because TensorAccessorArgs bake buffer placement into
+    // compile-time args, so a placement change must not reuse a cached program.
     return tt::tt_metal::operation::hash_operation<MLAQKVAssembleBwDeviceOperation>(
         args,
         tensor_args.dQ.dtype(),
         tensor_args.dQ.logical_shape(),
         tensor_args.dK.logical_shape(),
-        tensor_args.dV.logical_shape());
+        tensor_args.dV.logical_shape(),
+        tensor_args.dQ.memory_config(),
+        tensor_args.dK.memory_config(),
+        tensor_args.dV.memory_config());
 }
 
 MLAQKVAssembleBwDeviceOperation::program_factory_t MLAQKVAssembleBwDeviceOperation::select_program_factory(

@@ -732,7 +732,14 @@ class TestMatmulFusion:
         check_pcc(golden, out, label="multicore RMS->MM->RMS")
 
     @skip_with_watcher("Program too large for kernel config buffer. Will not fix.")
-    @pytest.mark.parametrize("num_rms", [2, 3, 4])
+    @pytest.mark.parametrize(
+        "num_rms",
+        [
+            2,
+            3,
+            pytest.param(4, marks=skip_with_llk_assert("Program too large for kernel config buffer. Will not fix.")),
+        ],
+    )
     @stress_test_program_cache
     def test_matmul_followed_by_n_rms(self, device, num_rms):
         """MM then N consecutive RMS norms."""

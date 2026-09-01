@@ -1,0 +1,69 @@
+# Convolution + batch norm + ReLU: full ResNet conv-bn-relu block.
+# Conv matmul, BN scale+shift via broadcast eltwise, then ReLU activation.
+
+operands:
+  - name: "activations"
+    dims: [128, 256]
+    format: "Float16_b"
+  - name: "weights"
+    dims: [256, 128]
+    format: "Float16_b"
+  - name: "bn_scale"
+    dims: [128, 128]
+    format: "Float16_b"
+  - name: "bn_shift"
+    dims: [128, 128]
+    format: "Float16_b"
+  - name: "conv_result"
+    dims: [128, 128]
+    format: "Float16_b"
+  - name: "scaled"
+    dims: [128, 128]
+    format: "Float16_b"
+  - name: "output"
+    dims: [128, 128]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "activations"
+        src_b: "weights"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
+    block_size: [64, 64]
+    pack:
+      - output: "conv_result"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "conv_result"
+        src_b: "bn_scale"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        broadcast_type: "ROW"
+        broadcast_tile: 0
+        math_fidelity: "HiFi2"
+    block_size: [64, 64]
+    pack:
+      - output: "scaled"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "scaled"
+        src_b: "bn_shift"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        broadcast_type: "ROW"
+        broadcast_tile: 0
+        math_fidelity: "LoFi"
+      - type: "UnarySfpu"
+        operation: "Relu"
+        iterations: 32
+    block_size: [64, 64]
+    pack:
+      - output: "output"
+        packer: "Packer"

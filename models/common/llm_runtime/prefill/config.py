@@ -12,6 +12,8 @@ from models.common.llm_runtime.config import PageTableLayout
 from models.common.llm_runtime.output_reader import OutputReader
 from models.common.llm_runtime.prefill.sampling_helpers import _TILE_SIZE
 
+_SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
+
 
 @dataclass(frozen=True)
 class PrefillRuntimeConfig:
@@ -20,18 +22,20 @@ class PrefillRuntimeConfig:
     model: Any
     mesh_device: Any
     output_reader: OutputReader
-    page_table_layout: PageTableLayout
+    page_table_layout: PageTableLayout  # Current geometry; may be replaced once before execution.
+    page_table_layout_ceiling: PageTableLayout  # Construction-time upper bound retained across replacement.
     max_batch_size: int
     max_prefill_chunk_size: int
+    supports_batched_prefill: bool | None
+    disable_batched_prefill: bool
+    max_prefill_batch_size: int
+    batched_prefill_batched_extract: bool
     cluster_shape: tuple[int, int]
     device_sampling_enabled: bool
     can_enable_trace: Callable[[int, int], bool]
     allow_force_argmax: bool
     sampling_batch_size: int
     static_q128_topk_supported: bool
-    max_page_table_capacity_width: int
-    max_prefill_page_table_width: int
-    max_decode_page_table_width: int
 
     @classmethod
     def resolve(
@@ -42,6 +46,10 @@ class PrefillRuntimeConfig:
         page_table_layout: PageTableLayout,
         max_batch_size: int,
         max_prefill_chunk_size: int,
+        supports_batched_prefill: bool | None = None,
+        disable_batched_prefill: bool = False,
+        max_prefill_batch_size: int = 8,
+        batched_prefill_batched_extract: bool = True,
         device_sampling_enabled: bool,
         can_enable_trace: Callable[[int, int], bool],
     ) -> "PrefillRuntimeConfig":
@@ -49,6 +57,11 @@ class PrefillRuntimeConfig:
 
         _require_positive_int("max_batch_size", max_batch_size)
         _require_positive_int("max_prefill_chunk_size", max_prefill_chunk_size)
+        _require_optional_bool("supports_batched_prefill", supports_batched_prefill)
+        _require_bool("disable_batched_prefill", disable_batched_prefill)
+        _require_positive_int("max_prefill_batch_size", max_prefill_batch_size)
+        _require_supported_prefill_batch_size(max_prefill_batch_size)
+        _require_bool("batched_prefill_batched_extract", batched_prefill_batched_extract)
         if not isinstance(output_reader, OutputReader):
             raise TypeError("output_reader must be an OutputReader")
         mesh_device = output_reader.mesh_device
@@ -95,20 +108,27 @@ class PrefillRuntimeConfig:
             page_table_layout=page_table_layout,
             max_batch_size=max_batch_size,
             max_prefill_chunk_size=max_prefill_chunk_size,
+            supports_batched_prefill=supports_batched_prefill,
+            disable_batched_prefill=disable_batched_prefill,
+            max_prefill_batch_size=max_prefill_batch_size,
+            batched_prefill_batched_extract=batched_prefill_batched_extract,
             cluster_shape=resolved_cluster_shape,
             device_sampling_enabled=device_sampling_enabled,
             can_enable_trace=can_enable_trace,
             allow_force_argmax=allow_force_argmax,
             sampling_batch_size=sampling_batch_size,
             static_q128_topk_supported=static_q128_topk_supported,
-            max_page_table_capacity_width=page_table_layout.raw_capacity_width,
-            max_prefill_page_table_width=page_table_layout.prefill_width,
-            max_decode_page_table_width=page_table_layout.decode_width,
+            page_table_layout_ceiling=page_table_layout,
         )
 
     def __post_init__(self) -> None:
         _require_positive_int("max_batch_size", self.max_batch_size)
         _require_positive_int("max_prefill_chunk_size", self.max_prefill_chunk_size)
+        _require_optional_bool("supports_batched_prefill", self.supports_batched_prefill)
+        _require_bool("disable_batched_prefill", self.disable_batched_prefill)
+        _require_positive_int("max_prefill_batch_size", self.max_prefill_batch_size)
+        _require_supported_prefill_batch_size(self.max_prefill_batch_size)
+        _require_bool("batched_prefill_batched_extract", self.batched_prefill_batched_extract)
         _require_positive_int("sampling_batch_size", self.sampling_batch_size)
         if not isinstance(self.output_reader, OutputReader):
             raise TypeError("output_reader must be an OutputReader")
@@ -126,19 +146,17 @@ class PrefillRuntimeConfig:
             raise TypeError("allow_force_argmax must be bool")
         if not isinstance(self.static_q128_topk_supported, bool):
             raise TypeError("static_q128_topk_supported must be bool")
-        width_ceilings = (
-            ("max_page_table_capacity_width", self.max_page_table_capacity_width),
-            ("max_prefill_page_table_width", self.max_prefill_page_table_width),
-            ("max_decode_page_table_width", self.max_decode_page_table_width),
-        )
-        for name, value in width_ceilings:
-            _require_positive_int(name, value)
-        if self.page_table_layout.raw_capacity_width > self.max_page_table_capacity_width:
-            raise ValueError("max_page_table_capacity_width must cover page_table_layout")
-        if self.page_table_layout.prefill_width > self.max_prefill_page_table_width:
-            raise ValueError("max_prefill_page_table_width must cover page_table_layout")
-        if self.page_table_layout.decode_width > self.max_decode_page_table_width:
-            raise ValueError("max_decode_page_table_width must cover page_table_layout")
+        if not isinstance(self.page_table_layout_ceiling, PageTableLayout):
+            raise TypeError("page_table_layout_ceiling must be a PageTableLayout")
+        if self.page_table_layout.block_size != self.page_table_layout_ceiling.block_size:
+            raise ValueError("page_table_layout_ceiling cannot change block_size")
+        if self.page_table_layout.raw_capacity_width > self.page_table_layout_ceiling.raw_capacity_width:
+            raise ValueError("page_table_layout_ceiling must cover page_table_layout capacity")
+        if (
+            self.page_table_layout.prefill_width > self.page_table_layout_ceiling.prefill_width
+            or self.page_table_layout.decode_width > self.page_table_layout_ceiling.decode_width
+        ):
+            raise ValueError("page_table_layout_ceiling must cover canonical page-table geometry")
         if not callable(self.can_enable_trace):
             raise TypeError("can_enable_trace must be callable")
         if self.mesh_device is None:
@@ -178,11 +196,11 @@ class PrefillRuntimeConfig:
             raise TypeError("layout must be a PageTableLayout")
         if layout.block_size != self.page_table_layout.block_size:
             raise ValueError("page-table layout replacement cannot change block_size")
-        if layout.raw_capacity_width > self.max_page_table_capacity_width:
+        if layout.raw_capacity_width > self.page_table_layout_ceiling.raw_capacity_width:
             raise ValueError("page-table layout replacement cannot exceed the construction-time capacity ceiling")
         if (
-            layout.prefill_width > self.max_prefill_page_table_width
-            or layout.decode_width > self.max_decode_page_table_width
+            layout.prefill_width > self.page_table_layout_ceiling.prefill_width
+            or layout.decode_width > self.page_table_layout_ceiling.decode_width
         ):
             raise ValueError("page-table layout replacement cannot expand canonical geometry")
         return replace(self, page_table_layout=layout)
@@ -191,3 +209,18 @@ class PrefillRuntimeConfig:
 def _require_positive_int(name: str, value: Any) -> None:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
+
+
+def _require_bool(name: str, value: Any) -> None:
+    if not isinstance(value, bool):
+        raise TypeError(f"{name} must be bool")
+
+
+def _require_optional_bool(name: str, value: Any) -> None:
+    if value is not None:
+        _require_bool(name, value)
+
+
+def _require_supported_prefill_batch_size(value: int) -> None:
+    if value not in _SUPPORTED_PREFILL_BATCH_SIZES:
+        raise ValueError(f"max_prefill_batch_size must be one of {_SUPPORTED_PREFILL_BATCH_SIZES}")

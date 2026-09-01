@@ -365,7 +365,11 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
     # In-place cache update has no clean golden; validate that the cache tensor
     # is still valid (correct dtype, not all-NaN) as a basic sanity check.
-    cache_out = mesh_tensor_to_torch(input_tensor_a, device if is_mesh_device else None)
+    cache_out = mesh_tensor_to_torch(
+        input_tensor_a,
+        device if is_mesh_device else None,
+        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+    )
     if cache_out is not None and cache_out.numel() > 0 and not torch.isnan(cache_out).all():
         pcc = (True, "1.0")
     else:

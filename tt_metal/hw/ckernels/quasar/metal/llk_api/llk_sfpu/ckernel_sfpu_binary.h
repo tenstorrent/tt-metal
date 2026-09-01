@@ -64,7 +64,7 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
 template <
     [[maybe_unused]] bool APPROXIMATION_MODE,
     BinaryOp BINOP,
-    bool is_fp32_dest_acc_en = false,
+    bool is_fp32_dest_acc_en,
     DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>

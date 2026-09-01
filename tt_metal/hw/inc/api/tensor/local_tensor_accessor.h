@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <tuple>
 
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
@@ -105,3 +107,75 @@ public:
 private:
     CoreLocalMem<T> mem_;
 };
+
+// A LocalTensorAccessor names this node's L1 region of a tensor, so it can be either endpoint of a NoC
+// transaction. This specialization makes it usable directly as the Src or Dst of any Noc operation.
+//
+// Notes:
+//  - `offset_bytes` addresses within the local region. LocalTensorAccessor does not expose the
+//    region's extent, so no bounds ASSERT is possible here.
+//  - LocalTensorAccessor may be used by both DM and compute (TRISC) kernels, but only DM kernels have
+//    NoC access.
+#if !defined(COMPILE_FOR_TRISC)
+template <typename T>
+struct noc_traits_t<LocalTensorAccessor<T>> {
+    struct src_args_type {
+        uint32_t offset_bytes = 0;
+    };
+    struct dst_args_type {
+        uint32_t offset_bytes = 0;
+    };
+    struct dst_args_mcast_type {};
+
+    template <Noc::AddressType address_type>
+    static auto src_addr(const LocalTensorAccessor<T>& src, const Noc&, const src_args_type& args) {
+        static_assert(
+            address_type == Noc::AddressType::LOCAL_L1, "LocalTensorAccessor can only be used as a local L1 source");
+        return src.get_bank_base_address() + args.offset_bytes;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr(const LocalTensorAccessor<T>& dst, const Noc&, const dst_args_type& args) {
+        static_assert(
+            address_type == Noc::AddressType::LOCAL_L1,
+            "LocalTensorAccessor can only be used as a local L1 destination");
+        return dst.get_bank_base_address() + args.offset_bytes;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr_mcast(const LocalTensorAccessor<T>&, const Noc&, const dst_args_mcast_type&) {
+        static_assert(false, "LocalTensorAccessor cannot be used as a NoC multicast destination");
+    }
+};
+
+template <typename T>
+inline constexpr bool noc_zero_l1_endpoint_v<LocalTensorAccessor<T>> = true;
+#endif  // !defined(COMPILE_FOR_TRISC)
+
+/**
+ * @brief Map a tensor sequence (tuple of TensorBindingToken) to an array of LocalTensorAccessor.
+ *
+ * A tuple of TensorBindingTokens is obtained from a TensorBindingSequence: host codegen emits
+ * `tensor::<sequence_name>` as `std::tuple` of the named binding tokens. This helper
+ * maps that sequence into a std::array of LocalTensorAccessors, one per token, in the same order.
+ * LocalTensorAccessor is only templated on the element type T, so all entries share one type.
+ *
+ * All tokens must refer to L1-resident tensors; a DRAM token fails at compile time. For DRAM or
+ * NOC address generation, use make_tensor_accessors instead (DM kernels only).
+ *
+ * Usage:
+ *   auto local_accessors = make_local_tensor_accessors<uint32_t>(tensor::inputs);
+ *   auto& acc = local_accessors[i];  // i-th LocalTensorAccessor in the sequence
+ *   auto& elem = acc[0];            // element in that accessor's local L1 region
+ *
+ * @tparam T Element type stored in each local region.
+ * @param tokens constexpr tuple of TensorBindingTokens from a TensorBindingSequence
+ *               (tensor::<sequence_name>).
+ * @return std::array<LocalTensorAccessor<T>, N>, one per token, in sequence order.
+ */
+template <typename T, typename... Tokens>
+std::array<LocalTensorAccessor<T>, sizeof...(Tokens)> make_local_tensor_accessors(const std::tuple<Tokens...>& tokens) {
+    return std::apply(
+        [](const auto&... toks) {
+            return std::array<LocalTensorAccessor<T>, sizeof...(Tokens)>{LocalTensorAccessor<T>(toks)...};
+        },
+        tokens);
+}

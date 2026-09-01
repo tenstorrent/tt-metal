@@ -101,7 +101,10 @@ FORCE_INLINE void typecast_and_pack(uint32_t cb_bf16, uint32_t cb_u8) {
 #ifdef ARCH_BLACKHOLE
     MATH((llk_math_reconfig_remap(false)));
 #endif
-    init_sfpu(cb_bf16, cb_u8);
+    // Mid-kernel re-init (startup already done in kernel_main): datacopy unpack+math via copy_init,
+    // pack format via pack_reconfig -- the call-once init_sfpu was migrated off.
+    copy_init(cb_bf16);
+    pack_reconfig_data_format(cb_u8);
     tile_regs_acquire();
     bf16.wait_front(1);
     copy_tile(cb_bf16, 0, 0);

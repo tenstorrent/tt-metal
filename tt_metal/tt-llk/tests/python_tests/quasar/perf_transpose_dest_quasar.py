@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.llk_params import PERF_RUN_TYPES_QUASAR
+from helpers.llk_params import PERF_LOOP_FACTOR_QUASAR, PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
 from quasar.test_transpose_dest_quasar import (
     PERF_TRANSPOSE_DEST_COMBINATIONS,
@@ -21,7 +21,7 @@ from quasar.test_transpose_dest_quasar import (
     formats_dest_acc_sync_transpose_dims=PERF_TRANSPOSE_DEST_COMBINATIONS,
     implied_math_format=lambda: transpose_dest_implied_math_formats(is_perf=True),
     run_types=PERF_RUN_TYPES_QUASAR,
-    loop_factor=[32],
+    loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_transpose_dest_quasar(

@@ -25,6 +25,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "impl/program/program_impl.hpp"
 
 #include <umd/device/types/arch.hpp>
 
@@ -537,8 +538,7 @@ TEST(MetalContextIntegrationTest, MockMetal2ProgramCompileOnForeignMeshFails) {
     auto mesh_b = env_b.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
 
     Program program = experimental::MakeProgramFromSpec(*mesh_a, MakeMinimalNoOpProgramSpec());
-    IDevice* foreign_device = mesh_b->get_devices().at(0);
-    EXPECT_THROW(detail::CompileProgram(foreign_device, program), std::runtime_error);
+    EXPECT_THROW(program.impl().compile(mesh_b.get()), std::runtime_error);
 }
 
 TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDevice) {

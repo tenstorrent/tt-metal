@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "experimental/llk_unpack_A_topk_xl_copy.h"
 #include "llk_unpack_common_api.h"
 
@@ -11,7 +12,7 @@
  * LLK UNPACK A — TopK-XL copy (single-UNPACR unpack-to-dest MOP for FP16 and FP32 paths)
  *************************************************************************/
 
-inline void llk_unpack_topk_xl_copy_init(const std::uint32_t operand = 0) {
+inline void llk_unpack_topk_xl_copy_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t operand_unpack_src_format = unpack_src_format[operand_id];
     const std::uint32_t operand_unpack_dst_format = unpack_dst_format[operand_id];

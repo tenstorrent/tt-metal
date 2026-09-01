@@ -26,6 +26,16 @@ struct ExecuteTopK {
         std::optional<std::tuple<Tensor&, Tensor&>> preallocated_output_tensors = std::nullopt,
         bool stable = false);
 };
+
+namespace detail {
+
+// Reports whether the canonical sampling call shape (last-dimension,
+// largest/sorted, unstable, with no custom tensors, grids, or memory config)
+// will use the Blackhole large-indices route. This deliberately shares the
+// implementation used by topk so Python sampling does not mirror policy.
+bool sampling_topk_would_route_to_large_indices(const Tensor& input_tensor, uint32_t k);
+
+}  // namespace detail
 }  // namespace ttnn::operations::reduction::topk
 
 namespace ttnn {

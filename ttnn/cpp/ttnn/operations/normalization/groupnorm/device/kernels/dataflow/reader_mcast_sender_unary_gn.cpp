@@ -227,7 +227,6 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
-    const DataFormat out_data_format = get_dataformat(dfb_out0_id);
     const uint32_t num_bytes_read = datum_size_bytes;
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
@@ -348,7 +347,7 @@ void kernel_main() {
                                 out_block_hw_normal);
                         }
 #else
-                        const uint32_t src0_tile_bytes = get_tile_size(dfb_in0_id);
+                        const uint32_t src0_tile_bytes = dfb_in0.get_tile_size();
                         const auto src_a = TensorAccessor(src0_args, src_addr);
                         uint32_t l1_write_addr;
                         l1_write_addr = dfb_in0.get_write_ptr();
@@ -460,7 +459,7 @@ void kernel_main() {
                                 out_block_h_actual,
                                 out_block_hw_normal);
 #else
-                            const uint32_t dst_tile_bytes = get_tile_size(dfb_reread_out_id);
+                            const uint32_t dst_tile_bytes = dfb_reread_out.get_tile_size();
                             uint32_t l1_write_addr;
                             l1_write_addr = dfb_reread_out.get_write_ptr();
                             dfb_reread_out.reserve_back(out_block_hw_normal);

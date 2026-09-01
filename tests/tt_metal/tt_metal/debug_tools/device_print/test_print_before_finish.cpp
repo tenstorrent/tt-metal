@@ -32,35 +32,16 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 namespace {
 
 void RunTest(DevicePrintFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    // Set up program
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program = Program();
-    workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
-
     // This tests prints only on a single core
     CoreCoord xy_start = {0, 0};
     CoreCoord xy_end = {0, 0};
 
-    KernelHandle brisc_print_kernel_id = CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/device_print/print_with_wait.cpp",
-        CoreRange(xy_start, xy_end),
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-
     // Run the program, use a large delay for the last print to emulate a long-running kernel.
-    uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
+    const auto device_id = mesh_device->get_device_ids()[0];
+    uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
     uint32_t delay_cycles = clk_mhz * 4000000;  // 4 seconds
-    for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
-        for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            const std::vector<uint32_t> args = {delay_cycles, x, y};
-            SetRuntimeArgs(program_, brisc_print_kernel_id, CoreCoord{x, y}, args);
-        }
-    }
-    fixture->RunProgram(mesh_device, workload);
+    const std::vector<uint32_t> args = {delay_cycles, xy_start.x, xy_start.y};
+    fixture->RunProgram(mesh_device, "tests/tt_metal/tt_metal/test_kernels/device_print/print_with_wait.cpp", args);
     // Close system instantly after running to attempt to cut off prints.
     fixture->TearDownTestSuite();
 

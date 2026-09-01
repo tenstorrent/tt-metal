@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.utility_functions import comp_allclose, comp_pcc
 
-SEQUENCE_LENGTHS = [128, 1024, 2048, 4096, 8192]
+SEQUENCE_LENGTHS = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
 
 
 def require_single_device(device) -> None:
@@ -70,10 +68,6 @@ def to_torch(tt_tensor: ttnn.Tensor, expected_shape: tuple[int, ...]) -> torch.T
 
 
 def assert_pcc(reference: torch.Tensor, candidate: torch.Tensor, threshold: float) -> None:
-    # comp_pcc returns (passing, numeric_pcc). The value used to be surfaced only in the
-    # assertion message, so a passing test reported nothing and margin erosion was invisible
-    # until the day it went red. Log it on every call, pass or fail.
-    passing, pcc_value = comp_pcc(reference, candidate, threshold)
+    passing, pcc_message = comp_pcc(reference, candidate, threshold)
     allclose, allclose_message = comp_allclose(reference, candidate)
-    logger.info(f"PCC {pcc_value} (threshold {threshold}, margin {pcc_value - threshold:+.6f}) | {allclose_message}")
-    assert passing, f"PCC check failed: {pcc_value}; {allclose_message}; allclose={allclose}"
+    assert passing, f"PCC check failed: {pcc_message}; {allclose_message}; allclose={allclose}"

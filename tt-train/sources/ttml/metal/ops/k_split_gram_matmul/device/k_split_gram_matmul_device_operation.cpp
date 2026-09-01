@@ -33,7 +33,16 @@ void KSplitGramMatmulDeviceOperation::validate_on_program_cache_miss(
             input.logical_shape()[1]);
     }
     const uint32_t tile_width = input.tensor_spec().tile().get_width();
-    const uint32_t K_tiles = input.logical_shape()[-1] / tile_width;
+    // The kernels reduce every tile in the padded K range and make no assumption about the
+    // contents of tile-padding columns (upstream ops may leave garbage there), so logical K
+    // must be tile-aligned.
+    TT_FATAL(
+        input.logical_shape()[-1] % tile_width == 0,
+        "K dimension ({}) must be a multiple of the tile width ({})",
+        input.logical_shape()[-1],
+        tile_width);
+    // Padded K_tiles is what the K-split actually partitions (matches the program factory).
+    const uint32_t K_tiles = input.padded_shape()[-1] / tile_width;
     TT_FATAL(K_tiles % 2 == 0, "K dimension ({} tiles) must be even for K-split", K_tiles);
     const auto device_grid = input.device()->compute_with_storage_grid_size();
     const uint32_t grid_dim = static_cast<uint32_t>(std::min(device_grid.x - 1, device_grid.y));

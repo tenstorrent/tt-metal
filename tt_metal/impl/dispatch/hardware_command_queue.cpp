@@ -29,22 +29,22 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC /*noc_index*/) :
     id_(id), manager_(device->sysmem_manager()), device_(device) {
     TTZoneScopedDN(DISPATCH, "CommandQueue_constructor");
 
-    uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
+    MetalContext& metal_ctx = MetalContext::instance(device_->get_context_id());
+    uint16_t channel = metal_ctx.get_cluster().get_assigned_channel_for_device(device_->id());
 
     CoreCoord enqueue_program_dispatch_core;
-    CoreType core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+    CoreType core_type = metal_ctx.get_dispatch_core_manager().get_dispatch_core_type();
+    if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
         // dispatch_s exists with this configuration. Workers write to dispatch_s.
         enqueue_program_dispatch_core =
-            MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(device_->id(), channel, id);
+            metal_ctx.get_dispatch_core_manager().dispatcher_s_core(device_->id(), channel, id);
     } else {
         if (device_->is_mmio_capable()) {
             enqueue_program_dispatch_core =
-                MetalContext::instance().get_dispatch_core_manager().dispatcher_core(device_->id(), channel, id);
+                metal_ctx.get_dispatch_core_manager().dispatcher_core(device_->id(), channel, id);
         } else {
             enqueue_program_dispatch_core =
-                MetalContext::instance().get_dispatch_core_manager().dispatcher_d_core(device_->id(), channel, id);
+                metal_ctx.get_dispatch_core_manager().dispatcher_d_core(device_->id(), channel, id);
         }
     }
     this->virtual_enqueue_program_dispatch_core_ =
@@ -76,27 +76,27 @@ void HWCommandQueue::terminate() {
     log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
     // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
     // CQ_PREFETCH_CMD_TERMINATE
-    uint32_t cmd_sequence_sizeB =
-        MetalContext::instance(this->device_->get_context_id()).hal().get_alignment(HalMemType::HOST);
+    MetalContext& metal_ctx = MetalContext::instance(this->device_->get_context_id());
+    uint32_t cmd_sequence_sizeB = metal_ctx.hal().get_alignment(HalMemType::HOST);
 
     // dispatch and prefetch terminate commands each needs to be a separate fetch queue entry
     void* cmd_region = this->manager_.issue_queue_reserve(cmd_sequence_sizeB, this->id_);
-    HugepageDeviceCommand dispatch_d_command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand dispatch_d_command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     dispatch_d_command_sequence.add_dispatch_terminate(DispatcherSelect::DISPATCH_MASTER);
     this->manager_.issue_queue_push_back(cmd_sequence_sizeB, this->id_);
     this->manager_.fetch_queue_reserve_back(this->id_);
     this->manager_.fetch_queue_write(cmd_sequence_sizeB, this->id_);
-    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+    if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
         // Terminate dispatch_s if enabled
         cmd_region = this->manager_.issue_queue_reserve(cmd_sequence_sizeB, this->id_);
-        HugepageDeviceCommand dispatch_s_command_sequence(cmd_region, cmd_sequence_sizeB);
+        HugepageDeviceCommand dispatch_s_command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
         dispatch_s_command_sequence.add_dispatch_terminate(DispatcherSelect::DISPATCH_SUBORDINATE);
         this->manager_.issue_queue_push_back(cmd_sequence_sizeB, this->id_);
         this->manager_.fetch_queue_reserve_back(this->id_);
         this->manager_.fetch_queue_write(cmd_sequence_sizeB, this->id_);
     }
     cmd_region = this->manager_.issue_queue_reserve(cmd_sequence_sizeB, this->id_);
-    HugepageDeviceCommand prefetch_command_sequence(cmd_region, cmd_sequence_sizeB);
+    HugepageDeviceCommand prefetch_command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     prefetch_command_sequence.add_prefetch_terminate();
     this->manager_.issue_queue_push_back(cmd_sequence_sizeB, this->id_);
     this->manager_.fetch_queue_reserve_back(this->id_);

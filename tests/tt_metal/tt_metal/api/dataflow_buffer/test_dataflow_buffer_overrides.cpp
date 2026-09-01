@@ -6,6 +6,7 @@
 
 #include "dfb_test_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -116,7 +117,10 @@ static void run_dfb_size_override_test(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    auto device_range = distributed::MeshCoordinateRange(mesh_device.shape());
+    distributed::MeshWorkload mesh_workload;
+    mesh_workload.add_program(device_range, experimental::MakeProgramFromSpec(mesh_device, spec));
+    Program& program = mesh_workload.get_programs().at(device_range);
 
     const auto input =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, workload * data_entry_size / sizeof(uint32_t));
@@ -168,7 +172,7 @@ static void run_dfb_size_override_test(
             tt_driver_atomics::mfence();
             ASSERT_EQ(rdback, input);
         }
-        slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), mesh_workload, /*blocking=*/true);
 
         std::vector<uint32_t> output;
         slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);

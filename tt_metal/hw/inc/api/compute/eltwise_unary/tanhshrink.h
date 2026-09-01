@@ -12,16 +12,18 @@
 
 namespace ckernel {
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tanhshrink_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_tanhshrink,
-        (DST_ACCUM_MODE, 8 /* ITERATIONS */),
+        (is_fp32_dest_acc_en, 8 /* ITERATIONS */),
         idst,
         VectorMode::RC));
 }
 
-ALWI void tanhshrink_tile_init() { MATH(SFPU_UNARY_INIT_FN(unused, sfpu::tanhshrink_init, (APPROX, DST_ACCUM_MODE))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void tanhshrink_tile_init() { MATH(SFPU_UNARY_INIT_FN(unused, sfpu::tanhshrink_init, (APPROX, is_fp32_dest_acc_en))); }
 
 }  // namespace ckernel

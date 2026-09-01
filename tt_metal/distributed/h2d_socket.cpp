@@ -57,6 +57,18 @@ void advance_h2d_simulator_socket_device(MeshDevice* mesh_device, const MeshCoor
 
 }  // namespace
 
+void H2DSocket::enable_mock_flow_control(const MeshDevice& mesh_device) {
+    // Emule executes the receiver, so only Mock needs synthetic acknowledgements.
+    if (MetalContext::instance(extract_context_id(&mesh_device)).get_cluster().get_target_device_type() !=
+        tt::TargetDevice::Mock) {
+        return;
+    }
+
+    // Alias the acknowledgement counter to bytes_sent_ so the FIFO always reads as drained. All
+    // host-side uses of bytes_acked_ptr_ are reads, and the non-movable socket keeps the pointer valid.
+    bytes_acked_ptr_ = &bytes_sent_;
+}
+
 H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoordinateRangeSet& device_range,
@@ -182,8 +194,8 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
         DeviceAddr raw_addr = svc.allocate_l1(recv_device, recv_core_.core_coord, alloc_size);
         svc_data_l1_addr_ = raw_addr;
 
-        auto shard_params = ShardSpecBuffer(
-            CoreRangeSet(recv_core_.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+        auto shard_params =
+            ShardSpecBuffer(CoreRangeSet(recv_core_.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
         DeviceLocalBufferConfig data_buffer_specs = {
             .page_size = static_cast<uint32_t>(alloc_size),
             .buffer_type = buffer_type_,
@@ -324,8 +336,12 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
                                      ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
         }
     } else if (mesh_device) {
-        recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
-        recv_virtual_core = mesh_device->virtual_core_from_logical_core(recv_core_.core_coord, recv_umd_core_type);
+        // Per-device translation (see metal_SocDescriptor::dram_bank_endpoint_coords): the
+        // mesh-level translation validates that every device agrees and throws when they do not,
+        // which a logical DRAM coord on a harvested mesh does not.
+        IDevice* recv_device = mesh_device->get_device(recv_core_.device_coord);
+        recv_device_id = recv_device->id();
+        recv_virtual_core = recv_device->virtual_core_from_logical_core(recv_core_.core_coord, recv_umd_core_type);
     } else {
         recv_device_id = device_id.value();
         recv_virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
@@ -426,6 +442,7 @@ H2DSocket::H2DSocket(
         bytes_acked_info = init_bytes_acked_buffer(mesh_device, recv_device_range_set, pcie_alignment, shm_name);
         bytes_acked_ptr_ = host_buffer_.get();
     }
+    enable_mock_flow_control(*mesh_device);
 
     init_config_buffer(mesh_device);
     init_data_buffer(mesh_device, pcie_alignment);
@@ -469,6 +486,7 @@ H2DSocket::H2DSocket(
     PinnedBufferInfo bytes_acked_info =
         init_bytes_acked_buffer(mesh_device, recv_device_range_set, pcie_alignment_, shm_name);
     bytes_acked_ptr_ = host_buffer_.get();
+    enable_mock_flow_control(*mesh_device);
 
     // Take the caller-supplied DRISC L1 offsets verbatim. No MeshBuffer allocation:
     // the framework's L1 allocator is worker-only, and host writes to DRAM-L1 go
@@ -786,8 +804,7 @@ void H2DSocket::set_page_size(uint32_t page_size) {
     // non-power-of-two (e.g. 2560 = 5×512 for some shard sizes), where
     // tt::align(5120, 2560) returns 7168 instead of 5120. Use modular
     // arithmetic so this works for any positive alignment.
-    uint32_t next_fifo_wr_ptr =
-        ((write_ptr_ + page_size - 1) / page_size) * page_size;
+    uint32_t next_fifo_wr_ptr = ((write_ptr_ + page_size - 1) / page_size) * page_size;
     uint32_t fifo_page_aligned_size = fifo_size_ - (fifo_size_ % page_size);
 
     if (next_fifo_wr_ptr >= fifo_page_aligned_size) {
@@ -930,9 +947,10 @@ std::unique_ptr<H2DSocket> H2DSocket::connect_from_descriptor(const HDSocketDesc
     socket->config_buffer_address_ = desc.config_buffer_address;
     socket->pcie_alignment_ = desc.pcie_alignment;
     // Must match the owner-side coord; empty mesh_coord (pre-mesh-coord descriptors) defaults to (0, 0).
-    MeshCoordinate device_coord = desc.mesh_coord.empty()
-        ? MeshCoordinate(0, 0)
-        : MeshCoordinate(ttsl::SmallVector<uint32_t>(desc.mesh_coord.begin(), desc.mesh_coord.end()));
+    MeshCoordinate device_coord =
+        desc.mesh_coord.empty()
+            ? MeshCoordinate(0, 0)
+            : MeshCoordinate(ttsl::SmallVector<uint32_t>(desc.mesh_coord.begin(), desc.mesh_coord.end()));
     socket->recv_core_ = MeshCoreCoord(device_coord, CoreCoord(desc.core_x, desc.core_y));
     socket->h2d_mode_ = static_cast<H2DMode>(desc.h2d_mode);
     socket->aligned_data_buf_start_ = desc.aligned_data_buf_start;

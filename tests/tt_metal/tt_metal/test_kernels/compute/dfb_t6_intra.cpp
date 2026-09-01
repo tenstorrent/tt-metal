@@ -6,6 +6,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -20,7 +21,8 @@ void kernel_main() {
     uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
 #endif
 
-    unary_op_init_common(dfb::out, dfb::out);
+    compute_kernel_hw_startup(dfb::out, dfb::out);
+    copy_init(dfb::out);
 
     for (uint32_t i = 0; i < entries_per_neo; i++) {
         // Pack TRISC: wait for free space, increment entry in-place, post credit.

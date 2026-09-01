@@ -540,7 +540,7 @@ def run_moe_perf_with_approximation(
         raise AssertionError(f"Perf check(s) outside expected range — {summary}")
 
 
-def run_mla_perf_with_approximation(
+def run_mla_perf_loudbox(
     command_2x4: str,
     expected_ns_2x4: float,
     model_name_2x4: str,
@@ -550,6 +550,11 @@ def run_mla_perf_with_approximation(
     margin: float = 0.03,
     comments_2x4: str = "",
 ):
+    """Run and validate the local 2x4 unwrapped-Fabric2D MLA proxy.
+
+    This result is not extrapolated to the production 8x4 TorusXY topology: scaling SDPA alone
+    cannot account for the different CCL topology.
+    """
     logger.info("=== 2x4 MLA perf test on LB ===")
     run_model_device_perf_test_with_merge(
         command=command_2x4,
@@ -561,9 +566,3 @@ def run_mla_perf_with_approximation(
         margin=margin,
         comments=comments_2x4,
     )
-    csv_2x4 = get_latest_ops_log_filename(subdir)
-    logger.info(f"2x4 CSV: {csv_2x4}")
-
-    logger.info("=== Approximating 8x4 Galaxy total from 2x4 ===")
-    df_approx = approximate_mla_galaxy_perf(csv_2x4=csv_2x4)
-    logger.info(f"\n{df_approx.to_string(index=False)}")

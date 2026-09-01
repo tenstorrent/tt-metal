@@ -80,8 +80,8 @@ void kernel_main() {
     // Load the whole per-batch [M, N] bias block once.
     // It's reused across all of this core's batch iterations (broadcast over batch).
     constexpr uint32_t bias_block_ntiles = out_subblock_h * out_num_subblocks_h * in1_block_w;  // M*N tiles
-    const uint32_t bias_single_tile_size_bytes = get_tile_size(dfb_id_in3);
     DataflowBuffer dfb_in3(dfb_id_in3);
+    const uint32_t bias_single_tile_size_bytes = dfb_in3.get_tile_size();
     const auto s3 = TensorAccessor(bias_args, in3_tensor_addr);
     dfb_in3.reserve_back(bias_block_ntiles);
     uint32_t in3_write_offset = 0;
@@ -105,7 +105,7 @@ void kernel_main() {
     dfb_in1.reserve_back(in1_num_tiles);
     dfb_in1.push_back(in1_num_tiles);
 #else
-    const uint32_t in1_single_tile_size_bytes = get_tile_size(dfb_id_in1);
+    const uint32_t in1_single_tile_size_bytes = dfb_in1.get_tile_size();
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM and the in1
     // CB pages are sized to match (see the program factory), so tiles are laid out in L1 at the
     // padded stride while the NOC reads the unpadded tile of data into each padded slot. No-op when
@@ -116,7 +116,7 @@ void kernel_main() {
 #endif  // IN1_SHARDED
 
 #ifndef OUT_SHARDED
-    const uint32_t output_single_tile_size_bytes = get_tile_size(dfb_id_out0);
+    const uint32_t output_single_tile_size_bytes = dfb_out.get_tile_size();
     const auto s = TensorAccessor(out_args, out_tensor_addr);
 #endif  // OUT_SHARDED
 

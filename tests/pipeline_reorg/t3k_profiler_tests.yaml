@@ -17,7 +17,7 @@
     wh_llmbox:
       timeout: 8
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+  team: runtime
 
 - name: T3000 CCL AllGather profiling
   cmd: run_ccl_T3000_test
@@ -33,7 +33,7 @@
     wh_llmbox:
       timeout: 10
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+  team: runtime
 
 - name: T3000 device profiler regressions
   cmd: run_device_profiler_test
@@ -41,7 +41,7 @@
     wh_llmbox:
       timeout: 25
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+  team: runtime
 
 - name: T3000 perf op report
   cmd: run_perf_op_report_test
@@ -65,4 +65,4 @@
     wh_llmbox:
       timeout: 8
   owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+  team: runtime

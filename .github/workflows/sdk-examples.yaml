@@ -9,6 +9,14 @@ on:
       package-artifact-name:
         required: true
         type: string
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Image with the packages already installed. When set it replaces
+          docker-image and the download and install steps are skipped. Empty
+          means the artifact path, which is what forks always get.
       enabled-skus:
         required: false
         type: string
@@ -90,7 +98,8 @@ jobs:
     timeout-minutes: ${{ matrix.test-group.timeout }}
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      # A prebuilt image already carries the packages and needs no Harbor prefix.
+      image: ${{ inputs.prebuilt-image || inputs.docker-image || 'docker-image-unresolved!' }}
       volumes:
         - /work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -111,12 +120,14 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - uses: ./.github/actions/download-artifact-with-retry
+        if: ${{ inputs.prebuilt-image == '' }}
         timeout-minutes: 15
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
           path: /work/pkgs/
 
       - name: Install packages
+        if: ${{ inputs.prebuilt-image == '' }}
         timeout-minutes: 10
         run: |
           set -euo pipefail
@@ -193,16 +204,22 @@ jobs:
       - name: Publish ccache summary
         if: ${{ !cancelled() && inputs.enable-kernel-ccache == true }}
         run: |
-          echo '## CCache Summary (kernel)' >> $GITHUB_STEP_SUMMARY
+          echo '<details><summary>CCache Summary (kernel)</summary>' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '</details>' >> $GITHUB_STEP_SUMMARY
 
           # Surface remote storage stats and errors from the ccache log.
           # Uses a filter script to avoid overflowing the 1024k step summary limit.
           if [ -f /tmp/ccache.log ]; then
-            echo '## CCache Remote Storage (kernel)' >> $GITHUB_STEP_SUMMARY
+            echo '<details><summary>CCache Remote Storage (kernel)</summary>' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             "$GITHUB_WORKSPACE/.github/scripts/ccache_log_filter.sh" /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo '</details>' >> $GITHUB_STEP_SUMMARY
           fi

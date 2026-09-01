@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
+from contextlib import contextmanager
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -464,6 +465,127 @@ def test_warmup_replicates_lane_local_case_and_cache_to_every_lane():
     assert group.already_warmed_up_prefill
 
 
+class _DeferredCapture:
+    def __init__(self, lane_idx, events, *, ready=True):
+        self.lane_idx = lane_idx
+        self.events = events
+        self.ready = ready
+        self.capture_pending = False
+        self.trace_activated = False
+        self.capture_calls = 0
+
+    @contextmanager
+    def defer_capture(self):
+        self.events.append(("enter", self.lane_idx))
+        try:
+            yield self
+        finally:
+            self.capture_pending = False
+            self.events.append(("exit", self.lane_idx))
+
+    def register(self):
+        self.events.append(("register", self.lane_idx))
+        self.capture_pending = self.ready
+
+    def activate_pending_capture(self):
+        assert self.capture_pending
+        self.events.append(("capture", self.lane_idx))
+        self.capture_calls += 1
+        self.trace_activated = True
+        self.capture_pending = False
+
+
+class _BarrierLane(_Lane):
+    def __init__(self, lane_idx, events, *, ready=True, fail=False):
+        super().__init__(lane_idx)
+        self.warmup = _DeferredCapture(lane_idx, events, ready=ready)
+        self.events = events
+        self.fail = fail
+
+    def warmup_model_decode(self, **kwargs):
+        self.events.append(("warmup", self.lane_idx))
+        if kwargs["enable_trace"]:
+            self.warmup.register()
+        if self.fail:
+            raise RuntimeError(f"warmup boom {self.lane_idx}")
+        return super().warmup_model_decode(**kwargs)
+
+
+def test_traced_warmup_registers_every_lane_before_any_capture():
+    events = []
+    lanes = [_BarrierLane(0, events), _BarrierLane(1, events)]
+    group = LaneGroupExecutor(lanes)
+
+    group.warmup_model_decode(
+        kv_cache=["kv-0", "kv-1"],
+        enable_trace=True,
+        max_batch_size=4,
+        num_blocks=8,
+        can_sample_on_device=False,
+    )
+
+    assert events == [
+        ("enter", 0),
+        ("enter", 1),
+        ("warmup", 0),
+        ("register", 0),
+        ("warmup", 1),
+        ("register", 1),
+        ("capture", 0),
+        ("capture", 1),
+        ("exit", 1),
+        ("exit", 0),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    [
+        ("exception", "warmup boom 1"),
+        ("asymmetry", "mixed trace activation readiness"),
+    ],
+)
+def test_traced_warmup_failure_or_asymmetry_captures_no_lane(mode, message, expect_error):
+    events = []
+    group_lanes = [
+        _BarrierLane(0, events, ready=True),
+        _BarrierLane(1, events, ready=mode != "asymmetry", fail=mode == "exception"),
+    ]
+    group = LaneGroupExecutor(group_lanes)
+
+    with expect_error(RuntimeError, message):
+        group.warmup_model_decode(
+            kv_cache=["kv-0", "kv-1"],
+            enable_trace=True,
+            max_batch_size=4,
+            num_blocks=8,
+            can_sample_on_device=False,
+        )
+
+    assert [lane.warmup.capture_calls for lane in group_lanes] == [0, 0]
+    assert not any(lane.warmup.capture_pending for lane in group_lanes)
+
+
+def test_eager_warmup_does_not_enter_trace_activation_deferral():
+    events = []
+    lanes = [_BarrierLane(0, events), _BarrierLane(1, events)]
+    group = LaneGroupExecutor(lanes)
+
+    group.warmup_model_decode(
+        kv_cache=["kv-0", "kv-1"],
+        enable_trace=False,
+        max_batch_size=4,
+        num_blocks=8,
+        can_sample_on_device=False,
+    )
+
+    assert events == [
+        ("warmup", 0),
+        ("warmup", 1),
+    ]
+    assert [lane.warmup.capture_calls for lane in lanes] == [0, 0]
+
+
 def test_compile_methods_slice_requests_to_lane_executors():
     lanes = [_Lane(0), _Lane(1)]
     group = LaneGroupExecutor(lanes)
@@ -491,7 +613,7 @@ def test_compile_methods_slice_requests_to_lane_executors():
     assert lane1_decode["tokens"].tolist() == [12, 13]
 
 
-def test_concrete_execution_targets_and_trace_classification_fan_out_per_lane():
+def test_concrete_execution_targets_preflight_every_traced_lane_before_any_execution(expect_error):
     class DispatchLane(_Lane):
         def __init__(self, lane_idx, *, traceable):
             super().__init__(lane_idx)
@@ -558,25 +680,24 @@ def test_concrete_execution_targets_and_trace_classification_fan_out_per_lane():
         "empty_slots": empty_slots,
     }
     assert group.prefill_forward(execution=group.eager_execution, **kwargs).flatten().tolist() == [10.0, 11.0]
-    assert group.prefill_forward(execution=group.traced_prefill_execution, **kwargs).flatten().tolist() == [10.0, 11.0]
-    assert group.decode_forward(
-        torch.tensor([10, 11, 12, 13]),
-        torch.tensor([1, 2, 3, 4]),
-        torch.arange(4, dtype=torch.int32).view(4, 1),
-        read_from_device=False,
-        execution=group.traced_decode_execution,
-    ) == [("raw-0", None), ("raw-1", None)]
     for lane_idx, lane in enumerate(lanes):
-        assert [method for method, _ in lane.calls] == ["can_trace_prefill", "prefill", "prefill", "decode"]
+        eager_call = next(call for call in lane.calls if call[0] == "prefill")
+        assert eager_call[1]["execution"] is group.eager_execution[lane_idx]
+        lane.calls.clear()
+
+    with expect_error(RuntimeError, "no DP lane executed"):
+        group.prefill_forward(execution=group.traced_prefill_execution, **kwargs)
+
+    assert [[method for method, _ in lane.calls] for lane in lanes] == [
+        ["can_trace_prefill"],
+        ["can_trace_prefill"],
+    ]
+    for lane_idx, lane in enumerate(lanes):
         trace_kwargs = lane.calls[0][1]
         assert set(trace_kwargs) == {"tokens", "prompt_lens", "start_pos"}
         assert trace_kwargs["tokens"].flatten().tolist() == [10 + lane_idx]
         assert trace_kwargs["prompt_lens"].tolist() == [7 + 2 * lane_idx]
         assert trace_kwargs["start_pos"].tolist() == [3 + lane_idx]
-        assert lane.calls[1][1]["execution"] is group.eager_execution[lane_idx]
-        assert lane.calls[2][1]["execution"] is group.traced_prefill_execution[lane_idx]
-        assert lane.calls[3][1]["execution"] is group.traced_decode_execution[lane_idx]
-        assert lane.calls[3][1]["read_from_device"] is False
 
 
 def test_dp1_trace_classification_slices_only_the_exact_lane_subset():
@@ -607,6 +728,35 @@ def test_dp1_trace_classification_slices_only_the_exact_lane_subset():
     assert trace_kwargs["tokens"].flatten().tolist() == [10, 11]
     assert trace_kwargs["prompt_lens"].tolist() == [7, 9]
     assert trace_kwargs["start_pos"].tolist() == [3, 4]
+
+
+def test_successful_traced_prefill_preflights_all_lanes_before_first_execution():
+    events = []
+
+    class TraceLane(_Lane):
+        def __init__(self, lane_idx):
+            super().__init__(lane_idx)
+            self.traced_prefill_execution = object()
+
+        def can_trace_prefill(self, *, tokens, prompt_lens=None, start_pos=None):
+            events.append(("preflight", self.lane_idx))
+            return True
+
+        def prefill_forward(self, *args, **kwargs):
+            events.append(("execute", self.lane_idx))
+            return super().prefill_forward(*args, **kwargs)
+
+    group = LaneGroupExecutor([TraceLane(0), TraceLane(1)])
+
+    output = group.prefill_forward(
+        tokens=torch.tensor([[10], [11]]),
+        page_table=torch.tensor([[0], [1]], dtype=torch.int32),
+        empty_slots=[0, 2],
+        execution=group.traced_prefill_execution,
+    )
+
+    assert output.flatten().tolist() == [10.0, 111.0]
+    assert events == [("preflight", 0), ("preflight", 1), ("execute", 0), ("execute", 1)]
 
 
 @pytest.mark.parametrize(

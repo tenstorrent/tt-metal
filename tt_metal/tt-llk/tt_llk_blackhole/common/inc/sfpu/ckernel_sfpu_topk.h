@@ -14,6 +14,10 @@
 #include "lltt.h"
 #include "sfpi.h"
 
+// Replay windows for the phase >= 4 step loop's load16/store16
+#define TOPK_STEP_LOAD_REPLAY_START  16
+#define TOPK_STEP_STORE_REPLAY_START 24
+
 namespace ckernel
 {
 namespace sfpu
@@ -538,6 +542,8 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                 switch (ph)
                 {
                     case 0:
+                    {
+                        constexpr int replay_count = STABLE_SORT ? 6 : 4;
                         for (int d = 0; d < 4; d++)
                         {
                             // Groups of 16 datums being sorted at the same time
@@ -550,7 +556,6 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             {
                                 lltt::replay(0, 8);
                             }
-                            constexpr int replay_count = STABLE_SORT ? 6 : 4;
                             if (init_phase)
                             {
                                 load_replay_buf<Exec>(16, replay_count, [] { bitonic_topk_ph0_st1_to_1<STABLE_SORT>(); });
@@ -571,12 +576,14 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             }
                         }
                         break;
+                    }
                     case 1:
+                    {
+                        constexpr int replay_count = STABLE_SORT ? 10 : 6;
                         // Groups of 16 datums being sorted at the same time
                         for (int d = 0; d < 4; d++)
                         {
                             lltt::replay(0, 8);
-                            constexpr int replay_count = STABLE_SORT ? 10 : 6;
                             if (init_phase)
                             {
                                 load_replay_buf<Exec>(16, replay_count, [] { bitonic_topk_ph1_st2_to_1<STABLE_SORT>(); });
@@ -589,11 +596,13 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             lltt::replay(8, 8);
                         }
                         break;
+                    }
                     case 2:
+                    {
+                        constexpr int replay_count = STABLE_SORT ? 14 : 9;
                         for (int d = 0; d < 4; d++)
                         {
                             lltt::replay(0, 8);
-                            constexpr int replay_count = STABLE_SORT ? 14 : 9;
                             if (init_phase)
                             {
                                 load_replay_buf<Exec>(16, replay_count, [] { bitonic_topk_ph2_st3_to_1<STABLE_SORT>(); });
@@ -606,6 +615,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             lltt::replay(8, 8);
                         }
                         break;
+                    }
                     case 3:
                         for (int d = 0; d < 4; d++)
                         {
@@ -631,14 +641,33 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             std::uint32_t inner_d    = dist >> 3; // How many loops to sort the sequence of length (2^ss / 16). Each loop sorts 16
                             datums_compared          = 0;
                             std::uint32_t dst_offset = 0;
+                            // Record this step's load16/store16 on the first
+                            // iteration (which also executes them), replay after.
+                            bool init_step_replay = true;
                             while (datums_compared < total_datums_to_compare)
                             {
                                 for (std::uint32_t ii = 0; ii < inner_d; ii++)
                                 {
-                                    bitonic_topk_load16<is_fp32_dest_acc_en>(4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
+                                    if (init_step_replay)
+                                    {
+                                        load_replay_buf<Exec>(
+                                            TOPK_STEP_LOAD_REPLAY_START, 8, [dist] { bitonic_topk_load16<is_fp32_dest_acc_en>(4, 2 * dist); });
+                                    }
+                                    else
+                                    {
+                                        lltt::replay(TOPK_STEP_LOAD_REPLAY_START, 8);
+                                    }
                                     bitonic_topk_step_N<STABLE_SORT>(dir);
-                                    bitonic_topk_store16<is_fp32_dest_acc_en, false>(
-                                        4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
+                                    if (init_step_replay)
+                                    {
+                                        load_replay_buf<Exec>(
+                                            TOPK_STEP_STORE_REPLAY_START, 8, [dist] { bitonic_topk_store16<is_fp32_dest_acc_en, false>(4, 2 * dist); });
+                                        init_step_replay = false;
+                                    }
+                                    else
+                                    {
+                                        lltt::replay(TOPK_STEP_STORE_REPLAY_START, 8);
+                                    }
                                     std::uint32_t dst_inc = 8;
                                     dst_offset += dst_inc;
                                     bool dst_cr = false;

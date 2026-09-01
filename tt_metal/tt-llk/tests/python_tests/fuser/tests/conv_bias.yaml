@@ -1,0 +1,47 @@
+# Convolution + bias: matmul followed by element-wise add with broadcast.
+# Models conv2d with per-channel bias: row broadcast repeats one bias vector
+# down the spatial rows, and broadcast_tile reuses it across all output tiles.
+
+operands:
+  - name: "activations"
+    dims: [128, 256]
+    format: "Float16_b"
+  - name: "weights"
+    dims: [256, 128]
+    format: "Float16_b"
+  - name: "bias"
+    dims: [128, 128]
+    format: "Float16_b"
+  - name: "conv_result"
+    dims: [128, 128]
+    format: "Float16_b"
+  - name: "output"
+    dims: [128, 128]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "activations"
+        src_b: "weights"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
+    block_size: [64, 64]
+    pack:
+      - output: "conv_result"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "conv_result"
+        src_b: "bias"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        broadcast_type: "ROW"
+        broadcast_tile: 0
+        math_fidelity: "LoFi"
+    block_size: [64, 64]
+    pack:
+      - output: "output"
+        packer: "Packer"

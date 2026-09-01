@@ -3,7 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Worker writer: drains cb_out tiled pages to grouped DRAM.
-// - Skips DRAM writes for tile_rows >= offsets[E_local]/32 (grouped is pre-zeroed).
+// - Skips DRAM writes for tile_rows >= offsets[E_local]/32. `grouped` is NOT
+//   pre-zeroed (it comes from a plain create_device_tensor), so those tail rows
+//   hold whatever the allocator handed us. That is deliberate: pad rows are not
+//   part of the op contract. moe_ffn_swiglu reads `grouped` only through
+//   per-expert slices [offsets[e], offsets[e+1]) and synthesizes its own zeros
+//   for the trailing slack; moe_ungroup never receives `grouped` at all (it
+//   takes expert_out/plan/offsets/grouped_scores) and skips pad slots via
+//   plan[i] == SENTINEL. Zeroing the tail here would be dead DRAM traffic on
+//   every step, proportional to the capacity slack. If a future consumer ever
+//   reads `grouped` densely over T_cap rows, zero it at that boundary instead.
 // - In the last chunk per tile-row, writes only last_chunk_tiles tiles
 //   (the remaining are zero-pad from the reader).
 // Always pops cb_out to keep the pipeline flowing.
@@ -39,6 +48,14 @@ constexpr uint32_t stride = get_compile_time_arg_val(5);
 constexpr uint32_t plan_ready_sem_id = get_compile_time_arg_val(6);
 constexpr auto grouped_args = TensorAccessorArgs<7>();
 constexpr auto offsets_args = TensorAccessorArgs<grouped_args.next_compile_time_args_offset()>();
+// The accessor chain must consume the host's CT-arg stream exactly. If the
+// host was built against a different arg table (scalar added/removed, accessor
+// reordered), every accessor base shifts — and when the stray word still
+// parses as a config word, the kernel compiles and reads garbage addresses.
+static_assert(
+    offsets_args.next_compile_time_args_offset() == kernel_compile_time_args.size(),
+    "moe_group_worker_writer: compile-time arg count differs from host emission — "
+    "rebuild the ttml host library to match this kernel source");
 
 void kernel_main() {
     const uint32_t grouped_addr = get_arg_val<uint32_t>(0);

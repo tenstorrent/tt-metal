@@ -71,14 +71,14 @@ private:
 
     // Must be called with lock_api_function_() held.
     void enqueue_read_shards_nolock(
-        const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+        const std::vector<ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         bool blocking,
         std::vector<MemoryPin> memory_pins = {});
     // Must be called with lock_api_function_() held.
     void enqueue_write_shards_nolock(
         MeshBuffer& mesh_buffer,
-        const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+        const std::vector<ShardDataTransfer>& shard_data_transfers,
         bool blocking,
         const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr);
 
@@ -115,7 +115,7 @@ public:
         const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) override;
     void enqueue_write_shards(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
-        const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+        const std::vector<ShardDataTransfer>& shard_data_transfers,
         bool blocking) override;
     void enqueue_write(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
@@ -125,7 +125,7 @@ public:
     // MeshBuffer Read APIs
     void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) override;
     void enqueue_read_shards(
-        const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+        const std::vector<ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         bool blocking) override;
     void enqueue_read(

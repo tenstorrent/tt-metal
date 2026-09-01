@@ -390,7 +390,7 @@ def test_generalized_moe_gate_512_global(device, batch_size, enable_sigmoid, see
 def test_generalized_moe_gate_grouped(device, batch_size, enable_sigmoid, seed):
     """DeepSeek GROUPED gate via ``generalized_moe_gate(grouped=True)``: 256 experts = 8 groups × 32 ->
     top-2-sum per group -> top-4 groups -> top-8, linear renorm + scale. Confirms the unified op's grouped
-    path (compiled with GMG_UNGROUPED_TOP8=0) matches the grouped golden — the path the standalone
+    path (ungrouped_top8=false via the moe_gate_ungrouped_top8 CT arg) matches the grouped golden — the path the standalone
     ``deepseek_moe_gate`` op used to own. grouped fixes top-8 + linear renorm, so topk / output_softmax are
     not swept (the op rejects other values in that mode)."""
     eps, scaling_factor = 1e-20, 2.5

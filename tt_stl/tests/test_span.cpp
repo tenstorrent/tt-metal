@@ -18,7 +18,7 @@ namespace {
 using ::testing::Eq;
 using ::testing::Pointwise;
 
-TEST(SpanTest, AsBytes) {
+TEST(SpanTest, CPU_AsBytes) {
     std::vector<uint32_t> src = {1, 2, 3, 4, 5};
     std::vector<uint32_t> dst = {0, 0, 0, 0, 0};
 

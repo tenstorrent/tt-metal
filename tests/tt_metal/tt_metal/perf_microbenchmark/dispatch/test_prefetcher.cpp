@@ -14,9 +14,11 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
+#include "tt_metal/impl/context/context_types.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/host_api/temp_quasar_api.hpp"
+#include "tt_metal/impl/program/program_impl.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include "tt_metal/impl/dispatch/memcpy.hpp"
@@ -165,17 +167,16 @@ class PrefetcherRingbufferReadTestFixture;
 // for testing purposes.
 namespace CommandBuilder {
 
-HostMemDeviceCommand build_dispatch_terminate(bool include_dispatch_s = true) {
-    bool dispatch_sub_enabled =
-        MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled() && include_dispatch_s;
-    DeviceCommandCalculator calc;
+HostMemDeviceCommand build_dispatch_terminate(MetalContext& metal_ctx, bool include_dispatch_s = true) {
+    bool dispatch_sub_enabled = metal_ctx.get_dispatch_query_manager().dispatch_s_enabled() && include_dispatch_s;
+    DeviceCommandCalculator calc(metal_ctx);
     calc.add_dispatch_wait();
     calc.add_dispatch_terminate();
     if (dispatch_sub_enabled) {
         calc.add_dispatch_terminate();
     }
     const uint32_t total_cmd_bytes = calc.write_offset_bytes();
-    HostMemDeviceCommand cmd(total_cmd_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, total_cmd_bytes);
     cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
     cmd.add_dispatch_terminate();
     if (dispatch_sub_enabled) {
@@ -185,22 +186,22 @@ HostMemDeviceCommand build_dispatch_terminate(bool include_dispatch_s = true) {
     return cmd;
 }
 
-HostMemDeviceCommand build_prefetch_terminate() {
-    DeviceCommandCalculator calc;
+HostMemDeviceCommand build_prefetch_terminate(MetalContext& metal_ctx) {
+    DeviceCommandCalculator calc(metal_ctx);
     calc.add_prefetch_terminate();
     const uint32_t total_cmd_bytes = calc.write_offset_bytes();
-    HostMemDeviceCommand cmd(total_cmd_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, total_cmd_bytes);
 
     cmd.add_prefetch_terminate();
 
     return cmd;
 }
 
-HostMemDeviceCommand build_dispatch_prefetch_stall() {
-    DeviceCommandCalculator calc;
+HostMemDeviceCommand build_dispatch_prefetch_stall(MetalContext& metal_ctx) {
+    DeviceCommandCalculator calc(metal_ctx);
     calc.add_dispatch_wait_with_prefetch_stall();
     const uint32_t command_size_bytes = calc.write_offset_bytes();
-    HostMemDeviceCommand cmd(command_size_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, command_size_bytes);
 
     cmd.add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, 0, 0, 0, 0);
@@ -208,12 +209,12 @@ HostMemDeviceCommand build_dispatch_prefetch_stall() {
     return cmd;
 }
 
-HostMemDeviceCommand build_dispatch_write_offset(ttsl::Span<const uint32_t> write_offsets) {
-    DeviceCommandCalculator calc;
+HostMemDeviceCommand build_dispatch_write_offset(MetalContext& metal_ctx, ttsl::Span<const uint32_t> write_offsets) {
+    DeviceCommandCalculator calc(metal_ctx);
     calc.add_dispatch_set_write_offsets(write_offsets.size());
     const uint32_t command_size_bytes = calc.write_offset_bytes();
 
-    HostMemDeviceCommand cmd(command_size_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, command_size_bytes);
 
     cmd.add_dispatch_set_write_offsets(write_offsets);
 
@@ -221,13 +222,14 @@ HostMemDeviceCommand build_dispatch_write_offset(ttsl::Span<const uint32_t> writ
 }
 
 template <bool inline_data>
-HostMemDeviceCommand build_prefetch_relay_linear_host(uint32_t noc_xy, uint32_t addr, uint32_t data_size_bytes) {
-    DeviceCommandCalculator calc;
+HostMemDeviceCommand build_prefetch_relay_linear_host(
+    MetalContext& metal_ctx, uint32_t noc_xy, uint32_t addr, uint32_t data_size_bytes) {
+    DeviceCommandCalculator calc(metal_ctx);
     calc.add_dispatch_write_linear_host();
     calc.add_prefetch_relay_linear();
     const uint32_t total_cmd_bytes = calc.write_offset_bytes();
 
-    HostMemDeviceCommand cmd(total_cmd_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, total_cmd_bytes);
     cmd.add_dispatch_write_host<inline_data>(
         false,            // flush_prefetch
         data_size_bytes,  // data_sizeB
@@ -243,12 +245,13 @@ HostMemDeviceCommand build_prefetch_relay_linear_host(uint32_t noc_xy, uint32_t 
 }
 
 template <bool inline_data>
-HostMemDeviceCommand build_relay_inline_host(const std::vector<uint32_t>& payload, uint32_t data_size_bytes) {
-    DeviceCommandCalculator calc;
+HostMemDeviceCommand build_relay_inline_host(
+    MetalContext& metal_ctx, const std::vector<uint32_t>& payload, uint32_t data_size_bytes) {
+    DeviceCommandCalculator calc(metal_ctx);
     calc.add_dispatch_write_linear_host_event(data_size_bytes);
     const uint32_t total_cmd_bytes = calc.write_offset_bytes();
 
-    HostMemDeviceCommand cmd(total_cmd_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, total_cmd_bytes);
     cmd.add_dispatch_write_host<inline_data>(
         true,             // flush_prefetch
         data_size_bytes,  // data_sizeB
@@ -262,13 +265,13 @@ HostMemDeviceCommand build_relay_inline_host(const std::vector<uint32_t>& payloa
 
 template <bool flush_prefetch, bool inline_data>
 HostMemDeviceCommand build_prefetch_relay_linear_read(
-    uint32_t noc_xy, uint32_t dst_addr, uint32_t src_addr, uint32_t transfer_size) {
-    DeviceCommandCalculator calc;
+    MetalContext& metal_ctx, uint32_t noc_xy, uint32_t dst_addr, uint32_t src_addr, uint32_t transfer_size) {
+    DeviceCommandCalculator calc(metal_ctx);
     calc.add_dispatch_write_linear<flush_prefetch, inline_data>(transfer_size);
     calc.add_prefetch_relay_linear();
     const uint32_t total_cmd_bytes = calc.write_offset_bytes();
 
-    HostMemDeviceCommand cmd(total_cmd_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, total_cmd_bytes);
     cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
         0,              // num_mcast_dests
         noc_xy,         // NOC coordinates
@@ -285,6 +288,7 @@ HostMemDeviceCommand build_prefetch_relay_linear_read(
 
 template <bool flush_prefetch, bool inline_data>
 HostMemDeviceCommand build_prefetch_relay_paged(
+    MetalContext& metal_ctx,
     uint32_t noc_xy,
     uint32_t addr,
     uint32_t start_page,
@@ -292,14 +296,14 @@ HostMemDeviceCommand build_prefetch_relay_paged(
     uint32_t page_size_bytes,
     uint32_t pages_in_chunk,
     uint32_t length_adjust = 0) {
-    DeviceCommandCalculator calc;
+    DeviceCommandCalculator calc(metal_ctx);
     uint32_t transfer_size = page_size_bytes * pages_in_chunk;
     calc.add_dispatch_write_linear<flush_prefetch, inline_data>(transfer_size);
     calc.add_prefetch_relay_paged();
     const uint32_t total_cmd_bytes = calc.write_offset_bytes();
 
     // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(total_cmd_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, total_cmd_bytes);
 
     cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
         0,              // num_mcast_dests
@@ -317,19 +321,20 @@ HostMemDeviceCommand build_prefetch_relay_paged(
 
 template <bool flush_prefetch, bool inline_data>
 HostMemDeviceCommand build_prefetch_relay_paged_packed(
+    MetalContext& metal_ctx,
     const std::vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
     uint32_t noc_xy,
     uint32_t addr,
     uint32_t total_length) {
     const uint32_t n_sub_cmds = sub_cmds.size();
     // Calculate the command size using DeviceCommandCalculator
-    DeviceCommandCalculator calc;
+    DeviceCommandCalculator calc(metal_ctx);
     calc.add_dispatch_write_linear<flush_prefetch, inline_data>(total_length);
     calc.add_prefetch_relay_paged_packed(n_sub_cmds);
     const uint32_t total_cmd_bytes = calc.write_offset_bytes();
 
     // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(total_cmd_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, total_cmd_bytes);
 
     cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
         0,             // num_mcast_dests
@@ -347,6 +352,7 @@ HostMemDeviceCommand build_prefetch_relay_paged_packed(
 
 template <bool flush_prefetch, bool inline_data>
 HostMemDeviceCommand build_prefetch_relay_linear_packed(
+    MetalContext& metal_ctx,
     const std::vector<CQPrefetchRelayLinearPackedSubCmd>& sub_cmds,
     uint32_t src_noc_xy,
     uint32_t dst_noc_xy,
@@ -354,13 +360,13 @@ HostMemDeviceCommand build_prefetch_relay_linear_packed(
     uint32_t total_length) {
     const uint32_t n_sub_cmds = sub_cmds.size();
     // Calculate the command size using DeviceCommandCalculator
-    DeviceCommandCalculator calc;
+    DeviceCommandCalculator calc(metal_ctx);
     calc.add_dispatch_write_linear<flush_prefetch, inline_data>(total_length);
     calc.add_prefetch_relay_linear_packed(n_sub_cmds);
     const uint32_t total_cmd_bytes = calc.write_offset_bytes();
 
     // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(total_cmd_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, total_cmd_bytes);
 
     cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
         0,             // num_mcast_dests
@@ -378,6 +384,7 @@ HostMemDeviceCommand build_prefetch_relay_linear_packed(
 
 template <bool flush_prefetch, bool inline_data>
 HostMemDeviceCommand build_prefetch_relay_linear_packed_h(
+    MetalContext& metal_ctx,
     const std::vector<CQPrefetchRelayLinearPackedSubCmd>& sub_cmds,
     uint32_t src_noc_xy,
     uint32_t dst_noc_xy,
@@ -385,13 +392,13 @@ HostMemDeviceCommand build_prefetch_relay_linear_packed_h(
     uint32_t total_length) {
     const uint32_t n_sub_cmds = sub_cmds.size();
     // Calculate the command size using DeviceCommandCalculator
-    DeviceCommandCalculator calc;
+    DeviceCommandCalculator calc(metal_ctx);
     calc.add_dispatch_write_linear<flush_prefetch, inline_data>(total_length);
     calc.add_prefetch_relay_linear_packed_h(n_sub_cmds);
     const uint32_t total_cmd_bytes = calc.write_offset_bytes();
 
     // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(total_cmd_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, total_cmd_bytes);
 
     cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
         0,             // num_mcast_dests
@@ -409,6 +416,7 @@ HostMemDeviceCommand build_prefetch_relay_linear_packed_h(
 
 template <bool flush_prefetch, bool inline_data>
 HostMemDeviceCommand build_prefetch_ringbuffer_relay(
+    MetalContext& metal_ctx,
     const std::vector<CQPrefetchRelayRingbufferSubCmd>& sub_cmds,
     const std::vector<uint32_t>& lengths,
     Common::DeviceData& device_data,
@@ -524,8 +532,9 @@ protected:
     // Hooks that differ between FD and SD execution. Overridden in SDPrefetchTestBase /
     // SDPrefetchHostTestFixture so the test bodies can be written once.
     virtual void append_terminate_commands(std::vector<HostMemDeviceCommand>& cmds) {
-        cmds.push_back(CommandBuilder::build_dispatch_terminate());
-        cmds.push_back(CommandBuilder::build_prefetch_terminate());
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+        cmds.push_back(CommandBuilder::build_dispatch_terminate(metal_ctx));
+        cmds.push_back(CommandBuilder::build_prefetch_terminate(metal_ctx));
     }
     virtual void* get_completion_queue_buffer() { return mgr_->get_completion_queue_ptr(fdcq_->id()); }
     virtual uint32_t get_completion_queue_buffer_size() { return mgr_->get_completion_queue_size(fdcq_->id()); }
@@ -619,9 +628,10 @@ protected:
         std::vector<uint32_t> payload = payload_generator_->generate_payload(xfer_size_bytes);
 
         // PHASE 1: Generate terminate command metadata
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         std::vector<HostMemDeviceCommand> work_cmds;
         work_cmds.push_back(Common::CommandBuilder::build_linear_write_command<true, true>(
-            payload, worker_range, false, noc_xy, l1_addr, xfer_size_bytes));
+            metal_ctx, payload, worker_range, false, noc_xy, l1_addr, xfer_size_bytes));
 
         std::vector<HostMemDeviceCommand> terminate_cmds;
         append_terminate_commands(terminate_cmds);
@@ -680,16 +690,17 @@ public:
             }
         }
 
-        DeviceCommandCalculator wait_calc;
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+        DeviceCommandCalculator wait_calc(metal_ctx);
         wait_calc.add_dispatch_wait();
-        HostMemDeviceCommand wait_cmd(wait_calc.write_offset_bytes());
+        HostMemDeviceCommand wait_cmd(metal_ctx, wait_calc.write_offset_bytes());
         wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
         const uint8_t* wptr = reinterpret_cast<const uint8_t*>(wait_cmd.data());
         exec_buf_data.insert(exec_buf_data.end(), wptr, wptr + wait_cmd.size_bytes());
 
-        DeviceCommandCalculator exec_buf_end_calc;
+        DeviceCommandCalculator exec_buf_end_calc(metal_ctx);
         exec_buf_end_calc.add_prefetch_exec_buf_end();
-        HostMemDeviceCommand exec_terminate(exec_buf_end_calc.write_offset_bytes());
+        HostMemDeviceCommand exec_terminate(metal_ctx, exec_buf_end_calc.write_offset_bytes());
         exec_terminate.add_prefetch_exec_buf_end();
         const uint8_t* tptr = reinterpret_cast<const uint8_t*>(exec_terminate.data());
         exec_buf_data.insert(exec_buf_data.end(), tptr, tptr + exec_terminate.size_bytes());
@@ -746,12 +757,13 @@ private:
         const uint32_t num_pages = fixture.build_and_write_exec_buf_to_dram(commands_per_iteration, num_iterations);
 
         // 4. Reserve and Write exec_buff command
-        DeviceCommandCalculator exec_buf_calc;
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+        DeviceCommandCalculator exec_buf_calc(metal_ctx);
         exec_buf_calc.add_prefetch_exec_buf();
         uint32_t cmd_size = exec_buf_calc.write_offset_bytes();
         void* cmd_buffer_base = mgr_->issue_queue_reserve(cmd_size, fdcq_->id());
         // Use DeviceCommand helper (HugepageDeviceCommand) to write to the issue queue memory
-        HugepageDeviceCommand exec_cmd(cmd_buffer_base, cmd_size);
+        HugepageDeviceCommand exec_cmd(metal_ctx, cmd_buffer_base, cmd_size);
         exec_cmd.add_prefetch_exec_buf(
             fixture.compute_exec_buf_base_addr(), fixture.DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE, num_pages);
 
@@ -819,8 +831,9 @@ public:
             uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
 
             // Relay paged from prefetcher -> linear write from dispatcher to L1
+            auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
             HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_paged<flush_prefetch_, inline_data_>(
-                noc_xy, l1_addr, start_page, base_addr, page_size_bytes, pages_in_chunk);
+                metal_ctx, noc_xy, l1_addr, start_page, base_addr, page_size_bytes, pages_in_chunk);
 
             // Shadow model updated per page
             for (uint32_t page = 0; page < pages_in_chunk; ++page) {
@@ -899,12 +912,13 @@ public:
             const uint16_t start_page_cmd = absolute_start_page % num_banks_;
 
             //  Step 1: Paged Write of host data to DRAM banks by dispatcher cmd
+            auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
             HostMemDeviceCommand cmd_dispatch_dram = Common::CommandBuilder::build_paged_write_command<hugepage_write_>(
-                chunk_payload, base_addr, page_size_bytes, pages_in_chunk, start_page_cmd, true);
+                metal_ctx, chunk_payload, base_addr, page_size_bytes, pages_in_chunk, start_page_cmd, true);
             commands_per_iteration.push_back(std::move(cmd_dispatch_dram));
 
             // Followed by stall to avoid RAW hazard
-            HostMemDeviceCommand cmd_stall = CommandBuilder::build_dispatch_prefetch_stall();
+            HostMemDeviceCommand cmd_stall = CommandBuilder::build_dispatch_prefetch_stall(metal_ctx);
             commands_per_iteration.push_back(std::move(cmd_stall));
 
             uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
@@ -912,7 +926,7 @@ public:
             // Step 2: Paged Read of DRAM banks by prefetcher, relay data to dispatcher for linear write to L1
             HostMemDeviceCommand cmd_prefetch =
                 CommandBuilder::build_prefetch_relay_paged<flush_prefetch_, inline_data_>(
-                    noc_xy, l1_addr, start_page_cmd, base_addr, page_size_bytes, pages_in_chunk);
+                    metal_ctx, noc_xy, l1_addr, start_page_cmd, base_addr, page_size_bytes, pages_in_chunk);
             commands_per_iteration.push_back(std::move(cmd_prefetch));
 
             for (uint32_t page = 0; page < pages_in_chunk; ++page) {
@@ -983,8 +997,9 @@ public:
         // Update Common::DeviceData for linear write
         Common::DeviceDataUpdater::update_linear_write(payload, device_data_, worker_range, is_mcast_);
         // Create the HostMemDeviceCommand
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         HostMemDeviceCommand cmd = Common::CommandBuilder::build_linear_write_command<flush_prefetch, inline_data>(
-            payload, worker_range, is_mcast_, noc_xy, addr, length);
+            metal_ctx, payload, worker_range, is_mcast_, noc_xy, addr, length);
 
         cmds_.push_back(std::move(cmd));
     }
@@ -999,7 +1014,8 @@ public:
         const bool inline_data = true;
 
         // Calculate size of a single merged entry of all lengths
-        DeviceCommandCalculator cmd_calc;
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+        DeviceCommandCalculator cmd_calc(metal_ctx);
         for (const auto length : lengths) {
             cmd_calc.add_dispatch_write_linear<flush_prefetch, inline_data>(length);
         }
@@ -1007,7 +1023,7 @@ public:
         const uint32_t command_size_bytes = cmd_calc.write_offset_bytes();
 
         // Create the HostMemDeviceCommand for single merged entry
-        HostMemDeviceCommand cmd(command_size_bytes);
+        HostMemDeviceCommand cmd(metal_ctx, command_size_bytes);
 
         // Add all lengths into single cmd
         for (const auto length : lengths) {
@@ -1051,8 +1067,9 @@ public:
         std::vector<CQPrefetchRelayPagedPackedSubCmd> sub_cmds =
             build_packed(lengths, device_data_, log_packed_read_page_size, n_sub_cmds);
 
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_paged_packed<flush_prefetch, inline_data>(
-            sub_cmds, noc_xy, l1_addr, total_length);
+            metal_ctx, sub_cmds, noc_xy, l1_addr, total_length);
 
         cmds_.push_back(std::move(cmd));
     }
@@ -1079,8 +1096,9 @@ public:
         // Capture address before updating device_data
         uint32_t l1_addr = device_data_.get_result_data_addr(worker, 0);
 
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_paged<flush_prefetch, inline_data>(
-            noc_xy, l1_addr, start_page, base_addr, page_size_bytes, pages_in_chunk);
+            metal_ctx, noc_xy, l1_addr, start_page, base_addr, page_size_bytes, pages_in_chunk);
 
         for (uint32_t page = 0; page < pages_in_chunk; ++page) {
             const uint32_t page_id = start_page + page;
@@ -1128,8 +1146,15 @@ public:
         Common::DeviceDataUpdater::update_packed_write(payload, device_data_, worker_cores, info_.l1_alignment_);
 
         // Build Command
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         HostMemDeviceCommand cmd = Common::CommandBuilder::build_packed_write_command(
-            payload, sub_cmds, addr, info_.l1_alignment_, info_.packed_write_max_unicast_sub_cmds_, no_stride);
+            metal_ctx,
+            payload,
+            sub_cmds,
+            addr,
+            info_.l1_alignment_,
+            info_.packed_write_max_unicast_sub_cmds_,
+            no_stride);
 
         cmds_.push_back(std::move(cmd));
     }
@@ -1166,12 +1191,13 @@ public:
         device_data_.pad(worker, bank_id, MetalContext::instance().hal().get_alignment(HalMemType::L1));
 
         // Barrier/stall to avoid RAW hazards
-        HostMemDeviceCommand stall_cmd = CommandBuilder::build_dispatch_prefetch_stall();
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+        HostMemDeviceCommand stall_cmd = CommandBuilder::build_dispatch_prefetch_stall(metal_ctx);
         cmds_.push_back(std::move(stall_cmd));
 
         // Blit: dispatcher linear write (dest) + relay linear read (src)
         HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_linear_read<flush_prefetch, inline_data>(
-            noc_xy, dst_addr, src_addr, length);
+            metal_ctx, noc_xy, dst_addr, src_addr, length);
 
         cmds_.push_back(std::move(cmd));
     }
@@ -1184,7 +1210,8 @@ public:
         DeviceDataUpdater::update_host_data(device_data_, payload, length);
 
         // Create the HostMemDeviceCommand with pre-calculated size
-        HostMemDeviceCommand cmd = CommandBuilder::build_relay_inline_host<inline_data>(payload, length);
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+        HostMemDeviceCommand cmd = CommandBuilder::build_relay_inline_host<inline_data>(metal_ctx, payload, length);
 
         cmds_.push_back(std::move(cmd));
 
@@ -1241,8 +1268,9 @@ protected:
             uint32_t data_size_words = payload_generator_->get_rand<uint32_t>(0, max_limit - 1) * count + 1;
             uint32_t data_size_bytes = data_size_words * sizeof(uint32_t);
 
-            HostMemDeviceCommand cmd =
-                CommandBuilder::build_prefetch_relay_linear_host<inline_data_>(noc_xy, l1_base, data_size_bytes);
+            auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+            HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_linear_host<inline_data_>(
+                metal_ctx, noc_xy, l1_base, data_size_bytes);
 
             commands_per_iteration.push_back(std::move(cmd));
 
@@ -1479,8 +1507,9 @@ protected:
             std::vector<CQPrefetchRelayPagedPackedSubCmd> sub_cmds =
                 build_sub_cmds(lengths, device_data, packed_read_page_size, n_sub_cmds);
 
+            auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
             HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_paged_packed<flush_prefetch_, inline_data_>(
-                sub_cmds, noc_xy, l1_addr, total_length);
+                metal_ctx, sub_cmds, noc_xy, l1_addr, total_length);
 
             commands_per_iteration.push_back(std::move(cmd));
             remaining_bytes -= total_length;
@@ -1592,12 +1621,13 @@ public:
         helper.add_paged_dram_read(worker_range, 0, 0, 128, 128, 0);
         helper.add_paged_dram_read(worker_range, 4, dram_alignment, 2048, num_banks_ + 4, 0);
         helper.add_paged_dram_read(worker_range, 5, dram_alignment, 2048, (num_banks_ * 3) + 1, 0);
-        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_ - 1, 0);
-        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_ - 1, 0);
+        const uint32_t num_banks_minus_one = std::max(num_banks_, 2u) - 1;  // 1-bank sim would give 0 pages
+        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_minus_one, 0);
+        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_minus_one, 0);
         helper.add_paged_dram_read(worker_range, 0, 0, 128, 128, 32);
         helper.add_paged_dram_read(worker_range, 4, dram_alignment, 2048, num_banks_ * 2, 1536);
         helper.add_paged_dram_read(worker_range, 5, dram_alignment, 2048, (num_banks_ * 2) + 1, 256);
-        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_ - 1, 640);
+        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_minus_one, 640);
         // Large pages
         helper.add_paged_dram_read(worker_range, 0, 0, DEFAULT_SCRATCH_DB_SIZE / 2 + dram_alignment, 2, 128);
         helper.add_paged_dram_read(worker_range, 0, 0, DEFAULT_SCRATCH_DB_SIZE, 2, 0);
@@ -1638,7 +1668,8 @@ public:
         // Skipping CQ_DISPATCH_CMD_DELAY from the legacy test here
         helper.add_unicast_write(worker_range, 1024);
         // Barrier/stall to avoid RAW hazards
-        HostMemDeviceCommand stall_cmd = CommandBuilder::build_dispatch_prefetch_stall();
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+        HostMemDeviceCommand stall_cmd = CommandBuilder::build_dispatch_prefetch_stall(metal_ctx);
         commands_per_iteration.push_back(std::move(stall_cmd));
         uint32_t length_bytes = 32;
         uint32_t offset_words = device_data.size_at(worker_range.start_coord, 0) - (length_bytes / sizeof(uint32_t));
@@ -1735,9 +1766,10 @@ protected:
 
             const std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds = build_sub_cmds(lengths, addresses);
 
+            auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
             HostMemDeviceCommand cmd =
                 CommandBuilder::build_prefetch_relay_linear_packed<flush_prefetch_, inline_data_>(
-                    sub_cmds, src_noc_xy, dst_noc_xy, dram_dest_addr, total_length);
+                    metal_ctx, sub_cmds, src_noc_xy, dst_noc_xy, dram_dest_addr, total_length);
 
             commands_per_iteration.push_back(std::move(cmd));
 
@@ -1916,8 +1948,17 @@ public:
             // We build the sub commands to relay them from the ringbuffer to the dispatcher
             std::vector<CQPrefetchRelayRingbufferSubCmd> sub_cmds = build_sub_cmds(lengths, n_sub_cmds);
 
+            auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
             HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_ringbuffer_relay<flush_prefetch_, inline_data_>(
-                sub_cmds, lengths, device_data, *this, noc_xy, l1_addr, total_length, ringbuffer_read_page_size_log2);
+                metal_ctx,
+                sub_cmds,
+                lengths,
+                device_data,
+                *this,
+                noc_xy,
+                l1_addr,
+                total_length,
+                ringbuffer_read_page_size_log2);
 
             commands_per_iteration.push_back(std::move(cmd));
             remaining_bytes -= total_length;
@@ -1956,6 +1997,7 @@ namespace CommandBuilder {
 
 template <bool flush_prefetch, bool inline_data>
 HostMemDeviceCommand build_prefetch_ringbuffer_relay(
+    MetalContext& metal_ctx,
     const std::vector<CQPrefetchRelayRingbufferSubCmd>& sub_cmds,
     const std::vector<uint32_t>& lengths,
     Common::DeviceData& device_data,
@@ -1966,7 +2008,7 @@ HostMemDeviceCommand build_prefetch_ringbuffer_relay(
     uint32_t ringbuffer_read_page_size_log2) {
     const uint32_t n_sub_cmds = sub_cmds.size();
     // Calculate the command size using DeviceCommandCalculator
-    DeviceCommandCalculator calc;
+    DeviceCommandCalculator calc(metal_ctx);
     for (uint32_t i = 0; i < n_sub_cmds; i++) {
         calc.add_prefetch_paged_to_ringbuffer();
     }
@@ -1976,7 +2018,7 @@ HostMemDeviceCommand build_prefetch_ringbuffer_relay(
     const uint32_t total_cmd_bytes = calc.write_offset_bytes();
 
     // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(total_cmd_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, total_cmd_bytes);
 
     // First, we populate the ringbuffer
     fixture.populate_ringbuffer_from_dram(cmd, lengths, device_data, ringbuffer_read_page_size_log2, n_sub_cmds);
@@ -2092,12 +2134,13 @@ public:
             uint32_t dram_addr =
                 dest_device_data.get_result_data_addr(dest_dram_logical_core, dest_dram_bank_id, tt::CoreType::DRAM);
 
-            DeviceCommandCalculator calc;
+            auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+            DeviceCommandCalculator calc(metal_ctx);
             calc.add_dispatch_write_linear<false, false>(length);
             const uint32_t dispatch_cmd_size = calc.write_offset_bytes();
 
             // Create the HostMemDeviceCommand with pre-calculated size
-            HostMemDeviceCommand cmd1(dispatch_cmd_size);
+            HostMemDeviceCommand cmd1(metal_ctx, dispatch_cmd_size);
 
             cmd1.add_dispatch_write_linear<false, false>(
                 0,          // num_mcast_dests
@@ -2131,11 +2174,11 @@ public:
 
             // Create the relay linear H command as a separate command as it must be
             // the only entry in fetchQ
-            DeviceCommandCalculator calc2;
+            DeviceCommandCalculator calc2(metal_ctx);
             calc2.add_prefetch_relay_linear_h();
             const uint32_t relay_cmd_size = calc2.write_offset_bytes();
 
-            HostMemDeviceCommand cmd2(relay_cmd_size);
+            HostMemDeviceCommand cmd2(metal_ctx, relay_cmd_size);
             cmd2.add_prefetch_relay_linear_h(src_noc_xy_addr, length, src_addr);
 
             uint32_t length_words = length / sizeof(uint32_t);
@@ -2249,11 +2292,12 @@ public:
             const std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds = build_sub_cmds(lengths, addresses);
 
             // Command 1: Dispatch write linear (RELAY_INLINE_NOFLUSH) - sent as separate fetchQ entry
-            DeviceCommandCalculator calc1;
+            auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+            DeviceCommandCalculator calc1(metal_ctx);
             calc1.add_dispatch_write_linear<flush_prefetch_, inline_data_>(total_length);
             const uint32_t dispatch_cmd_size = calc1.write_offset_bytes();
 
-            HostMemDeviceCommand cmd1(dispatch_cmd_size);
+            HostMemDeviceCommand cmd1(metal_ctx, dispatch_cmd_size);
             cmd1.add_dispatch_write_linear<flush_prefetch_, inline_data_>(
                 0,               // num_mcast_dests
                 dst_noc_xy,      // NOC coordinates for DESTINATION (dispatcher writes here)
@@ -2264,11 +2308,11 @@ public:
             commands_per_iteration.push_back(std::move(cmd1));
 
             // Command 2: Relay linear packed H - must be standalone entry in fetchQ
-            DeviceCommandCalculator calc2;
+            DeviceCommandCalculator calc2(metal_ctx);
             calc2.add_prefetch_relay_linear_packed_h(sub_cmds.size());
             const uint32_t relay_cmd_size = calc2.write_offset_bytes();
 
-            HostMemDeviceCommand cmd2(relay_cmd_size);
+            HostMemDeviceCommand cmd2(metal_ctx, relay_cmd_size);
             cmd2.add_prefetch_relay_linear_packed_h(src_noc_xy, total_length, sub_cmds, sub_cmds.size());
             commands_per_iteration.push_back(std::move(cmd2));
 
@@ -2330,8 +2374,9 @@ protected:
         device_data.pad(worker_core, bank_id, MetalContext::instance().hal().get_alignment(HalMemType::L1));
 
         // Build command (dispatcher linear write (dest) + relay linear read (src))
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_linear_read<flush_prefetch_, inline_data_>(
-            noc_xy, dst_addr, src_addr, data_size_bytes);
+            metal_ctx, noc_xy, dst_addr, src_addr, data_size_bytes);
 
         remaining_bytes -= data_size_bytes;
         return cmd;
@@ -2379,8 +2424,9 @@ protected:
         // Calculate absolute address for command
         uint32_t cmd_base_addr = dram_base_ + random_offset;
         uint32_t addr = device_data.get_result_data_addr(worker_core, 0);
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_paged<flush_prefetch_, inline_data_>(
-            noc_xy, addr, start_page, cmd_base_addr, page_size, pages, length_adjust);
+            metal_ctx, noc_xy, addr, start_page, cmd_base_addr, page_size, pages, length_adjust);
 
         // Update Common::DeviceData for paged read
         uint32_t page_size_words = page_size / sizeof(uint32_t);
@@ -2449,8 +2495,9 @@ protected:
                     Common::DeviceDataUpdater::update_linear_write(payload, device_data, worker_range, false);
 
                     // Build the command: Dispatch Write Linear (Unicast) wrapped in Prefetch Relay Inline
+                    auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
                     HostMemDeviceCommand cmd = Common::CommandBuilder::build_linear_write_command<true, true>(
-                        payload, worker_range, false, noc_xy, addr, xfer_size_bytes);
+                        metal_ctx, payload, worker_range, false, noc_xy, addr, xfer_size_bytes);
 
                     remaining_bytes -= xfer_size_bytes;
                     return cmd;
@@ -2507,7 +2554,9 @@ protected:
                         }
                     }
 
+                    auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
                     xfer_size_bytes = Common::PackedWriteUtils::clamp_to_max_fetch(
+                        metal_ctx,
                         max_fetch_bytes_,
                         xfer_size_bytes,
                         num_sub_cmds,
@@ -2526,7 +2575,13 @@ protected:
 
                     // Build Command
                     HostMemDeviceCommand cmd = Common::CommandBuilder::build_packed_write_command(
-                        payload, sub_cmds, addr, l1_alignment_, packed_write_max_unicast_sub_cmds_, no_stride);
+                        metal_ctx,
+                        payload,
+                        sub_cmds,
+                        addr,
+                        l1_alignment_,
+                        packed_write_max_unicast_sub_cmds_,
+                        no_stride);
 
                     remaining_bytes -= xfer_size_bytes;
                     return cmd;
@@ -2603,7 +2658,6 @@ public:
                     break;
                 }
                 case CQ_PREFETCH_CMD_RELAY_INLINE: {
-                    // worker_range() collapses mcast to unicast on single-core arches (Quasar) to stay within grid.
                     const CoreRange multi_worker_range = this->worker_range(worker_core, /*multi_core=*/true);
                     auto result = gen_random_inline_cmd(device_data, multi_worker_range, noc_xy, remaining_bytes);
                     if (result.has_value()) {
@@ -2643,7 +2697,8 @@ public:
         if (tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
         }
-        this->device_ = tt_metal::CreateDevice(0);
+        this->mesh_device_ = tt_metal::distributed::MeshDevice::create_unit_mesh(0);
+        this->device_ = this->mesh_device_->get_devices()[0];
         if (tt::tt_metal::detail::sd_cq_kernel_tests_should_skip(this->device_)) {
             GTEST_SKIP() << "Quasar SD cq-kernel tests require dispatch-engine cores in the soc descriptor";
         }
@@ -2682,10 +2737,8 @@ public:
     }
 
     void TearDown() override {
-        if (this->device_) {
-            tt_metal::CloseDevice(this->device_);
-            this->device_ = nullptr;
-        }
+        this->device_ = nullptr;
+        this->mesh_device_.reset();
     }
 
     // Launches cq_prefetch.cpp (combined IS_H_VARIANT+IS_D_VARIANT) + cq_dispatch.cpp under
@@ -2838,8 +2891,9 @@ public:
         }
 
         // Terminate: dispatch_wait + dispatch_terminate + prefetch_terminate (shared by both paths).
-        write_cmd(CommandBuilder::build_dispatch_terminate(/*include_dispatch_s*/ false));
-        write_cmd(CommandBuilder::build_prefetch_terminate());
+        auto& metal_ctx = MetalContext::instance(extract_context_id(this->device_));
+        write_cmd(CommandBuilder::build_dispatch_terminate(metal_ctx, /*include_dispatch_s*/ false));
+        write_cmd(CommandBuilder::build_prefetch_terminate(metal_ctx));
 
         if (Common::is_quasar_cq_dram_backed()) {
             // Flush all DRAM command writes so the kernel sees them when it starts.
@@ -2870,8 +2924,7 @@ public:
         const bool fd_kernels_on_same_core = (phys_prefetch == phys_disp);
 
         // prefetch_sync_sem: dispatch signals prefetch when a stall round-trip is done.
-        const uint32_t pf_sync_sem =
-            tt_metal::CreateSemaphore(program, {prefetch_logical}, 0u, cq_core_type);
+        const uint32_t pf_sync_sem = tt_metal::CreateSemaphore(program, {prefetch_logical}, 0u, cq_core_type);
         uint32_t di_sync_sem = pf_sync_sem;
         if (!fd_kernels_on_same_core) {
             di_sync_sem = tt_metal::CreateSemaphore(program, {dispatch_logical}, 0u, cq_core_type);
@@ -2883,8 +2936,7 @@ public:
         // dispatch (init=0, the received-pages count).
         const uint32_t pf_downstream_cb_sem =
             tt_metal::CreateSemaphore(program, {prefetch_logical}, dispatch_buffer_pages, cq_core_type);
-        const uint32_t di_dispatch_cb_sem =
-            tt_metal::CreateSemaphore(program, {dispatch_logical}, 0u, cq_core_type);
+        const uint32_t di_dispatch_cb_sem = tt_metal::CreateSemaphore(program, {dispatch_logical}, 0u, cq_core_type);
         if (!fd_kernels_on_same_core) {
             TT_FATAL(
                 pf_downstream_cb_sem == di_dispatch_cb_sem,
@@ -2968,7 +3020,7 @@ public:
         }
 
         device_data.overflow_check(this->device_);
-        tt_metal::detail::LaunchProgram(this->device_, program);
+        tt_metal::LaunchProgram(*this->mesh_device_, std::move(program), /*wait_until_cores_done=*/true);
         // Ensure host CPU sees any PCIe-written completion queue data before validating.
         tt_driver_atomics::mfence();
         // DRAM-backed Quasar CQs need a staging-buffer readback before validation; host-backed queues are
@@ -2992,9 +3044,10 @@ private:
         const std::function<void(const HostMemDeviceCommand&, bool)>& write_cmd) {
         const uint32_t num_pages = this->build_and_write_exec_buf_to_dram(commands_per_iteration, num_iterations);
 
-        DeviceCommandCalculator exec_buf_calc;
+        auto& metal_ctx = MetalContext::instance(extract_context_id(this->device_));
+        DeviceCommandCalculator exec_buf_calc(metal_ctx);
         exec_buf_calc.add_prefetch_exec_buf();
-        HostMemDeviceCommand exec_cmd(exec_buf_calc.write_offset_bytes());
+        HostMemDeviceCommand exec_cmd(metal_ctx, exec_buf_calc.write_offset_bytes());
         exec_cmd.add_prefetch_exec_buf(
             this->compute_exec_buf_base_addr(), this->DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE, num_pages);
         write_cmd(exec_cmd, /*stall*/ true);
@@ -3204,8 +3257,9 @@ protected:
                 device_, worker_range, l1_base, dram_base_, nullptr, false, get_dram_data_size_words(), cfg_);
             const uint32_t page_size_words = page_size / sizeof(uint32_t);
             const uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
+            auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
             HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_paged<flush_prefetch_, inline_data_>(
-                noc_xy, l1_addr, /*start_page=*/0, dram_base_, page_size, /*pages_in_chunk=*/1);
+                metal_ctx, noc_xy, l1_addr, /*start_page=*/0, dram_base_, page_size, /*pages_in_chunk=*/1);
 
             const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(/*bank_id=*/0);
             const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
@@ -3277,9 +3331,10 @@ protected:
         }
         serialized_bytes *= get_num_iterations();
 
-        DeviceCommandCalculator wait_calc;
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
+        DeviceCommandCalculator wait_calc(metal_ctx);
         wait_calc.add_dispatch_wait();
-        DeviceCommandCalculator exec_buf_end_calc;
+        DeviceCommandCalculator exec_buf_end_calc(metal_ctx);
         exec_buf_end_calc.add_prefetch_exec_buf_end();
         serialized_bytes += wait_calc.write_offset_bytes() + exec_buf_end_calc.write_offset_bytes();
 
@@ -3330,10 +3385,11 @@ protected:
 
         constexpr uint32_t filler_payload_size = 16;
         const std::vector<uint32_t> filler_payload(filler_payload_size / sizeof(uint32_t), 0xA5A5A5A5);
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         std::vector<HostMemDeviceCommand> commands;
         for (uint32_t page = 1; page < dispatch_cb_pages - 3; ++page) {
             HostMemDeviceCommand filler_cmd = Common::CommandBuilder::build_linear_write_command<true, true>(
-                filler_payload, worker_range, /*is_mcast=*/false, noc_xy, source_addr, filler_payload_size);
+                metal_ctx, filler_payload, worker_range, /*is_mcast=*/false, noc_xy, source_addr, filler_payload_size);
             const auto* prefetch_cmd = reinterpret_cast<const CQPrefetchCmd*>(filler_cmd.data());
             TT_FATAL(
                 tt::align(prefetch_cmd->relay_inline.length, dispatch_cb_page_size) == dispatch_cb_page_size,
@@ -3346,7 +3402,7 @@ protected:
         const uint32_t crossing_payload_size = dispatch_cb_page_size;
         std::vector<uint32_t> crossing_payload = payload_generator_->generate_payload(crossing_payload_size);
         HostMemDeviceCommand seed_cmd = Common::CommandBuilder::build_linear_write_command<true, true>(
-            crossing_payload, worker_range, /*is_mcast=*/false, noc_xy, source_addr, crossing_payload_size);
+            metal_ctx, crossing_payload, worker_range, /*is_mcast=*/false, noc_xy, source_addr, crossing_payload_size);
         const auto* seed_prefetch_cmd = reinterpret_cast<const CQPrefetchCmd*>(seed_cmd.data());
         TT_FATAL(
             tt::align(seed_prefetch_cmd->relay_inline.length, dispatch_cb_page_size) == 2 * dispatch_cb_page_size,
@@ -3356,7 +3412,7 @@ protected:
         Common::DeviceDataUpdater::update_linear_write(crossing_payload, device_data, worker_range, /*is_mcast=*/false);
         commands.push_back(std::move(seed_cmd));
 
-        HostMemDeviceCommand stall_cmd = CommandBuilder::build_dispatch_prefetch_stall();
+        HostMemDeviceCommand stall_cmd = CommandBuilder::build_dispatch_prefetch_stall(metal_ctx);
         const auto* stall_prefetch_cmd = reinterpret_cast<const CQPrefetchCmd*>(stall_cmd.data());
         TT_FATAL(
             tt::align(stall_prefetch_cmd->relay_inline.length, dispatch_cb_page_size) == dispatch_cb_page_size,
@@ -3365,7 +3421,7 @@ protected:
 
         const uint32_t dst_addr = device_data.get_result_data_addr(first_worker, 0);
         HostMemDeviceCommand crossing_cmd = CommandBuilder::build_prefetch_relay_linear_read<false, false>(
-            noc_xy, dst_addr, source_addr, crossing_payload_size);
+            metal_ctx, noc_xy, dst_addr, source_addr, crossing_payload_size);
         const auto* crossing_prefetch_cmd = reinterpret_cast<const CQPrefetchCmd*>(crossing_cmd.data());
         TT_FATAL(
             crossing_prefetch_cmd->base.cmd_id == CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH,
@@ -3413,9 +3469,10 @@ protected:
         std::vector<uint32_t> payload = payload_generator_->generate_payload(transfer_size_bytes);
         Common::DeviceDataUpdater::update_linear_write(payload, device_data, worker_range, /*is_mcast=*/false);
 
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         std::vector<HostMemDeviceCommand> commands;
         commands.push_back(Common::CommandBuilder::build_linear_write_command<true, true>(
-            payload, worker_range, /*is_mcast=*/false, noc_xy, l1_addr, transfer_size_bytes));
+            metal_ctx, payload, worker_range, /*is_mcast=*/false, noc_xy, l1_addr, transfer_size_bytes));
 
         // Each command consumes one PrefetchQ entry. After prefetch_q_entries commands, the device consumer
         // has wrapped to the base and the host producer is at the limit. The extra command makes the host
@@ -3441,12 +3498,13 @@ protected:
         const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
         const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
 
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         auto make_command = [&](const std::vector<uint32_t>& payload, uint32_t address) {
             return Common::CommandBuilder::build_linear_write_command<true, true>(
-                payload, worker_range, /*is_mcast=*/false, noc_xy, address, transfer_size_bytes);
+                metal_ctx, payload, worker_range, /*is_mcast=*/false, noc_xy, address, transfer_size_bytes);
         };
 
-        DeviceCommandCalculator barrier_calc;
+        DeviceCommandCalculator barrier_calc(metal_ctx);
         barrier_calc.add_dispatch_wait();
         const uint32_t barrier_bytes = barrier_calc.write_offset_bytes();
         const uint32_t issue_alignment = mgr_->is_dram_backed()
@@ -3581,6 +3639,7 @@ protected:
         // pages past the base, which we track so every iteration refills up to the boundary and wraps once.
         uint32_t write_offset_pages = 0;
         const uint32_t num_iterations = get_num_iterations();
+        auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
         for (uint32_t iter = 0; iter < num_iterations; ++iter) {
             // Phase 1: fill the ring up to exactly one page before the region end.
             const uint32_t fill_pages = total_pages - write_offset_pages - 1;
@@ -3603,8 +3662,8 @@ protected:
             std::vector<HostMemDeviceCommand> fillers;
             fillers.reserve(fill_pages);
             for (uint32_t page = 0; page < fill_pages; ++page) {
-                fillers.push_back(
-                    CommandBuilder::build_prefetch_relay_linear_host<inline_data_>(noc_xy, l1_base, filler_size_bytes));
+                fillers.push_back(CommandBuilder::build_prefetch_relay_linear_host<inline_data_>(
+                    metal_ctx, noc_xy, l1_base, filler_size_bytes));
                 DeviceDataUpdater::update_host_data(filler_expected, filler_data, filler_size_bytes);
                 pad_host_data(filler_expected);
             }
@@ -3635,8 +3694,8 @@ protected:
                 /*dram_data_size_words=*/0,
                 cfg_);
             std::vector<HostMemDeviceCommand> crossing_commands;
-            crossing_commands.push_back(
-                CommandBuilder::build_prefetch_relay_linear_host<inline_data_>(noc_xy, l1_base, crossing_size_bytes));
+            crossing_commands.push_back(CommandBuilder::build_prefetch_relay_linear_host<inline_data_>(
+                metal_ctx, noc_xy, l1_base, crossing_size_bytes));
             DeviceDataUpdater::update_host_data(crossing_expected, crossing_data, crossing_size_bytes);
             pad_host_data(crossing_expected);
             const uint32_t crossing_pages =
@@ -3891,9 +3950,10 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
         device_, worker_range, l1_base, dram_base, nullptr, /*is_banked=*/false, /*dram_data_size_words=*/0, cfg_);
 
     // Find the maximum number of pages per command that fits within the configured max prefetch command size.
+    auto& metal_ctx = MetalContext::instance(extract_context_id(device_));
     uint32_t pages_per_cmd = 1U;
     for (uint32_t pages = 1U; pages <= requested_pages_per_cmd; ++pages) {
-        DeviceCommandCalculator calc;
+        DeviceCommandCalculator calc(metal_ctx);
         calc.add_dispatch_write_paged<hugepage_write_>(page_size_bytes, pages);
         if (calc.write_offset_bytes() > max_fetch_bytes_) {
             break;
@@ -3946,7 +4006,7 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
         const uint16_t start_page_cmd = absolute_start_page % num_banks_;
 
         HostMemDeviceCommand cmd_dispatch_dram = Common::CommandBuilder::build_paged_write_command<hugepage_write_>(
-            chunk_payload, base_addr, page_size_bytes, pages_per_cmd, start_page_cmd, /*is_dram=*/true);
+            metal_ctx, chunk_payload, base_addr, page_size_bytes, pages_per_cmd, start_page_cmd, /*is_dram=*/true);
         commands_per_iteration.push_back(std::move(cmd_dispatch_dram));
 
         absolute_start_page += pages_per_cmd;
@@ -3959,13 +4019,13 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
     }
 
     // Barrier wait command (same rationale as BaseTestFixture::execute_generated_commands).
-    DeviceCommandCalculator barrier_calc;
+    DeviceCommandCalculator barrier_calc(metal_ctx);
     barrier_calc.add_dispatch_wait();
     const uint64_t total_cmd_bytes =
         (static_cast<uint64_t>(num_iterations) * per_iter_total) + barrier_calc.write_offset_bytes();
 
     void* cmd_buffer_base = mgr_->issue_queue_reserve(total_cmd_bytes, fdcq_->id());
-    HugepageDeviceCommand dc(cmd_buffer_base, total_cmd_bytes);
+    HugepageDeviceCommand dc(metal_ctx, cmd_buffer_base, total_cmd_bytes);
 
     std::vector<uint32_t> entry_sizes;
     entry_sizes.reserve((static_cast<size_t>(num_iterations) * commands_per_iteration.size()) + 1U);
@@ -3977,7 +4037,7 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
         }
     }
 
-    HostMemDeviceCommand barrier_cmd(barrier_calc.write_offset_bytes());
+    HostMemDeviceCommand barrier_cmd(metal_ctx, barrier_calc.write_offset_bytes());
     barrier_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0U, 0U, 0U, 0);
     dc.add_data(barrier_cmd.data(), barrier_cmd.size_bytes(), barrier_cmd.size_bytes());
     entry_sizes.push_back(barrier_cmd.size_bytes());

@@ -27,7 +27,7 @@ std::vector<std::pair<std::uint64_t, std::uint32_t>> span_order(const memory& m)
 // DISCRETE loading must emit spans in ascending address order even when the address sort is a
 // non-identity permutation. An ncrisc-style binary places its data segment at a LOWER address than
 // text, which produces exactly such a permutation, so it exercises that ordering.
-TEST(MemorySegmentOrdering, DiscreteEmitsSpansInAscendingAddressOrder) {
+TEST(MemorySegmentOrdering, CPU_DiscreteEmitsSpansInAscendingAddressOrder) {
     // segments[0] is text (the loader treats the first segment as text), placed high in memory;
     // the data segment is placed lower -- the ncrisc layout that triggers a non-identity sort.
     const std::vector<word_t> text_contents = {0x1111'1111, 0x2222'2222};  // addr 0x2000, 2 words
@@ -55,7 +55,7 @@ TEST(MemorySegmentOrdering, DiscreteEmitsSpansInAscendingAddressOrder) {
 
 // The identity-permutation paths (non-DISCRETE) coalesce contiguous segments into a single span.
 // This guards that non-DISCRETE behaviour: contiguous segments must still collapse to one span.
-TEST(MemorySegmentOrdering, ContiguousCoalescesIntoSingleSpan) {
+TEST(MemorySegmentOrdering, CPU_ContiguousCoalescesIntoSingleSpan) {
     const std::vector<word_t> text_contents = {0x1111'1111, 0x2222'2222};  // lma 0x1000, 2 words
     const std::vector<word_t> data_contents = {0x3333'3333};               // lma 0x1008, 1 word
 
@@ -77,7 +77,7 @@ TEST(MemorySegmentOrdering, ContiguousCoalescesIntoSingleSpan) {
 // order has none (a .bss-only PT_LOAD has p_filesz == 0, so zero content words) link_spans_ is
 // still empty when the accumulate step runs, and link_spans_.back() writes 8 bytes before the
 // start of the buffer. Such a segment carries no data, so it must simply contribute no span.
-TEST(MemorySegmentOrdering, DiscreteHandlesEmptyFirstSegmentInAddressOrder) {
+TEST(MemorySegmentOrdering, CPU_DiscreteHandlesEmptyFirstSegmentInAddressOrder) {
     // segments[0] is text (the loader requires the first segment to be text), placed high in
     // memory; a .bss-only segment sits lower, so the address sort puts the empty one first.
     const std::vector<word_t> text_contents = {0x1111'1111, 0x2222'2222};  // addr 0x2000, 2 words
@@ -100,7 +100,7 @@ TEST(MemorySegmentOrdering, DiscreteHandlesEmptyFirstSegmentInAddressOrder) {
 
 // A contentless segment that does not sort first must also be dropped -- this already worked, and
 // guards that the underflow fix did not change the behaviour of the previously-reachable case.
-TEST(MemorySegmentOrdering, DiscreteDropsEmptyTrailingSegment) {
+TEST(MemorySegmentOrdering, CPU_DiscreteDropsEmptyTrailingSegment) {
     const std::vector<word_t> text_contents = {0x1111'1111, 0x2222'2222};  // addr 0x1000, 2 words
 
     std::vector<ElfFile::Segment> segments;

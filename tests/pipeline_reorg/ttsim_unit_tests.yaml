@@ -13,7 +13,7 @@
 #     category appears in the comma-separated list; on schedule the filter is
 #     bypassed and every entry runs.
 
-# Entries use sim_<arch> SKUs (sim_wormhole_b0, sim_blackhole) and run under
+# Entries use sim_<arch> SKUs (sim_wh_n150, sim_bh_p150) and run under
 # the ttsim simulator on ubuntu-latest; the impl invokes setup-ttsim.
 # See .github/actions/setup-ttsim/action.yml.
 
@@ -23,9 +23,9 @@
 # - name: ttnn compute-fused validation tests
 #   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations_compute_only/fused -xv --timeout=600'
 #   skus:
-#     sim_wormhole_b0:
+#     sim_wh_n150:
 #       timeout: 15
-#     sim_blackhole:
+#     sim_bh_p150:
 #       timeout: 15
 #   owner_id: U076Z1JJUQZ # Edwin Lee
 #   team: ttsim

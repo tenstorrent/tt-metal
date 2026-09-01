@@ -130,8 +130,8 @@ void kernel_main() {
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_out(dfb_out_id);
 
-    const uint32_t single_tile_size_bytes = get_tile_size(dfb_out_id);
-    const uint32_t input_mask_single_tile_size_bytes = get_tile_size(dfb_input_mask_id);
+    const uint32_t single_tile_size_bytes = dfb_out.get_tile_size();
+    const uint32_t input_mask_single_tile_size_bytes = dfb_input_mask.get_tile_size();
 #ifdef UNTILIZE_OUT
     constexpr uint32_t tile_hw = get_named_compile_time_arg_val("TILE_HW");
     constexpr uint32_t tile_height = tile_hw / tile_width;
@@ -284,7 +284,7 @@ void kernel_main() {
                 generate_bcast_col_scalar(CircularBuffer(eps_dfb_id), eps);
 
                 if constexpr (fuse_gamma) {
-                    const uint32_t gamma_tile_bytes = get_tile_size(dfb_gamma_id);
+                    const uint32_t gamma_tile_bytes = dfb_gamma.get_tile_size();
                     const uint32_t gamma_element_bytes = gamma_tile_bytes / tt::constants::TILE_HW;
                     const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
@@ -309,7 +309,7 @@ void kernel_main() {
                 }
 
                 if constexpr (fuse_beta) {
-                    const uint32_t beta_tile_bytes = get_tile_size(dfb_beta_id);
+                    const uint32_t beta_tile_bytes = dfb_beta.get_tile_size();
                     const uint32_t beta_element_bytes = beta_tile_bytes / tt::constants::TILE_HW;
                     const auto beta = TensorAccessor(beta_args, beta_addr);
 

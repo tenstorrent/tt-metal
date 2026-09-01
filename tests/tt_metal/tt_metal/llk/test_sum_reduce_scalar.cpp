@@ -50,10 +50,12 @@ struct SumReduceScalarConfig {
     bool dst_full_sync = false;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     uint32_t seed = 12345;
+    bool use_constant_input = false;
+    uint16_t constant_input_bits = 0;
+    bool expect_exact_zero = false;
 };
 
 bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumReduceScalarConfig& config) {
-    IDevice* device = mesh_device.get_devices()[0];
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord core = {0, 0};
 
@@ -68,16 +70,15 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
     // reader_unary_push_n walks a bank linearly, which would otherwise stride across
     // interleaved banks and hand the compute kernel the wrong tiles.
     const uint32_t input_byte_size = config.num_tiles * tile_byte_size;
-    tt_metal::InterleavedBufferConfig dram_config = {
-        .device = device,
-        .size = input_byte_size,
-        .page_size = input_byte_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
-    auto src_dram_buffer = CreateBuffer(dram_config);
+    auto src_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = input_byte_size},
+        {.page_size = input_byte_size, .buffer_type = tt_metal::BufferType::DRAM},
+        &mesh_device);
 
-    dram_config.size = out_tile_byte_size;
-    dram_config.page_size = out_tile_byte_size;
-    auto dst_dram_buffer = CreateBuffer(dram_config);
+    auto dst_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = out_tile_byte_size},
+        {.page_size = out_tile_byte_size, .buffer_type = tt_metal::BufferType::DRAM},
+        &mesh_device);
 
     uint32_t cb_tiles = std::max(8u, config.num_tiles);
     tt_metal::CircularBufferConfig cb_src_config =
@@ -134,10 +135,18 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
     SetRuntimeArgs(program, sum_reduce_kernel, core, {config.num_tiles, std::bit_cast<uint32_t>(config.scaler)});
 
     uint32_t byte_size = config.num_tiles * tile_byte_size;
-    auto packed_input = test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        0, 1.0f, byte_size / sizeof(bfloat16), config.seed);
+    std::vector<uint32_t> packed_input;
+    if (config.use_constant_input) {
+        const uint32_t packed_value =
+            (static_cast<uint32_t>(config.constant_input_bits) << 16) | config.constant_input_bits;
+        packed_input.assign(byte_size / sizeof(uint32_t), packed_value);
+    } else {
+        packed_input = test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+            0, 1.0f, byte_size / sizeof(bfloat16), config.seed);
+    }
 
-    tt_metal::detail::WriteToBuffer(*src_dram_buffer, packed_input);
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, packed_input, /*blocking=*/true);
 
     // Wrap the program into a MeshWorkload and dispatch via the mesh command queue.
     // This path works under both fast dispatch and slow dispatch, unlike detail::LaunchProgram.
@@ -145,22 +154,23 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     workload.add_program(device_range, std::move(program));
-    auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
     std::vector<uint32_t> result_vec;
-    tt_metal::detail::ReadFromBuffer(*dst_dram_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
 
     auto u16_src_vec = u16_from_u32_vector(packed_input);
 
     float golden_scalar = 0.0f;
-    for (uint16_t packed : u16_src_vec) {
-        golden_scalar += static_cast<float>(std::bit_cast<bfloat16>(packed));
+    if (!config.expect_exact_zero) {
+        for (uint16_t packed : u16_src_vec) {
+            golden_scalar += static_cast<float>(std::bit_cast<bfloat16>(packed));
+        }
+        // The scaler sits in SrcB for both GAPOOL passes (column accumulate and final
+        // collapse), so it multiplies the result twice.
+        golden_scalar *= config.scaler * config.scaler;
     }
-    // The scaler sits in SrcB for both GAPOOL passes (column accumulate and final
-    // collapse), so it multiplies the result twice.
-    golden_scalar *= config.scaler * config.scaler;
 
     // The reduced scalar lives in element [0] of the output tile, in the output CB's
     // format: raw fp32 with native fp32 DEST, otherwise the low bfloat16 of word 0.
@@ -192,6 +202,9 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
     const float rel_tol = (config.math_fidelity == MathFidelity::LoFi) ? 0.05f : 0.01f;
     const float abs_tol = 0.01f;
     const float tolerance = std::max(rel_tol * std::abs(golden_scalar), abs_tol);
+    if (config.expect_exact_zero) {
+        return device_scalar == 0.0f;
+    }
     return std::abs(device_scalar - golden_scalar) < tolerance;
 }
 
@@ -311,3 +324,20 @@ INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<bool>& info) {
         return info.param ? "SumReduceScalar_Scaler_2_fp32dest" : "SumReduceScalar_Scaler_0p5";
     });
+
+class SumReduceScalarZeroFlagTest : public LLKMeshDeviceSingleCardFixture {};
+
+TEST_F(SumReduceScalarZeroFlagTest, RestoresDefaultAfterCopyBeforeDenormalScaler) {
+    auto& mesh_device = *devices_[0];
+    constexpr uint16_t largest_finite_bfloat16 = 0x7f7f;
+    const float denormal_scaler = static_cast<float>(std::bit_cast<bfloat16>(uint16_t{1}));
+
+    ASSERT_TRUE(run_sum_reduce_scalar_test(
+        mesh_device,
+        {.num_tiles = 1,
+         .tile_height = 32,
+         .scaler = denormal_scaler,
+         .use_constant_input = true,
+         .constant_input_bits = largest_finite_bfloat16,
+         .expect_exact_zero = true}));
+}

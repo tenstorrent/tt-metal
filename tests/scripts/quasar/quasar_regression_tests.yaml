@@ -118,6 +118,40 @@ unit_tests_legacy:
     config: 2x3_DISPATCH
     back2back: true
 
+  - filter: "*MeshBufferHeightShardedL1*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*MeshBufferWidthShardedL1*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*TestWorkloadAcrossMultipleWorkerNodes*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*TestSubDevicePartitionsWorkerGrid*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*TestSubDeviceShardedL1BufferAllocation*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*TestSubDeviceStallGroup*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*TestSubDeviceManagerSwitching*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarFdsFixture*"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
 unit_tests_debug_tools:
   - filter: "*WatcherAssertTests*/DM2"
     config: 1x3

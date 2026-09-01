@@ -94,12 +94,13 @@ ALWI void softsign_tile_init() { MATH(SFPU_UNARY_INIT_FN(softsign, sfpu::init_so
 * | alpha_recip     | The reciprocal of the alpha parameter for the CELU function                | uint32_t |                                                       | True     |
 */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_celu,
-        (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
+        (APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
         idst,
         VectorMode::RC,
         alpha,
@@ -125,7 +126,7 @@ ALWI void celu_tile_init() { MATH(SFPU_UNARY_INIT(celu)); }
  * | param0          | The λ value for the Softshrink formulation                                 | uint32   |                                                       | True     |
  */
  // clang-format on
- ALWI void softshrink_tile(uint32_t idst, uint32_t param0) {
+ALWI void softshrink_tile(uint32_t idst, uint32_t param0) {
      MATH(SFPU_UNARY_CALL(
          DST_SYNC_MODE,
          DST_ACCUM_MODE,

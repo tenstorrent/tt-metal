@@ -153,7 +153,7 @@ inline void compute_single_stage_noc_addrs(
 
 /**
  * @brief Read a block of tiles from remote memory
- * to L1 for an input CB. Reserves space for a full
+ * to L1 for an input buffer. Reserves space for a full
  * block of tiles for synchronization purposes, but
  * only reads tiles that contain data
  *
@@ -167,7 +167,7 @@ inline void compute_single_stage_noc_addrs(
  * @param block Block object that defines the number of tiles to read
  */
 template <typename T, typename Block>
-inline void read_block_to_cb(
+inline void read_block_to_dfb(
     Noc& noc,
     DataflowBuffer& dfb,
     const T& addr,
@@ -175,7 +175,7 @@ inline void read_block_to_cb(
     const uint32_t offset,
     const Block& block) {
     // Need to reserve/push on intervals that nicely
-    // divide the CB size. The CB and block size has been
+    // divide the buffer size. The buffer and block size has been
     // configured to ensure this in the program setup
     dfb.reserve_back(block.full_block_size());
     uint32_t idx = 0;
@@ -196,7 +196,7 @@ inline void read_block_to_cb(
  * A full block slot (`block.full_block_size()`) is reserved/pushed for synchronization.
  */
 template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
-inline void read_row_major_block_to_cb(
+inline void read_row_major_block_to_dfb(
     Noc& noc,
     DataflowBuffer& dfb_in_rm,
     const T& src_a,
@@ -224,10 +224,10 @@ inline void read_row_major_block_to_cb(
 }
 
 /**
- * @brief Write one column block of row-major output data from a CB to DRAM.
+ * @brief Write one column block of row-major output data from a buffer to DRAM.
  */
 template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
-inline void write_row_major_block_from_cb(
+inline void write_row_major_block_from_dfb(
     Noc& noc,
     DataflowBuffer& dfb_out_rm,
     const T& dst_a,
@@ -265,7 +265,7 @@ inline void write_row_major_block_from_cb(
  * by the tilize step in the compute kernel. Handles the case where H is not tile-aligned.
  */
 template <typename T, uint32_t TILE_W, uint32_t TILE_H>
-inline void push_row_major_blocks_to_cb(
+inline void push_row_major_blocks_to_dfb(
     Noc& noc,
     DataflowBuffer& dfb_in_rm,
     const T& src_a,

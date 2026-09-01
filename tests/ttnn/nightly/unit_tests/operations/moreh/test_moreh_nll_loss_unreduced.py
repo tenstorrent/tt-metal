@@ -17,6 +17,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     to_ttnn,
 )
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def get_torch_tensors(shape, torch_dtype):
     C = shape[1]
@@ -182,6 +185,8 @@ def test_moreh_nll_loss_unreduced_callback(shape, device):
     torch.manual_seed(0)
 
     ignore_index = 1
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
 
     for i in range(4):
@@ -197,6 +202,9 @@ def test_moreh_nll_loss_unreduced_callback(shape, device):
         num_program_cache_entries_list.append(device.num_program_cache_entries())
 
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    # Guard that the op registers cached programs at all; the equality checks alone
+    # would still pass even if it never does.
+    assert num_program_cache_entries_list[0] > 0
     assert (
         num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
         and num_program_cache_entries_list[2] == num_program_cache_entries_list[3]
@@ -241,6 +249,8 @@ def test_moreh_nll_loss_unreduced_backward(
 def test_moreh_nll_loss_unreduced_backward_test_callback(shape, none_weight, device, ignore_index):
     torch.manual_seed(0)
 
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(4):
         if i < 2:
@@ -255,6 +265,9 @@ def test_moreh_nll_loss_unreduced_backward_test_callback(shape, none_weight, dev
         num_program_cache_entries_list.append(device.num_program_cache_entries())
 
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    # Guard that the op registers cached programs at all; the equality checks alone
+    # would still pass even if it never does.
+    assert num_program_cache_entries_list[0] > 0
     assert (
         num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
         and num_program_cache_entries_list[2] == num_program_cache_entries_list[3]

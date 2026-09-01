@@ -21,7 +21,14 @@ Imports no device libraries, so it loads without hardware.
 
 from dataclasses import dataclass
 
-from .schema import MEAN, STD, stat_column
+from .schema import (
+    MEAN,
+    METRIC_BASES,
+    RUN_TYPE_NAMES,
+    STD,
+    metric_column,
+    stat_column,
+)
 
 
 @dataclass(frozen=True)
@@ -54,8 +61,8 @@ _TIMING_COLUMNS = [
 # ── The one published table: every column, headers + provenance ─────────────
 # This IS the table handed to the data team; the Parquet is written with it. Each
 # column's `origin` says who fills it — "test" (default) or "ci".
-# TODO(counters/Quasar, deferred — see #51249): counter/metric and Quasar columns
-# join here as nullable once a counter/Quasar run captures their exact names.
+# Counter metrics are deliberately not here, see DROPPED_COLUMNS below. Quasar has
+# its own published table in wide_schema_quasar.py — do not mix Quasar columns in.
 DB_SCHEMA = [
     Column("marker", "string", False, "identity"),
     # formats
@@ -64,7 +71,8 @@ DB_SCHEMA = [
     Column("formats.output", "string", True, "formats"),
     Column("formats.register_A", "string", True, "formats"),
     Column("formats.register_B", "string", True, "formats"),
-    Column("formats.sfpu_math", "string", True, "formats"),
+    Column("formats.sfpu_src", "string", True, "formats"),
+    Column("formats.sfpu_dst", "string", True, "formats"),
     # flags
     Column("dest_acc", "string", True, "flags"),
     Column("speed_of_light", "bool", True, "flags"),
@@ -73,7 +81,9 @@ DB_SCHEMA = [
     Column("loop_factor", "int64", True, "key"),
     Column("tile_cnt", "int64", True, "key"),
     # configuration
+    Column("alpha_bits", "int64", True, "configuration"),
     Column("approx_mode", "string", True, "configuration"),
+    Column("beta_bits", "int64", True, "configuration"),
     Column("binop_mathop", "string", True, "configuration"),
     Column("block_ct_dim", "int64", True, "configuration"),
     Column("block_rt_dim", "int64", True, "configuration"),
@@ -114,6 +124,7 @@ DB_SCHEMA = [
     Column("pool_type", "string", True, "configuration"),
     Column("r_dimm", "int64", True, "configuration"),
     Column("reduce_pool_type", "string", True, "configuration"),
+    Column("relu_config", "int64", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
     Column("stable_sort", "string", True, "configuration"),
     Column("ternary_mathop", "string", True, "configuration"),
@@ -146,11 +157,18 @@ MANDATORY = [c.name for c in DB_SCHEMA if not c.nullable]
 # Columns a test emits but the published table intentionally drops. The converter
 # removes them instead of failing on an unknown column.
 #   TEXT_SIZE(...)  — per-stage ELF code size; not used by the gate
+#   <RUN_TYPE>_<metric>  — counter-derived metrics, only produced under
+#   --enable-perf-counters, which no pipeline passes
 DROPPED_COLUMNS = {
     "TEXT_SIZE(L1_TO_L1)",
     "TEXT_SIZE(MATH_ISOLATE)",
     "TEXT_SIZE(PACK_ISOLATE)",
     "TEXT_SIZE(UNPACK_ISOLATE)",
+} | {
+    metric_column(run_type, base)
+    for run_type in RUN_TYPE_NAMES
+    for metric in METRIC_BASES
+    for base in (metric, stat_column(metric, MEAN), stat_column(metric, STD))
 }
 
 # Row identity: one test config in one run. The sweep-parameter columns (which

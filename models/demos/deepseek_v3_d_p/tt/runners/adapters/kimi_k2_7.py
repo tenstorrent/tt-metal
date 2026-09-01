@@ -27,3 +27,5 @@ class KimiK27Adapter(KimiK26Adapter):
     test_prefill_trace_default = (
         "/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320"
     )
+    # Not inherited from Kimi-K2.6: different checkpoint, and K2.7's trace has no mla_io/ streams.
+    mla_trace_defaults = ()

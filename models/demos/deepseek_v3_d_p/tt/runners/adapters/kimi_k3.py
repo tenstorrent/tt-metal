@@ -18,8 +18,10 @@ and ``allocate_kv_cache`` are inherited but would size the KV cache to ``params.
 is wrong for 24-of-93; they are overridden to fail loudly rather than mislead.
 
 MoE scope (issue #51336): the latent-MoE structure -- routed experts at the reduced 3584 hidden,
-896 experts / top-16, a latent RMSNorm, and one shared expert at 6144. Two deliberate limits:
-  * the device path runs **SiLU**, not the checkpoint's SiTU-GLU, until the kernel in #51335 lands;
+896 experts / top-16, a latent RMSNorm, and one shared expert at 6144. Every FFN site runs the
+checkpoint's **SiTU-GLU** on device: the routed experts through the fused kernel (#51351), the
+shared expert and the layer-0 dense FFN through ttnn-level softcap/sigmoid/multiply (#53625), which
+is correct but not yet tuned at their 6144 / 33792 widths. One deliberate limit remains:
   * only the **gate** uses real checkpoint weights. Experts, shared expert and the latent
     projections use seeded random weights, because everything routed is MXFP4 and no dequantizer
     exists yet. Device PCC is therefore TT-vs-torch on identical seeded weights.
@@ -52,24 +54,34 @@ class KimiK3Adapter(MLAPrefillAdapter):
     hf_repo_id = "moonshotai/Kimi-K3"
     env_var = "KIMI_K3_HF_MODEL"
     default_local_path = Path("models/demos/deepseek_v3_d_p/reference/kimi_k3")
-    num_layers_to_download = 1
+    # The download fallback fetches layers 0..N-1, and pretrained_mla_layer is 3.
+    num_layers_to_download = 4
     ref_cache_env = "TT_KIMI_K3_PREFILL_HOST_REF_CACHE"
     mla_ref_cache_env = "KIMI_K3_MLA_REF_CACHE"
     ttnn_cache_env = "TT_KIMI_K3_PREFILL_TTNN_CACHE"
     # Loading the staged checkpoint wholesale needs an MXFP4 -> bf16 dequantizer that does not exist
-    # yet, so the pretrained fixtures stay skipped. The MoE gate is exempt: it is unquantized and read
+    # yet, so the full-transformer fixtures stay skipped. The MoE gate is exempt: it is unquantized and read
     # through a prefix-filtered safe_open.
     supports_pretrained = False
+    # MLA alone is loadable: quantization_config.ignore covers self_attn, so those weights are bf16.
+    # The first full-attention layer, not 0 -- layers 0-2 are KDA and hold no MLA tensors.
+    pretrained_mla_layer = KimiK3Config.mla_layer_ids()[0]
+    mla_trace_defaults = ("/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_k3_100k_vllm",)
     # Left as None: shared_path feeds conftest's state_dict fixture, which pytest would resolve --
     # loading all 1.5 TB -- before the supports_pretrained skip in the fixture body runs.
     shared_path = None
 
     # Device vs upstream KimiSparseMoeBlock. Held at test_kimi_k3_moe's final_output_pcc: the two
-    # compare the same device tensor against references that agree to 1.7e-5, so they measure the
-    # same thing and cannot carry different bars. The old 0.99 was measured on 2x4 (0.995692) and
-    # does not transfer -- 8x4 spreads 896 experts over 32 chips instead of 8, so the top-16 combine
-    # accumulates across 4x as many chips in the bf8 latent space, and both checks land together at
-    # 0.9694 (reference 0.969434, final_output 0.969454). 0.965 keeps the usual ~0.005 of margin.
+    # compare the same device tensor against references that agree to 2e-5, so they measure the same
+    # thing and cannot carry different bars. The 8x4 value is 0.9696 (reference 0.969567,
+    # final_output 0.969585) -- 8x4 spreads 896 experts over 32 chips instead of 8, so the top-16
+    # combine accumulates across 4x as many chips in the bf8 latent space than on the 2x4 proxy
+    # (0.995693). 0.965 keeps the usual ~0.005 of margin.
+    #
+    # Moving the routed experts onto SiTU-GLU did not cost anything here: 8x4 went 0.969434 ->
+    # 0.969567 and 2x4 0.995692 -> 0.995693. K3's realistic activations sit well inside both tanh
+    # caps, so the bf4 accuracy cost that _K3_SATURATION_CASES documents does not arise at these
+    # scales.
     moe_pcc_threshold = 0.965
 
     @property
@@ -88,9 +100,8 @@ class KimiK3Adapter(MLAPrefillAdapter):
     def reference_moe_cls(self):
         """K3's MoE block: DeepSeek-V3's, wrapped in the shared low-rank latent projection pair.
 
-        Note this reference computes **SiTU-GLU**, which no TT kernel implements yet (#51335). It is
-        therefore the truth model for the host-side latent-structure test, not for device PCC -- the
-        device runs SiLU, so device comparisons must use a SiLU-configured reference on both sides.
+        The block applies one activation to routed and shared experts alike, which matches the
+        device: ``run_reference_moe`` builds it with hidden_act="situ" for both halves.
         """
         from models.demos.deepseek_v3_d_p.reference.kimi_k3.modeling_kimi_moe import KimiSparseMoeBlock
 

@@ -13,8 +13,8 @@
 //
 // Stimuli generator buffers and the perf-counter region are kept in this header
 // so that the disjoint ranges are visible side-by-side and any future allocation
-// has to be reconciled against both. The perf-counter macros are only defined in
-// the WC build (counter machinery in counters.h is gated by the same flag).
+// has to be reconciled against both. The perf-counter macros are only defined when perf
+// counters are compiled (the counter machinery in counters.h is gated by the same flag).
 
 // FIXME: this shouldn't be statically allocated
 constexpr std::uint32_t PERF_INPUT_A = 0x21000;
@@ -43,7 +43,8 @@ enum class PerfRunType
     UNPACK_ISOLATE,
     MATH_ISOLATE,
     PACK_ISOLATE,
-    L1_CONGESTION
+    L1_CONGESTION,
+    SFPU_ISOLATE
 };
 
 inline void _perf_unpack_set_valid(std::uint32_t source)
@@ -120,8 +121,6 @@ inline void _perf_math_loop_clear_valid(std::uint32_t iterations)
 
 inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim)
 {
-    // fixme: add quasar support
-
     for (std::uint32_t loop = 0; loop < loop_factor; loop++)
     {
         for (std::uint32_t j = 0; j < kt_dim; j++)

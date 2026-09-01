@@ -49,10 +49,10 @@ template <
 inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true) {
     // DPRINT("llk_math_eltwise_binary: dst_index = {}, max dest tiles = {}\n",
     //     dst_index,
-    //     get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>());
+    //     get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>());
 
     LLK_ASSERT(
-        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        (dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "llk_math_eltwise_binary: dst index exceeds available dest register capacity. Uncomment the DPRINT "
         "block above and enable DPRINT support to inspect the dst index and max dest tile values.");
 
@@ -76,10 +76,10 @@ inline void llk_math_eltwise_binary(
     const std::uint32_t operand_A, const std::uint32_t operand_B, uint dst_index, const bool clear_fp32_dst_acc) {
     // DPRINT("llk_math_eltwise_binary: dst_index = {}, max dest tiles = {}\n",
     //     dst_index,
-    //     get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>());
+    //     get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>());
 
     LLK_ASSERT(
-        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+        (dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "llk_math_eltwise_binary: dst index exceeds available dest register capacity. Uncomment the DPRINT "
         "block above and enable DPRINT support to inspect the dst index and max dest tile values.");
 

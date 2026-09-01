@@ -18,10 +18,15 @@
 #include "tt_stl/assert.hpp"
 #include "fmt/format.h"
 
-// Access to internal API: BuildEnvManager, CompileProgram, get_kernel
+// Access to internal API: BuildEnvManager, ProgramImpl, get_kernel
 #include "jit_build/build_env_manager.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
+
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <filesystem>
 
 namespace tt::tt_metal {
 
@@ -60,10 +65,9 @@ protected:
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         for (auto& [device_id, device] : id_to_device_) {
             for (const auto& logical_core : device->get_devices()[0]->get_inactive_ethernet_cores()) {
-                CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
-                    device->get_devices()[0]->id(), logical_core, CoreType::ETH);
-                cluster.assert_risc_reset_at_core(
-                    tt_cxy_pair(device->get_devices()[0]->id(), virtual_core), tt::umd::RiscType::ALL);
+                CoreCoord virtual_core =
+                    cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
+                cluster.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
             }
         }
 
@@ -321,41 +325,40 @@ protected:
 public:
     std::string dprint_file_name;
 
+    // Hardware config for a single-threaded data-movement kernel, portable across generations.
+    static experimental::DataMovementHardwareConfig SingleThreadDmConfig(tt::ARCH arch) {
+        if (arch == tt::ARCH::QUASAR) {
+            return experimental::DataMovementGen2Config{};
+        }
+        return experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+    }
+
+    // Compiles the kernel and returns the path to its ELF, so the caller can inspect the binary.
     std::string CompileKernel(const std::string& kernel_path, stl::Span<const uint32_t> runtime_args = {}) {
         // Get the first available mesh device
         auto mesh_device = this->devices_.at(0);
 
-        // Set up program
-        distributed::MeshWorkload workload;
-        auto zero_coord = distributed::MeshCoordinate(0, 0);
-        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = Program();
-        workload.add_program(device_range, std::move(program));
-        auto& program_ = workload.get_programs().at(device_range);
+        // MakeProgramFromSpec compiles eagerly, so the ELF exists on disk once it returns and a
+        // build failure surfaces here as a throw (which the compilation-failure tests rely on).
+        auto spec = MakeSingleDmPrintSpec(mesh_device->arch(), kernel_path, runtime_args.size());
+        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+        SetSingleDmPrintArgs(program, runtime_args);
 
-        // This tests prints only on a single core
-        constexpr CoreCoord core = {0, 0};  // Print on first core only
-        DataMovementConfig config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
-        KernelHandle kernel_handle = CreateKernel(program_, kernel_path, core, config);
-
-        SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
         auto* device = mesh_device->get_devices()[0];
-        detail::CompileProgram(device, program_);
+        program.impl().compile(mesh_device.get());
 
-        // Find compiled kernel and extract format string from it to compare with expected_format_message
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
         uint32_t tensix_core_type = hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX);
         uint32_t dm_class_idx = enchantum::to_underlying(tt::tt_metal::HalProcessorClassType::DM);
 
-        int riscv_id = static_cast<std::underlying_type_t<tt::tt_metal::DataMovementProcessor>>(config.processor);
+        const auto& kernel = program.impl().get_kernel_by_spec_name(kPrintKernelName.get());
+        const int riscv_id = static_cast<int>(kernel->get_kernel_processor_type(0));
 
         const auto& build_state =
             tt::tt_metal::BuildEnvManager::get_instance(extract_context_id(device))
                 .get_kernel_build_state(device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
-        const auto& kernel = program_.impl().get_kernel(kernel_handle);
-        const std::string full_kernel_name = kernel->get_full_kernel_name();
-        return build_state.get_target_out_path(full_kernel_name);
+        return build_state.get_target_out_path(kernel->get_full_kernel_name());
     }
 
     // A function to run a program, according to which dispatch mode is set.
@@ -363,20 +366,14 @@ public:
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         const std::string& kernel_path,
         stl::Span<const uint32_t> runtime_args = {}) {
-        // Set up program
+        auto spec = MakeSingleDmPrintSpec(mesh_device->arch(), kernel_path, runtime_args.size());
+        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+        SetSingleDmPrintArgs(program, runtime_args);
+
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = Program();
         workload.add_program(device_range, std::move(program));
-        auto& program_ = workload.get_programs().at(device_range);
-
-        // This tests prints only on a single core
-        constexpr CoreCoord core = {0, 0};  // Print on first core only
-        DataMovementConfig config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
-        KernelHandle kernel_handle = CreateKernel(program_, kernel_path, core, config);
-
-        SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
 
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
@@ -397,6 +394,43 @@ public:
         const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
         DebugToolsMeshFixture::RunTestOnDevice(run_function, mesh_device);
         MetalContext::instance().dprint_server()->clear_log_file();
+    }
+
+private:
+    static constexpr experimental::NodeCoord kPrintNode{0, 0};
+    static inline const experimental::KernelSpecName kPrintKernelName{"dprint"};
+
+    // A one-kernel data-movement ProgramSpec for the DPRINT tests.
+    static experimental::ProgramSpec MakeSingleDmPrintSpec(
+        tt::ARCH arch, const std::string& kernel_path, size_t num_args) {
+        return experimental::ProgramSpec{
+            .name = "dprint",
+            .kernels = {experimental::KernelSpec{
+                .unique_id = kPrintKernelName,
+                .source = std::filesystem::path{kernel_path},
+                .num_threads = 1,
+                .hw_config = SingleThreadDmConfig(arch),
+                .advanced_options =
+                    experimental::KernelAdvancedOptions{.num_runtime_varargs = static_cast<uint32_t>(num_args)},
+            }},
+            .work_units = {experimental::WorkUnitSpec{
+                .name = "main", .kernels = {kPrintKernelName}, .target_nodes = kPrintNode}},
+        };
+    }
+
+    // SetProgramRunArgs requires an entry for every kernel that declares runtime args and rejects
+    // entries for kernels that declare none, so this is a no-op when the kernel takes no arguments.
+    static void SetSingleDmPrintArgs(Program& program, stl::Span<const uint32_t> runtime_args) {
+        if (runtime_args.empty()) {
+            return;
+        }
+        experimental::ProgramRunArgs::KernelRunArgs kernel_run_args{.kernel = kPrintKernelName};
+        kernel_run_args.advanced_options.runtime_varargs[kPrintNode] =
+            std::vector<uint32_t>(runtime_args.begin(), runtime_args.end());
+
+        experimental::ProgramRunArgs run_args;
+        run_args.kernel_run_args.push_back(std::move(kernel_run_args));
+        experimental::SetProgramRunArgs(program, run_args);
     }
 };
 

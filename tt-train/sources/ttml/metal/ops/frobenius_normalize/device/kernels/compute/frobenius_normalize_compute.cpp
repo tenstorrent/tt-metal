@@ -56,9 +56,8 @@ void kernel_main() {
     constexpr uint32_t accum_reg = 0;
     constexpr uint32_t work_reg = 1;
 
-    init_sfpu(cb_input, cb_output);
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
     compute_kernel_hw_startup(cb_input, cb_input, cb_output);
+    copy_init(cb_input);
 
     // =========================================================================
     // Phase 1: Square and accumulate all input tiles into one FP32 tile
@@ -69,7 +68,7 @@ void kernel_main() {
             for (uint32_t i = 0; i < num_tiles_per_core; ++i) {
                 cb_wait_front(cb_input, 1);
                 const auto reg = (i == 0) ? accum_reg : work_reg;
-                copy_tile_init(cb_input);
+                copy_init(cb_input);
                 copy_tile(cb_input, 0, reg);
                 mul_binary_tile_init();
                 mul_binary_tile(reg, reg, reg);
@@ -93,10 +92,13 @@ void kernel_main() {
     {
         cb_wait_front(cb_sq_acc, 1);
 
-        init_sfpu(cb_sq_acc, cb_sq_partial);
+        // Mid-kernel phase switch (hw startup already done at kernel top): reconfig SrcA + Pack for the
+        // new operands instead of a mid-kernel init_sfpu.
+        reconfig_data_format_srca(cb_sq_acc);
+        pack_reconfig_data_format(cb_sq_partial);
 
         tile_regs_acquire();
-        copy_tile_init(cb_sq_acc);
+        copy_init(cb_sq_acc);
         copy_tile(cb_sq_acc, 0, 0);
         cb_pop_front(cb_sq_acc, 1);
 
@@ -118,7 +120,7 @@ void kernel_main() {
             cb_wait_front(cb_recv, 1);
 
             tile_regs_acquire();
-            copy_tile_init(cb_recv);
+            copy_init(cb_recv);
             copy_tile(cb_recv, 0, 0);
             cb_pop_front(cb_recv, 1);
 
@@ -147,9 +149,15 @@ void kernel_main() {
         const uint32_t norm_u32 = read_tile_value(cb_norm, 0, 0);
         cb_pop_front(cb_norm, 1);
 
-        init_sfpu(cb_input, cb_output);
+        // Mid-kernel phase switch (hw startup already done at kernel top): reconfig Pack for the new
+        // output, then re-point SrcA + copy_init for the final scaled copy of the input.
+        pack_reconfig_data_format(cb_output);
 
-        copy_tile_to_dst_init_short_with_dt(cb_output, cb_input);
+        // SrcA currently holds the FP32 reduce operand, so set it to the input format unconditionally: a
+        // format-conditional reconfig keyed on the output CB would skip when input and output share a format
+        // and leave SrcA reading the input as FP32.
+        reconfig_data_format_srca(cb_input);
+        copy_init(cb_input);
         binop_with_scalar_tile_init();
 
         for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_core; tile_idx += block_size) {

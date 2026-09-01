@@ -18,7 +18,8 @@
 void kernel_main() {
     constexpr uint32_t per_core_tile_cnt = get_arg(args::per_core_tile_cnt);
 
-    unary_op_init_common(0, 1);
+    compute_kernel_hw_startup(0, 1);
+    copy_init(0);
 
 #ifdef PACK_RELU
     pack_relu_config(ReluConfig::from_packed(get_arg(args::relu_config)));

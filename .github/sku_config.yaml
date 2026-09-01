@@ -192,6 +192,12 @@ skus:
     runs_on:
       - exabox-multihost-ci-sc4
 
+  # Like bh_sc4, but high-power pool (exabox.tenstorrent.com/power=14kw).
+  # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
+  bh_sc4_high_power:
+    runs_on:
+      - exabox-multihost-ci-sc4-hp
+
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc16:
     runs_on:
@@ -201,6 +207,15 @@ skus:
     runs_on:
       - tt-ubuntu-2204-medium-stable
     merge_queue_sku: cpu_medium_prio
+
+  # GitHub-hosted CPU-only runner: no Tenstorrent device, no Harbor access.
+  # Used for host-only (CPU_-prefixed) subsets of device test binaries so scarce
+  # self-hosted device runners only execute tests that actually need silicon.
+  # No merge_queue_sku: GitHub-hosted capacity is not a contended prio pool
+  # (same as the sim_* ubuntu-latest SKUs below).
+  github_hosted_cpu:
+    runs_on:
+      - ubuntu-latest
 
   # ---------------------------------------------------------------------------
   # Merge-queue prio SKUs (merge_group events only).
@@ -219,20 +234,67 @@ skus:
     runs_on:
       - tt-ubuntu-2204-medium-prio-stable
 
-  # Synthetic CPU SKUs for ttsim simulator jobs. Tests using these SKUs run on
-  # ubuntu-latest; the impl is expected to invoke .github/actions/setup-ttsim
-  # gated on `startsWith(sku, 'sim_')` to download the matching libttsim_<arch>.so
-  # and export the simulator env vars. The arch suffix on the SKU name selects
-  # the ttsim binary (sim_wormhole_b0 → libttsim_wh.so, sim_blackhole → libttsim_bh.so).
-  sim_wormhole_b0:
+  # Synthetic CPU SKUs for ttsim simulator jobs. The impl invokes
+  # .github/actions/setup-ttsim gated on `startsWith(sku, 'sim_')`; that action reads
+  # ttsim_lib below to pick which simulator binary to install, and derives the soc
+  # descriptor from its wh/bh prefix. Workflows never name a libttsim binary — add or
+  # retarget a SKU here and every pipeline that uses it follows.
+  #
+  # Each sim SKU mirrors one HW SKU's processor count, so a test can list the sim SKU
+  # alongside the HW SKU it stands in for:
+  #   ttsim_lib: (Required) libttsim binary from the tenstorrent/ttsim release pinned
+  #     in tt_metal/ttsim-version. The fetch-ttsim job downloads libttsim_*.so wholesale,
+  #     so a new lib needs no workflow change.
+  sim_wh_n150:
     runs_on:
       - ubuntu-latest
-  sim_blackhole:
+    ttsim_lib: libttsim_wh.so
+  sim_wh_n300:
     runs_on:
       - ubuntu-latest
-  sim_wormhole_b0_galaxy:
+    ttsim_lib: libttsim_wh_x2.so
+  sim_wh_llmbox:
     runs_on:
       - tt-ubuntu-2204-large-stable
-  sim_blackhole_galaxy:
+    ttsim_lib: libttsim_wh_x8.so
+  sim_wh_galaxy:
     runs_on:
       - tt-ubuntu-2204-large-stable
+    ttsim_lib: libttsim_wh_x32.so
+  sim_bh_p150:
+    runs_on:
+      - ubuntu-latest
+    ttsim_lib: libttsim_bh.so
+  sim_bh_p300:
+    runs_on:
+      - ubuntu-latest
+    ttsim_lib: libttsim_bh_x2.so
+  sim_bh_quietbox_2:
+    runs_on:
+      - tt-ubuntu-2204-large-stable
+    ttsim_lib: libttsim_bh_x4.so
+  sim_bh_galaxy:
+    runs_on:
+      - tt-ubuntu-2204-large-stable
+    ttsim_lib: libttsim_bh_x32.so
+  sim_quasar:
+    runs_on:
+      - ubuntu-latest
+    ttsim_lib: libttsim_qsr.so
+
+  # _xl variants: same simulator binary as their base SKU, but on a bigger runner for
+  # pipelines whose suite is too large for ubuntu-latest (e.g. the full LLK regression,
+  # tens of thousands of collected tests under xdist + per-test forking — ubuntu-latest
+  # OOMs or fails to fork workers, see llk_ttsim_weekly.yaml).
+  sim_wh_n150_xl:
+    runs_on:
+      - tt-ubuntu-2204-xlarge-stable
+    ttsim_lib: libttsim_wh.so
+  sim_bh_p150_xl:
+    runs_on:
+      - tt-ubuntu-2204-xlarge-stable
+    ttsim_lib: libttsim_bh.so
+  sim_quasar_xl:
+    runs_on:
+      - tt-ubuntu-2204-xlarge-stable
+    ttsim_lib: libttsim_qsr.so

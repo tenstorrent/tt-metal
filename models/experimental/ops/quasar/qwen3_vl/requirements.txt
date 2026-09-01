@@ -1,0 +1,6 @@
+# git+https://github.com/huggingface/transformers@27ef46e84662b74cbd6e228d0bb4ddcde46057b3
+accelerate >= 0.27.2
+torch>=2.6.0
+torchvision>=0.21.0
+qwen-vl-utils
+nltk

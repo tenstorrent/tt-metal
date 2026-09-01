@@ -70,7 +70,6 @@ def _run_tilize(mesh_device, *, m_rows, k_cols, target_rows_per_core=256):
     assert_with_pcc(torch_in, out.float(), pcc=PCC)
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "m_rows, k_cols",

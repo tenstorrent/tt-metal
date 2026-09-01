@@ -1,0 +1,23 @@
+# This file defines the test matrix for the LLK ttsim weekly tests pipelines.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run (env vars must be inlined).
+#   skus: A mapping of SKU names to their configuration:
+#     timeout: Job timeout in minutes.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: LLK ttsim regression
+  cmd: cd tt_metal/tt-llk/tests && ./run_ttsim_regression.sh -n 4
+  skus:
+    sim_wh_n150_xl:
+      timeout: 75
+    sim_bh_p150_xl:
+      timeout: 240
+    sim_quasar_xl:
+      timeout: 180
+  team: llk
+  owner_id: U09UC143684 # Nemanja Divnic

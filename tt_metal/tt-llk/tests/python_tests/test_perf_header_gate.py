@@ -33,6 +33,57 @@ from perf_schema_derive import (
 # ── Per-test schema catalog (WH/BH) ───────────────────────────────────
 
 
+def _test_name_alias_problems(catalog) -> list:
+    """Every catalog entry must have ``test_name_aliases`` with current -> current.
+
+    Extra keys are previous names. Every value must equal the catalog key, so
+    renaming a test in place without editing this map fails: the identity
+    entry would still point at the old name.
+    """
+    problems = []
+    claimed = {}
+    for name, entry in sorted(catalog.items()):
+        if "test_name_aliases" not in entry:
+            problems.append(
+                f"  '{name}': missing test_name_aliases. Add "
+                f"{{'{name}': '{name}'}} and record any previous names."
+            )
+            continue
+        aliases = entry["test_name_aliases"]
+        if not isinstance(aliases, dict) or not aliases:
+            problems.append(
+                f"  '{name}': test_name_aliases must be a non-empty map "
+                f"(old -> new), starting with '{name}' -> '{name}'."
+            )
+            continue
+        if aliases.get(name) != name:
+            problems.append(
+                f"  '{name}': test_name_aliases must include the current "
+                f"name '{name}' -> '{name}'. Update this map when the test "
+                f"is renamed."
+            )
+        for old, new in aliases.items():
+            if new != name:
+                problems.append(
+                    f"  '{name}': test_name_aliases maps '{old}' -> '{new}', "
+                    f"but this catalog entry is '{name}'. Every new name must "
+                    f"match the current test name."
+                )
+            if old != name and old in catalog:
+                problems.append(
+                    f"  '{name}': test_name_aliases old name '{old}' is still "
+                    f"a catalog key. Point aliases at the surviving name only."
+                )
+            owner = claimed.get(old)
+            if owner is not None and owner != name:
+                problems.append(
+                    f"  '{name}': test_name_aliases old name '{old}' already "
+                    f"maps to '{owner}'."
+                )
+            claimed[old] = name
+    return problems
+
+
 def _assert_schemas_match(catalog, live, arch):
     problems = []
     for name, cols in sorted(live.items()):
@@ -54,6 +105,7 @@ def _assert_schemas_match(catalog, live, arch):
             f"  '{name}': in catalog but no longer a {arch} perf test "
             f"(renamed or deleted?). Remove its catalog entry."
         )
+    problems.extend(_test_name_alias_problems(catalog))
 
     msg = [
         f"{arch} per-perf-test CSV schema(s) drifted from "
@@ -62,7 +114,9 @@ def _assert_schemas_match(catalog, live, arch):
         *problems,
         "",
         "If intentional: update that test's 'columns', bump its 'version', and "
-        "for a renamed column add an 'aliases' entry (old -> new).",
+        "for a renamed column add an 'aliases' entry (old -> new). For a renamed "
+        "test, update 'test_name_aliases' so the current name maps to itself and "
+        "every previous name maps to the current name.",
     ]
     assert not problems, "\n".join(msg)
 
@@ -79,6 +133,92 @@ def test_perf_test_schemas_match_qsr():
     _assert_schemas_match(
         ps.PERF_TEST_SCHEMAS_QSR, derive_perf_test_schemas(quasar=True), "Quasar"
     )
+
+
+def test_test_name_aliases_align_with_catalog_key():
+    catalog = {
+        "perf_new": {
+            "version": 1,
+            "columns": ["marker"],
+            "test_name_aliases": {
+                "perf_new": "perf_new",
+                "perf_old": "perf_new",
+                "perf_older": "perf_new",
+            },
+        },
+        "perf_untouched": {
+            "version": 1,
+            "columns": ["marker"],
+            "test_name_aliases": {"perf_untouched": "perf_untouched"},
+        },
+    }
+    assert _test_name_alias_problems(catalog) == []
+
+
+def test_test_name_aliases_reject_misaligned_new_name():
+    catalog = {
+        "perf_new": {
+            "version": 1,
+            "columns": ["marker"],
+            "test_name_aliases": {
+                "perf_new": "perf_new",
+                "perf_old": "perf_wrong",
+            },
+        },
+    }
+    problems = _test_name_alias_problems(catalog)
+    assert len(problems) == 1
+    assert "perf_old" in problems[0]
+    assert "perf_wrong" in problems[0]
+    assert "perf_new" in problems[0]
+
+
+def test_test_name_aliases_require_current_identity():
+    catalog = {
+        "perf_new": {
+            "version": 1,
+            "columns": ["marker"],
+            "test_name_aliases": {"perf_old": "perf_new"},
+        },
+    }
+    problems = _test_name_alias_problems(catalog)
+    assert any("must include the current name" in p for p in problems)
+
+
+def test_test_name_aliases_reject_rename_without_updating_map():
+    # Catalog key renamed in place; map still identity of the old name.
+    catalog = {
+        "perf_new": {
+            "version": 1,
+            "columns": ["marker"],
+            "test_name_aliases": {"perf_old": "perf_old"},
+        },
+    }
+    problems = _test_name_alias_problems(catalog)
+    assert any("must include the current name" in p for p in problems)
+    assert any("perf_old" in p and "perf_new" in p for p in problems)
+
+
+def test_test_name_aliases_reject_missing_and_stale_key():
+    catalog = {
+        "perf_new": {"version": 1, "columns": ["marker"]},
+        "perf_still_live": {
+            "version": 1,
+            "columns": ["marker"],
+            "test_name_aliases": {
+                "perf_still_live": "perf_still_live",
+                "perf_other": "perf_still_live",
+            },
+        },
+        "perf_other": {
+            "version": 1,
+            "columns": ["marker"],
+            "test_name_aliases": {"perf_other": "perf_other"},
+        },
+    }
+    problems = _test_name_alias_problems(catalog)
+    assert any("missing test_name_aliases" in p for p in problems)
+    assert any("still a catalog key" in p for p in problems)
 
 
 # ── Metric-vocabulary drift (global) ──────────────────────────────────

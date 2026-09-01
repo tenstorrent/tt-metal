@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // To run (from the tt-metal repo root, after an emule build):
-//   build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Metadata_*"
+//   build_emule/test/tt_metal/unit_tests_api --gtest_filter="UnitMeshFixture.Metadata_*"
 
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -12,6 +12,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -31,11 +32,9 @@ namespace tt::tt_metal {
 // underlying detection is validate_circular_buffer_region in ProgramImpl; our
 // wrapper in ConfigureDeviceWithProgram translates its TT_THROW into an
 // ASAN-style abort for emule.
-TEST_F(MeshDeviceFixture, Metadata_CB_Tensor_Clash_SanityCheck) {
+TEST_F(UnitMeshFixture, Metadata_CB_Tensor_Clash_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto& mesh_device = this->devices_.at(0);
-    auto* device = mesh_device->get_devices()[0];
     CoreCoord logical_core = {0, 0};
 
     // Pin a low lowest_occupied_compute_l1_address by allocating a 1 MB L1
@@ -46,7 +45,7 @@ TEST_F(MeshDeviceFixture, Metadata_CB_Tensor_Clash_SanityCheck) {
     distributed::DeviceLocalBufferConfig l1_local_config{
         .page_size = l1_buffer_size, .buffer_type = BufferType::L1, .bottom_up = false};
     distributed::ReplicatedBufferConfig l1_buf_config{.size = l1_buffer_size};
-    auto l1_buffer = distributed::MeshBuffer::create(l1_buf_config, l1_local_config, mesh_device.get());
+    auto l1_buffer = distributed::MeshBuffer::create(l1_buf_config, l1_local_config, &this->device());
 
     // CB sized to overrun the buffer's lower edge.
     Program program = CreateProgram();
@@ -68,7 +67,9 @@ TEST_F(MeshDeviceFixture, Metadata_CB_Tensor_Clash_SanityCheck) {
         logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    EXPECT_DEATH(detail::LaunchProgram(device, program), ".*\\[ASAN ERROR\\] Metadata Overflow.*");
+    EXPECT_DEATH(
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        ".*\\[ASAN ERROR\\] Metadata Overflow.*");
 }
 
 // Directly exercises the emule-only static KERNEL_CONFIG-window check
@@ -86,10 +87,9 @@ TEST_F(MeshDeviceFixture, Metadata_CB_Tensor_Clash_SanityCheck) {
 // reachable when the ring buffer is larger than that window (config can land in
 // the band between them); otherwise the finalize FATAL fires first and this check
 // is defensive. The test self-calibrates and SKIPs when the band is unusable.
-TEST_F(MeshDeviceFixture, Metadata_KernelConfigWindow_Overflow_SanityCheck) {
+TEST_F(UnitMeshFixture, Metadata_KernelConfigWindow_Overflow_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
 
     const auto& hal = MetalContext::instance().hal();
@@ -98,7 +98,8 @@ TEST_F(MeshDeviceFixture, Metadata_KernelConfigWindow_Overflow_SanityCheck) {
         static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG));
     uint32_t default_unreserved =
         static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED));
-    uint32_t alloc_unreserved = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+    uint32_t alloc_unreserved =
+        static_cast<uint32_t>(this->device().allocator()->get_base_allocator_addr(HalMemType::L1));
     uint32_t window_size = default_unreserved - kc_base;    // check_program_metadata_size bound
     uint32_t ringbuffer_size = alloc_unreserved - kc_base;  // finalize_offsets TT_FATAL bound
 
@@ -152,7 +153,9 @@ TEST_F(MeshDeviceFixture, Metadata_KernelConfigWindow_Overflow_SanityCheck) {
     std::vector<uint32_t> args(n_args, 0u);
     SetRuntimeArgs(program, kernel, logical_core, args);
 
-    EXPECT_DEATH(detail::LaunchProgram(device, program), ".*\\[ASAN ERROR\\] Metadata Overflow.*");
+    EXPECT_DEATH(
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        ".*\\[ASAN ERROR\\] Metadata Overflow.*");
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
 }
@@ -167,10 +170,9 @@ TEST_F(MeshDeviceFixture, Metadata_KernelConfigWindow_Overflow_SanityCheck) {
 // until the watchdog aborts. Keeping death tests first lets each fork cleanly.
 // (Today the window-overflow death test SKIPs on WH/BH, but this ordering keeps
 // the bare `Metadata_*` glob safe on any arch where it does fire.)
-TEST_F(MeshDeviceFixture, Metadata_CB_Tensor_NoViolation) {
+TEST_F(UnitMeshFixture, Metadata_CB_Tensor_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
 
     // A tiny 2-page CB leaves the vast majority of L1 free; no clash possible.
@@ -191,7 +193,7 @@ TEST_F(MeshDeviceFixture, Metadata_CB_Tensor_NoViolation) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Must NOT abort.
-    detail::LaunchProgram(device, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");

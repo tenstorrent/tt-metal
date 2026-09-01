@@ -300,7 +300,11 @@ def run(
     )
     # paged_update_cache modifies cache_tensor in place, so output is the same as input_tensor_a
     output_tensor = input_tensor_a
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    output_tensor = mesh_tensor_to_torch(
+        output_tensor,
+        device if is_mesh_device else None,
+        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     if is_mesh_device:

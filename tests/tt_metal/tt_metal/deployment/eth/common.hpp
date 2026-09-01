@@ -8,6 +8,7 @@
 #include <chrono>
 
 #include "tt_metal/tt_metal/deployment/deployment_common.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
 
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -286,7 +287,7 @@ static void wait_to_finish_eth_timeout_cores(
     }
 
     for (const auto& [dev, workload] : devices) {
-        detail::CompileProgram(dev->get_devices()[0], *programs[dev]);
+        programs[dev]->impl().compile(dev.get());
         devices[dev]->add_program(device_range, std::move(*programs[dev]));
     }
 

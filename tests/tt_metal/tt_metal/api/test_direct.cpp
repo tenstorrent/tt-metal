@@ -36,6 +36,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 
 using std::vector;
 using namespace tt;
@@ -309,7 +310,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
     };
     experimental::SetProgramRunArgs(program, params);
 
-    slow_dispatch::LaunchProgram(*mesh_device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> dest_buffer_data;
     slow_dispatch::ReadFromBuffer(*output_dram_buffer, dest_buffer_data);

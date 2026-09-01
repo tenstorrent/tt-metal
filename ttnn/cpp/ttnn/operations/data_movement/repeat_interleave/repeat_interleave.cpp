@@ -4,19 +4,30 @@
 
 #include "repeat_interleave.hpp"
 
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_device_operation.hpp"
+#include "ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_supported.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/upsample/upsample.hpp"
 
-namespace ttnn {
+#include "repeat_interleave_force.hpp"
+
+namespace ttnn::operations::data_movement::detail {
+namespace {
 
 // repeat interleave supports repeats as 1 to inf, and any dim in [-rank, rank) for a tensor of
 // arbitrary rank >= 2. `dim` is resolved via get_normalized_index (so negative dims are supported),
 // and the last dim is handled by transposing it to the second-to-last position and recursing.
+//
+// Named (not anonymous-call-site) so the recursive branches below can recurse into it directly:
+// recursing through the public ttnn::repeat_interleave() would re-enter the routing gate and let a
+// call already routed here escalate to codegen mid-recursion.
 //
 // NOTE on the default output memory config for a sharded input when `output_mem_config` is not
 // given: the two sharded code paths below differ. The native fast-path (ROW_MAJOR rank-4, dims
@@ -28,8 +39,8 @@ namespace ttnn {
 // the same call with no explicit `output_mem_config` can return sharded-L1 or interleaved-DRAM
 // depending purely on which internal path the input happens to hit; pass an explicit
 // `output_mem_config` if the output's memory config matters to the caller.
-ttnn::Tensor repeat_interleave(
-    const ttnn::Tensor& input_a, uint32_t repeat, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor repeat_interleave_native(
+    const Tensor& input_a, uint32_t repeat, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     if (input_a.logical_shape().rank() == 1) {
         // A rank-1 tensor's only dim is inherently the "last dim", which the general path below can't
         // handle directly (it would attempt an invalid transpose(-1, -2) on a rank-1 tensor). Add a
@@ -37,7 +48,7 @@ ttnn::Tensor repeat_interleave(
         // the normal path, then collapse the dummy dim back out.
         const uint32_t size = input_a.logical_shape()[0];
         ttnn::Tensor unsqueezed = ttnn::unsqueeze(input_a, 1);
-        ttnn::Tensor result = ttnn::repeat_interleave(unsqueezed, repeat, 0, output_mem_config);
+        ttnn::Tensor result = repeat_interleave_native(unsqueezed, repeat, 0, output_mem_config);
         return ttnn::reshape(result, ttnn::Shape({size * repeat}));
     }
 
@@ -96,7 +107,7 @@ ttnn::Tensor repeat_interleave(
         // matches DRAM) so an explicitly-requested interleaved L1 output isn't silently left in DRAM.
         const MemoryConfig interleaved = ttnn::DRAM_MEMORY_CONFIG;
         ttnn::Tensor interleaved_input = ttnn::to_memory_config(input_a, interleaved);
-        ttnn::Tensor interleaved_result = ttnn::repeat_interleave(interleaved_input, repeat, dim, interleaved);
+        ttnn::Tensor interleaved_result = repeat_interleave_native(interleaved_input, repeat, dim, interleaved);
         const MemoryConfig requested = output_mem_config.value_or(interleaved);
         return ttnn::to_memory_config(interleaved_result, requested);
     }
@@ -117,7 +128,9 @@ ttnn::Tensor repeat_interleave(
             transpose_input = ttnn::typecast(transpose_input, DataType::BFLOAT16, mem_config);
         }
         auto transposed_input = ttnn::transpose(transpose_input, -1, -2, mem_config);
-        auto repeated_input = ttnn::repeat_interleave(transposed_input, repeat, -2, mem_config);
+        // Recurse into the native implementation, not the public entry point: the latter re-enters
+        // the routing gate, which would let this inner call dispatch to codegen.
+        auto repeated_input = repeat_interleave_native(transposed_input, repeat, -2, mem_config);
         auto result = ttnn::transpose(repeated_input, -1, -2, mem_config);
         return typecast ? ttnn::typecast(result, input_a.dtype(), mem_config) : result;
     }
@@ -167,6 +180,122 @@ ttnn::Tensor repeat_interleave(
     auto original_layout = ttnn::to_layout(reshaped_tensor, input_a.layout());
     return typecast ? ttnn::typecast(original_layout, input_a.dtype(), mem_config)
                     : ttnn::to_memory_config(original_layout, mem_config);
+}
+
+// Rank-general TILE page geometry for the (outer, non-sub-tile) repeated axis, in the same page
+// space prim::repeat_codegen's kernels index.
+struct PageMap {
+    uint32_t lower_pages;
+    uint32_t rep_dim_pages;
+    uint32_t total_out_pages;
+    uint32_t stick_size;
+};
+
+PageMap tile_page_map(const Tensor& input, uint32_t rep_dim, uint32_t num_repeats) {
+    const auto& shape = input.logical_shape();
+    const uint32_t ndim = shape.rank();
+    const uint32_t ht = (shape[ndim - 2] + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+    const uint32_t wt = (shape[ndim - 1] + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+    std::vector<uint32_t> dim_pages;
+    dim_pages.reserve(ndim);
+    for (uint32_t i = 0; i + 2 < ndim; ++i) {
+        dim_pages.push_back(shape[i]);
+    }
+    dim_pages.push_back(ht);
+    dim_pages.push_back(wt);
+
+    uint32_t lower_pages = 1;
+    for (uint32_t d = rep_dim + 1; d < dim_pages.size(); ++d) {
+        lower_pages *= dim_pages[d];
+    }
+    uint32_t volume_tiles = 1;
+    for (uint32_t pages : dim_pages) {
+        volume_tiles *= pages;
+    }
+    return {lower_pages, dim_pages[rep_dim], volume_tiles * num_repeats, /*stick_size=*/0};
+}
+
+// Rank-general RM (stick) page geometry for a whole-stick (outer/H) repeated axis: one page per
+// stick, so the last dim contributes width rather than a page count.
+PageMap rm_page_map(const Tensor& input, uint32_t rep_dim, uint32_t num_repeats) {
+    const auto& shape = input.logical_shape();
+    const uint32_t ndim = shape.rank();
+    std::vector<uint32_t> dim_pages;
+    dim_pages.reserve(ndim);
+    for (uint32_t i = 0; i + 1 < ndim; ++i) {
+        dim_pages.push_back(shape[i]);
+    }
+    dim_pages.push_back(1);
+
+    uint32_t lower_pages = 1;
+    for (uint32_t d = rep_dim + 1; d < dim_pages.size(); ++d) {
+        lower_pages *= dim_pages[d];
+    }
+    uint32_t total_src_pages = 1;
+    for (uint32_t pages : dim_pages) {
+        total_src_pages *= pages;
+    }
+    return {lower_pages, dim_pages[rep_dim], total_src_pages * num_repeats, shape[ndim - 1] * input.element_size()};
+}
+
+Tensor repeat_interleave_via_codegen(
+    const Tensor& input, uint32_t repeats, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+    const uint32_t normalized_dim = input.logical_shape().get_normalized_index(dim);
+    const MemoryConfig mem_config = output_mem_config.value_or(input.memory_config());
+    const uint32_t ndim = input.logical_shape().rank();
+    // Sole writer of operation_attributes_t.rep_dim; the inverse is ttnn::prim::recover_rep_dim.
+    const uint32_t padded_dim = normalized_dim + (ttnn::prim::kRepDimPadRank - ndim);
+    const PageMap page_map = input.layout() == Layout::TILE ? tile_page_map(input, normalized_dim, repeats)
+                                                            : rm_page_map(input, normalized_dim, repeats);
+    return ttnn::prim::repeat_interleave_codegen(
+        input,
+        padded_dim,
+        repeats,
+        page_map.lower_pages,
+        page_map.rep_dim_pages,
+        page_map.total_out_pages,
+        page_map.stick_size,
+        /*stick_size_out=*/0,
+        mem_config);
+}
+
+}  // namespace
+
+ttnn::Tensor repeat_interleave_force_native(
+    const ttnn::Tensor& input_a, uint32_t repeats, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+    return repeat_interleave_native(input_a, repeats, dim, output_mem_config);
+}
+
+ttnn::Tensor repeat_interleave_force_codegen(
+    const ttnn::Tensor& input_a, uint32_t repeats, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(
+        repeat_interleave_codegen::supported_by_codegen(input_a, repeats, dim, output_mem_config),
+        "repeat_interleave_force_codegen invoked for a case the codegen path does not support "
+        "(requires a device-resident, unsharded rank-2..4 bfloat16/float32/int32 input, an "
+        "interleaved output, repeats > 1, and a repeated dim outside the pages the layout "
+        "subdivides -- TILE defers the two sub-tile dims and requires the default 32x32 tile, "
+        "ROW_MAJOR defers the within-stick last dim and needs a stick narrow enough for two CB "
+        "slots in one core's L1). This entry never "
+        "falls back to native, because a forced leg that quietly served native would make any "
+        "comparison against native vacuous. Use ttnn::repeat_interleave if you want the case "
+        "routed.");
+    return repeat_interleave_via_codegen(input_a, repeats, dim, output_mem_config);
+}
+
+}  // namespace ttnn::operations::data_movement::detail
+
+namespace ttnn {
+
+Tensor repeat_interleave(
+    const Tensor& input_a, uint32_t repeats, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+    namespace detail = operations::data_movement::detail;
+    namespace repeat_interleave_codegen = operations::data_movement::repeat_interleave_codegen;
+
+    if (repeat_interleave_codegen::supported_by_codegen(input_a, repeats, dim, output_mem_config) &&
+        !repeat_interleave_codegen::is_demoted(input_a, repeats, dim, output_mem_config)) {
+        return detail::repeat_interleave_via_codegen(input_a, repeats, dim, output_mem_config);
+    }
+    return detail::repeat_interleave_native(input_a, repeats, dim, output_mem_config);
 }
 
 }  // namespace ttnn

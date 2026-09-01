@@ -20,15 +20,17 @@ import os
 
 from .parquet import convert_csvs_to_parquet
 
-_VALID_ARCHES = ("wormhole", "blackhole")
+_VALID_ARCHES = ("wormhole", "blackhole", "quasar")
 _VALID_PIPELINES = ("PR", "nightly")
 
 
 def _run_csvs(csv_dir):
     """The combined per-test CSVs, excluding the .post / .counters side files.
 
-    Real runs nest one directory per test (``perf_data/<base>/<base>.csv``), so
-    the glob is recursive.
+    Real runs nest one directory per test
+    (``perf_data/runs/<tag>/<base>/<base>.csv``), so the glob is recursive. Point
+    ``csv_dir`` at ONE run — ``perf_data/latest`` or a specific ``runs/<tag>`` —
+    never at ``perf_data`` itself, or every retained run is swept into one batch.
     """
     return sorted(
         p
@@ -104,7 +106,10 @@ def main(argv=None):
     ap.add_argument("--csv-dir", required=True, help="dir of combined per-test CSVs")
     ap.add_argument("--out", required=True, help="output run parquet path")
     ap.add_argument(
-        "--arch", required=True, choices=_VALID_ARCHES, help="wormhole | blackhole"
+        "--arch",
+        required=True,
+        choices=_VALID_ARCHES,
+        help="wormhole | blackhole | quasar",
     )
     ap.add_argument("--strict", action="store_true", help="fail on schema drift")
     a = ap.parse_args(argv)

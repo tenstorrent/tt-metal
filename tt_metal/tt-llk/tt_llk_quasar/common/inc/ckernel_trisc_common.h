@@ -76,6 +76,8 @@ constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) -
 std::uint32_t volatile* const cfg = (std::uint32_t volatile*)TENSIX_CFG_BASE;
 // Points to the buffer table
 buffer_descriptor_u volatile* const bd_table = (buffer_descriptor_u volatile* const)(cfg + BUFFER_DESCRIPTOR_TABLE_REG0_L1_BASE_ADDR_ADDR32);
+// Number of entries in the buffer descriptor table (physically partitioned per TRISC; ids are 0..31).
+constexpr std::uint32_t BD_TABLE_NUM_ENTRIES = 32;
 
 constexpr std::uint32_t NUM_WORDS_TILE_CNT = 8;
 
@@ -158,6 +160,8 @@ inline void validate_buffer_desc(const buffer_descriptor_u& buf_desc)
  */
 inline void _configure_buf_desc_table_(const std::uint32_t buf_desc_id, const buffer_descriptor_u& buf_desc)
 {
+    // Guards the invalid sentinel (BFD_ID_INVALID) and any OOB id from a wild write into cfg space.
+    LLK_ASSERT(buf_desc_id < BD_TABLE_NUM_ENTRIES, "buf_desc_id out of range");
     for (std::uint32_t i = 0; i < BD_NUM_WORDS; i++)
     {
         bd_table[buf_desc_id].words[i] = buf_desc.words[i];
@@ -413,6 +417,7 @@ struct srcs_dims
 };
 
 // SrcS runs in 32-bit element mode when the UNP_S destination format is 32-bit wide.
+// Unpack-to-SrcS cannot convert fp16 to TF32, so Tf32 is not a legal unpack_S_dst here.
 inline constexpr bool _is_srcs_32bit_mode_(const DataFormat unpack_S_dst_format)
 {
     return unpack_S_dst_format == DataFormat::Float32 || unpack_S_dst_format == DataFormat::Int32;
@@ -441,7 +446,7 @@ inline std::uint16_t compute_square_of_min(std::uint8_t input1, std::uint8_t inp
 }
 
 /**
- * @brief Creates a tdma_descriptor_t structure from TensorShape and other needed parameters
+ * @brief Creates a buffer descriptor from TensorShape and other needed parameters
  * Currently supported buffer descriptor dimensions are:
  * x=16; y=[1, 2, 4, 8, 16]; z=1; or x=16; y=16; z=4; these are hardware constraints.
  *
@@ -450,12 +455,9 @@ inline std::uint16_t compute_square_of_min(std::uint8_t input1, std::uint8_t inp
  * @param tensor_shape: Tile/face dimensions and shape of input tensor
  * @param base_l1_16B: base address of the buffer in L1
  * @param data_format: L1 data encoding format
- * @param buf_desc_id: buffer descriptor table ID
- * @param reg_data_format: Register data encoding format
  */
 template <L1AccessMode MODE = L1AccessMode::Continuous>
-inline tdma_descriptor_t construct_tdma_desc(
-    const TensorShape& tensor_shape, unsigned base_l1_16B, unsigned data_format, std::uint32_t buf_desc_id, unsigned reg_data_format)
+inline buffer_descriptor_u construct_buf_desc(const TensorShape& tensor_shape, unsigned base_l1_16B, unsigned data_format)
 {
     buffer_descriptor_u buf_desc = {0};
     buf_desc.f.x_dim             = tensor_shape.face_c_dim;
@@ -480,9 +482,7 @@ inline tdma_descriptor_t construct_tdma_desc(
 
     validate_buffer_desc<MODE>(buf_desc);
 
-    tdma_descriptor_t tdma_desc = {buf_desc, buf_desc_id, static_cast<std::uint8_t>(reg_data_format)};
-
-    return tdma_desc;
+    return buf_desc;
 }
 
 } // namespace ckernel::trisc

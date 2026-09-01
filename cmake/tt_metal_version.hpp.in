@@ -1,0 +1,21 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <string_view>
+
+#ifndef TT_METAL_BUILD_TYPE
+#define TT_METAL_BUILD_TYPE "Unknown"
+#endif
+
+namespace tt::tt_metal {
+
+inline constexpr std::string_view kGitSha = "@VERSION_SHA@";
+inline constexpr std::string_view kGitShaShort = "@VERSION_HASH@";
+inline constexpr std::string_view kVersionFull = "@VERSION_FULL@";
+inline constexpr std::string_view kBuildType = TT_METAL_BUILD_TYPE;
+inline constexpr bool kGitDirty = @VERSION_DIRTY_CPP@;
+
+}  // namespace tt::tt_metal

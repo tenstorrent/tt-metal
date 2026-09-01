@@ -1,0 +1,258 @@
+# Files a Jira record when the Package and release workflow fails.
+#
+# Watches the "Package and release" workflow; on a failed run it collects the
+# failed jobs and opens (or de-duplicates onto) a Jira issue via
+# jira_client.py.
+#
+# TODO (specifics to be provided):
+#   - JIRA_ISSUE_TYPE        : issue type (default below: Bug)
+#   - WATCH_JOBS             : comma-separated job-name substrings that count as
+#                             "the tests and pipelines" (empty = any failed job)
+#
+# Credentials (repo/org Actions secrets, scoped to this RELEASE-project automation
+# so other Jira projects can carry their own):
+#   - secrets JIRA_RELEASE_USER_EMAIL / JIRA_RELEASE_API_TOKEN : Jira account creds
+# The Jira project key ("RELEASE") is not secret and is inlined below.
+name: "[internal] File Jira issue on package-and-release failure"
+
+on:
+  workflow_run:
+    workflows:
+      - "Package and release"
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      run-id:
+        description: "Package and release workflow run id to file a Jira issue for (manual testing)"
+        required: true
+        type: string
+      dry-run:
+        description: "Print the Jira payload in the log instead of filing"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  # Empty = file for any failed job. Narrow to the specific tests/pipelines later.
+  WATCH_JOBS: ""
+  JIRA_ISSUE_TYPE: "Bug"
+
+jobs:
+  file-jira:
+    # Failed run, or a manual dispatch for testing. The release-ref check lives
+    # in the collect step below, which resolves the branch from the run itself
+    # so both paths are covered.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Collect failed jobs from the package-and-release run
+        id: collect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run-id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          # Only real releases reach the RELEASE board. Package and release also
+          # runs on main (cron dev release) and on feature branches via dispatch;
+          # those failures are CI noise. Release refs are `stable` and the
+          # version tags, matching release-build-test-publish.yaml.
+          #
+          # Resolved from the run itself rather than the trigger, because
+          # `on.workflow_run.branches` cannot express tags and does not apply to
+          # workflow_dispatch at all (which also has no head_sha in its event
+          # payload). One check, both entry points.
+          read -r BRANCH HEAD_SHA < <(gh api "repos/$REPO/actions/runs/$RUN_ID" \
+            --jq '"\(.head_branch) \(.head_sha)"')
+          case "$BRANCH" in
+            stable|v[0-9]*) ;;
+            *)
+              echo "::notice::run $RUN_ID is on '$BRANCH', not a release ref; nothing to file."
+              echo "file=false" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+          esac
+
+          # Failed jobs as "infra<TAB>name<TAB>url". Capture first: a gh
+          # failure inside <(...) would leave the list empty and be read as
+          # "nothing to file".
+          #
+          # A job whose runner never came up has no test result to report --
+          # its work steps are skipped and only the always() steps run, so it
+          # fails in ~35s having tested nothing. Those are dropped rather than
+          # reported as test failures. GitHub *skips* a job whose `needs`
+          # failed, so a true dependency cascade never reaches this list.
+          if ! rows=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate \
+            --jq '.jobs[] | select(.conclusion=="failure" or .conclusion=="timed_out")
+                  | [ (any(.steps[]?;
+                           (.conclusion=="failure" or .conclusion=="timed_out")
+                           and ((.name|ascii_downcase)
+                                | test("^ *(set up job|set up runner|initialize containers) *$")))
+                       | tostring),
+                      .name, .html_url ] | @tsv'); then
+            echo "::error::could not list jobs for run $RUN_ID"
+            exit 1
+          fi
+          mapfile -t rows < <(printf '%s' "$rows")
+
+          failed=(); urls=(); dropped=0
+          for r in "${rows[@]}"; do
+            IFS=$'\t' read -r is_infra jname jurl <<< "$r"
+            if [ "$is_infra" = "true" ]; then
+              echo "::notice::skipping $jname -- runner never started, no test ran"
+              dropped=$((dropped + 1))
+              continue
+            fi
+            if [ -n "${WATCH_JOBS}" ]; then
+              keep=0
+              IFS=',' read -ra pats <<< "$WATCH_JOBS"
+              for p in "${pats[@]}"; do
+                [[ "$jname" == *"$(echo "$p" | xargs)"* ]] && keep=1 && break
+              done
+              [ "$keep" = 1 ] || continue
+            fi
+            failed+=("$jname"); urls+=("$jurl")
+          done
+
+          if [ "${#failed[@]}" -eq 0 ]; then
+            if [ "$dropped" -gt 0 ]; then
+              echo "::notice::all $dropped failed job(s) were infra failures; nothing to file."
+            else
+              echo "No watched jobs failed; nothing to file."
+            fi
+            echo "file=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "file=true" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+          summary=$(printf '%s\n' "${failed[@]}" \
+            | python3 .github/actions/scripts/failure_title.py "$BRANCH")
+
+          # Section layout mirrors RELEASE-7, the hand-written reference for
+          # these tickets. "### " and "- " render as headings and bullets.
+          {
+            echo "summary=$summary"
+            echo "description<<EOF"
+            echo "### Impact"
+            echo "The Package and release workflow failed on $BRANCH: ${#failed[@]} job(s) failed."
+            [ "$dropped" -gt 0 ] && echo "($dropped more job(s) omitted: the runner never started, so no test ran.)"
+            echo "### Failed jobs"
+            # The leaf name, not the whole "a / b / c / leaf" path -- the prefix
+            # is the same for every row and the link carries the full context.
+            for i in "${!failed[@]}"; do echo "- [${failed[$i]##*/ }](${urls[$i]})"; done
+            echo "### Environment"
+            echo "- Branch: $BRANCH"
+            if [ -n "${HEAD_SHA:-}" ]; then
+              echo "- Commit: [${HEAD_SHA:0:12}](https://github.com/$REPO/commit/$HEAD_SHA)"
+            else
+              echo "- Commit: unknown"
+            fi
+            echo "- Run link: [$RUN_ID](${RUN_URL:-https://github.com/$REPO/actions/runs/$RUN_ID})"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # The failed run's own AI Summary (the ai_run_summary artifact uploaded
+      # by release-build-test-publish) supplies per-job root causes. Analysis
+      # is decoration: the ticket files without it if the artifact is missing
+      # or the fetch breaks.
+      - name: Attach AI Summary root causes
+        if: ${{ steps.collect.outputs.file == 'true' }}
+        id: ai
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run-id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "section<<EOF"
+            python3 .github/actions/scripts/ai_failure_section.py "$REPO" "$RUN_ID"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: File Jira issue
+        if: ${{ steps.collect.outputs.file == 'true' }}
+        env:
+          JIRA_BASE_URL: "https://tenstorrent.atlassian.net"
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_RELEASE_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_RELEASE_API_TOKEN }}
+          JIRA_PROJECT_KEY: "RELEASE"
+          JIRA_ISSUE_TYPE: ${{ env.JIRA_ISSUE_TYPE }}
+          JIRA_SUMMARY: ${{ steps.collect.outputs.summary }}
+          # The AI section is already newline-terminated headings/bullets; an
+          # empty section (no artifact, fetch failed) concatenates to nothing.
+          JIRA_DESCRIPTION: "${{ steps.collect.outputs.description }}\n${{ steps.ai.outputs.section }}"
+          # The per-ref label lets the close-jira job below find this ticket
+          # when a later run on the same ref goes green.
+          JIRA_LABELS: "ci-failure,package-and-release,package-release-ref:${{ steps.collect.outputs.branch }}"
+          # Everything lands on one owner for triage, who reassigns. Override
+          # with the repo variable rather than editing this file.
+          JIRA_ASSIGNEE_ACCOUNT_ID: ${{ vars.RELEASE_JIRA_ASSIGNEE || '63c5a7806178fcc941d86a9d' }}
+          # False for workflow_run events: the expression only reads true on a
+          # manual dispatch that asked for it.
+          JIRA_DRY_RUN: ${{ inputs.dry-run && '1' || '' }}
+          # While one issue is open for this pipeline, later failures comment on it.
+          # Scope per commit: re-runs of the same release de-dupe onto one
+          # ticket, a later release failure opens a new one. The sha comes from
+          # the collect step so a manual dispatch dedups exactly like the
+          # workflow_run path.
+          JIRA_DEDUP_LABEL: "package-release-failure:${{ steps.collect.outputs.sha }}"
+        run: |
+          if [ -z "${JIRA_USER_EMAIL}" ] || [ -z "${JIRA_API_TOKEN}" ]; then
+            echo "::notice::JIRA_RELEASE_* secrets not configured; skipping Jira filing."
+            exit 0
+          fi
+          python3 .github/actions/scripts/jira_client.py
+
+  # The mirror of file-jira: a green run on a release ref means the failure is
+  # gone, so the open ticket(s) for that ref are closed with a comment linking
+  # the green run.
+  close-jira:
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Close open Jira issues for this release ref
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          JIRA_BASE_URL: "https://tenstorrent.atlassian.net"
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_RELEASE_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_RELEASE_API_TOKEN }}
+          JIRA_PROJECT_KEY: "RELEASE"
+          JIRA_ACTION: "close"
+        run: |
+          set -euo pipefail
+          # Same release-ref gate as the collect step above: only release refs
+          # ever filed a ticket, so only they have anything to close.
+          BRANCH=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .head_branch)
+          case "$BRANCH" in
+            stable|v[0-9]*) ;;
+            *)
+              echo "::notice::run $RUN_ID is on '$BRANCH', not a release ref; nothing to close."
+              exit 0 ;;
+          esac
+          if [ -z "${JIRA_USER_EMAIL}" ] || [ -z "${JIRA_API_TOKEN}" ]; then
+            echo "::notice::JIRA_RELEASE_* secrets not configured; skipping."
+            exit 0
+          fi
+          export JIRA_DEDUP_LABEL="package-release-ref:$BRANCH"
+          export JIRA_COMMENT="Package and release is green again on $BRANCH: run [$RUN_ID]($RUN_URL) passed. Closing."
+          python3 .github/actions/scripts/jira_client.py

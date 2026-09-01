@@ -6,6 +6,7 @@
 
 #include "dfb_test_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -111,7 +112,7 @@ static void run_single_dfb_multicore_2_0(
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
     m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
 
-    slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> output;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
@@ -217,7 +218,7 @@ static void run_concurrent_dfbs_program_2_0(
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
     m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
 
-    slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> output;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
@@ -361,7 +362,7 @@ static void run_sequential_4_dfbs_2_0(
         m2_writeshard_barrier_uint32(mesh_device, in_tensors[i], inputs[i]);
     }
 
-    slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     for (uint32_t i = 0; i < 4; ++i) {
         std::vector<uint32_t> output;
@@ -542,7 +543,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     // Pre-fill each DFB's L1 ring directly via uniform_alloc_addr after manual
     // finalize+allocate. No borrowed_from / ring tensor needed; the compute
     // kernel is TRISC-only and can't carry tensor bindings.
-    slow_dispatch::CompileProgram(this->device(), program);
+    program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
@@ -554,7 +555,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
         slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), dfb_l1_addr, inputs[i]);
     }
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         std::vector<uint32_t> output;

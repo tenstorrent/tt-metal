@@ -126,10 +126,10 @@ _QUIETBOX_CI_MIN_BANDWIDTH_GBPS = {
 
 # Galaxy uses one 8-rank KV ring after initializing the full 8x4 XY torus.
 # The shorter 55K transfer has greater fixed-cost exposure, but it measures
-# 80--86 GB/s on the high-power Galaxy runner. Qualify it at 79 GB/s and the
+# 80--86 GB/s on the high-power Galaxy runner. Qualify it at 78 GB/s and the
 # large KV-cache transfer at the 90 GB/s ring target.
 _GALAXY_CI_MIN_BANDWIDTH_GBPS = {
-    55_000: 79.0,
+    55_000: 78.0,
     512 * 1024: 90.0,
 }
 

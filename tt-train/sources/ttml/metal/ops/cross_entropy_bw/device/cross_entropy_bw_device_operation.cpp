@@ -51,6 +51,30 @@ void CrossEntropyBackwardDeviceOperation::validate_on_program_cache_miss(
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
     check_tensor(input_tensor, "Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(target_tensor, "Target", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
+
+    // The reader walks one row-major target page per batch-channel slice of the input
+    // (page = tile_row / Ht over NC * Ht rows) and sizes each page read from the target's
+    // inner dim, while the program cache is keyed on the input shape alone. Pinning both the
+    // target's page width and its page count to the input keeps every page index the reader
+    // can form inside the target allocation, and keeps a cached program valid for the target
+    // tensor it runs with.
+    const auto& target_shape = target_tensor.logical_shape();
+    TT_FATAL(
+        target_shape[-1] == input_tensor.logical_shape()[-2],
+        "CrossEntropyBackward: target inner dim ({}) must equal input sequence dim ({})",
+        target_shape[-1],
+        input_tensor.logical_shape()[-2]);
+    const auto& input_padded_shape = input_tensor.padded_shape();
+    const uint64_t input_nc_pages =
+        input_padded_shape.volume() / (static_cast<uint64_t>(input_padded_shape[-2]) * input_padded_shape[-1]);
+    const uint64_t target_pages = target_shape.volume() / target_shape[-1];
+    TT_FATAL(
+        target_pages == input_nc_pages,
+        "CrossEntropyBackward: target must supply one page per input batch-channel slice, got {} page(s) for {} "
+        "slice(s)",
+        target_pages,
+        input_nc_pages);
+
     if (preallocated_output_tensor.has_value()) {
         check_tensor(
             preallocated_output_tensor.value(),

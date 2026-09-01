@@ -34,6 +34,7 @@ from runner_failure_common import (
     result_to_dict,
     scan_jobs,
     signature_counts,
+    step_conclusion,
     write_reports,
 )
 
@@ -605,6 +606,7 @@ def recent_job_from_runner_api_row(
         html_url=html_url,
         started_at=normalize_timestamp(row_value(row, "JOB_START_TS", "STARTED_AT", "started_at", "start_time")),
         completed_at=normalize_timestamp(row_value(row, "JOB_END_TS", "COMPLETED_AT", "completed_at", "end_time")),
+        setup_runner_conclusion="",
     )
 
 
@@ -661,6 +663,7 @@ def recent_job_from_live_github_api(
         ),
         started_at=str(job.get("started_at") or ""),
         completed_at=str(job.get("completed_at") or ""),
+        setup_runner_conclusion=step_conclusion(job, "Set up runner"),
     )
 
 

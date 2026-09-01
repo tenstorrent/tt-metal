@@ -11,11 +11,32 @@ from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
 from fuser.tile_loop import LoopBlockRow, TileLoop
+from helpers.llk_params import DestAccumulation
 
 
 class UnpackerTilizeA(Unpacker):
     loop: TileLoop = LoopBlockRow()
     per_block_init = True
+
+    def perf_set_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        set_b = "true" if config.dest_acc == DestAccumulation.Yes else "false"
+        return f"_perf_unpack_loop_set_valid<true, {set_b}>({block.block_tiles_x});\n"
+
+    def perf_clear_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        clear_b = "true" if config.dest_acc == DestAccumulation.Yes else "false"
+        return f"_perf_math_loop_clear_valid<true, {clear_b}>({block.block_tiles_x});\n"
 
     def get_headers(self) -> List[str]:
         return [

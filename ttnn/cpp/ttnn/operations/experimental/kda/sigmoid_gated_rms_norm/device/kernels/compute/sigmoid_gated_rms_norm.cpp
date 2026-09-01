@@ -82,7 +82,7 @@ void activate_gate(uint32_t Vt, DataflowBuffer& norm) {
     norm.reserve_back(Vt);
     pack_reconfig_data_format(dfb::norm);
     reconfig_data_format_srca(dfb::gate);
-    copy_tile_to_dst_init_short(dfb::gate);
+    copy_init(dfb::gate);
     sigmoid_tile_init();
     for (uint32_t i = 0; i < Vt; i++) {
         tile_regs_acquire();

@@ -1,0 +1,11 @@
+Write a haiku about machine learning.
+
+Explain the difference between supervised and unsupervised learning in simple terms.
+
+Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered
+
+What are the three laws of thermodynamics?
+
+Translate the following to French: "Hello, how are you today?"
+
+Write a Python function to calculate the Fibonacci sequence.

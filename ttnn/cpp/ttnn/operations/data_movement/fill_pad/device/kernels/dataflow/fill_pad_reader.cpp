@@ -4,7 +4,7 @@
 
 /**
  * Reads border tiles from the tensor (DRAM interleaved or sharded) into the
- * double-buffered dfb_tile_in. The writer (BRISC) applies the padding-fill mask
+ * double-buffered dfb_data_in. The writer (BRISC) applies the padding-fill mask
  * in L1 and writes each tile back.
  *
  * Unified border-tile split. The host enumerates border tiles across all
@@ -29,74 +29,60 @@
  *       tile_id = slice * H_tiles * W_tiles + (H_tiles - 1) * W_tiles + (W_tiles - 1)
  *
  * Tile ordering across the three phases must match fill_pad_writer.cpp and
- * fill_pad_compute.cpp exactly (CBs are FIFO).
+ * fill_pad_compute.cpp exactly (DFBs are FIFO).
  *
- * CT args layout (common to reader and writer):
- *   [0]  W_tiles
- *   [1]  H_tiles
- *   [2]  N_slices (unused here)
- *   [3]  has_right_pad
- *   [4]  has_bottom_pad
- *   [5]  W_mod32 (unused here)
- *   [6]  H_mod32 (unused here)
- *   [7]  elem_size (2 or 4)
- *   [8]  fill_bits (unused here)
- *   [9]  CB_TILE_IN (= 0)
- *   [10+] TensorAccessorArgs
- *
- * RT args:
- *   [0]  buf_addr
- *   [1]  start_right   [2]  num_right
- *   [3]  start_bottom  [4]  num_bottom
- *   [5]  start_corner  [6]  num_corner
+ * Metal 2.0 named resources:
+ *   CTAs:  W_tiles, H_tiles, has_right_pad, has_bottom_pad, elem_size (elem_size unused).
+ *   DFB:   dfb::data_in  (this reader is its PRODUCER).
+ *   tensor: tensor::src (in-place tensor; base address auto-injected by the binding).
+ *   RTAs:  start_right, num_right, start_bottom, num_bottom, start_corner, num_corner.
  */
 
+#include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t W_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t H_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t has_right_pad = get_compile_time_arg_val(3);
-    constexpr uint32_t has_bottom_pad = get_compile_time_arg_val(4);
-    constexpr uint32_t elem_size = get_compile_time_arg_val(7);
-    constexpr uint32_t cb_tile_in_idx = get_compile_time_arg_val(9);
+    constexpr auto W_tiles = get_arg(args::W_tiles);
+    constexpr auto H_tiles = get_arg(args::H_tiles);
+    constexpr auto has_right_pad = get_arg(args::has_right_pad);
+    constexpr auto has_bottom_pad = get_arg(args::has_bottom_pad);
+    [[maybe_unused]] constexpr auto elem_size = get_arg(args::elem_size);
 
     // Per-phase slice strides (meaningful only when the corresponding phase is active).
     // Clamped to >= 1 so the compiler does not see a constexpr divide-by-zero in
     // the dead-code branches (when H_tiles==1 or W_tiles==1 the host sets the
     // matching num_* to 0 and the loop below never executes).
-    constexpr uint32_t right_slice_stride =
+    constexpr std::uint32_t right_slice_stride =
         has_right_pad ? (has_bottom_pad ? ((H_tiles > 1u) ? (H_tiles - 1u) : 1u) : H_tiles) : 1u;
-    constexpr uint32_t bottom_slice_stride =
+    constexpr std::uint32_t bottom_slice_stride =
         has_bottom_pad ? (has_right_pad ? ((W_tiles > 1u) ? (W_tiles - 1u) : 1u) : W_tiles) : 1u;
 
-    constexpr uint32_t tile_bytes = get_tile_size(cb_tile_in_idx);
+    const auto start_right = get_arg(args::start_right);
+    const auto num_right = get_arg(args::num_right);
+    const auto start_bottom = get_arg(args::start_bottom);
+    const auto num_bottom = get_arg(args::num_bottom);
+    const auto start_corner = get_arg(args::start_corner);
+    const auto num_corner = get_arg(args::num_corner);
 
-    const uint32_t buf_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_right = get_arg_val<uint32_t>(1);
-    const uint32_t num_right = get_arg_val<uint32_t>(2);
-    const uint32_t start_bottom = get_arg_val<uint32_t>(3);
-    const uint32_t num_bottom = get_arg_val<uint32_t>(4);
-    const uint32_t start_corner = get_arg_val<uint32_t>(5);
-    const uint32_t num_corner = get_arg_val<uint32_t>(6);
-
-    constexpr auto src_args = TensorAccessorArgs<10>();
-    const auto s = TensorAccessor(src_args, buf_addr, tile_bytes);
+    // Tensor base address and layout metadata are supplied by the tensor::src binding.
+    const auto s = TensorAccessor(tensor::src);
 
     Noc noc;
-    DataflowBuffer dfb_tile_in(cb_tile_in_idx);
+    DataflowBuffer dfb_tile_in(dfb::data_in);
+    const std::uint32_t tile_bytes = dfb_tile_in.get_entry_size();
 
     // ---- Right phase ----
     // Maintain (slice, row) incrementally instead of dividing every iteration
     // — RV32IM division is slow. Startup division runs at most once.
     if constexpr (has_right_pad) {
-        uint32_t slice = num_right ? start_right / right_slice_stride : 0u;
-        uint32_t row = num_right ? start_right - slice * right_slice_stride : 0u;
-        for (uint32_t i = 0; i < num_right; ++i) {
-            const uint32_t tile_id = slice * H_tiles * W_tiles + row * W_tiles + (W_tiles - 1u);
+        std::uint32_t slice = num_right ? start_right / right_slice_stride : 0u;
+        std::uint32_t row = num_right ? start_right - slice * right_slice_stride : 0u;
+        for (std::uint32_t i = 0; i < num_right; ++i) {
+            const std::uint32_t tile_id = slice * H_tiles * W_tiles + row * W_tiles + (W_tiles - 1u);
             dfb_tile_in.reserve_back(1);
             noc.async_read(s, dfb_tile_in, tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
             noc.async_read_barrier();
@@ -111,10 +97,10 @@ void kernel_main() {
 
     // ---- Bottom phase ----
     if constexpr (has_bottom_pad) {
-        uint32_t slice = num_bottom ? start_bottom / bottom_slice_stride : 0u;
-        uint32_t col = num_bottom ? start_bottom - slice * bottom_slice_stride : 0u;
-        for (uint32_t j = 0; j < num_bottom; ++j) {
-            const uint32_t tile_id = slice * H_tiles * W_tiles + (H_tiles - 1u) * W_tiles + col;
+        std::uint32_t slice = num_bottom ? start_bottom / bottom_slice_stride : 0u;
+        std::uint32_t col = num_bottom ? start_bottom - slice * bottom_slice_stride : 0u;
+        for (std::uint32_t j = 0; j < num_bottom; ++j) {
+            const std::uint32_t tile_id = slice * H_tiles * W_tiles + (H_tiles - 1u) * W_tiles + col;
             dfb_tile_in.reserve_back(1);
             noc.async_read(s, dfb_tile_in, tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
             noc.async_read_barrier();
@@ -129,9 +115,9 @@ void kernel_main() {
 
     // ---- Corner phase ----
     if constexpr (has_right_pad && has_bottom_pad) {
-        for (uint32_t k = 0; k < num_corner; ++k) {
-            const uint32_t slice = start_corner + k;
-            const uint32_t tile_id = slice * H_tiles * W_tiles + (H_tiles - 1u) * W_tiles + (W_tiles - 1u);
+        for (std::uint32_t k = 0; k < num_corner; ++k) {
+            const std::uint32_t slice = start_corner + k;
+            const std::uint32_t tile_id = slice * H_tiles * W_tiles + (H_tiles - 1u) * W_tiles + (W_tiles - 1u);
             dfb_tile_in.reserve_back(1);
             noc.async_read(s, dfb_tile_in, tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
             noc.async_read_barrier();

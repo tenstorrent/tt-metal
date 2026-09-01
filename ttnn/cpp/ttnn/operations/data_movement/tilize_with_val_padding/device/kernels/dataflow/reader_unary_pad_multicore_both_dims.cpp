@@ -15,18 +15,21 @@
 using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
-    constexpr uint32_t dfb_id_in0 = 0;
-    constexpr uint32_t dfb_id_in1 = 1;
-
     constexpr uint32_t total_num_rows = get_compile_time_arg_val(0);
     constexpr uint32_t third_dim = get_compile_time_arg_val(1);
     constexpr uint32_t tile_height = get_compile_time_arg_val(2);
     constexpr uint32_t element_size = get_compile_time_arg_val(3);
     constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(4);
     constexpr uint32_t dram_alignment = get_compile_time_arg_val(5);
+    // The buffer this instance fills, and its staging buffer. These are compile-time args rather
+    // than fixed indices because a factory whose work split gives cores different block widths
+    // must give each width its own correctly-sized pair of buffers: the raw block write below
+    // cannot wrap, so a buffer's size must stay an exact multiple of the block pushed into it.
+    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(6);
+    constexpr uint32_t dfb_id_in1 = get_compile_time_arg_val(7);
     constexpr uint64_t dram_align_mask = ~static_cast<uint64_t>(dram_alignment - 1);
     constexpr uint64_t dram_align_offset = static_cast<uint64_t>(dram_alignment - 1);
-    constexpr auto src_args = TensorAccessorArgs<6>();
+    constexpr auto src_args = TensorAccessorArgs<8>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t pad_value = get_arg_val<uint32_t>(1);

@@ -60,15 +60,24 @@ def test_dropout_output_tensor(device):
 
 
 @pytest.mark.parametrize("in_place", [False, True])
-def test_dropout_seed_distinguishes_cache_entries(device, in_place):
+@pytest.mark.parametrize("use_per_device_seed", [False, True])
+def test_dropout_seed_distinguishes_cache_entries(device, in_place, use_per_device_seed):
     """Regression guard for dropout's seed static/dynamic contract, on both the distinct-output and
-    in-place (output_tensor==input) fast paths.
+    in-place (output_tensor==input) fast paths, and both program factories.
+
+    `use_per_device_seed` selects the factory and the cache-hit seed-derivation branch in
+    override_runtime_arguments: True -> DropoutMeshWorkloadFactory (per-device offset), False ->
+    DropoutProgramFactory (raw seed, the branch distributed tt-train uses).
 
     `seed` is excluded from compute_program_hash (so calls differing only in seed cache-hit) but
     must be re-applied to the cached program on every dispatch. Pins both halves:
       * different seed must NOT grow the cache  -> guards against re-adding seed to the hash.
       * different seed must change the dropout mask -> guards against the frozen-seed bug on the
         fast path (the in_place case is only reachable since resolve_bindings allows input==output).
+
+    Parametrized over `use_per_device_seed` so both cache-hit override hooks are exercised:
+    the mesh path (`DropoutMeshWorkloadFactory::override_runtime_arguments`, per-device seed offset)
+    and the single-program path (`DropoutProgramFactory::override_runtime_arguments`).
     """
     t = torch.ones((1, 1, 32, 64))
     tensor = ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -78,7 +87,9 @@ def test_dropout_seed_distinguishes_cache_entries(device, in_place):
 
     def run(seed):
         out_kwargs = {"output_tensor": tensor} if in_place else {}
-        out = ttnn.experimental.dropout(tensor, probability=0.5, scale=2.0, seed=seed, **out_kwargs)
+        out = ttnn.experimental.dropout(
+            tensor, probability=0.5, scale=2.0, seed=seed, use_per_device_seed=use_per_device_seed, **out_kwargs
+        )
         return ttnn.to_torch(out).float().clone()
 
     out_a = run(1234)
@@ -88,8 +99,46 @@ def test_dropout_seed_distinguishes_cache_entries(device, in_place):
     out_c = run(5678)
     entries_c = device.num_program_cache_entries()
 
+    assert entries_a == 1, "the first dispatch must create exactly one cache entry"
     assert entries_b == entries_a, "same seed must reuse the cached program"
     assert entries_c == entries_a, "a different seed must NOT add a cache entry -- seed is dynamic, not hashed"
     assert not torch.equal(out_a, out_c), "a different seed must change the dropout mask (seed re-patched on fast path)"
+
+    device.disable_and_clear_program_cache()
+
+
+def test_dropout_cache_hit_rederives_buffer_address(device):
+    """On a cache hit the override must re-derive the input/output buffer addresses from the current
+    tensors (not reuse the first-miss addresses). Reallocate a fresh input with different VALUES between
+    two same-shape dispatches: the kept (non-dropped) outputs must reflect the second input, proving the
+    program read the new buffer address."""
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    scale = 2.0
+    shape = (1, 1, 32, 64)
+
+    # Hold both inputs and both outputs alive across the two dispatches: the second input/output cannot
+    # reuse the first's freed slot, so their addresses are guaranteed to differ (asserted below). This
+    # makes the re-derivation actually exercised -- if the allocator handed back the first-miss address a
+    # frozen (never re-derived) dst_addr would still pass, a false negative.
+    a = ttnn.from_torch(torch.ones(shape), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    out_a = ttnn.experimental.dropout(a, probability=0.5, scale=scale, seed=1234)  # miss
+    ttnn.to_torch(out_a)
+
+    b = ttnn.from_torch(torch.full(shape, 3.0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    out_b_tensor = ttnn.experimental.dropout(b, probability=0.5, scale=scale, seed=1234)
+    out_b = ttnn.to_torch(out_b_tensor).float()
+
+    assert device.num_program_cache_entries() == 1, "same-shape dispatch must reuse the cached program"
+    assert a.buffer_address() != b.buffer_address(), "second input must land at a different address"
+    assert (
+        out_a.buffer_address() != out_b_tensor.buffer_address()
+    ), "second output must land at a different address (dst_addr re-derivation)"
+    nonzero = out_b[out_b != 0.0]
+    assert nonzero.numel() > 0, "expected some elements to survive dropout"
+    assert torch.allclose(
+        nonzero, torch.full_like(nonzero, 3.0 * scale)
+    ), "kept outputs must be 3.0*scale -- proves the hit re-derived the new input buffer address"
 
     device.disable_and_clear_program_cache()

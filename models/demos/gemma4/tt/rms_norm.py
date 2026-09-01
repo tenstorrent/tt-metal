@@ -120,14 +120,12 @@ class RMSNorm(nn.Module):
             )
             tt_stats = ttnn.rms_norm_pre_all_gather(x, program_config=program_config, dtype=ttnn.bfloat16)
 
+            # Avoid deprecated all_gather kwargs (num_links/topology/mesh_device).
             tt_gathered_stats = ttnn.all_gather(
                 tt_stats,
                 dim=3,
-                num_links=1,
                 cluster_axis=1,
-                mesh_device=self.mesh_device,
                 memory_config=tt_gathered_stats_memory_config,
-                topology=ttnn.Topology.Ring,
             )
             ttnn.deallocate(tt_stats)
 

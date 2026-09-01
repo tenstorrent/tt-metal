@@ -198,62 +198,6 @@ void bind_unary_operation_subcoregrids(
         nb::arg("sub_core_grids") = nb::none());
 }
 
-template <ttnn::unique_string OpName, typename FuncTensor, typename FuncComplex>
-void bind_unary_operation_overload_complex(
-    nb::module_& mod,
-    FuncTensor func_tensor,
-    FuncComplex func_complex,
-    const std::string& math,
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = "") {
-    auto doc = fmt::format(
-        R"doc(
-        Applies {0} to :attr:`input_tensor` element-wise.
-
-        .. math::
-            {2}
-
-        Args:
-            input_tensor (ttnn.Tensor or ComplexTensor): the input tensor.
-
-        Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - {3}
-                 - TILE, ROW_MAJOR
-
-            {4}
-        )doc",
-        std::string(OpName),
-        std::string("ttnn.") + std::string(OpName),
-        math,
-        supported_dtype,
-        note);
-
-    ttnn::bind_function<OpName>(
-        mod,
-        doc.c_str(),
-        ttnn::overload_t(
-            func_tensor,
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()),
-        ttnn::overload_t(func_complex, nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config")));
-}
-
 template <ttnn::unique_string OpName>
 void bind_unary_operation_overload_complex_return_complex(
     nb::module_& mod, const std::string& supported_dtype = "BFLOAT16", const std::string& info_doc = "") {
@@ -1233,70 +1177,6 @@ void bind_unary_composite_2param(
         mod, doc.c_str(), Func, nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config") = nb::none());
 }
 
-template <
-    ttnn::unique_string OpName,
-    Tensor (*Func)(
-        const Tensor&,
-        const std::optional<MemoryConfig>&,
-        const std::optional<Tensor>&,
-        const std::optional<CoreRangeSet>&)>
-void bind_unary_composite(
-    nb::module_& mod,
-    const std::string& description,
-    const std::string& range = "",
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string& supported_layout = "TILE",
-    const std::string& note = "") {
-    auto doc = fmt::format(
-        R"doc(
-        {2}
-
-        .. math::
-            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i)
-
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor. {3}
-
-        Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - {4}
-                 - {5}
-
-            {6}
-        )doc",
-        std::string(OpName),
-        std::string("ttnn.") + std::string(OpName),
-        description,
-        range,
-        supported_dtype,
-        supported_layout,
-        note);
-
-    ttnn::bind_function<OpName>(
-        mod,
-        doc.c_str(),
-        Func,
-        nb::arg("input_tensor"),
-        nb::kw_only(),
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("output_tensor") = nb::none(),
-        nb::arg("sub_core_grids") = nb::none());
-}
-
 // OpHandler_1int
 template <ttnn::unique_string OpName, auto Func>
 void bind_unary_composite_int_with_default(
@@ -1406,66 +1286,6 @@ void bind_unary_composite_int(
             nb::arg("memory_config") = nb::none()});
 }
 
-// OpHandler_threshold
-template <ttnn::unique_string OpName, auto Func>
-void bind_unary_threshold(
-    nb::module_& mod,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    const std::string& parameter_name_b,
-    const std::string& parameter_b_doc,
-    const std::string& description) {
-    auto doc = fmt::format(
-        R"doc(
-        {6}
-
-        .. math::
-            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \verb|{2}|, \verb|{4}|)
-
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            {2} (float): {3}.
-            {4} (float): {5}.
-
-        Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16
-                 - TILE, ROW_MAJOR
-        )doc",
-        std::string(OpName),
-        std::string("ttnn.") + std::string(OpName),
-        parameter_name_a,
-        parameter_a_doc,
-        parameter_name_b,
-        parameter_b_doc,
-        description);
-
-    ttnn::bind_function<OpName>(
-        mod,
-        doc.c_str(),
-        ttnn::overload_t{
-            Func,
-            nb::arg("input_tensor"),
-            nb::arg(parameter_name_a.c_str()),
-            nb::arg(parameter_name_b.c_str()),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
-}
-
 void bind_unary_logit(nb::module_& mod, const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
@@ -1527,61 +1347,6 @@ void bind_unary_logit(nb::module_& mod, const std::string& info_doc = "") {
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor") = nb::none(),
         nb::arg("sub_core_grids") = nb::none());
-}
-
-template <ttnn::unique_string OpName, auto Func>
-void bind_unary_composite_rpow(
-    nb::module_& mod,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    const std::string& description,
-    const std::string& range,
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string& info_doc = "") {
-    auto doc = fmt::format(
-        R"doc(
-        {4}
-
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor. {5}
-            {2} (float): {3}
-
-        Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - {6}
-                 - TILE, ROW_MAJOR
-
-            {7}
-        )doc",
-        std::string(OpName),
-        std::string("ttnn.") + std::string(OpName),
-        parameter_name_a,
-        parameter_a_doc,
-        description,
-        range,
-        supported_dtype,
-        info_doc);
-    ttnn::bind_function<OpName>(
-        mod,
-        doc.c_str(),
-        ttnn::overload_t{
-            Func,
-            nb::arg("input_tensor"),
-            nb::arg(parameter_name_a.c_str()),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
 }
 }  // namespace
 

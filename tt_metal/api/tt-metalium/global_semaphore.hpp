@@ -18,15 +18,38 @@ namespace tt::tt_metal {
 class IDevice;
 class GlobalSemaphore;
 class GlobalSemaphoreImpl;
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
 class GlobalSemaphore {
 public:
+    /**
+     * @brief Allocates a global semaphore in L1 on the mesh device.
+     *
+     * @param device Mesh device to create the semaphore on.
+     * @param cores Range of Tensix coordinates using the semaphore.
+     * @param initial_value Initial value of the semaphore.
+     * @param buffer_type Buffer type to store the semaphore. Can only be an L1 buffer type.
+     */
+    GlobalSemaphore(
+        distributed::MeshDevice& device,
+        CoreRangeSet cores,
+        uint32_t initial_value,
+        BufferType buffer_type = BufferType::L1);
+
+    [[deprecated(
+        "Use GlobalSemaphore(distributed::MeshDevice&, ...) instead. "
+        "GlobalSemaphore(IDevice*, ...) will be removed after 2026-09-20.")]]
     GlobalSemaphore(
         IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
+    [[deprecated(
+        "Use GlobalSemaphore(distributed::MeshDevice&, ...) instead. "
+        "GlobalSemaphore(IDevice*, ...) will be removed after 2026-09-20.")]]
     GlobalSemaphore(
         IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 

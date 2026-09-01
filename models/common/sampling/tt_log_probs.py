@@ -298,10 +298,8 @@ class LogProbsCalculator:
         return ttnn.all_gather(
             tensor,
             dim=dim,
-            num_links=num_links,
             memory_config=tensor.memory_config(),
             cluster_axis=self._all_gather_cluster_axis,
-            topology=ttnn.Topology.Linear,
         )
 
     def set_log_probs_mode(

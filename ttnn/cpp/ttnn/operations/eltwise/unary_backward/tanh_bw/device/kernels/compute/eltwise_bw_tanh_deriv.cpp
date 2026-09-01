@@ -28,7 +28,8 @@ void kernel_main() {
     DataflowBuffer exp_dfb_input(cb_input);
     DataflowBuffer exp_dfb_grad_in(cb_grad_in);
 
-    unary_op_init_common(cb_grad_out, cb_grad_in);
+    compute_kernel_hw_startup(cb_grad_out, cb_grad_in);
+    copy_init(cb_grad_out);
     tanh_derivative_tile_init<false>();
     mul_binary_tile_init();
 

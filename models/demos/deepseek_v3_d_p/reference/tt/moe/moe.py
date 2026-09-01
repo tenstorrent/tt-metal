@@ -178,6 +178,7 @@ class TorchMoe(nn.Module):
         activation: str = ACTIVATION_SILU,
         situ_beta: float = 1.0,
         situ_linear_beta: float | None = None,
+        shared_activation: str | None = None,
     ):
         """
         Initialize MinimalMoE with configuration parameters.
@@ -212,9 +213,12 @@ class TorchMoe(nn.Module):
                 num_shared_experts (6144), not at moe_intermediate_size (3072).
             latent_weights: Optional dict with down_proj / up_proj / norm for the latent projections.
             latent_use_norm / rms_norm_eps: latent RMSNorm control (K3: True / 1e-5).
-            activation / situ_beta / situ_linear_beta: GLU activation for both the routed and shared
-                experts. Defaults to "silu", which is also what the device path runs; "situ" models
-                the K3 checkpoint faithfully but has no TT kernel yet (#51335).
+            activation / situ_beta / situ_linear_beta: GLU activation for the ROUTED experts, and
+                for the shared expert unless shared_activation overrides it. Defaults to "silu".
+                Kimi-K3's routed experts run "situ" on device (RoutedExpertActivation.SituGlu).
+            shared_activation: GLU activation for the SHARED expert; defaults to activation. The
+                two sites are configured independently on device -- a fused kernel vs composed ttnn
+                ops -- so the reference mirrors them independently. No model splits them today.
         """
         super().__init__()
 
@@ -304,7 +308,9 @@ class TorchMoe(nn.Module):
 
         # The shared expert stays at emb_dim on the pre-projection input, with its own intermediate.
         use_identity = routed_weights is None
-        act = dict(activation=activation, situ_beta=situ_beta, situ_linear_beta=situ_linear_beta)
+        situ = dict(situ_beta=situ_beta, situ_linear_beta=situ_linear_beta)
+        act = dict(activation=activation, **situ)
+        shared_act = dict(activation=activation if shared_activation is None else shared_activation, **situ)
         self.routed_experts = nn.ModuleList(
             [
                 TorchExpert(
@@ -322,7 +328,7 @@ class TorchMoe(nn.Module):
             self.shared_hidden_dim,
             torch_weights=shared_weights,
             use_identity=use_identity,
-            **act,
+            **shared_act,
         )
 
         # Create reduce module (sums over topk dimension)

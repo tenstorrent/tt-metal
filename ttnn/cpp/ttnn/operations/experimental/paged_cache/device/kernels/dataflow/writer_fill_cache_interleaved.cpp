@@ -140,8 +140,7 @@ void kernel_main() {
         }
     }
 
-    const uint32_t tile_bytes = get_tile_size(cb_id_in);
-    const DataFormat data_format = get_dataformat(cb_id_in);
+    const uint32_t tile_bytes = cb_in.get_tile_size();
 
     const auto out_gen = TensorAccessor(s0_args, dst_addr);
     const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr);

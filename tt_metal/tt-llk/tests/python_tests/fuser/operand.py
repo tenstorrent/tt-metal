@@ -230,20 +230,19 @@ class Operand:
         )
         return f"[[maybe_unused]] const Operand {self.cpp_name}({hex(self.l1_address)}, {buffer_size});\n"
 
-    def cpp_tdma_decl_init(self) -> str:
+    def cpp_buf_desc_decl(self) -> str:
         return (
-            f"tdma_descriptor_t {self.cpp_desc_name} = "
-            f"ckernel::trisc::construct_tdma_desc("
+            f"buffer_descriptor_u {self.cpp_desc_name} = "
+            f"ckernel::trisc::construct_buf_desc("
             f"{self.tile_shape.cpp_value}, "
             f"{hex(self.l1_address)} / 16, "
-            f"{self.data_format.cpp_underlying_value}, "
-            f"{self.buf_desc_id}, 0);\n"
+            f"{self.data_format.cpp_underlying_value});\n"
         )
 
     def emit_buf_desc_table_entry(self) -> str:
         if self.buf_desc_id is None:
             return ""
-        return f"ckernel::trisc::_configure_buf_desc_table_({self.buf_desc_id}, {self.cpp_desc_name}.buf_desc);\n"
+        return f"ckernel::trisc::_configure_buf_desc_table_({self.buf_desc_id}, {self.cpp_desc_name});\n"
 
 
 class OperandRegistry:
@@ -417,7 +416,7 @@ class OperandRegistry:
     def emit_operand_init(operands: list[Operand]) -> str:
         code = ""
         for op in operands:
-            code += op.cpp_tdma_decl_init()
+            code += op.cpp_buf_desc_decl()
             code += op.emit_buf_desc_table_entry()
         return code
 

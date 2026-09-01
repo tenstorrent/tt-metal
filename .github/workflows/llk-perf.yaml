@@ -16,6 +16,11 @@ on:
           - wormhole
           - blackhole
           - quasar
+      speed-of-light:
+        description: "Enable --speed-of-light for LLK performance tests"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   checks: write
@@ -34,6 +39,8 @@ jobs:
     with:
       # Scheduled runs have no dispatch inputs, so retain the existing behavior.
       architecture: ${{ inputs.architecture || 'all' }}
+      # Nightly runs always use speed-of-light; manual runs use the checkbox.
+      speed-of-light: ${{ github.event_name == 'schedule' || inputs.speed-of-light }}
     secrets: inherit
 
   llk-perf-summary:

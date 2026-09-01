@@ -118,9 +118,6 @@ static void run_writer() {
 
     const uint32_t input_Ht = chunk_local_t;
     const uint32_t start_idx = batch_idx * cache_CHtWt + update_idxt * Wt;
-    const uint32_t start_id =
-        start_idx + (core_blocks_written / input_Ht) * cache_HtWt + (core_blocks_written % input_Ht) * Wt;
-
     const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
     CircularBuffer cb(cb_id_out);
 
@@ -128,12 +125,23 @@ static void run_writer() {
     // `cache_args` and `noc` are declared above (shared with the optional metadata read).
     const auto s = TensorAccessor(cache_args, dst_addr);
 
-    const uint32_t end_id = start_id + num_pages;
-    for (uint32_t i = start_id; i < end_id; ++i) {
-        cb.wait_front(onepage);
-        noc.async_write(cb, s, page_bytes, {}, {.page_id = i});
-        noc.async_writes_flushed();
-        cb.pop_front(onepage);
+    // One block is one page-row (Wt pages) of one head, head-major / row-minor as the reader streams
+    // them. The cache's head stride (cache_HtWt) exceeds the input's (input_Ht * Wt) once the cache is
+    // deeper than one chunk, so each page id is recomputed from (head, row) rather than walked with ++,
+    // which would cross into the previous head's rows. Only reachable at C > 1.
+    // Exact: the program factory passes num_pages as num_blocks_per_core * Wt, so there is never a
+    // partial block to drop here.
+    const uint32_t num_blocks = num_pages / Wt;
+    for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+        const uint32_t block = core_blocks_written + blk;
+        const uint32_t row = block % input_Ht;
+        const uint32_t page0 = start_idx + (block / input_Ht) * cache_HtWt + row * Wt;
+        for (uint32_t w = 0; w < Wt; ++w) {
+            cb.wait_front(onepage);
+            noc.async_write(cb, s, page_bytes, {}, {.page_id = page0 + w});
+            noc.async_writes_flushed();
+            cb.pop_front(onepage);
+        }
     }
     noc.async_write_barrier();
 }

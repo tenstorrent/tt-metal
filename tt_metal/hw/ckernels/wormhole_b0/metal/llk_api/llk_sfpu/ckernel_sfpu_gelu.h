@@ -208,7 +208,7 @@ void gelu_init() {
         sfpi::vConstFloatPrgm0 = 0.5f;
 
         // LUT segments (6-entry piecewise linear, each hi/lo pair packed into one imm32):
-        // [0.0, 0.5): slope=0.1928, intercept=-0.0150  (lreg0)
+        // [0.0, 0.5): slope=0.1928, intercept=-0.000104  (lreg0)
         // [0.5, 1.0): slope=0.4939, intercept=-0.1605  (lreg0 hi / lreg4 hi)
         // [1.0, 1.5): slope=0.6189, intercept=-0.2797  (lreg1)
         // [1.5, 2.0): slope=0.6099, intercept=-0.2635  (lreg1 hi / lreg5 hi)
@@ -381,7 +381,6 @@ inline void calculate_gelu_tanh() {
     }
 }
 
-template <bool is_fp32_dest_acc_en>
 inline void gelu_tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // initialise constants for _sfpu_tanh_fp32_accurate_

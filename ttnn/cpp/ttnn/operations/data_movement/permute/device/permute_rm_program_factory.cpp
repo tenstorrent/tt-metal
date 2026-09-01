@@ -308,10 +308,12 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
     // Metal 2.0 requires an explicit unpack_modes entry for every Float32 DFB the compute
     // kernel consumes when enable_32_bit_dest = true. The compute kernel consumes SRC_CB
-    // (via tilize) and TILIZE_CB (self-loop). Legacy default (Default) → UnpackToSrc.
+    // (via tilize) and TILIZE_CB (self-loop). UnpackToDest, not UnpackToSrc: SrcA/SrcB are
+    // only 19 bits wide, so unpacking Float32 there truncates it to tf32. MultiCoreTiledGeneric
+    // already sets UnpackToDest on the same two CBs.
     // (Float32-only; Int32/UInt32 not required yet — issue #49936.)
     if (cb_data_format == tt::DataFormat::Float32) {
-        compute_cfg.unpack_modes = {{SRC_CB, UnpackMode::UnpackToSrc}, {TILIZE_CB, UnpackMode::UnpackToSrc}};
+        compute_cfg.unpack_modes = {{SRC_CB, UnpackMode::UnpackToDest}, {TILIZE_CB, UnpackMode::UnpackToDest}};
     }
 
     KernelSpec compute{

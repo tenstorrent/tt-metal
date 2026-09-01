@@ -73,7 +73,7 @@ void reduce_rm_reader() {
     dataflow_kernel_lib::prepare_reduce_scaler<cb_id_scaler, REDUCE_OP, DIM>(scaler_f, scaler_valid_for_reduce);
 
     // Identity template — pre-built once, reused as the pad source for every staged slab.
-    const uint32_t clear_template_bytes = get_tile_size(cb_id_clear_value);
+    const uint32_t clear_template_bytes = cb_clear_value.get_tile_size();
     rm_fill_buffer_with_identity_pattern(
         cb_clear_value.get_write_ptr(), clear_template_bytes, elem_bytes, padding_identity_bits);
     cb_clear_value.push_back(onepage);

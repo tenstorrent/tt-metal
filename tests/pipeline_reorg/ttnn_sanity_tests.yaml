@@ -5,7 +5,7 @@
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
 # Optional: fast_runtime_mode_off.
 #
-# sim_wormhole_b0 / sim_blackhole SKUs run the same cmd under the ttsim simulator
+# sim_wh_n150 / sim_bh_p150 SKUs run the same cmd under the ttsim simulator
 # on ubuntu-latest; ttnn-sanity-tests-impl.yaml invokes setup-ttsim for these.
 # See .github/actions/setup-ttsim/action.yml.
 
@@ -37,6 +37,8 @@
     tests/ttnn/unit_tests/operations/data_movement/test_full.py::test_full_int
     tests/ttnn/unit_tests/operations/data_movement/test_dropout.py::test_dopout
     tests/ttnn/unit_tests/operations/data_movement/test_non_zero_indices.py::test_non_zero_indices_ttnn
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n300_civ2:
       timeout: 5
@@ -44,9 +46,9 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 40
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 40
   team: ttnn
   owner_id: U05ACKAJTHS # Naif Tarafdar
@@ -60,9 +62,9 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 40
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 40
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
@@ -76,9 +78,9 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 40
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 40
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
@@ -92,9 +94,9 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 40
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 40
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
@@ -108,9 +110,9 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 40
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 40
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
@@ -124,9 +126,9 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 60
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 60
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
@@ -140,9 +142,9 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 40
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 40
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
@@ -156,9 +158,9 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 60
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 60
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
@@ -172,9 +174,9 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 60
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 60
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
@@ -188,9 +190,9 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 60
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 60
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
@@ -204,9 +206,9 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 40
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 40
   team: ttnn
   owner_id: U08JFM3CFA4 # Gongyu Wang
@@ -220,18 +222,18 @@
       timeout: 15
     bh_p150b_civ2:
       timeout: 15
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 40
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 40
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
 
 # indexer_score is Blackhole-only (the nightly suite has the full coverage); this reuses the accuracy
-# test's sp_rank-7 GLM5.1/DSv32 deployment cases (8h/16h, bf16 + bfp8 q, deployed bfp8 k) so post-commit/
+# test's sp_rank-7 GLM5.1 deployment cases (8h, bf16 + bfp8 q, deployed bfp8 k) so post-commit/
 # sanity catches deployment regressions and the op gets watcher coverage, without re-running them nightly.
 - name: "ttnn indexer_score group"
-  cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py -k "accuracy and rank7" -xv'
+  cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py -k "accuracy and rank7" -xv'
   skus:
     wh_n300_civ2:
       timeout: 10
@@ -239,9 +241,9 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 10
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 40
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 40
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
@@ -255,9 +257,9 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 40
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 40
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
@@ -268,6 +270,8 @@
   # device. Exporting it here rather than relying on the directory conftest's fixture also makes
   # the requirement visible, and satisfies the requires_hybrid_allocator marker on those tests.
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode" && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/per_core_allocation -xv'
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n300_civ2:
       timeout: 40
@@ -275,9 +279,22 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 40
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 40
+  team: ttnn
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+
+- name: "trace allocation tracker"
+  cmd: |
+    pytest --timeout 300 tests/ttnn/unit_tests/test_trace_allocation_config.py -xv
+    TT_METAL_TRACE_ALLOC_TRACKING=1 pytest --timeout 300 tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py -k 'trace_allocation_tracking' -xv
+    TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_TRACEBACKS=1 pytest --timeout 300 tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py -k 'trace_allocation_tracking_acknowledgments_and_lifetime' -xv
+  skus:
+    wh_n300_civ2:
+      timeout: 10
+    sim_wh_n150:
+      timeout: 15
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev

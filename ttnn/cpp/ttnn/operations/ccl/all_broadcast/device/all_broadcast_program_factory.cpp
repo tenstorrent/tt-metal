@@ -188,13 +188,14 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     writer_compile_args.insert(writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
     std::map<std::string, std::string> kernel_defines;
+    const auto& output_tensor = output_tensors[ring_index];
     if (sharded) {
         kernel_defines["SHARDED"] = "1";
         shard_builder::extend_sharding_compile_time_args(input_tensor, reader_compile_args);
         shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_args);
     } else {
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
     }
 
     // Build kernel descriptors.  Push them onto desc.kernels NOW (before the

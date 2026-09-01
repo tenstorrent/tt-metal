@@ -32,6 +32,7 @@
 
 #include "dfb_test_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "device_fixture.hpp"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -181,7 +182,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     std::vector<DataT> result_init(expected_scalar_reads.size(), 0u);
     slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), result_l1_addr, result_init);
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     tt_driver_atomics::mfence();
     std::vector<DataT> scalar_results;
@@ -471,7 +472,7 @@ void run_extent_probe(distributed::MeshDevice& mesh_device, const ExtentProbePar
     };
     m2::SetProgramRunArgs(program, run_args);
 
-    slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
     tt_driver_atomics::mfence();
 
     const CoreCoord core{0, 0};

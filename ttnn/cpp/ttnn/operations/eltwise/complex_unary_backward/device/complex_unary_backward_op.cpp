@@ -43,7 +43,7 @@ std::vector<ComplexTensor> _polar_bw(
     sgn_result.deallocate();
     ComplexTensor flip_tensor = ComplexTensor(
         {ttnn::zeros_like(input.real(), input.real().dtype(), input.real().layout(), std::nullopt, output_mem_config),
-         ttnn::ones_like(input.imag())});
+         ttnn::ones_like(input.imag(), input.imag().dtype(), input.imag().layout(), std::nullopt, output_mem_config)});
     Tensor grad_angle = ttnn::real(
         ttnn::operations::complex_binary::multiply(
             ttnn::conj(grad, output_mem_config),

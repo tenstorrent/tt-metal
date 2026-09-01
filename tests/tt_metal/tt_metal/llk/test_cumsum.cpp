@@ -87,7 +87,6 @@ void run_single_core_cumsum(
     Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
 
     CoreCoord core = {0, 0};
 
@@ -100,19 +99,17 @@ void run_single_core_cumsum(
     uint32_t H = test_config.Ht * tile_height;
     uint32_t dram_buffer_size = single_tile_size * test_config.N * test_config.Wt * test_config.Ht;
 
-    tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
-        .size = dram_buffer_size,
-        .page_size = dram_buffer_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig global_config{.size = dram_buffer_size};
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = dram_buffer_size, .buffer_type = tt_metal::BufferType::DRAM};
 
-    auto src_dram_buffer = CreateBuffer(dram_config);
+    auto src_dram_buffer = distributed::MeshBuffer::create(global_config, dram_config, mesh_device.get());
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
     tt_metal::CircularBufferConfig l1_src_cb_config = tt_metal::CircularBufferConfig(dram_buffer_size, {{0, tt::DataFormat::Float16_b}})
         .set_page_size(0, single_tile_size);
     tt_metal::CreateCircularBuffer(program_, core, l1_src_cb_config);
 
-    auto dst_dram_buffer = CreateBuffer(dram_config);
+    auto dst_dram_buffer = distributed::MeshBuffer::create(global_config, dram_config, mesh_device.get());
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
     tt_metal::CircularBufferConfig l1_dst_cb_config = tt_metal::CircularBufferConfig(dram_buffer_size, {{16, tt::DataFormat::Float16_b}})
         .set_page_size(16, single_tile_size);
@@ -193,13 +190,13 @@ void run_single_core_cumsum(
     auto input_packed_tilized =
         ::unit_tests::compute::gold_standard_tilize(input_packed, {test_config.N * test_config.Ht, test_config.Wt});
 
-    tt_metal::detail::WriteToBuffer(src_dram_buffer, input_packed_tilized);
+    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, input_packed_tilized, /*blocking=*/true);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
     std::vector<uint32_t> output_packed_tilized;
-    tt_metal::detail::ReadFromBuffer(dst_dram_buffer, output_packed_tilized);
+    distributed::EnqueueReadMeshBuffer(cq, output_packed_tilized, dst_dram_buffer, /*blocking=*/true);
     auto output_packed = ::unit_tests::compute::gold_standard_untilize(
         output_packed_tilized, {test_config.N * test_config.Ht, test_config.Wt});
 

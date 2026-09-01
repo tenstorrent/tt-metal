@@ -42,58 +42,56 @@ void kernel_main() {
 
     DataflowBuffer dfb(dfb::scratch);
     dfb.reserve_back(1);
-    const uint32_t buf_addr = dfb.get_write_ptr();
-    CoreLocalMem<volatile uint32_t> buf(buf_addr);
     const uint32_t num_words = total_bytes / sizeof(uint32_t);
+
+    Noc noc;
+    uint32_t status = kStatusOk;
 
     // Stamp 0xFF into every byte and verify it landed before the zero-API call.
     {
-        auto lock = buf.scoped_lock(num_words);
+        const auto stamp_lock = dfb.scoped_write_lock(1);
+        auto buf = stamp_lock.get_ptr<volatile uint32_t>();
         for (uint32_t i = 0; i < num_words; ++i) {
             buf[i] = 0xFFFFFFFFu;
         }
         for (uint32_t i = 0; i < num_words; ++i) {
             if (buf[i] != 0xFFFFFFFFu) {
-                report(flag_addr, kStatusStampFail);
-                dfb.push_back(1);
-                return;
+                status = kStatusStampFail;
+                break;
             }
         }
     }
 
-    // TODO(buffer-unlock-eviction): unlock should evict the buffer's dirty lines from
-    // this core's cache. Until that is implemented, evict explicitly here so the iDMA
-    // zero (which writes TL1, bypassing the cache) is not shadowed by the stale 0xFF
-    // stamp on the readback below. Remove this loop once scoped_lock release evicts.
-#ifdef ARCH_QUASAR
-    for (uint32_t off = 0; off < total_bytes; off += L2_CACHE_LINE_SIZE) {
-        invalidate_l2_cache_line(buf_addr + off);
-    }
-#endif
-
-    Noc noc;
+    if (status == kStatusOk) {
+        {
+            const auto zero_lock = dfb.scoped_write_lock(1);
 #ifdef ZERO_NUM_CHUNKS
-    // Issue ZERO_NUM_CHUNKS disjoint async_write_zeros into this one entry, then barrier
-    // ONCE.
-    const uint32_t chunk_bytes = total_bytes / ZERO_NUM_CHUNKS;  // host picks an exact divisor
-    for (uint32_t c = 0; c < ZERO_NUM_CHUNKS; ++c) {
-        noc.async_write_zeros(dfb, chunk_bytes, {.offset_bytes = c * chunk_bytes});
-    }
-    noc.write_zeros_l1_barrier();
+            // Issue ZERO_NUM_CHUNKS disjoint async_write_zeros into this one entry, then barrier
+            // ONCE.
+            const uint32_t chunk_bytes = total_bytes / ZERO_NUM_CHUNKS;  // host picks an exact divisor
+            for (uint32_t c = 0; c < ZERO_NUM_CHUNKS; ++c) {
+                noc.async_write_zeros(dfb, chunk_bytes, {.offset_bytes = c * chunk_bytes});
+            }
+            noc.write_zeros_l1_barrier();
 #else
-    noc.async_write_zeros(dfb, total_bytes);
-    noc.write_zeros_l1_barrier();
+            noc.async_write_zeros(dfb, total_bytes);
+            noc.write_zeros_l1_barrier();
 #endif
+        }
 
-    // Verify every byte is now 0.
-    for (uint32_t i = 0; i < num_words; ++i) {
-        if (buf[i] != 0u) {
-            report(flag_addr, kStatusZeroFail);
-            dfb.push_back(1);
-            return;
+        // Verify every byte is now 0.
+        {
+            const auto verify_lock = dfb.scoped_read_lock(1);
+            auto buf = verify_lock.get_ptr<volatile uint32_t>();
+            for (uint32_t i = 0; i < num_words; ++i) {
+                if (buf[i] != 0u) {
+                    status = kStatusZeroFail;
+                    break;
+                }
+            }
         }
     }
 
     dfb.push_back(1);
-    report(flag_addr, kStatusOk);
+    report(flag_addr, status);
 }

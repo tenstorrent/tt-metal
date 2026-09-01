@@ -11,8 +11,6 @@ on:
         options:
           - all
           - unit
-          - wan22
-          - qwenimage
       platform:
         required: false
         type: choice

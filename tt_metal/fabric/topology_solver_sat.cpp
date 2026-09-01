@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
+#include <map>
 #include <numeric>
 #include <set>
 #include <string>
@@ -536,29 +537,34 @@ inline void topology_sat_add_at_most_one_sequential(TopologySatSolver& solver, c
     solver.add(0);
 }
 
-// ── Host-Usage Budget (minimize distinct same-rank global groups used) ────────
+// ── Hard host cap: "at most k same-rank host groups occupied" with a full-packing fast path ────
 //
-// Adds a hard "at most k_hosts distinct same-rank global groups (host partitions) are used" constraint.
-// For every host group p that has at least one assignment literal, introduce an indicator h_p and add
-// (¬x_{t,g} v h_p) for each assign literal whose global g belongs to group p — so using any global in p
-// forces h_p true. Bounding the number of true h_p to k_hosts is encoded as "at least (P - k_hosts) of the
-// h_p are false" via the existing at-least-k machinery over the negated indicator literals.
-//
-// Returns true if the budget was encoded (or is non-binding); false only if the at-least-k encoding reports
-// the bound is trivially impossible (caller then tries a larger budget).
-bool topology_sat_encode_host_group_budget(
+// The minimal-host objective is a cardinality constraint over per-host-group OCCUPANCY: "at most k of the same-rank
+// global groups (host partitions) are occupied", with the solver free to choose WHICH k. The general encoding uses a
+// sequential-counter over the occupancy literals, whose propagation is weak. When a minimal-host packing fills each
+// used host COMPLETELY (n_target is a multiple of a uniform group capacity -- e.g. a 16-host ring where every host is
+// fully used), an all-or-nothing per-host encoding forces the count with strong unit propagation alone, no counter --
+// this is the fast path that lets the solver actually find such packings (see issue #50253: SC16 ring on SC24).
+
+// Build one "occupied" indicator per non-empty host group: occ_g <=> (some target maps into a global of group g).
+// When all_or_nothing is true, additionally force occ_g => every (reachable) global of g is used. This is valid ONLY
+// when a minimal-host packing fills each used host completely; it eliminates partially-used hosts, which massively
+// prunes the at-most-k search. Returns the occupancy indicators (one per non-empty group).
+inline void topology_sat_build_group_occupancy(
     TopologySatSolver& solver,
     const TopologySatConstraintView& constraint_data,
     const TopologySatHardEncoding& enc,
-    size_t k_hosts) {
+    bool all_or_nothing,
+    std::vector<int>& occ_out) {
+    occ_out.clear();
     const auto& global_to_host = constraint_data.global_to_same_rank_group;
     const size_t num_groups = constraint_data.same_rank_groups.size();
     if (global_to_host.empty() || num_groups == 0) {
-        return true;
+        return;
     }
 
-    // Collect assignment literals per host group (group labels are dense ids in [0, num_groups)).
-    std::vector<std::vector<int>> host_assign_lits(num_groups);
+    // Per group, gather the assign literals landing a target on each global mesh of that group.
+    std::vector<std::map<size_t, std::vector<int>>> group_mesh_lits(num_groups);
     const size_t nt = enc.assign_lit.size();
     for (size_t t = 0; t < nt; ++t) {
         const auto& globs = enc.allowed_global_idx[t];
@@ -572,35 +578,110 @@ bool topology_sat_encode_host_group_budget(
             if (label < 0 || static_cast<size_t>(label) >= num_groups) {
                 continue;
             }
-            host_assign_lits[static_cast<size_t>(label)].push_back(lits[k]);
+            group_mesh_lits[static_cast<size_t>(label)][g].push_back(lits[k]);
         }
     }
 
-    // One "host used" indicator per non-empty group, with backward implication (used global => host used).
-    std::vector<int> neg_host_lits;
-    neg_host_lits.reserve(num_groups);
     for (size_t p = 0; p < num_groups; ++p) {
-        if (host_assign_lits[p].empty()) {
+        auto& mesh_lits = group_mesh_lits[p];
+        if (mesh_lits.empty()) {
             continue;
         }
-        const int h = solver.declare_one_more_variable();
-        for (int a : host_assign_lits[p]) {
-            solver.add(-a);
-            solver.add(h);
+        // Per-mesh "used" indicator: used_m <=> OR(assign lits that land a target on mesh m).
+        std::vector<int> used_m;
+        used_m.reserve(mesh_lits.size());
+        for (auto& [gidx, lits] : mesh_lits) {
+            const int um = solver.declare_one_more_variable();
+            solver.add(-um);  // um => OR(lits)
+            for (int l : lits) {
+                solver.add(l);
+            }
+            solver.add(0);
+            for (int l : lits) {  // each lit => um
+                solver.add(-l);
+                solver.add(um);
+                solver.add(0);
+            }
+            used_m.push_back(um);
+        }
+        // occ_g <=> OR(used_m).
+        const int occ = solver.declare_one_more_variable();
+        solver.add(-occ);
+        for (int um : used_m) {
+            solver.add(um);
+        }
+        solver.add(0);
+        for (int um : used_m) {
+            solver.add(-um);
+            solver.add(occ);
             solver.add(0);
         }
-        neg_host_lits.push_back(-h);
+        if (all_or_nothing) {
+            for (int um : used_m) {  // occ => every reachable mesh of the group is used
+                solver.add(-occ);
+                solver.add(um);
+                solver.add(0);
+            }
+        }
+        occ_out.push_back(occ);
     }
+}
 
-    const size_t num_present = neg_host_lits.size();
+// Capacity feasibility: can k same-rank global groups hold n_target placements at all? The k LARGEST groups must sum
+// to >= n_target (generalizes ceil(n_target / max_group_size) to non-uniform group sizes).
+inline bool topology_sat_max_groups_cap_capacity_feasible(
+    const TopologySatConstraintView& constraint_data, size_t n_target, size_t k) {
+    if (k == 0 || n_target == 0) {
+        return true;
+    }
+    std::vector<size_t> capacities;
+    capacities.reserve(constraint_data.same_rank_groups.size());
+    for (const auto& g : constraint_data.same_rank_groups) {
+        if (!g.empty()) {
+            capacities.push_back(g.size());
+        }
+    }
+    if (capacities.empty()) {
+        return true;  // no partition registered; cap is non-binding
+    }
+    std::sort(capacities.begin(), capacities.end(), std::greater<size_t>());
+    size_t reachable_capacity = 0;
+    for (size_t i = 0; i < k && i < capacities.size(); ++i) {
+        reachable_capacity += capacities[i];
+    }
+    return reachable_capacity >= n_target;
+}
+
+// HARD: at most k_hosts same-rank global groups occupied. Returns true if encoded (or non-binding); false only if the
+// underlying cardinality is trivially impossible. `full_packing` == true additionally applies the all-or-nothing
+// occupancy tightening (a used host must be completely filled), which lets tight packings propagate by unit
+// resolution and is what makes cases like a 16-host ring on a 24-host cluster tractable (issue #50253). The
+// at-most-k counter is ALWAYS emitted, though: `full_packing` is derived from the RAW group size, but pinnings /
+// degree filtering / AC-3 can leave a group with fewer *reachable* globals than its raw capacity, and then
+// n_target == k * capacity can be satisfied across MORE than k partially-reachable groups. Relying on all-or-nothing
+// alone would silently exceed the cap; the counter guarantees the bound. The counter is over the per-group
+// occupancy indicators only (one literal per group), so it stays cheap and does not reintroduce the old bottleneck.
+inline bool topology_sat_encode_at_most_k_groups(
+    TopologySatSolver& solver,
+    const TopologySatConstraintView& constraint_data,
+    const TopologySatHardEncoding& enc,
+    size_t k_hosts,
+    bool full_packing) {
+    std::vector<int> occ;
+    topology_sat_build_group_occupancy(solver, constraint_data, enc, /*all_or_nothing=*/full_packing, occ);
+    const size_t num_present = occ.size();
     if (num_present == 0 || k_hosts >= num_present) {
-        return true;  // budget is not binding
+        return true;  // not binding
     }
-
-    static constexpr size_t kHostBudgetCombClauses = 500000;
+    // "at most k occupied" == "at least (num_present - k) of the negated occupancy literals".
+    std::vector<int> neg;
+    neg.reserve(num_present);
+    for (int o : occ) {
+        neg.push_back(-o);
+    }
+    static constexpr size_t kGroupBudgetCombClauses = 500000;
     std::string reason;
-    return topology_sat_add_at_least_k_literals(
-        solver, neg_host_lits, num_present - k_hosts, kHostBudgetCombClauses, &reason);
+    return topology_sat_add_at_least_k_literals(solver, neg, num_present - k_hosts, kGroupBudgetCombClauses, &reason);
 }
 
 // ── Hard Constraint Encoding Sub-functions ────────────────────────────────────
@@ -1477,52 +1558,99 @@ bool topology_sat_search(
         return finalize_success(solver, enc);
     };
 
-    // Opt-in objective: minimize the number of distinct same-rank global groups (host partitions) the mapping
-    // touches. Walk a host-usage budget upward from the capacity-based lower bound (ceil(n_target / max group
-    // capacity)) and return the first budget that is satisfiable — that is the minimum number of hosts. This is a
-    // complete (not greedy) search, so it finds the true minimum host count when one exists. It is best-effort:
-    // if no budget below the total group count is satisfiable we fall through to the normal unconstrained solve,
-    // so enabling the objective can never turn a solvable instance UNSAT.
-    if (constraint_data.minimize_same_rank_groups_used) {
+    // Minimal-host objective, expressed via same-rank-group OCCUPANCY (driven entirely by MappingConstraints):
+    //   - max_same_rank_groups_used > 0  -> HARD "at most K host groups occupied" (solver picks WHICH K).
+    //   - minimize_same_rank_groups_used -> SOFT best-effort: target the capacity lower bound in a single attempt.
+    // Both let the solver choose ANY host combination, so we never pin to a specific (possibly-unroutable) cover.
+    // The HARD cap is honored STRICTLY: if the at-most-K occupancy encode is UNSAT / too hard within the conflict
+    // budget, this returns failure rather than silently dropping the cap (which would violate the constraint the
+    // caller set). Relaxing the cap is the CALLER's decision -- topology_mapper_utils retries without it. The SOFT
+    // minimize, when it is the only objective, is best-effort and falls through to the unconstrained solve below.
+    if (constraint_data.max_same_rank_groups_used > 0 || constraint_data.minimize_same_rank_groups_used) {
         size_t num_host_groups = 0;
         size_t max_group_capacity = 0;
+        size_t min_group_capacity = SIZE_MAX;
         for (const auto& grp : constraint_data.same_rank_groups) {
             if (!grp.empty()) {
                 ++num_host_groups;
                 max_group_capacity = std::max(max_group_capacity, grp.size());
+                min_group_capacity = std::min(min_group_capacity, grp.size());
             }
         }
-        if (num_host_groups >= 2 && max_group_capacity > 0) {
-            const size_t k_min = (graph_data.n_target + max_group_capacity - 1) / max_group_capacity;
-            // Each tight host-budget solve is conflict-capped. Proving the minimum host count for a ring/chain
-            // embedded into a strictly larger physical graph (e.g. a 64-mesh decode ring on an 80-mesh / 20-host
-            // supercluster) is a Hamiltonian-cycle-with-cardinality search the SAT engine can spin on for minutes;
-            // the cap lets an intractable budget be abandoned so the loop (and then the unconstrained fall-through
-            // below) still returns a valid mapping quickly. Tractable budgets finish well within the cap and return
-            // the identical model they would unbounded, so existing golden mappings are unchanged.
-            static constexpr int kHostMinimizeConflictBudget = 300'000;
-            for (size_t k = std::max<size_t>(k_min, 1); k < num_host_groups; ++k) {
+        if (num_host_groups >= 1 && max_group_capacity > 0) {
+            // Capacity lower bound on host groups. The HARD cap value (when set) is the caller's K; the SOFT
+            // minimize has no explicit K, so it targets this floor in a single shot.
+            const size_t k_floor = (graph_data.n_target + max_group_capacity - 1) / max_group_capacity;
+            const size_t K = (constraint_data.max_same_rank_groups_used > 0)
+                                 ? constraint_data.max_same_rank_groups_used
+                                 : k_floor;
+            // Uniform capacity (all host groups the same size) enables the full-packing fast path: when
+            // n_target == K * capacity every used host is filled completely, so the all-or-nothing occupancy
+            // encoding forces the host count by unit propagation alone (no weak sequential counter). This is what
+            // makes tight packings like a 16-host ring on a 24-host cluster tractable (issue #50253).
+            const bool uniform_capacity = (min_group_capacity == max_group_capacity);
+            const bool full_packing = uniform_capacity && (graph_data.n_target == K * max_group_capacity);
+            // The occupancy solve is conflict-capped so an intractable cap is abandoned for the fall-through rather
+            // than proved unbounded. Tractable caps finish well within the budget and return the identical model
+            // they would unbounded, so existing golden mappings are unchanged.
+            static constexpr int kHostCapConflictBudget = 300'000;
+            // Attempt the at-most-K occupancy encode once. Returns: 1 = solved (mapping finalized), 0 =
+            // UNSAT/unencodable/timed out (fall through), -1 = hard constraints alone are UNSAT (defer to the
+            // normal path for error messaging).
+            auto attempt_cap = [&](bool packing) -> int {
                 TopologySatSolver solver;
                 TopologySatHardEncoding enc;
                 if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
-                    break;  // hard constraints alone are UNSAT; defer to the normal path for error messaging
+                    return -1;
                 }
-                if (!topology_sat_encode_host_group_budget(solver, constraint_data, enc, k)) {
-                    continue;  // this budget is trivially unencodable; try a larger one
+                if (!topology_sat_encode_at_most_k_groups(solver, constraint_data, enc, K, packing)) {
+                    return 0;
                 }
-                if (solver.solve_limited(kHostMinimizeConflictBudget) == TopologySatSolver::kSat &&
+                if (solver.solve_limited(kHostCapConflictBudget) == TopologySatSolver::kSat &&
                     finalize_success(solver, enc)) {
                     if (!quiet_mode) {
                         log_info(
                             tt::LogFabric,
-                            "Topology SAT: minimized host-group usage to {} group(s) (capacity lower bound {})",
-                            k,
-                            k_min);
+                            "Topology SAT: confined host-group usage to at most {} group(s) (capacity lower bound {})",
+                            K,
+                            k_floor);
                     }
+                    return 1;
+                }
+                return 0;
+            };
+            // Only attempt when K can actually hold every target (the K largest groups must sum to >= n_target).
+            if (topology_sat_max_groups_cap_capacity_feasible(constraint_data, graph_data.n_target, K)) {
+                int r = attempt_cap(full_packing);
+                if (r == 1) {
                     return true;
                 }
+                // Retry the SAME cap with the general (non-all-or-nothing) encoding, so the aggressive full-packing
+                // fast path can never lose a mapping the general cardinality constraint would have found.
+                if (r == 0 && full_packing) {
+                    if (attempt_cap(/*packing=*/false) == 1) {
+                        return true;
+                    }
+                }
             }
-            // No binding budget was satisfiable within the conflict cap; fall through to the unconstrained solve.
+            // The at-most-K cap could not be satisfied (infeasible capacity, UNSAT, or budget exhausted).
+            if (constraint_data.max_same_rank_groups_used > 0) {
+                // HARD cap: honor it strictly. Do NOT fall through to an uncapped solve -- that would silently
+                // VIOLATE the constraint the caller set. Return failure; relaxing the cap is the caller's decision
+                // (topology_mapper_utils retries the mapping without the cap when this fails).
+                state.error_message = fmt::format(
+                    "Topology SAT: could not satisfy the hard at-most-{}-host-group cap for {} target(s) within the "
+                    "conflict budget",
+                    K,
+                    graph_data.n_target);
+                if (quiet_mode) {
+                    log_debug(tt::LogFabric, "{}", state.error_message);
+                } else {
+                    log_info(tt::LogFabric, "{}", state.error_message);
+                }
+                return false;
+            }
+            // SOFT minimize only: best-effort -- fall through to the unconstrained solve below.
         }
     }
 
@@ -1623,6 +1751,20 @@ bool topology_sat_search(
 
 // ── topology_sat_search_n — enumerate up to max_solutions with blocking clauses ─────────────────
 
+// Encode the HARD host-group cap into an enumeration solver so EVERY enumerated model occupies at most
+// max_same_rank_groups_used distinct same-rank global groups. Enforced here (not just filtered by the caller)
+// because the enumeration otherwise streams spread-out placements first and the capped ones may never appear within
+// the caller's max_solutions window. Always uses the general at-most-k counter (no all-or-nothing full-packing
+// tightening) so every valid capped placement stays enumerable. No-op when no cap is set.
+inline bool topology_sat_encode_host_group_cap_for_enumeration(
+    TopologySatSolver& solver, const TopologySatConstraintView& constraint_data, const TopologySatHardEncoding& enc) {
+    if (constraint_data.max_same_rank_groups_used == 0) {
+        return true;
+    }
+    return topology_sat_encode_at_most_k_groups(
+        solver, constraint_data, enc, constraint_data.max_same_rank_groups_used, /*full_packing=*/false);
+}
+
 bool topology_sat_search_n(
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
@@ -1658,6 +1800,9 @@ bool topology_sat_search_n(
     TopologySatHardEncoding enc;
     if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
         return false;
+    }
+    if (!topology_sat_encode_host_group_cap_for_enumeration(solver, constraint_data, enc)) {
+        return false;  // hard host-group cap is trivially unencodable -> no capped solutions
     }
 
     for (const auto& shape_key : initial_forbidden_shape_keys) {
@@ -1728,6 +1873,9 @@ std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_sess
     enc = {};
     if (!topology_sat_encode_hard_constraints(session->solver, graph_data, constraint_data, enc, validation_mode)) {
         return nullptr;
+    }
+    if (!topology_sat_encode_host_group_cap_for_enumeration(session->solver, constraint_data, enc)) {
+        return nullptr;  // hard host-group cap is trivially unencodable -> no capped solutions
     }
     return session;
 }

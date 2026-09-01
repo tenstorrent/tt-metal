@@ -234,8 +234,26 @@ ttnn.attach_golden_function(ttnn.reshape, golden_function=_golden_function)
 ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
 
 
-def _golden_function(input_tensor, *args, **kwargs):
-    return input_tensor
+def _golden_function(input_tensor, dtype=None, *, spec=None, **_):
+    if input_tensor is None:
+        return None
+
+    import torch
+
+    target_dtype = spec.dtype if spec is not None else dtype
+    if target_dtype is None:
+        return input_tensor
+
+    # Host float-to-uint16 conversion truncates and clamps, unlike PyTorch's direct unsigned cast.
+    if isinstance(input_tensor, torch.Tensor) and input_tensor.is_floating_point() and target_dtype == ttnn.uint16:
+        return torch.clamp(input_tensor.to(torch.int32), min=0, max=65535).to(torch.uint16)
+
+    if target_dtype == ttnn.fp8_e4m3:
+        # Match FP8 storage quantization while keeping the golden exportable as torch.float32.
+        return input_tensor.to(torch.float8_e4m3fn).to(torch.float32)
+
+    # Mirror explicit TT dtype conversion so the golden matches values stored by from_torch.
+    return input_tensor.to(ttnn.ttnn_dtype_to_torch_dtype(target_dtype))
 
 
 @ttnn.register_python_operation(name="ttnn.from_torch", golden_function=_golden_function)
@@ -440,23 +458,9 @@ def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-doc = """
-Copies the `ttnn.Tensor` :attr:`tensor` to the `tt_lib.device.MeshDevice`.
-
-The tensor may be placed in DRAM or L1 memory.
-
-Currently memory_config must be of an Interleaved tensor (not sharded)
-
-Args:
-    * :attr:`tensor`: the ttnn.Tensor
-    * :attr:`device`: the ttnn.MeshDevice
-    * :attr:`memory_config`: the optional MemoryConfig (DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG). Defaults to DRAM_MEMORY_CONFIG.
-"""
-
 ttnn.register_python_operation(
     name="ttnn.to_device",
     golden_function=_golden_function,
-    doc=doc,
 )(ttnn._ttnn.operations.core.to_device)
 
 
@@ -464,18 +468,9 @@ def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-doc = """
-Copies the `ttnn.Tensor` :attr:`tensor` to the host.
-
-Args:
-    * :attr:`tensor`: the ttnn.Tensor
-"""
-
-
 ttnn.register_python_operation(
     name="ttnn.from_device",
     golden_function=_golden_function,
-    doc=doc,
 )(ttnn._ttnn.operations.core.from_device)
 
 ttnn.register_python_operation(

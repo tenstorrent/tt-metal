@@ -44,6 +44,11 @@ CoreType get_core_type_from_config(const DispatchCoreConfig& config);
 CoreType resolve_dispatch_core_type(
     MetalEnvImpl& env, tt::ChipId device_id, const DispatchCoreConfig& dispatch_core_config);
 
+// Offline-safe resolution: WH/BH map DispatchCoreType to CoreType. Quasar DISPATCH vs WORKER
+// depends on the SoC descriptor and TT_METAL_TENSIX_DISPATCH_CORES, so this overload throws
+// rather than silently emitting WORKER.
+CoreType resolve_dispatch_core_type(tt::ARCH arch, DispatchCoreType dispatch_core_type);
+
 // Resolve the dispatch core axis from a DispatchCoreConfig without depending on MetalContext.
 // Uses the config's explicit axis if set; otherwise falls back to arch-based resolution.
 // TODO: https://github.com/tenstorrent/tt-metal/issues/39974

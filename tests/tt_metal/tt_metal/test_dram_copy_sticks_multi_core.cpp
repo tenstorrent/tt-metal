@@ -29,6 +29,7 @@
 #include <tt_stl/span.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -116,7 +117,7 @@ TEST_F(UnitMeshFixture, DramCopySticksMultiCore) {
             }
         }
 
-        slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
         // std::vector<uint32_t> result_vec;
         // slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////

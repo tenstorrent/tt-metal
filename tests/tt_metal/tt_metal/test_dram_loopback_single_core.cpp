@@ -12,6 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -57,7 +58,7 @@ TEST_F(UnitMeshFixture, DramLoopbackSingleCore) {
         core,
         {l1_buffer_addr, input_dram_buffer_addr, 0, output_dram_buffer_addr, 0, dram_buffer_size});
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
     slow_dispatch::ReadFromBuffer(*output_dram_buffer, result_vec);

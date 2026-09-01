@@ -206,6 +206,8 @@ void wait_for_go_message() {
 }
 
 #if !defined(COMPILE_FOR_TRISC)
+#include "noc_address_backend.h"
+
 FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) {
     go_msg_t go_message;
     go_message.all = go_message_in->all;
@@ -214,11 +216,8 @@ FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) 
 #else
     constexpr uint32_t dispatch_message_stride = NOC_STREAM_REG_SPACE_SIZE;
 #endif
-    uint64_t addr = NOC_XY_ADDR(
-        NOC_X(go_message.master_x),
-        NOC_Y(go_message.master_y),
-        DISPATCH_MESSAGE_ADDR + dispatch_message_stride * go_message.dispatch_message_offset);
-    return addr;
+    const uint32_t local_addr = DISPATCH_MESSAGE_ADDR + dispatch_message_stride * go_message.dispatch_message_offset;
+    return noc_address_backend::dispatch_address(go_message.master_x, go_message.master_y, local_addr);
 }
 
 FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_index) {

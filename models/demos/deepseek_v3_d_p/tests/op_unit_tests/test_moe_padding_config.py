@@ -22,15 +22,27 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
-# Galaxy-shaped SP=8 config (chunk_size_global 5120 -> tokens_per_chip 640) plus a small 2x4 case so
-# the op is exercised on boxes that cannot host 32 chips.
+# Galaxy-shaped SP=8 config (chunk_size_global 5120 -> tokens_per_chip 640) plus the existing small
+# 2x4 case for boxes that cannot host 32 chips. Keep this one-for-one: the production row owns
+# TorusXY, while the local row owns plain Fabric2D.
 _MESHES = [
-    pytest.param((8, 4), marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4")),
-    pytest.param((2, 4), marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4")),
+    pytest.param(
+        (8, 4),
+        torus_xy_device_params(),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="torus-xy-8x4",
+    ),
+    pytest.param(
+        (2, 4),
+        fabric2d_device_params(),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+        id="fabric2d-2x4",
+    ),
 ]
-_MESH_IDS = ["8x4", "2x4"]
 
 # (actual_start, actual_isl) pairs. Chosen to cover every branch of the rotation:
 #   * start == 0                -> sequential layout (the degenerate case)
@@ -93,7 +105,7 @@ def _read_counts(config: ttnn.Tensor, mesh_device, sp_factor: int) -> tuple[list
 
 def _run_case(mesh_device, actual_start: int, actual_isl: int, padding_side: str = "right"):
     sp_factor = int(mesh_device.shape[0])
-    tokens_per_chip = 640
+    tokens_per_chip = PREFILL_CHUNK_TOKENS_PER_CHIP
     chunk_global = sp_factor * tokens_per_chip
 
     config = _alloc_config(mesh_device, sp_factor)
@@ -122,7 +134,7 @@ def _run_case(mesh_device, actual_start: int, actual_isl: int, padding_side: str
     return config, start_t, end_t
 
 
-@pytest.mark.parametrize("mesh_device", _MESHES, ids=_MESH_IDS, indirect=True)
+@pytest.mark.parametrize("mesh_device,device_params", _MESHES, indirect=True)
 @pytest.mark.parametrize("actual_start,actual_isl", _CASES, ids=_IDS)
 def test_moe_padding_config_matches_host(mesh_device, actual_start, actual_isl):
     """The device op reproduces the host builder's per-chip counts exactly."""
@@ -132,19 +144,30 @@ def test_moe_padding_config_matches_host(mesh_device, actual_start, actual_isl):
     _run_case(mesh_device, actual_start, actual_isl)
 
 
-@pytest.mark.parametrize("mesh_device", _MESHES, ids=_MESH_IDS, indirect=True)
+@pytest.mark.parametrize("mesh_device,device_params", _MESHES, indirect=True)
 def test_moe_padding_config_left_padding(mesh_device):
     """pad_side is written through for left padding (start 0 only: rotation implies right padding)."""
     _run_case(mesh_device, 0, 2592, padding_side="left")
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
+        )
+    ],
+    indirect=True,
+)
 def test_moe_padding_config_one_program_across_chunks(mesh_device):
     """The per-chunk values must stay OUT of the program hash, and refreshing the metadata tensors in
     place must change the result — together these are exactly what lets one capture replay across
     chunks. Asserts a single cached program serves a sequence of different chunks, each still correct."""
     sp_factor = int(mesh_device.shape[0])
-    tokens_per_chip = 640
+    tokens_per_chip = PREFILL_CHUNK_TOKENS_PER_CHIP
 
     config = _alloc_config(mesh_device, sp_factor)
     start_t = _meta1(mesh_device, 0)

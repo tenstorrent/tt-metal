@@ -192,32 +192,63 @@ inline void _llk_math_matmul_di_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_di
 }
 
 /**
- * @brief Initializes mop config for matrix multiply operation.
+ * @brief Number of MVMULs recorded into the replay buffer for one Tile x Tile matrix multiply.
  *
- * Input 0 dim = [rt_dim, 1], Input 1 dim = [1, ct_dim]; output is a matrix block of dimension [rt_dim, ct_dim].
- * For DstSync::SyncHalf: ct_dim * rt_dim <= 8 tiles in a 16-bit format, ct_dim * rt_dim <= 4 tiles in a 32-bit format.
- * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in a 16-bit format, ct_dim * rt_dim <= 8 tiles in a 32-bit format.
+ * One less than the total MVMUL count: the closing MVMUL of the Tile x Tile operation is issued from
+ * outside the replay buffer by the MOP in @ref _llk_math_matmul_mop_config_, or directly from the
+ * RISC core in the experimental no-MOP path.
  *
- * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
- * values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam ENABLE_2X_FORMAT: When true, emits the non-DI MXFP4_2x variant (7-MVMUL replay traversing only A0/A1 and B0/B1; relies on SrcA being unpacked as
- * MxFp4_2x_A/B for the 2x sub-element expansion).
- * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
- * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
+ * @tparam ENABLE_2X_FORMAT: Select the MXFP4_2x traversal (8 MVMULs) instead of the plain one (16).
  */
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
-inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_dim)
+template <bool ENABLE_2X_FORMAT>
+inline constexpr std::uint32_t _llk_math_matmul_replay_buf_len_()
+{
+    return ENABLE_2X_FORMAT ? (8 - 1) : (16 - 1);
+}
+
+/**
+ * @brief Addrmod slot used by the per-fidelity-phase closing MVMUL of a Tile x Tile matrix multiply.
+ *
+ * @tparam ENABLE_2X_FORMAT: Select the MXFP4_2x addrmod layout instead of the plain one.
+ * @note Paired with @ref _llk_math_matmul_op_last_addr_mod_; both slots are programmed by @ref _llk_math_matmul_addrmod_.
+ */
+template <bool ENABLE_2X_FORMAT>
+inline constexpr std::uint8_t _llk_math_matmul_op_addr_mod_()
+{
+    return ENABLE_2X_FORMAT ? ADDR_MOD_4 : ADDR_MOD_5;
+}
+
+/**
+ * @brief Addrmod slot used by the final MVMUL of a Tile x Tile matrix multiply (advances dest to the next tile).
+ *
+ * @tparam ENABLE_2X_FORMAT: Select the MXFP4_2x addrmod layout instead of the plain one.
+ * @note Paired with @ref _llk_math_matmul_op_addr_mod_; both slots are programmed by @ref _llk_math_matmul_addrmod_.
+ */
+template <bool ENABLE_2X_FORMAT>
+inline constexpr std::uint8_t _llk_math_matmul_op_last_addr_mod_()
+{
+    return ENABLE_2X_FORMAT ? ADDR_MOD_5 : ADDR_MOD_3;
+}
+
+/**
+ * @brief Records the MVMUL sequence for one Tile x Tile matrix multiply into replay buffer slot 0.
+ *
+ * Extracted from @ref _llk_math_matmul_mop_config_ so the experimental no-MOP matmul replays this exact
+ * sequence rather than restating it. Length is @ref _llk_math_matmul_replay_buf_len_.
+ *
+ * @tparam ENABLE_2X_FORMAT: When true, records the non-DI MXFP4_2x variant (7-MVMUL replay traversing only A0/A1 and B0/B1; relies on SrcA being unpacked as
+ * MxFp4_2x_A/B for the 2x sub-element expansion).
+ * @note Call @ref _llk_math_matmul_addrmod_ with the matching template args first, the recorded MVMULs select its addrmod slots.
+ */
+template <bool ENABLE_2X_FORMAT>
+inline void _llk_math_matmul_load_replay_()
 {
     // in0 - loaded to SrcB
     // in1 - loaded to SrcA
     // Unpacker will always load faces in f0,f1,f2,f3 order
     // if in1 is transposed then faces 1&2 need to be swapped during read
     // by changing address increment amount via addr_mods
-    constexpr std::uint32_t FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
-
-    const bool reuse_a = ct_dim >= rt_dim;
-
-    constexpr std::uint32_t replay_buf_len = ENABLE_2X_FORMAT ? (8 - 1) : (16 - 1);
+    constexpr std::uint32_t replay_buf_len = _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
 
     if constexpr (ENABLE_2X_FORMAT)
     {
@@ -269,10 +300,39 @@ inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_di
                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A3 // srca=srca, srcb+=8,  dest+=8
             });
     }
+}
 
-    constexpr std::uint32_t matmul_op_addr_mod      = ENABLE_2X_FORMAT ? ADDR_MOD_4 : ADDR_MOD_5;
-    constexpr std::uint32_t matmul_op_last_addr_mod = ENABLE_2X_FORMAT ? ADDR_MOD_5 : ADDR_MOD_3;
-    constexpr static std::uint32_t matmul_op        = TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, matmul_op_addr_mod, 0);
+/**
+ * @brief Initializes mop config for matrix multiply operation.
+ *
+ * Input 0 dim = [rt_dim, 1], Input 1 dim = [1, ct_dim]; output is a matrix block of dimension [rt_dim, ct_dim].
+ * For DstSync::SyncHalf: ct_dim * rt_dim <= 8 tiles in a 16-bit format, ct_dim * rt_dim <= 4 tiles in a 32-bit format.
+ * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in a 16-bit format, ct_dim * rt_dim <= 8 tiles in a 32-bit format.
+ *
+ * Expands to FIDELITY_PHASES iterations of [REPLAY(0, replay_buf_len), matmul_op], with matmul_op_last
+ * replacing matmul_op in the final iteration.
+ *
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam ENABLE_2X_FORMAT: When true, emits the non-DI MXFP4_2x variant (7-MVMUL replay traversing only A0/A1 and B0/B1; relies on SrcA being unpacked as
+ * MxFp4_2x_A/B for the 2x sub-element expansion).
+ * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
+ * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
+ */
+template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
+inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_dim)
+{
+    constexpr std::uint32_t FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
+
+    const bool reuse_a = ct_dim >= rt_dim;
+
+    constexpr std::uint32_t replay_buf_len = _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
+
+    _llk_math_matmul_load_replay_<ENABLE_2X_FORMAT>();
+
+    constexpr std::uint8_t matmul_op_addr_mod      = _llk_math_matmul_op_addr_mod_<ENABLE_2X_FORMAT>();
+    constexpr std::uint8_t matmul_op_last_addr_mod = _llk_math_matmul_op_last_addr_mod_<ENABLE_2X_FORMAT>();
+    constexpr static std::uint32_t matmul_op       = TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, matmul_op_addr_mod, 0);
     const std::uint32_t matmul_op_last =
         reuse_a ? TT_OP_MVMUL(p_setrwc::CLR_A, 0, matmul_op_last_addr_mod, 0) : TT_OP_MVMUL(p_setrwc::CLR_B, 0, matmul_op_last_addr_mod, 0);
 

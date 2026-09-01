@@ -61,8 +61,7 @@ void kernel_main() {
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
 
-    const uint32_t single_tile_size_bytes = get_tile_size(dfb_gamma_id);
-    const uint32_t input_mask_single_tile_size_bytes = get_tile_size(dfb_input_mask_id);
+    const uint32_t input_mask_single_tile_size_bytes = dfb_input_mask.get_tile_size();
 
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 

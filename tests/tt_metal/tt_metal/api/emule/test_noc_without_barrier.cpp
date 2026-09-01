@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // To run (from the tt-metal repo root, after an emule build):
-//   build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.NoC_Barrier_*"
+//   build_emule/test/tt_metal/unit_tests_api --gtest_filter="UnitMeshFixture.NoC_Barrier_*"
 
 #include <gtest/gtest.h>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -20,10 +21,9 @@ using namespace tt::tt_metal;
 
 namespace tt::tt_metal {
 
-TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_SanityCheck) {
+TEST_F(UnitMeshFixture, NoC_Barrier_Missing_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -36,7 +36,10 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_SanityCheck) {
     // Allocate a real L1 buffer as the noc_async_read destination so the
     // tensor-area sanitizer doesn't fire before cb_pop_front triggers the
     // barrier check.
-    auto dst_buf = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto dst_buf = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = 1024},
+        {.page_size = 1024, .buffer_type = BufferType::L1},
+        &this->device());
 
     // 2. Kernel that reads then pops WITHOUT a barrier. Popping frees the page
     //    for the producer to refill while the read is still in flight — a race.
@@ -60,7 +63,7 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_SanityCheck) {
     SetRuntimeArgs(program, kernel, logical_core, {dst_buf->address()});
 
     EXPECT_DEATH(
-        detail::LaunchProgram(device, program),
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
         ".*Race Condition: cb_pop_front.*called while a NoC read is still pending.*");
 }
 
@@ -72,10 +75,9 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_SanityCheck) {
 // leave a genuine missing-barrier bug on the page-accessor path uncaught otherwise.
 // (Kept before the non-death controls below so its EXPECT_DEATH forks from a
 // still-single-threaded parent — see the ordering note in the regression runner.)
-TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_AddrGen_SanityCheck) {
+TEST_F(UnitMeshFixture, NoC_Barrier_Missing_AddrGen_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -86,8 +88,11 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_AddrGen_SanityCheck) {
 
     // DRAM source for the page-accessor read + a real L1 destination (so the
     // tensor/OOB check doesn't pre-empt the pop-time race check).
-    auto src_buf = Buffer::create(device, 1024, 1024, BufferType::DRAM);
-    auto dst_buf = Buffer::create(device, 1024, 1024, BufferType::L1);
+    distributed::ReplicatedBufferConfig buf_config{.size = 1024};
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = 1024, .buffer_type = BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig l1_config{.page_size = 1024, .buffer_type = BufferType::L1};
+    auto src_buf = distributed::MeshBuffer::create(buf_config, dram_config, &this->device());
+    auto dst_buf = distributed::MeshBuffer::create(buf_config, l1_config, &this->device());
 
     // The TensorAccessor reads its bank layout from compile-time args.
     std::vector<uint32_t> reader_ct_args;
@@ -116,7 +121,7 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_AddrGen_SanityCheck) {
     SetRuntimeArgs(program, kernel, logical_core, {src_buf->address(), dst_buf->address()});
 
     EXPECT_DEATH(
-        detail::LaunchProgram(device, program),
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
         ".*Race Condition: cb_pop_front.*called while a NoC read is still pending.*");
 }
 
@@ -125,10 +130,9 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_AddrGen_SanityCheck) {
 // the subsequent cb_pop_front sees zero in-flight reads. Guards the check from
 // firing when the kernel correctly barriers (and confirms the barrier actually
 // resets the counter). The CB is cycled in balance so nothing else fires.
-TEST_F(MeshDeviceFixture, NoC_Barrier_Present_NoViolation) {
+TEST_F(UnitMeshFixture, NoC_Barrier_Present_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -137,7 +141,10 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Present_NoViolation) {
         CircularBufferConfig(2048, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, 1024);
     CreateCircularBuffer(program, logical_core, cb_config);
 
-    auto dst_buf = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto dst_buf = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = 1024},
+        {.page_size = 1024, .buffer_type = BufferType::L1},
+        &this->device());
 
     std::string kernel_src = R"(
         #include "api/dataflow/dataflow_api.h"
@@ -164,7 +171,7 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Present_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {dst_buf->address()});
 
     // Must NOT abort.
-    detail::LaunchProgram(device, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -176,10 +183,9 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Present_NoViolation) {
 // clear-to-zero semantic: if noc_async_read_barrier ever regressed to a decrement,
 // the counter would still be 1 at the pop and this legitimate ≥2-read kernel would
 // false-positive — which no single-read test can catch.
-TEST_F(MeshDeviceFixture, NoC_Barrier_MultiRead_SingleBarrier_NoViolation) {
+TEST_F(UnitMeshFixture, NoC_Barrier_MultiRead_SingleBarrier_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -188,7 +194,10 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_MultiRead_SingleBarrier_NoViolation) {
         CircularBufferConfig(2048, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, 1024);
     CreateCircularBuffer(program, logical_core, cb_config);
 
-    auto dst_buf = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto dst_buf = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = 1024},
+        {.page_size = 1024, .buffer_type = BufferType::L1},
+        &this->device());
 
     std::string kernel_src = R"(
         #include "api/dataflow/dataflow_api.h"
@@ -215,7 +224,7 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_MultiRead_SingleBarrier_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {dst_buf->address()});
 
     // Must NOT abort — the single barrier cleared both in-flight reads.
-    detail::LaunchProgram(device, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");

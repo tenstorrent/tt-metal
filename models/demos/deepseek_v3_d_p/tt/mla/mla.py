@@ -292,6 +292,7 @@ class ttMLA:
         has_indexer: bool | None = None,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         active_seq_len: Optional[int] = None,
+        first_layer_idx: Optional[int] = None,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
@@ -583,6 +584,7 @@ class ttMLA:
                     active_seq_len=self.active_seq_len,
                     slot_num=slot_num,
                     layer_num=self.layer_num,
+                    first_layer_idx=first_layer_idx,
                 )
         else:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
@@ -667,7 +669,7 @@ class ttMLA:
         "wkv_b2": ("kv_lora_rank", "v_head_dim"),
     }
 
-    def _cfg_matches(self, cfg: dict) -> bool:
+    def _cfg_matches(self, cfg: dict, kt: int | None = None) -> bool:
         """Do this tuned config's declared gating tags match this live ttMLA?
 
         Tags are declared in mla_config.py; only the match is resolved here, because it depends on this
@@ -696,9 +698,18 @@ class ttMLA:
         cap = cfg.get("dense_head_cap_non_dsa")
         if cap is not None and self.num_heads > cap and not self._is_dsa_family:
             return False
+        # K. The table is keyed on (weight_name, seq_len_local), so one slot is shared by variants
+        # with different K. A tiling whose in0_block_w does not divide this model's per-device Kt
+        # cannot run here at all -- the matmul dies with "Kt (32) must be divisible by in0_block_w
+        # (14)" -- so reject it like any other tag and let a later candidate, e.g. one tuned for this
+        # variant, be chosen. kt is None on the SDPA path, which has no weight to size against.
+        if kt is not None:
+            in0_block_w = getattr(cfg.get("program_config"), "in0_block_w", None)
+            if in0_block_w is not None and kt % in0_block_w != 0:
+                return False
         return True
 
-    def _select_cfg(self, entry) -> dict | None:
+    def _select_cfg(self, entry, weight_name: str | None = None) -> dict | None:
         """Pick the first tuned config whose tags match, from a single dict or a list of candidates.
 
         A slot holds several candidates when variants share a seq_len (Kimi-K2.6 at 64 heads and K3 at
@@ -708,14 +719,24 @@ class ttMLA:
         if entry is None:
             return None
         candidates = entry if isinstance(entry, (list, tuple)) else (entry,)
-        return next((cfg for cfg in candidates if self._cfg_matches(cfg)), None)
+        kt = self._weight_kt(weight_name) if weight_name is not None else None
+        return next((cfg for cfg in candidates if self._cfg_matches(cfg, kt)), None)
 
     def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
         """Resolve the tuned matmul config for this weight/seq_len, applying the gating tags.
         Returns None when no tuned config applies (caller falls back to defaults)."""
         if not is_blackhole():
             return None
-        return self._select_cfg(self.mm_configs[weight_name].get(seq_len_local))
+        return self._select_cfg(self.mm_configs[weight_name].get(seq_len_local), weight_name)
+
+    def _weight_kt(self, weight_name: str) -> int | None:
+        """This model's per-device K for one weight, in tiles, or None if the weight is absent.
+
+        Weights are [K, N] and ``mapper_tp0`` shards K across the TP axis, so ``shape[-2]`` is
+        already the per-device extent the matmul program consumes.
+        """
+        weight = getattr(self, f"{weight_name}_weight", None)
+        return None if weight is None else weight.shape[-2] // ttnn.TILE_SIZE
 
     def _get_act_mem_config(self, weight_name: str, seq_len_local: int) -> ttnn.MemoryConfig:
         """Memory config for the activation (in0) feeding this weight's matmul, as tuned in the mm
@@ -1734,11 +1755,15 @@ class ttMLA:
             # behavior, where sparse_sdpa still needs a batch-1 cache. For a multi-slot cache this
             # slice creates owned transient storage that the caller releases; for a single-slot cache
             # it is a no-op alias of the persistent cache and must not be released by the caller.
-            gathered = ttnn.slice(
-                storage,
-                [slot_lo, 0, 0, 0],
-                [slot_lo + 1, 1, storage.shape[2], storage.shape[3]],
-            )
+            if storage.shape[0] == 1:
+                gathered = storage
+            else:
+                gathered = ttnn.slice(
+                    storage,
+                    [slot_lo, 0, 0, 0],
+                    [slot_lo + 1, 1, storage.shape[2], storage.shape[3]],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
         else:
             # Block-cyclic storage is meaningful only in complete SP slabs. The new AG writes each
             # rank's active local prefix into its fixed worst-case slot, retaining the allocation and

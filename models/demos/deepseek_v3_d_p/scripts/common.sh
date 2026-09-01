@@ -26,7 +26,7 @@ LOG_DIR="/data/$USER/$LOG_NAME"
 
 # Test selection — single source of truth.
 TEST_FILE="$TT_METAL_HOME/models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py"
-KFILTER="ds_prefill and pretrained and e256_device_fp32 and fabric2d-mesh-8x4 and 61_layers and balanced and right_pad and smoke and no_determinism and iter25 and 25600 and longbook"
+KFILTER="ds_prefill and pretrained and e256_device_fp32 and torus-xy-8x4 and 61_layers and balanced and right_pad and smoke and no_determinism and iter25 and 25600 and longbook"
 
 # Inner-iteration count, derived from the iterNN token in the filter above.
 INNER_ITERS=$(grep -oE 'iter[0-9]+' <<<"$KFILTER" | grep -oE '[0-9]+' | head -1)

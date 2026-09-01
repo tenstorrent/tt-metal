@@ -25,12 +25,18 @@ void kernel_main() {
     constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_4;  // used for reduction
     constexpr uint32_t cb_input_tile = tt::CBIndex::c_5;
     constexpr uint32_t cb_target_logits = tt::CBIndex::c_6;
+    constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_12;
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t mask_w = get_compile_time_arg_val(2);
+    constexpr uint32_t target_page_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t tiled_H = get_compile_time_arg_val(4);
     constexpr uint32_t target_indexes_read_page_size = get_compile_time_arg_val(5);
+
+    // Logical vocabulary size; targets at or above it (including the padded-row sentinel) skip
+    // the logit gather and contribute a zero logit instead.
+    constexpr uint32_t num_inner = (Wt - 1U) * TILE_WIDTH + (mask_w == 0U ? TILE_WIDTH : mask_w);
 
     constexpr uint32_t onetile = 1U;
 #ifdef DO_MASK_W
@@ -74,6 +80,8 @@ void kernel_main() {
     }
     cb_push_back(cb_scaler_idx, onetile);
 
+    generate_matmul_row_reduce_tile(cb_matmul_reduce);  // ones-column tile for the exp-sum row reduction
+
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
     constexpr auto input_args = TensorAccessorArgs<6>();
     constexpr auto target_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
@@ -87,26 +95,35 @@ void kernel_main() {
 
         // read target indexes
         cb_reserve_back(cb_target_idx, onetile);
-        uint32_t l1_target_indexes_write_addr =
-            get_write_ptr(cb_target_idx);  // get the address of the first tile in the target buffer
-
-        auto [page, offset] = get_page_and_offset(start_row + i, tiled_H);
-
-        auto noc_async_target_indexes_page_addr = target_indexes_address_generator.get_noc_addr(page, offset);
-        noc_async_read(
-            noc_async_target_indexes_page_addr,
-            l1_target_indexes_write_addr,
-            target_indexes_read_page_size);  // read the page from the target buffer
-        noc_async_read_barrier();            // wait until all tiles are read
+        read_target_indices_page_clamped(
+            target_indexes_address_generator,
+            get_write_ptr(cb_target_idx),
+            start_row + i,
+            tiled_H,
+            target_page_bytes,
+            target_indexes_read_page_size);
+        cb_push_back(cb_target_idx, onetile);
 
         cb_reserve_back(cb_target_logits, onetile);
         uint32_t l1_target_logits_write_addr = get_write_ptr(cb_target_logits);
 
+        cb_wait_front(cb_target_idx, onetile);
         auto target_indexes_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_target_idx));
         for (uint32_t h = 0; h < TILE_HEIGHT; ++h) {
-            uint32_t target_value_idx = h;  // only first row of the tile is used
+            uint32_t target_value = target_indexes_l1_ptr[h];
 
-            uint32_t target_value = target_indexes_l1_ptr[target_value_idx];
+            auto target_logits_write_l1_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_target_logits_write_addr);
+            uint32_t inplace_idx = get_tilized_idx(h, 0);
+
+            if (target_value >= num_inner) {
+                // Out-of-range target (or padded row): a raw index would address a tile far past
+                // the row and gather undefined data. Contribute a zero logit instead, matching
+                // select_target_logit's convention for out-of-shard targets, so the row's loss
+                // is the benign logsumexp.
+                target_logits_write_l1_ptr[inplace_idx] = 0;
+                continue;
+            }
 
             // Read the tile containing the target value using read_tiles_by_row
             read_tiles_by_row(
@@ -119,17 +136,14 @@ void kernel_main() {
 
             auto read_input_tile_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_input_tile));
 
-            auto target_logits_write_l1_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_target_logits_write_addr);
-
             auto idx_inside_tile = get_tilized_idx(h, target_value);  // only first row of the tile is used
-            uint32_t inplace_idx = get_tilized_idx(h, 0);
             target_logits_write_l1_ptr[inplace_idx] = read_input_tile_l1_ptr[idx_inside_tile];
 
             // Pop the tile after extracting the value - cb_input_tile is used as scratch space
             cb_pop_front(cb_input_tile, onetile);
         }
 
+        cb_pop_front(cb_target_idx, onetile);
         cb_push_back(cb_target_logits, onetile);
 
 #ifdef EVERYTHING_FITS_IN_L1
