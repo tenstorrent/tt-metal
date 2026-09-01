@@ -32,22 +32,25 @@ enum class BlobContext : std::uint8_t
     Context23,
 };
 
-struct UnpackerAddrCtrlEntry
+class UnpackerAddrCtrlEntry
 {
+public:
     const Field& Xstride;
     const Field& Ystride;
     const Field& Zstride;
     const Field& Wstride;
 };
 
-struct UnpackerAddrCtrlFields
+class UnpackerAddrCtrlFields
 {
+public:
     std::uint32_t unpacker;
 
 private:
     template <std::uint32_t UnpackerIndex, std::uint32_t RegIndex>
-    struct Fields
+    class Fields
     {
+    public:
         static_assert(UnpackerIndex < 2, "unpacker index out of range");
         static_assert(RegIndex < 2, "unpacker register index out of range");
 
@@ -104,14 +107,16 @@ public:
     }
 };
 
-struct UnpackerAddrBaseFields
+class UnpackerAddrBaseFields
 {
+public:
     std::uint32_t unpacker;
 
 private:
     template <std::uint32_t UnpackerIndex, std::uint32_t RegIndex>
-    struct Fields
+    class Fields
     {
+    public:
         static_assert(UnpackerIndex < 2, "unpacker index out of range");
         static_assert(RegIndex < 2, "unpacker register index out of range");
 
@@ -150,8 +155,9 @@ public:
     }
 };
 
-struct UnpackerBlobsYStartFields
+class UnpackerBlobsYStartFields
 {
+public:
     std::uint32_t unpacker;
 
 private:
@@ -173,8 +179,9 @@ public:
     }
 };
 
-struct UnpackerContextEntry
+class UnpackerContextEntry
 {
+public:
     const Field& Base;
 };
 
@@ -185,8 +192,9 @@ template <std::uint32_t UnpackerIndex>
 inline constexpr std::uint32_t UnpackerContextCount = UnpackerIndex == 0 ? 8 : 2;
 
 template <std::uint32_t UnpackerIndex, std::uint32_t ContextIndex>
-struct UnpackerContextDescriptor
+class UnpackerContextDescriptor
 {
+public:
     static_assert(UnpackerIndex < 2, "unpacker index out of range");
     static_assert(ContextIndex < UnpackerContextCount<UnpackerIndex>, "unpacker context index out of range");
 
@@ -246,8 +254,9 @@ public:
 
 } // namespace detail
 
-struct UnpackerContextFields
+class UnpackerContextFields
 {
+public:
     std::uint32_t unpacker;
 
 private:
@@ -278,8 +287,9 @@ public:
 };
 
 template <std::uint32_t UnpackerIndex>
-struct StaticUnpackerContextFields
+class StaticUnpackerContextFields
 {
+public:
     static_assert(UnpackerIndex < 2, "unpacker index out of range");
 
     template <std::uint32_t ContextIndex>
@@ -301,8 +311,9 @@ struct StaticUnpackerContextFields
     }
 };
 
-struct UnpackerEntry
+class UnpackerEntry
 {
+public:
     UnpackerAddrCtrlFields AddrCtrl;
     UnpackerAddrBaseFields AddrBase;
     UnpackerContextFields Cntx;
@@ -313,8 +324,9 @@ struct UnpackerEntry
 };
 
 template <std::uint32_t UnpackerIndex>
-struct StaticUnpackerEntry
+class StaticUnpackerEntry
 {
+public:
     UnpackerAddrCtrlFields AddrCtrl;
     UnpackerAddrBaseFields AddrBase;
     StaticUnpackerContextFields<UnpackerIndex> Cntx;
@@ -324,12 +336,13 @@ struct StaticUnpackerEntry
     UnpackerBlobsYStartFields BlobsYStart;
 };
 
-struct UnpackerFields
+class UnpackerFields
 {
 private:
     template <std::uint32_t UnpackerIndex>
-    struct Fields
+    class Fields
     {
+    public:
         static_assert(UnpackerIndex < 2, "unpacker index out of range");
 
         static constexpr Field ForcedSharedExp {

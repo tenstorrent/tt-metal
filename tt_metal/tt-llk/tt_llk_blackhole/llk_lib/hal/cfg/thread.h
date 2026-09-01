@@ -17,46 +17,56 @@ namespace cfg
 // THREAD
 // ============================================================
 
-struct CfgStateId
-{                                                                                // Cfg state id for this thread
+class CfgStateId
+{ // Cfg state id for this thread
+public:
     static constexpr Field StateID {RegisterFile::Thread, 16, 0, 0, 0, 1, 1, 0}; // Configuration state context to use for this thread (1b)
 };
 
-struct DestTargetRegCfgMath
-{                                                                                // Set destination register offset for math and packer
+class DestTargetRegCfgMath
+{ // Set destination register offset for math and packer
+public:
     static constexpr Field Offset {RegisterFile::Thread, 16, 1, 0, 0, 12, 1, 0}; // Math source/target dest register static offset (12b)
 };
 
-struct SrcASelector
+class SrcASelector
 {
+public:
 };
 
-struct SrcBSelector
+class SrcBSelector
 {
+public:
 };
 
-struct SrcSelector
+class SrcSelector
 {
+public:
 };
 
-struct DestSelector
+class DestSelector
 {
+public:
 };
 
-struct FidelitySelector
+class FidelitySelector
 {
+public:
 };
 
-struct BiasSelector
+class BiasSelector
 {
+public:
 };
 
-struct YSelector
+class YSelector
 {
+public:
 };
 
-struct ZSelector
+class ZSelector
 {
+public:
 };
 
 inline constexpr SrcASelector SrcA {};
@@ -68,7 +78,7 @@ inline constexpr BiasSelector Bias {};
 inline constexpr YSelector Y {};
 inline constexpr ZSelector Z {};
 
-struct DisableImpliedFmtFields
+class DisableImpliedFmtFields
 {
 private:
     static constexpr Field SrcAField {RegisterFile::Thread, 16, 2, 0, 0, 1, 1, 0}; // Disable implied Unp0-SrcA Fmt (1b)
@@ -89,72 +99,84 @@ public:
 // Disable Implied format for Src Registers
 inline constexpr DisableImpliedFmtFields DisableImpliedFmt {};
 
-struct SfpuDestFmt
-{                                                                               // Format SFPU expects in Dest (used to determine 8-bit/5-bit exponent formats)
+class SfpuDestFmt
+{ // Format SFPU expects in Dest (used to determine 8-bit/5-bit exponent formats)
+public:
     static constexpr Field Enable {RegisterFile::Thread, 16, 4, 0, 0, 1, 1, 0}; // Enable SFPU format from thread register (1b)
     static constexpr Field Base {RegisterFile::Thread, 16, 4, 0, 1, 4, 1, 0};   // Format SFPU expects in Dest (4b)
 };
 
-struct SrcASet
-{                                                                                        // SrcA Base Set
+class SrcASet
+{ // SrcA Base Set
+public:
     static constexpr Field Base {RegisterFile::Thread, 16, 5, 0, 0, 2, 1, 0};            // SrcA Base Set (2b)
     static constexpr Field SetOvrdWithAddr {RegisterFile::Thread, 16, 5, 0, 2, 1, 1, 0}; // Ovrd set index with higher wr addr bits (1b)
 };
 
-struct SrcBSet
-{                                                                             // SrcB Base Set
+class SrcBSet
+{ // SrcB Base Set
+public:
     static constexpr Field Base {RegisterFile::Thread, 16, 6, 0, 0, 2, 1, 0}; // SrcB Base Set (2b)
 };
 
-struct ClrDvalid
+class ClrDvalid
 { // Disable data valid clear unless its CLEARDVALID inst. Banks will still switch (useful when using both banks)
+public:
     static constexpr Field SrcA_Disable {RegisterFile::Thread, 16, 7, 0, 0, 1, 1, 0}; // SrcA Data valid clear disable (1b)
     static constexpr Field SrcB_Disable {RegisterFile::Thread, 16, 7, 0, 1, 1, 1, 0}; // SrcB Data valid clear disable (1b)
 };
 
-struct ScbdBankMask32b
+class ScbdBankMask32b
 { // Generate bank masks for screboard assuming double buffering at 32-bit datum gran.
+public:
     static constexpr Field Enable {RegisterFile::Thread, 16, 8, 0, 0, 1, 1, 0}; // Enable (1b)
 };
 
-struct PackScbdBankMask32b
+class PackScbdBankMask32b
 { // Generate bank masks for screboard assuming double buffering at 32-bit datum gran. (pack)
+public:
     static constexpr Field Enable {RegisterFile::Thread, 16, 9, 0, 0, 1, 1, 0}; // Enable (1b)
 };
 
-struct UnpackScbdBankMask32b
+class UnpackScbdBankMask32b
 { // Generate bank masks for screboard assuming double buffering at 32-bit datum gran. (unpack)
+public:
     static constexpr Field Enable {RegisterFile::Thread, 16, 10, 0, 0, 1, 1, 0}; // Enable (1b)
 };
 
-struct FidelityBase
-{                                                                               // Base fidelity phase
+class FidelityBase
+{ // Base fidelity phase
+public:
     static constexpr Field Phase {RegisterFile::Thread, 16, 11, 0, 0, 2, 1, 0}; // Base fidelity phase (2b)
 };
 
-struct AddrModSrcEntry
+class AddrModSrcEntry
 {
+public:
     const Field& Incr;
     const Field& Incr2;
     const Field& CR;
     const Field& Clear;
 };
 
-struct AddrModPackYEntry
+class AddrModPackYEntry
 {
+public:
     const Field& Incr;
     const Field& CR;
     const Field& Clear;
 };
 
-struct AddrModPackZEntry
+class AddrModPackZEntry
 {
+public:
     const Field& Incr;
     const Field& Clear;
 };
 
-struct AddrModPackEntry
+class AddrModPackEntry
 {
+public:
     AddrModPackYEntry YFields;
     AddrModPackZEntry ZFields;
 
@@ -169,8 +191,9 @@ struct AddrModPackEntry
     }
 };
 
-struct AddrModDestEntry
+class AddrModDestEntry
 {
+public:
     const Field& Incr;
     const Field& CR;
     const Field& Clear;
@@ -195,24 +218,27 @@ private:
     AddrModPackEntry Pack;
 };
 
-struct AddrModFidelityEntry
+class AddrModFidelityEntry
 {
+public:
     const Field& Incr;
     const Field& Clear;
 };
 
-struct AddrModBiasEntry
+class AddrModBiasEntry
 {
+public:
     const Field& Incr;
     const Field& Clear;
 };
 
-struct AddrModFields
+class AddrModFields
 {
 private:
     template <bool IsSrcB>
-    struct SrcFields
+    class SrcFields
     {
+    public:
         static constexpr std::uint32_t Shift = IsSrcB ? 8 : 0;
 
         static constexpr Field Incr {RegisterFile::Thread, 16, 12, 0, Shift, 6, 8, 16};             // Src A/B autoincrement amount (6b)
@@ -331,13 +357,15 @@ public:
  */
 inline constexpr AddrModFields AddrMod {};
 
-struct SfpuStack
-{                                                                               // Config bits for the SFPU stack mode
+class SfpuStack
+{ // Config bits for the SFPU stack mode
+public:
     static constexpr Field Incr {RegisterFile::Thread, 16, 36, 0, 0, 10, 1, 0}; // Dest SP autoincrement amount (10b)
 };
 
-struct UnpackMiscCfg
+class UnpackMiscCfg
 { // Unpacker misc config
+public:
     static constexpr Field CfgContextOffset_0 {
         RegisterFile::Thread, 16, 41, 0, 0, 4, 1, 0}; // Unpacker 0 cfg context offset added to the context id from instruction field or context counter. Final
                                                       // context id is computed as CfgContextOffset + (AutoIncContextId ? CfgContextCnt : CfgContextId) (4b)
@@ -359,21 +387,23 @@ struct UnpackMiscCfg
         RegisterFile::Thread, 16, 41, 0, 15, 1, 1, 0}; // Reset metadata unpack z_start. Write to the register with bit set to 1 will clear context counter (1b)
 };
 
-struct NocOverlayMsgClear
+class NocOverlayMsgClear
 { // A write to this register triggers pop from data and message FIFOs in NOC overlay to free up space. This register is written after last unpack instruction
-  // once data has been read by TDMA engine.
+public:
+    // once data has been read by TDMA engine.
     static constexpr Field StreamId_0 {RegisterFile::Thread, 16, 42, 0, 0, 6, 1, 0}; // Noc overlay stream id for unpacker 0 (6b)
     static constexpr Field MsgNum_0 {RegisterFile::Thread, 16, 42, 0, 8, 3, 1, 0};   // Number of messages(tiles) to pop from message fifo for unpacker 0 (3b)
     static constexpr Field StreamId_1 {RegisterFile::Thread, 16, 42, 1, 0, 6, 1, 0}; // Noc overlay stream id unpacker 1 (6b)
     static constexpr Field MsgNum_1 {RegisterFile::Thread, 16, 42, 1, 8, 3, 1, 0};   // Number of messages(tiles) to pop from message fifo for unpacker 1 (3b)
 };
 
-struct PerfCntCmdEntry
+class PerfCntCmdEntry
 {
 private:
     template <std::uint32_t Index>
-    struct Fields
+    class Fields
     {
+    public:
         static constexpr Field Start {RegisterFile::Thread, 16, 44, 0, 2 * Index, 1, 1, 0};    // Start perf count Index (1b)
         static constexpr Field Stop {RegisterFile::Thread, 16, 44, 0, 2 * Index + 1, 1, 1, 0}; // End perf count Index (1b)
     };
@@ -398,25 +428,29 @@ inline constexpr PerfCntCmdEntry PerfCntCmd[] = {
     PerfCntCmdEntry::make<3>(),
 };
 
-struct EnableAccStats
-{                                                                                // enable generating histogram of exponents
+class EnableAccStats
+{ // enable generating histogram of exponents
+public:
     static constexpr Field Enable {RegisterFile::Thread, 16, 45, 0, 0, 1, 1, 0}; // enable (1b)
 };
 
-struct FpuBiasSel
-{                                                                                 // Select upper or lower 32 bias values
+class FpuBiasSel
+{ // Select upper or lower 32 bias values
+public:
     static constexpr Field Pointer {RegisterFile::Thread, 16, 46, 0, 0, 1, 1, 0}; // When set, selects bias values 32 to 63 (1b)
 };
 
-struct Fp16aForce
-{                                                                                // Read dest like FP16A in int mode (for move int8 ops)
+class Fp16aForce
+{ // Read dest like FP16A in int mode (for move int8 ops)
+public:
     static constexpr Field Enable {RegisterFile::Thread, 16, 55, 0, 0, 1, 1, 0}; // When set, performs move ops like FP16A (1b)
 };
 
-struct TensixTriscSync
+class TensixTriscSync
 { // Selectively enable/disable hardware hazard detection between a TRISC and the Tensix core. The tt_tensix_trisc_sync (TTS) module works by snooping on
-  // accesses from the TRISC to  either a register file or the instructios buffer. If a particular resource is "tracked"  (by enabling the corresponding bit in
-  // this register), the TTS unit will maintain a shadow  copy of all outstanding accesses to that resource.
+public:
+    // accesses from the TRISC to  either a register file or the instructios buffer. If a particular resource is "tracked"  (by enabling the corresponding bit
+    // in this register), the TTS unit will maintain a shadow  copy of all outstanding accesses to that resource.
     static constexpr Field TrackGlobalCfg {
         RegisterFile::Thread, 16, 56, 0, 0, 1, 1, 0}; // If 1, TRISC memory-mapped accesses to global config registers (in the CfgExu and also  including the
                                                       // so-called THCON register in tt_tdma) will be tracked. If Tensix  instructions are also tracked, then
@@ -447,34 +481,39 @@ struct TensixTriscSync
                                                       // prevent hazards. (1b)
 };
 
-struct StreamwaitPhaseHi
+class StreamwaitPhaseHi
 { // This config register stores extra data that don't fit within the STREAMWAIT opcode itself
+public:
     static constexpr Field Val {
         RegisterFile::Thread, 16, 57, 0, 0, 10, 1, 0}; // The 10-bit target_val value in the STREAMWAIT opcode is appended to this value. For example, if this
                                                        // was 0x3FF and target_val was 2, then STREAMWAIT would wait for phase 0xFFC02. (10b)
 };
 
-struct StreamwaitNumMsgsHi
+class StreamwaitNumMsgsHi
 { // This config register stores extra data that don't fit within the STREAMWAIT opcode itself
+public:
     static constexpr Field Val {
         RegisterFile::Thread, 16, 58, 0, 0, 7, 1, 0}; // The 10-bit target_val value in the STREAMWAIT opcode is appended to this value. For example, if this
                                                       // was 0x7F and target_val was 2, then STREAMWAIT would wait for 0x1FC02 messages to be received. (7b)
 };
 
-struct StreamIdSync
+class StreamIdSync
 { // Select a stream to be used for Sync Exu
+public:
     static constexpr Field BankSel {
         RegisterFile::Thread, 16, 59, 0, 0, 6, 4, 16}; // Selects which stream to use for stallwait stream instructions (3-bit group id, 3-bit stream id) (6b)
 };
 
-struct StreamIdTrisc
-{                                                                                  // Select a stream to be used to be read by TRISC
+class StreamIdTrisc
+{ // Select a stream to be used to be read by TRISC
+public:
     static constexpr Field BankSel {RegisterFile::Thread, 16, 63, 0, 0, 6, 4, 16}; // Selects which stream to use for internally mapping to Trisc registers
                                                                                    // (3-bit group id, 3-bit stream id) (6b)
 };
 
-struct TensixCsrConfig
+class TensixCsrConfig
 { // Modifies behaviour of qstatus, bstatus, and stream CSR bits.
+public:
     static constexpr Field RawBusyStatus {
         RegisterFile::Thread, 16, 67, 0, 0, 1, 1, 0}; // If high, the bstatus CSR will only report whether a given execution unit is currently busy. If low, the
                                                       // bstatus bits  will be the OR of the busy status and the queue status. In other words, if this bit is 0,

@@ -15,64 +15,75 @@ namespace cfg
 // GLOBAL
 // ============================================================
 
-struct DestTargetRegCfgPack
-{                                                                                  // Set destination register offset for Packer. Address must be aligned to 16B
-    static constexpr Field Offset {RegisterFile::State, 32, 180, 0, 0, 12, 4, 32}; // Packer source/target dest register static offset - 4 reg sets (12b)
+class DestTargetRegCfgPack
+{ // Set destination register offset for Packer. Address must be aligned to 16B
+public:
+    static constexpr Field Offset {RegisterFile::State, 32, 180, 0, 0, 12, 4, 32};  // Packer source/target dest register static offset - 4 reg sets (12b)
     static constexpr Field ZOffset {RegisterFile::State, 32, 180, 0, 12, 6, 4, 32}; // Packer Z-tile offset for tile position generator - 4 reg sets (6b)
 };
 
-struct CgSrcPipeline
-{                                                                                        // Enable clock gating of the srca/srcb pipeline
+class CgSrcPipeline
+{ // Enable clock gating of the srca/srcb pipeline
+public:
     static constexpr Field GateSrcAPipeEn {RegisterFile::State, 32, 184, 0, 0, 1, 1, 0}; // Gate SRCA pipeline enable (1b)
     static constexpr Field GateSrcBPipeEn {RegisterFile::State, 32, 184, 0, 1, 1, 1, 0}; // Gate SRCB pipeline enable (1b)
 };
 
-struct RiscvIcInvalidate
-{                                                                                       // RISCV instruction cache invalidate
+class RiscvIcInvalidate
+{ // RISCV instruction cache invalidate
+public:
     static constexpr Field InvalidateAll {RegisterFile::State, 32, 185, 0, 0, 5, 1, 0}; // Invalidate RISCV instruction cache. Bit 0 - main Risc core, bits 1-3
                                                                                         // - three Trisc threads, 4 - Noc control risc (5b)
 };
 
-struct PrngSeed
-{                                                                                   // Seed master PRNG and start seeding clients
+class PrngSeed
+{ // Seed master PRNG and start seeding clients
+public:
     static constexpr Field Seed_Val {RegisterFile::State, 32, 186, 0, 0, 32, 1, 0}; // Seed value for master PRNG (32b)
 };
 
-struct IntDescaleValues
-{                                                                                  // 4 8-bit words for descaling
+class IntDescaleValues
+{ // 4 8-bit words for descaling
+public:
     static constexpr Field Value {RegisterFile::State, 32, 187, 0, 0, 32, 16, 32}; // Value (32b)
 };
 
-struct TriscEndPc
-{                                                                              // Trisc end PC value (ending location of code)
+class TriscEndPc
+{ // Trisc end PC value (ending location of code)
+public:
     static constexpr Field PC {RegisterFile::State, 32, 203, 0, 0, 32, 3, 32}; // End PC value (32b)
 };
 
-struct BriscEndPc
-{                                                                             // Main risc (brisc) end PC value (ending location of code)
+class BriscEndPc
+{ // Main risc (brisc) end PC value (ending location of code)
+public:
     static constexpr Field PC {RegisterFile::State, 32, 206, 0, 0, 32, 1, 0}; // End PC value (32b)
 };
 
-struct NocRiscEndPc
-{                                                                             // NOC risc end PC value (ending location of code)
+class NocRiscEndPc
+{ // NOC risc end PC value (ending location of code)
+public:
     static constexpr Field PC {RegisterFile::State, 32, 207, 0, 0, 32, 1, 0}; // End PC value (32b)
 };
 
-struct RiscPrefetchCtrl
-{                                                                                        // Risc prefetcher enable
+class RiscPrefetchCtrl
+{ // Risc prefetcher enable
+public:
     static constexpr Field Enable_Trisc {RegisterFile::State, 32, 208, 0, 0, 3, 1, 0};   // Trisc prefetcher enable (3b)
     static constexpr Field Enable_Brisc {RegisterFile::State, 32, 208, 0, 3, 1, 1, 0};   // Brisc prefetcher enable (1b)
     static constexpr Field Enable_NocRisc {RegisterFile::State, 32, 208, 0, 4, 1, 1, 0}; // NOC risc prefetcher enable (1b)
     static constexpr Field Max_Req_Count {RegisterFile::State, 32, 208, 0, 5, 8, 1, 0};  // Max number of requests in stream prefetcher (8b)
 };
 
-struct Scratch
+class Scratch
 { // Just a register with no architectural effects. Used with CFGSHIFTMASK instruction
+public:
     static constexpr Field val {RegisterFile::State, 32, 209, 0, 0, 32, 3, 32}; // Scratch register value. (32b)
 };
 
-struct L1CacheTagSearchAccel
+class L1CacheTagSearchAccel
 { // L1 Cache Tag Search Acceleration control register
+public:
     static constexpr Field Search_Enable {
         RegisterFile::State, 32, 212, 0, 0, 1, 1, 0}; // Enable the functionality (for other fields of this register, like addresses, to be captured, this bit
                                                       // has to be toggled - meaning needs to be disabled and then enabled back with new values for the other
@@ -93,8 +104,9 @@ struct L1CacheTagSearchAccel
     static constexpr Field Tag_alloc {RegisterFile::State, 32, 212, 7, 26, 1, 1, 0};         // Alloc tag after tag search if not already present (1b)
 };
 
-struct DestAccessCfg
+class DestAccessCfg
 { // There are two optional modes you can turn on in dest: - "Stride 8 swizzling in 32-bit mode" (call this A) - "Address remapping" (call this B)
+public:
     static constexpr Field swizzle_32b {
         RegisterFile::State,
         32,
@@ -128,8 +140,9 @@ struct DestAccessCfg
                                                       // absolute, set this bit to 1. (1b)
 };
 
-struct SrcAccessCfg
+class SrcAccessCfg
 { // Mode bits for accessing source registers
+public:
     static constexpr Field math_view_srca_as_one_bank {
         RegisterFile::State,
         32,
@@ -149,8 +162,9 @@ struct SrcAccessCfg
         RegisterFile::State, 32, 221, 0, 3, 1, 1, 0}; // Same as disable_contig_srca_dvalid_phase but for srcB (1b)
 };
 
-struct ChickenBits
+class ChickenBits
 { // A place to add chicken bits
+public:
     static constexpr Field sfpu_scbd_disable {
         RegisterFile::State, 32, 222, 0, 0, 1, 1, 0}; // Disable any stalls from the SFPU scoreboarding logic. Not to be confused with the dest arbitration;
                                                       // this scoreboarding is the  one that lets you omit SFPNOPs between instructions that would otherwise
