@@ -12,11 +12,11 @@ tensors captured from a real coqui run.
 
 The front-end jobs, and what consumes them:
 
-  * `load_reference_audio(path, sr)`         -> ([1,N] mono wav, sr) (reference-clip IO)
+  * `load_reference_audio(path)`             -> ([1,N] mono wav, sr) (reference-clip IO)
   * `XttsTokenizer.encode(text, lang)`       -> token ids            (prompt assembly)
-  * `conditioning_mels(audio, sr, stats)`    -> [1,80,T] mel chunks  (Block 1 input)
-  * `speaker_logmel(audio, sr)`              -> [1,64,T] logmel      (Block 2 input)
-  * `assemble_prompt(ids, cond_latents, tb)` -> [1,P,1024] prefix    (Block 3 prefill)
+  * `conditioning_mels(audio, sr, stats)`    -> [1,80,T] mel chunks  (conditioning input)
+  * `speaker_logmel(audio, sr)`              -> [1,64,T] logmel      (speaker-encoder input)
+  * `assemble_prompt(ids, cond_latents, tb)` -> [1,P,1024] prefix    (GPT prefill)
 
 DSP building blocks (`sinc_resample`, `melscale_fbanks`, `mel_spectrogram`) reimplement the
 exact torchaudio functions coqui calls (torchaudio is not in tt-metal's env). They are pure
@@ -124,50 +124,26 @@ def mel_spectrogram(wav, n_fft, hop_length, win_length, window, fb):
 # ---------------------------------------------------------------------------------------
 
 
-def load_reference_audio(path, fallback_sr=22050):
+def load_reference_audio(path):
     """Load a reference-voice clip -> (waveform tensor [1, N] float, sample rate).
 
-    .wav/.flac/.ogg via soundfile (multi-channel is downmixed to mono by averaging the
-    channels); .pt via torch.load handling a raw tensor/ndarray, a (tensor, sr) tuple, or
-    a HuggingFace audio-sample dict {"audio": {"array": ..., "sampling_rate": ...}}.
-    `fallback_sr` is used when the .pt carries no sample rate. soundfile/numpy are imported
-    lazily so importing this module needs neither."""
-    import numpy as np
+    .wav/.flac/.ogg via soundfile; multi-channel is downmixed to mono by averaging the
+    channels. soundfile is imported lazily so importing this module does not need it.
+    Callers holding a waveform already pass it to XttsV2.compute_voice directly."""
+    import soundfile as sf
 
     ext = os.path.splitext(path)[1].lower()
-    if ext in (".wav", ".flac", ".ogg"):
-        import soundfile as sf
-
-        data, sr = sf.read(path, dtype="float32")
-        wav = torch.from_numpy(data)
-        if wav.dim() > 1:  # [N, C] -> mono
-            wav = wav.mean(dim=1)
-        return wav.reshape(1, -1), sr
-
-    raw = torch.load(path, map_location="cpu", weights_only=False)
-    sr = fallback_sr
-    if isinstance(raw, dict) and isinstance(raw.get("audio"), dict) and "array" in raw["audio"]:
-        sr = int(raw["audio"].get("sampling_rate", sr))
-        raw = raw["audio"]["array"]
-    elif isinstance(raw, dict):
-        for k in ("array", "audio", "waveform", "wav"):
-            if k in raw:
-                raw = raw[k]
-                break
-    elif isinstance(raw, (tuple, list)):
-        if len(raw) == 2 and isinstance(raw[1], (int, float)):
-            raw, sr = raw[0], int(raw[1])
-        else:
-            raw = raw[0]
-    wav = raw if torch.is_tensor(raw) else torch.as_tensor(np.asarray(raw))
-    wav = wav.squeeze()
-    if wav.dim() > 1:
-        wav = wav[0]
-    return wav.float().reshape(1, -1), sr
+    if ext not in (".wav", ".flac", ".ogg"):
+        raise ValueError(f"reference clip must be .wav/.flac/.ogg, got {ext or path!r}")
+    data, sr = sf.read(path, dtype="float32")
+    wav = torch.from_numpy(data)
+    if wav.dim() > 1:  # [N, C] -> mono
+        wav = wav.mean(dim=1)
+    return wav.reshape(1, -1), sr
 
 
 # ---------------------------------------------------------------------------------------
-# Block 1 front-end: conditioning mel chunks (coqui Xtts.get_gpt_cond_latents)
+# Conditioning front-end: mel chunks (coqui Xtts.get_gpt_cond_latents)
 # ---------------------------------------------------------------------------------------
 
 COND_CHUNK_SECONDS = 6  # coqui chunk_length: style embeddings are computed per chunk and averaged
@@ -183,7 +159,7 @@ def conditioning_mels(audio, sr: int, mel_norms):
     log(clamp 1e-5), then divided per-band by the checkpoint's `mel_stats`).
 
     Returns a LIST because coqui computes one style embedding per <=6s chunk and averages the
-    embeddings — so the caller must run Block 1 once per chunk and mean the latents. A <=6s
+    embeddings — so the caller must run the conditioning encoder once per chunk and mean the latents. A <=6s
     reference clip yields exactly one chunk (the shape every PCC test used)."""
     audio = audio.reshape(1, -1).float()
     if sr != 22050:
@@ -209,13 +185,13 @@ def conditioning_mels(audio, sr: int, mel_norms):
 
 
 # ---------------------------------------------------------------------------------------
-# Block 2 front-end: speaker-encoder logmel (coqui ResNetSpeakerEncoder.torch_spec)
+# Speaker-encoder front-end: logmel (coqui ResNetSpeakerEncoder.torch_spec)
 # ---------------------------------------------------------------------------------------
 
 
 def speaker_logmel(audio, sr: int):
     """Reference waveform -> [1,64,T] logmel, the ResNet speaker encoder's instancenorm
-    input (= what the TT Block 2 consumes; see tests/pcc/test_speaker_pcc.py).
+    input (= what the TT speaker encoder consumes; see tests/pcc/test_speaker_pcc.py).
 
     Transcribes Xtts.get_speaker_embedding (resample to 16k) + the encoder's torch_spec:
     PreEmphasis(0.97) -> MelSpectrogram(16000, n_fft=512, win=400, hop=160, hamming window,
@@ -236,7 +212,7 @@ def speaker_logmel(audio, sr: int):
 
 
 # ---------------------------------------------------------------------------------------
-# Block 0: tokenizer (coqui VoiceBpeTokenizer). Cleaning comes from reference/coqui, vendored
+# Tokenizer (coqui VoiceBpeTokenizer). Cleaning comes from reference/coqui, vendored
 # verbatim: the model was trained on those tables' output, so a rewrite risks token drift.
 # ---------------------------------------------------------------------------------------
 
@@ -354,7 +330,7 @@ class XttsTokenizer:
 
 
 # ---------------------------------------------------------------------------------------
-# Block 3 front-end: GPT prompt-prefix assembly (coqui GPT.compute_embeddings)
+# GPT front-end: prompt-prefix assembly (coqui GPT.compute_embeddings)
 # ---------------------------------------------------------------------------------------
 
 START_TEXT_TOKEN = 261  # coqui GPT defaults (gpt.py); confirmed against config.json

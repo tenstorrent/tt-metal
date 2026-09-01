@@ -1,3 +1,4 @@
+soundfile>=0.12.1        # reference-clip IO in frontend.py, and the demo's wav output
 num2words>=0.5.13
 hangul_romanize>=0.1.0  # Korean: the vocab has no Hangul, so it must be romanized first
 pypinyin>=0.53.0        # Chinese: likewise, romanized to pinyin
