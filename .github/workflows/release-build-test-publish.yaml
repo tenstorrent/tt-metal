@@ -140,14 +140,18 @@ jobs:
           fi
 
   release-demo-tests:
-    needs: [check-harbor, build-artifact-tracy, determine-test-skus]
+    needs: [check-harbor, build-artifact-release, determine-test-skus]
     if: ${{ inputs.tag-version != '' }}
     secrets: inherit
     uses: ./.github/workflows/release-demo-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact-tracy.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-tracy.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-tracy.outputs.wheel-artifact-name }}
+      # Model demo tests run against the NON-tracy build. The tracy/profiler build
+      # is roughly 2x slower end to end (prefill compile 153s vs 74s, decode 113ms
+      # vs 54ms on Llama 3.1-8B / bh_p150), which blows the per-test timeout budget
+      # these tests are calibrated against. main made the same switch in #53509.
+      docker-image: ${{ needs.build-artifact-release.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-release.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.determine-test-skus.outputs.enabled-skus }}
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
       tier: "1"
