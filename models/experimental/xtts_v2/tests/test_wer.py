@@ -17,7 +17,7 @@ the text it was given — invariant to how that particular draw happened to say 
 
 The voice comes from the checkpoint's own speakers_xtts.pth rather than a reference clip: a
 synthetic waveform puts the speaker encoder outside its training distribution and the decoder
-answers with non-speech. Latents also mean no DSP and no Block 1 or 2 work here, so a failure is
+answers with non-speech. Latents also mean no DSP and no conditioning or speaker-encoder work here, so a failure is
 prefill, decode or the vocoder.
 
 One case per supported language, each gated on its own, so a failure names the language instead of
@@ -211,7 +211,7 @@ class _Asr:
 
 def _speakers(ckpt_path):
     """The checkpoint's built-in studio speakers -> {name: Voice}. Latents, so no DSP is involved."""
-    raw = torch.load(os.path.join(os.path.dirname(ckpt_path), SPEAKERS_FILE), weights_only=False)
+    raw = torch.load(os.path.join(os.path.dirname(ckpt_path), SPEAKERS_FILE), weights_only=True)
     return {
         name: Voice(gpt_cond_latent=d["gpt_cond_latent"], speaker_embedding=d["speaker_embedding"])
         for name, d in raw.items()

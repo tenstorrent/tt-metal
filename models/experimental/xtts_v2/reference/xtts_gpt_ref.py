@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-CPU reference for the XTTS-v2 GPT transformer core (Block 3), plus a golden-tensor
+CPU reference for the XTTS-v2 GPT transformer core, plus a golden-tensor
 generator for the TTNN PCC test.
 
 Block boundary under test:
@@ -29,8 +29,7 @@ Run to (re)generate goldens:
 import argparse
 import functools
 import os
-import sys
-import types
+import pickle
 
 import torch
 
@@ -84,37 +83,51 @@ GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden", "gpt")
 # --------------------------------------------------------------------------------------
 # Checkpoint loading (stub the TTS package so pickle can resolve config globals)
 # --------------------------------------------------------------------------------------
-def _install_tts_stub():
-    class _Any:
+# The checkpoint carries coqui's config objects next to the tensors, so weights_only=True cannot
+# read it. These are every class it asks to build; anything else is a substituted file, not ours.
+_CKPT_GLOBALS = {
+    ("collections", "OrderedDict"),
+    ("torch", "FloatStorage"),
+    ("torch", "LongStorage"),
+    ("torch._utils", "_rebuild_tensor_v2"),
+}
+_CKPT_STUBBED = {
+    ("TTS.config.shared_configs", "BaseDatasetConfig"),
+    ("TTS.tts.configs.xtts_config", "XttsConfig"),
+    ("TTS.tts.models.xtts", "XttsArgs"),
+    ("TTS.tts.models.xtts", "XttsAudioConfig"),
+}
+
+
+def _load_restricted(path):
+    """torch.load the checkpoint, refusing every class it does not need to rebuild its tensors."""
+
+    class _Discarded:
         def __init__(self, *a, **k):
             pass
 
         def __setstate__(self, s):
-            try:
-                self.__dict__.update(s)
-            except Exception:
-                pass
+            pass
 
-        def __call__(self, *a, **k):
-            return self
+    class _Unpickler(pickle.Unpickler):
+        def find_class(self, module, name):
+            if (module, name) in _CKPT_STUBBED:
+                return _Discarded  # coqui's config objects; load_full_state keeps only tensors
+            if (module, name) in _CKPT_GLOBALS:
+                return super().find_class(module, name)
+            raise pickle.UnpicklingError(f"checkpoint asked for an unexpected class: {module}.{name}")
 
-    class _StubMod(types.ModuleType):
-        def __getattr__(self, name):
-            return _Any
+    return torch.load(path, map_location="cpu", weights_only=False, pickle_module=_Shim(_Unpickler))
 
-    for name in [
-        "TTS",
-        "TTS.tts",
-        "TTS.tts.models",
-        "TTS.tts.models.xtts",
-        "TTS.tts.configs",
-        "TTS.tts.configs.xtts_config",
-        "TTS.config",
-        "TTS.config.shared_configs",
-        "TTS.tts.layers",
-        "TTS.utils",
-    ]:
-        sys.modules.setdefault(name, _StubMod(name))
+
+class _Shim:
+    """torch.load wants a module-like object exposing Unpickler, load and a name."""
+
+    __name__ = "pickle"
+
+    def __init__(self, unpickler):
+        self.Unpickler = unpickler
+        self.load = pickle.load
 
 
 @functools.lru_cache(maxsize=2)
@@ -125,8 +138,7 @@ def load_full_state(ckpt_path=None):
     preprocess_* functions are called 32 times, and re-reading the 1.86 GB model.pth each time
     dominates startup. The returned dict is read-only as far as callers are concerned — the
     preprocess_* functions only copy out of it."""
-    _install_tts_stub()
-    sd = torch.load(resolve_ckpt(ckpt_path), map_location="cpu", weights_only=False)
+    sd = _load_restricted(resolve_ckpt(ckpt_path))
     state = sd["model"] if isinstance(sd, dict) and "model" in sd else sd
     return {k: v for k, v in state.items() if hasattr(v, "shape")}
 
@@ -253,7 +265,7 @@ def load_gen_head(ckpt_path=DEFAULT_CKPT):
 
 def build_prompt_embeds(heads, n_text=16, seed=0):
     """A seeded text-only prompt [1, n_text, 1024] (stands in for cond+text until the
-    Perceiver / Block 1 exists). Reference and TTNN use the identical prompt."""
+    Perceiver exists). Reference and TTNN use the identical prompt."""
     g = torch.Generator().manual_seed(seed)
     text_ids = torch.randint(0, heads["text_emb"].shape[0], (n_text,), generator=g)
     return (heads["text_emb"][text_ids] + heads["text_pos"][:n_text]).unsqueeze(0).contiguous()
