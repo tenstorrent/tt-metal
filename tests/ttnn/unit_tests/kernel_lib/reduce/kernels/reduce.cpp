@@ -31,6 +31,8 @@ struct PostReduceMultiply {
         compute_kernel_lib::detail::reduce_post_mul_tile<input_format>(dst_idx, REDUCE_POST_MULTIPLIER_BITS);
     }
 };
+#else
+using PostReduceMultiply = compute_kernel_lib::NoOp;
 #endif
 
 template <bool enable_accumulation>
@@ -58,16 +60,7 @@ ALWI void run_reduce_call(
         output_cb,
         REDUCE_INPUT_POLICY,
         REDUCE_RECONFIG_MODE,
-        REDUCE_FP32_MODE>(
-        shape,
-        layout,
-        accumulation,
-#ifdef REDUCE_POST_MULTIPLIER_BITS
-        PostReduceMultiply {}
-#else
-        compute_kernel_lib::NoOp{}
-#endif
-    );
+        REDUCE_FP32_MODE>(shape, layout, accumulation, PostReduceMultiply{});
 
     constexpr bool helper_pops_input =
         REDUCE_INPUT_POLICY == compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile ||
@@ -100,14 +93,10 @@ void kernel_main() {
     cb_reserve_back(cb_input, input_tiles * num_calls);
     cb_push_back(cb_input, input_tiles * num_calls);
 
-    for (uint32_t call = 0; call < num_calls; ++call) {
-        const bool is_last_call = call == num_calls - 1;
-        if (is_last_call) {
-            run_reduce_call<cb_output>(shape, layout, input_tiles, call);
-        } else {
-            run_reduce_call<cb_accumulator>(shape, layout, input_tiles, call);
-        }
+    for (uint32_t call = 0; call < num_calls - 1; ++call) {
+        run_reduce_call<cb_accumulator>(shape, layout, input_tiles, call);
     }
+    run_reduce_call<cb_output>(shape, layout, input_tiles, num_calls - 1);
 
     // reduce() deliberately keeps the scaler resident for reuse by every call.
     cb_pop_front(cb_scaler, 1);

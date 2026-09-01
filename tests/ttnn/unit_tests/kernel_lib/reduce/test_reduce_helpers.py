@@ -389,7 +389,7 @@ def _defines(case: ReduceCase) -> list[tuple[str, str]]:
 
 def _compute_config(case: ReduceCase) -> ttnn.ComputeConfigDescriptor:
     config = ttnn.ComputeConfigDescriptor(
-        math_fidelity=ttnn.MathFidelity.HiFi3,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
         fp32_dest_acc_en=True,
         dst_full_sync_en=False,
     )
@@ -581,11 +581,10 @@ def test_reduce_helpers_complete_input_space(device, case: ReduceCase):
     if case.input_dtype == "int32":
         torch.testing.assert_close(actual.to(torch.int64), expected, rtol=0, atol=0, msg=case.name)
     else:
-        rtol = 0.05 if case.calls > 1 or case.input_dtype == "bf16" else 0.02
         torch.testing.assert_close(
             actual.to(torch.float64),
             expected.to(torch.float64),
-            rtol=rtol,
-            atol=0.1,
+            rtol=0.01,
+            atol=0.01,
             msg=case.name,
         )
