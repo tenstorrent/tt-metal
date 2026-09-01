@@ -1259,8 +1259,21 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // arise here.
 
     // 1D depthwise compute uses dest-reuse for accumulation — no MATMUL_PARTIALS CB is allocated.
-    const bool partials_cb_uses_output =
-        !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
+    //
+    // [option 2 — no partials/output alias on Quasar] On WH/BH the one-block matmul_partials CB is aliased
+    // onto the output allocation (borrowed) to save one output-block of L1, and metal1.0 placed it at the
+    // END of the output region via CBInfo::address_offset so the scratch overlaps only the block finalized
+    // last. The Metal-2.0 borrowed-DFB API (DataflowBufferSpec::borrowed_from) has no offset field — it can
+    // only place the borrowed view at OFFSET 0 (the start) of the output. Front placement makes the partials
+    // scratch clobber output block 0 the moment a several-block output advances to block 1, corrupting /
+    // deadlocking the multi-block height- and block-sharded convs (exactly the ones that don't match WH/BH).
+    // Rather than reintroduce an offset mechanism, give matmul_partials its OWN L1 DFB on Quasar: the DFB
+    // below then skips borrowed_from (own allocation), and the compute kernel takes its !partials_cb_uses_
+    // output path, which rewinds the dedicated partials ring (RESTORE_PARTIALS) between K-blocks and never
+    // touches OUT. Costs one output-block of L1 per compute node; a larger Quasar grid absorbs it. WH/BH keep
+    // the aliased+offset scheme (their CBDescriptor path still carries address_offset).
+    const bool partials_cb_uses_output = !is_conv_1d_depthwise_conv && !arch_is_quasar &&
+                                         get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
     log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
 
     const bool reader_indices_globally_allocated =
