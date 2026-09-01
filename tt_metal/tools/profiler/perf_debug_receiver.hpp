@@ -122,6 +122,14 @@ struct ReceiverConfig {
 class PerfDebugReceiver {
 public:
     PerfDebugReceiver(ReceiverConfig config, std::vector<ReceiverDeviceConfig> devices);
+
+    // Late-arriving frequency for a device whose anchor is COMPOSED from the root AFTER the receiver
+    // was built. ReceiverDeviceConfig::frequency_ghz is snapshotted at construction, and for a
+    // non-root device it is still 0 at that point -- the host-fit fallback that used to fill it in
+    // was deliberately removed (it injected us-scale cross-device skew). Without this refresh the
+    // device keeps frequency 0 forever: its per-device stats are skipped by the `freq > 0.0` gate
+    // and nothing downstream can turn its cycles into time.
+    void set_device_frequency(uint32_t chip_id, double freq_ghz);
     ~PerfDebugReceiver();
 
     PerfDebugReceiver(const PerfDebugReceiver&) = delete;

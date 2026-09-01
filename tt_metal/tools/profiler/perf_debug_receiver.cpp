@@ -111,6 +111,18 @@ struct IdleBackoff {
 
 }  // namespace
 
+void PerfDebugReceiver::set_device_frequency(uint32_t chip_id, double freq_ghz) {
+    if (freq_ghz <= 0.0) {
+        return;
+    }
+    for (auto& d : devices_) {
+        if (d.chip_id == chip_id) {
+            d.frequency_ghz = freq_ghz;
+            return;
+        }
+    }
+}
+
 PerfDebugReceiver::PerfDebugReceiver(ReceiverConfig config, std::vector<ReceiverDeviceConfig> devices) :
     cfg_(std::move(config)), devices_(std::move(devices)) {
     TT_FATAL(devices_.size() <= kPerfDebugMaxDevices, "record dev field holds {} devices", kPerfDebugMaxDevices);

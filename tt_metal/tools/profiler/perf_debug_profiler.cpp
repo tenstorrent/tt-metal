@@ -2257,6 +2257,8 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
         return (static_cast<uint64_t>(std::min(a, b)) << 32) | std::max(a, b);
     };
     std::set<uint64_t> seen_pairs;
+    // chip -> (initiator_count - responder_count), for the role-balancing rule below.
+    std::map<uint32_t, int> role_load;
     std::set<int> visited;
     std::queue<IDevice*> bfs;
     st->root = static_cast<uint32_t>(devices.front()->id());
@@ -2296,7 +2298,22 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
             }
             seen_pairs.insert(pk);
             FabricSyncState::Edge e;
-            const bool a_initiates = a->id() < pid;
+            // ROLE BALANCE, not chip id. Orienting every edge by `a->id() < pid` makes the
+            // lowest-numbered chip initiate ALL of its links and the highest respond to all of its
+            // own: on the 4-chip ring that is chip 0 initiating twice and chip 3 responding twice.
+            // Not cosmetic -- every link whose RESPONDER was chip 3 kept a ~190-260 us sample-0
+            // doorbell wait that the fast-doorbell fix cleared on every other link, and chip 3 was
+            // the only responder-only chip. Balancing gives each chip one send and one receive (a
+            // directed ring), so no chip carries two of the same role.
+            // role_load = (times initiator) - (times responder); the lighter end initiates, with the
+            // old chip-id rule kept as the tie-break so the assignment stays deterministic.
+            const uint32_t ca = static_cast<uint32_t>(a->id());
+            const uint32_t cb = static_cast<uint32_t>(pid);
+            const int la = role_load[ca];
+            const int lb = role_load[cb];
+            const bool a_initiates = (la != lb) ? (la < lb) : (a->id() < pid);
+            role_load[ca] += a_initiates ? 1 : -1;
+            role_load[cb] += a_initiates ? -1 : 1;
             FabricSyncState::End ea{static_cast<uint32_t>(a->id()), ec, CoreCoord{}, 0};
             FabricSyncState::End eb{static_cast<uint32_t>(pid), std::get<1>(peer), CoreCoord{}, 0};
             e.init = a_initiates ? ea : eb;
@@ -2929,6 +2946,14 @@ void PerfDebugProfiler::compose_device_anchors_from_root() {
         (void)rate;
         ctx.freq_ghz = root_freq_ghz_;
         ctx.clock_synced = true;
+        // PUSH IT INTO THE RECEIVER TOO. The receiver's device table was built during device open,
+        // before this composition ran, so it snapshotted freq_ghz while it was still 0 for every
+        // non-root device -- the same stale-snapshot trap as st->anchors just below. Left unrefreshed
+        // the receiver reports no per-device stats for chips 1..N and their cycles cannot be
+        // converted, which reads downstream as "only device 0 has data".
+        if (receiver_ != nullptr) {
+            receiver_->set_device_frequency(ctx.chip_id, ctx.freq_ghz);
+        }
         tracy_->AddDevice(ctx.chip_id, root_host_anchor_, dev_at_root_anchor, ctx.freq_ghz);
         ctx.anchor_host = root_host_anchor_;
         ctx.anchor_dev = static_cast<uint64_t>(dev_at_root_anchor);

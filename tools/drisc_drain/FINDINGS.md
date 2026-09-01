@@ -6532,3 +6532,72 @@ losslessness exact in both -- 4465 and 4536 rounds, **0 partial, 0 dropped, 0 st
    kernel holding a resource with nothing reporting it. `rtt0 max` is the watch signal -- it
    already reaches 735731 cy (545 us).
 4. The 4-link bandwidth variance is now an OPEN question with no candidate mechanism.
+
+---
+
+## REGRESSION FIXED: only device 0 had rows since the host-anchor nuke -- a stale receiver frequency
+
+### Dating it
+Same config (`fabric_1grp.yaml`), same 612 records in every run. Devices reporting a receiver zone
+window, by capture log mtime:
+
+    15:33  cap_short    devices=4  notanchored=0
+    16:20  cap_corr     devices=4  notanchored=0
+    16:33  cap_percorr  devices=4  notanchored=0
+    16:59  cap_nuke     devices=1  notanchored=3   <-- flips here
+    ...    every capture since  devices=1
+
+It flipped at the per-device host-anchor nuke, and stayed broken for ~5 hours of captures.
+
+**Method error worth not repeating:** I first called this pre-existing because
+`grep -c "could NOT be anchored"` was nonzero in older logs too. That grep asks whether the ERROR
+TEXT appears, not whether devices HAVE ROWS. The text appears in both eras; the rows do not. Count
+the thing you actually care about.
+
+### Root cause -- NOT the nuke itself
+`PerfDebugReceiver`'s device table is built during device open (`rd.frequency_ghz = ctx.freq_ghz`),
+which runs BEFORE `compose_device_anchors_from_root()`. For a non-root device `ctx.freq_ghz` is
+still 0 at that moment -- the host-fit fallback that used to fill it in is exactly what was nuked.
+Compose sets `ctx.freq_ghz = root_freq_ghz_` two seconds later, but the receiver keeps the stale 0
+forever, and its per-device path is gated on `freq > 0.0`.
+
+The data was never missing: device 3's stream decoded **612 records (612 zones)**. It had no
+frequency to convert them with. This is the SAME stale-snapshot trap as the `st->anchors` bug, whose
+fix sits three lines below where this one belongs.
+
+Fix: `PerfDebugReceiver::set_device_frequency()`, called from compose. The nuked fallback stays
+nuked -- a frequency is a RATE, and the thing that was rightly forbidden is an independent per-device
+ORIGIN. Verified: all 4 devices report a zone window again.
+
+## Role balance: applied as designed, and it REFUTES the responder-chip hypothesis
+
+`a_initiates = a->id() < pid` oriented every edge by chip id, so the lowest chip initiated all its
+links and the highest responded to all of its own. Replaced with a load-balancing rule (lighter end
+initiates; chip-id tie-break keeps it deterministic). On the 4-chip ring this yields a directed ring
+-- **every chip exactly one send and one receive**, confirmed live: `0->1, 3->0, 1->2, 2->3`.
+
+It did NOT fix the slow doorbell, and that is the useful result:
+
+| chip pair | before (roles by id) | after (balanced) |
+|-----------|----------------------|------------------|
+| {0,1}     | `0->1`  24k FAST     | `0->1`  24k FAST |
+| {1,2}     | `1->2`  21k FAST     | `1->2`  26k FAST |
+| {0,3}     | `0->3` 193k SLOW     | `3->0` 222k SLOW |
+| {2,3}     | `2->3` 254k SLOW     | `2->3` 258k SLOW |
+
+**The responder-chip story is dead.** With balanced roles the slow links have responders chip 0 and
+chip 3, and chip 0 is FAST as a responder's peer on `0->1`. The invariant that survives both
+configurations is the physical CHIP PAIR: **every link that touches chip 3 is slow in EITHER
+direction; no link that avoids chip 3 is ever slow.** Consistent across all 8 runs.
+
+So it is a property of chip 3 (or of its two eth channels), not of the role, and not of "the
+hardest-driven links" either -- both of those framings were mine and both are now withdrawn.
+
+Next test, UNDONE: whether chip 3's router loop is simply slower, which would make its prescaler
+expiries rarer in wall-clock. Instrument the prescaler period per chip, or lower
+`FABRIC_ROUTER_SYNC_PRESCALER_MASK` on chip 3 alone.
+
+### Caveat on the capture itself
+`test_tt_fabric` emits ~612 zones for the whole run -- every device reads `0.00 Mzones/s`. All four
+devices are now REGISTERED and anchored, but this harness will never fill a timeline. For a capture
+with real device rows, use a zone-producing workload.
