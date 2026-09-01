@@ -87,6 +87,12 @@ jobs:
     env:
       BLAZE_REPO: tenstorrent/tt-blaze
       BLAZE_WORKFLOW: ci.yaml
+      # tt-blaze's bucket id for the leg this gate requires. Distinct from the
+      # `bh-loudbox-gptoss-temporal` dispatch input below, which is the boolean
+      # that SELECTS this bucket -- the two are separate names on the tt-blaze
+      # side and must be changed together. Used by the post-run assertion to
+      # prove the bucket actually ran; see the `success` case in the poll loop.
+      BLAZE_BUCKET: gpt-oss-temporal-multiuser
     steps:
       - name: Dispatch tt-blaze ci.yaml and wait for it
         id: dispatch
@@ -203,16 +209,57 @@ jobs:
             if [ "$status" = "completed" ]; then
               case "$conclusion" in
                 success)
-                  echo "✅ tt-blaze CI passed: ${run_url}"
+                  # A green run does NOT prove the bucket ran. If tt-blaze's
+                  # selected-buckets resolves to nothing, its select-buckets job
+                  # sets has-buckets=false, the Loudbox matrix job is skipped,
+                  # and tt-blaze's own workflow-status lists that job as
+                  # OPTIONAL -- so the run still concludes success. Taking that
+                  # at face value would leave this gate permanently green and
+                  # permanently empty after any bucket rename or wiring drift on
+                  # the tt-blaze side. Assert the leg exists and passed.
+                  #
+                  # Substring match: the leg's full name is composed by the
+                  # caller and the reusable workflow (eg.
+                  # "silicon-tests-bh-loudbox / Silicon Tests (Blackhole Loudbox)
+                  # / ${BLAZE_BUCKET}"), so only the bucket id is stable here.
+                  bucket_jobs=$(gh run view "$run_id" --repo "$BLAZE_REPO" --json jobs \
+                                  --jq "[.jobs[] | select((.name // \"\") | contains(\"${BLAZE_BUCKET}\"))] | length" \
+                                2>/dev/null || echo "")
+                  bucket_passed=$(gh run view "$run_id" --repo "$BLAZE_REPO" --json jobs \
+                                    --jq "[.jobs[] | select(((.name // \"\") | contains(\"${BLAZE_BUCKET}\")) and .conclusion == \"success\")] | length" \
+                                  2>/dev/null || echo "")
+
+                  # An unreadable jobs list is not proof of anything; fail rather
+                  # than infer coverage from a query that did not answer.
+                  if [ -z "$bucket_jobs" ] || [ -z "$bucket_passed" ]; then
+                    echo "::error::tt-blaze run ${run_id} concluded success but its job list could not be read, so this gate cannot confirm '${BLAZE_BUCKET}' ran. ${run_url}"
+                    echo "- ❌ tt-blaze — could not verify \`${BLAZE_BUCKET}\` ran ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
+                    exit 1
+                  fi
+                  if [ "$bucket_jobs" -eq 0 ]; then
+                    echo "::error::tt-blaze run ${run_id} is green but ran NO job for bucket '${BLAZE_BUCKET}' -- this gate proved nothing. The bucket selection drifted: either ${BLAZE_REF}'s ci.yaml no longer maps bh-loudbox-gptoss-temporal onto that bucket, or the bucket was renamed in its silicon-tests-bh-loudbox-impl.yaml catalog. Realign BLAZE_BUCKET here with the tt-blaze side. ${run_url}"
+                    echo "- ❌ tt-blaze — \`${BLAZE_BUCKET}\` never ran ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
+                    exit 1
+                  fi
+                  if [ "$bucket_passed" -eq 0 ]; then
+                    echo "::error::tt-blaze run ${run_id} is green overall but its '${BLAZE_BUCKET}' leg did not pass (skipped or cancelled). ${run_url}"
+                    echo "- ❌ tt-blaze — \`${BLAZE_BUCKET}\` did not pass ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
+                    exit 1
+                  fi
+
+                  echo "✅ tt-blaze CI passed (${BLAZE_BUCKET} ran): ${run_url}"
                   echo "- ✅ tt-blaze — [run ${run_id}](${run_url})" >> "$GITHUB_STEP_SUMMARY"
                   exit 0
                   ;;
                 skipped)
-                  # Every job guarded off (eg. a "[SKIP CI]" title on the blaze
-                  # side). Nothing ran, so there is nothing to fail on.
-                  echo "::notice::tt-blaze CI was skipped: ${run_url}"
-                  echo "- ⏭️ tt-blaze — skipped ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
-                  exit 0
+                  # Unreachable from this dispatch -- check-skip runs on any
+                  # workflow_dispatch, so at least one job always runs and the
+                  # conclusion is success or failure, never skipped. Kept as a
+                  # FAILURE rather than removed: if tt-blaze ever guards that job
+                  # off too, "nothing ran" must not read as "the gate passed".
+                  echo "::error::tt-blaze CI concluded 'skipped' -- no job ran, so this gate verified nothing. ${run_url}"
+                  echo "- ❌ tt-blaze — skipped, nothing verified ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
+                  exit 1
                   ;;
                 *)
                   echo "::error::tt-blaze CI concluded '${conclusion}' — this tt-metal change breaks tt-blaze, or the blaze run itself is broken. ${run_url}"
