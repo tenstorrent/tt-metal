@@ -354,44 +354,23 @@ def build_rope_tables(
     return freqs.cos(), freqs.sin()
 
 
-def build_row_timesteps(
-    layout: MiniMaxH3PackedSequence,
-    video_timestep: float,
-    audio_timestep: float,
-    condition_video_timestep: float,
-    condition_audio_timestep: float,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Per-row timesteps, reduced to the transformer's ``(timesteps, indices)`` pair.
-
-    One forward serves rows at different noise levels: generated video and audio
-    step their own schedules while conditioning rows stay pinned at their
-    noise-augmentation level. Text rows never reach an output head and inherit
-    the video timestep.
-    """
-    row_timesteps = torch.full((layout.sequence_length,), video_timestep, dtype=torch.float32)
-    row_timesteps[layout.video_indices[: layout.num_condition_video_rows]] = condition_video_timestep
-    row_timesteps[layout.audio_indices[layout.num_condition_audio_rows :]] = audio_timestep
-    row_timesteps[layout.audio_indices[: layout.num_condition_audio_rows]] = condition_audio_timestep
-    return torch.unique(row_timesteps, sorted=True, return_inverse=True)
-
-
-# Roles a resident-AdaLN row can take, in canonical slot order. Each maps to one noise level per
-# step, and a row's role never changes across a request -- so, unlike the precomputed path's
-# per-step `torch.unique`, the row->slot map is built once.
+# Roles a row can take, in canonical slot order. Each maps to one noise level per step, and a
+# row's role never changes across a request, so the row->slot map is built once. Slot count is
+# fixed -- duplicates included -- because tracing demands a constant shape. When two roles share
+# a value (video == audio at step 0, both `t = 0`), the device embeds both slots rather than
+# merging. `time_embedder` is a batch-sensitive GEMM, so that is a deliberate numerics choice.
 MINIMAX_H3_ADALN_ROLES = ("video", "audio", "condition_video", "condition_audio")
 
 
 def build_slot_routing(layout: MiniMaxH3PackedSequence) -> tuple[torch.Tensor, tuple[str, ...]]:
-    """Fixed per-row AdaLN slot assignment for the resident (non-precomputed) path.
+    """Fixed per-row AdaLN slot assignment.
 
     A row's noise level is fixed by its role -- generated video and text at the video level,
     generated audio at the audio level, conditioning rows pinned at their augmentation level -- so
-    the row->slot map is constant for the whole request. This is what replaces the precomputed
-    path's per-step ``build_row_timesteps`` + ``torch.unique``, whose deduplicated level count
-    varies step to step (the conditioning floor collides with the video level early in the schedule
-    and separates later) and so cannot be a traced input. Roles with no rows are dropped, so a
+    the row->slot map is constant for the whole request. Roles with no rows are dropped, so a
     request carries the minimum fixed slot count: two for ``t2va``, three for ``fl2va`` and four for
-    ``ref2va``.
+    ``ref2va``. Duplicate levels stay as separate slots; merging would change ``time_embedder``'s
+    batch mid-request and break the trace.
 
     Returns ``(row_slot, roles)``: ``row_slot[r]`` is row ``r``'s slot index and ``roles`` names
     each slot in order, so :func:`slot_levels` builds the matching per-step level vector.
@@ -409,9 +388,8 @@ def build_slot_routing(layout: MiniMaxH3PackedSequence) -> tuple[torch.Tensor, t
     roles = tuple(role for role in MINIMAX_H3_ADALN_ROLES if present[role])
     slot = {role: index for index, role in enumerate(roles)}
 
-    # The same row->role assignment `build_row_timesteps` makes, recording the slot index rather
-    # than the level value: default (text + generated video) at the video slot, then override the
-    # conditioning and generated-audio spans.
+    # Default (text + generated video) at the video slot, then override the conditioning and
+    # generated-audio spans.
     row_slot = torch.full((layout.sequence_length,), slot["video"], dtype=torch.long)
     if num_cond_video:
         row_slot[layout.video_indices[:num_cond_video]] = slot["condition_video"]
@@ -426,15 +404,15 @@ def slot_levels(
     *,
     video_timestep: float,
     audio_timestep: float,
-    condition_video_timestep: float,
-    condition_audio_timestep: float,
+    condition_video_timestep: float | None = None,
+    condition_audio_timestep: float | None = None,
 ) -> torch.Tensor:
     """The per-step noise level of each slot, ordered to match :func:`build_slot_routing`'s roles.
 
     Fixed length (``len(roles)``) for the whole request -- no dedup -- so the modulation table the
     blocks project from has a constant shape and the step is traceable. Two slots may hold equal
-    levels (the conditioning floor equals the video level early in the schedule); they are kept
-    distinct rather than merged, which is precisely what fixes the shape.
+    levels (video and audio both ``t = 0`` at step 0); they stay distinct rather than merged.
+    Conditioning values are required only for roles that are present.
     """
     values = {
         "video": video_timestep,
@@ -442,6 +420,9 @@ def slot_levels(
         "condition_video": condition_video_timestep,
         "condition_audio": condition_audio_timestep,
     }
+    missing = [role for role in roles if values[role] is None]
+    if missing:
+        raise ValueError(f"slot_levels missing values for roles {missing}")
     return torch.tensor([values[role] for role in roles], dtype=torch.float32)
 
 
@@ -452,24 +433,3 @@ def adaln_indices(token_tags: torch.Tensor, timestep_indices: torch.Tensor) -> t
     their modulation is irrelevant because their output is discarded.
     """
     return timestep_indices * MINIMAX_H3_MODALITY_NUM + token_tags.clamp(min=0)
-
-
-def adaln_index_ranges(indices: torch.Tensor) -> list[tuple[int, int, int]]:
-    """Compress a row-to-AdaLN-table map into ``(start, stop, table_row)`` runs.
-
-    The packed layout is contiguous by modality and the timestep map is
-    piecewise-constant over those same blocks, so this collapses to a handful of
-    runs -- which is what lets the device apply modulation as slice plus
-    broadcast instead of a gather. Returns runs over the rows given, so callers
-    pass their own sequence-parallel shard and get shard-local ranges.
-    """
-    if indices.ndim != 1:
-        raise ValueError(f"indices must be 1-D, got shape {tuple(indices.shape)}")
-    if indices.numel() == 0:
-        return []
-
-    values = indices.to(torch.long)
-    boundaries = torch.nonzero(values[1:] != values[:-1], as_tuple=False).reshape(-1) + 1
-    starts = torch.cat([torch.zeros(1, dtype=torch.long), boundaries])
-    stops = torch.cat([boundaries, torch.tensor([values.numel()], dtype=torch.long)])
-    return [(int(a), int(b), int(values[a])) for a, b in zip(starts, stops)]

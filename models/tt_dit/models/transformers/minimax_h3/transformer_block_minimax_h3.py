@@ -66,7 +66,6 @@ class MiniMaxH3TransformerBlock(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
-        precomputed_adaln: bool = False,
     ) -> None:
         super().__init__()
 
@@ -124,22 +123,14 @@ class MiniMaxH3TransformerBlock(Module):
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
-        # With precomputed modulation the projection never exists on device: the caller passes the
-        # six tables into `forward` instead, and this block's `adaln_proj.*` checkpoint keys are
-        # dropped in `_prepare_torch_state`. See `adaln_cache_minimax_h3`.
-        self.precomputed_adaln = precomputed_adaln
-        self.adaln_proj = (
-            None
-            if precomputed_adaln
-            else ColParallelLinear(
-                time_embed_dim,
-                NUM_MODULATION_PARAMS * hidden_size * MODALITY_NUM,
-                bias=True,
-                mesh_device=mesh_device,
-                mesh_axis=self.tp_mesh_axis,
-                fsdp_mesh_axis=fsdp_mesh_axis,
-                ccl_manager=ccl_manager,
-            )
+        self.adaln_proj = ColParallelLinear(
+            time_embed_dim,
+            NUM_MODULATION_PARAMS * hidden_size * MODALITY_NUM,
+            bias=True,
+            mesh_device=mesh_device,
+            mesh_axis=self.tp_mesh_axis,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
 
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -173,10 +164,6 @@ class MiniMaxH3TransformerBlock(Module):
 
         weight = state.pop("adaln_proj.linear.weight", None)
         bias = state.pop("adaln_proj.linear.bias", None)
-        if self.precomputed_adaln:
-            # Dropped: these are the 26 GB the precomputed table exists to keep off the
-            # device. The pops above already strip them from the state the loader checks.
-            return
         if weight is not None:
             state["adaln_proj.weight"] = _reorder_for_tp(weight)
         if bias is not None:
@@ -240,11 +227,10 @@ class MiniMaxH3TransformerBlock(Module):
         self,
         spatial_1BND: ttnn.Tensor,
         N: int,
-        temb: ttnn.Tensor | None,
+        temb: ttnn.Tensor,
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
-        modulation_tables: list[ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
@@ -255,16 +241,7 @@ class MiniMaxH3TransformerBlock(Module):
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
-        # Precomputed: the six tables come from the host-built cache, addressed by the same absolute
-        # `adaln_indices`, so nothing downstream changes. Otherwise project `temb` on device.
-        if modulation_tables is not None:
-            if len(modulation_tables) != NUM_MODULATION_PARAMS:
-                raise ValueError(f"expected {NUM_MODULATION_PARAMS} modulation tables, got {len(modulation_tables)}")
-            tables = modulation_tables
-        else:
-            if self.precomputed_adaln:
-                raise ValueError("block was built with precomputed_adaln but forward got no modulation_tables")
-            tables = self._modulation_tables(temb)
+        tables = self._modulation_tables(temb)
 
         # ttnn.embedding takes [batch, seq] indices; uint32 is the dtype it expects.
         indices = ttnn.reshape(adaln_indices, (1, adaln_indices.shape[-1]))
