@@ -67,7 +67,6 @@ class MiniMaxH3AudioDecoder(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "full",
-        tap_matmul: bool = True,
         max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
     ) -> None:
         super().__init__()
@@ -86,7 +85,6 @@ class MiniMaxH3AudioDecoder(Module):
         # depthwise resample filters need no lever: their conv1d kernel is exact in fp32
         # (see compute_depthwise_conv1d.cpp).
         self.split_mode = split_mode
-        self.tap_matmul = tap_matmul
         self.max_c_in_block = max_c_in_block
 
         # H3's audio channel schedule differs from LTX's at both ends, so every conv misses
@@ -106,7 +104,6 @@ class MiniMaxH3AudioDecoder(Module):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
         self.decoder = Vocoder(
             resblock_kernel_sizes=list(resblock_kernel_sizes),
@@ -125,7 +122,6 @@ class MiniMaxH3AudioDecoder(Module):
             ccl_manager=ccl_manager,
             # H3-only opt-in: LTX's vocoder keeps its default single-conv weights.
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
 
     def _project_latents_device(self, latents_BCT: torch.Tensor) -> torch.Tensor:

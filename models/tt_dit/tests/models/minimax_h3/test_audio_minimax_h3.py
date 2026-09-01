@@ -6,8 +6,8 @@
 
 T-parallel decode works: ``test_audio_decode_t_parallel`` at the bottom of this file is resurrected from
 git history, as the previous version of this docstring asked for. The 8-way shard layout it called
-known-broken was `Vocoder.conv_pre` returning uninitialized memory when sharded, plus
-``_forward_tap_matmul`` padding shard boundaries locally instead of through the halo; both are fixed, and
+known-broken was `Vocoder.conv_pre` returning uninitialized memory when sharded (plus a halo bug in the
+since-retired tap-matmul path); both were fixed, and
 the test's PSNR assert is enforced for every factor rather than excused. ``test_neighbor_pad_t_minimax_h3.py``
 is still in git history if the halo itself ever needs its own gate again -- it was verified correct here
 (exact at pad 1/3/25) while hunting the conv_pre bug."""
@@ -103,7 +103,7 @@ def _tt_decoder(config: dict, mesh_device) -> MiniMaxH3AudioDecoder:
 def test_decode(mesh_device, num_latent_frames):
     """The whole decode path against the reference, at a production duration, stereo.
 
-    Constructor defaults are accurate mode (split_mode='full', tap_matmul), so the bars are the
+    Constructor defaults are accurate mode (split_mode='full'), so the bars are the
     accurate-mode ones: measured 0.0045 rel RMSE / 99.9990% PCC / 67.5 dB PSNR.
     """
     reference, config = _build_reference()
@@ -116,7 +116,6 @@ def test_decode(mesh_device, num_latent_frames):
     tt_decoder = _tt_decoder(config, mesh_device)
     # The precision levers are the constructed defaults; assert they landed where they matter.
     assert tt_decoder.dec_in_proj.split_mode == "full", "split_mode='full' did not land on dec_in_proj"
-    assert tt_decoder.dec_in_proj.tap_matmul, "tap_matmul=True did not land on dec_in_proj"
     assert tt_decoder.decoder.conv_post.split_mode == "full", "split_mode='full' did not land on conv_post"
 
     tt_decoder.load_torch_state_dict(convert_minimax_h3_audio_state_dict(dict(reference.state_dict())), strict=False)
@@ -490,7 +489,7 @@ def _build(mesh_device, config, converted, parallel_config, ccl_manager):
     """The decoder at this file's shared defaults, plus a shard layout.
 
     Goes through `build_audio_decoder` rather than constructing directly so the precision levers
-    (`split_mode`, `tap_matmul`, `max_c_in_block`) stay at whatever the shipping default is -- a
+    (`split_mode`, `max_c_in_block`) stay at whatever the shipping default is -- a
     sharded run must measure the same configuration the unsharded gates do, or a divergence could
     be a lever difference rather than a sharding bug.
     """

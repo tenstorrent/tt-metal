@@ -1144,8 +1144,7 @@ class MiniMaxH3Pipeline:
                 model_name=MODEL_NAME,
                 # The audio precision levers change the module's parameter set, so they are part of
                 # the cache key -- read off the module so the key cannot drift from what was built.
-                subfolder="audio_encoder"
-                + weights_variant(encoder.split_mode, encoder.tap_matmul, encoder.max_c_in_block),
+                subfolder="audio_encoder" + weights_variant(encoder.split_mode, encoder.max_c_in_block),
                 parallel_config=self.vae_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,
@@ -1223,8 +1222,7 @@ class MiniMaxH3Pipeline:
                 model_name=MODEL_NAME,
                 # The audio precision levers change the module's parameter set, so they are part of
                 # the cache key -- read off the module so the key cannot drift from what was built.
-                subfolder="audio_decoder"
-                + weights_variant(decoder.split_mode, decoder.tap_matmul, decoder.max_c_in_block),
+                subfolder="audio_decoder" + weights_variant(decoder.split_mode, decoder.max_c_in_block),
                 parallel_config=self.vae_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,
