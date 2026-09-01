@@ -102,21 +102,17 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
 //
 // Reached from _llk_math_eltwise_unary_sfpu_init_'s SfpuType::softplus arm, which both
 // production (SFPU_UNARY_INIT) and the tt-llk harness run before the calculate step.
-#ifdef INP_FLOAT32
-#define SOFTPLUS_CREG_C0 SOFTPLUS_POLY_C0
-#define SOFTPLUS_CREG_C1 SOFTPLUS_POLY_C1
-#define SOFTPLUS_CREG_C2 SOFTPLUS_POLY_C2
-#else
-#define SOFTPLUS_CREG_C0 SOFTPLUS_BF16_POLY_C0
-#define SOFTPLUS_CREG_C1 SOFTPLUS_BF16_POLY_C1
-#define SOFTPLUS_CREG_C2 SOFTPLUS_BF16_POLY_C2
-#endif
-
 inline void softplus_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    sfpi::vConstFloatPrgm0 = SOFTPLUS_CREG_C0;
-    sfpi::vConstFloatPrgm1 = SOFTPLUS_CREG_C1;
-    sfpi::vConstFloatPrgm2 = SOFTPLUS_CREG_C2;
+#ifdef INP_FLOAT32
+    sfpi::vConstFloatPrgm0 = SOFTPLUS_POLY_C0;
+    sfpi::vConstFloatPrgm1 = SOFTPLUS_POLY_C1;
+    sfpi::vConstFloatPrgm2 = SOFTPLUS_POLY_C2;
+#else
+    sfpi::vConstFloatPrgm0 = SOFTPLUS_BF16_POLY_C0;
+    sfpi::vConstFloatPrgm1 = SOFTPLUS_BF16_POLY_C1;
+    sfpi::vConstFloatPrgm2 = SOFTPLUS_BF16_POLY_C2;
+#endif
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>

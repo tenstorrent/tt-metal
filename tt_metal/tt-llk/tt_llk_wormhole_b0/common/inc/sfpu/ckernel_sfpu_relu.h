@@ -43,7 +43,8 @@ sfpi_inline sfpi::vFloat _relu_max_body_(sfpi::vFloat val, sfpi::vFloat threshol
     //
     // Order matters: the predicated original clamped HIGH first and LOW second, so a
     // negative threshold yields 0, not the threshold. max(min(..)) reproduces that;
-    // min(max(..)) does not.
+    // min(max(..)) does not -- which is also why sfpi::clamp() is not usable here: it is
+    // defined as min(max(val, lower), upper), the order this kernel must not use.
     return sfpi::max(sfpi::min(val, threshold), 0.0f);
 }
 
@@ -60,10 +61,14 @@ inline void _relu_max_impl_(const int iterations, VecType threshold)
         }
         else
         {
-            // sfpi::min/max cover vFloat and vSMag only on Wormhole/Blackhole (the vInt
-            // overloads are gated on __riscv_xtttensixqsr), and SFPSWAP orders operands as
-            // sign+magnitude, so a vInt clamp would need the 2's-complement conversion
-            // _relu_min_ does by hand. Left predicated.
+            // sfpi::min/max cover vFloat and vSMag only on Wormhole/Blackhole: the vInt
+            // overloads sit inside `#if __riscv_xtttensixqsr` in sfpi's include/sfpi_lib.h
+            // -- min(vInt, int), max(vInt, int) and the vInt arm of min_max's enable_if
+            // (checked against sfpi 7.71/7.72). That header ships with the toolchain and is
+            // not checked in (tt_metal/tt-llk/tests/.gitignore), so grepping this repo for
+            // the macro finds nothing. SFPSWAP also orders operands as sign+magnitude, so a
+            // vInt clamp would need the 2's-complement conversion _relu_min_ does by hand.
+            // Left predicated.
             v_if (result > threshold)
             {
                 result = threshold;

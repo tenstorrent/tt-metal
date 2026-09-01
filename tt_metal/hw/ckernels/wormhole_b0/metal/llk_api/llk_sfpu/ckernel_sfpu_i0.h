@@ -13,16 +13,6 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-#define POLYVAL10(coef10, coef9, coef8, coef7, coef6, coef5, coef4, coef3, coef2, coef1, coef0, t4)               \
-    ((coef0 +                                                                                                     \
-      (coef1 +                                                                                                    \
-       (coef2 +                                                                                                   \
-        (coef3 +                                                                                                  \
-         (coef4 + (coef5 + (coef6 + (coef7 + (coef8 + (coef9 + coef10 * t4) * t4) * t4) * t4) * t4) * t4) * t4) * \
-            t4) *                                                                                                 \
-           t4) *                                                                                                  \
-          t4) *                                                                                                   \
-     t4)
 // Park the three costliest series coefficients in the SFPU's programmable constant
 // registers: SFPMAD names a CREG directly in an operand field, so each costs zero
 // instructions per element instead of the two SFPLOADI a full-fp32 literal needs, and the
@@ -39,9 +29,10 @@ inline void i0_init() {
 
 // Horner step of the I0 series, applied to two independent accumulators in lockstep.
 // The steps must alternate at STATEMENT level: GCC will not interleave two independent
-// expression trees on its own (measured -- writing the two POLYVAL10 calls back to back
-// leaves all 9 SFPNOP per element in place). Coefficients ascend exactly as POLYVAL10
-// consumed them, so each element's chain keeps its operations, operands and order: bit-exact.
+// expression trees on its own (measured -- writing the two series out as two back-to-back
+// Horner expressions leaves all 9 SFPNOP per element in place). Coefficients ascend in the
+// order the series is evaluated, so each element's chain keeps its operations, operands and
+// order: bit-exact.
 #define I0_STEP2(c)         \
     do {                    \
         r0 = r0 * t0 + (c); \
@@ -77,7 +68,7 @@ inline void calculate_i0() {
         I0_STEP2(sfpi::vConstFloatPrgm0);  // 0.0004340277778f,   parked by i0_init
         I0_STEP2(0.015625f);
         I0_STEP2(0.25f);
-        r0 = r0 * t0;  // POLYVAL10's trailing multiply by t4
+        r0 = r0 * t0;  // the series has no constant term: trailing multiply by t
         r1 = r1 * t1;
 
         dst_reg[0] = 1.0f + r0;
@@ -86,7 +77,11 @@ inline void calculate_i0() {
         dst_reg += 2;
     }
 
-    // Odd ITERATIONS: finish the trailing element on its own.
+    // Odd ITERATIONS: finish the trailing element on its own. Written out rather than handed
+    // to PolynomialEvaluator::eval: eval builds `c + t * inner`, which compiles to the same
+    // 37 (WH) / 28 (BH) instructions but with the SFPMAD multiplicands commuted (`t * r`
+    // instead of `r * t`) on every step. Commuting a multiply is IEEE-safe, but this kernel's
+    // guarantee is byte-identical output, so the chain stays as the interleaved path writes it.
     if constexpr (ITERATIONS % 2 != 0) {
         vFloat in = dst_reg[0];
         vFloat t = in * in;
