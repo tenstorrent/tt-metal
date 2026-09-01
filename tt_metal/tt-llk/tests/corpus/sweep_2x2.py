@@ -1352,6 +1352,44 @@ KNOBS = {
     # the row refuses by name (regrename-no-free-lreg 26 with the
     # temporal tier ALSO exhausted, regrename-cc-span 16, constraint 6).
     "rename-temporal": "-mtt-tensix-optimize-rename-temporal",
+    # KO (reassoc-mad-restructure, FABLE_GOES_BURR residual attack R3):
+    # the laneIJ trig cert's named "muli+add -> fused mad =
+    # value-changing licensed class" successor, shipped as licensed
+    # COMBINE-PREFERENCE STEERING — under BOTH license keys
+    # (-fassociative-math effective triple AND the token) the
+    # SFPMULI/SFPADDI immediate-fold rules veto themselves exactly when
+    # the product dies into an add, so the pair fuses through the
+    # pre-existing single-use mul+add->SFPMAD contract rule: ONE
+    # partially-fused rounding instead of two serial MAD-subunit
+    # roundings, word-neutral (the loadi is kept, the pair collapses),
+    # one dependent result-latency hop removed per fire; the kept-loadi
+    # live range is budgeted by the NEW windowed point-pressure engine
+    # query (rvtt_pressure_window_peak: the may-live model restricted
+    # to the pair window — the whole-block conservative peak reads
+    # 64-66 on the trig body and would refuse everything the file
+    # admits).  LICENSED KNOB (like "reassoc"/"stochrnd-store-fold"):
+    # the value-change class is double->single rounding on the fused
+    # product plus SFPMULI's +0-flush sign-of-zero — the ratified
+    # reassoc-license divergence family (laneKO DIVERGENCE-CERT.md).
+    # MEASURED (laneKO-evidence-20260901, BH p150 CHIP 1 0000:01:00.0,
+    # wave-5 four-chip order, 21 sessions corr-first -x, ALL
+    # cycle-identical x3, paired CRAQ 3/3+3/3 at pinned sim
+    # 1d162f0adf67): at the booked trigonometry-fresh comparator leg
+    # (ON37 + reclaim + stoch + crs + rename-temporal) the sem anchor
+    # reproduces 391865 EXACT and the hand anchor 381105 EXACT (the
+    # laneKJ cell); the assoc TRIPLE ALONE is byte- and cycle-INERT
+    # (391865 — attribution is the token's fires alone); + triple +
+    # reassoc-mad-restructure delivers 375354 x3 = -4.21%, matching the
+    # modeled bb3 row II 95 -> 91 (-4 delivered II; fires = 2 addi + 1
+    # muli fused in the steady-state loop, 2 loop candidates refuse
+    # honestly at pair-window peak 8); plain-ON-37 sem base 414904 x3
+    # (causal -9.53).  vs_hand +2.82 -> -1.51: the trig LOSS FLIPPED TO
+    # WIN (comparator = the hand arm's own booked leg, II/IG
+    # convention; the licensed flags also speed the HAND row to 352434,
+    # -7.52% — its own immediate pairs fuse — recorded, not booked:
+    # hand rows book their canonical build).
+    "reassoc-mad-restructure": "-fassociative-math -fno-signed-zeros "
+    "-fno-trapping-math -mtt-tensix-optimize-reassoc-mad-restructure",
     # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
     # exactly the doomed-hoist mirror refusal
     # noexec-rerecord-dststore-composition-unaudited (Dst-store re-record
@@ -1802,6 +1840,15 @@ KNOB_MODES = {
     # a booking knob; promotion requires the ON-delta adjudication
     # ceremony.
     "rename-temporal": "on-plus",
+    # KO reassoc-mad-restructure: default-off Init(0) LICENSED booking
+    # knob (two-key wall: nothing fires without -fassociative-math,
+    # like the "reassoc" row); a combine-preference steering knob whose
+    # shape needs the ON baseline and the trig booking composition, so
+    # the booking A/B is (booked-leg + triple + token) vs booked-leg.
+    # on-plus while a booking knob; promotion requires the ON-delta
+    # adjudication ceremony (and would put license keys in the ON set —
+    # an owner-level call, NOT implied by this registration).
+    "reassoc-mad-restructure": "on-plus",
     # HH launch-flatten: default-off Init(0) booking knob; a pure
     # GIMPLE unroll-request (delivery-shape change only, dynamic word
     # stream unchanged by construction).  on-plus while a booking knob;
