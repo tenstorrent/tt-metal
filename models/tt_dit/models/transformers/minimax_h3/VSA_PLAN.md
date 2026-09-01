@@ -146,6 +146,17 @@ bytes. Ideal-utilization bound at 0.9 sparsity is ~6-7 ms for the fine stage at 
 in the kernel, ~2-3x end-to-end block speedup over dense). Reports & CSVs were generated via
 `run_vsa_perf_sweep.sh` + `tt-perf-report --start-signpost start --end-signpost stop`.
 
+## vsa_sdpa optimization (goal: ~60% math utilization, lossless)
+
+Peak model = tt-perf-report Blackhole HiFi2 (2.765 TF/core); FLOPs = listed-block QK+PV only.
+Targets (heaviest shard): 1.86 / 4.94 / 9.96 ms at 5 / 10 / 15 s.
+
+| version | 15s median (1 dev) | util | notes |
+|---|---|---|---|
+| v1 gather | 81.9 ms | 4.8% | DRAM-bound on per-row re-gathers (~390 GB/s); flat in m and index order |
+| v2 streaming | 25.0 ms | 15.7% | resident rows + one ascending-order union stream per core; still per-core DRAM pulls + per-visit flash overhead |
+| v3 leader-pull + fused visits | (measuring) | | head-group leader streams the head's blocks from DRAM once per pass; workers NoC-pull from leader L1; ping-pong max/sum state kills all state copies; phase-batched multi-row visits, 5 syncs/arrival |
+
 ## Decisions log
 - **2026-08-31 machine setup**: 4x8 BH galaxy runs bare-metal (no docker): build_metal.sh with
   clang-20, create_venv.sh, pinned diffusers (abc5e9bf71) for the torch reference. Requires

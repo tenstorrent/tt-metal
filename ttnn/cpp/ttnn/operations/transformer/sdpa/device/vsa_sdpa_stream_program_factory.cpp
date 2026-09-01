@@ -4,9 +4,10 @@
 //
 // vsa_sdpa streaming (v3) program factory. Cores are grouped per head: the group's first core is a
 // fetch-only LEADER that streams the head's KV blocks from DRAM once per pass into its L1 slots;
-// the WORKERS hold resident query rows (strided across the group so the dense exempt-query rows
-// spread evenly), pull blocks from the leader's L1 over the NoC, and run the fused multi-row
-// online-softmax visit engine. DRAM reads the head's KV exactly n_passes times per group instead
+// the WORKERS hold resident query rows as CONTIGUOUS runs (real VSA index sets are spatially
+// correlated and every row lists the exempt prefix, so contiguity maximizes how many resident rows
+// each arriving block visits -- the multi-row batching that amortizes per-visit overhead), pull
+// blocks from the leader's L1 over the NoC, and run the fused multi-row online-softmax engine. DRAM reads the head's KV exactly n_passes times per group instead
 // of once per (row, listed block) -- the redundancy that made v1/v2 DRAM-bound.
 
 #include "ttnn/operations/transformer/sdpa/device/vsa_sdpa_device_operation.hpp"
@@ -32,6 +33,7 @@ constexpr uint32_t kRowGroup = 8;      // rows fused per compute phase group
 constexpr uint32_t kStreamDepth = 6;   // KV blocks in flight per core
 constexpr uint32_t kLogDepth = 8;      // leader arrival-log ring (>= kStreamDepth + sentinel slack)
 constexpr uint32_t kMaxWorkers = 16;   // leader runtime-arg array bound
+constexpr uint32_t kRowChunk = 4;      // contiguous rows per placement chunk (matches the kernels)
 
 struct StreamSchedule {
     uint32_t head = 0;
@@ -297,16 +299,33 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
 
         const tt::tt_metal::CoreCoord leader_logical = {sched.group_first % grid.x, sched.group_first / grid.x};
         const tt::tt_metal::CoreCoord leader_phys = device->worker_core_from_logical_core(leader_logical);
-        const uint32_t max_rows = (n_q_tiles + n_active - 1) / n_active;
+        // worker 0 always holds the most rows under chunk-cyclic dealing
+        uint32_t max_rows = 0;
+        {
+            const uint32_t nc = (n_q_tiles + kRowChunk - 1) / kRowChunk;
+            for (uint32_t c = 0; c < nc; c += n_active) {
+                const uint32_t c0 = c * kRowChunk;
+                max_rows += (n_q_tiles - c0 < kRowChunk) ? (n_q_tiles - c0) : kRowChunk;
+            }
+        }
         const uint32_t n_passes = is_idle ? 0 : (max_rows + kRMax - 1) / kRMax;
-        const uint32_t row_start = sched.is_leader ? 0 : sched.worker_index;
-        const uint32_t row_count =
-            (sched.is_leader || is_idle)
-                ? 0
-                : ((n_q_tiles > sched.worker_index) ? (n_q_tiles - sched.worker_index + n_active - 1) / n_active : 0);
+        // Chunked round-robin placement: 4-row contiguous chunks dealt cyclically across the
+        // group's workers. Adjacent rows share most of their index sets (spatial correlation plus
+        // the exempt prefix), so intra-chunk contiguity feeds the engine's multi-row batching,
+        // while dealing chunks cyclically spreads the fully-dense exempt-query rows -- a purely
+        // contiguous split piles them all onto worker 0 (measured 3x worst-shard regression).
+        const uint32_t n_chunks = (n_q_tiles + kRowChunk - 1) / kRowChunk;
+        uint32_t row_count = 0;
+        if (!sched.is_leader && !is_idle) {
+            for (uint32_t c = sched.worker_index; c < n_chunks; c += n_active) {
+                const uint32_t c0 = c * kRowChunk;
+                row_count += (n_q_tiles - c0 < kRowChunk) ? (n_q_tiles - c0) : kRowChunk;
+            }
+        }
+        const uint32_t row_start = sched.is_leader ? 0 : sched.worker_index * kRowChunk;
 
         RtArgs reader_rt;
-        reader_rt.reserve(12 + 2 * kMaxWorkers);
+        reader_rt.reserve(13 + 2 * kMaxWorkers);
         reader_rt.push_back(v_buf);
         reader_rt.push_back(idx_buf);
         reader_rt.push_back(counts_buf);
@@ -316,8 +335,9 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         reader_rt.push_back(static_cast<uint32_t>(leader_phys.x));
         reader_rt.push_back(static_cast<uint32_t>(leader_phys.y));
         reader_rt.push_back(n_active);
+        reader_rt.push_back(sched.is_leader ? 0u : sched.worker_index);
         reader_rt.push_back(row_start);
-        reader_rt.push_back(n_active);  // row_stride
+        reader_rt.push_back(n_active * kRowChunk);  // chunk-cyclic big stride
         reader_rt.push_back(row_count);
         if (sched.is_leader) {
             for (uint32_t w = 0; w < n_active; ++w) {
@@ -340,7 +360,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         writer_rt[6] = static_cast<uint32_t>(leader_phys.x);
         writer_rt[7] = static_cast<uint32_t>(leader_phys.y);
         writer_rt[8] = row_start;
-        writer_rt[9] = n_active;  // row_stride
+        writer_rt[9] = n_active * kRowChunk;  // chunk-cyclic big stride
         writer_rt[10] = row_count;
         writer_rt[11] = 0u;
         writer_desc.emplace_runtime_args(core, writer_rt);

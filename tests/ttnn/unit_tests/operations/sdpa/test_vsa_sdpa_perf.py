@@ -41,6 +41,18 @@ def make_inputs(device, s_local, n_blocks, row_blocks, dense_rows, order, seed=0
                 listed = torch.randperm(n_blocks, generator=gen)[:row_blocks]
             elif order == "sorted":
                 listed = torch.randperm(n_blocks, generator=gen)[:row_blocks].sort().values
+            elif order == "model":
+                # Realistic VSA selection: every row lists the exempt prefix (~13% of the budget),
+                # and neighboring q-tiles' top-k sets are spatially correlated -- scores are a
+                # smooth per-block field plus per-row noise, like real coarse-stage attention maps.
+                n_exempt = max(1, row_blocks // 8)
+                if r % 64 == 0 or "model_field" not in locals():
+                    model_field = torch.randn(n_blocks, generator=gen)
+                block_of_row = int(r * n_blocks / max(1, n_q))
+                dist = (torch.arange(n_blocks) - block_of_row).abs().float() / n_blocks
+                row_scores = model_field - 3.0 * dist + 0.35 * torch.randn(n_blocks, generator=gen)
+                row_scores[:n_exempt] = float("inf")  # exempt prefix always listed
+                listed = row_scores.topk(row_blocks).indices
             else:  # sequential: contiguous run, maximal DRAM locality
                 start = int(torch.randint(0, n_blocks - row_blocks, (1,), generator=gen))
                 listed = torch.arange(start, start + row_blocks)
@@ -85,10 +97,11 @@ def test_vsa_sdpa_bench(device):
     # median shard: no dense rows; worst shard (identity placement): 18 dense rows.
     cases = [
         ("median 15s topk", dict(s_local=14464, n_blocks=1808, row_blocks=197, dense_rows=0, order="topk")),
-        ("median 15s sorted", dict(s_local=14464, n_blocks=1808, row_blocks=197, dense_rows=0, order="sorted")),
-        ("median 15s seq", dict(s_local=14464, n_blocks=1808, row_blocks=197, dense_rows=0, order="sequential")),
-        ("worst  15s topk", dict(s_local=14464, n_blocks=1808, row_blocks=197, dense_rows=18, order="topk")),
+        ("median 15s model", dict(s_local=14464, n_blocks=1808, row_blocks=197, dense_rows=0, order="model")),
+        ("worst  15s model", dict(s_local=14464, n_blocks=1808, row_blocks=197, dense_rows=18, order="model")),
+        ("median 10s model", dict(s_local=9216, n_blocks=1152, row_blocks=125, dense_rows=0, order="model")),
         ("median 5s  topk", dict(s_local=4800, n_blocks=688, row_blocks=80, dense_rows=0, order="topk")),
+        ("median 5s  model", dict(s_local=4800, n_blocks=688, row_blocks=80, dense_rows=0, order="model")),
     ]
     print()
     for label, spec in cases:

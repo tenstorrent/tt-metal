@@ -139,7 +139,8 @@ void kernel_main() {
         if (pass_base < row_count && drained >= pass_base) {
             const uint32_t pass_rows = (row_count - pass_base < R_MAX) ? (row_count - pass_base) : R_MAX;
             for (uint32_t r = 0; r < pass_rows; ++r) {
-                const uint32_t q_tile = row_start + (pass_base + r) * row_stride;
+                const uint32_t ri = pass_base + r;  // chunk-cyclic (see reader)
+                const uint32_t q_tile = row_start + (ri >> 2) * row_stride + (ri & 3);
                 const uint32_t page0 = (head * n_q_tiles + q_tile) * q_tiles_per_row;
                 for (uint32_t i = 0; i < q_tiles_per_row; ++i) {
                     // cb_q_res is RAM-mode: never reserved/pushed here, offsets from the base.
@@ -159,7 +160,7 @@ void kernel_main() {
 
         if (cb_pages_available_at_front(cb_out, out_tiles_per_row)) {
             out_cb.wait_front(out_tiles_per_row);
-            const uint32_t q_tile = row_start + drained * row_stride;
+            const uint32_t q_tile = row_start + (drained >> 2) * row_stride + (drained & 3);
             const uint32_t page0 = (head * n_q_tiles + q_tile) * out_tiles_per_row;
             for (uint32_t i = 0; i < out_tiles_per_row; ++i) {
                 noc.async_write(

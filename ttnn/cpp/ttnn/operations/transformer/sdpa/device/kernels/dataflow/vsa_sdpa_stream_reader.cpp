@@ -84,9 +84,10 @@ void kernel_main() {
     const uint32_t leader_x = get_arg_val<uint32_t>(argi++);
     const uint32_t leader_y = get_arg_val<uint32_t>(argi++);
     const uint32_t n_workers = get_arg_val<uint32_t>(argi++);
-    const uint32_t row_start = get_arg_val<uint32_t>(argi++);   // worker: first resident row
-    const uint32_t row_stride = get_arg_val<uint32_t>(argi++);  // worker: row stride (= n_workers)
-    const uint32_t row_count = get_arg_val<uint32_t>(argi++);   // worker: total rows
+    const uint32_t worker_index = get_arg_val<uint32_t>(argi++);  // this worker's slot in the group
+    const uint32_t row_start = get_arg_val<uint32_t>(argi++);     // worker: first resident row
+    const uint32_t row_stride = get_arg_val<uint32_t>(argi++);    // worker: row stride
+    const uint32_t row_count = get_arg_val<uint32_t>(argi++);     // worker: total rows
 
     constexpr uint32_t keys_per_tile = tt::constants::TILE_WIDTH;
     constexpr uint32_t bitmap_words = (n_kv_blocks + 31) / 32;
@@ -227,17 +228,15 @@ void kernel_main() {
 
     // Progress mailbox: this worker's consumed-arrival count, staged locally (own ackbox word) and
     // posted to the leader's ackbox word for this worker. Monotonic single-writer, so unbarriered
-    // posted writes are safe; one barrier before exit flushes the tail.
+    // posted writes are safe; one barrier before exit flushes the tail. The local staging word sits
+    // at the SAME offset as the remote target: NoC L1->L1 transfers require src and dst to share
+    // their 16-byte phase.
     uint32_t consumed = 0;
-    // row_start == this worker's index within the group (factory contract). The local staging word
-    // sits at the SAME offset as the remote target: NoC L1->L1 transfers require src and dst to
-    // share their 16-byte phase, so staging everyone at word 0 silently corrupts posts for
-    // workers whose slot is not 16-byte aligned.
-    const uint32_t my_box_local = ackbox_l1 + row_start * 4;
-    const uint64_t my_box_remote = get_noc_addr(leader_x, leader_y, ackbox_l1 + row_start * 4, noc.get_noc_id());
+    const uint32_t my_box_local = ackbox_l1 + worker_index * 4;
+    const uint64_t my_box_remote = get_noc_addr(leader_x, leader_y, ackbox_l1 + worker_index * 4, noc.get_noc_id());
     const auto post_progress = [&]() {
         ++consumed;
-        ackbox[row_start] = consumed;
+        ackbox[worker_index] = consumed;
         noc_async_write(my_box_local, my_box_remote, 4, noc.get_noc_id());
     };
 
@@ -255,7 +254,9 @@ void kernel_main() {
             for (uint32_t wd = 0; wd < bitmap_words; ++wd) {
                 bm[wd] = 0;
             }
-            const uint32_t q_tile = row_start + (pass_row_base + r) * row_stride;
+            // chunk-cyclic placement: 4-row chunks dealt round-robin (row_stride = workers * 4)
+            const uint32_t ri = pass_row_base + r;
+            const uint32_t q_tile = row_start + (ri >> 2) * row_stride + (ri & 3);
             noc.async_read(idx, idx_cb, idx_row_bytes, {.page_id = head * n_q_tiles + q_tile}, {.offset_bytes = 0});
             noc.async_read_barrier();
             for (uint32_t e = 0; e < W; ++e) {
