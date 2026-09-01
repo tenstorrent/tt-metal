@@ -203,7 +203,8 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_19) : static_cast<uint32_t>(tt::CBIndex::c_0);
     // V1 accepts tiled BF16 input, so the FP32 aliases remain inactive. Its input CB holds one streamed
     // block rather than the complete local input, requiring the reader to supply both statistics passes.
-    const bool fp32_sfpu_normalizer = welford_unpack_fp32_active;
+    // V1 has no dedicated FP32 normalization aliases; keep its standard FPU finalizer even if FP32 input is added.
+    constexpr bool fp32_sfpu_normalizer = false;
     constexpr uint32_t cb_ex_global_index = tt::CBIndex::c_15;
     constexpr uint32_t cb_ex2pe_index = tt::CBIndex::c_27;
     constexpr bool sfpu_two_pass_l1_replay = false;
