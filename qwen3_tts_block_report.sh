@@ -77,7 +77,11 @@ if [[ $ASSEMBLE_ONLY -eq 0 ]]; then
       cp "$csv" "$WORK/${sel}_$i.csv"
       tt-perf-report --start-signpost start --end-signpost stop "$csv" \
         > "$WORK/${sel}_$i.rpt" 2>/dev/null
-      echo "$(grep -E '^ +100\.0 %' "$WORK/${sel}_$i.rpt" | head -1 | grep -oE '[0-9,]+ μs' | head -1)"
+      # No `head` in this pipeline: it exits after one line, the upstream grep takes a
+      # SIGPIPE, and `set -o pipefail` then kills the whole run mid-sweep. Use grep -m1
+      # and sed -n 1p, both of which drain their input.
+      tot=$(grep -m1 -E '^ +100\.0 %' "$WORK/${sel}_$i.rpt" | grep -oE '[0-9,]+ μs' | sed -n 1p) || tot=""
+      echo "${tot:-<no window>}"
     done
   done
 fi
