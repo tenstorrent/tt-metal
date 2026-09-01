@@ -21,7 +21,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen3_tts.tt.rope import apply_rope_qk, get_decode_transformation_mat
+from models.demos.qwen3_tts.tt.rope import apply_rope_qk, get_decode_transformation_mat, shard_decode_rope_tables
 
 
 class CodePredictor(LightweightModule):
@@ -800,6 +800,10 @@ class CodePredictor(LightweightModule):
             h = inputs_embeds
             own_h = False
 
+        _own_rope = False
+        if mode == "decode" or int(inputs_embeds.shape[-2]) == 1:
+            cos, sin, _own_rope = shard_decode_rope_tables(cos, sin, self.head_dim)
+
         updated_kvs = [] if kv_caches is not None else None
         for li, lw in enumerate(self.layers_w):
             layer_kv = kv_caches[li] if kv_caches is not None else None
@@ -826,6 +830,9 @@ class CodePredictor(LightweightModule):
         h_norm = ttnn.rms_norm(h, epsilon=self.rms_norm_eps, weight=self.final_norm_w, compute_kernel_config=self.kcfg)
         if own_h:
             ttnn.deallocate(h)
+        if _own_rope:
+            ttnn.deallocate(cos)
+            ttnn.deallocate(sin)
 
         if return_hidden_state:
             return h_norm, updated_kvs

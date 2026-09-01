@@ -202,10 +202,16 @@ class DecoderLayer(LightweightModule):
         # Pre-norm attention
         residual = x
         residual_sharded = None
+        _own_residual_sharded = False
         if decode_path:
-            # Decode: keep the chain sharded — wo is DRAM-sharded and consumes sharded
-            # input directly. Reuse the sharded `x` buffer as `residual_sharded`.
-            residual_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
+            # Decode: keep the chain sharded. Skip I2S when the previous layer's
+            # residual add already wrote this shard spec.
+            if x.memory_config() == ln_in_memcfg:
+                residual_sharded = x
+                _own_residual_sharded = False
+            else:
+                residual_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
+                _own_residual_sharded = True
             x = self.input_layernorm(
                 residual_sharded,
                 program_config=ln_progcfg,
@@ -262,16 +268,13 @@ class DecoderLayer(LightweightModule):
                 memory_config=self._decode_ln_in_memcfg,
             )
             x = self.mlp(x, mode=mode)
-            # Second residual add: stage to L1_INTERLEAVED instead of DRAM. Next
-            # layer's input_layernorm does to_memory_config(x, _decode_ln_in_memcfg)
-            # which is a cheap L1→L1 reshard rather than a DRAM round-trip on the
-            # 4 KB (Talker) / 2 KB (CP) per-layer activation.
-            x_out = ttnn.add(residual, x, memory_config=ttnn.L1_MEMORY_CONFIG)
+            # Write the LN shard spec so the next layer's input LN skips I2S.
+            x_out = ttnn.add(residual, x, memory_config=self._decode_ln_in_memcfg)
             ttnn.deallocate(residual)
             return x_out, updated_kv_cache
 
         # First residual add: result feeds the post_attention_layernorm + MLP.
-        if residual_sharded is not None:
+        if residual_sharded is not None and _own_residual_sharded:
             ttnn.deallocate(residual_sharded)
         if prefill_path:
             # Write the sum in the LN shard spec so post-attn LN (and the next
