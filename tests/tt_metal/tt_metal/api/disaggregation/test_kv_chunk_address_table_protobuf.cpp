@@ -598,11 +598,16 @@ TEST(KvChunkAddressTableProtobuf, GoldenV1ArtifactReads) {
     // 2 layers x 2 slots x 96 chunks, affine rows, stride 0x10000 from per-row bases).
     // Freezes the v1 wire contract — any drift in how we read old files fails here.
     namespace fs = std::filesystem;
-    // __FILE__ may carry a build-container prefix (/work); resolve via TT_METAL_HOME first.
-    const char* home = std::getenv("TT_METAL_HOME");
-    fs::path path = home ? fs::path(home) / "tests/tt_metal/tt_metal/api/disaggregation/kv_chunk_table_v1_golden.pb"
-                         : fs::path(__FILE__).parent_path() / "kv_chunk_table_v1_golden.pb";
-    if (!fs::exists(path) && home) {  // local (non-container) build: __FILE__ is the real path
+    // Resolution order: repo-root-relative (CI runs tests with cwd=$TT_METAL_HOME), then
+    // $TT_METAL_HOME, then __FILE__ (local non-container builds, where __FILE__ is real).
+    const fs::path rel = fs::path("tests/tt_metal/tt_metal/api/disaggregation/kv_chunk_table_v1_golden.pb");
+    fs::path path = rel;
+    if (!fs::exists(path)) {
+        if (const char* home = std::getenv("TT_METAL_HOME")) {
+            path = fs::path(home) / rel;
+        }
+    }
+    if (!fs::exists(path)) {
         path = fs::path(__FILE__).parent_path() / "kv_chunk_table_v1_golden.pb";
     }
     auto restored = import_from_protobuf_file(path.string());
