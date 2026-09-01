@@ -106,10 +106,6 @@ Tensor reduce(
         "output_layout is only supported for sum (SUM) and mean (AVG) reductions, got {}",
         reduce_math);
 
-    if (reduce_math == tt::tt_metal::ReduceOpMath::MIN && input_tensor.dtype() != tt::tt_metal::DataType::INT32) {
-        return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config, compute_kernel_config, sub_core_grids);
-    }
-
     auto parallelization_strategy = ttnn::prim::get_parallelization_strategy(input_tensor, reduce_dim);
     auto is_multicore_hw = parallelization_strategy == tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     const ttnn::PadValue pad_value = reduce_op_utils::get_tilize_pad_value(reduce_math, input_tensor.dtype());
@@ -131,16 +127,6 @@ Tensor reduce(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
     ttnn::verify_numerical_configuration(arch, compute_kernel_config);
-
-    // Accurate fp32 SFPU path (FPU truncates to TF32). Falls back to FPU without fp32_dest_acc_en or on Quasar.
-    const bool fp32_sfpu_eligible = !fast_and_approximate_mode &&
-                                    input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 &&
-                                    arch != tt::ARCH::QUASAR && config.fp32_dest_acc_en;
-
-    const bool use_sfpu_fp32_mean = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::AVG;
-    const bool use_sfpu_fp32_max = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::MAX && !negate;
-
-    const bool use_sfpu_fp32_reduce = use_sfpu_fp32_mean || use_sfpu_fp32_max;
 
     // Dense row-major reduce: a fast path that consumes ROW_MAJOR input directly (no host tilize)
     // and is currently restricted to mean (AVG) / sum (SUM) on 4D BF16/FLOAT32 tensors with
@@ -168,6 +154,30 @@ Tensor reduce(
         rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::W && !explicit_tile_request;
     const bool use_rm_dense_h = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::H;
     const bool use_rm_dense = use_rm_dense_w || use_rm_dense_h;
+
+    // Accurate fp32 SFPU path (the FPU truncates fp32 to tf32 on the way into SrcA/SrcB). Falls back
+    // to the FPU without fp32_dest_acc_en or on Quasar (no SFPU reduce LLKs). The dense RM kernels
+    // share the same SFPU fold via CT arg 6. negate=true marks the FPU's -MAX(-x) min lowering,
+    // which has no SFPU fold, so MAX/MIN exclude it.
+    const bool fp32_sfpu_eligible = !fast_and_approximate_mode &&
+                                    input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 &&
+                                    arch != tt::ARCH::QUASAR && config.fp32_dest_acc_en;
+
+    const bool use_sfpu_fp32_sum = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::SUM;
+    const bool use_sfpu_fp32_mean = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::AVG;
+    const bool use_sfpu_fp32_max = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::MAX && !negate;
+    const bool use_sfpu_fp32_min = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::MIN && !negate;
+
+    const bool use_sfpu_fp32_reduce = use_sfpu_fp32_sum || use_sfpu_fp32_mean || use_sfpu_fp32_max || use_sfpu_fp32_min;
+
+    // The FPU has no float/bf16 MIN primitive, so fast-mode MIN lowers to -MAX(-x) via the fused
+    // negate kernels. Accurate fp32 MIN drives the LLK MIN reduce directly (like Int32 MIN) and must
+    // skip that lowering.
+    if (reduce_math == tt::tt_metal::ReduceOpMath::MIN && input_tensor.dtype() != tt::tt_metal::DataType::INT32 &&
+        !use_sfpu_fp32_min) {
+        return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config, compute_kernel_config, sub_core_grids);
+    }
+
     // Layout the dense RM path will be asked to produce; ROW_MAJOR unless TILE was requested.
     const auto rm_dense_out_layout =
         explicit_tile_request ? tt::tt_metal::Layout::TILE : tt::tt_metal::Layout::ROW_MAJOR;
@@ -175,8 +185,8 @@ Tensor reduce(
     // High-level mean uses AVG with scaler (1/N). On the tiled path, GMPOOL AVG matches that intent. On the dense
     // row-major W/H path we tilize one logical row at a time from a narrow RM page; AVG applies an extra normalization
     // for full tile faces that does not match torch.mean together with partial-row tilize. Use SUM + the same scaler.
-    // SUM and MAX pass through unchanged.
-    // The accurate fp32 SFPU mean path also lowers AVG to SUM: the SFPU folds tiles with a plain
+    // SUM, MAX and MIN pass through unchanged.
+    // The accurate fp32 SFPU mean also lowers AVG to SUM: the SFPU folds tiles with a plain
     // add (add_binary_tile) and normalizes via the 1/N post-mul below, so it needs SUM semantics.
     tt::tt_metal::ReduceOpMath prim_reduce_math = reduce_math;
     if ((use_rm_dense || use_sfpu_fp32_mean) && reduce_math == tt::tt_metal::ReduceOpMath::AVG) {
@@ -194,7 +204,8 @@ Tensor reduce(
     // A non-unity scalar is applied after the reduction (see requires_post_mul() in common.hpp):
     // GMPOOL keeps only the scaler's exponent for MAX/MIN, and the Int32 SFPU path ignores the
     // scaler CB. Int32 post-mul rounds through fp32, so it is lossy for |result| > 2^24.
-    // The accurate fp32 SFPU reduces also post-mul: mean applies its 1/N here, max its user scalar.
+    // The accurate fp32 SFPU path also post-muls (the SFPU ignores the scaler CB): mean applies its
+    // 1/N here, the rest their user scalar.
     const bool use_post_mul =
         ttnn::prim::requires_post_mul(reduce_math, prepared_input.dtype(), scaler, use_sfpu_fp32_reduce);
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
@@ -234,8 +245,8 @@ Tensor reduce(
     // INT32 SFPU reduce has no REDUCE_SCALAR primitive (ROW/COL only), so Int32 HW always uses
     // W-then-H. Fast-mode Float32 max HW can use single-core REDUCE_SCALAR (FPU) when num_tiles == 1;
     // multi-tile HW still uses W-then-H via is_multicore_hw. Applies to Int32 MAX/SUM/MIN.
-    // The accurate fp32 SFPU reduces likewise have no SFPU REDUCE_SCALAR, so they must decompose HW
-    // into W-then-H regardless of tile count; both do so exactly (sum of sums, max of maxes).
+    // The accurate fp32 SFPU path likewise has no SFPU REDUCE_SCALAR, so it decomposes HW into
+    // W-then-H regardless of tile count; every op does so exactly (sum of sums, max of maxes, ...).
     const bool use_two_step_hw_sfpu_reduce =
         (reduce_dim == tt::tt_metal::ReduceOpDim::HW) &&
         ((prepared_input.dtype() == tt::tt_metal::DataType::INT32 &&
@@ -343,7 +354,7 @@ Tensor reduce(
                 /*post_mul_scaler=*/1.0f,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/true,
-                /*use_sfpu_reduce=*/use_sfpu_fp32_mean,
+                /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
                 /*num_h_slices=*/num_h_slices,
                 /*output_layout=*/tt::tt_metal::Layout::ROW_MAJOR);
 
@@ -360,7 +371,7 @@ Tensor reduce(
                 /*post_mul_scaler=*/post_mul,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/true,
-                /*use_sfpu_reduce=*/use_sfpu_fp32_mean,
+                /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
                 /*num_h_slices=*/1,
                 /*output_layout=*/rm_dense_out_layout);
         }

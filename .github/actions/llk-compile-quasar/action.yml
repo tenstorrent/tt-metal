@@ -54,7 +54,7 @@ runs:
       uses: mikepenz/action-junit-report@v5
       with:
         report_paths: tt_metal/tt-llk/tests/python_tests/pytest-report-quasar-compile.xml
-        check_name: Quasar Compile Tests
+        annotate_only: true
         detailed_summary: true
         job_summary: false
         include_passed: false

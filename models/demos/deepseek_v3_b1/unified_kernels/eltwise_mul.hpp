@@ -17,7 +17,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/bcast.h"
 #include "api/compute/experimental/eltwise_mul_scalar.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
+#include "api/compute/experimental/deepseek_compute_kernel_hw_startup.h"
 using namespace ckernel;
 #endif
 

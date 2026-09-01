@@ -15,11 +15,9 @@
 #include "api/debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
-#if DEVICE_PRINT_DISPATCH_ENABLED
 #include "tt_metal/impl/dispatch/kernels/device_print_dispatch.h"
-#endif
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
 #include "hostdev/dev_msgs.h"
 #include "risc_common.h"
@@ -86,7 +84,16 @@ constexpr uint64_t device_print_cycles_for_full = DEVICE_PRINT_CYCLES_FOR_FULL;
 // process_go_signal_mcast_cmd protects today's known site, but we save/restore for
 // defense-in-depth so future dispatch_s code can rely on cmd_buf state being preserved
 // across an execute() / shutdown() call.
-//
+#ifdef ARCH_QUASAR
+// Quasar keeps its cmd_buf state in RoCC overlay registers rather than the NOC_CTRL /
+// NOC_*_ADDR_COORDINATE MMIO registers Wormhole and Blackhole expose, so there is nothing for a
+// snapshot/restore guard to read back through NOC_CMD_BUF_READ_REG. Nothing needs restoring
+// either: every dispatch_s write path re-programs the whole cmd_buf via
+// cq_noc_async_write_init_state before it issues a with_state transaction, and the
+// wait_for_workers reorder in process_go_signal_mcast_cmd keeps device_print_dispatcher.execute()
+// out of every init_state -> with_state window.
+using DispatchSNocCmdBufGuard = device_print_dispatch::EmptyNocCmdBufGuard;
+#else
 // Constructor: snapshot the regs, then call the new-API _init_state functions to program
 // NOC_CTRL for our reads (cmd_buf 1) and writes (cmd_buf 0).
 // Destructor: restore the saved regs.
@@ -113,6 +120,7 @@ struct DispatchSNocCmdBufGuard {
     DispatchSNocCmdBufGuard(const DispatchSNocCmdBufGuard&) = delete;
     DispatchSNocCmdBufGuard& operator=(const DispatchSNocCmdBufGuard&) = delete;
 };
+#endif
 
 static DevicePrintDispatch<
     true,

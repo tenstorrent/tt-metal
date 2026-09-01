@@ -344,10 +344,9 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
     // Launch and wait
-    fixture->RunProgramNonblocking(receiver_device, receiver_program);
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
+    fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    fixture->WaitForSingleProgramDone(receiver_device);
 
     // Validate sender/receiver status
     std::vector<uint32_t> sender_status;

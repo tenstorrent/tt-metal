@@ -17,32 +17,34 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_x_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_tp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
 @pytest.mark.parametrize(
     "isl_per_chip, vocab_size, emb_dim",
     [
-        (3200, DeepSeekV3Config.VOCAB_SIZE, DeepSeekV3Config.EMB_SIZE),
+        (PREFILL_CHUNK_TOKENS_PER_CHIP, DeepSeekV3Config.VOCAB_SIZE, DeepSeekV3Config.EMB_SIZE),
     ],
-    ids=["deepseek_prefill_100K"],
+    ids=["isl_5k"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
         pytest.param(
             (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="linear"),
-            id="linear-4",
+            torus_x_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
+            id="torus-x-1x4",
         ),
         pytest.param(
             (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            fabric2d_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
+            id="fabric2d-2x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],

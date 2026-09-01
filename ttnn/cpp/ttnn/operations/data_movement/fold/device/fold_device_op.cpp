@@ -21,6 +21,11 @@ tt::tt_metal::ShardSpec synthesize_fold_output_shard_spec(
     auto* device = input_tensor.device();
     const auto grid = device->compute_with_storage_grid_size();
     const uint32_t max_cores = grid.x * grid.y;
+    // Inherit input's orientation when available (mirrors generate_transpose_shard_spec); ROW_MAJOR fallback for
+    // non-sharded inputs.
+    const tt::tt_metal::ShardOrientation orientation = input_tensor.shard_spec().has_value()
+                                                           ? input_tensor.shard_spec()->orientation
+                                                           : tt::tt_metal::ShardOrientation::ROW_MAJOR;
     std::array<uint32_t, 2> shape = {0, 0};
     CoreRangeSet cores;
     switch (layout) {
@@ -35,18 +40,21 @@ tt::tt_metal::ShardSpec synthesize_fold_output_shard_spec(
             break;
         }
         default: {  // BLOCK_SHARDED
-            shape = {tt::div_up(rows, grid.y), tt::div_up(cols, grid.x)};
-            const uint32_t n_rows = tt::div_up(rows, shape[0]);
-            const uint32_t n_cols = tt::div_up(cols, shape[1]);
-            cores = CoreRangeSet(CoreRange({0, 0}, {n_cols - 1, n_rows - 1}));
+            // COL_MAJOR flips axis→core mapping (see TensorSpec validation + conv2d_utils::determine_parallel_config):
+            // height splits across grid.x, width across grid.y — asymmetric grids (e.g. bh_p100 11×10) otherwise
+            // overshoot num_shards_along_width vs shard_grid.y for COL_MAJOR.
+            const bool col_major = orientation == tt::tt_metal::ShardOrientation::COL_MAJOR;
+            const uint32_t h_divisor = col_major ? grid.x : grid.y;
+            const uint32_t w_divisor = col_major ? grid.y : grid.x;
+            shape = {tt::div_up(rows, h_divisor), tt::div_up(cols, w_divisor)};
+            const uint32_t n_shards_h = tt::div_up(rows, shape[0]);
+            const uint32_t n_shards_w = tt::div_up(cols, shape[1]);
+            const uint32_t grid_x = col_major ? n_shards_h : n_shards_w;
+            const uint32_t grid_y = col_major ? n_shards_w : n_shards_h;
+            cores = CoreRangeSet(CoreRange({0, 0}, {grid_x - 1, grid_y - 1}));
             break;
         }
     }
-    // Inherit input's orientation when available (mirrors generate_transpose_shard_spec); ROW_MAJOR fallback for
-    // non-sharded inputs.
-    tt::tt_metal::ShardOrientation orientation = input_tensor.shard_spec().has_value()
-                                                     ? input_tensor.shard_spec()->orientation
-                                                     : tt::tt_metal::ShardOrientation::ROW_MAJOR;
     return tt::tt_metal::ShardSpec(cores, shape, orientation);
 }
 

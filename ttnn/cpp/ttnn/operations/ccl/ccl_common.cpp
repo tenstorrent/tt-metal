@@ -123,6 +123,48 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
 }
 
+bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis) {
+    const auto& mesh_view = mesh_device.get_view();
+    const auto& mesh_shape = mesh_view.shape();
+    if (mesh_shape[axis] < 2) {
+        return true;  // no hops to compare
+    }
+
+    // Axis 0 runs down a column, axis 1 along a row.
+    std::optional<tt::tt_fabric::eth_chan_directions> axis_direction;
+    for (uint32_t row_or_col = 0; row_or_col < mesh_shape[1 - axis]; row_or_col++) {
+        const auto nodes = axis == 0 ? mesh_view.get_fabric_node_ids_on_column(row_or_col)
+                                     : mesh_view.get_fabric_node_ids_on_row(row_or_col);
+        for (size_t i = 1; i < nodes.size(); i++) {
+            const auto directions = tt::tt_fabric::get_neighbor_eth_directions(nodes[i - 1], nodes[i]);
+            if (directions.empty() || (axis_direction.has_value() && directions.front() != *axis_direction)) {
+                return false;
+            }
+            axis_direction = directions.front();
+        }
+    }
+    return true;
+}
+
+bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis) {
+    const auto& mesh_view = mesh_device.get_view();
+    const auto& mesh_shape = mesh_view.shape();
+    // A 2-device axis would close on the link it already uses, so it stays open and never rings.
+    if (!tt::tt_fabric::is_genuine_torus_dim(mesh_shape[axis])) {
+        return false;
+    }
+
+    // Axis 0 runs down a column, axis 1 along a row.
+    for (uint32_t row_or_col = 0; row_or_col < mesh_shape[1 - axis]; row_or_col++) {
+        const auto nodes = axis == 0 ? mesh_view.get_fabric_node_ids_on_column(row_or_col)
+                                     : mesh_view.get_fabric_node_ids_on_row(row_or_col);
+        if (tt::tt_fabric::get_neighbor_eth_directions(nodes.back(), nodes.front()).empty()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 tt::tt_fabric::Topology get_axis_topology(
     const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis) {
     // Whether the fabric wraps this axis into a ring/torus.
@@ -140,9 +182,9 @@ tt::tt_fabric::Topology get_axis_topology(
         axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
     }
 
-    // Ring only if the fabric can wrap this axis AND the device set spans [0..size-1].
-    const bool axis_is_ring = axis_can_wrap && get_boundary_mode(tensor, tt::tt_fabric::Topology::Torus, axis) ==
-                                                   tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
+    // The torus flags name a fabric axis. A view axis can be a permutation of it, so the flag alone
+    // says nothing about this axis: only a wired closing link makes it a ring.
+    const bool axis_is_ring = axis_can_wrap && is_axis_wrap_wired(*tensor.device(), axis);
     return axis_is_ring ? tt::tt_fabric::Topology::Ring : tt::tt_fabric::Topology::Linear;
 }
 
@@ -152,8 +194,14 @@ tt::tt_fabric::Topology get_usable_topology(
     const std::optional<uint32_t>& cluster_axis) {
     tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
     if (topology_ == tt::tt_fabric::Topology::Ring || topology_ == tt::tt_fabric::Topology::Torus) {
-        auto boundary_mode = get_boundary_mode(tensor, topology_, cluster_axis);
-        if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
+        bool wraps;
+        if (cluster_axis.has_value()) {
+            wraps = is_axis_wrap_wired(*tensor.device(), *cluster_axis);
+        } else {
+            wraps = get_boundary_mode(tensor, topology_, cluster_axis) ==
+                    tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
+        }
+        if (wraps) {
             return topology_;
         }
         if (topology_ == tt::tt_fabric::Topology::Torus) {

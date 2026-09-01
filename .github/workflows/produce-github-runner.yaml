@@ -1,0 +1,82 @@
+name: "[internal] Produce GitHub Runner data"
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    - cron: "*/10 * * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  produce-github-runner:
+    runs-on: ubuntu-slim
+    timeout-minutes: 4
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Check GitHub API rate limit
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_API_TOKEN }}
+        run: gh api rate_limit
+
+      - name: Fetch self-hosted runners
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_API_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Lists all self-hosted runners registered to the tenstorrent org. --paginate
+          # concatenates pages (each page is a {total_count, runners} object);
+          # the build step slurps and flattens them below.
+          gh api --paginate /orgs/tenstorrent/actions/runners > runners_raw.json
+
+      - name: Build runner snapshot
+        run: |
+          set -euo pipefail
+
+          mkdir -p generated/github_runner
+          COLLECTED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # drop any whose name contains (case-insensitively) runner, xla, forge, torch, syseng, or mlir.
+          jq -n \
+            --arg ts "$COLLECTED_AT" \
+            --slurpfile pages runners_raw.json '
+          {
+            collected_at: $ts,
+            runners: [
+              $pages[] | .runners[]?
+              | select((.name // "") | test("runner|xla|forge|torch|syseng|mlir"; "i") | not)
+              | {
+                id,
+                name,
+                os,
+                status,
+                busy,
+                labels: [ .labels[]?.name ]
+              }
+            ]
+          }
+          ' > generated/github_runner/github_runner_snapshot.json
+
+          echo "Runner count:"
+          jq '.runners | length' generated/github_runner/github_runner_snapshot.json
+
+      - name: Add timestamp to filename
+        run: |
+          TS=$(date -u +"%Y%m%dT%H%M%SZ")
+          mv generated/github_runner/github_runner_snapshot.json \
+             generated/github_runner/${TS}_github_runner_snapshot.json
+
+      # Uploads on both the scheduled run and a manual workflow_dispatch, so the
+      # pipeline can be re-tested end-to-end from the default branch on demand.
+      - name: Upload runner data via SFTP
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_GITHUB_RUNNER_WRITER_KEY }}
+          username: ${{ secrets.SFTP_GITHUB_RUNNER_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_GITHUB_RUNNER_WRITER_HOSTNAME }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/github_runner_batchfile.txt

@@ -78,6 +78,10 @@ class PrefillRunParams:
     # MoE shared-expert ∥ dispatch overlap (default on). Off => single-segment trace (no per-chunk
     # sub-device swaps), faster replay at the cost of the overlap. See TtPrefillRuntimeConfig.
     overlap_shared_expert_with_dispatch: bool = True
+    # Build the DFlash drafter context-KV cache during prefill. Opt-in / default False so adding this
+    # feature never breaks existing PrefillRunParams constructors (which need not pass it); the runner
+    # derives it from the model capability (supports_dflash) + PREFILL_DFLASH + a drafter checkpoint.
+    dflash_enabled: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -125,6 +129,8 @@ class PrefillModelAdapter(ABC):
     # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
     # Must match the layout the model's decoder layer consumes/produces.
     pipeline_activation_emb_tp_sharded: bool = True
+    # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
+    supports_dflash: bool = False
 
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
@@ -200,6 +206,11 @@ class PrefillModelAdapter(ABC):
     moe_pcc_threshold: float = 0.999
     mla_pcc_threshold: float = 0.999
     supports_pretrained: bool = True
+    # Model layer whose ``self_attn.*`` holds the MLA weights; None if no checkpoint is reachable.
+    pretrained_mla_layer: Optional[int] = 0
+    # This variant's OWN golden MLA-trace dirs (each holding mla_io/ + kv_cache/), for the
+    # MLA-level trace tests; one per user, cycled. Empty = no trace was ever recorded for it.
+    mla_trace_defaults: tuple[str, ...] = ()
     # Whether the tokenizer needs trust_remote_code=True (custom tokenizer code shipped in the repo,
     # e.g. Kimi's tiktoken-backed BBPE). DeepSeek-V3 uses a stock fast tokenizer, so it turns this off
     # to avoid the flat-config trust_remote_code import path that otherwise breaks its load.
@@ -241,6 +252,15 @@ class PrefillModelAdapter(ABC):
 
     @property
     def reference_moe_cls(self) -> Optional[type]:
+        return None
+
+    @property
+    def reference_rotary_cls(self) -> Optional[type]:
+        """Rope module a standalone reference attention needs its ``(cos, sin)`` from.
+
+        Only needed for references from transformers >= 5, which compute rope at the MODEL level and
+        pass ``position_embeddings`` down, so an attention used on its own has to be handed them.
+        The vendored DeepSeek/Kimi references build rope internally and leave this None."""
         return None
 
 

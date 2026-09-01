@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import ttnn
+from models.common.device_utils import is_blackhole
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.modules.tt_ccl import (
@@ -32,8 +33,7 @@ from models.common.modules.tt_ccl import (
     default_topology,
     get_tt_ccl,
 )
-from models.common.tensor_utils import TILE_SIZE, get_padded_hidden_dim, pad_dim_to_size
-from models.common.utility_functions import is_blackhole
+from models.common.tensor_utils import TILE_SIZE, get_out_subblock_w, get_padded_hidden_dim, pad_dim_to_size
 from models.tt_transformers.tt.common import Mode
 
 # =============================================================================
@@ -71,6 +71,9 @@ class MLP1DConfig:
     tt_ccl: TT_CCL | None = None
     topology: Optional[ttnn.Topology] = None  # None = auto-detect
     num_reduce_scatter_links: int = 1
+    decode_rs_memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG
+    decode_rs_chunks_per_sync: int = 1
+    decode_rs_num_workers_per_link: int = 1
 
     # Optional: derived from weights if None
     dim: int | None = None
@@ -419,10 +422,10 @@ class MLP1D(LightweightModule):
             barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
             num_links=cfg.num_reduce_scatter_links,
             memory_config=w2_out.memory_config(),
-            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            intermediate_memory_config=cfg.decode_rs_memory_config,
             topology=cfg.topology,
-            chunks_per_sync=CCL_CHUNKS_PER_SYNC,
-            num_workers_per_link=CCL_NUM_WORKERS_PER_LINK,
+            chunks_per_sync=cfg.decode_rs_chunks_per_sync,
+            num_workers_per_link=cfg.decode_rs_num_workers_per_link,
             num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
         )
         w2_out.deallocate(True)
@@ -531,6 +534,7 @@ class MLP1D(LightweightModule):
         decode_w2_prg_config = args.get_mlp_ff2_prg_config(Mode.DECODE, None, None)
         decode_mlp2_input_memcfg = args.get_mlp_binary_mult_mem_config(Mode.DECODE)
         decode_residual_memcfg = args.get_mlp_output_mem_config(Mode.DECODE, None)
+        mlp_rs_cfg = model_config.get("MLP_RS_CONFIG", {})
 
         # Compute memory configs for weights
         num_devices = mesh_device.get_num_devices()
@@ -616,6 +620,9 @@ class MLP1D(LightweightModule):
             max_batch_size=args.max_batch_size,
             mlp_activation_type=getattr(args, "mlp_activation_type", ttnn.UnaryOpType.SILU),
             topology=ccl_topology,
+            decode_rs_memory_config=mlp_rs_cfg.get("rs_memory_config", ttnn.L1_MEMORY_CONFIG),
+            decode_rs_chunks_per_sync=mlp_rs_cfg.get("chunks_per_sync", 1),
+            decode_rs_num_workers_per_link=mlp_rs_cfg.get("num_workers_per_link", 1),
             decode_w1_w3_prg_config=decode_w1_w3_prg_config,
             decode_w2_prg_config=decode_w2_prg_config,
             decode_mlp2_input_memcfg=decode_mlp2_input_memcfg,
@@ -688,17 +695,6 @@ def _find_prefill_grid(row_tiles: int, col_tiles: int, max_rows: int = 8, max_co
     return rows, cols
 
 
-def _get_out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
-    """Get output subblock width that divides per_core_n and satisfies constraints."""
-    # [ALIGNED] Exactly matching models/tt_transformers/tt/common.py:get_out_subblock_w
-    out_subblock_w = 4  # TODO: Check with LLK team if this is the true bound, might be 8 now
-    while out_subblock_w > 1:
-        if out_subblock_w * out_subblock_h <= 4 and per_core_n % out_subblock_w == 0:
-            break
-        out_subblock_w -= 1
-    return out_subblock_w
-
-
 def _dram_shard_core_grid(k: int, tile_size: int = TILE_SIZE) -> ttnn.CoreGrid:
     """Get core grid for DRAM sharding based on K dimension."""
     rows, cols = _find_grid(k // tile_size)
@@ -742,7 +738,7 @@ def _matmul_config(
         per_core_n = math.ceil(n / (tile_size * grid_size[0]))
 
     out_subblock_h = 1
-    out_subblock_w = _get_out_subblock_w(per_core_n, out_subblock_h)
+    out_subblock_w = get_out_subblock_w(per_core_n, out_subblock_h)
 
     if in0_block_w is None:
         in0_block_w = _find_largest_divisor(k // (tile_size * grid_size[1]))

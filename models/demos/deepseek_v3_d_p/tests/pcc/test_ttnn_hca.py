@@ -8,7 +8,7 @@ reference modeling_deepseek_v4.py.
 
 Every test drives a public forward -- no TtHCA private method is called directly:
   - TtHCACompressor.forward        compressed KV entries + block bias
-  - TtHCA.forward, single-shot     single device and mesh, 5 prompt lengths
+  - TtHCA.forward, single-shot     5 prompt lengths
   - TtHCA.forward, chunked         TtHCAState across chunks, 4 scenarios + two 56K runs
 
 Each of them runs on both V4 variants, flash and pro.
@@ -31,8 +31,9 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
 )
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA, TtHCACompressor
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtHCACompressor
+from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # Real (pre-pad) prompt lengths. prepare_input pads each up to compress_rate*sp, so the ragged ones
@@ -94,32 +95,28 @@ _MODEL_CONFIGS_LONG = [pytest.param(cfg, long, id=name) for name, cfg, _, long, 
 _MODEL_CONFIGS_FORWARD = [pytest.param(cfg, fwd, id=name) for name, cfg, _, _, fwd in _VARIANTS]
 
 
-# 1x1 needs no fabric (sp=tp=1 skips every collective). On a 32-chip box only 8x4 runs;
+# Blackhole runs a mesh config only when it uses every chip, so one shape per box class.
 _MESH_CONFIGS = [
     pytest.param(
-        (1, 1),
-        {},
+        (2, 2),
+        fabric2d_device_params(),
         ttnn.Topology.Linear,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="linear"),
-        id="single-1x1",
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+        id="fabric2d-mesh-2x2",
     ),
     pytest.param(
         (4, 2),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        fabric2d_device_params(),
         ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-        id="mesh-4x2",
+        id="fabric2d-mesh-4x2",
     ),
     pytest.param(
         (8, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
-        ttnn.Topology.Linear,
+        torus_xy_device_params(),
+        ttnn.Topology.Ring,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="fabric2d-mesh-8x4",
+        id="torus-xy-8x4",
     ),
 ]
 
@@ -264,67 +261,6 @@ def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len, mode
 
 
 @pytest.mark.parametrize("seq_len", _SHAPES, ids=[f"seq{s}" for s in _SHAPES])
-@pytest.mark.parametrize("model_config, forward_pcc", _MODEL_CONFIGS_FORWARD)
-def test_hca_forward(device, seq_len, model_config, forward_pcc):
-    """Single-shot TtHCA.forward against DeepseekV4Attention.forward, on one device: sp=tp=1, so this
-    is the only test that runs the block with no collectives and every head on one chip."""
-    torch.manual_seed(_SEED)
-    batch = 1
-    config = _config(model_config)
-    nh, hd, sw = config.num_attention_heads, config.head_dim, config.sliding_window
-    compress_rate = config.compress_rates["heavily_compressed_attention"]
-    logger.debug(f"batch={batch}, seq_len={seq_len}, heads={nh}, head_dim={hd}, sw={sw}")
-
-    ref = DeepseekV4Attention(config, layer_idx=0).eval()
-    assert ref.compressor is not None, "layer_idx=0 must be a heavily_compressed_attention layer"
-    with torch.no_grad():
-        ref.q_a_norm.weight.uniform_(0.5, 1.5)
-        ref.kv_norm.weight.uniform_(0.5, 1.5)
-        ref.sinks.normal_(0.0, 1.0)
-        ref.compressor.position_bias.normal_(0.0, 0.02)
-        ref.compressor.kv_norm.weight.uniform_(0.5, 1.5)
-
-    hidden = torch.randn(batch, seq_len, config.hidden_size)
-    position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch, -1)
-
-    logger.debug("Running torch reference DeepseekV4Attention.forward")
-    with torch.no_grad():
-        cos, sin = ref.compressor.rotary_emb(hidden, position_ids=position_ids, layer_type="compress")
-        i = torch.arange(seq_len).view(seq_len, 1)
-        j = torch.arange(seq_len).view(1, seq_len)
-        attn_mask = torch.zeros(seq_len, seq_len).masked_fill(~((j <= i) & (i - j < sw)), float("-inf"))
-        attn_mask = attn_mask.view(1, 1, seq_len, seq_len).expand(batch, 1, seq_len, seq_len)
-        out_ref, _ = ref(hidden, {"compress": (cos, sin)}, position_ids, attn_mask, past_key_values=None)
-    logger.debug(f"Reference output shape: {tuple(out_ref.shape)}")
-
-    tt_model = TtHCA.from_reference(device, ref, config)
-    # sp=1 here, so this only rounds up to a whole compression window -- the same call the mesh test makes.
-    hidden_padded, seq_len_actual = TtHCA.prepare_input(hidden, 1, compress_rate)
-    tt_input = ttnn.from_torch(
-        hidden_padded.unsqueeze(1),
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-    )
-
-    logger.debug("Running ttnn TtHCA forward")
-    state = tt_model.alloc_state(hidden_padded.shape[1])  # a one-chunk prefill still owns its state
-    signpost("HCA_START")
-    out_tt = tt_model(tt_input, seq_len_actual=seq_len_actual, state=state)
-    signpost("HCA_END")
-    out = ttnn.to_torch(out_tt).squeeze(1)[:, :seq_len_actual]  # [B, 1, S, hidden] -> [B, S_real, hidden]
-    logger.debug(f"TTNN output shape: {tuple(out.shape)}")
-
-    assert out.shape == out_ref.shape, f"shape mismatch: tt {tuple(out.shape)} vs ref {tuple(out_ref.shape)}"
-
-    pcc_passed, pcc_message = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), pcc=forward_pcc)
-    logger.debug(f"HCA block PCC: {pcc_message}")
-    assert pcc_passed, f"HCA block PCC test failed: {pcc_message}"
-
-    logger.debug("PCC test passed!")
-
-
-@pytest.mark.parametrize("seq_len", _SHAPES, ids=[f"seq{s}" for s in _SHAPES])
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology",
     _MESH_CONFIGS,
@@ -364,7 +300,7 @@ def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len, model_c
 
     tt_model = TtHCA.from_reference(mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology)
 
-    hidden_padded, seq_len_actual = TtHCA.prepare_input(hidden, sp_factor, compress_rate)
+    hidden_padded, seq_len_actual = TtHCACompressor.prepare_input(hidden, sp_factor, compress_rate)
     logger.debug(f"mesh={tuple(mesh_device.shape)} S_real={seq_len_actual} S_pad={hidden_padded.shape[1]}")
     ms = tuple(mesh_device.shape)
     tt_input = ttnn.from_torch(
