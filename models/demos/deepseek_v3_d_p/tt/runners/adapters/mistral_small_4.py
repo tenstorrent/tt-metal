@@ -72,7 +72,9 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
     # the fp8 tensors. mistral4_hf_config also fixes the softmax-scale convention (see that module).
     config_builder_overrides_checkpoint = True
     mla_pcc_threshold = 0.995
-    moe_pcc_threshold = 0.971
+    # 0.971 was sized for the sigmoid gate, which measured 0.972458 -- a revert would have passed.
+    # The softmax gate measures 0.994563; 0.982 (DeepSeek's value) catches a regression with room.
+    moe_pcc_threshold = 0.982
     prefill_trace_layout = "single_file"
 
     # --- CPU reference ---------------------------------------------------------------------------

@@ -47,6 +47,8 @@ class MistralSmall4Config:
     NUM_LIMITED_GROUPS = 1  # topk_group
     ROUTE_SCALE = 1.0  # routed_scaling_factor
     NORM_TOPK_PROB = True  # norm_topk_prob
+    # Mistral4TopkRouter carries only `weight`; there is no auxiliary-loss-free correction bias.
+    ROUTER_HAS_CORRECTION_BIAS = False
 
     # Model architecture
     NUM_LAYERS = 36  # num_hidden_layers
