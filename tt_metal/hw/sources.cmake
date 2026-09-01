@@ -32,6 +32,7 @@ set(HW_JIT_API_HEADERS
     inc/api/scratchpad.h
     inc/api/compute/compute_kernel_api.h
     inc/api/compute/add_int_sfpu.h
+    inc/api/compute/add_top_row.h
     inc/api/compute/atan2.h
     inc/api/compute/bcast.h
     inc/api/compute/binary_bitwise_sfpu.h
@@ -125,6 +126,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/logsigmoid.h
     inc/api/compute/mask.h
     inc/api/compute/matmul.h
+    inc/api/compute/max_pool_indices.h
     inc/api/compute/mul_int_sfpu.h
     inc/api/compute/pack.h
     inc/api/compute/pack_untilize.h
@@ -139,6 +141,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/sentinel/sentinel_core.h
     inc/api/compute/sentinel/testing_spy.h
     inc/api/compute/situ_glu.h
+    inc/api/compute/sfpu_reduce.h
     inc/api/compute/softmax.h
     inc/api/compute/src_order.h
     inc/api/compute/sub_int_sfpu.h

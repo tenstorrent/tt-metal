@@ -9,6 +9,7 @@
 #include "../metadata/metadata.hpp"
 #ifdef TRISC_MATH
 #include "experimental/llk_sfpu/ckernel_sfpu_sampling.h"
+#include "api/compute/sfpu_reduce.h"
 #endif
 
 #if defined(COMPILE_FOR_TRISC)

@@ -8,6 +8,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tilize.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/max_pool_indices.h"
 #include "api/compute/pack.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/tile_move_copy.h"
