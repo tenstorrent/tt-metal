@@ -937,9 +937,17 @@ def warmup_gemma4_batched_prefill_traces(
                     break
 
                 if not sampling_parameters_sweeped:
+                    # Single-user prefill all-gathers logits to the full vocab
+                    # before sampling (process_output_prefill contract), while
+                    # the penalties masks stay vocab-sharded per device — so
+                    # penalty-bearing params are only shape-valid on the
+                    # batched-prefill path (sharded logits). Sweeping them at
+                    # batch_size==1 dies in binary_ng ("Invalid subtile
+                    # broadcast type": logits [B, vocab] vs mask [B, vocab/tp]).
+                    # Greedy (no-penalty) warmup is the only valid b=1 sweep.
                     sampling_params = generator._create_sampling_params(
                         can_sample_on_device=can_sample_on_device,
-                        greedy_only=greedy_only,
+                        greedy_only=greedy_only or batch_size == 1,
                         batch_size=batch_size,
                     )
                 else:
