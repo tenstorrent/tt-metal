@@ -512,9 +512,9 @@ def _chunk_recurrence(
     inputs: _FlatRecurrenceInputs,
     initial_state: ttnn.Tensor,
     *,
-    program_config: KDARecurrenceProgramConfig,
     compute_config: _RecurrenceComputeConfig,
     sequence_parallel_axis: int | None,
+    scan_strategy: _RecurrenceScan,
 ) -> _ScanResult:
     """Run the fixed Kimi-K3 recurrence contract through the selected scan strategy."""
     geometry = _validate_recurrence_geometry(
@@ -554,11 +554,6 @@ def _chunk_recurrence(
         initial_state,
         (geometry.batch_heads, geometry.key_dim, geometry.value_dim),
     )
-    scan_strategy = _select_scan(
-        program_config=program_config,
-        compute_config=compute_config,
-        sequence_parallel_axis=sequence_parallel_axis,
-    )
     chunk_inputs = _prepare_chunk_inputs(inputs, geometry)
     prepared = _prepare_chunk_terms(
         chunk_inputs,
@@ -570,6 +565,70 @@ def _chunk_recurrence(
     assert result.output.dtype == KDA_SCAN_OUTPUT_DTYPE
     assert result.final_state.dtype == KDA_RECURRENT_STATE_DTYPE
     return result
+
+
+class KDARecurrence:
+    """Constructor-fixed KDA recurrence executor."""
+
+    def __init__(
+        self,
+        device: ttnn.Device | ttnn.MeshDevice,
+        program_config: KDARecurrenceProgramConfig,
+        *,
+        sequence_parallel_axis: int | None,
+    ) -> None:
+        if sequence_parallel_axis not in (None, 0, 1):
+            raise ValueError("sequence_parallel_axis must be 0 or 1")
+        preparation = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        affine_prefix = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=program_config.affine_prefix_math_fidelity,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        scan = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=program_config.scan_math_fidelity,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        self._compute_config = _RecurrenceComputeConfig(
+            preparation=preparation,
+            affine_prefix=affine_prefix,
+            scan=scan,
+        )
+        self._sequence_parallel_axis = sequence_parallel_axis
+        self._scan_strategy = _select_scan(
+            program_config=program_config,
+            compute_config=self._compute_config,
+            sequence_parallel_axis=sequence_parallel_axis,
+        )
+
+    def __call__(
+        self,
+        *,
+        q: ttnn.Tensor,
+        k: ttnn.Tensor,
+        v: ttnn.Tensor,
+        gate: ttnn.Tensor,
+        beta: ttnn.Tensor,
+        initial_state: ttnn.Tensor,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Return ``(new_state, output)`` for directly named recurrence tensors."""
+        result = _chunk_recurrence(
+            _FlatRecurrenceInputs(q=q, k=k, v=v, gate=gate, beta=beta),
+            initial_state,
+            compute_config=self._compute_config,
+            sequence_parallel_axis=self._sequence_parallel_axis,
+            scan_strategy=self._scan_strategy,
+        )
+        return result.final_state, result.output
 
 
 def _distributed_affine_prefix(

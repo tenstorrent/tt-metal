@@ -12,7 +12,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_recurrent_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import compare_cpu_device
-from models.demos.deepseek_v3_d_p.tt.kda import ops
+from models.demos.deepseek_v3_d_p.tt.kda import recurrence
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -46,33 +46,23 @@ def _run_recurrence(
     *,
     summary_group_chunks: int = 8,
     local_scan_strategy: Literal["direct", "grouped"] = "direct",
-) -> ops._ScanResult:
-    prefix_compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        fp32_dest_acc_en=True,
-    )
-    return ops._chunk_recurrence(
-        ops._FlatRecurrenceInputs(q=q, k=k, v=v, gate=gate, beta=beta),
-        state,
-        program_config=KDARecurrenceProgramConfig(
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    executor = recurrence.KDARecurrence(
+        device,
+        KDARecurrenceProgramConfig(
             summary_group_chunks=summary_group_chunks,
             local_scan_strategy=local_scan_strategy,
         ),
-        compute_config=ops._RecurrenceComputeConfig(
-            preparation=None,
-            affine_prefix=prefix_compute_config,
-            scan=prefix_compute_config,
-        ),
         sequence_parallel_axis=None,
     )
+    return executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state)
 
 
 def test_grouped_scan_capacity_reports_device_limit(device: ttnn.Device, expect_error) -> None:
     grid = device.compute_with_storage_grid_size()
     capacity = grid.x * grid.y
     with expect_error(ValueError, f"only {capacity} are supported"):
-        ops._validate_grouped_scan_capacity(
+        recurrence._validate_grouped_scan_capacity(
             batch_heads=capacity + 1,
             num_chunks=1,
             summary_group_chunks=1,
@@ -93,20 +83,13 @@ def test_chunk_recurrence_rejects_nonproduction_contract(device: ttnn.Device, ex
         "beta": _to_device(torch.randn(beta_shape), device, ttnn.float32),
     }
     valid_state = _to_device(torch.randn(state_shape), device, ttnn.float32)
-    program_config = KDARecurrenceProgramConfig()
-    compute_config = ops._RecurrenceComputeConfig(None, None, None)
+    executor = recurrence.KDARecurrence(device, KDARecurrenceProgramConfig(), sequence_parallel_axis=None)
 
     def run(
         inputs: dict[str, ttnn.Tensor],
         state: ttnn.Tensor = valid_state,
     ) -> None:
-        ops._chunk_recurrence(
-            ops._FlatRecurrenceInputs(**inputs),
-            state,
-            program_config=program_config,
-            compute_config=compute_config,
-            sequence_parallel_axis=None,
-        )
+        executor(**inputs, initial_state=state)
 
     wrong_dtype_inputs = {
         "q": _to_device(torch.randn(flat_shape), device, ttnn.float32),
@@ -178,7 +161,7 @@ def test_chunk_recurrence_pcc(
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            result = _run_recurrence(
+            final_state, output = _run_recurrence(
                 device,
                 q_tt,
                 k_tt,
@@ -189,7 +172,7 @@ def test_chunk_recurrence_pcc(
                 summary_group_chunks=summary_group_chunks,
                 local_scan_strategy=local_scan_strategy,
             )
-        return result.output, result.final_state
+        return output, final_state
 
     checks_determinism = (sequence, heads, key_dim, value_dim, summary_group_chunks, local_scan_strategy) == (
         256,
@@ -244,7 +227,7 @@ def test_grouped_summary_preserves_weak_decay(device: ttnn.Device) -> None:
     golden_output = golden_output.to(torch.bfloat16)
 
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        result_eight = _run_recurrence(
+        state_eight, output_eight_tt = _run_recurrence(
             device,
             _to_device(q.reshape(1, sequence, heads * dim), device, ttnn.bfloat16),
             _to_device(k.reshape(1, sequence, heads * dim), device, ttnn.bfloat16),
@@ -258,7 +241,7 @@ def test_grouped_summary_preserves_weak_decay(device: ttnn.Device) -> None:
     ttnn.synchronize_device(device)
 
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        result_two = _run_recurrence(
+        state_two, output_two_tt = _run_recurrence(
             device,
             _to_device(q.reshape(1, sequence, heads * dim), device, ttnn.bfloat16),
             _to_device(k.reshape(1, sequence, heads * dim), device, ttnn.bfloat16),
@@ -269,8 +252,8 @@ def test_grouped_summary_preserves_weak_decay(device: ttnn.Device) -> None:
             summary_group_chunks=2,
         )
 
-    output_eight = ttnn.to_torch(result_eight.output).reshape(1, sequence, heads, dim)
-    output_two = ttnn.to_torch(result_two.output).reshape(1, sequence, heads, dim)
+    output_eight = ttnn.to_torch(output_eight_tt).reshape(1, sequence, heads, dim)
+    output_two = ttnn.to_torch(output_two_tt).reshape(1, sequence, heads, dim)
     label = "weak-decay production contract"
     assert_accurate(golden_output, output_eight, name=f"{label} grouped output")
     assert_accurate(
@@ -280,9 +263,9 @@ def test_grouped_summary_preserves_weak_decay(device: ttnn.Device) -> None:
         pcc_threshold=0.9999,
     )
     assert_accurate(
-        ttnn.to_torch(result_two.final_state),
-        ttnn.to_torch(result_eight.final_state),
+        ttnn.to_torch(state_two),
+        ttnn.to_torch(state_eight),
         name=f"{label} group-size state invariance",
         pcc_threshold=0.9999,
     )
-    assert_accurate(golden_state, ttnn.to_torch(result_eight.final_state), name=f"{label} grouped state")
+    assert_accurate(golden_state, ttnn.to_torch(state_eight), name=f"{label} grouped state")

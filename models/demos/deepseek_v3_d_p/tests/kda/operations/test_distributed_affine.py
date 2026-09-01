@@ -10,7 +10,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.kda.utils import collect_mesh_accuracy_and_determinism_results
-from models.demos.deepseek_v3_d_p.tt.kda import ops
+from models.demos.deepseek_v3_d_p.tt.kda import recurrence
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_RECURRENT_STATE_DTYPE, KDARecurrenceProgramConfig
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
 
@@ -148,7 +148,7 @@ def test_distributed_affine_prefix_matches_serial(
         fp32_dest_acc_en=True,
     )
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        entry_tt, final_tt = ops._distributed_affine_prefix(
+        entry_tt, final_tt = recurrence._distributed_affine_prefix(
             a_tt,
             b_tt,
             state_tt,
@@ -157,7 +157,7 @@ def test_distributed_affine_prefix_matches_serial(
         )
     cache_entries = mesh_device.num_program_cache_entries()
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        repeated_entry_tt, repeated_final_tt = ops._distributed_affine_prefix(
+        repeated_entry_tt, repeated_final_tt = recurrence._distributed_affine_prefix(
             a_tt,
             b_tt,
             state_tt,
@@ -176,7 +176,7 @@ def test_distributed_affine_prefix_matches_serial(
         if run_index == 2:
             return repeated_entry_tt, repeated_final_tt
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            return ops._distributed_affine_prefix(
+            return recurrence._distributed_affine_prefix(
                 a_tt,
                 b_tt,
                 state_tt,
@@ -188,7 +188,7 @@ def test_distributed_affine_prefix_matches_serial(
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        traced_entry_tt, traced_final_tt = ops._distributed_affine_prefix(
+        traced_entry_tt, traced_final_tt = recurrence._distributed_affine_prefix(
             a_tt,
             b_tt,
             state_tt,
