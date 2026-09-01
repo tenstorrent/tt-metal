@@ -827,3 +827,26 @@
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   sp_config: sc1
+
+
+# Acceptance gate for the trace-aware socket sync ops (#52451 inbound / #52456 outbound):
+# caller-owned persistent destinations, program-cache behaviour across arg modes, and the
+# actual goal -- inbound_socket_service_sync captured in a ttnn trace and replayed. Random
+# tensors on the full 8x4 mesh, no model weights, so it is fast and weight-independent.
+# No fabric_profile: the test drives H2D sockets on a plain mesh-8x4 and a torus descriptor
+# would silently skip its requires_mesh_topology(mesh_shape=(8, 4)) parametrization.
+- name: "Socket sync ops: persistent destinations + trace replay"
+  cmd: |
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_sync_op_persistent_trace.py -vvv --tb=short
+    '
+  test_type: sync_op_trace
+  test_tags: [sockets, trace]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 5
+  owner_id: U09L76N1MAT # Nenad Babin
+  team: models
+  sp_config: sc1
