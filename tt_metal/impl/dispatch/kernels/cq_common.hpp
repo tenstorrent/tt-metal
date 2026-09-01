@@ -64,16 +64,6 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
     return diff > 0;
 }
 
-// EXPERIMENT: tag the relay packets the dispatcher reads with a load -- command headers and the
-// sub-command arrays behind them -- so the receiving NIU snoops them into its cache, replacing the
-// dispatcher-side invalidations. Bulk payload is left untagged: the dispatcher only forwards it, and
-// that read is served from TL1 by the NIU rather than through the cache.
-// Merging is gated on whether a non-power-of-2 transfer is safe in inline-write mode, since TileLink
-// rounds the size up and may touch bytes outside the transfer.
-#ifndef FD_QSR_RELAY_SNOOP
-#define FD_QSR_RELAY_SNOOP 1
-#endif
-
 // Choosing the view for a sync word on Quasar: match the transport that publishes it, and use the same
 // view on both sides -- a cached store can sit dirty while an uncached poll reads TL1 and never sees it.
 //   Local CPU store (same-tile DM to DM): cached. DM caches are coherent with each other.
@@ -174,29 +164,15 @@ FORCE_INLINE void cq_noc_async_wwrite_with_state(
 // config (dst_noc, VC..) have been specified.
 // flush_last_transfer sets the flush packet tag on the final transfer so that a credit atomic issued after
 // this call -- typically from CBWriter::release_pages -- cannot commit to L1 ahead of the payload.
-// snoop_transfers tags every packet so the receiving NIU updates the destination's cache in place; set it
-// only for bytes the destination reads with a load, since it costs the receiver L2 write traffic.
 // No-op on tt-1xx, which has no packet tags.
 template <
     bool write_last_packet = true,
     bool update_counters = false,
     enum CQNocWait wait_first = CQ_NOC_WAIT,
     uint32_t cmd_buf = NCRISC_WR_CMD_BUF,
-    bool flush_last_transfer = false,
-    bool snoop_transfers = false>
+    bool flush_last_transfer = false>
 inline uint32_t cq_noc_async_write_with_state_any_len(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
-    static_assert(
-        !snoop_transfers || write_last_packet,
-        "snoop_transfers requires write_last_packet: the tag is persistent cmd-buf state and is cleared after the "
-        "final transfer, so a call that does not issue it would leak the tag onto unrelated writes.");
-#if defined(ARCH_QUASAR)
-    // Snoop is per-packet, so it must be set before the first of the burst-sized transfers below. Flush
-    // instead covers every packet that precedes it, so it is only needed on the last.
-    if constexpr (snoop_transfers) {
-        noc_set_packet_tags<cmd_buf>(/*snoop=*/true, /*flush=*/false);
-    }
-#endif
     if (size > NOC_MAX_BURST_SIZE) {
         cq_noc_async_write_with_state<CQ_NOC_SnDL, wait_first, CQ_NOC_SEND, cmd_buf, update_counters>(
             src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests);
@@ -214,13 +190,13 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
     if constexpr (write_last_packet) {
 #if defined(ARCH_QUASAR)
         if constexpr (flush_last_transfer) {
-            noc_set_packet_tags<cmd_buf>(/*snoop=*/snoop_transfers, /*flush=*/true);
+            noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/true);
         }
 #endif
         cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, cmd_buf, update_counters>(
             src_addr, dst_addr, size, ndests, noc);
 #if defined(ARCH_QUASAR)
-        if constexpr (flush_last_transfer || snoop_transfers) {
+        if constexpr (flush_last_transfer) {
             noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/false);
         }
 #endif
@@ -748,7 +724,7 @@ template <uint32_t l1_to_local_cache_copy_chunk, uint32_t l1_cache_elements_roun
 FORCE_INLINE void careful_copy_from_l1_to_local_cache(
     volatile uint32_t tt_l1_ptr* l1_ptr, uint32_t count, uint32_t* l1_cache) {
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    if constexpr (invalidate_source && !FD_QSR_RELAY_SNOOP) {
+    if constexpr (invalidate_source) {
         // Upstream relayed the source by NoC write, which does not snoop, so a cached copy left over from an
         // earlier ring wrap is stale. Range covers the up-to-chunk-1 elements this function reads past count.
         // Prefetcher callers leave this off: both of its fetch paths already invalidate the extent they read.

@@ -381,13 +381,7 @@ FORCE_INLINE void write_downstream(
                 get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
                 remaining);
 #else
-            cq_noc_async_write_with_state_any_len<
-                true,
-                true,
-                CQNocWait::CQ_NOC_WAIT,
-                downstream_cmd_buf,
-                /*flush_last_transfer=*/false,
-                /*snoop_transfers=*/FD_QSR_RELAY_SNOOP>(
+            cq_noc_async_write_with_state_any_len<true, true, CQNocWait::CQ_NOC_WAIT, downstream_cmd_buf>(
                 static_cast<uint32_t>(data_ptr),
                 get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
                 remaining);
@@ -409,8 +403,7 @@ FORCE_INLINE void write_downstream(
         true,
         CQNocWait::CQ_NOC_WAIT,
         downstream_cmd_buf,
-        /*flush_last_transfer=*/true,
-        /*snoop_transfers=*/FD_QSR_RELAY_SNOOP>(
+        /*flush_last_transfer=*/true>(
         static_cast<uint32_t>(data_ptr),
         get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
         length);
@@ -932,11 +925,7 @@ static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& di
     }
     // On Quasar these writes carry no flush tag: this routine does not release the page, so the header
     // and the payload that follows are published by one release_pages, and the flush on the payload's
-    // last transfer covers all packets before it. They do carry the snoop tag -- the dispatcher reads
-    // this header with a load, unlike the payload that follows it.
-#if defined(ARCH_QUASAR) && FD_QSR_RELAY_SNOOP
-    noc_set_packet_tags<NCRISC_WR_CMD_BUF>(/*snoop=*/true, /*flush=*/false);
-#endif
+    // last transfer covers all packets before it.
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
         // wrap cmddat
@@ -948,9 +937,6 @@ static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& di
     }
     noc_async_write(static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
     dispatch_data_ptr += length;
-#if defined(ARCH_QUASAR) && FD_QSR_RELAY_SNOOP
-    noc_set_packet_tags<NCRISC_WR_CMD_BUF>(/*snoop=*/false, /*flush=*/false);
-#endif
 
     return load_aligned<uint32_t>(&cmd->relay_inline.stride);
 }
