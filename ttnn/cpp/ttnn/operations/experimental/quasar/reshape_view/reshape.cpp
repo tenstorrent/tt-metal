@@ -21,8 +21,6 @@
 #include "ttnn/operations/experimental/quasar/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/experimental/quasar/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_op.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operation.hpp"

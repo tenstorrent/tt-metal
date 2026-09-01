@@ -9,7 +9,6 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal.hpp>
