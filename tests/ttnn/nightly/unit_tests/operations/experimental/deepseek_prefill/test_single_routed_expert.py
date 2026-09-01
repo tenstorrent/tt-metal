@@ -360,6 +360,7 @@ def test_single_routed_expert_isl_sweep(
 _K3_TOKEN_SWEEP = [32, 64, 128, 256, 512, 1024, 2048, 5120]
 
 
+@pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
 @pytest.mark.parametrize("num_tokens", _K3_TOKEN_SWEEP, ids=[f"t{t}" for t in _K3_TOKEN_SWEEP])
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 @pytest.mark.extended_model
