@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "api/core_local_mem.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -29,6 +30,27 @@ public:
 private:
     const uint32_t* words_;
 };
+
+template <typename Accessor>
+ALWI void preload_config_pages(
+    const Accessor& accessor,
+    const uint32_t address,
+    const uint32_t page_bytes,
+    const uint32_t page_begin,
+    const uint32_t page_count,
+    const uint32_t destination_addr) {
+    const auto pages = TensorAccessor(accessor, address, page_bytes);
+    Noc noc;
+    for (uint32_t page = 0; page < page_count; ++page) {
+        noc.async_read(
+            pages,
+            CoreLocalMem<uint32_t>(destination_addr + page * page_bytes),
+            page_bytes,
+            {.page_id = page_begin + page},
+            {});
+    }
+    noc.async_read_barrier();
+}
 
 template <typename Accessor>
 ALWI void load_config_page(

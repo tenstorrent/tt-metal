@@ -176,62 +176,6 @@ inline void _horizontal_stencil_plus_base_face(
     }
 }
 
-template <uint8_t K, uint32_t Rows>
-inline void _horizontal_stencil_plus_base(
-    const uint32_t h_packed[K],
-    const uint32_t input1,
-    const uint32_t input2,
-    const uint32_t base1,
-    const uint32_t base2,
-    const uint32_t output1,
-    const uint32_t output2) {
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(0);
-    _lwt_clear_addr_mod_base_();
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-
-    _horizontal_stencil_plus_base_face<K, Rows>(
-        h_packed,
-        _lwt_dst_base(input1, 0),
-        _lwt_dst_base(input1, 1),
-        _lwt_dst_base(base1, 0),
-        _lwt_dst_base(output1, 0));
-    _horizontal_stencil_plus_base_face<K, Rows>(
-        h_packed,
-        _lwt_dst_base(input1, 1),
-        _lwt_dst_base(input2, 0),
-        _lwt_dst_base(base1, 1),
-        _lwt_dst_base(output1, 1));
-    _horizontal_stencil_plus_base_face<K, Rows>(
-        h_packed,
-        _lwt_dst_base(input2, 0),
-        _lwt_dst_base(input2, 1),
-        _lwt_dst_base(base2, 0),
-        _lwt_dst_base(output2, 0));
-
-    if constexpr (Rows > 16) {
-        _horizontal_stencil_plus_base_face<K, Rows - 16>(
-            h_packed,
-            _lwt_dst_base(input1, 2),
-            _lwt_dst_base(input1, 3),
-            _lwt_dst_base(base1, 2),
-            _lwt_dst_base(output1, 2));
-        _horizontal_stencil_plus_base_face<K, Rows - 16>(
-            h_packed,
-            _lwt_dst_base(input1, 3),
-            _lwt_dst_base(input2, 2),
-            _lwt_dst_base(base1, 3),
-            _lwt_dst_base(output1, 3));
-        _horizontal_stencil_plus_base_face<K, Rows>(
-            h_packed,
-            _lwt_dst_base(input2, 2),
-            _lwt_dst_base(input2, 3),
-            _lwt_dst_base(base2, 2),
-            _lwt_dst_base(output2, 2));
-    }
-
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
-}
-
 template <uint8_t K>
 inline void _horizontal_stencil_dense_tile(
     const uint32_t h_packed[K],
@@ -304,19 +248,6 @@ inline void _horizontal_stencil_plus_base_narrow(
 }  // namespace ckernel
 
 inline void hstencil_init() { MATH((ckernel::sfpu::_horizontal_stencil_init())); }
-
-template <uint8_t K, uint32_t Rows = 32>
-inline void hstencil_plus_base_tile(
-    std::array<uint32_t, K> h_packed,
-    const uint32_t input1,
-    const uint32_t input2,
-    const uint32_t base1,
-    const uint32_t base2,
-    const uint32_t output1,
-    const uint32_t output2) {
-    MATH((ckernel::sfpu::_horizontal_stencil_plus_base<K, Rows>(
-        h_packed.data(), input1, input2, base1, base2, output1, output2)));
-}
 
 template <uint8_t K>
 inline void hstencil_dense_tile(
