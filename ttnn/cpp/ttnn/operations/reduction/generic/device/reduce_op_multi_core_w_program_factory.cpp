@@ -188,8 +188,10 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     const uint32_t min_rows_per_core = num_rows_per_core_group_2 == 0
                                            ? num_rows_per_core_group_1
                                            : std::min(num_rows_per_core_group_1, num_rows_per_core_group_2);
-    const uint32_t reader_tiles_per_batch =
-        rm_path || use_height_sharding ? 1u : reduce_reader_batch(min_rows_per_core * Wt);
+    // The fused-negate kernel only profits from batching once a core owns several rows: with one
+    // row per core it measures 18-32% slower batched, and 6-8% faster with two or more.
+    const bool batch_reads = !rm_path && !use_height_sharding && !(use_fpu_negate && min_rows_per_core < 2);
+    const uint32_t reader_tiles_per_batch = batch_reads ? reduce_reader_batch(min_rows_per_core * Wt) : 1u;
 
     uint32_t num_input_tiles = reduce_reader_input_cb_tiles(reader_tiles_per_batch);
     if (rm_path) {
