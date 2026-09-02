@@ -7,14 +7,22 @@ embedding output rank, plus_one dtypes, LM-head matmul geometry at
 vocab 154880 on one Blackhole chip, and the on-device sampling op contract.
 """
 
+import json
 import time
+from pathlib import Path
 
 import torch
 
 import ttnn
+from models.autoports.zai_org_glm_4_7_flash.tt.provenance import source_manifest
 
 TILE = 32
 V, H = 154880, 2048
+#: The report cites the LM-head geometry sweep and the default-config figure as
+#: the justification for the explicit program config, so they are written to an
+#: artifact rather than only printed (work log FM-019).
+OUT = Path(__file__).resolve().parents[1] / "doc" / "full_model" / "head_probe.json"
+RESULTS = {"source_manifest": source_manifest([__file__]), "lm_head_us": {}, "notes": []}
 
 
 def _rect_grid(cores):
@@ -123,9 +131,11 @@ def main():
                 ttnn.synchronize_device(dev)
                 dt = (time.perf_counter() - t0) / 20 * 1e6
                 print(f"LM head {name} 1D cores={cores} bw={bw} pcn={pc.per_core_N}: {dt:.1f} us  out={out.shape}")
+                RESULTS["lm_head_us"][f"{name}_1d_cores{cores}_bw{bw}"] = round(dt, 1)
                 ttnn.deallocate(out)
             except Exception as e:
                 print(f"LM head {name} 1D cores={cores} bw={bw}: FAIL {str(e)[:160]}")
+                RESULTS["lm_head_us"][f"{name}_1d_cores{cores}_bw{bw}"] = f"FAIL: {str(e).splitlines()[0][:120]}"
         # default config
         try:
             ttnn.synchronize_device(dev)
@@ -134,12 +144,22 @@ def main():
                 o = ttnn.linear(x, wt, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=ck)
                 ttnn.deallocate(o)
             ttnn.synchronize_device(dev)
-            print(f"LM head {name} default cfg: {(time.perf_counter()-t0)/20*1e6:.1f} us")
+            default_us = (time.perf_counter() - t0) / 20 * 1e6
+            print(f"LM head {name} default cfg: {default_us:.1f} us")
+            RESULTS["lm_head_us"][f"{name}_default_program_config"] = round(default_us, 1)
         except Exception as e:
             print(f"LM head {name} default: FAIL {str(e)[:160]}")
         ttnn.deallocate(wt)
     ttnn.deallocate(x)
     ttnn.close_device(dev)
+    RESULTS["notes"].append(
+        "One decode row (M = 32 padded rows) x 2048 x 154880, 20 iterations each, wall clock with an "
+        "explicit synchronize. `*_default_program_config` is the figure the report cites for why the "
+        "explicit 1D mcast config is required."
+    )
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(RESULTS, indent=2) + "\n")
+    print("wrote", OUT)
     print("HEAD_PROBE_OK")
 
 

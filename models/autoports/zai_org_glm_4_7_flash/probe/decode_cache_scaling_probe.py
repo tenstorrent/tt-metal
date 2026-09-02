@@ -10,11 +10,14 @@ MLA decode read, or the page-table tensor width itself.
     python models/autoports/zai_org_glm_4_7_flash/probe/decode_cache_scaling_probe.py
 """
 
+import json
 import time
+from pathlib import Path
 
 import torch
 
 import ttnn
+from models.autoports.zai_org_glm_4_7_flash.tt.provenance import source_manifest
 
 TILE = 32
 KVPE = 576
@@ -62,6 +65,8 @@ def main():
         use_height_and_width_as_shard_shape=True,
     )
 
+    out_path = Path(__file__).resolve().parents[1] / "doc" / "full_model" / "cache_scaling.json"
+    payload = {"source_manifest": source_manifest([__file__]), "rows": [], "rope_table_lookup_us": {}}
     print(f"{'ctx':>9} {'blocks':>7} {'update us':>10} {'flash us':>10} {'flash(pt64) us':>15}")
     for ctx in (4096, 16384, 65536, 202752):
         blocks = -(-ctx // BLOCK)
@@ -121,9 +126,41 @@ def main():
         t_flash = bench(lambda: flash(pt_full))
         t_flash_small = bench(lambda: flash(pt_small))
         print(f"{ctx:9d} {blocks:7d} {t_upd:10.1f} {t_flash:10.1f} {t_flash_small:15.1f}")
+        payload["rows"].append(
+            {
+                "context": ctx,
+                "blocks": blocks,
+                "paged_update_cache_us": round(t_upd, 1),
+                "flash_decode_us": round(t_flash, 1),
+                "flash_decode_64_block_page_table_us": round(t_flash_small, 1),
+            }
+        )
         for t in (cache, pt_full, pt_small, pos, kvpe, q):
             ttnn.deallocate(t)
+    # The other thing that turned out to scale with an *allocated* size: the
+    # per-layer RoPE cos/sin lookup. A TILE-layout `ttnn.embedding` over a
+    # `[context, 64]` table costs more the taller the table is, which is what
+    # made 94 lookups per decode step cost 19.7 ms at the full context and is
+    # why the model shares one ROW_MAJOR table (work log FM-005). Measured here
+    # so that claim has an artifact (FM-019).
+    idx = ttnn.from_torch(
+        torch.zeros(1, 1, dtype=torch.int32), device=dev, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    for ctx in (4096, 202752):
+        host = torch.zeros(ctx, 64, dtype=torch.bfloat16)
+        for layout, name in ((ttnn.TILE_LAYOUT, "tile"), (ttnn.ROW_MAJOR_LAYOUT, "row_major")):
+            table = ttnn.from_torch(
+                host, device=dev, dtype=ttnn.bfloat16, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            us = bench(lambda: ttnn.deallocate(ttnn.embedding(idx, table, layout=ttnn.TILE_LAYOUT)))
+            payload["rope_table_lookup_us"][f"{name}_ctx{ctx}"] = round(us, 1)
+            print(f"rope {name} table ctx={ctx}: {us:.1f} us")
+            ttnn.deallocate(table)
+    ttnn.deallocate(idx)
     ttnn.close_device(dev)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, indent=2) + "\n")
+    print("wrote", out_path)
     print("CACHE_SCALING_PROBE_OK")
 
 

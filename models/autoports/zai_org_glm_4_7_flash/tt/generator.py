@@ -107,17 +107,33 @@ class _SamplingArgs:
         self.sampling_dp = 1
 
 
-def _reject_user_id_kwarg(kwargs) -> None:
-    """``user_id=`` used to disappear into ``**kwargs`` and prefill slot 0.
+#: Keys that used to vanish into a ``**kwargs`` and change nothing. The three
+#: public entry points keep ``**kwargs`` so the shared readiness harness can
+#: pass whatever it likes, which is exactly why a caller's own intent could be
+#: swallowed. Named explicitly rather than by rejecting every unknown key
+#: (work log FM-018, FM-019).
+_SWALLOWED = {
+    "user_id": "name slots with user_ids=[...]",
+    "slot": "name slots with user_ids=[...]",
+    "slot_id": "name slots with user_ids=[...]",
+    "user": "name slots with user_ids=[...]",
+    "temperature": "pass sampling_params=SamplingParams(...)",
+    "top_k": "pass sampling_params=SamplingParams(...)",
+    "top_p": "pass sampling_params=SamplingParams(...)",
+    "seed": "pass sampling_params=SamplingParams(...)",
+    "sampling": "pass sampling_params=SamplingParams(...)",
+    "greedy": "pass sampling_params=SamplingParams(...)",
+}
 
-    Both low-level entry points take ``**kwargs`` so the shared readiness
-    harness can pass whatever it likes, which meant a caller naming a slot the
-    old way was silently ignored. Named explicitly rather than by rejecting
-    every unknown key, so the harness keeps working (work log FM-018).
-    """
-    for key in ("user_id", "slot", "slot_id", "user"):
+
+def _reject_swallowed_kwargs(kwargs) -> None:
+    for key, hint in _SWALLOWED.items():
         if key in kwargs:
-            raise TypeError(f"unexpected keyword {key!r}: name slots with user_ids=[...]")
+            raise TypeError(f"unexpected keyword {key!r}: {hint}")
+
+
+def _reject_user_id_kwarg(kwargs) -> None:
+    _reject_swallowed_kwargs(kwargs)
 
 
 def _new_counters() -> Dict[str, int]:
@@ -765,7 +781,14 @@ class GLM47FlashGenerator(_ReadinessGenerator):
 
         if enable_trace:
             if self._decode_trace_id is None:
-                self.capture_decode_trace(kv_cache=kv_cache)
+                # warm_inactive, because this capture happens *mid-request*:
+                # the default warm pass decodes token 0 at position 0 for every
+                # slot and `paged_update_cache` writes a row for each, which
+                # would replace the first prompt token's KV entry in every
+                # prefilled slot. Every other capture site either resets
+                # afterwards or is at construction; this one is the low-level
+                # caller-owned-cache path and can do neither (work log FM-019).
+                self.capture_decode_trace(kv_cache=kv_cache, warm_inactive=True)
                 self.set_decode_tokens(toks)
                 self.set_decode_positions(pos)
             self.decode_step_traced()
@@ -830,6 +853,7 @@ class GLM47FlashGenerator(_ReadinessGenerator):
         captured model + sampling traces.
         """
 
+        _reject_swallowed_kwargs(kwargs)
         if max_new_tokens < 1:
             raise ValueError("max_new_tokens must be >= 1")
         seq = len(prompt_token_ids)

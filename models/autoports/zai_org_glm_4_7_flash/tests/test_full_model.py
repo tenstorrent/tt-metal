@@ -388,8 +388,12 @@ def test_no_host_fallback_during_traced_decode(gen, monkeypatch):
     gen.set_decode_positions([len(ids)])
 
     calls = []
-    for name in ("from_torch", "to_torch", "as_tensor", "copy_host_to_device_tensor"):
-        original = getattr(ttnn, name)
+    # `get_device_tensors` and `Tensor.cpu` are here because `$tt-enable-tracing`
+    # names them as host-boundary routes that do not go through `to_torch`.
+    for name in ("from_torch", "to_torch", "as_tensor", "copy_host_to_device_tensor", "get_device_tensors"):
+        original = getattr(ttnn, name, None)
+        if original is None:
+            continue
 
         def tripwire(*args, _name=name, _orig=original, **kwargs):
             calls.append(_name)
@@ -397,10 +401,21 @@ def test_no_host_fallback_during_traced_decode(gen, monkeypatch):
 
         monkeypatch.setattr(ttnn, name, tripwire)
 
+    original_cpu = ttnn.Tensor.cpu
+
+    def cpu_tripwire(self, *args, **kwargs):
+        calls.append("Tensor.cpu")
+        return original_cpu(self, *args, **kwargs)
+
+    monkeypatch.setattr(ttnn.Tensor, "cpu", cpu_tripwire)
+
     gen.decode_step_traced()
     assert calls == [], f"host fallback inside traced decode: {calls}"
     gen.read_decode_tokens(1)
-    assert calls == ["to_torch"], f"token readback should be the only host touch, got {calls}"
+    # `to_torch` reaches the device through `Tensor.cpu`, so the one readback
+    # may trip both of those names and nothing else.
+    assert set(calls) <= {"to_torch", "Tensor.cpu"}, f"token readback touched more than expected: {calls}"
+    assert "to_torch" in calls, calls
 
 
 def test_static_no_torch_in_runtime_modules():
@@ -565,8 +580,11 @@ def test_host_logits_paths_compile_nothing_at_an_unaligned_length(gen):
     and then slice the wanted rows on device: three programs keyed on the
     logical prompt length, compiled while the decode traces were live, and a
     trace recapture to clean up after them. The walk is now tile-aligned at
-    both ends and the single-row slice has a fixed size, so both families are
-    warmed at construction (work log FM-018).
+    both ends and the row trim happens on the *host*. A fixed-size device
+    slice also bounds the family and was rejected: that program is
+    single-core, so warming it before the trace allocates places its static
+    circular buffers where the trace's L1 logits later sit. Both remaining
+    families are warmed at construction (work log FM-018).
     """
     import torch as _torch
 
@@ -594,6 +612,60 @@ def test_host_logits_paths_compile_nothing_at_an_unaligned_length(gen):
     assert gen.counters["trace_recaptures"] == 0
     # the two paths agree on the final position
     assert int(low[0, 0].argmax()) == int(logits[0, -1].argmax())
+
+
+def test_lazy_trace_capture_in_decode_forward_preserves_the_prompt(gen):
+    """`decode_forward(enable_trace=True)` may capture the trace itself.
+
+    That capture happens *mid-request*, after the prompt is already in the
+    cache, and the default warm pass decodes token 0 at position 0 for every
+    slot, which `paged_update_cache` writes. Before FM-019 that silently
+    replaced the first prompt token's KV entry, on the one path a
+    caller-owned-cache adapter has to use. Reproduced by releasing the traces
+    between the prefill and the first step and letting `decode_forward`
+    re-capture them: the tokens must match the same sequence taken with the
+    traces already captured.
+    """
+    import torch as _torch
+
+    ids = _prompt_ids(gen, 96)
+    page_table = gen._page_table_torch
+    kv_cache = gen._kv_cache
+
+    def run(release_first):
+        gen.reset()
+        first = gen._prefill_and_sample_first(ids)
+        if release_first:
+            ttnn.release_trace(gen.mesh_device, gen._decode_trace_id)
+            gen._decode_trace_id = None
+            gen.sampling.reset_trace()
+            gen._sampling_traced = False
+            gen._program_cache_entries_at_capture = None
+            gen._decode_logits = None
+        out = [first]
+        nxt = first
+        for step in range(4):
+            tok = gen.decode_forward(
+                _torch.tensor([[nxt]]),
+                _torch.tensor([len(ids) + step]),
+                page_table=page_table,
+                kv_cache=kv_cache,
+                enable_trace=True,
+                return_logits=False,
+            )
+            nxt = int(_torch.as_tensor(tok).reshape(-1)[0])
+            out.append(nxt)
+        return out
+
+    control = run(release_first=False)
+    lazy = run(release_first=True)
+    assert lazy == control, (control, lazy)
+
+
+def test_generate_rejects_swallowed_sampling_kwargs(gen, expect_error):
+    """`generate(..., top_k=20)` used to run greedy and say nothing."""
+    with expect_error(TypeError, "sampling_params"):
+        gen.generate(_prompt_ids(gen, 32), 2, enable_trace=True, stop_on_eos=False, top_k=20)
 
 
 def test_low_level_prefill_rejects_the_old_slot_kwarg(gen, expect_error):
