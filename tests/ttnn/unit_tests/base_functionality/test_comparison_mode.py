@@ -7,7 +7,6 @@ import pytest
 import torch
 
 import ttnn
-from ttnn.operations.core import _typecast_golden_function
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import skip_for_wormhole_b0
 from models.common.utility_functions import torch_random
@@ -180,6 +179,8 @@ def test_mesh_index_selects_requested_device_shard(monkeypatch):
 
 
 def test_typecast_golden_prefers_explicit_bfloat16_metadata():
+    _typecast_golden_function = ttnn.get_golden_function(ttnn.typecast)
+
     input_tensor = torch.tensor([1.7], dtype=torch.bfloat16)
 
     captured_dtype_result = _typecast_golden_function(
@@ -202,6 +203,8 @@ def test_typecast_golden_prefers_explicit_bfloat16_metadata():
 
 
 def test_global_typecast_inputs_receive_local_host_metadata():
+    _typecast_golden_function = ttnn.get_golden_function(ttnn.typecast)
+
     local_inputs = (
         (),
         {
@@ -223,8 +226,7 @@ def test_global_typecast_inputs_receive_local_host_metadata():
 
 
 def test_assign_golden_uses_nanobind_argument_names_and_casts_dtype():
-    from ttnn.operations.binary import _golden_function_assign
-
+    _golden_function_assign = ttnn.get_golden_function(ttnn.assign)
     input_tensor = torch.tensor([1.234567], dtype=torch.float32)
     expected = input_tensor.to(torch.bfloat16)
 

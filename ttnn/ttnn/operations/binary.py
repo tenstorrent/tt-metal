@@ -600,9 +600,8 @@ def _golden_function_assign(
         input_b = args[0]
 
     if dtype is not None:
-        from ttnn.operations.core import _typecast_golden_function
-
-        return _typecast_golden_function(source_tensor, output_dtype=dtype)
+        typecast_golden_function = ttnn.get_golden_function(ttnn.typecast)
+        return typecast_golden_function(source_tensor, output_dtype=dtype)
 
     # The destination overload casts to input_b's storage dtype.
     return source_tensor.to(input_b.dtype) if input_b is not None else source_tensor.clone()
