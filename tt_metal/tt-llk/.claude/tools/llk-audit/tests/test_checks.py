@@ -1385,6 +1385,122 @@ def test_srcreg_dummy_publication_guard_is_per_src_register():
     assert len(out) == 1 and out[0].line == 111, out
 
 
+@case
+def test_srcreg_dest_to_src_gate_must_name_the_written_register():
+    # MOVD2B writes SrcB; a stall naming only SRCA_VLD proves nothing about it.
+    F = "tt_llk_wormhole_b0/x.h"
+    facts = [
+        fn("g", F, 100, 300),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, a, 0, 0)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1 and out[0].hint == "DEST2SRC_WRONG_SRC_GATE", out
+    # A stall naming BOTH registers (transpose_dest's shape) gates either move.
+    both = [
+        fn("g", F, 100, 300),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, a, 0, 0)", func="m"),
+    ]
+    assert [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", both))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ] == []
+
+
+@case
+def test_srcreg_dest_to_src_bank_flip_rearms_the_drain():
+    # The drain proves the FPU pipe was empty AT THE STALL; a flip issued after it
+    # re-arms the same in-flight-epilogue race.
+    F = "tt_llk_wormhole_b0/x.h"
+    base = [
+        fn("g", F, 100, 300),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2A", "TTI_MOVD2A(0, 0, a, 0, 0)", func="m"),
+    ]
+    flip = base + [
+        macro(
+            F,
+            130,
+            "TTI_SETRWC",
+            "TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB)",
+            func="m",
+        ),
+        macro(F, 140, "TTI_MOVD2A", "TTI_MOVD2A(0, 0, a, 0, 0)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", flip))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert (
+        len(out) == 1 and out[0].hint == "DEST2SRC_DRAIN_REARMED" and out[0].line == 140
+    ), out
+    # CLR_NONE does not flip, and the moves of one burst do not re-arm each other.
+    noflip = base + [
+        macro(
+            F,
+            130,
+            "TTI_SETRWC",
+            "TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D)",
+            func="m",
+        ),
+        macro(F, 140, "TTI_MOVD2A", "TTI_MOVD2A(0, 0, a, 0, 0)", func="m"),
+    ]
+    assert [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", noflip))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ] == []
+
+
+@case
+def test_srcreg_math_drain_alone_is_not_a_gate():
+    # A MATH-only stall settles the bank pointer but never waits for the unpacker
+    # to hand the bank over (the real llk_math_hadamard shape).
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_math_hadamard.h"
+    facts = [
+        fn("_llk_math_hadamard_h128_", F, 100, 300),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, ADDR_MOD_7, 0, 16)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1 and out[0].hint == "DEST2SRC_WAIT_UNRELATED", out
+
+
 # --- mailbox-sync (lite) --------------------------------------------------
 
 
