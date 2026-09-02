@@ -28,6 +28,12 @@ on:
         required: false
         type: string
         default: ""
+        description: "Comma-separated test_groups this invocation must not run"
+      include-test-group:
+        required: false
+        type: string
+        default: ""
+        description: "Comma-separated test_groups this invocation is limited to"
       resource-prefix:
         required: true
         type: string
@@ -91,11 +97,10 @@ jobs:
           MATRIX="$MATRIX"
           TEST_TYPE="${{ inputs.test-type }}"
           EXCLUDE_GROUP="${{ inputs.exclude-test-group }}"
+          INCLUDE_GROUP="${{ inputs.include-test-group }}"
           if [ -z "$TEST_TYPE" ] || \
             echo "$TEST_TYPE" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Fxq "all"; then
-            if [ -n "$EXCLUDE_GROUP" ]; then
-              MATRIX=$(echo "$MATRIX" | jq -c --arg g "$EXCLUDE_GROUP" '[.[] | select(.test_group != $g)]')
-            fi
+            :
           else
             MATRIX=$(echo "$MATRIX" | jq -c --arg sel "$TEST_TYPE" '
               ($sel | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $tokens
@@ -105,10 +110,21 @@ jobs:
                     or (($e.test_tags // []) | any(. as $f | $tokens | index($f)))
                 ) ]
             ')
-            if [ "$MATRIX" = "[]" ]; then
-              echo "::error::No tests found for test-type '$TEST_TYPE'. Ensure each selected test-type or test-group is defined in the test matrix (TESTS_YAML_PATH=${{ env.TESTS_YAML_PATH }})."
-              exit 1
-            fi
+          fi
+          # Group routing runs after selection, and unconditionally: a test_tag selects entries
+          # across groups, so a group this invocation does not own can enter on any selection,
+          # not just "all". Both inputs take a list because an invocation can disown several.
+          if [ -n "$EXCLUDE_GROUP" ]; then
+            MATRIX=$(echo "$MATRIX" | jq -c --arg sel "$EXCLUDE_GROUP" '
+              ($sel | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $drop
+              | [ .[] | . as $e | select((($drop | index($e.test_group)) | not)) ]
+            ')
+          fi
+          if [ -n "$INCLUDE_GROUP" ]; then
+            MATRIX=$(echo "$MATRIX" | jq -c --arg sel "$INCLUDE_GROUP" '
+              ($sel | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $keep
+              | [ .[] | . as $e | select($keep | index($e.test_group)) ]
+            ')
           fi
           echo "filtered_matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$MATRIX" >> $GITHUB_OUTPUT
@@ -121,8 +137,10 @@ jobs:
         run: |
           FILTERED=$(echo "$MATRIX" | jq -c --arg sp "${{ inputs.sp-config }}" '[.[] | select(.sp_config == $sp)]')
           if [ "$FILTERED" = "[]" ]; then
-            echo "::error::No tests found for sp_config '${{ inputs.sp-config }}' in ${TESTS_YAML_PATH}"
-            exit 1
+            # The selection is validated against the tests YAML before the build, so an empty
+            # slice here is not a bad token -- it means this invocation owns none of what was
+            # selected. multihost-tests is skipped and the run stays green.
+            echo "::notice::No ${{ inputs.sp-config }} test selected for this invocation; contributing no legs."
           fi
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$FILTERED" >> $GITHUB_OUTPUT
@@ -146,6 +164,7 @@ jobs:
   multihost-tests:
     name: ${{ matrix.test-group.name }}
     needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
 
