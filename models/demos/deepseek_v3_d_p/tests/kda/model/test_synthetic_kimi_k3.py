@@ -33,13 +33,13 @@ _PCC_THRESHOLD = 0.9995
         pytest.param(
             (2, 4),
             1,
-            fabric_1d_device_params(l1_small_size=24576),
+            fabric_1d_device_params(),
             id="SP2xTP4-fabric-1d",
         ),
         pytest.param(
             (8, 4),
             1,
-            torus_xy_device_params(l1_small_size=24576),
+            torus_xy_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),

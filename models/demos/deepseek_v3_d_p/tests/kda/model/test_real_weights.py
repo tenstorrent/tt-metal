@@ -22,13 +22,13 @@ pytestmark = [run_for_blackhole()]
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params,sequence",
     [
-        pytest.param((1, 8), 1, fabric_1d_device_params(l1_small_size=24576), 128, id="SP1xTP8"),
-        pytest.param((2, 4), 1, fabric_1d_device_params(l1_small_size=24576), 128, id="SP2xTP4"),
-        pytest.param((2, 4), 0, fabric_1d_device_params(l1_small_size=24576), 128, id="SP4xTP2"),
+        pytest.param((1, 8), 1, fabric_1d_device_params(), 128, id="SP1xTP8"),
+        pytest.param((2, 4), 1, fabric_1d_device_params(), 128, id="SP2xTP4"),
+        pytest.param((2, 4), 0, fabric_1d_device_params(), 128, id="SP4xTP2"),
         pytest.param(
             (8, 4),
             1,
-            torus_xy_device_params(l1_small_size=24576),
+            torus_xy_device_params(),
             512,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4",
