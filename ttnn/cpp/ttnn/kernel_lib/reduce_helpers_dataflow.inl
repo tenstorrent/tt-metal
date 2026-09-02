@@ -235,6 +235,24 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     dfb.push_back(1);
 }
 
+template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim>
+FORCE_INLINE void prepare_planned_reduce_aux(float scaler_f, uint32_t valid_reduce_dim_elements_in_tile) {
+    constexpr uint32_t full_dim =
+        reduce_dim == ReduceDim::REDUCE_COL ? get_tile_r_dim<dfb_id>() : get_tile_c_dim<dfb_id>();
+    const uint32_t valid_elements =
+        valid_reduce_dim_elements_in_tile == 0 ? full_dim : valid_reduce_dim_elements_in_tile;
+#if defined(REDUCE_AUX_SCALER_PAIR)
+    prepare_reduce_scaler<dfb_id, pool_type, reduce_dim>(scaler_f, full_dim);
+    prepare_reduce_scaler<dfb_id, pool_type, reduce_dim>(scaler_f, valid_elements);
+#elif defined(REDUCE_AUX_MASK)
+    prepare_reduce_mask<dfb_id, reduce_dim>(valid_elements);
+#elif defined(REDUCE_AUX_ZERO)
+    prepare_reduce_scaler<dfb_id, pool_type, reduce_dim>(0.0f, full_dim);
+#else
+    prepare_reduce_scaler<dfb_id, pool_type, reduce_dim>(scaler_f, valid_elements);
+#endif
+}
+
 // =============================================================================
 // Prepare a 0/1 MASK tile for the AccumulateViaAdd partial (non-tile-aligned) reduce path.
 // The mask is 1.0 in the first `valid_elems` reduce-dim positions and 0 elsewhere, laid out for the
