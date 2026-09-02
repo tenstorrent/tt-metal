@@ -119,7 +119,7 @@ DataMovementConfigStatus CheckDataMovementConfig(
             data_movement_config_status.noc1_in_use = local_noc1_usage;
         };
 
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance(program.impl().get_context_id()).hal();
     for (const auto& core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -168,8 +168,8 @@ void ConfigureKernelGroup(
     uint32_t programmable_core_type_index,
     const KernelGroup* kernel_group,
     IDevice* device,
-    const CoreCoord& logical_core) {
-    const auto& hal = MetalContext::instance().hal();
+    const CoreCoord& logical_core,
+    const Hal& hal) {
     uint32_t kernel_config_base =
         hal.get_dev_addr(hal.get_programmable_core_type(programmable_core_type_index), HalL1MemAddrType::KERNEL_CONFIG);
     for (auto kernel_id : kernel_group->kernel_ids) {
@@ -241,8 +241,8 @@ bool WriteToDeviceDRAMChannel(
         address >= device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
-    MetalContext::instance().get_cluster().write_dram_vec(
-        host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    metal_ctx.get_cluster().write_dram_vec(host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
     return true;
 }
 
@@ -260,9 +260,9 @@ bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addre
             device, address, static_cast<uint32_t>(host_buffer.size()), "ReadFromDeviceDRAMChannel");
     }
     bool pass = true;
-    MetalContext::instance().get_cluster().dram_barrier(device->id());
-    MetalContext::instance().get_cluster().read_dram_vec(
-        host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    metal_ctx.get_cluster().dram_barrier(device->id());
+    metal_ctx.get_cluster().read_dram_vec(host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
     return pass;
 }
 
@@ -288,7 +288,8 @@ bool WriteToDeviceL1(
         }
     }
     auto worker_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    MetalContext::instance().get_cluster().write_core(device->id(), worker_core, host_buffer, address);
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    metal_ctx.get_cluster().write_core(device->id(), worker_core, host_buffer, address);
     return true;
 }
 
@@ -308,7 +309,8 @@ bool WriteToDeviceL1(
 
 bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, const uint32_t& regval) {
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    MetalContext::instance().get_cluster().write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    metal_ctx.get_cluster().write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
 }
 
@@ -325,9 +327,10 @@ bool ReadFromDeviceL1(
                 device->id(), address, address + static_cast<uint32_t>(host_buffer.size()));
         }
     }
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    metal_ctx.get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    MetalContext::instance().get_cluster().read_core(
+    metal_ctx.get_cluster().read_core(
         host_buffer.data(), host_buffer.size(), tt_cxy_pair(device->id(), virtual_core), address);
     return true;
 }
@@ -345,16 +348,18 @@ bool ReadFromDeviceL1(
             emule::LiveL1HostPokeRanges::add(device->id(), address, address + size);
         }
     }
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    metal_ctx.get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    host_buffer = MetalContext::instance().get_cluster().read_core(device->id(), virtual_core, address, size);
+    host_buffer = metal_ctx.get_cluster().read_core(device->id(), virtual_core, address, size);
     return true;
 }
 
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval) {
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    metal_ctx.get_cluster().l1_barrier(device->id());
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    MetalContext::instance().get_cluster().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
+    metal_ctx.get_cluster().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
 }
 
@@ -416,9 +421,10 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
     ZoneScoped;
 
     auto device_id = device->id();
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
 
 #ifdef TT_METAL_USE_EMULE
-    if (MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+    if (metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
         // Emule lazily JIT-compiles inside execute_program_emulated, so is_finalized()/is_compiled()
         // are never set — skip both asserts (HW-only) and run synchronously, mirroring LaunchProgram.
         // Configure before writing runtime args: ConfigureDeviceWithProgram allocates the ephemeral
@@ -462,9 +468,9 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
         concrete_device->record_dispatched_program_cbs(program.impl());
     }
 
-    MetalContext::instance().get_cluster().dram_barrier(device_id);
-    MetalContext::instance().get_cluster().l1_barrier(device_id);
-    const auto& hal = MetalContext::instance().hal();
+    metal_ctx.get_cluster().dram_barrier(device_id);
+    metal_ctx.get_cluster().l1_barrier(device_id);
+    const auto& hal = metal_ctx.hal();
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {
         CoreType core_type = hal.get_core_type(programmable_core_type_index);
@@ -497,7 +503,13 @@ void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     for (const auto& [id, device] : devices) {
         devices_to_close.push_back(device);
     }
-    MetalContext::instance().device_manager()->close_devices(devices_to_close);
+    if (devices.empty()) {
+        MetalContext::instance().device_manager()->close_devices(devices_to_close);
+    } else {
+        MetalContext::instance(extract_context_id(devices.begin()->second))
+            .device_manager()
+            ->close_devices(devices_to_close);
+    }
 }
 
 void ReleaseOwnership() {
@@ -542,7 +554,8 @@ void WriteToDeviceSharded(
     auto* device = buffer.device();
     const auto& allocator = device->allocator();
 
-    const auto& cluster = MetalContext::instance().get_cluster();
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    const auto& cluster = metal_ctx.get_cluster();
     const size_t alignment_req = cluster.get_alignment_requirements(device->id(), page_size);
     const size_t aligned_bytes = alignment_req ? (page_size / alignment_req) * alignment_req : page_size;
     const size_t remainder_bytes = page_size - aligned_bytes;
@@ -571,8 +584,7 @@ void WriteToDeviceSharded(
                                         (write_device_page * buffer.aligned_page_size()) + offset;
                 auto core_coordinates =
                     device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
-                MetalContext::instance().get_cluster().write_core(
-                    device->id(), core_coordinates, page, absolute_address);
+                cluster.write_core(device->id(), core_coordinates, page, absolute_address);
             } else {
                 auto bank_local_address = buffer.address() + (write_device_page * buffer.aligned_page_size()) + offset;
                 WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
@@ -638,7 +650,8 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, ttsl::Span<const u
     size_t bank_index = 0;
     size_t data_index = 0;
 
-    const auto& cluster = MetalContext::instance().get_cluster();
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    const auto& cluster = metal_ctx.get_cluster();
     const size_t alignment_req = cluster.get_alignment_requirements(device->id(), page_size);
     const size_t aligned_bytes = alignment_req ? (page_size / alignment_req) * alignment_req : page_size;
     const size_t remainder_bytes = page_size - aligned_bytes;
@@ -714,7 +727,8 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
     size_t host_idx = 0;
     size_t bank_index = 0;
 
-    const auto& cluster = MetalContext::instance().get_cluster();
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    const auto& cluster = metal_ctx.get_cluster();
     size_t aligned_page_size = tt::align(page_size, cluster.get_alignment_requirements(device->id(), page_size));
 
     std::vector<uint8_t> page(aligned_page_size);
@@ -729,8 +743,7 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
             case BufferType::L1_SMALL: {
                 auto core_coordinates = device->worker_core_from_logical_core(
                     buffer.allocator()->get_logical_core_from_bank_id(bank_index));
-                tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                    page.data(), aligned_page_size, tt_cxy_pair(device->id(), core_coordinates), address);
+                cluster.read_core(page.data(), aligned_page_size, tt_cxy_pair(device->id(), core_coordinates), address);
             } break;
             default: TT_THROW("Unsupported buffer type to read from device!");
         }
@@ -752,7 +765,8 @@ void read_pages_to_host_helper(
     const uint32_t& core_page_id,
     const uint32_t& bank_id) {
     uint64_t host_buffer_start = uint64_t(host_page_id) * page_size;
-    const auto& cluster = MetalContext::instance().get_cluster();
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    const auto& cluster = metal_ctx.get_cluster();
     size_t aligned_page_size = tt::align(page_size, cluster.get_alignment_requirements(device->id(), page_size));
 
     if (dev_buffer.is_l1()) {
@@ -763,11 +777,11 @@ void read_pages_to_host_helper(
                                 (core_page_id * dev_buffer.aligned_page_size());
         if (aligned_page_size > page_size) {
             std::vector<uint8_t> page(aligned_page_size);
-            MetalContext::instance().get_cluster().read_core(
+            cluster.read_core(
                 page.data(), aligned_page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
             std::memcpy(host_buffer + host_buffer_start, page.data(), page_size);
         } else {
-            MetalContext::instance().get_cluster().read_core(
+            cluster.read_core(
                 host_buffer + host_buffer_start,
                 page_size,
                 tt_cxy_pair(device->id(), core_coordinates),
@@ -820,10 +834,11 @@ void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer) {
         case BufferType::TRACE:
         case BufferType::L1:  // fallthrough
         case BufferType::L1_SMALL: {
+            const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
             if (buffer.is_dram()) {
-                MetalContext::instance().get_cluster().dram_barrier(device->id());
+                metal_ctx.get_cluster().dram_barrier(device->id());
             } else {
-                MetalContext::instance().get_cluster().l1_barrier(device->id());
+                metal_ctx.get_cluster().l1_barrier(device->id());
             }
             ReadFromDevice(buffer, host_buffer);
         } break;
@@ -873,9 +888,8 @@ void LaunchProgram(
 // Such programs (e.g. the persistent tensor-prefetcher DRISC senders) are disjoint from the FD
 // worker grid and dispatch column, so launching them via slow dispatch does not perturb an active
 // FD session. Used to scope the force-slow-dispatch guard in LaunchProgram.
-bool program_targets_only_dram_cores(const Program& program) {
+bool program_targets_only_dram_cores(const Program& program, const Hal& hal) {
     const auto& logical_cores_used_in_program = program.impl().logical_cores();
-    const auto& hal = MetalContext::instance().hal();
     bool has_any_core = false;
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {
@@ -893,6 +907,7 @@ bool program_targets_only_dram_cores(const Program& program) {
 void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done, bool force_slow_dispatch) {
     {  // Profiler scope start
         ZoneScoped;
+        MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
         /// This function is shared between FD and SD.
         // We call this function when initializing HW Command Queues or when reading Profiler Device to Device
         // sync information from the accelerators.
@@ -900,17 +915,16 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         if (!force_slow_dispatch) {
             detail::DispatchStateCheck(false);
         } else {
-            auto& dm = MetalContext::instance().device_manager();
+            auto& dm = metal_ctx.device_manager();
             const bool fd_active = dm->is_dispatch_firmware_active();
             const bool rt_done = dm->is_rt_profiler_device_init_complete(device->id());
             // Scope the service bypass to this device
-            const bool service_active =
-                !tt::tt_metal::MetalContext::instance().get_service_core_manager().claimed_cores(device->id()).empty();
+            const bool service_active = !metal_ctx.get_service_core_manager().claimed_cores(device->id()).empty();
             // DRAM-only programs (e.g. the persistent tensor-prefetcher DRISC senders) run on the DRAM
             // programmable cores, which are disjoint from the FD worker grid and dispatch column. Launching
             // them via slow dispatch does not touch FD-owned cores or the FD pipeline, so it is safe to mix
             // with an active FD session regardless of profiler init state.
-            const bool dram_only = detail::program_targets_only_dram_cores(program);
+            const bool dram_only = detail::program_targets_only_dram_cores(program, metal_ctx.hal());
             TT_ASSERT(
                 !(fd_active && rt_done) || service_active || dram_only,
                 "Cannot force slow dispatch while fast dispatch firmware is active and real-time profiler init has "
@@ -918,7 +932,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
 
 #ifdef TT_METAL_USE_EMULE
-        if (MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Emule)
+        if (metal_ctx.get_cluster().get_target_device_type() != tt::TargetDevice::Emule)
 #endif
         {
             program.impl().compile(device);
@@ -942,7 +956,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         auto device_id = device->id();
 
 #ifdef TT_METAL_USE_EMULE
-        if (MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+        if (metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
             // Emulated mode always executes synchronously (slow dispatch only).
             // The wait_until_cores_done flag is not honored; all kernels complete
             // before this function returns.
@@ -951,15 +965,15 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
 #endif
         {
-            MetalContext::instance().get_cluster().dram_barrier(device_id);
+            metal_ctx.get_cluster().dram_barrier(device_id);
 
             // Note: the l1_barrier below is needed to be sure writes to cores that
             // don't get the GO mailbox (eg, storage cores) have all landed
-            MetalContext::instance().get_cluster().l1_barrier(device->id());
+            metal_ctx.get_cluster().l1_barrier(device->id());
 
             std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
             std::unordered_set<CoreCoord> not_done_cores;
-            const auto& hal = MetalContext::instance().hal();
+            const auto& hal = metal_ctx.hal();
             for (uint32_t programmable_core_type_index = 0;
                  programmable_core_type_index < logical_cores_used_in_program.size();
                  programmable_core_type_index++) {
@@ -1008,6 +1022,7 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
 bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
     ZoneScoped;
     bool pass = true;
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
     // This function is shared between FD and SD.
     // We call this function when initializing HW Command Queues or when reading Profiler Device to Device
     // sync information from the accelerators.
@@ -1025,7 +1040,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
 
     bool is_emulated = false;
 #ifdef TT_METAL_USE_EMULE
-    is_emulated = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
+    is_emulated = metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
 #endif
 
     try {
@@ -1057,7 +1072,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     }
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = metal_ctx.hal();
     uint32_t max_cbs = hal.get_arch_num_circular_buffers();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_cores = logical_cores_used_in_program[index];
@@ -1067,7 +1082,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
             CoreCoord physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             // Skip binary writing for emulated mode (JIT compilation happens in execute_program_emulated)
             if (!is_emulated) {
-                ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
+                ConfigureKernelGroup(program, index, kernel_group, device, logical_core, hal);
             }
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
@@ -1106,8 +1121,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         }
                     }  // PROF_END("CBS")
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).cb_offset;
-                    MetalContext::instance().get_cluster().write_core(
-                        device_id, physical_core, circular_buffer_config_vec, addr);
+                    metal_ctx.get_cluster().write_core(device_id, physical_core, circular_buffer_config_vec, addr);
                 }
 
                 if (!dfbs_on_core.empty()) {
@@ -1128,7 +1142,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         kernel_config_base,
                         program.impl().get_program_config(index).dfb_offset,
                         bytes_written);
-                    MetalContext::instance().get_cluster().write_core(
+                    metal_ctx.get_cluster().write_core(
                         device_id, physical_core, std::span<const uint8_t>(dfb_config_vec.data(), bytes_written), addr);
                 }
 
@@ -1163,12 +1177,11 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         // core's shard of the dedicated config Buffer.
                         const auto& page =
                             program.impl().get_cross_node_dfb(participant.remote_dfb_id).config_page(logical_core);
-                        MetalContext::instance().get_cluster().write_core(
+                        metal_ctx.get_cluster().write_core(
                             device_id, physical_core, page, participant.config_page_addr);
                     }
                     uint64_t addr = kernel_config_base + cross_node_dfb_offset;
-                    MetalContext::instance().get_cluster().write_core(
-                        device_id, physical_core, cross_node_dfb_vec, addr);
+                    metal_ctx.get_cluster().write_core(device_id, physical_core, cross_node_dfb_vec, addr);
                 }
             }
             program.impl().init_semaphores(*device, logical_core, index);
@@ -1189,7 +1202,8 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
         detail::DispatchStateCheck(false);
     }
 
-    const auto& hal = MetalContext::instance().hal();
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    const auto& hal = metal_ctx.hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
@@ -1225,8 +1239,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                     physical_core.str(),
                                     rt_args_addr,
                                     rt_args);
-                                MetalContext::instance().get_cluster().write_core(
-                                    device_id, physical_core, rt_args, rt_args_addr);
+                                metal_ctx.get_cluster().write_core(device_id, physical_core, rt_args, rt_args_addr);
                             }
 
                             const auto& common_rt_args = kernel->common_runtime_args();
@@ -1242,7 +1255,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                     physical_core.str(),
                                     common_rt_args_addr,
                                     common_rt_args);
-                                MetalContext::instance().get_cluster().write_core(
+                                metal_ctx.get_cluster().write_core(
                                     device_id, physical_core, common_rt_args, common_rt_args_addr);
                             }
                         }
@@ -1355,16 +1368,17 @@ IDevice* CreateDeviceMinimal(
 bool CloseDevice(IDevice* device) {
     ZoneScoped;
     auto device_id = device->id();
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
 
     // This API may not be used to close a single remote device or multi-chip cluster.
     // MeshDevice RAII should be used instead to ensure proper teardown.
     TT_FATAL(
-        MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id,
+        metal_ctx.get_cluster().get_associated_mmio_device(device_id) == device_id,
         "CloseDevice(device_id={}) may only be used for closing single MMIO capable devices. For multi chip clusters, "
         "use MeshDevice RAII or MeshDevice::close().",
         device_id);
 
-    return MetalContext::instance().device_manager()->close_device(device_id);
+    return metal_ctx.device_manager()->close_device(device_id);
 }
 
 Program CreateProgram() { return Program(); }
@@ -1796,7 +1810,8 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
 void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
-    detail::DispatchStateCheck(MetalContext::instance().rtoptions().get_fast_dispatch());
+    const MetalContext& metal_ctx = MetalContext::instance(program.impl().get_context_id());
+    detail::DispatchStateCheck(metal_ctx.rtoptions().get_fast_dispatch());
     program.impl().add_buffer(buffer);
 }
 

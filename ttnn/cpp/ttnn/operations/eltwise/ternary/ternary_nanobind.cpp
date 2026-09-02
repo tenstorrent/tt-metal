@@ -204,6 +204,8 @@ void bind_ternary_addcmul(
                  - TILE
 
             Only TTT (tensor-tensor-tensor) variant is supported.
+
+            A preallocated output_tensor may use a different dtype than the inputs; FLOAT32 output with BFLOAT16 inputs is supported.
         )doc",
         "addcmul",
         "ttnn.addcmul",
@@ -261,6 +263,8 @@ void bind_ternary_addcdiv(
                  - TILE
 
             Only TTT (tensor-tensor-tensor) variant is supported.
+
+            A preallocated output_tensor may use a different dtype than the inputs; FLOAT32 output with BFLOAT16 inputs is supported.
         )doc",
         "addcdiv",
         "ttnn.addcdiv",

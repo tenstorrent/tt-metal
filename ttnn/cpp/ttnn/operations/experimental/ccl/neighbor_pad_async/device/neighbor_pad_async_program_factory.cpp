@@ -178,6 +178,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         outer_dim_size *= input_tensor_shape[d];
     }
 
+    const bool use_barrier_sem = !operation_attributes.using_persistent_buffers;
+
     bool is_first_device = true;
     bool is_last_device = true;
     uint32_t forward_device_offset = 0;
@@ -524,7 +526,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 h_writer_num_sticks_per_halo_dim,  // num_sticks_per_halo_dim
                 virtual_core.x,                    // neighbor_sem_noc0_x
                 virtual_core.y,                    // neighbor_sem_noc0_y
-                true,                              // use_barrier_semaphore
+                use_barrier_sem,                   // use_barrier_semaphore
                 virtual_opposite_core.x,           // barrier_sem_noc0_x
                 virtual_opposite_core.y};          // barrier_sem_noc0_y
             // Phase 2 signal targets (W fabric reader cores for 2D padding)
@@ -838,7 +840,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     1,                               // num_sticks_per_halo_dim
                     w_virtual_core.x,                // neighbor_sem_noc0_x
                     w_virtual_core.y,                // neighbor_sem_noc0_y
-                    true,                            // use_barrier_semaphore (W-axis startup barrier)
+                    use_barrier_sem,                 // use_barrier_semaphore (W-axis startup barrier)
                     w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].x,   // barrier_sem_noc0_x (opp dir)
                     w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].y};  // barrier_sem_noc0_y
                 // No Phase 2 signal targets (W writers don't signal further)
