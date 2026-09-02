@@ -65,9 +65,9 @@ void route_table_2d_t::calculate_chip_to_all_routing_fields(
         x_size,
         num_chips);
 
-    // The packer zeroes only the live [y_size,x_size] action-map region; clear the full 2D route-table
-    // slot so the memcpy into L1 is deterministic.
-    std::memset(data, 0, sizeof(data));
+    // The packer zeroes only the live [y_size,x_size] action-map region. Clear the fixed vector
+    // region so unused capacity is deterministic; ControlPlane fills the separate tree region.
+    std::memset(action_vectors, 0, sizeof(action_vectors));
 
     auto probe = [&control_plane, mesh_id](uint32_t src_chip, uint32_t dst_chip) {
         const auto dir =
@@ -86,7 +86,7 @@ void route_table_2d_t::calculate_chip_to_all_routing_fields(
     auto y_action = [&](uint32_t cur_y, uint32_t dst_y) { return probe(cur_y * x_size, dst_y * x_size); };
     auto x_action = [&](uint32_t cur_x, uint32_t dst_x) { return probe(cur_x, dst_x); };
 
-    const bool ok = Routing2DCodec::pack_route_vectors(data, y_size, x_size, y_action, x_action);
+    const bool ok = Routing2DCodec::pack_route_vectors(action_vectors, y_size, x_size, y_action, x_action);
     // TT_FATAL, not TT_ASSERT. This is the load-bearing one: TT_ASSERT is a no-op in Release, `data`
     // is memset to zero above, and a failed pack therefore embeds an ALL-ZERO routing table. Every
     // route buffer then widens to zeros, every router decodes action 0, action_is_valid() rejects it,

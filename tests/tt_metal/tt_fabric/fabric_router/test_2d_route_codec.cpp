@@ -29,24 +29,17 @@ namespace {
 using Codec = Routing2DCodec;
 constexpr uint32_t kMaximumActionMapBytes = 64 + 4;
 
-// Every 2D mesh shape that exists in-tree, plus the two boundary shapes the bounds are written
-// against. {name, Y, X}.
 struct Shape {
     const char* name;
     uint32_t y;
     uint32_t x;
 };
 
-constexpr std::array<Shape, 10> kInTreeShapes = {{
-    {"[32,4] Galaxy", 32, 4},
+// Representative packing geometries. The descriptor sweep owns exhaustive in-tree shape coverage.
+constexpr std::array<Shape, 4> kRepresentativeShapes = {{
     {"[8,4]", 8, 4},
     {"[8,8]", 8, 8},
     {"[8,16]", 8, 16},
-    {"[16,8]", 16, 8},
-    {"[16,4]", 16, 4},
-    {"[4,4]", 4, 4},
-    {"[2,4]", 2, 4},
-    {"[2,2]", 2, 2},
     {"[1,16]", 1, 16},
 }};
 
@@ -64,34 +57,20 @@ eth_chan_directions dor_x(uint32_t cur, uint32_t dst) {
 // Shape admissibility
 // ---------------------------------------------------------------------------------------------
 
-// The prior per-axis X bound of 4 excluded [8,8], [8,16], [16,8] and [1,16]. The bound is now the
-// addressable coordinate range, not the physical slot shape.
-TEST(Routing2DCodec, EveryInTreeShapeFitsTheRouteTable) {
-    for (const auto& s : kInTreeShapes) {
-        EXPECT_TRUE(Codec::shape_fits_route_table(s.y, s.x)) << s.name << " must fit the 2D route table";
-        EXPECT_LE(Codec::vectors_region_bytes(s.y, s.x), Codec::ROUTE_TABLE_CAPACITY_BYTES) << s.name;
-    }
-}
-
 TEST(Routing2DCodec, VectorsRegionBytesMatchesThePackedLayout) {
     // Y table is y_size rows of ceil(y_size/4) bytes; X table likewise. Checked against hand
     // arithmetic so a change to the packing density cannot pass unnoticed.
-    EXPECT_EQ(Codec::vectors_region_bytes(32, 4), 32u * 8u + 4u * 1u);   // 260
-    EXPECT_EQ(Codec::vectors_region_bytes(8, 8), 8u * 2u + 8u * 2u);     // 32
-    EXPECT_EQ(Codec::vectors_region_bytes(1, 16), 1u * 1u + 16u * 4u);   // 65
+    EXPECT_EQ(Codec::vectors_region_bytes(8, 8), 8u * 2u + 8u * 2u);     // square
+    EXPECT_EQ(Codec::vectors_region_bytes(1, 16), 1u * 1u + 16u * 4u);   // narrow rectangle
     EXPECT_EQ(Codec::vectors_region_bytes(64, 4), 64u * 16u + 4u * 1u);  // 1028
 }
 
 TEST(Routing2DCodec, MaximumShapesFillTheHybridSlotExactly) {
     for (const auto& shape : std::array<Shape, 2>{{{"[64,4]", 64, 4}, {"[4,64]", 4, 64}}}) {
         EXPECT_TRUE(Codec::shape_fits_route_table(shape.y, shape.x));
-        EXPECT_EQ(Codec::vectors_region_bytes(shape.y, shape.x), 1028u) << shape.name;
-        EXPECT_EQ(Codec::mcast_tree_region_bytes(shape.y, shape.x), 132u) << shape.name;
-        EXPECT_EQ(
-            Codec::mcast_tree_offset_bytes(shape.y, shape.x) + Codec::mcast_tree_region_bytes(shape.y, shape.x),
-            Codec::ROUTE_TABLE_CAPACITY_BYTES)
-            << shape.name;
-        EXPECT_TRUE(Codec::hybrid_region_fits(shape.y, shape.x)) << shape.name;
+        EXPECT_EQ(Codec::vectors_region_bytes(shape.y, shape.x), Codec::ACTION_VECTOR_CAPACITY_BYTES) << shape.name;
+        EXPECT_EQ(Codec::mcast_tree_region_bytes(shape.y, shape.x), Codec::MCAST_TREE_CAPACITY_BYTES) << shape.name;
+        EXPECT_TRUE(Codec::route_table_regions_fit(shape.y, shape.x)) << shape.name;
     }
 }
 
@@ -102,36 +81,16 @@ TEST(Routing2DCodec, ShapesBeyondTheAddressableRangeAreRejected) {
     EXPECT_FALSE(Codec::shape_fits_route_table(64, 64));
 }
 
-TEST(Routing2DCodec, GalaxyLeavesRoomForItsMulticastTrees) {
-    EXPECT_TRUE(Codec::hybrid_region_fits(32, 4));
-    EXPECT_TRUE(Codec::hybrid_region_fits(8, 4));
-    EXPECT_TRUE(Codec::hybrid_region_fits(8, 8));
-}
-
 // ---------------------------------------------------------------------------------------------
 // Packet header sizing
 // ---------------------------------------------------------------------------------------------
-
-// The 2D action maps occupy Y + X bytes -- two more than the (Y-1) + (X-1) hop count the tiers were
-// originally sized from. [32,4] needs 36 bytes, one past the old 35 B tier.
-TEST(Routing2DCodec, EveryInTreeShapeFitsTheNinetySixByteHeader) {
-    constexpr uint32_t kTier96 = 36;
-    for (const auto& s : kInTreeShapes) {
-        EXPECT_LE(s.y + s.x, kTier96) << s.name << " needs " << (s.y + s.x) << " route bytes";
-    }
-    EXPECT_EQ(sizeof(HybridMeshPacketHeaderT<36>), 96u);
-}
 
 TEST(Routing2DCodec, HeaderTiersAreSizeClassAligned) {
     EXPECT_EQ(sizeof(HybridMeshPacketHeaderT<20>), 80u);
     EXPECT_EQ(sizeof(HybridMeshPacketHeaderT<36>), 96u);
     EXPECT_EQ(sizeof(HybridMeshPacketHeaderT<52>), 112u);
     EXPECT_EQ(sizeof(HybridMeshPacketHeaderT<kMaximumActionMapBytes>), 128u);
-}
-
-TEST(Routing2DCodec, MaximumShapeFitsTheLargestPacketHeader) {
     EXPECT_EQ(64u + 4u, kMaximumActionMapBytes);
-    EXPECT_EQ(sizeof(HybridMeshPacketHeaderT<kMaximumActionMapBytes>), 128u);
     EXPECT_EQ(sizeof(HybridMeshPacketHeaderT<kMaximumActionMapBytes>) + sizeof(UDMControlFields), 144u);
 }
 
@@ -140,8 +99,8 @@ TEST(Routing2DCodec, MaximumShapeFitsTheLargestPacketHeader) {
 // ---------------------------------------------------------------------------------------------
 
 TEST(Routing2DCodec, PackDecodeRoundTripsOnAPlainMesh) {
-    for (const auto& s : kInTreeShapes) {
-        std::vector<std::uint8_t> table(Codec::ROUTE_TABLE_CAPACITY_BYTES, 0xAB);
+    for (const auto& s : kRepresentativeShapes) {
+        std::vector<std::uint8_t> table(Codec::ACTION_VECTOR_CAPACITY_BYTES, 0xAB);
         ASSERT_TRUE(Codec::pack_route_vectors(table.data(), s.y, s.x, dor_y, dor_x)) << s.name;
 
         for (uint32_t dst = 0; dst < s.y; ++dst) {
@@ -173,7 +132,7 @@ TEST(Routing2DCodec, PackDecodeRoundTripsOnAPlainMesh) {
 
 TEST(Routing2DCodec, PackDecodeRoundTripsAtMaximumShapes) {
     for (const auto& shape : std::array<Shape, 2>{{{"[64,4]", 64, 4}, {"[4,64]", 4, 64}}}) {
-        std::vector<std::uint8_t> table(Codec::ROUTE_TABLE_CAPACITY_BYTES, 0);
+        std::vector<std::uint8_t> table(Codec::ACTION_VECTOR_CAPACITY_BYTES, 0);
         ASSERT_TRUE(Codec::pack_route_vectors(table.data(), shape.y, shape.x, dor_y, dor_x)) << shape.name;
 
         for (uint32_t dst = 0; dst < shape.y; ++dst) {
@@ -198,16 +157,16 @@ TEST(Routing2DCodec, PackDecodeRoundTripsAtMaximumShapes) {
 TEST(Routing2DCodec, PackWritesOnlyItsOwnRegion) {
     constexpr uint32_t kY = 8, kX = 4;
     constexpr std::uint8_t kSentinel = 0xAB;
-    std::vector<std::uint8_t> table(Codec::ROUTE_TABLE_CAPACITY_BYTES, kSentinel);
+    std::vector<std::uint8_t> table(Codec::ACTION_VECTOR_CAPACITY_BYTES, kSentinel);
     ASSERT_TRUE(Codec::pack_route_vectors(table.data(), kY, kX, dor_y, dor_x));
 
-    for (uint32_t i = Codec::vectors_region_bytes(kY, kX); i < Codec::ROUTE_TABLE_CAPACITY_BYTES; ++i) {
+    for (uint32_t i = Codec::vectors_region_bytes(kY, kX); i < Codec::ACTION_VECTOR_CAPACITY_BYTES; ++i) {
         EXPECT_EQ(table[i], kSentinel) << "pack scribbled past its region at byte " << i;
     }
 }
 
 TEST(Routing2DCodec, PackRejectsShapesItCannotRepresent) {
-    std::vector<std::uint8_t> table(Codec::ROUTE_TABLE_CAPACITY_BYTES, 0);
+    std::vector<std::uint8_t> table(Codec::ACTION_VECTOR_CAPACITY_BYTES, 0);
     EXPECT_FALSE(Codec::pack_route_vectors(table.data(), 64, 64, dor_y, dor_x));
     EXPECT_FALSE(Codec::pack_route_vectors(table.data(), Codec::MAX_AXIS_SIZE + 1, 4, dor_y, dor_x));
 }
@@ -215,7 +174,7 @@ TEST(Routing2DCodec, PackRejectsShapesItCannotRepresent) {
 // An axis action that does not belong to that axis is a caller bug, not something to encode as a
 // zero and forward blindly.
 TEST(Routing2DCodec, PackRejectsOffAxisActions) {
-    std::vector<std::uint8_t> table(Codec::ROUTE_TABLE_CAPACITY_BYTES, 0);
+    std::vector<std::uint8_t> table(Codec::ACTION_VECTOR_CAPACITY_BYTES, 0);
     auto east_on_y = [](uint32_t, uint32_t) { return eth_chan_directions::EAST; };
     auto north_on_x = [](uint32_t, uint32_t) { return eth_chan_directions::NORTH; };
     EXPECT_FALSE(Codec::pack_route_vectors(table.data(), 8, 4, east_on_y, dor_x));
@@ -224,7 +183,7 @@ TEST(Routing2DCodec, PackRejectsOffAxisActions) {
 
 // Z is legal on the Y axis (an express chord jumps along rows) and never on X.
 TEST(Routing2DCodec, ZIsAYAxisActionOnly) {
-    std::vector<std::uint8_t> table(Codec::ROUTE_TABLE_CAPACITY_BYTES, 0);
+    std::vector<std::uint8_t> table(Codec::ACTION_VECTOR_CAPACITY_BYTES, 0);
     auto z_on_y = [](uint32_t cur, uint32_t dst) {
         return cur == dst ? eth_chan_directions::NORTH : eth_chan_directions::Z;
     };

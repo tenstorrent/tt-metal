@@ -181,7 +181,8 @@ inline bool fabric_set_2d_unicast_route(
         dst_dev_id = exit_node_table[dst_mesh_id];
     }
 
-    widen_2d_route_to_chip(packet_header, routing_table->route_table_2d.data, dst_dev_id, mesh_y_size, mesh_x_size);
+    widen_2d_route_to_chip(
+        packet_header, routing_table->route_table_2d.action_vectors, dst_dev_id, mesh_y_size, mesh_x_size);
     return true;
 }
 
@@ -225,7 +226,7 @@ inline std::uint8_t fabric_set_2d_mcast_route(
         // not model.
         ASSERT(exit_dev_id != (uint16_t)((uint32_t)root_y * mesh_x_size + root_x));
         widen_2d_route_to_chip(
-            packet_header, routing_table->route_table_2d.data, exit_dev_id, mesh_y_size, mesh_x_size);
+            packet_header, routing_table->route_table_2d.action_vectors, exit_dev_id, mesh_y_size, mesh_x_size);
         // Same fall-through as the router's decode: the Y byte wins when nonzero, else the X byte
         // carries it.
         const std::uint8_t action_y = packet_header->route_buffer[root_y];
@@ -239,7 +240,7 @@ inline std::uint8_t fabric_set_2d_mcast_route(
     route_2d_detail::Route2DMapStaging<route_buffer_bytes> maps(map_bytes);
     encode_2d_mcast_maps<route_2d_detail::AlignedMcastTreeEdgeReader>(
         maps.bytes(),
-        routing_table->route_table_2d.data,
+        routing_table->route_table_2d.mcast_trees,
         mesh_y_size,
         mesh_x_size,
         root_y,
@@ -278,7 +279,8 @@ inline void fabric_set_2d_intermesh_landing_route(
         // holds none of the targets.
         const uint16_t exit_dev_id = routing_table.exit_node_table[final_mesh_id];
         ASSERT(exit_dev_id != (uint16_t)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
-        widen_2d_route_to_chip(packet_header, routing_table.route_table_2d.data, exit_dev_id, mesh_y_size, mesh_x_size);
+        widen_2d_route_to_chip(
+            packet_header, routing_table.route_table_2d.action_vectors, exit_dev_id, mesh_y_size, mesh_x_size);
         return;
     }
 
@@ -286,7 +288,7 @@ inline void fabric_set_2d_intermesh_landing_route(
         // Destination landing, unicast: widen to the final chip.
         widen_2d_route_to_chip(
             packet_header,
-            routing_table.route_table_2d.data,
+            routing_table.route_table_2d.action_vectors,
             packet_header->dst_start_chip_id,
             mesh_y_size,
             mesh_x_size);
@@ -306,7 +308,7 @@ inline void fabric_set_2d_intermesh_landing_route(
     route_2d_detail::Route2DMapStaging<route_buffer_bytes> maps(map_bytes);
     encode_2d_mcast_maps<route_2d_detail::AlignedMcastTreeEdgeReader>(
         maps.bytes(),
-        routing_table.route_table_2d.data,
+        routing_table.route_table_2d.mcast_trees,
         mesh_y_size,
         mesh_x_size,
         anchor_dev_id / mesh_x_size,

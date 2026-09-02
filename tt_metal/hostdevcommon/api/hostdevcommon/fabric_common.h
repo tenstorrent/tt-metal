@@ -185,7 +185,7 @@ constexpr uint32_t derive_2d_route_table_capacity_bytes(
         max_axis_size * ((max_axis_size + actions_per_byte - 1) / actions_per_byte) +
         orthogonal_axis_size * ((orthogonal_axis_size + actions_per_byte - 1) / actions_per_byte);
     const uint32_t tree_bytes = tree_edge_bytes * ((max_axis_size - 1) + (orthogonal_axis_size - 1));
-    return ((vector_bytes + 3u) & ~3u) + tree_bytes;
+    return vector_bytes + tree_bytes;
 }
 
 }  // namespace detail
@@ -263,12 +263,19 @@ struct Routing2DCodec {
     }
 
     // ---- L1 region sizing -------------------------------------------------------
-    // Packed reverse-tree descriptors use 6-bit row indices. The capacity covers packed vectors
-    // plus this chip's two reverse trees for any mesh up to MAX_MESH_SIZE devices.
+    // Packed reverse-tree descriptors use 6-bit row indices. Fixed regions prevent one representation
+    // from consuming another's capacity; both maxima are reached by 64x4 and 4x64 meshes.
     static constexpr uint32_t MAX_AXIS_SIZE = 64;
     static constexpr uint32_t MCAST_TREE_EDGE_BYTES = 2;
+    static_assert(MAX_MESH_SIZE % MAX_AXIS_SIZE == 0);
+    static constexpr uint32_t MAX_ORTHOGONAL_AXIS_SIZE = MAX_MESH_SIZE / MAX_AXIS_SIZE;
+    static constexpr uint32_t ACTION_VECTOR_CAPACITY_BYTES =
+        table_bytes(MAX_AXIS_SIZE) + table_bytes(MAX_ORTHOGONAL_AXIS_SIZE);
+    static constexpr uint32_t MCAST_TREE_CAPACITY_BYTES =
+        MCAST_TREE_EDGE_BYTES * ((MAX_AXIS_SIZE - 1) + (MAX_ORTHOGONAL_AXIS_SIZE - 1));
     static constexpr uint32_t ROUTE_TABLE_CAPACITY_BYTES = detail::derive_2d_route_table_capacity_bytes(
         MAX_AXIS_SIZE, MAX_MESH_SIZE, ACTIONS_PER_BYTE, MCAST_TREE_EDGE_BYTES);
+    static_assert(ROUTE_TABLE_CAPACITY_BYTES == ACTION_VECTOR_CAPACITY_BYTES + MCAST_TREE_CAPACITY_BYTES);
 
     // ---- Pack (host-side table generation) --------------------------------------
     // The Y region occupies [0, table_bytes(y_size)) and the X region follows it, both as
@@ -278,32 +285,21 @@ struct Routing2DCodec {
     }
 
     // ---- Multicast reverse-tree region -------------------------------------------
-    // Follows the destination-major vectors. Unlike the vectors, which are mesh-identical, each chip
-    // carries only the trees for its own row and column, so the contents differ per chip.
-    //
-    // The offset is derived from the mesh shape on both sides, because the vectors are packed to the
-    // live shape and a fixed offset would either waste the [64,4] bound or collide.
+    // The fixed tree region follows the fixed vector region. Within it, Y precedes X and the X offset
+    // depends only on the live Y tree's edge count.
     // An arborescence over n rows has n-1 edges; a single-row axis has none.
     static constexpr uint32_t mcast_tree_edge_count(uint32_t axis_size) { return axis_size > 1 ? axis_size - 1 : 0; }
     static constexpr uint32_t mcast_tree_region_bytes(uint32_t y_size, uint32_t x_size) {
         return MCAST_TREE_EDGE_BYTES * (mcast_tree_edge_count(y_size) + mcast_tree_edge_count(x_size));
     }
-    static constexpr uint32_t mcast_tree_offset_bytes(uint32_t y_size, uint32_t x_size) {
-        return (vectors_region_bytes(y_size, x_size) + 3u) & ~3u;
-    }
-    static constexpr uint32_t required_route_table_bytes(uint32_t y_size, uint32_t x_size) {
-        return mcast_tree_offset_bytes(y_size, x_size) + mcast_tree_region_bytes(y_size, x_size);
-    }
-    // Whether vectors plus trees fit the route-table slot.
-    static constexpr bool hybrid_region_fits(uint32_t y_size, uint32_t x_size) {
-        return required_route_table_bytes(y_size, x_size) <= ROUTE_TABLE_CAPACITY_BYTES;
+    // Whether vectors and trees fit their fixed regions.
+    static constexpr bool route_table_regions_fit(uint32_t y_size, uint32_t x_size) {
+        return vectors_region_bytes(y_size, x_size) <= ACTION_VECTOR_CAPACITY_BYTES &&
+               mcast_tree_region_bytes(y_size, x_size) <= MCAST_TREE_CAPACITY_BYTES;
     }
 
-    static constexpr uint32_t mcast_tree_y_offset(uint32_t y_size, uint32_t x_size) {
-        return mcast_tree_offset_bytes(y_size, x_size);
-    }
-    static constexpr uint32_t mcast_tree_x_offset(uint32_t y_size, uint32_t x_size) {
-        return mcast_tree_offset_bytes(y_size, x_size) + MCAST_TREE_EDGE_BYTES * mcast_tree_edge_count(y_size);
+    static constexpr uint32_t mcast_tree_x_offset(uint32_t y_size) {
+        return MCAST_TREE_EDGE_BYTES * mcast_tree_edge_count(y_size);
     }
 
     // Packed edge fields: two 6-bit row indices, fixed by the Y <= 64 bound, plus a parent_output
@@ -341,8 +337,8 @@ struct Routing2DCodec {
     }
 
     // Unicast action-map bound only: both axes must be addressable and the packed vectors must fit
-    // the L1 slot. FabricContext separately checks the packet map, while hybrid_region_fits() checks
-    // multicast trees.
+    // the L1 slot. FabricContext separately checks the packet map, while route_table_regions_fit()
+    // checks both fixed regions.
     static constexpr bool shape_fits_route_table(uint32_t y_size, uint32_t x_size) {
         return y_size <= MAX_AXIS_SIZE && x_size <= MAX_AXIS_SIZE &&
                vectors_region_bytes(y_size, x_size) <= ROUTE_TABLE_CAPACITY_BYTES;
@@ -505,11 +501,13 @@ static_assert(
         (Routing2DCodec::ACTION_VALID_MASK & Routing2DCodec::ACTION_RESERVED_MASK) == 0,
     "2D action-map byte valid/reserved masks must partition the byte");
 static_assert(
-    Routing2DCodec::required_route_table_bytes(64, 4) == Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES,
-    "The 64x4 maximum must fill the 2D route-table allocation exactly");
+    Routing2DCodec::vectors_region_bytes(64, 4) == Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES &&
+        Routing2DCodec::mcast_tree_region_bytes(64, 4) == Routing2DCodec::MCAST_TREE_CAPACITY_BYTES,
+    "The 64x4 maximum must fill both fixed route-table regions exactly");
 static_assert(
-    Routing2DCodec::required_route_table_bytes(4, 64) == Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES,
-    "The 4x64 maximum must fill the 2D route-table allocation exactly");
+    Routing2DCodec::vectors_region_bytes(4, 64) == Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES &&
+        Routing2DCodec::mcast_tree_region_bytes(4, 64) == Routing2DCodec::MCAST_TREE_CAPACITY_BYTES,
+    "The 4x64 maximum must fill both fixed route-table regions exactly");
 
 // ============================================================================
 // 2D action-map multicast encode
@@ -559,10 +557,10 @@ inline void mcast_prune_axis(
 }
 
 // Fills route_buffer[0..y_size) with route_buffer_y and route_buffer[y_size..y_size+x_size) with
-// route_buffer_x, from the reverse trees embedded in this chip's `vectors` table.
+// route_buffer_x, from this chip's fixed multicast-tree region.
 //
 //   anchor_{y,x}   the chip the client's N/S/E/W extents are measured from
-//   encode_root_x  the column where path tracing begins, which owns `vectors`
+//   encode_root_x  the column where path tracing begins
 //
 // These are the same chip for a worker sending inside its own mesh (the overload below), and differ at
 // a destination-mesh landing. No encode_root_y is needed, since the Y tree is already rooted there.
@@ -577,7 +575,7 @@ inline void mcast_prune_axis(
 template <typename EdgeReader = McastTreeEdgeByteReader>
 inline void encode_2d_mcast_maps(
     std::uint8_t* route_buffer,
-    const std::uint8_t* vectors,
+    const std::uint8_t* mcast_trees,
     std::uint32_t y_size,
     std::uint32_t x_size,
     std::uint32_t anchor_y,
@@ -618,8 +616,8 @@ inline void encode_2d_mcast_maps(
         mcast_set_row_bit(x_targets, (root_x + x_size - (k % x_size)) % x_size);
     }
 
-    const std::uint8_t* tree_y = vectors + Routing2DCodec::mcast_tree_y_offset(y_size, x_size);
-    const std::uint8_t* tree_x = vectors + Routing2DCodec::mcast_tree_x_offset(y_size, x_size);
+    const std::uint8_t* tree_y = mcast_trees;
+    const std::uint8_t* tree_x = mcast_trees + Routing2DCodec::mcast_tree_x_offset(y_size);
 
     std::uint32_t needed_x[MCAST_ROW_BITS_WORDS] = {x_targets[0], x_targets[1]};
     mcast_prune_axis<EdgeReader>(out_x, tree_x, x_size, needed_x, /*is_y_axis=*/false);
@@ -649,7 +647,7 @@ inline void encode_2d_mcast_maps(
 template <typename EdgeReader = McastTreeEdgeByteReader>
 inline void encode_2d_mcast_maps(
     std::uint8_t* route_buffer,
-    const std::uint8_t* vectors,
+    const std::uint8_t* mcast_trees,
     std::uint32_t y_size,
     std::uint32_t x_size,
     std::uint32_t root_y,
@@ -659,7 +657,7 @@ inline void encode_2d_mcast_maps(
     std::uint32_t e_hops,
     std::uint32_t w_hops) {
     encode_2d_mcast_maps<EdgeReader>(
-        route_buffer, vectors, y_size, x_size, root_y, root_x, root_x, n_hops, s_hops, e_hops, w_hops);
+        route_buffer, mcast_trees, y_size, x_size, root_y, root_x, root_x, n_hops, s_hops, e_hops, w_hops);
 }
 
 // FWD_DIRS slot order: base {E, W, N, S, Z} with the self direction removed.
@@ -1008,24 +1006,30 @@ struct RouterStateManager {
     }
 };
 
-// Destination-major 2D action-map route table, sharing the 2D union slot with the legacy compressed table.
-// Raw byte storage because row strides depend on the live mesh shape [Y,X]:
+// Destination-major 2D routing state. Shares its L1 offset with the 1D routing-path table because a
+// fabric build uses exactly one routing mode. Regions are fixed-size; rows within action_vectors use
+// the live mesh shape [Y,X]:
 //   y_vectors: row dst_y at byte offset dst_y * ceil(Y/4), region [0, Y*ceil(Y/4))
 //   x_vectors: row dst_x at byte offset dst_x * ceil(X/4), region [Y*ceil(Y/4), Y*ceil(Y/4) + X*ceil(X/4))
-// Typed accessors and the host-side packer live on Routing2DCodec.
+// mcast_trees stores this chip's Y tree followed by its X tree.
 struct __attribute__((packed)) route_table_2d_t {
-    std::uint8_t data[Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES];
+    std::uint8_t action_vectors[Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES];
+    std::uint8_t mcast_trees[Routing2DCodec::MCAST_TREE_CAPACITY_BYTES];
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
-    // Fills the 2-bit vector table for this mesh by probing ControlPlane's first-hop relation along
-    // each axis (implemented in compressed_routing_path.cpp). This is the sole 2D route artifact --
-    // the compressed_route_2d_t hop-program table it replaced is gone.
+    // Fills action_vectors by probing ControlPlane's first-hop relation along each axis.
     void calculate_chip_to_all_routing_fields(const FabricNodeId& src_fabric_node_id, uint16_t num_chips);
 #endif
 };
 static_assert(
     sizeof(route_table_2d_t) == Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES,
     "2D route table must match its L1 capacity");
+static_assert(
+    offsetof(route_table_2d_t, mcast_trees) == Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES,
+    "2D multicast trees must follow the fixed action-vector region");
+static_assert(
+    offsetof(route_table_2d_t, mcast_trees) % alignof(std::uint32_t) == 0,
+    "2D multicast-tree storage must be word aligned");
 
 struct routing_l1_info_t {
     RouterStateManager state_manager{};  // 32 bytes
@@ -1038,7 +1042,7 @@ struct routing_l1_info_t {
     direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};  // 384 bytes
 
     // Union overlaps the 1D and 2D routing tables at one offset; a build uses exactly one member.
-    // The 2D member stores destination-major action maps.
+    // The 2D member stores destination-major action vectors and per-chip multicast trees.
     union __attribute__((packed)) {
         intra_mesh_routing_path_t<1, false> routing_path_table_1d;  // 1024 bytes
         route_table_2d_t route_table_2d;                            // 1160 bytes
