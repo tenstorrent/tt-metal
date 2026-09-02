@@ -40,6 +40,7 @@
 #include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 #include "ttnn/operations/reduction/topk/topk.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
@@ -47,6 +48,120 @@
 #include "ttnn_test_fixtures.hpp"
 
 namespace ttnn::operations::reduction::test {
+
+TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+
+    const auto make_tiled_spec = [](const Shape& shape) {
+        return TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
+    };
+    const ReduceHardwareConfig hardware{
+        .arch = tt::ARCH::BLACKHOLE,
+        .fp32_dest_acc_en = false,
+        .dst_full_sync_en = false,
+        .available_l1_bytes = 1U << 20,
+    };
+
+    const auto output = make_tiled_spec(Shape{1, 1, 32, 1});
+    const auto short_plan = make_reduce_plan(
+        make_tiled_spec(Shape{1, 1, 32, 3 * 32}),
+        output,
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        hardware);
+    EXPECT_EQ(short_plan.algorithm, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
+
+    const auto threshold_plan = make_reduce_plan(
+        make_tiled_spec(Shape{1, 1, 32, 4 * 32}),
+        output,
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        0.25F,
+        ReduceFp32Mode::Fast,
+        hardware);
+    EXPECT_EQ(threshold_plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
+    EXPECT_FLOAT_EQ(threshold_plan.post_scale, 0.25F);
+
+    const auto tile_bytes = tt::tt_metal::tile_size(DataType::BFLOAT16);
+    const auto chunked_plan = make_reduce_plan(
+        make_tiled_spec(Shape{1, 1, 32, 8 * 32}),
+        output,
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        hardware,
+        4 * tile_bytes);
+    EXPECT_EQ(chunked_plan.input_policy, compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop);
+    EXPECT_EQ(chunked_plan.chunk.reduce_axis_tiles, 2U);
+    ASSERT_NE(chunked_plan.find_cb(ReduceCbRole::Input), nullptr);
+    EXPECT_EQ(chunked_plan.find_cb(ReduceCbRole::Input)->total_size_bytes, 4 * tile_bytes);
+
+    const auto col_input = make_tiled_spec(Shape{1, 1, 8 * 32, 8 * 32});
+    const auto col_output = make_tiled_spec(Shape{1, 1, 1, 8 * 32});
+    const std::vector<ReduceCbConfig> reductions{
+        {0U,
+         ReduceCallConfig{
+             .input_spec = col_input,
+             .output_spec = col_output,
+             .reduce_math = ReduceOpMath::SUM,
+             .reduce_dim = ReduceOpDim::H,
+             .scalar = 1.0F,
+             .fp32_mode = ReduceFp32Mode::Fast,
+             .max_input_cb_bytes = 32 * tile_bytes}},
+        {1U,
+         ReduceCallConfig{
+             .input_spec = col_input,
+             .output_spec = col_output,
+             .reduce_math = ReduceOpMath::SUM,
+             .reduce_dim = ReduceOpDim::H,
+             .scalar = 1.0F,
+             .fp32_mode = ReduceFp32Mode::Fast,
+             .max_input_cb_bytes = 32 * tile_bytes}},
+    };
+    const auto sequence =
+        make_reduce_plan(reductions, {.auxiliary_cb_id = 2U, .accumulator_cb_id = 4U, .output_cb_id = 3U}, hardware);
+    ASSERT_EQ(sequence.calls.size(), 2U);
+    EXPECT_EQ(sequence.calls[0].input_cb_id, 0U);
+    EXPECT_EQ(sequence.calls[0].output_cb_id, 4U);
+    EXPECT_EQ(sequence.calls[0].accumulator_cb_id, 4U);
+    EXPECT_FALSE(sequence.calls[0].is_last);
+    EXPECT_EQ(sequence.calls[1].input_cb_id, 1U);
+    EXPECT_EQ(sequence.calls[1].output_cb_id, 3U);
+    EXPECT_EQ(sequence.calls[1].accumulator_cb_id, 4U);
+    EXPECT_TRUE(sequence.calls[1].is_last);
+    for (const auto& call : sequence.calls) {
+        EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
+        EXPECT_EQ(call.plan.input_policy, compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop);
+        EXPECT_EQ(call.plan.chunk.reduce_axis_tiles, 2U);
+        EXPECT_EQ(call.plan.chunk.output_tiles, 8U);
+    }
+
+    const CoreRangeSet shard_grid(CoreRange(CoreCoord{0, 0}, CoreCoord{0, 0}));
+    const MemoryConfig sharded_l1(
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec(shard_grid, {32, 4 * 32}, ShardOrientation::ROW_MAJOR));
+    const auto sharded_input =
+        TensorSpec(Shape{1, 1, 32, 4 * 32}, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), sharded_l1));
+    const auto alias_plan = make_reduce_plan(
+        sharded_input, output, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware, 0);
+    EXPECT_EQ(alias_plan.input_policy, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
+    ASSERT_NE(alias_plan.find_cb(ReduceCbRole::Input), nullptr);
+    EXPECT_EQ(alias_plan.find_cb(ReduceCbRole::Input)->alias, ReduceCbAlias::InputTensor);
+    EXPECT_ANY_THROW(make_reduce_plan(
+        make_tiled_spec(Shape{1, 1, 32, 4 * 32}),
+        output,
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        hardware,
+        0));
+}
 
 class ReductionSmoke : public TTNNFixtureWithSuiteDevice<ReductionSmoke> {};
 
@@ -75,6 +190,30 @@ TEST_F(ReductionSmoke, SumReduceW) {
         for (uint32_t r = 0; r < h; r++) {
             ASSERT_EQ(static_cast<float>(result[r]), static_cast<float>(w)) << "h=" << h << " w=" << w << " row " << r;
         }
+    }
+}
+
+TEST_F(ReductionSmoke, HostPlannedWideSumSanity) {
+    auto& device = *device_;
+    constexpr uint32_t reduced_tiles = 768;
+    const auto input =
+        ttnn::ones(ttnn::Shape{2, 1, 32, reduced_tiles * 32}, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+    const auto output =
+        ttnn::sum(input, -1, true, std::nullopt, std::nullopt, 1.0F / static_cast<float>(reduced_tiles));
+    ASSERT_EQ(output.logical_shape(), (ttnn::Shape{2, 1, 32, 1}));
+    for (const auto value : output.to_vector<bfloat16>()) {
+        EXPECT_EQ(static_cast<float>(value), 32.0F);
+    }
+}
+
+TEST_F(ReductionSmoke, HostPlannedChunkedColAddSanity) {
+    auto& device = *device_;
+    constexpr uint32_t height = 32768;
+    const auto input = ttnn::ones(ttnn::Shape{1, 1, height, 32}, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+    const auto output = ttnn::sum(input, -2, true);
+    ASSERT_EQ(output.logical_shape(), (ttnn::Shape{1, 1, 1, 32}));
+    for (const auto value : output.to_vector<bfloat16>()) {
+        EXPECT_EQ(static_cast<float>(value), static_cast<float>(height));
     }
 }
 

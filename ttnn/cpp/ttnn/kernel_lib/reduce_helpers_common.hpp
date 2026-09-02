@@ -7,15 +7,7 @@
 #include <cstdint>
 
 #include "llk_defs.h"
-
-/**
- * @brief Float32 reduce precision mode.
- *
- * Fast keeps fp32 on the FPU/GMPOOL path (inputs truncated to tf32 — faster, lossy); Accurate
- * routes fp32 through the SFPU at full fp32. Only affects Float32; Int32 always uses the SFPU
- * regardless of this mode.
- */
-enum class ReduceFp32Mode : uint8_t { Fast, Accurate };
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
 
 /**
  * @brief Determines whether a reduce operation should use the SFPU path.
