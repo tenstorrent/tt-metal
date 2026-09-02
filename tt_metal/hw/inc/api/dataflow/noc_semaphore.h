@@ -164,8 +164,6 @@ public:
      * @param value The value to decrement the semaphore by.
      */
     __attribute__((always_inline)) void down(uint32_t value) {
-        // down() is a wait followed by a set, so it emits both: the wait zone explains a
-        // stall, and the set is a real state change another core may be waiting on.
         auto* sem_addr = local_ptr();
         WAYPOINT("NSDW");
         if constexpr (SCOPE == SemScope::DM_LOCAL_CACHED) {

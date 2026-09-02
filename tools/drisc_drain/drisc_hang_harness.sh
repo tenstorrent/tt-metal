@@ -17,14 +17,14 @@
 # Usage: DELAY=125 N=60 ARMED=0 ./harness.sh
 
 H=${TT_HOST:-yyzo-bh-05}; P=${TT_PORT:-42756}; R=${TT_REMOTE:-/localdev/$LOGNAME/tt-metal}
-BIN=./build_Release/programming_examples/test_perf_debug_zones
+BIN=./build_Release/programming_examples/test_streaming_profiler_zones
 TAG=${TAG:-run}
 OUT=${OUT_DIR:-${TMPDIR:-/tmp}}/harn_$TAG; mkdir -p $OUT
 SUM=$OUT/summary.txt; CSV=$OUT/runs.csv; : > $SUM
 echo "k,delay,armed,rc,dur_s,card,class" > $CSV
 DELAY=${DELAY:-150}; N=${N:-60}; ARMED=${ARMED:-0}
 STOP_ON_WEDGE=${STOP_ON_WEDGE:-0}
-# REPEAT>0 arms the egress amplifier (TT_METAL_PERF_DEBUG_SHIP_REPEAT). Payload becomes duplicate
+# REPEAT>0 arms the egress amplifier (TT_METAL_STREAMING_PROFILER_SHIP_REPEAT). Payload becomes duplicate
 # frames, so it is a STRESS tool, not a capture -- NO_DECODE is already on.
 # 2x2 factorial knobs: DISPATCH=fast|slow and DRAINER=drisc|tensix
 DISPATCH=${DISPATCH:-fast}; DRAINER=${DRAINER:-drisc}
@@ -32,7 +32,7 @@ DISPATCH=${DISPATCH:-fast}; DRAINER=${DRAINER:-drisc}
 #
 # Slow dispatch reserves nothing for dispatch, so compute_with_storage_grid_size() returns the FULL
 # 12x10; fast dispatch returns 11x10. The drainer holds the last column back under slow dispatch
-# (perf_debug_profiler.cpp ~line 613), so "--gx 0" put producers on column 12 that NO drainer polls.
+# (streaming_profiler.cpp ~line 613), so "--gx 0" put producers on column 12 that NO drainer polls.
 # Those lossless producers fill their rings, block in ring_ensure_room forever, and the run dies in
 # wait_until_cores_done -- an UNCAUGHT 45 s throw that dumps core. That is the "26/26 slow-dispatch
 # TEARDOWN" of FINDINGS N+21 B: a harness grid bug, not a device fault. Reproduced and fixed 2026-08-07.
@@ -44,17 +44,17 @@ DISPATCH=${DISPATCH:-fast}; DRAINER=${DRAINER:-drisc}
 GX=${GX:-11}; GY=${GY:-10}
 CELLX=""
 [ "$DISPATCH" = "slow" ]   && CELLX="$CELLX TT_METAL_SLOW_DISPATCH_MODE=1"
-[ "$DRAINER"  = "tensix" ] && CELLX="$CELLX TT_METAL_PERF_DEBUG_DRAIN_TENSIX=1"
+[ "$DRAINER"  = "tensix" ] && CELLX="$CELLX TT_METAL_STREAMING_PROFILER_RELAY_TENSIX=1"
 # Keep the arms comparable. As of 2026-08-07 the DRISC drainer polls the FULL 12x10 under slow dispatch
 # by default, while the Tensix drainer must always reserve the last column (its drainer lives there).
 # Left alone that would make a slow-dispatch DRISC cell sweep 120 cores against Tensix's 110 -- a
 # difference in POLL-LIST LENGTH, which is the idle sweep cost, masquerading as a difference between
 # core types. Force the reservation on both so every cell polls 110. Measurement only: full-grid
 # coverage is the right default for real captures, and GX/GY above already match this 110.
-[ "$DISPATCH" = "slow" ]   && CELLX="$CELLX TT_METAL_PERF_DEBUG_RESERVE_COLUMN=1"
+[ "$DISPATCH" = "slow" ]   && CELLX="$CELLX TT_METAL_STREAMING_PROFILER_RESERVE_COLUMN=1"
 REPEAT=${REPEAT:-0}
 REPX=""
-[ "$REPEAT" != "0" ] && REPX="TT_METAL_PERF_DEBUG_SHIP_REPEAT=$REPEAT"
+[ "$REPEAT" != "0" ] && REPX="TT_METAL_STREAMING_PROFILER_SHIP_REPEAT=$REPEAT"
 
 ENVX=""
 [ "$ARMED" = "1" ] && ENVX="TT_METAL_OPERATION_TIMEOUT_SECONDS=45"
@@ -78,7 +78,7 @@ for k in $(seq 1 $N); do
   log=$OUT/${k}.log
   t0=$(python3 -c 'import time;print(time.time())')
   ssh -p $P -o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=6 $H "cd $R && timeout -k 15 300 env \
-    TT_METAL_PERF_DEBUG_PROFILER=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PERF_DEBUG_NO_DECODE=1 $ENVX $REPX $CELLX \
+    TT_METAL_STREAMING_PROFILER=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_STREAMING_PROFILER_NO_DECODE=1 $ENVX $REPX $CELLX \
     $BIN --gx $GX --gy $GY --iters 500 --delay $DELAY" > $log 2>&1 &
   sshpid=$!
   waited=0

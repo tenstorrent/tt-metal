@@ -413,8 +413,6 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
 
     int32_t free_space_pages;
     WAYPOINT("CRBW");
-    // The PRODUCER blocked on a FULL CB -- the back-pressure direction. Braced so the zone closes
-    // when the spin ends rather than at the end of the function.
     {
         SYNC_WAIT("SYNC-CB-RESERVE", operand);
         do {
@@ -1612,8 +1610,6 @@ inline void noc_semaphore_set_multicast(
         vc,
         /*posted=*/false,
         noc);
-    // Multicast: the address encodes a rectangle, so one record stands for every
-    // waiter inside it.
     SYNC_SIGNAL("SYNC-SEM-SET-REMOTE", dst_noc_addr_multicast);
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
@@ -1958,10 +1954,8 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
 FORCE_INLINE
 void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false, -1);
-    // Local L1 offset identifies the semaphore; the waiting core is the recording
-    // core, so its identity is implicit. A remote setter records the full NoC
-    // address instead, which carries the destination coordinates needed to pair
-    // the two sides.
+    // Waits key on the local L1 offset (the waiter is the recording core); remote sets key on the
+    // full NoC address, which carries the coordinates needed to pair the two sides.
     WAYPOINT("NSW");
     {
         SYNC_WAIT("SYNC-SEM-WAIT", reinterpret_cast<uintptr_t>(sem_addr));

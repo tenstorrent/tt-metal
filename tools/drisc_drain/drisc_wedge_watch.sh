@@ -12,7 +12,7 @@
 #
 # WHAT IT DOES PER RUN
 #   1. clears the endpoint's DevSta sticky bits, so they become a per-run PCIe error probe
-#   2. runs test_perf_debug_zones, timed, with the log kept
+#   2. runs test_streaming_profiler_zones, timed, with the log kept
 #   3. reads CARD STATE, then classifies:
 #        WEDGE      endpoint link state reads Unknown (all-ones config space) -> hard PCIe wedge
 #        MMIO_STALL "MMIO per-op timeout" in the log: a ~220 ms 4B load = the root-port completion
@@ -49,7 +49,7 @@ TAG=${TAG:-watch}
 # (devsta unavail) makes any pooled rate meaningless. Per-row is the only version that cannot be lost.
 SWEEP_ID=${SWEEP_ID:-$(date +%Y%m%dT%H%M%S)}
 REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
-BIN=${BIN:-$REPO/build_Release/programming_examples/test_perf_debug_zones}
+BIN=${BIN:-$REPO/build_Release/programming_examples/test_streaming_profiler_zones}
 # Derive the output root from the REPO path, not from $LOGNAME: the dev container runs as root with no
 # passwd entry, so $LOGNAME/$USER are EMPTY there and "/localdev/$LOGNAME/..." collapsed to
 # "/localdev//drisc_wedge" -- writing sweep results into the SHARED /localdev root instead of the user's
@@ -58,7 +58,7 @@ OUT=${OUT_DIR:-$(dirname "$REPO")/drisc_wedge}/$TAG
 N=${N:-60}
 DELAY=${DELAY:-125}
 ITERS=${ITERS:-500}
-# DECODE=0 (default) sets TT_METAL_PERF_DEBUG_NO_DECODE=1: the reader does read()+ack and NOTHING else --
+# DECODE=0 (default) sets TT_METAL_STREAMING_PROFILER_NO_DECODE=1: the reader does read()+ack and NOTHING else --
 # no decode, no publish. That is right for hunting the wedge (cheaper runs, and the wedge is classified
 # from the process outcome and card state, neither of which needs decode) but it makes the HOST-DERIVED
 # stats void: marker count and producer stall zones are produced BY the decode, so with it off they read 0
@@ -241,11 +241,11 @@ recover(){ local st
   return 0; }
 
 ENVX=""; [ "$ARMED" = "1" ] && ENVX="TT_METAL_OPERATION_TIMEOUT_SECONDS=45"
-DECODEX=""; [ "$DECODE" != "1" ] && DECODEX="TT_METAL_PERF_DEBUG_NO_DECODE=1"
+DECODEX=""; [ "$DECODE" != "1" ] && DECODEX="TT_METAL_STREAMING_PROFILER_NO_DECODE=1"
 CELLX=""
 [ "$DISPATCH" = "slow" ] && CELLX="$CELLX TT_METAL_SLOW_DISPATCH_MODE=1"
-[ "$RESERVE_COLUMN" = "1" ] && CELLX="$CELLX TT_METAL_PERF_DEBUG_RESERVE_COLUMN=1"
-[ "$DRAINER" = "tensix" ] && CELLX="$CELLX TT_METAL_PERF_DEBUG_DRAIN_TENSIX=1"
+[ "$RESERVE_COLUMN" = "1" ] && CELLX="$CELLX TT_METAL_STREAMING_PROFILER_RESERVE_COLUMN=1"
+[ "$DRAINER" = "tensix" ] && CELLX="$CELLX TT_METAL_STREAMING_PROFILER_RELAY_TENSIX=1"
 # rpath points into build_Release/lib, which lacks the installed libs; the repo-root lib/ has them.
 LIBS=$REPO/lib; [ -d "$LIBS" ] || LIBS=$REPO/build_Release/lib
 
@@ -269,7 +269,7 @@ for k in $(seq 1 "$N"); do
   devsta_clear
   t0=$SECONDS
   ( cd "$REPO" && timeout -k 15 "$RUN_TIMEOUT" env \
-      TT_METAL_PERF_DEBUG_PROFILER=1 TT_METAL_DEVICE_PROFILER=1 $DECODEX \
+      TT_METAL_STREAMING_PROFILER=1 TT_METAL_DEVICE_PROFILER=1 $DECODEX \
       LD_LIBRARY_PATH="$LIBS" $ENVX $CELLX \
       "$BIN" --gx "$GX" --gy "$GY" --iters "$ITERS" --delay "$DELAY" ) > "$RUNLOG" 2>&1
   rc=$?

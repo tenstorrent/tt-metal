@@ -69,7 +69,7 @@ teardown hang was landing in OTHER.
 
 ## Egress amplifier as a candidate fast repro
 
-`REPEAT=<n>` sets `TT_METAL_PERF_DEBUG_SHIP_REPEAT`, re-shipping each staged frame n times so egress
+`REPEAT=<n>` sets `TT_METAL_STREAMING_PROFILER_SHIP_REPEAT`, re-shipping each staged frame n times so egress
 stops being bounded by producer rate. The payload becomes duplicate frames, so it is a STRESS tool,
 never a capture (`NO_DECODE` is already on).
 

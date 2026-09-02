@@ -17,7 +17,7 @@
 # Usage: DELAY=125 N=60 ARMED=0 ./harness.sh
 
 H=${TT_HOST:-yyzo-bh-05}; P=${TT_PORT:-42756}; R=${TT_REMOTE:-/localdev/$LOGNAME/tt-metal}
-BIN=./build_Release/programming_examples/test_perf_debug_zones
+BIN=./build_Release/programming_examples/test_streaming_profiler_zones
 TAG=${TAG:-run}
 OUT=${OUT_DIR:-${TMPDIR:-/tmp}}/harn_$TAG; mkdir -p $OUT
 SUM=$OUT/summary.txt; CSV=$OUT/runs.csv; : > $SUM
@@ -26,7 +26,7 @@ DELAY=${DELAY:-125}; N=${N:-40}   # N = runs PER ARM
 STOP_ON_WEDGE=0
 REPEAT=${REPEAT:-0}
 REPX=""
-[ "$REPEAT" != "0" ] && REPX="TT_METAL_PERF_DEBUG_SHIP_REPEAT=$REPEAT"
+[ "$REPEAT" != "0" ] && REPX="TT_METAL_STREAMING_PROFILER_SHIP_REPEAT=$REPEAT"
 
 # randomized 2-arm schedule (never alternate: a boundary-straddling failure would bias attribution)
 sched=()
@@ -57,7 +57,7 @@ for ARMED in "${sched[@]}"; do
   log=$OUT/${k}_a${ARMED}.log
   t0=$(python3 -c 'import time;print(time.time())')
   ssh -p $P -o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=6 $H "cd $R && timeout -k 15 300 env \
-    TT_METAL_PERF_DEBUG_PROFILER=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PERF_DEBUG_NO_DECODE=1 $ENVX $REPX \
+    TT_METAL_STREAMING_PROFILER=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_STREAMING_PROFILER_NO_DECODE=1 $ENVX $REPX \
     $BIN --gx 0 --gy 0 --iters 500 --delay $DELAY" > $log 2>&1 &
   sshpid=$!
   waited=0

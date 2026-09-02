@@ -64,35 +64,13 @@ namespace tt::tt_metal {
 
 namespace {
 
-// ---- Persistent zone translation-unit id registry ---------------------------------------------------
-//
-// Hands out the tu_id half of a structural device zone id (hostdevcommon/profiler_zone_id.h), injected
-// into the kernel compile as -DTT_PROFILER_TU_ID. Two properties make it necessary:
-//
-//  * IDS MUST BE UNIQUE ACROSS TUs. That is the entire reason structural ids are collision-free: the
-//    local half is unique within a TU, so the TU half has to be unique between them.
-//  * IDS MUST BE STABLE ACROSS RUNS. The JIT caches objects and ELFs, so an ELF compiled by an earlier
-//    run keeps the id baked into its .tt_zone_meta records. If the next run reassigned ids, a cached ELF
-//    would alias a freshly-compiled one. Hence a file, not an in-memory counter.
-//
-// The KEY is source identity, deliberately NOT the build variant: kernel source path (or a hash of
-// inline source) plus the build target, i.e. the RISC. The target belongs in the key because the local
-// index is a __COUNTER__ position, and a kernel source compiled for BRISC vs NCRISC pulls in a different
-// set of preprocessor-gated headers and can therefore number its zones differently. Compile-time
-// ARGUMENTS are deliberately left out: including them would mint a fresh id per op instance and grow the
-// registry without bound. The residual risk that buys is a kernel with #if-gated zone macros compiled
-// twice with different defines in one run -- its two variants would share a tu_id and disagree on what a
-// local index means. The host reports that as a zone-id collision rather than silently mis-naming (see
-// llrt/zone_meta.cpp), which is why the tradeoff is takeable.
-//
-// EVERY id in the space is allocatable. There is no reserved band: the producer stall zone, the DRISC
-// self-profiling zones and the NoC event tags are ordinary source locations in ordinary TUs now, so
-// nothing here has to be held back for them.
-//
-// Format: append-only text, one "<source_id>\t<tu_id>" line per TU. Allocation is lowest-free-id, so the
-// space stays dense and a deleted registry rebuilds compactly. Guarded by flock() for the whole
-// read-modify-write so parallel builds sharing a cache root cannot hand out the same id twice, plus a
-// process-local mutex because the JIT compiles many kernels on a thread pool.
+// Hands out the tu_id half of a structural zone id (hostdevcommon/profiler_zone_id.h) as -DTT_PROFILER_TU_ID.
+// Ids must be unique across TUs and stable across runs (a cached ELF keeps the id in its .tt_zone_meta),
+// hence a file. The key is source identity plus build target: one source compiled for BRISC vs NCRISC can
+// number its zones differently. Compile-time args are left out to keep the registry bounded; two
+// define-variants of one source then share a tu_id, which the host reports as a collision rather than
+// mis-naming. Append-only "<source_id>\t<tu_id>" lines, lowest free id; flock() covers parallel builds
+// sharing a cache root, the mutex covers the JIT's own thread pool.
 uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const std::string& source_id) {
     static std::mutex mtx;
     std::lock_guard<std::mutex> lk(mtx);
@@ -120,7 +98,7 @@ uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const st
         while (std::getline(in, line)) {
             auto tab = line.rfind('\t');
             if (tab == std::string::npos) {
-                continue;  // malformed line: ignore rather than fail the build
+                continue;
             }
             uint32_t entry_id = 0;
             try {
@@ -129,7 +107,7 @@ uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const st
                 continue;
             }
             if (entry_id >= TT_ZONE_TU_COUNT) {
-                continue;  // e.g. an id assigned under a wider split
+                continue;  // assigned when the tu split was wider
             }
             if (line.compare(0, tab, source_id) == 0) {
                 return entry_id;

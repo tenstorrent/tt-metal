@@ -41,40 +41,23 @@ namespace kernel_profiler {
 // Sized for the widest processor count -- including Quasar's 24 -- so the layout is arch-uniform and the
 // host indexes it identically everywhere, whatever the DRAM side later does with its own count.
 static constexpr std::uint32_t PROFILER_SPSC_MAX_RISC = 24;
-// Tensix RISCs whose rings the drainer sweeps and the host decodes (BRISC, NCRISC, TRISC0-2).
+// Tensix RISCs whose rings the relay sweeps and the host decodes (BRISC, NCRISC, TRISC0-2).
 static constexpr std::uint32_t PROFILER_SPSC_TENSIX_RISC = 5;
 
 enum SpscControlBuffer {
-    // [0, PROFILER_SPSC_MAX_RISC): ring HEAD per RISC -- consumer-written (drainer), monotonic word count.
+    // [0, PROFILER_SPSC_MAX_RISC): ring head per RISC, consumer-written (relay), monotonic word count.
     SPSC_RING_HEAD_0 = 0,
-    // [PROFILER_SPSC_MAX_RISC, 2*): ring TAIL per RISC -- producer-written, monotonic word count.
+    // [PROFILER_SPSC_MAX_RISC, 2*): ring tail per RISC, producer-written, monotonic word count.
     SPSC_RING_TAIL_0 = PROFILER_SPSC_MAX_RISC,
-    // Host->kernel terminate signal: set at teardown when the drainer consumer is stopping. While clear, a
-    // producing RISC BLOCKS on a full ring (lossless). While set, the producer stops blocking and
-    // proceeds, so a dispatch core cannot get stuck in ring_ensure_room and wedge wait_until_cores_done()
-    // during device close.
+    // Host->kernel terminate: while clear a producer blocks on a full ring; while set it proceeds, so a dispatch
+    // core cannot wedge wait_until_cores_done() at device close.
     PROFILER_TERMINATE = 2 * PROFILER_SPSC_MAX_RISC,
-    // Core identity: NoC coords packed as (y << 16) | x, written once by BRISC FW at init from
-    // my_x[0]/my_y[0]. Deliberately NOT the push-to-DRAM profiler's ControlBuffer::NOC_X/NOC_Y or its
-    // FLAT_ID -- that enum belongs to the other backend and the two never share a word.
-    //
-    // Coords rather than a flat id on purpose: the flat id is a dense rank over a sorted map of
-    // Tensix+Eth cores, so it has no positional formula, shifts with harvesting, and can only be
-    // computed host-side. (x,y) is what the core already knows about itself, needs no host round-trip,
-    // and the host can map it back however it likes. It rides along free in every bulk read, since the
-    // control vector is the first 256 B of the span -- a drainer never injects or constructs identity.
+    // NoC coords packed (y << 16) | x, written once by BRISC FW at init. Coords, not the flat id: the flat id is a
+    // dense rank over a sorted core map with no positional formula, computable only host-side.
     SPSC_CORE_XY = 2 * PROFILER_SPSC_MAX_RISC + 1,
-    // Per-RISC count of times this producer BLOCKED on a full ring. Written by the producer itself in the
-    // stall path, read by the host directly out of L1 at teardown.
-    //
-    // This is the knee metric, and it lives here rather than being counted from decoded PROFILER_STALL_ZONE
-    // markers because a marker has to survive the whole pipeline to be counted -- DRISC frame, PCIe FIFO,
-    // buffer pool, decoder, BroadcastRing -- and every one of those can drop it (measured: 1.29 M records
-    // dropped at the ring, ~27 K unaccounted elsewhere). A counter in the producer's own L1 cannot be lost,
-    // and reading it needs no decode at all, so the measurement stops perturbing the thing it measures.
-    //
-    // 8 slots, indexed by processor id: enough for Tensix (5), Eth and DRAM, without pushing
-    // SPSC_CONTROL_END past the 64-word control vector.
+    // Per-RISC count of full-ring blocks, written in the stall path and read by the host from L1 at teardown;
+    // counting decoded stall markers would undercount, since a marker can be dropped between the relay frame and
+    // the BroadcastRing. 8 slots so SPSC_CONTROL_END stays inside the 64-word vector.
     SPSC_STALL_COUNT_0 = 2 * PROFILER_SPSC_MAX_RISC + 2,
     SPSC_STALL_COUNT_MAX = 8,
     SPSC_CONTROL_END = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,  // first unused word; grow the layout here
@@ -88,18 +71,16 @@ static_assert(
     SPSC_CONTROL_END <= PROFILER_L1_CONTROL_VECTOR_SIZE,
     "SPSC/drainer control layout overflows the profiler L1 control vector");
 
-// Size of the drain kernel's results block, in words. Shared because the host both ZEROES and READS it and
-// lays the handshake block out immediately behind it -- three places that silently disagreed would each fail
-// differently (a stale counter, a short read, an overlapping handshake). Was 64 and exactly full; the DRISC
-// self-profiling counters need out[64..87], and the NoC-footprint counters out[88..119].
-//
-// WHY 208 IS FREE, and why it must not be raised further. This block lives inside the drain kernel's
-// `kMiscBytes` budget in perf_debug_profiler.cpp, which is 1024 B holding done(64) + stop(64) + results.
-// 208 words is 832 B, so done + stop + results = 960 of 1024. Nothing else moves: `kMiscBytes` is
-// unchanged, so `fixed` is unchanged, so the number of STAGING SLOTS the same L1 can hold is unchanged --
-// which matters because nstage is 7 by a margin of well under one slot. Check that arithmetic, not just
-// this constant, before raising it past the budget.
-static constexpr std::uint32_t SPSC_DRAIN_RESULT_WORDS = 224;
+// Host->relay stop word: quiesce drains everything with every wait still holding, release is the kill
+// switch that abandons the waits and hands the NIU back.
+static constexpr std::uint32_t kRelayStopQuiesce = 1;
+static constexpr std::uint32_t kRelayStopRelease = 2;
+// Relay->host completion word, published only after the socket barrier; the host matches the high half.
+static constexpr std::uint32_t kRelayDoneWord = 0xD09E0000u;
+static constexpr std::uint32_t kRelayDoneMask = 0xFFFF0000u;
+// Each relay control word owns a 64 B pad, so the words that share it (the sync rendezvous triple behind
+// the stop word, the heartbeat behind done) travel in one host write.
+static constexpr std::uint32_t kRelayCtrlWordStride = 64;
 
 // STICKY_META (SPSC/drainer backend, legacy / synthetic bench path only): an 8B context packet whose high
 // word carries (core_x, core_y, risc) + this type and whose low word is a 32-bit host-side ID. The host
@@ -109,56 +90,36 @@ static constexpr std::uint32_t SPSC_DRAIN_RESULT_WORDS = 224;
 // enumerator on the DRAM profiler's PacketTypes; it never belonged to that wire.
 static constexpr std::uint32_t SPSC_TYPE_STICKY_META = 6;
 
-// ---- SPSC SPAN frame: the identity-free drain wire format ------------------------------------------
+// SPSC span frame, the relay wire format: a control block (identity from SPSC_CORE_XY, progress from the heads,
+// extent from the tails) followed by the ring words it describes; the relay injects nothing of its own.
 //
-// A drainer should not know, or claim to know, who it is draining. Everything the host needs is already
-// in the 256 B control vector the drainer had to poll anyway: identity in SPSC_CORE_XY, progress in the
-// heads, extent in the tails. So the frame is that control vector, verbatim, followed by the ring bytes
-// it describes -- and the drainer injects nothing.
-//
-//   [0]                       w0 = SPSC_SPAN_PACKET_TYPE << PP_TYPE_SHIFT; low 27 bits RESERVED, zero
-//   [1]                       payload_words = PROFILER_L1_CONTROL_VECTOR_SIZE + pack pads + shipped ring words
+//   [0]                       w0 = SPSC_SPAN_PACKET_TYPE << PP_TYPE_SHIFT; low 27 bits are layout flags
+//   [1]                       payload_words = control block + pack pads + shipped ring words
 //   [2 .. PREFIX)             zero
-//   [PREFIX .. +CONTROL)      the worker's profiler control vector, verbatim
-//   [.. +payload)             for each RISC in ascending order with a live run: spsc_span_pack_pad()
-//                             skipped words, then the run, ring wrap resolved into a flat array
+//   [PREFIX .. +CONTROL)      packed frame: the SPSC_SPAN_WIRE_CTRL_WORDS control block; raw frame: the
+//                             worker's whole 64-word control vector
+//   [.. +payload)             per RISC in ascending order with a live run: spsc_span_pack_pad() skipped words,
+//                             then the run, ring wrap resolved into a flat array
 //   [.. frame_words)          skipped words up to a 64 B socket page
 //
-// The host recomputes the geometry from the control vector the frame carries -- per RISC, run =
-// spsc_span_live(head, tail) starting at word counter tail - run -- so there is nothing on the wire to
-// desynchronize: no lane tags, no run lengths, no core id.
-//
-// The payload is never CPU-copied: the NIU gathers each live window straight from the staged span into
-// the host FIFO, one write per contiguous ring segment. A NoC write requires the destination to be
-// CONGRUENT to the source modulo NOC_PCIE_WRITE_ALIGNMENT_BYTES (16 B -- the NoC MIS-DELIVERS a misaligned
-// transfer rather than rejecting it), so each live run is preceded by spsc_span_pack_pad() skipped words
-// bringing the wire offset to the ring phase of the run's first word. The wrap continuation needs no pad:
-// the ring capacity is a multiple of the alignment, so it lands congruent by construction. Skipped words
-// are never written -- the host derives every offset from the control vector and reads past them.
-//
-// Prefix is 16 words (64 B) so the control vector starts at 64 B and the payload at 320 B -- both
-// multiples of L1_ALIGNMENT (16 B on Blackhole), which keeps the control-vector PCIe write aligned.
+// The host recomputes the geometry from the control block (per RISC, run = spsc_span_live(head, tail) ending
+// at word counter tail), so the wire carries no lane tags, run lengths or core id. The NIU gathers each live
+// window straight into the host FIFO, and a NoC write mis-delivers a transfer whose destination is not
+// congruent to the source modulo NOC_PCIE_WRITE_ALIGNMENT_BYTES (16 B), so each run is preceded by
+// spsc_span_pack_pad() skipped words, never written; the host reads past them. The 16-word prefix puts the
+// control block at 64 B and the payload at 320 B, both L1_ALIGNMENT multiples.
 constexpr static std::uint32_t SPSC_SPAN_PREFIX_WORDS = 16;
 // Wire type code. Must equal PP_BULK_SPAN in tt_metal/tools/profiler/spsc_packet.h, which is plain C and
 // cannot include this header; spsc_marker_decode.hpp static_asserts that the two agree.
 constexpr static std::uint32_t SPSC_SPAN_PACKET_TYPE = 13;
 // Where the packet type sits in word0 of every packet in this stream (PP_TYPE_SHIFT in spsc_packet.h).
 constexpr static std::uint32_t SPSC_SPAN_TYPE_SHIFT = 27;
-// Socket page granularity, in words -- a frame is padded up to a whole number of these.
-//
-// MEASURED, do not "optimize" again without re-measuring: setting this to the whole frame (2,640 words)
-// collapsed page operations 165x (2.5 M -> 8.9 K) and cut bytes shipped 41%, and bought NOTHING -- total
-// busy time went 34.0 -> 34.3 ms. It also concentrated the same credit-wait into fewer, longer stalls
-// (167 -> 339 us per busy sweep), pushing the worst sweep past the ring-fill deadline and turning 0
-// producer stalls into 952. Socket page bookkeeping is not the host-egress wall.
+// Socket page granularity in words; frames pad up to a whole number. Larger pages concentrate the same credit
+// wait into stalls long enough to miss the ring-fill deadline.
 constexpr static std::uint32_t SPSC_SPAN_PAGE_WORDS = 16;
 
-// Live words one RISC contributes to a span frame. With exact packing this is the entire geometry: the
-// drainer ships `run` words and the host consumes `run` words, both derived from the same control vector.
-//
-// Head and tail are monotonic word counters, so the subtraction is wrap-safe. A lossless producer blocks at
-// capacity, so a run wider than the ring means the snapshot was read torn -- clamped here, and counted by
-// the caller rather than trusted.
+// Live words one RISC contributes. Head and tail are monotonic, so the subtraction is wrap-safe; a run wider
+// than the ring means a torn snapshot and is clamped here and counted by the caller.
 constexpr std::uint32_t spsc_span_live(std::uint32_t head, std::uint32_t tail, std::uint32_t cap) {
     const std::uint32_t run = tail - head;
     return run > cap ? cap : run;
@@ -166,22 +127,16 @@ constexpr std::uint32_t spsc_span_live(std::uint32_t head, std::uint32_t tail, s
 
 // NoC L1->PCIe write congruence quantum (NOC_PCIE_WRITE_ALIGNMENT_BYTES), in words.
 constexpr static std::uint32_t SPSC_SPAN_PACK_ALIGN_WORDS = 4;
-// Skipped words before a live run so the NIU gather lands src/dst congruent: both the frame start on the
-// wire and the staged span in L1 sit at alignment-multiple addresses, so only the run's ring phase and the
-// current wire offset (in words from the frame start) decide the pad. The drainer sizes frames with this
-// and the host walks them with it; a disagreement would desynchronize every lane after the first.
+// Skipped words before a live run so the NIU gather lands src/dst congruent; frame start and staged span sit
+// at alignment multiples, so only the run's ring phase and the wire offset decide it. Relay and host must
+// agree or every later lane mis-walks.
 constexpr std::uint32_t spsc_span_pack_pad(std::uint32_t start_counter, std::uint32_t frame_off_words) {
     return (start_counter - frame_off_words) & (SPSC_SPAN_PACK_ALIGN_WORDS - 1u);
 }
 
-// A wrapping run ships as its whole ring image ONLY when the dead remainder is small. The one-read
-// image saves a NoC issue on the drainer's critical path, which pays exactly at the saturation
-// boundary -- where runs are near-full and the remainder is a few words. At sustained rates runs
-// wrap at a few hundred words, and shipping the image inflates egress bytes by the remainder
-// (measured +33% at delay 9, enough to push the drain past its equilibrium ceiling: sustained knee
-// 9 -> 12). Below the threshold the run ships as the two-piece wrap split, byte-exact. Both sides
-// derive the condition from (start, extent) alone, so the wire carries no flag -- but they MUST
-// use this one predicate: a disagreement mis-walks every lane after the first.
+// A wrapping run ships as its whole ring image only when the dead remainder is small, else as a two-piece
+// split: the one-read image saves a NoC issue at the saturation boundary, but at sustained rates it inflates
+// egress by the remainder. Both sides derive this from (start, extent) alone; the wire carries no flag.
 constexpr static std::uint32_t SPSC_SPAN_WRAP_IMAGE_MAX_PAD_WORDS = 64;
 constexpr bool spsc_span_wrap_image(std::uint32_t start, std::uint32_t extent, std::uint32_t ring_cap) {
     return (start & (ring_cap - 1u)) + extent > ring_cap && ring_cap - extent <= SPSC_SPAN_WRAP_IMAGE_MAX_PAD_WORDS;
@@ -189,10 +144,8 @@ constexpr bool spsc_span_wrap_image(std::uint32_t start, std::uint32_t extent, s
 
 inline std::uint32_t spsc_span_w0() { return SPSC_SPAN_PACKET_TYPE << SPSC_SPAN_TYPE_SHIFT; }
 
-// Compact on-wire control block for PACKED span frames: just the words the decoder walks. The L1
-// control vector is 64 words laid out for 24 RISCs (heads at 0..4 but tails at 24..28 and XY at 49),
-// and shipping it verbatim made ~50 dead words per frame in the loaded direction of the PCIe tile.
-// RAW (self) frames still carry the true vector at its L1 layout -- the w0 raw flag picks the geometry.
+// Control block of a packed frame: just the words the decoder walks. The L1 vector is 64 words laid out for
+// 24 RISCs, ~50 of them dead on the wire. Raw frames carry the true vector; the w0 raw flag picks the geometry.
 constexpr static std::uint32_t SPSC_SPAN_WIRE_CTRL_WORDS = 16;
 enum SpscWireCtrl : std::uint32_t {
     SPSC_WIRE_HEAD_0 = 0,  // ..4
@@ -200,11 +153,9 @@ enum SpscWireCtrl : std::uint32_t {
     SPSC_WIRE_XY = 10,
 };
 
-// Layout flag in w0's reserved-zero low bits: set = the payload is the RAW span (control vector +
-// five whole rings at fixed offsets, ring wrap NOT resolved) instead of packed live runs. The drainer
-// ships whichever costs its egress less -- packing trades bytes for NoC write issues (~10 extra per
-// frame), so above the kernel's fill threshold raw's single burst wins and the flag rides along so
-// the host walks the right geometry.
+// w0 flag: the payload is the raw span (control vector plus five whole rings, wrap unresolved) rather than
+// packed live runs. Packing trades bytes for ~10 extra NoC issues per frame, so above the fill threshold raw
+// wins.
 constexpr static std::uint32_t SPSC_SPAN_RAW_FLAG = 1u;
 
 // ---- Wire codes shared with the producer and the host decoder --------------------------------------
@@ -238,10 +189,8 @@ inline std::uint32_t spsc_marker_w0(std::uint32_t type, std::uint32_t zone_id) {
 inline std::uint32_t spsc_sticky_timer_w0(std::uint32_t timer_hi) {
     return (SPSC_TYPE_STICKY_TIMER << SPSC_SPAN_TYPE_SHIFT) | (timer_hi & SPSC_TIMER_HI_MASK);
 }
-// PP_DATA: a point-in-time packet with a self-describing payload length, 3 + N words. Mirrors
-// spsc_packet.h's pp_data_w0 / pp_data_w2 and is asserted against them in spsc_marker_decode.hpp, the one
-// translation unit that sees both headers. word0 is shaped exactly like a zone marker (type | the full
-// 27-bit structural id); the length lives in its own word2.
+// 3 + N words: word0 is shaped like a zone marker (type | 27-bit id), the length lives in word2. Mirrors
+// spsc_packet.h's pp_data_w0/w2.
 static constexpr std::uint32_t SPSC_TYPE_DATA = 10;
 static constexpr std::uint32_t SPSC_DATA_SIZE_SHIFT = 25;
 inline std::uint32_t spsc_data_w0(std::uint32_t id) {

@@ -60,11 +60,9 @@ KERNEL_ZONES = ("BRISC-KERNEL", "NCRISC-KERNEL", "TRISC-KERNEL")
 DM_KERNEL_ZONES = ("BRISC-KERNEL", "NCRISC-KERNEL")
 
 # Lean-marker event ids -> marker names, kept in sync with the EV_* constants in the compute
-# kernel (kernels/compute_copy_with_nops.cpp). STALE ENCODING: this module still decodes the
-# DRAM-era DeviceRecordEvent shape (event id in the low 16 bits of the timer id, data == 0), but
-# the kernel now emits these as DeviceTimestampedData("OP2OP-EVENT", <EV_* id>) with the id as
-# PAYLOAD -- update the TS_EVENT recovery below to read the data column when reviving this
-# benchmark on the streaming wire.
+# kernel (kernels/compute_copy_with_nops.cpp). The kernel carries the id in the marker payload,
+# while the TS_EVENT recovery below still reads it from the low 16 bits of the timer id; that has
+# to be switched to the data column before this benchmark runs again.
 EVENT_NAMES = {
     12: "TILE_IDX",  # lean-mode first-math (tile 0)
     13: "FINISH_LAST_PUSH",  # pack finish

@@ -5,7 +5,7 @@ callback you register.
 
 ## Three device-profiler modes (mutually exclusive)
 
-| mode | `TT_METAL_DEVICE_PROFILER` | `TT_METAL_STREAMING_PROFILER` | device kernels | DRAM profiler (L1 → DRAM → per-op dump) | streaming (SPSC producer + DRISC fillers + host receiver) | real-time profiler |
+| mode | `TT_METAL_DEVICE_PROFILER` | `TT_METAL_STREAMING_PROFILER` | device kernels | DRAM profiler (L1 → DRAM → per-op dump) | streaming (SPSC producer + DRISC relays + host receiver) | real-time profiler |
 |---|---|---|---|---|---|---|
 | 1 | unset | unset | no profiler code | off | off | on |
 | 2 | set | unset | legacy `kernel_profiler.hpp` (`-DPROFILE_KERNEL`) | on | off | on |
@@ -20,7 +20,7 @@ Sub-switches:
 |---|---|---|
 | `TT_METAL_DEVICE_PROFILER_DISPATCH`, `TT_METAL_DEVICE_PROFILER_NOC_EVENTS`, `TT_METAL_PROFILER_SYNC`, ... | mode 2 only | legacy DRAM-profiler options (ride on `profiler_enabled`) |
 | `TT_METAL_STREAMING_PROFILER_TRACY` | mode 3 | built-in Tracy sink (opt-in) |
-| `TT_METAL_PERF_DEBUG_OPS_CSV`, `TT_METAL_PERF_DEBUG_ZONE_CSV`, `TT_METAL_PERF_DEBUG_STALL_CSV` | mode 3 | built-in CSV consumers |
+| `TT_METAL_STREAMING_PROFILER_OPS_CSV`, `TT_METAL_STREAMING_PROFILER_ZONE_CSV`, `TT_METAL_STREAMING_PROFILER_STALL_CSV` | mode 3 | built-in CSV consumers |
 | `TT_METAL_DEVICE_PROFILER_SYNC_EVENTS` | mode 3 only | sync-event zones at CB/semaphore waits (`-DPROFILE_SYNC_EVENTS`) |
 | `TT_METAL_DRISC_PROFILER` | mode 3 only | arm the producers but do not boot the built-in receiver (caller supplies a DRISC drainer) |
 
@@ -40,12 +40,12 @@ One switch — it also arms the device-side markers. Leave `TT_METAL_DEVICE_PROF
 
 ## Register a callback
 
-From `tools/profiler/perf_debug_consumer.hpp`:
+From `tools/profiler/streaming_profiler_consumer.hpp`:
 
 ```cpp
-auto h = perf_debug::register_consumer("my-sink",
-    [](const perf_debug::PerfDebugRecordBatch& b) { /* ... */ });
-// later: perf_debug::unregister_consumer(h);
+auto h = streaming_profiler::register_consumer("my-sink",
+    [](const streaming_profiler::StreamingProfilerRecordBatch& b) { /* ... */ });
+// later: streaming_profiler::unregister_consumer(h);
 ```
 
 Register any time — before the device opens or mid-capture. Your callback runs on its own
@@ -55,12 +55,12 @@ else's. The batch span is only valid during the call, so copy what you keep.
 ## What you get
 
 Zones arrive **whole**: a zone is one record with a start and a duration. On the wire the device
-already ships most zones atomically (one 3-word packet at scope close, carrying end + duration);
-the few remaining legacy start/end pairs (the producer-stall zone, the >3.2 s long-zone fallback,
-DRISC drainer self-zones) are paired for you on the host. Either way you never see halves.
+ships most zones atomically (one 3-word packet at scope close, carrying end + duration); the kinds
+that still ship as start/end pairs (the producer-stall zone, the >3.2 s long-zone fallback, DRISC
+relay self-zones) are paired for you on the host. Either way you never see halves.
 
 ```cpp
-enum class PerfDebugRecType : uint32_t {
+enum class StreamingProfilerRecType : uint32_t {
     Zone = 1,   // a complete zone: data.zone = {start, duration}
     Data = 3,   // point marker with payload: data.ts; payload follows via Ext (+ Cont)
     Event = 4,  // point marker, no payload: data.ts; complete in itself
@@ -68,14 +68,14 @@ enum class PerfDebugRecType : uint32_t {
     Cont = 6,   // one uint64 of Data payload (words 3 and up): data.payload
 };
 
-struct PerfDebugRecMeta {
+struct StreamingProfilerRecMeta {
     uint32_t spare : 16;
     uint32_t lane : 10;  // which (core, RISC) stream: lane = core_index * 5 + risc
     uint32_t dev : 3;    // device index into the capture context
-    PerfDebugRecType type : 3;
+    StreamingProfilerRecType type : 3;
 };
 
-struct PerfDebugRec {
+struct StreamingProfilerRec {
     // The active member is decided by meta.type.
     union {
         struct {
@@ -87,7 +87,7 @@ struct PerfDebugRec {
         uint64_t payload;  // Cont
     } data;
     uint32_t id;            // structural zone id -> resolves to the zone's name
-    PerfDebugRecMeta meta;
+    StreamingProfilerRecMeta meta;
     uint32_t prog;          // runtime host-id of the op this lane is executing (0 = none yet)
 };
 ```
@@ -99,14 +99,14 @@ either way.
 
 ## The call pattern
 
-The ops-CSV consumer in `tools/profiler/perf_debug_ops_csv.{hpp,cpp}` is the full working
+The ops-CSV consumer in `tools/profiler/streaming_profiler_ops_csv.{hpp,cpp}` is the full working
 reference.
 
 ```cpp
-void MyConsumer::operator()(const perf_debug::PerfDebugRecordBatch& batch) {
+void MyConsumer::operator()(const streaming_profiler::StreamingProfilerRecordBatch& batch) {
     names_.refresh();  // ZoneNameMirror member: names arrive as kernels JIT, refresh once per batch
     for (const auto& r : batch.records) {
-        if (r.meta.type != PerfDebugRecType::Zone) continue;
+        if (r.meta.type != StreamingProfilerRecType::Zone) continue;
         std::string_view name = names_.lookup(r.id);                          // zone name
         const auto& lane = batch.context->devices[r.meta.dev].lanes[r.meta.lane];  // chip, core x/y, risc, role
         // ... aggregate: e.g. per-op rows keyed on r.prog, using r.data.zone.start / .duration ...
@@ -119,12 +119,12 @@ void MyConsumer::operator()(const perf_debug::PerfDebugRecordBatch& batch) {
 The built-in CSV consumer:
 
 ```
-TT_METAL_STREAMING_PROFILER=1 TT_METAL_PERF_DEBUG_OPS_CSV=/tmp/ops.csv python your_model.py
+TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_OPS_CSV=/tmp/ops.csv python your_model.py
 ```
 
 One row per op (kernel start/end unions, per-core and per-RISC splits), joinable against a
 classic `ops_perf_results` CSV on GLOBAL CALL COUNT.
-`tests/ttnn/tracy/test_perf_debug_ops_csv.py` runs exactly this.
+`tests/ttnn/tracy/test_streaming_profiler_ops_csv.py` runs exactly this.
 
 ## Two rules
 
@@ -132,5 +132,5 @@ Don't register/unregister from inside a callback, and don't block in it.
 
 ---
 
-*There is also a built-in callback that pushes zones to a Tracy timeline; enable it with
-`TT_METAL_STREAMING_PROFILER_TRACY=1`.*
+A built-in callback pushes zones to a Tracy timeline; enable it with
+`TT_METAL_STREAMING_PROFILER_TRACY=1`.

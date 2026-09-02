@@ -2,22 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tools/profiler/perf_debug_stall_csv.hpp"
+#include "tools/profiler/streaming_profiler_stall_csv.hpp"
 
 #include <cstdio>
-#include <cstdlib>
+#include <string>
 #include <string_view>
 
-namespace tt::tt_metal::perf_debug {
+#include "context/metal_context.hpp"
 
-void PerfDebugStallCsvConsumer::operator()(const PerfDebugRecordBatch& batch) {
+namespace tt::tt_metal::streaming_profiler {
+
+void StreamingProfilerStallCsvConsumer::operator()(const StreamingProfilerRecordBatch& batch) {
     if (devctx_.size() < batch.context->devices.size()) {
         devctx_ = batch.context->devices;
     }
     dropped_ += batch.dropped_delta;
     names_.refresh();
-    for (const PerfDebugRec& rec : batch.records) {
-        if (rec.meta.type != PerfDebugRecType::Zone) {
+    for (const StreamingProfilerRec& rec : batch.records) {
+        if (rec.meta.type != StreamingProfilerRecType::Zone) {
             continue;
         }
         int32_t ni;
@@ -45,7 +47,7 @@ void PerfDebugStallCsvConsumer::operator()(const PerfDebugRecordBatch& batch) {
     }
 }
 
-void PerfDebugStallCsvConsumer::write_csv(const std::string& path) const {
+void StreamingProfilerStallCsvConsumer::write_csv(const std::string& path) const {
     FILE* f = std::fopen(path.c_str(), "w");
     if (f == nullptr) {
         return;
@@ -92,30 +94,13 @@ void PerfDebugStallCsvConsumer::write_csv(const std::string& path) const {
 
 namespace {
 
-// TT_METAL_PERF_DEBUG_STALL_CSV=<path>: same lifecycle as the ops CSV -- register at load, write at exit,
-// state leaked on purpose (an exit-time destructor would be ordered against other statics).
-struct StallCsvState {
-    std::string path;
-    PerfDebugStallCsvConsumer consumer;
-    PerfDebugConsumerHandle handle = 0;
-};
-StallCsvState* g_stall_csv = nullptr;
-
-const bool g_stall_csv_registered = [] {
-    const char* p = std::getenv("TT_METAL_PERF_DEBUG_STALL_CSV");
-    if (p == nullptr || *p == '\0') {
-        return false;
-    }
-    g_stall_csv = new StallCsvState{p, {}, 0};
-    g_stall_csv->handle =
-        register_consumer("stall-csv", [](const PerfDebugRecordBatch& b) { g_stall_csv->consumer(b); });
-    std::atexit([] {
-        unregister_consumer(g_stall_csv->handle);
-        g_stall_csv->consumer.write_csv(g_stall_csv->path);
+const bool g_stall_csv_declared = [] {
+    register_file_consumer<StreamingProfilerStallCsvConsumer>("stall-csv", []() -> std::string {
+        return MetalContext::instance().rtoptions().get_streaming_profiler_stall_csv_path();
     });
     return true;
 }();
 
 }  // namespace
 
-}  // namespace tt::tt_metal::perf_debug
+}  // namespace tt::tt_metal::streaming_profiler
