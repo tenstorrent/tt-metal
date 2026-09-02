@@ -12,6 +12,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/sdpa/device/block_cyclic_layout.hpp"  // ttnn::prim::BlockCyclicLayout (shared)
 #include "ttnn/operations/ccl/ccl_host_types.hpp"                           // ttnn::ccl::Topology
+#include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/global_semaphore.hpp>
@@ -50,6 +51,11 @@ struct FusedRingConfig {
     ttnn::ccl::Topology topology{ttnn::ccl::Topology::Linear};
     std::vector<tt::tt_metal::GlobalSemaphore> ag_semaphore;  // the all-gather's own out-ready semaphores
     std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id{std::nullopt};
+    bool full_mesh{false};
+    ttnn::ccl::snake_ring::Orientation snake_orientation{ttnn::ccl::snake_ring::Orientation::Row};
+    uint32_t mesh_rows{0};
+    uint32_t mesh_cols{0};
+    std::optional<uint64_t> route_plan_hash;
     // NOTE: the all-gather concat dim is structurally fixed to seq (dim 2) -- the reader's block-cyclic
     // permutation assumes it -- so it is a named constant at the AG call site, not a configurable field. The AG
     // workers' grid offset is likewise computed by the factory (reserved-column math), not carried here.

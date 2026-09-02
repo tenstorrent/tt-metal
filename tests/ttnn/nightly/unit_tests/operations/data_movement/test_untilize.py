@@ -35,7 +35,7 @@ def _height_only_core_count(shape):
     return shape[-2] // _TILE
 
 
-@pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_untilize_with_padded_input(mem_config, device):
     """Regression test: untilize on a padded TILE tensor must discard padding.
 

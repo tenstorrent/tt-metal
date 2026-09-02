@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -28,6 +29,11 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 //
 // In-place: returns a handle to `cache`. Two call forms (identical results):
 
+// `valid_global` (optional, both forms): the end of this chunk's REAL tokens. Given it, only the rows
+// holding them are written, so what must fit the cache is ceil32(valid_global) rather than
+// kv_actual_global + chunk_global, and a chunk padding past the cache end is legal. The 32-token block
+// holding the last real token IS written (zero_padded_kv_cache clears its pad cells).
+//
 // (1) Scalar form (original): per-call `slot_idx`/`kv_actual_global` are host values, passed as
 //     common runtime args and patched on cache hits.
 ttnn::Tensor update_padded_kv_cache(
@@ -37,7 +43,8 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t layer_idx,
     uint32_t num_layers,
     uint32_t kv_actual_global,
-    uint32_t cluster_axis);
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> valid_global = std::nullopt);
 
 // (2) Per-element-tensor form (traceable): `slot_idx`/`kv_actual_global` are read on-device by the
 //     writer kernel from two 1-element uint32 DRAM tensors ([1,1,1,1], ROW_MAJOR, replicated across
@@ -52,7 +59,8 @@ ttnn::Tensor update_padded_kv_cache(
     const ttnn::Tensor& kv_actual_global,
     uint32_t layer_idx,
     uint32_t num_layers,
-    uint32_t cluster_axis);
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<ttnn::Tensor>& valid_global = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache
 
