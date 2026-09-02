@@ -100,11 +100,14 @@ inline __attribute__((always_inline)) void dma_set_burst_size(uint8_t burst_size
 /**
  * @brief Non-blocking GDDR to L1 read. Pair with dma_async_read_barrier().
  *
+ * @tparam kWaitReady Poll the engine's read-ready status before issuing. False skips the poll; the caller
+ *                    must then bound the in-flight read count itself (queue-full is otherwise silent).
  * @param stream      TX stream (0 or 1).
  * @param src_gddr    GDDR source address (64-bit).
  * @param dst_l1      DRISC L1 destination address (32-bit).
  * @param size_bytes  Transfer size in bytes (must be a multiple of 16).
  */
+template <bool kWaitReady = true>
 inline __attribute__((always_inline)) void dma_async_read(
     uint8_t stream, uint64_t src_gddr, uint32_t dst_l1, uint32_t size_bytes) {
     check_stream_(stream);
@@ -114,10 +117,12 @@ inline __attribute__((always_inline)) void dma_async_read(
     attrs.f.transfer_size_words = size_bytes >> 4;
     attrs.f.transfer_start_read = 1;
 
-    volatile DmaCtrlReadStatus_u status = {.val = DmaCtrlReadStatus_DEFAULT};
-    do {
-        status.val = READ_TX_CTRL_REG(TX_CTRL_TX_READ_STATUS_REG_OFFSET);
-    } while (status.f.read_ready != 1);
+    if constexpr (kWaitReady) {
+        volatile DmaCtrlReadStatus_u status = {.val = DmaCtrlReadStatus_DEFAULT};
+        do {
+            status.val = READ_TX_CTRL_REG(TX_CTRL_TX_READ_STATUS_REG_OFFSET);
+        } while (status.f.read_ready != 1);
+    }
 
     program_dma_read_addresses_(stream, src_gddr, dst_l1);
     WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_TRANSFER_ATTRIBUTES_REG_OFFSET, attrs.val);
@@ -126,11 +131,14 @@ inline __attribute__((always_inline)) void dma_async_read(
 /**
  * @brief Non-blocking L1 to GDDR write. Pair with dma_async_write_barrier().
  *
+ * @tparam kWaitReady Poll the engine's write-ready status before issuing. False skips the poll; the caller
+ *                    must then bound the in-flight write count itself (queue-full is otherwise silent).
  * @param stream      TX stream (0 or 1).
  * @param src_l1      DRISC L1 source address (32-bit).
  * @param dst_gddr    GDDR destination address (64-bit).
  * @param size_bytes  Transfer size in bytes (must be a multiple of 16).
  */
+template <bool kWaitReady = true>
 inline __attribute__((always_inline)) void dma_async_write(
     uint8_t stream, uint32_t src_l1, uint64_t dst_gddr, uint32_t size_bytes) {
     check_stream_(stream);
@@ -142,10 +150,12 @@ inline __attribute__((always_inline)) void dma_async_write(
     attrs.f.end_of_packet = 0;
     attrs.f.transfer_start_raw = 1;
 
-    volatile DmaCtrlWriteStatus_u status = {.val = DmaCtrlWriteStatus_DEFAULT};
-    do {
-        status.val = READ_TX_CTRL_REG(TX_CTRL_TX_WRITE_STATUS_REG_OFFSET);
-    } while (status.f.write_ready != 1);
+    if constexpr (kWaitReady) {
+        volatile DmaCtrlWriteStatus_u status = {.val = DmaCtrlWriteStatus_DEFAULT};
+        do {
+            status.val = READ_TX_CTRL_REG(TX_CTRL_TX_WRITE_STATUS_REG_OFFSET);
+        } while (status.f.write_ready != 1);
+    }
 
     program_dma_write_addresses_(stream, src_l1, dst_gddr);
     WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_TRANSFER_ATTRIBUTES_REG_OFFSET, attrs.val);

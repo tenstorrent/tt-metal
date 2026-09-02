@@ -64,52 +64,6 @@ inline void notify_bytes_sent(const SocketSenderInterface& sender) {
         4u);
 }
 
-// socket_reserve_pages spins with no escape. This wait holds through quiesce (stop=1), when the receiver is
-// still acking; only the kill switch (stop=2) returns false.
-inline bool reserve_pages(const SocketSenderInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* stop) {
-    const uint32_t num_bytes = num_pages * socket.page_size;
-    volatile tt_l1_ptr uint32_t* acked = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_base_addr);
-    const uint32_t acked_end = socket.bytes_acked_base_addr + socket.num_downstreams * bytes_acked_size_bytes;
-    while (reinterpret_cast<uint32_t>(acked) < acked_end) {
-        while (true) {
-            invalidate_l1_cache();
-            const uint32_t bytes_free = socket.downstream_fifo_total_size - (socket.bytes_sent - *acked);
-            if (bytes_free >= num_bytes) {
-                break;
-            }
-            if (*stop == kernel_profiler::kRelayStopRelease) {
-                return false;
-            }
-        }
-        acked =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reinterpret_cast<uint32_t>(acked) + bytes_acked_size_bytes);
-    }
-    return true;
-}
-
-// dma_async_write/read poll the engine's ready status first; that poll guards queue-full, which the
-// generation gate (<= ~10 of 15 writes) and the pump (<= 2 of 255 reads) make unreachable.
-__attribute__((always_inline)) inline void dma_write_unchecked(
-    uint8_t stream, uint32_t src_l1, uint64_t dst_gddr, uint32_t size_bytes) {
-    DmaTxqTransferAttrs_u attrs = {.val = DmaTxqTransferAttrs_DEFAULT};
-    attrs.f.transfer_size_words = size_bytes >> 4;
-    attrs.f.start_of_packet = 0;
-    attrs.f.end_of_packet = 0;
-    attrs.f.transfer_start_raw = 1;
-    experimental::program_dma_write_addresses_(stream, src_l1, dst_gddr);
-    WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_TRANSFER_ATTRIBUTES_REG_OFFSET, attrs.val);
-}
-
-__attribute__((always_inline)) inline void dma_read_unchecked(
-    uint8_t stream, uint64_t src_gddr, uint32_t dst_l1, uint32_t size_bytes) {
-    DmaTxqTransferAttrs_u attrs = {.val = DmaTxqTransferAttrs_DEFAULT};
-    attrs.f.transfer_size_words = size_bytes >> 4;
-    attrs.f.transfer_start_read = 1;
-    experimental::program_dma_read_addresses_(stream, src_gddr, dst_l1);
-    WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_TRANSFER_ATTRIBUTES_REG_OFFSET, attrs.val);
-}
-
-
 constexpr uint32_t kStageBase = get_named_compile_time_arg_val("stage_base");
 constexpr uint32_t kNStage = get_named_compile_time_arg_val("n_stage");
 constexpr uint32_t kCoreRecords = get_named_compile_time_arg_val("core_records");
@@ -277,7 +231,7 @@ struct SpoolPump {
     __attribute__((always_inline)) void append(uint32_t src, uint32_t len) {
         while (len != 0) {
             const uint32_t piece = len > kSpoolBytes - wr_off ? kSpoolBytes - wr_off : len;
-            dma_write_unchecked(kDmaShip, src, kSpoolBase + wr_off, piece);
+            experimental::dma_async_write<false>(kDmaShip, src, kSpoolBase + wr_off, piece);
             dma_issued++;
             wr += piece;
             wr_off += piece;
@@ -338,7 +292,8 @@ struct SpoolPump {
             if (len > kSpoolBytes - rd_iss_off) {
                 len = kSpoolBytes - rd_iss_off;
             }
-            dma_read_unchecked(kDmaDrain, kSpoolBase + rd_iss_off, kBounceBase0 + emp * kBounceBytes, len);
+            experimental::dma_async_read<false>(
+            kDmaDrain, kSpoolBase + rd_iss_off, kBounceBase0 + emp * kBounceBytes, len);
             rd_iss += len;
             rd_iss_off += len;
             if (rd_iss_off == kSpoolBytes) {
@@ -761,7 +716,7 @@ void kernel_main() {
             pump.rebalance();
         } else {
             asm volatile("fence" ::: "memory");
-            if (!reserve_pages(sender, bytes / kPageBytes, stop)) {
+            if (!socket_reserve_pages(sender, bytes / kPageBytes, stop, kernel_profiler::kRelayStopRelease)) {
                 killed = true;
                 return;
             }

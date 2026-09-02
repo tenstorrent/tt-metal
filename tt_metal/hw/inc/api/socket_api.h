@@ -136,6 +136,35 @@ void socket_reserve_pages(const SocketSenderInterface& socket, uint32_t num_page
     }
 }
 
+// Like socket_reserve_pages, but gives up and returns false when *abort_word reads abort_value while the
+// downstream has no room, so a sender can be released by its host instead of spinning on a dead receiver.
+bool socket_reserve_pages(
+    const SocketSenderInterface& socket,
+    uint32_t num_pages,
+    volatile tt_l1_ptr uint32_t* abort_word,
+    uint32_t abort_value) {
+    uint32_t num_bytes = num_pages * socket.page_size;
+    volatile tt_l1_ptr uint32_t* bytes_acked_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_base_addr);
+    uint32_t bytes_acked_end = socket.bytes_acked_base_addr + socket.num_downstreams * bytes_acked_size_bytes;
+    while (reinterpret_cast<uint32_t>(bytes_acked_ptr) < bytes_acked_end) {
+        while (true) {
+            invalidate_l1_cache();
+            const uint32_t bytes_free =
+                socket.downstream_fifo_total_size - (socket.bytes_sent - *bytes_acked_ptr);
+            if (bytes_free >= num_bytes) {
+                break;
+            }
+            if (*abort_word == abort_value) {
+                return false;
+            }
+        }
+        bytes_acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            reinterpret_cast<uint32_t>(bytes_acked_ptr) + bytes_acked_size_bytes);
+    }
+    return true;
+}
+
 void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
     uint32_t num_bytes = num_pages * socket.page_size;
     ASSERT(num_bytes <= socket.downstream_fifo_curr_size);
