@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-09-01",
+  "last_scan_date": "2026-09-02",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -86,8 +86,8 @@
     {
       "branch": "silencer/dedupe-matmul-memconfig-mismatch-warning-77496cdc6bbbe3a9",
       "pattern": "Mismatch between computed/provided mem config warning - 102x repeats, only 2 distinct pairs",
-      "status": "pr-gate-dispatched-2026-09-01",
-      "note": "PR #51894 still draft, no dedicated validation run found on branch this run either. Deferred again this run: reconciliation focus was PR #52996's outstanding validation-redispatch. Re-attempt dispatch + validation next run if still unvalidated.",
+      "status": "reported-inconclusive-ready-for-review",
+      "note": "pr-gate run 33557656596 completed/success but ttnn-smoke-tests test job did not exercise matmul path (932-line log, no matmul invocation) - inconclusive, not confirmed. Commented outcome and marked ready for review (2026-09-02).",
       "number": 51894
     },
     {
@@ -278,5 +278,5 @@
       "number": 55002
     }
   ],
-  "backlog_cursor": "Reconciled #54851 (merged), #53024 (merged). #51894 still had no validation run; dispatched pr-gate on branch silencer/dedupe-matmul-memconfig-mismatch-warning-77496cdc6bbbe3a9 and posted status comment. #54732 already reported-inconclusive-ready-for-review, no action needed this run. Remaining in_flight entries not re-checked this run (already terminal per prior status strings). Next run: verify #51894 pr-gate outcome; then proceed to Phase B scan of an untried workflow (models t1/t2, single-card, blackhole)."
+  "backlog_cursor": "Reconciled #51894 (pr-gate run 33557656596 success but inconclusive - test job did not exercise matmul path). No Phase B target selected this run due to reconciliation focus. Next run: proceed to Phase B scan of an untried workflow (models t1/t2, single-card, blackhole)."
 }
