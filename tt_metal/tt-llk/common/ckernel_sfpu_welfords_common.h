@@ -638,6 +638,7 @@ sfpi_inline void _two_pass_update_shifted_rows_(std::uint32_t start_row, std::ui
 template <bool dual_sum, bool retain_anchor = false>
 sfpi_inline void _two_pass_finish_shifted_mean_(std::uint32_t reciprocal_bits)
 {
+    static_assert(!retain_anchor || dual_sum, "anchor retention requires the dual-accumulator statistics path");
     if constexpr (retain_anchor)
     {
         TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, 0);

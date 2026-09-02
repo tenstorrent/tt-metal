@@ -113,11 +113,12 @@ ALWI void two_pass_stats_update_shifted_rows(
 /**
  * @brief Converts the shifted sum into a mean and clears the accumulators for the centred-M2 pass.
  * @tparam dual_sum If true, combines the two shifted-sum accumulators before scaling.
- * @tparam retain_anchor If true, retains the anchor for the subsequent centred-M2 pass.
+ * @tparam retain_anchor If true, retains the anchor for the subsequent centred-M2 pass; requires `dual_sum`.
  * @param reciprocal_bits Bit representation of the FP32 reciprocal population count.
  */
 template <bool dual_sum = true, bool retain_anchor = false>
 ALWI void two_pass_stats_finish_shifted_mean(std::uint32_t reciprocal_bits) {
+    static_assert(!retain_anchor || dual_sum, "anchor retention requires the dual-accumulator statistics path");
     MATH((llk_math_two_pass_sfpu_finish_shifted_mean<dual_sum, retain_anchor>(reciprocal_bits)));
 }
 
