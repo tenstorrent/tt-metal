@@ -86,6 +86,6 @@ void kernel_main() {
         u::ComputeBlock rot = rot_storage.store(u::matmul(x, m));
 
         // x * cos + rot * sin, in ONE pass: four leaves, three DST slots.
-        u::noc_store<1>(out_storage.store(x * cos + rot * sin), out, c);
+        u::noc_store<1>(out_storage, x * cos + rot * sin, out, c);
     }
 }

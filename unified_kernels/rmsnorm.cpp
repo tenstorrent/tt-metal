@@ -105,6 +105,6 @@ void kernel_main() {
 
         // Rows: one value per COLUMN, replicated down the rows. The other axis, in the same
         // kernel, which is what makes this more than a second reduction test.
-        u::noc_store<1>(out_storage.store(normed * u::bcast<u::Axis::Rows>(w)), out, i);
+        u::noc_store<1>(out_storage, normed * u::bcast<u::Axis::Rows>(w), out, i);
     }
 }

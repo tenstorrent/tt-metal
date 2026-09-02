@@ -912,6 +912,48 @@ void example_shim_decl() {
     noc_store<0>(mm_out.store(mm_i.rsqrt()), t2, 0);
 }
 
+// ---------------------------------------------------------------------------------------
+// The congruent drain: noc_store<thread>(storage, expression, ...) beside the older
+// noc_store<thread>(storage.store(expression), ...).
+//
+// Both spellings stay public, and the 24 example sites above deliberately keep using the
+// Block form so it stays under test. What has to hold is that the new one is EXACTLY the
+// old one with the store() unwrapped -- same buffers, same order, same instructions -- so
+// this is a report_same pair rather than a second protocol check.
+//
+// It also pins the overload disjointness that is easy to lose: (Block, Accessor, idx) and
+// (Storage, Node, Fn) are both three arguments, separated only by the first parameter.
+// Both are exercised here, so a change that makes one swallow the other stops compiling.
+void example_drain_old() {
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t2 = TensorAccessor(FakeArgs{2}, 0);
+    using In = Shape<2, 3>;
+    Storage<In> in(0), out(2), out2(4);
+    {
+        ComputeBlock a = noc_load<1>(in, t0, 0).wait();
+        noc_store<0>(out.store(a.exp()), t2, 0);  // accessor form
+    }
+    {
+        ComputeBlock a = noc_load<1>(in, t0, 0).wait();
+        noc_store<0>(out2.store(a.relu()), [](L1Entries) {});  // custom Fn form
+    }
+}
+
+void example_drain_new() {
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t2 = TensorAccessor(FakeArgs{2}, 0);
+    using In = Shape<2, 3>;
+    Storage<In> in(0), out(2), out2(4);
+    {
+        ComputeBlock a = noc_load<1>(in, t0, 0).wait();
+        noc_store<0>(out, a.exp(), t2, 0);
+    }
+    {
+        ComputeBlock a = noc_load<1>(in, t0, 0).wait();
+        noc_store<0>(out2, a.relu(), [](L1Entries) {});
+    }
+}
+
 // Single-shot matmul: one k-block straight through Storage::store(), no
 // accumulation buffer.
 void example_matmul_single() {
@@ -1159,6 +1201,10 @@ int main() {
     ok &= report("shim: ComputeBlock<Shape, dfb>");
     ok &= report_same(
         "shim: declaration vs Storage::store", tt::unified::example_shim_storage, tt::unified::example_shim_decl);
+    ok &= report_same(
+        "drain: noc_store(storage, expr) vs noc_store(storage.store(expr))",
+        tt::unified::example_drain_old,
+        tt::unified::example_drain_new);
     printf("\n%s: %s\n", TT_LABEL, ok ? "ALL BALANCED" : "FAILURES PRESENT");
     return ok ? 0 : 1;
 }

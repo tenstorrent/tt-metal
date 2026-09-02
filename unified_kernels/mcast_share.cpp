@@ -97,7 +97,7 @@ void kernel_main() {
         }
 #endif
 
-        u::noc_store<1>(out0_storage.store(u::copy(a)), out0, core * rounds + r);
-        u::noc_store<1>(out1_storage.store(u::copy(b)), out1, core * rounds + r);
+        u::noc_store<1>(out0_storage, u::copy(a), out0, core * rounds + r);
+        u::noc_store<1>(out1_storage, u::copy(b), out1, core * rounds + r);
     }
 }

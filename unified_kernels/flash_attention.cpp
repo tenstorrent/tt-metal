@@ -330,7 +330,7 @@ void kernel_main() {
         // This costs NO extra NOC traffic. The built-in store already issues one write
         // per page, since consecutive pages of an interleaved tensor sit on different
         // banks, so all that changes is the destination page index each write is given.
-        u::noc_store<1>(out_storage.store(o_done * u::bcast<u::Axis::Cols>(rl)), [&](u::L1Entries pages) {
+        u::noc_store<1>(out_storage, o_done * u::bcast<u::Axis::Cols>(rl), [&](u::L1Entries pages) {
             for (uint32_t p = 0; p < pages.count; ++p) {
                 // The block is row-major in L1: page p is its tile (p / dt, p % dt).
                 const uint32_t row = i * sq + p / dt;

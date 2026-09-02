@@ -122,5 +122,5 @@ void kernel_main() {
 
     u::ComputeBlock prob = prob_storage.store(e * u::bcast<u::Axis::Cols>(recip));
 
-    u::noc_store<1>(out_storage.store(u::matmul(prob, v)), out, 0);
+    u::noc_store<1>(out_storage, u::matmul(prob, v), out, 0);
 }

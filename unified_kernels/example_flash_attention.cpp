@@ -106,5 +106,5 @@ void kernel_main() {
     u::ComputeBlock<Out> total_out = running_out.release();
 
     u::ComputeBlock reciprocal = reciprocal_storage.store(u::recip(total_sum));
-    u::noc_store<1>(out_storage.store(total_out * u::bcast<kRows>(reciprocal)), out, 0);
+    u::noc_store<1>(out_storage, total_out * u::bcast<kRows>(reciprocal), out, 0);
 }
