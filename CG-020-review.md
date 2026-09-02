@@ -160,15 +160,18 @@ gaps follow, all of them cheap to close:
    configuration already in the repository, as Section 4 shows.
 
    Apply the capitalization rule to new code only. iceoryx encoded the convention quoted in
-   Section 2 as `clang-tidy` options, then commented out all of them except the two member
-   prefix rules and switched the check off, noting "Temporarily disabled because massive API
-   changes"
-   ([.clang-tidy:46-47](https://github.com/eclipse-iceoryx/iceoryx/blob/08bf71b0384fc6092b8f910f90a5f2832d5612ea/.clang-tidy#L46-L47),
-   with the disabled options left in place at
-   [lines 196 to 209](https://github.com/eclipse-iceoryx/iceoryx/blob/08bf71b0384fc6092b8f910f90a5f2832d5612ea/.clang-tidy#L196-L209)
-   as a record of intent). Given the 71 to 17 split in the public headers here, enabling the
-   check across the repository would reach the same result. Limiting `clang-tidy` to changed
-   lines enforces the rule on new code without a repository-wide rename.
+   Section 2 as `clang-tidy` options, then backed the enforcement out. Its configuration
+   enables `readability-*` near the top of the check list but then disables the naming check with
+   [`-readability-identifier-naming`](https://github.com/eclipse-iceoryx/iceoryx/blob/08bf71b0384fc6092b8f910f90a5f2832d5612ea/.clang-tidy#L36)
+   further down, and because the list is evaluated in order the later entry wins. The reason is
+   recorded a few lines below as
+   ["Temporarily disabled because massive API changes"](https://github.com/eclipse-iceoryx/iceoryx/blob/08bf71b0384fc6092b8f910f90a5f2832d5612ea/.clang-tidy#L46-L47),
+   and the convention itself is still in the file at
+   [lines 196 to 209](https://github.com/eclipse-iceoryx/iceoryx/blob/08bf71b0384fc6092b8f910f90a5f2832d5612ea/.clang-tidy#L196-L209),
+   but those CheckOptions have no effect while the check is off.
+   Given the 71 to 17 split in the public headers here, enabling the check across this
+   repository would reach the same result. Limiting `clang-tidy` to changed lines enforces the
+   rule on new code without a repository-wide rename.
 
 ### Note on CG-021
 
