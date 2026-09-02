@@ -1400,6 +1400,78 @@
   team: models
 
 # ----------------------------------------------------------------------------
+# WAN 2.2 single-galaxy multihost tests (bh_sc1 / exabox-multihost-ci-sc1)
+# ----------------------------------------------------------------------------
+# Separate entries from the wh_galaxy / bh_quietbox_2 legs above rather than another SKU on those:
+# the bh_galaxy pool is too small to carry Wan, so Blackhole galaxy coverage runs on the exabox
+# single-galaxy SKU instead. That needs the multihost plumbing the LTX-2.3 bh_sc1 leg uses (a
+# single-rank mpirun plus TT_MESH_GRAPH_DESC_PATH) and the Blackhole parametrization ids
+# (bh_glx and nl2, not wh_glx and nl4), so the commands cannot be shared with the Wormhole entries.
+- name: TT-DiT Wan2.2-T2V-A14B unit tests (single BH galaxy)
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
+    export NO_PROMPT=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # vbench quality checks (test_pipeline_wan.py) need the pre-staged dataset. exabox stages
+    # datasets under /mnt/models; the wh_galaxy legs use /mnt/MLPerf. Take whichever exists so the
+    # leg never downloads it mid-run.
+    for d in /mnt/models/vbench /mnt/MLPerf/vbench; do
+      if [ -d "$d" ]; then export VBENCH_CACHE_DIR="$d" TORCH_HOME="$d/torch_hub"; break; fi
+    done
+    [ -n "${VBENCH_CACHE_DIR:-}" ] || echo "WARNING: no vbench cache found; quality checks may download"
+    # Run every leg, accumulate failures, fail the job if any leg failed (LTX-2.3 bh_sc1 pattern).
+    rc=0
+    run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest "$@" || rc=1; }
+    run --timeout 1000 models/tt_dit/tests/models/wan2_2/test_rope.py
+    run --timeout 1000 models/tt_dit/tests/models/wan2_2/test_attention_wan.py
+    run --maxfail 10 --timeout 10000 models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "not f32 and not 720p and not f81"
+    run --maxfail 10 --timeout 10000 models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "not 720p"
+    run --maxfail 10 --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py
+    run --timeout 1000 models/tt_dit/tests/encoders/umt5/test_umt5.py -k "bh_glx"
+    run --timeout 1000 models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding -k "bh_glx"
+    exit $rc
+  model: wan-2.2-t2v
+  model_family: Wan
+  skus:
+    bh_sc1:
+      timeout: 150
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT Wan2.2-I2V-A14B unit tests (single BH galaxy)
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
+    export NO_PROMPT=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    for d in /mnt/models/vbench /mnt/MLPerf/vbench; do
+      if [ -d "$d" ]; then export VBENCH_CACHE_DIR="$d" TORCH_HOME="$d/torch_hub"; break; fi
+    done
+    [ -n "${VBENCH_CACHE_DIR:-}" ] || echo "WARNING: no vbench cache found; quality checks may download"
+    # No is_fsdp1 filter here: that is a wh_galaxy workaround for an OOM on is_fsdp0, and Blackhole
+    # has the DRAM headroom to run both.
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest --maxfail 10 --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py
+  model: wan-2.2-i2v
+  model_family: Wan
+  skus:
+    bh_sc1:
+      timeout: 120
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+# ----------------------------------------------------------------------------
 # WAN 2.2 multihost quad-galaxy tests (bh_sc4 / exabox-multihost-ci-sc4)
 # ----------------------------------------------------------------------------
 - name: TT-DiT Wan2.2-A14B transformer block unit tests
