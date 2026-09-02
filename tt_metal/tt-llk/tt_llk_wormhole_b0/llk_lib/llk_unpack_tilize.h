@@ -65,7 +65,9 @@ inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const
  * @param face_r_dim: Rows per face.
  * @param narrow_tile: Whether the tile is narrow (single column of faces).
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
- * @note Call @ref _llk_unpack_tilize_uninit_ after this function to restore the modified tile-descriptor state.
+ * @note Call @ref _llk_unpack_tilize_uninit_ after this function to revert the state altered here:
+ *       unpack config word-0 (tilize/haloize mode) and Tile_x_dim_cntx0. The SrcA tile descriptor is
+ *       neither written here nor restored there — see tt-llk#1161.
  * @ref _llk_unpack_tilize_ is the matching execute call.
  * @ref _llk_math_eltwise_unary_datacopy_init_ (DataCopyType::A2D) is the matching init on the math thread.
  */
@@ -539,9 +541,11 @@ inline void _llk_unpack_tilizeA_B_(
  * face_r_dim-aware canonical Tile_x_dim so subsequent ops see a normal tile layout — i.e. it
  * reverts exactly the state @ref _llk_unpack_tilize_init_ altered. The SrcA tile-descriptor
  * Y/Z-dim word is deliberately left untouched: tilize neither writes nor mutates it, so it is
- * not this op's to restore (it is owned per-operand by configure_unpack_AB and re-established on
- * an operand switch by reconfig_full_operand / reconfig_tile_shape). x-start/x-end is transient
- * and reprogrammed by the next operation's init (see tt-llk#1036), so it is not restored here.
+ * not this op's to restore. Whoever switches the operand owns re-establishing it — Z-dim via
+ * an explicit reconfig_full_operand / reconfig_tile_shape (a plain format reconfig with
+ * p_dim_stride_target::IGNORE does not reprogram geometry), Y-dim only by configure_unpack_AB
+ * at kernel start. x-start/x-end is transient and reprogrammed by the next operation's init
+ * (see tt-llk#1036), so it is not restored here.
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
  * @param tensor_shape: Tile geometry; face_r_dim restores the canonical Tile_x_dim.
@@ -557,11 +561,19 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
     // NOTE: the SrcA tile-descriptor Y/Z-dim word (THCON_SEC0_REG0_TileDescriptor+1) is
     // intentionally NOT written here. Tilize does not own it: _llk_unpack_tilize_init_ never
     // writes it and the tilize UNPACR does not mutate it (the unpacker datapath reads config, it
-    // does not write it). Its canonical {y=1, z=num_faces} baseline is owned per-operand by
-    // configure_unpack_AB and re-established on an operand switch by reconfig_full_operand /
-    // reconfig_tile_shape. Writing it here (the historical band-aid) violated the
+    // does not write it). Writing it here (the historical band-aid) violated the
     // operation-restorable contract and, by stamping this operand's num_faces, corrupted a
     // following op whose operand had a different num_faces (tt-metal#45179/#47016). See tt-llk#1161.
+    //
+    // Its canonical {y=1, z=num_faces} baseline is programmed per-operand by configure_unpack_AB.
+    // Re-establishing it after an operand switch is the switcher's job, and only for Z-dim: it takes
+    // an explicit reconfig_full_operand / reconfig_tile_shape, because
+    // _llk_unpack_reconfig_tile_shape_srca_ is skipped when the caller passes
+    // p_dim_stride_target::IGNORE (which tilize_init_short_with_dt / tilize_uninit_with_dt do), and
+    // plain tilize_uninit does no unpack reconfig at all. Y-dim has no repair path outside
+    // configure_unpack_AB: _llk_unpack_reconfig_tile_shape_srca_ masks with
+    // TILE_DESC_UPPER_HALFWORD_MASK and so cannot write it. Untilize and fast-tilize perturb Y-dim
+    // but each snapshots and restores the whole word itself (SR_UNPACK_UNTILIZER_STATE_2).
 
     // The unpack-config[0] write below also clears tileize_mode, haloize_mode, and the
     // other word-0 fields back to 0, mirroring what the zero-initialised config struct
