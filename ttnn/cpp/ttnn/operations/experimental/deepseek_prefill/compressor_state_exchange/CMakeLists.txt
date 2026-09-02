@@ -25,6 +25,8 @@ target_sources(
         FILES ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_COMPRESSOR_STATE_EXCHANGE_API_HEADERS}
     PRIVATE
         compressor_state_exchange.cpp
+        device/compressor_state_select.cpp
+        device/compressor_state_select_program_factory.cpp
 )
 
 target_link_libraries(
@@ -33,6 +35,7 @@ target_link_libraries(
         TT::Metalium
     PUBLIC
         TTNN::Core
+        TTNN::Ops::CCL
         TTNN::Ops::DataMovement
         TTNN::Ops::PointToPoint
 )

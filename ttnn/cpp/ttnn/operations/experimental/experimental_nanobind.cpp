@@ -81,6 +81,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/combine_fabric2d_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/compressor_state_exchange/compressor_state_exchange_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/csa_compressor/csa_compressor_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/moe_fused_swiglu_nanobind.hpp"
@@ -218,6 +219,7 @@ void py_module(nb::module_& mod) {
 
     // DeepSeek prefill MoE operations
     deepseek_prefill::detail::bind_compressor_state_exchange(mod);
+    deepseek_prefill::detail::bind_csa_compressor(mod);
     deepseek_prefill::detail::bind_dispatch(mod);
     deepseek_prefill::detail::bind_combine(mod);
     deepseek_prefill::detail::bind_routed_expert_ffn(mod);
