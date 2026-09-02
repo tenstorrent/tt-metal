@@ -317,7 +317,7 @@ inline void _llk_pack_reconfig_data_format_(
     llk::san::pack_operand_configure<true>(
         is_fp32_dest_acc_en, pack_src_format, pack_dst_format, face_r_dim, llk::san::IGNORE, num_faces, partial_face, narrow_tile);
 
-    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, face_r_dim, partial_face);
+    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, face_r_dim);
 }
 
 /**
@@ -363,7 +363,7 @@ inline void _llk_pack_hw_configure_(
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     llk::san::pack_operand_configure(is_fp32_dest_acc_en, pack_src_format, pack_dst_format, face_r_dim, llk::san::IGNORE, num_faces, partial_face, narrow_tile);
 
-    configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
+    configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, narrow_tile, relu_config);
 }
 
 /**

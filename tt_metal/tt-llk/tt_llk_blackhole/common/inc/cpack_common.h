@@ -401,11 +401,7 @@ inline void reconfigure_exp_threshold(const std::uint32_t pack_dst_format)
 
 template <bool is_fp32_dest_acc_en>
 inline void set_packer_config(
-    const std::uint32_t pack_src_format,
-    const std::uint32_t pack_dst_format,
-    const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t num_faces  = 4,
-    const bool partial_face        = false)
+    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // Get pointer to registers for current state ID
@@ -601,7 +597,6 @@ inline void configure_pack(
     const std::uint32_t face_r_dim  = FACE_R_DIM,
     const std::uint32_t tile_c_dim  = TILE_C_DIM,
     const std::uint32_t num_faces   = 4,
-    const bool partial_face         = false,
     const std::uint32_t relu_config = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
@@ -647,7 +642,7 @@ inline void configure_pack(
 
     t6_mutex_release(mutex::REG_RMW);
 
-    set_packer_config<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, face_r_dim, num_faces, partial_face);
+    set_packer_config<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, face_r_dim, num_faces);
 
     // PACK_COUNTERS_SEC0_pack_per_xy_plane = cfg_reg_array[3][0 +: 8];
     // PACK_COUNTERS_SEC0_pack_reads_per_xy_plane = cfg_reg_array[3][8 +: 8];

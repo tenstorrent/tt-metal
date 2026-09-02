@@ -434,7 +434,8 @@ inline void pack_init_apply(
  * @param tile_size: Size of one output tile in bytes.
  * @param tile_c_dim: Tile column dimension (datums).
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: True if packing a partial (sub-face-row) face. Recorded for operand validation only; the packer config sizes partial faces from
+ * face_r_dim.
  * @param face_r_dim: Number of rows per face; sizes the BFP exponent section for partial faces.
  */
 template <bool is_fp32_dest_acc_en>
@@ -481,7 +482,8 @@ inline void _llk_pack_set_fp32_dest_acc_(bool enable)
  * @param face_r_dim: Number of rows per face.
  * @param tile_c_dim: Tile column dimension (datums).
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: True if packing a partial (sub-face-row) face. Recorded for operand validation only; the packer config sizes partial faces from
+ * face_r_dim.
  * @param relu_config: Packed relu mode and threshold configuration (0 disables relu).
  * @note For 8-bit unpack-source datums, do not use PackMode::Tilize: the Blackhole row-unswizzling workaround is skipped (and is unnecessary, as 8-bit formats
  * are unaffected by the issue).
@@ -502,7 +504,7 @@ inline void _llk_pack_hw_configure_(
     // sstanisic todo: partial face, narrow tile are weird (see #47440)
     llk::san::pack_operand_configure(is_fp32_dest_acc_en, pack_src_format, pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, llk::san::IGNORE);
 
-    configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
+    configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, relu_config);
 }
 
 /**
