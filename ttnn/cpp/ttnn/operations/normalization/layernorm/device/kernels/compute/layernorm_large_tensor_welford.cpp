@@ -316,6 +316,7 @@ void kernel_main() {
     constexpr uint32_t blk = get_arg(args::block_size);
     constexpr uint32_t do_gamma = get_arg(args::do_gamma);
     constexpr uint32_t do_beta = get_arg(args::do_beta);
+    constexpr bool fuse_pre_add = get_arg(args::fuse_pre_add) == 1;
     constexpr bool FLOAT32_DTYPE = get_arg(args::fp32_dest_acc_en) == 1;
     constexpr uint32_t W = get_arg(args::W);
     constexpr uint32_t tile_width = get_arg(args::tile_width);
