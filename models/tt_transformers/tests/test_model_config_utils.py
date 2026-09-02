@@ -81,7 +81,10 @@ def test_compute_galaxy_width_shard_cores(width, expected):
         pytest.param(28672, 28, 32, id="llama-70b"),
         # Qwen-72B padded: 32768 // 8 // 4 = 1024, which 28 cores cannot tile-align; 32 can.
         pytest.param(32768, 32, 32, id="qwen-72b-padded"),
-        pytest.param(14336, 28, 16, id="llama-8b"),
+        # 14336 // 8 // 4 = 448, which 28 cores cannot fill at tile granularity, so the
+        # shard rounds up to one tile and the grid over-covers (28 * 32 = 896 >= 448) --
+        # the same padding the demo applies when it covers 896 with 30 * 32 = 960.
+        pytest.param(14336, 28, 32, id="llama-8b-padded"),
     ],
 )
 def test_galaxy_ff1_out_reduce_scatter_memory_config(hidden_dim, expected_cores, expected_shard_width):
