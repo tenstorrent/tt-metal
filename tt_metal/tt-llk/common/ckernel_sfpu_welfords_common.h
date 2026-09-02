@@ -298,11 +298,23 @@ sfpi_inline void _clear_previous_mean_and_m2_()
     TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
 }
 
-// Two-pass statistics helpers. The shifted pass-one path holds an anchor in
-// LREG4 and sums (x - anchor) in LREG5/6 to preserve precision for large common
-// offsets. Both produce the mean in LREG4; pass two holds the centered sum of
-// squares in LREG5/6. The input tile has been transposed so channels are rows
-// and the 32 spatial samples remain vector lanes.
+/**
+ * @brief Internal register protocol for shifted two-pass statistics.
+ *
+ * Input tiles are transposed before these helpers run, so tile rows select
+ * channels and the 32 spatial samples occupy vector lanes. Pass one keeps a
+ * common anchor in LREG4 and accumulates `(x - anchor)` in LREG5, optionally
+ * alternating with LREG6. `_two_pass_finish_shifted_mean_` replaces LREG4 with
+ * the mean and clears LREG5/LREG6. Pass two accumulates `(x - mean)^2` in
+ * LREG5/LREG6. LREG11 must contain -1.0, as established by the two-pass init.
+ *
+ * State spill helpers use two consecutive DST tiles: mean at raw offset 0 and
+ * M2 at raw offset 64. The optional retained anchor uses the otherwise-unused
+ * vector at mean-tile offset 4. Helpers that finalise to row or raw-face layout
+ * consume reciprocal values as FP32 bit patterns to avoid runtime division.
+ */
+
+/** Accumulate one shifted input vector into the selected sum register. */
 template <std::uint32_t input_lreg, std::uint32_t accumulator_lreg>
 sfpi_inline void _two_pass_accumulate_shifted_sum_row_()
 {
@@ -311,6 +323,7 @@ sfpi_inline void _two_pass_accumulate_shifted_sum_row_()
     TTI_SFPADD(accumulator_lreg, ckernel::p_sfpu::LCONST_1, input_lreg, accumulator_lreg, 0);
 }
 
+/** Accumulate four shifted input vectors through two independent dependency chains. */
 sfpi_inline void _two_pass_accumulate_shifted_sum_block_()
 {
     TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, 0);
@@ -324,6 +337,12 @@ sfpi_inline void _two_pass_accumulate_shifted_sum_block_()
     TTI_SFPNOP;
 }
 
+/**
+ * Accumulate the selected rows of an already-loaded four-row block.
+ * @tparam dual_sum Whether odd rows use LREG6 instead of sharing LREG5.
+ * @param first First selected row within the block.
+ * @param last One-past-last selected row within the block.
+ */
 template <bool dual_sum>
 sfpi_inline void _two_pass_accumulate_shifted_sum_loaded_block_(std::uint32_t first, std::uint32_t last)
 {
@@ -349,6 +368,12 @@ sfpi_inline void _two_pass_accumulate_shifted_sum_loaded_block_(std::uint32_t fi
     TTI_SFPNOP;
 }
 
+/**
+ * Initialise the shift anchor from the first selected row, then accumulate the block.
+ * @tparam dual_sum Whether to use two shifted-sum accumulators.
+ * @tparam I Tile face-row index.
+ * @tparam J Four-row block index within the face row.
+ */
 template <bool dual_sum, std::uint32_t I, std::uint32_t J>
 sfpi_inline void _two_pass_initialize_anchor_and_accumulate_block_(std::uint32_t start_row, std::uint32_t end_row)
 {
@@ -385,6 +410,7 @@ sfpi_inline void _two_pass_initialize_anchor_and_accumulate_block_(std::uint32_t
     _two_pass_accumulate_shifted_sum_loaded_block_<dual_sum>(first, last);
 }
 
+/** Accumulate one centred square into the serial LREG5 M2 chain. */
 template <std::uint32_t input_lreg>
 sfpi_inline void _two_pass_accumulate_m2_single_()
 {
@@ -393,6 +419,7 @@ sfpi_inline void _two_pass_accumulate_m2_single_()
     TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
 }
 
+/** Accumulate four centred squares in row order while pipelining residual formation. */
 sfpi_inline void _two_pass_accumulate_m2_block_()
 {
     // Alternate residuals between LREG6 and LREG7 so useful work separates
@@ -411,6 +438,7 @@ sfpi_inline void _two_pass_accumulate_m2_block_()
     TTI_SFPNOP;
 }
 
+/** Accumulate one centred square into the selected dual-M2 dependency chain. */
 template <std::uint32_t input_lreg, std::uint32_t accumulator_lreg>
 sfpi_inline void _two_pass_accumulate_m2_dual_single_()
 {
@@ -421,6 +449,7 @@ sfpi_inline void _two_pass_accumulate_m2_dual_single_()
     TTI_SFPMAD(input_lreg, input_lreg, accumulator_lreg, accumulator_lreg, 0);
 }
 
+/** Accumulate four centred squares by alternating the LREG5/LREG6 M2 chains. */
 sfpi_inline void _two_pass_accumulate_m2_dual_block_()
 {
     // Form all four residuals in place, then alternate two M2 accumulators.
@@ -437,6 +466,14 @@ sfpi_inline void _two_pass_accumulate_m2_dual_block_()
     TTI_SFPNOP;
 }
 
+/**
+ * Load and process the intersection of a tile row range with one four-row block.
+ * @tparam accumulate_m2 Selects centred-M2 rather than shifted-sum accumulation.
+ * @tparam dual_accumulator Enables the second sum or M2 dependency chain.
+ * @tparam shifted_mean Marks the only supported pass-one mode.
+ * @tparam I Tile face-row index.
+ * @tparam J Four-row block index within the face row.
+ */
 template <bool accumulate_m2, bool dual_accumulator, bool shifted_mean, std::uint32_t I, std::uint32_t J>
 sfpi_inline void _two_pass_block_rows_(std::uint32_t start_row, std::uint32_t end_row)
 {
@@ -491,6 +528,7 @@ sfpi_inline void _two_pass_block_rows_(std::uint32_t start_row, std::uint32_t en
     }
 }
 
+/** Dispatch one pass-one block, optionally initialising the shift anchor in that block. */
 template <bool initialize_anchor, bool dual_sum, std::uint32_t I, std::uint32_t J>
 sfpi_inline void _two_pass_shifted_block_rows_(std::uint32_t start_row, std::uint32_t end_row)
 {
@@ -507,6 +545,10 @@ sfpi_inline void _two_pass_shifted_block_rows_(std::uint32_t start_row, std::uin
     _two_pass_block_rows_<false, dual_sum, true, I, J>(start_row, end_row);
 }
 
+/**
+ * Accumulate centred M2 over a contiguous range of rows in the current input tile.
+ * @tparam dual_m2 Whether odd rows use the independent LREG6 M2 accumulator.
+ */
 template <bool dual_m2>
 sfpi_inline void _two_pass_update_rows_(std::uint32_t start_row, std::uint32_t num_rows)
 {
@@ -539,6 +581,12 @@ sfpi_inline void _two_pass_update_rows_(std::uint32_t start_row, std::uint32_t n
     _two_pass_block_rows_<true, dual_m2, false, 1, 3>(start_row, end_row);
 }
 
+/**
+ * Accumulate shifted pass-one sums or dispatch to centred-M2 pass two.
+ * @tparam accumulate_m2 Selects pass two when true.
+ * @tparam initialize_anchor Initialises LREG4 from the first selected input.
+ * @tparam dual_accumulator Enables the independent LREG6 dependency chain.
+ */
 template <bool accumulate_m2, bool initialize_anchor, bool dual_accumulator>
 sfpi_inline void _two_pass_update_shifted_rows_(std::uint32_t start_row, std::uint32_t num_rows)
 {
@@ -581,6 +629,12 @@ sfpi_inline void _two_pass_update_shifted_rows_(std::uint32_t start_row, std::ui
     _two_pass_shifted_block_rows_<initialize_anchor, dual_accumulator, 1, 3>(start_row, end_row);
 }
 
+/**
+ * Convert shifted sums into the mean and clear the pass-two M2 accumulators.
+ * @tparam dual_sum Whether LREG6 must be folded into LREG5 first.
+ * @tparam retain_anchor Whether to preserve the original anchor in LREG7 for compensated finalisation.
+ * @param reciprocal_bits FP32 bit pattern for the reciprocal population count.
+ */
 template <bool dual_sum, bool retain_anchor = false>
 sfpi_inline void _two_pass_finish_shifted_mean_(std::uint32_t reciprocal_bits)
 {
@@ -606,6 +660,11 @@ sfpi_inline void _two_pass_finish_shifted_mean_(std::uint32_t reciprocal_bits)
     TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
 }
 
+/**
+ * Store a retained anchor, anchor-minus-mean correction, and variance for the compensated FPU finaliser.
+ * @tparam dual_m2 Whether LREG6 must be folded into LREG5 first.
+ * @param reciprocal_bits FP32 bit pattern for the reciprocal population count.
+ */
 template <bool dual_m2>
 sfpi_inline void _two_pass_store_split_mean_var_to_dst_row_(std::uint32_t reciprocal_bits)
 {
@@ -665,29 +724,35 @@ sfpi_inline void _two_pass_store_split_mean_var_to_dst_row_(std::uint32_t recipr
     TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset + offset3);
 }
 
+/** Store the retained LREG7 anchor at raw offset zero of the current DST tile. */
 sfpi_inline void _two_pass_store_anchor_to_dst_()
 {
     TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, 0);
 }
 
+/** Restore LREG7 from raw offset zero of the current DST tile. */
 sfpi_inline void _two_pass_load_anchor_from_dst_()
 {
     TTI_SFPLOAD(ckernel::p_sfpu::LREG7, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, 0);
 }
 
-// The mean-state tile stores its vector at raw offset 0. Offset 4 is the next
-// unused vector slot, so an anchor placed there survives state spill/reload and
-// block combines without requiring another tile.
+/**
+ * Store the retained LREG7 anchor in the mean-state tile's unused vector slot.
+ * The mean vector occupies raw offset 0; offset 4 survives state spill/reload
+ * and block combines without requiring another tile.
+ */
 sfpi_inline void _two_pass_store_anchor_to_state_dst_()
 {
     TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, 4);
 }
 
+/** Restore LREG7 from the mean-state tile's raw offset 4 anchor slot. */
 sfpi_inline void _two_pass_load_anchor_from_state_dst_()
 {
     TTI_SFPLOAD(ckernel::p_sfpu::LREG7, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, 4);
 }
 
+/** Clear the mean/shifted-sum/M2 state in LREG4-LREG6. */
 sfpi_inline void _two_pass_clear_stats_()
 {
     TTI_SFPLOADI(ckernel::p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, 0);
@@ -695,6 +760,10 @@ sfpi_inline void _two_pass_clear_stats_()
     TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
 }
 
+/**
+ * Spill the current mean/M2 state to two consecutive DST tiles.
+ * @tparam dual_m2 Whether LREG6 must be folded into LREG5 before the spill.
+ */
 template <bool dual_m2>
 sfpi_inline void _two_pass_store_mean_m2_to_dst_()
 {
@@ -710,6 +779,15 @@ sfpi_inline void _two_pass_store_mean_m2_to_dst_()
     TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
 }
 
+/**
+ * Merge the current block's mean/M2 with state stored in two consecutive DST tiles.
+ *
+ * Uses the parallel-Welford cross term. Runtime division is avoided by passing
+ * compile-time FP32 constants for `1/(n_a+n_b)` and `n_b`.
+ * @tparam dual_m2 Whether LREG6 must be folded into LREG5 before the merge.
+ * @param total_reciprocal_bits FP32 bits for `1/(n_a+n_b)`.
+ * @param block_n_bits FP32 bits for the current block population `n_b`.
+ */
 template <bool dual_m2>
 sfpi_inline void _two_pass_combine_block_to_dst_(std::uint32_t total_reciprocal_bits, std::uint32_t block_n_bits)
 {
@@ -752,6 +830,11 @@ sfpi_inline void _two_pass_combine_block_to_dst_(std::uint32_t total_reciprocal_
     TTI_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, m2_tile_offset);
 }
 
+/**
+ * Finalise mean and variance into row-zero vectors of consecutive DST tiles.
+ * @tparam dual_m2 Whether LREG6 must be folded into LREG5 before scaling.
+ * @param reciprocal_bits FP32 bits for the reciprocal population count.
+ */
 template <bool dual_m2>
 sfpi_inline void _two_pass_store_mean_var_to_dst_row_(std::uint32_t reciprocal_bits)
 {
@@ -793,6 +876,12 @@ sfpi_inline void _two_pass_store_mean_var_to_dst_row_(std::uint32_t reciprocal_b
     TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset + offset3);
 }
 
+/**
+ * Finalise one group's mean and variance into compact raw-face slots.
+ * @tparam dual_m2 Whether LREG6 must be folded into LREG5 before scaling.
+ * @param group_id Four-lane group slot within the output vectors.
+ * @param reciprocal_bits FP32 bits for the reciprocal population count.
+ */
 template <bool dual_m2>
 sfpi_inline void _two_pass_store_mean_var_to_dst_raw_group_(std::uint32_t group_id, std::uint32_t reciprocal_bits)
 {
@@ -812,6 +901,10 @@ sfpi_inline void _two_pass_store_mean_var_to_dst_raw_group_(std::uint32_t group_
     TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
 }
 
+/**
+ * Horizontally reduce the paired mean and variance vectors in LREG0 and LREG4.
+ * @tparam broadcast_result Whether to broadcast each final sum to every lane.
+ */
 template <bool broadcast_result>
 sfpi_inline void _two_pass_horizontal_sum_pair_()
 {
@@ -873,6 +966,16 @@ sfpi_inline void _two_pass_horizontal_sum_pair_()
     }
 }
 
+/**
+ * Finalise lane-local statistics, combine 32 equal lane populations, and store one group.
+ *
+ * Uses total variance: average lane variance plus variance of lane means.
+ * The third consecutive DST tile is clobbered as scratch while the first two
+ * receive compact mean and variance vectors.
+ * @tparam dual_m2 Whether LREG6 must be folded into LREG5 before scaling.
+ * @param group_id Four-lane group slot within the output vectors.
+ * @param reciprocal_bits FP32 bits for the reciprocal lane population count.
+ */
 template <bool dual_m2>
 sfpi_inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(std::uint32_t group_id, std::uint32_t reciprocal_bits)
 {
@@ -1062,6 +1165,12 @@ sfpi_inline void _load_mean_m2_from_dst_group_(std::uint32_t group_id)
     TT_SFPLOAD(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, m2_tile_offset + (group_id << 2));
 }
 
+/**
+ * Save one compact group state and restore another in LREG4/LREG5.
+ * @tparam dual_accumulator Must be false because LREG6 and retained LREG7 state are not preserved.
+ * @param save_group_id Group slot that receives the active state.
+ * @param restore_group_id Group slot restored into the active registers.
+ */
 template <bool dual_accumulator>
 sfpi_inline void _two_pass_switch_group_(std::uint32_t save_group_id, std::uint32_t restore_group_id)
 {
