@@ -102,7 +102,10 @@ void kernel_main() {
                     constexpr std::uint32_t stats_input_dst = input_dst;
 #else
                     dfb_in.wait_front(onetile);
-                    const std::uint32_t stats_input_dst = ht < 3 ? (ht == 0 ? retained_input_dst : ht) : input_dst;
+                    // Keep var_dst clean: finalization writes only the result rows, so
+                    // parking pass-one input there would leak stale data into padding.
+                    const std::uint32_t stats_input_dst =
+                        ht < 2 ? (ht == 0 ? retained_input_dst : mean_dst) : input_dst;
                     copy_tile(dfb::in, 0, stats_input_dst);
                     dfb_in.pop_front(onetile);
 #endif
@@ -123,7 +126,7 @@ void kernel_main() {
                 }
                 dfb_in.pop_front(Ht);
 #else
-                constexpr std::uint32_t num_front_retained = Ht < 3 ? Ht : 3;
+                constexpr std::uint32_t num_front_retained = Ht < 2 ? Ht : 2;
                 for (std::uint32_t ht = 0; ht < num_front_retained; ++ht) {
                     const std::uint32_t stats_input_dst = ht == 0 ? retained_input_dst : ht;
                     two_pass_stats_update_rows<true>(stats_input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);

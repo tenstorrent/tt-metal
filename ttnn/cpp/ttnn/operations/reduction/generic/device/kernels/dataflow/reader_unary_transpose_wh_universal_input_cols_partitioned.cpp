@@ -105,9 +105,9 @@ void kernel_main() {
 #else
         static_assert(!sfpu_two_pass || row_chunk == 1);
         if constexpr (sfpu_two_pass) {
-            constexpr std::uint32_t num_passes = Ht > 4 ? 2 : 1;
+            constexpr std::uint32_t num_passes = Ht > 3 ? 2 : 1;
             for (std::uint32_t pass = 0; pass < num_passes; ++pass) {
-                const std::uint32_t pass_start = pass == 0 ? 0 : std::min(Ht, static_cast<std::uint32_t>(3));
+                const std::uint32_t pass_start = pass == 0 ? 0 : std::min(Ht, static_cast<std::uint32_t>(2));
                 const std::uint32_t pass_end = pass == 0 ? Ht : Ht - 1;
                 for (std::uint32_t ht_base = pass_start; ht_base < pass_end;) {
                     const std::uint32_t contiguous_pages = max_read_batch - stream_write_page;
