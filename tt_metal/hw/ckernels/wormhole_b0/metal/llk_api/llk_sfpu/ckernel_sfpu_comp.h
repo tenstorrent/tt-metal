@@ -151,55 +151,55 @@ inline void calculate_comp() {
     }
 }
 
+// Each mode writes the constant that the untaken side would have produced up front and
+// keeps only the taken arm under a v_if. That drops the SFPCOMPC the v_else compiles to,
+// and lets the default be materialised once outside the predicate.
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_int() {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vInt v = dst_reg[0];
         vInt zero = 0;
+        vInt res = zero;
 
         // a[i] == 0
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
-            v_if(v == zero) { v = 1; }
-            v_else { v = zero; }
+            v_if(v == zero) { res = 1; }
             v_endif;
         }
 
         // a[i] != 0
         if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
-            v_if(v == zero) { v = zero; }
-            v_else { v = 1; }
+            res = 1;
+            v_if(v == zero) { res = zero; }
             v_endif;
         }
 
         // a[i] < 0
         if constexpr (COMP_MODE == SfpuType::less_than_zero) {
-            v_if(v < zero) { v = 1; }
-            v_else { v = zero; }
+            v_if(v < zero) { res = 1; }
             v_endif;
         }
 
         // a[i] > 0
         if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
-            v_if(v > zero) { v = 1; }
-            v_else { v = zero; }
+            v_if(v > zero) { res = 1; }
             v_endif;
         }
 
         // a[i] <= 0
         if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
-            v_if(v <= zero) { v = 1; }
-            v_else { v = zero; }
+            v_if(v <= zero) { res = 1; }
             v_endif;
         }
 
         // a[i] >= 0
         if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
-            v_if(v >= zero) { v = 1; }
-            v_else { v = zero; }
+            v_if(v >= zero) { res = 1; }
             v_endif;
         }
 
-        dst_reg[0] = v;
+        dst_reg[0] = res;
         dst_reg++;
     }
 }

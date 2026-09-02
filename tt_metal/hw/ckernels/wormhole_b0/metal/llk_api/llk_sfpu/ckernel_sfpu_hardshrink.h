@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
@@ -13,7 +14,7 @@ namespace ckernel::sfpu {
 inline void hardshrink_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_hardshrink(uint32_t param0) {
+inline void calculate_hardshrink(std::uint32_t param0) {
     // Hardshrink(x, λ) = x if |x| > λ, else 0
     // Single comparison using abs: setsgn(v, 0) clears sign bit
     // param0 contains lambda as FP32 bits. For BF16 inputs, the host pre-rounds
@@ -25,8 +26,11 @@ inline void calculate_hardshrink(uint32_t param0) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat abs_v = sfpi::setsgn(v, 0);
-        v_if(abs_v <= lambda) { sfpi::dst_reg[0] = 0.0f; }
+        // |v| <= lambda written as lambda - |v| >= 0. Wormhole SFPSETCC only has
+        // LT0/GTE0/EQ0/NE0, so the <= form costs two SFPSETCCs plus an SFPCOMPC while
+        // this one lands directly on GTE0. Both operands are non-negative (lambda is a
+        // magnitude), so the subtraction cannot overflow and equality still lands on +0.
+        v_if(lambda - sfpi::abs(v) >= 0.0f) { sfpi::dst_reg[0] = 0.0f; }
         v_endif;
         sfpi::dst_reg++;
     }

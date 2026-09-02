@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
@@ -26,7 +27,7 @@ namespace sfpu {
 // order, run min/max, then invert the result back.
 // When threshold MSB = 1, raw bits already sort correctly under sign-magnitude with min/max roles swapped.
 template <bool APPROXIMATION_MODE, bool IS_LOWER_BOUND, DataFormat FORMAT, int ITERATIONS = 8>
-inline void relu_clamp_uint(uint threshold) {
+inline void relu_clamp_uint(std::uint32_t threshold) {
     static_assert(
         FORMAT == DataFormat::UInt32 || FORMAT == DataFormat::UInt16,
         "relu_clamp_uint requires DataFormat::UInt32 or UInt16 (uint8 dispatches through UInt32)");
@@ -84,7 +85,7 @@ inline void relu_clamp_uint(uint threshold) {
 // Load/store as signed 2's complement (DataLayout::I32). Since the sign-magnitude SFPSWAP path cannot
 // represent -2^31 (0x80000000 is -0), we use the plain int32 compare.
 template <bool APPROXIMATION_MODE, bool IS_LOWER_BOUND, int ITERATIONS = 8>
-inline void relu_clamp_int(uint threshold) {
+inline void relu_clamp_int(std::uint32_t threshold) {
     const vInt t = static_cast<int>(threshold);
     const bool is_pos_threshold = static_cast<int>(threshold) >= 0;
     if constexpr (IS_LOWER_BOUND) {
@@ -142,30 +143,29 @@ inline void relu_clamp_int(uint threshold) {
 }
 inline void relu_min_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
+// relu_min: max(x, threshold), one SFPSWAP per element instead of a predicated move.
 template <bool APPROXIMATION_MODE>
-inline void relu_min(uint uint_threshold) {
+inline void relu_min(std::uint32_t uint_threshold) {
     vFloat threshold = Converter::as_float(uint_threshold);
+#pragma GCC unroll 8
     for (int d = 0; d < 8; d++) {
-        vFloat a = dst_reg[0];
-        v_if(a < threshold) { a = threshold; }
-        v_endif;
-        dst_reg[0] = a;
+        dst_reg[0] = sfpi::max(vFloat(dst_reg[0]), threshold);
         dst_reg++;
     }
 }
 
 inline void relu_max_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
+// relu_max/relu6: max(0, min(x, threshold)), two SFPSWAPs per element instead of two
+// predicated moves. Written as max(min(..)) rather than sfpi::clamp(x, 0, threshold):
+// clamp evaluates min(max(x, 0), threshold), which returns the threshold rather than 0
+// when the threshold is negative. The nesting here keeps the original op's semantics.
 template <bool APPROXIMATION_MODE>
-inline void relu_max(uint uint_threshold) {
+inline void relu_max(std::uint32_t uint_threshold) {
     vFloat threshold = Converter::as_float(uint_threshold);
+#pragma GCC unroll 8
     for (int d = 0; d < 8; d++) {
-        vFloat a = dst_reg[0];
-        v_if(a > threshold) { a = threshold; }
-        v_endif;
-        v_if(a < 0.0f) { a = 0.0f; }
-        v_endif;
-        dst_reg[0] = a;
+        dst_reg[0] = sfpi::max(sfpi::min(vFloat(dst_reg[0]), threshold), vFloat(0.0f));
         dst_reg++;
     }
 }
@@ -173,7 +173,7 @@ inline void relu_max(uint uint_threshold) {
 inline void lrelu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_lrelu(const uint slope) {
+inline void calculate_lrelu(const std::uint32_t slope) {
     _calculate_lrelu_<APPROXIMATION_MODE>(ITERATIONS, slope);
 }
 
