@@ -574,7 +574,7 @@ def _run_chunked_prefill(
         assert trace_paths, (
             f"reference='trace' is not supported for variant '{trace_variant.name}': no golden MLA "
             "trace was ever recorded for it (mla_trace_defaults is empty). Use reference='cpu' or "
-            "reference='func', or point MLA_CHUNKED_TRACE_PATH at a trace.
+            "reference='func', or point MLA_CHUNKED_TRACE_PATH at a trace."
         )
         traces = resolve_traces(trace_paths, num_users)
         # The trace is a DENSE token sequence; iters_isl just chunks it variably. Partial iters pad
