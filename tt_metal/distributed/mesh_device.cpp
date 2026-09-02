@@ -1187,6 +1187,15 @@ CoreCoord MeshDeviceImpl::worker_core_from_logical_core(const CoreCoord& logical
         return device->worker_core_from_logical_core(logical_core);
     });
 }
+CoreCoord MeshDeviceImpl::worker_core_from_logical_core_at(
+    const MeshCoordinate& mesh_coordinate, const CoreCoord& logical_core) const {
+    auto& metal_context = MetalContext::instance();
+    const auto fabric_node_id = get_fabric_node_id(mesh_coordinate);
+    const auto physical_chip_id =
+        metal_context.get_control_plane().get_physical_chip_id_from_fabric_node_id(fabric_node_id);
+    return metal_context.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+        physical_chip_id, logical_core, CoreType::WORKER);
+}
 CoreCoord MeshDeviceImpl::logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const {
     return validate_and_get_reference_value(this->get_devices(), [ethernet_core](const auto* device) {
         return device->logical_core_from_ethernet_core(ethernet_core);
@@ -1773,6 +1782,10 @@ CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_co
 }
 CoreCoord MeshDevice::worker_core_from_logical_core(const CoreCoord& logical_core) const {
     return pimpl_->worker_core_from_logical_core(logical_core);
+}
+CoreCoord MeshDevice::worker_core_from_logical_core_at(
+    const MeshCoordinate& mesh_coordinate, const CoreCoord& logical_core) const {
+    return pimpl_->worker_core_from_logical_core_at(mesh_coordinate, logical_core);
 }
 CoreCoord MeshDevice::ethernet_core_from_logical_core(const CoreCoord& logical_core) const {
     return pimpl_->ethernet_core_from_logical_core(logical_core);
