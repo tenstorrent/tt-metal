@@ -6,19 +6,21 @@
     "normalized_by": "anchor_calls_in_window (one LM head per step), not an assumed iteration count",
     "total_rows": 1264,
     "ops_per_step": 158.0,
-    "device_us_per_step": 1708.1,
-    "op_to_op_gap_us_per_step": 20378.2,
+    "device_us_per_step": 1710.0,
+    "op_to_op_gap_us_per_step": 20396.4,
+    "op_to_op_gap_is_instrumentation": true,
+    "op_to_op_gap_note": "test_full_model_profile.py drains the device profiler after every iteration inside the signposted windows, so this gap is dominated by those flushes and is NOT dispatch overhead. Use the wall clock in perf_reduced_decode.json / perf.json for host-visible latency.",
     "top_ops": [
       {
         "op": "MatmulDeviceOperation 32 x 2048 x 154880",
-        "us_per_step": 872.84,
+        "us_per_step": 873.17,
         "pct": 51.1,
         "calls_per_step": 1.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 2048 x 10240",
-        "us_per_step": 131.65,
-        "pct": 7.7,
+        "us_per_step": 132.83,
+        "pct": 7.8,
         "calls_per_step": 2.0
       },
       {
@@ -35,25 +37,25 @@
       },
       {
         "op": "SdpaDecodeDeviceOperation",
-        "us_per_step": 49.87,
+        "us_per_step": 49.92,
         "pct": 2.9,
         "calls_per_step": 2.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 10240 x 2048",
-        "us_per_step": 47.33,
+        "us_per_step": 47.27,
         "pct": 2.8,
         "calls_per_step": 1.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 5120 x 2048",
-        "us_per_step": 45.0,
+        "us_per_step": 45.03,
         "pct": 2.6,
         "calls_per_step": 2.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 2048 x 1536",
-        "us_per_step": 39.08,
+        "us_per_step": 39.19,
         "pct": 2.3,
         "calls_per_step": 4.0
       },
@@ -65,31 +67,31 @@
       },
       {
         "op": "UntilizeCodegenDeviceOperation",
-        "us_per_step": 30.56,
+        "us_per_step": 30.57,
         "pct": 1.8,
         "calls_per_step": 2.0
       },
       {
         "op": "SparseMatmulDeviceOperation active=?/64 x 32 x 1536 x 2048",
-        "us_per_step": 30.26,
+        "us_per_step": 30.5,
         "pct": 1.8,
         "calls_per_step": 1.0
       },
       {
         "op": "FillPadDeviceOperation",
-        "us_per_step": 30.2,
+        "us_per_step": 30.21,
         "pct": 1.8,
         "calls_per_step": 5.0
       },
       {
         "op": "TransposeDeviceOperation",
-        "us_per_step": 25.5,
+        "us_per_step": 25.58,
         "pct": 1.5,
         "calls_per_step": 8.0
       },
       {
         "op": "SliceDeviceOperation",
-        "us_per_step": 24.28,
+        "us_per_step": 24.31,
         "pct": 1.4,
         "calls_per_step": 19.0
       }
@@ -102,60 +104,62 @@
     "normalized_by": "anchor_calls_in_window (one LM head per step), not an assumed iteration count",
     "total_rows": 1600,
     "ops_per_step": 200.0,
-    "device_us_per_step": 2752.6,
-    "op_to_op_gap_us_per_step": 27049.2,
+    "device_us_per_step": 2751.1,
+    "op_to_op_gap_us_per_step": 27187.7,
+    "op_to_op_gap_is_instrumentation": true,
+    "op_to_op_gap_note": "test_full_model_profile.py drains the device profiler after every iteration inside the signposted windows, so this gap is dominated by those flushes and is NOT dispatch overhead. Use the wall clock in perf_reduced_decode.json / perf.json for host-visible latency.",
     "top_ops": [
       {
         "op": "MatmulDeviceOperation 32 x 2048 x 154880",
-        "us_per_step": 873.49,
+        "us_per_step": 871.56,
         "pct": 31.7,
         "calls_per_step": 1.0
       },
       {
         "op": "TopkLargeIndicesDeviceOperation",
-        "us_per_step": 664.89,
+        "us_per_step": 665.03,
         "pct": 24.2,
         "calls_per_step": 4.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 2048 x 10240",
-        "us_per_step": 132.36,
+        "us_per_step": 132.52,
         "pct": 4.8,
         "calls_per_step": 2.0
       },
       {
         "op": "TopkRouteFinishDeviceOperation",
-        "us_per_step": 82.03,
+        "us_per_step": 82.29,
         "pct": 3.0,
         "calls_per_step": 4.0
       },
       {
         "op": "SliceDeviceOperation",
-        "us_per_step": 80.53,
+        "us_per_step": 80.2,
         "pct": 2.9,
         "calls_per_step": 23.0
       },
       {
         "op": "BinaryNgDeviceOperation",
-        "us_per_step": 73.3,
+        "us_per_step": 73.24,
         "pct": 2.7,
         "calls_per_step": 25.0
       },
       {
         "op": "TopkRoutePrepDeviceOperation",
-        "us_per_step": 68.27,
+        "us_per_step": 68.42,
         "pct": 2.5,
         "calls_per_step": 4.0
       },
       {
         "op": "LayerNormDeviceOperation",
-        "us_per_step": 52.72,
+        "us_per_step": 52.61,
         "pct": 1.9,
         "calls_per_step": 9.0
       },
       {
         "op": "SparseMatmulDeviceOperation active=?/64 x 32 x 2048 x 3072",
-        "us_per_step": 51.27,
+        "us_per_step": 51.15,
         "pct": 1.9,
         "calls_per_step": 1.0
       },
@@ -167,25 +171,25 @@
       },
       {
         "op": "MatmulDeviceOperation 32 x 10240 x 2048",
-        "us_per_step": 47.32,
+        "us_per_step": 47.42,
         "pct": 1.7,
         "calls_per_step": 1.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 5120 x 2048",
-        "us_per_step": 45.03,
+        "us_per_step": 45.01,
         "pct": 1.6,
         "calls_per_step": 2.0
       },
       {
         "op": "CopyDeviceOperation",
-        "us_per_step": 40.52,
+        "us_per_step": 40.92,
         "pct": 1.5,
         "calls_per_step": 1.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 2048 x 1536",
-        "us_per_step": 40.3,
+        "us_per_step": 40.42,
         "pct": 1.5,
         "calls_per_step": 4.0
       }
@@ -198,90 +202,92 @@
     "normalized_by": "anchor_calls_in_window (one LM head per step), not an assumed iteration count",
     "total_rows": 110,
     "ops_per_step": 110.0,
-    "device_us_per_step": 10444.7,
-    "op_to_op_gap_us_per_step": 427.6,
+    "device_us_per_step": 10423.2,
+    "op_to_op_gap_us_per_step": 453.4,
+    "op_to_op_gap_is_instrumentation": true,
+    "op_to_op_gap_note": "test_full_model_profile.py drains the device profiler after every iteration inside the signposted windows, so this gap is dominated by those flushes and is NOT dispatch overhead. Use the wall clock in perf_reduced_decode.json / perf.json for host-visible latency.",
     "top_ops": [
       {
         "op": "SparseMatmulDeviceOperation active=?/256 x 32 x 2048 x 3072",
-        "us_per_step": 3069.94,
-        "pct": 29.4,
+        "us_per_step": 3049.45,
+        "pct": 29.3,
         "calls_per_step": 1.0
       },
       {
         "op": "SparseMatmulDeviceOperation active=?/64 x 128 x 1536 x 2048",
-        "us_per_step": 1982.44,
-        "pct": 19.0,
+        "us_per_step": 1996.96,
+        "pct": 19.2,
         "calls_per_step": 1.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 2048 x 154880",
-        "us_per_step": 876.5,
-        "pct": 8.4,
+        "us_per_step": 866.2,
+        "pct": 8.3,
         "calls_per_step": 1.0
       },
       {
         "op": "MatmulDeviceOperation b={20} x 128 x 768 x 256",
-        "us_per_step": 702.25,
+        "us_per_step": 702.59,
         "pct": 6.7,
         "calls_per_step": 2.0
       },
       {
         "op": "UnaryDeviceOperation",
-        "us_per_step": 464.84,
+        "us_per_step": 466.44,
         "pct": 4.5,
         "calls_per_step": 7.0
       },
       {
         "op": "BinaryNgDeviceOperation",
-        "us_per_step": 451.09,
+        "us_per_step": 448.94,
         "pct": 4.3,
         "calls_per_step": 14.0
       },
       {
         "op": "MatmulDeviceOperation b={20} x 128 x 512 x 256",
-        "us_per_step": 435.49,
+        "us_per_step": 434.94,
         "pct": 4.2,
         "calls_per_step": 2.0
       },
       {
         "op": "SliceDeviceOperation",
-        "us_per_step": 322.68,
+        "us_per_step": 324.3,
         "pct": 3.1,
         "calls_per_step": 22.0
       },
       {
         "op": "PermuteDeviceOperation",
-        "us_per_step": 321.24,
+        "us_per_step": 320.2,
         "pct": 3.1,
         "calls_per_step": 2.0
       },
       {
         "op": "MatmulDeviceOperation 128 x 5120 x 2048",
-        "us_per_step": 237.79,
+        "us_per_step": 238.21,
         "pct": 2.3,
         "calls_per_step": 2.0
       },
       {
         "op": "MatmulDeviceOperation 128 x 10240 x 2048",
-        "us_per_step": 231.98,
+        "us_per_step": 231.96,
         "pct": 2.2,
         "calls_per_step": 1.0
       },
       {
         "op": "LayerNormDeviceOperation",
-        "us_per_step": 215.87,
+        "us_per_step": 215.44,
         "pct": 2.1,
         "calls_per_step": 9.0
       },
       {
         "op": "MatmulDeviceOperation b={20} x 128 x 192 x 512",
-        "us_per_step": 190.48,
+        "us_per_step": 189.99,
         "pct": 1.8,
         "calls_per_step": 2.0
       },
       {
         "op": "MatmulDeviceOperation 128 x 2048 x 10240",
-        "us_per_step": 148.88,
+        "us_per_step": 147.58,
         "pct": 1.4,
         "calls_per_step": 2.0
       }

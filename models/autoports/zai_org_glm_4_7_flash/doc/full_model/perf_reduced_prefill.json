@@ -1,4 +1,12 @@
 {
+  "source_manifest": {
+    "tt/model.py": "e12073e8820e4cd0",
+    "tt/generator.py": "97912ec08b6e8167",
+    "tt/optimized_decoder.py": "b2abc9f36278b32f",
+    "tt/fused_decoder.py": "0dbbe26e401a1716",
+    "tt/functional_decoder.py": "d04c7d1958a8fe74",
+    "tests/test_full_model_profile.py": "9482d8f90d84cb81"
+  },
   "variant": "reduced full model: HF layers 0 (dense) + 1 (moe), real embedding/norm/LM head",
   "layers": [
     0,
@@ -6,7 +14,7 @@
   ],
   "prompt_len": 128,
   "physical_prefill_len": 128,
-  "wall_ms": 11.21,
+  "wall_ms": 11.23,
   "signposts": [
     "PERF_FM_PREFILL",
     "PERF_FM_PREFILL_END"

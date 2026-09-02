@@ -1,42 +1,50 @@
 {
+  "source_manifest": {
+    "tt/model.py": "e12073e8820e4cd0",
+    "tt/generator.py": "97912ec08b6e8167",
+    "tt/optimized_decoder.py": "b2abc9f36278b32f",
+    "tt/fused_decoder.py": "0dbbe26e401a1716",
+    "tt/functional_decoder.py": "d04c7d1958a8fe74",
+    "probe/decode_position_scaling_probe.py": "289fcda8eab1188b"
+  },
   "layers": "0,1",
   "cache_context": 202752,
   "note": "The cache is allocated but not filled; the flash MLA decode reads it regardless, so these are honest timings of the op's work at each cur_pos even though the contents are zeros.",
   "rows": [
     {
       "position": 128,
-      "eager_ms": 13.5,
-      "traced_ms": 1.81
+      "eager_ms": 13.66,
+      "traced_ms": 1.82
     },
     {
       "position": 2048,
-      "eager_ms": 3.4,
+      "eager_ms": 3.97,
       "traced_ms": 1.89
     },
     {
       "position": 8192,
-      "eager_ms": 3.33,
+      "eager_ms": 3.31,
       "traced_ms": 2.03
     },
     {
       "position": 32768,
-      "eager_ms": 3.3,
-      "traced_ms": 2.61
+      "eager_ms": 3.54,
+      "traced_ms": 2.62
     },
     {
       "position": 65536,
-      "eager_ms": 3.85,
+      "eager_ms": 4.43,
       "traced_ms": 3.4
     },
     {
       "position": 131072,
-      "eager_ms": 5.46,
-      "traced_ms": 4.96
+      "eager_ms": 6.0,
+      "traced_ms": 4.98
     },
     {
       "position": 202751,
-      "eager_ms": 7.1,
-      "traced_ms": 6.64
+      "eager_ms": 7.62,
+      "traced_ms": 6.67
     }
   ]
 }

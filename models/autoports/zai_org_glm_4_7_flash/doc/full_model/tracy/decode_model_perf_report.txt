@@ -7,7 +7,7 @@ Using operations until 'PERF_FM_DECODE_MODEL_END'.
 Detected data from 1 devices. Merging device data...
 Warning: SparseMatmulDeviceOperation rows without numeric nnz were found. Their DRAM/FLOP utilization is omitted; pass --active-experts K to model K active experts per input batch group.
 Writing CSV output to models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_model_perf_report.csv
-Overall DRAM roofline (modeled ops): 47.0% (240 GB/s)
+Overall DRAM roofline (modeled ops): 46.9% (240 GB/s)
 Warning: Unclassified operation 'UntilizeCodegenDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
 Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
 Warning: Unclassified operation 'PlusOneDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.

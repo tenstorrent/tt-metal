@@ -1,4 +1,12 @@
 {
+  "source_manifest": {
+    "tt/model.py": "e12073e8820e4cd0",
+    "tt/generator.py": "97912ec08b6e8167",
+    "tt/optimized_decoder.py": "b2abc9f36278b32f",
+    "tt/fused_decoder.py": "0dbbe26e401a1716",
+    "tt/functional_decoder.py": "d04c7d1958a8fe74",
+    "tests/test_full_model_perf.py": "0eb21aa7fb3ca8fc"
+  },
   "workload": {
     "prompt_len": 128,
     "generate_len": 128,
@@ -7,34 +15,33 @@
     "sampling": "greedy split sampling (k=1, p=0, temp=1) on device"
   },
   "setup_s": {
-    "_": null,
-    "build_total_s": 181.24
+    "build_total_s": 182.9
   },
   "ttft_ms": {
-    "prompt_128_warmed": 389.0,
+    "prompt_128_warmed": 388.7,
     "prompt_128_physical": 128,
-    "prompt_3000_first_call": 6955.8,
-    "prompt_3000_second_call": 6956.2,
+    "prompt_3000_first_call": 6956.9,
+    "prompt_3000_second_call": 6956.3,
     "prompt_3000_physical": 3072
   },
   "prefill_tokens_per_s": {
-    "prompt_128": 329.0,
+    "prompt_128": 329.3,
     "prompt_3000": 431.3
   },
   "decode_ms_per_token": {
     "traced_model_only_no_sampling": 21.753,
-    "traced_model_plus_sampling": 22.877,
-    "token_out_incl_readback": 23.01,
-    "generate_loop_measured": 22.656
+    "traced_model_plus_sampling": 22.875,
+    "token_out_incl_readback": 22.982,
+    "generate_loop_measured": 22.665
   },
   "decode_tokens_per_s_per_user": {
     "traced_model_only_no_sampling": 45.97,
-    "token_out_incl_readback": 43.46,
-    "generate_loop_measured": 44.14
+    "token_out_incl_readback": 43.51,
+    "generate_loop_measured": 44.12
   },
   "end_to_end": {
     "prompt_128_generate_128_s": 3.267,
-    "tokens_per_s": 39.18
+    "tokens_per_s": 39.17
   },
   "layer_stack_lower_bound": {
     "source": "doc/optimized_decoder/README.md traced per-layer decode, ctx 1024, batch 1, wall",
@@ -42,8 +49,8 @@
     "dense_layers": 1,
     "ms_per_token": 23.033,
     "full_model_only_costs_ms": -1.28,
-    "sampling_ms": 1.124,
-    "token_readback_ms": 0.133
+    "sampling_ms": 1.122,
+    "token_readback_ms": 0.107
   },
   "host_work_counters_over_the_measured_generate": {
     "model_trace_replays": 127,

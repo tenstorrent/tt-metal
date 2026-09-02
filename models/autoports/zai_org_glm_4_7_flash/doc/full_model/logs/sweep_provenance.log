@@ -1,0 +1,67 @@
+++ date -Is
++ echo 'sweep started 2026-09-02T00:08:28-04:00'
+sweep started 2026-09-02T00:08:28-04:00
+++ git rev-parse HEAD
++ echo HEAD=84b11d86639f190956e26f45503e100bed692374
+HEAD=84b11d86639f190956e26f45503e100bed692374
++ echo '--- stage-owned dirty files at sweep start:'
+--- stage-owned dirty files at sweep start:
++ git status --porcelain -- models/autoports/zai_org_glm_4_7_flash
+++ date -Is
++ echo 'sweep finished 2026-09-02T01:29:15-04:00'
+sweep finished 2026-09-02T01:29:15-04:00
+++ git rev-parse HEAD
++ echo HEAD=84b11d86639f190956e26f45503e100bed692374
+HEAD=84b11d86639f190956e26f45503e100bed692374
++ echo '--- stage-owned dirty files at sweep end (artifacts only expected):'
+--- stage-owned dirty files at sweep end (artifacts only expected):
++ git status --porcelain -- models/autoports/zai_org_glm_4_7_flash
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/README.md
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/capacity.json
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/compile_cost.json
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/compile_cost_warm.json
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/decode_position_scaling.json
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/degenerate_check.json
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/full_context.json
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/compile_cost_cold.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/compile_cost_warm.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/decode_position_scaling.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/dram_capacity_probe.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/pytest_full_context.log
+ D models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/pytest_full_context_guard.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/pytest_full_model.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/pytest_full_model_batch32.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/pytest_full_model_perf.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/qualitative_suite.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/run_autoregressive.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/run_prefill_check.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/run_teacher_forcing.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/summarize_perf_report.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/tracy_profile_run.log.gz
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/watcher/watcher_full_model.log.gz
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/watcher/watcher_reduced_smoke.log.gz
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/watcher/watcher_reduced_traced_decode.log.gz
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/watcher_full_model.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/watcher_reduced_smoke.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/watcher_reduced_trace.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/perf.json
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/perf_reduced_decode.json
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/perf_reduced_prefill.json
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/perf_report_summary.json
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/qualitative/qualitative_prompt_format.json
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_model_perf_report.csv.gz
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_model_perf_report.txt
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_model_perf_report_stacked.csv
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_model_perf_report_stacked.png
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_tokenout_perf_report.csv.gz
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_tokenout_perf_report.txt
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_tokenout_perf_report_stacked.csv
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_tokenout_perf_report_stacked.png
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/prefill_perf_report.csv
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/prefill_perf_report.txt
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/prefill_perf_report_stacked.csv
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/prefill_perf_report_stacked.png
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/work_log.md
+ M models/autoports/zai_org_glm_4_7_flash/readiness_autoregressive/autoregressive_meta.json
+ M models/autoports/zai_org_glm_4_7_flash/readiness_autoregressive/hf_completion.txt
+ M models/autoports/zai_org_glm_4_7_flash/readiness_autoregressive/tt_completion.txt

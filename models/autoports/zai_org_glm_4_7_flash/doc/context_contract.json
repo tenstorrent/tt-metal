@@ -243,7 +243,9 @@
   "provenance": {
    "stage": "full-model",
    "evidence": "doc/full_model/README.md, doc/full_model/accuracy.json, doc/full_model/perf.json, doc/full_model/logs/",
-   "date": "2026-09-01"
+   "source_commit": "84b11d86639",
+   "source_provenance": "every artifact carries a source_manifest block; doc/full_model/logs/sweep_provenance.log records HEAD and git status at the start and end of the sweep that produced them",
+   "date": "2026-09-02"
   },
   "dram_budget_bytes": {
    "weights_plus_persistent_scratch": 18788830464,
@@ -253,6 +255,24 @@
    "measured_allocatable": 33822867456,
    "headroom_after_trace_region": 8752955264
   },
-  "evidence": "doc/full_model/capacity.json and doc/full_model/dram_capacity.json (both written on hardware by tests/test_full_model_perf.py and probe/dram_capacity_probe.py); doc/full_model/full_context.json is the 202751-token prefill + decode run through the whole 47-layer stack"
+  "evidence": "doc/full_model/capacity.json and doc/full_model/dram_capacity.json (both written on hardware by tests/test_full_model_perf.py and probe/dram_capacity_probe.py); doc/full_model/full_context.json is the 202733-token prefill plus decode to position 202751 through the whole 47-layer stack",
+  "full_context_evidence": {
+   "prompt_len": 202733,
+   "physical_prefill_len": 202752,
+   "last_decode_position": 202751,
+   "prefill_s": 2236.4,
+   "prefill_tokens_per_s": 90.7,
+   "decode_ms_per_token_at_202751": 136.3,
+   "periodic_continuation": "9/9 exact",
+   "needle_recall": {
+    "planted_at_position": 1024,
+    "queried_at_position": 202751,
+    "reach_positions": 201727,
+    "top1_correct": true,
+    "gated": false,
+    "why_not_gated": "recall at that distance is a checkpoint property, not a port property; the gate is the periodic continuation"
+   },
+   "artifact": "doc/full_model/full_context.json, doc/full_model/logs/pytest_full_context.log"
+  }
  }
 }

@@ -1,4 +1,4 @@
-2026-09-01 22:54:02.576 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+2026-09-02 00:25:35.734 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
 Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
 ============================= test session starts ==============================
 platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/stisi/tt-metal/python_env/bin/python
@@ -12,33 +12,33 @@ timeout method: signal
 timeout func_only: False
 collecting ... collected 5 items
 
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_capacity_contract 2026-09-01 22:54:04.247 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
-2026-09-01 22:54:04.247 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
-2026-09-01 22:54:04.247 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
-2026-09-01 22:54:04.247 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
-2026-09-01 22:54:04.259 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
-2026-09-01 22:54:04.260 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
-2026-09-01 22:54:04.294 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
-2026-09-01 22:54:04.294 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
-2026-09-01 22:54:04.294 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
-2026-09-01 22:54:04.294 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
-2026-09-01 22:54:04.296 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
-2026-09-01 22:54:04.567 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
-2026-09-01 22:54:04.674 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
-2026-09-01 22:54:04.674 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
-2026-09-01 22:54:04.674 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
-2026-09-01 22:54:04.674 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
-2026-09-01 22:54:04.674 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
-2026-09-01 22:54:04.715 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
-2026-09-01 22:57:00.945 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-01 22:57:00.945 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-01 22:57:01.179 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-01 22:57:01.179 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-01 22:57:02.005 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-01 22:57:02.005 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-01 22:57:02.126 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:130)
-2026-09-01 22:57:02.127 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-01 22:57:02.127 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_capacity_contract 2026-09-02 00:25:37.380 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-02 00:25:37.380 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-02 00:25:37.380 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-02 00:25:37.380 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-02 00:25:37.393 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-02 00:25:37.393 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-02 00:25:37.428 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-02 00:25:37.428 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-09-02 00:25:37.428 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-09-02 00:25:37.428 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-02 00:25:37.429 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-02 00:25:37.640 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-02 00:25:37.743 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-02 00:25:37.743 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-02 00:25:37.743 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-02 00:25:37.743 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-02 00:25:37.743 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-02 00:25:37.784 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-02 00:28:32.853 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 00:28:32.853 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 00:28:33.081 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 00:28:33.081 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 00:28:33.911 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 00:28:33.911 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 00:28:34.035 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:130)
+2026-09-02 00:28:34.036 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 00:28:34.036 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 building 47 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-org--GLM-4.7-Flash/snapshots/7dd20894a642a0aa287e9827cb1a1f7f91386b67
   layer 0 (dense) built [1/47]
   layer 1 (moe) built [2/47]
@@ -99,7 +99,7 @@ second tokens: [374, 18611, 17, 458, 13, 19083, 17670, 304, 47073, 1737, 7975, 1
 PASSED
 models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_slot_isolation_matches_single_user PASSED
 models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_inactive_rows PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_traced_decode_feedback PASSED2026-09-01 22:57:59.585 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_traced_decode_feedback PASSED2026-09-02 00:29:31.507 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
 
 
 =============================== warnings summary ===============================
@@ -113,15 +113,15 @@ models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batc
 ==================================== PASSES ====================================
 - generated xml file: /home/stisi/tt-metal/generated/test_reports/most_recent_tests.xml -
 ============================= slowest 25 durations =============================
-178.09s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_capacity_contract
+176.87s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_capacity_contract
 29.53s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_prefill_mixed_lengths_and_decode
 10.66s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_slot_isolation_matches_single_user
 9.60s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_traced_decode_feedback
-6.67s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_inactive_rows
-0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_prefill_mixed_lengths_and_decode
+6.68s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_inactive_rows
 0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_slot_isolation_matches_single_user
-0.19s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_inactive_rows
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_inactive_rows
 0.19s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_traced_decode_feedback
+0.19s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_prefill_mixed_lengths_and_decode
 
 (6 durations < 0.005s hidden.  Use -vv to show these durations.)
 =========================== short test summary info ============================
@@ -130,11 +130,11 @@ PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::te
 PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_slot_isolation_matches_single_user
 PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_inactive_rows
 PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py::test_batch_traced_decode_feedback
-================== 5 passed, 2 warnings in 236.39s (0:03:56) ===================
+================== 5 passed, 2 warnings in 235.15s (0:03:55) ===================
 sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
 nanobind: leaked 2 instances!
- - leaked instance 0x7d3292e8f928 of type "ttnn._ttnn.tensor.MemoryConfig"
- - leaked instance 0x7d32932468c8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7e02fa45e808 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7e02f9eaf908 of type "ttnn._ttnn.tensor.MemoryConfig"
 nanobind: leaked 20 types!
  - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
  - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
@@ -148,22 +148,22 @@ nanobind: leaked 20 types!
  - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
  - ... skipped remainder
 nanobind: leaked 253 functions!
+ - leaked function "get_device_id"
+ - leaked function "get_view"
  - leaked function ""
  - leaked function ""
- - leaked function "to"
  - leaked function ""
- - leaked function ""
+ - leaked function "push_current_command_queue_id_for_thread"
+ - leaked function "ranges"
+ - leaked function "__ne__"
  - leaked function ""
  - leaked function "__init__"
- - leaked function "get_current_command_queue_id_for_thread"
- - leaked function ""
- - leaked function "load_sub_device_manager"
  - ... skipped remainder
 nanobind: this is likely caused by a reference counting issue in the binding code.
-See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-09-01 22:58:01.277 | info     |    BuildKernels | JIT cache stats: 1084/1084 hits (100.0%) [1084 cached, 811 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
-2026-09-01 22:58:01.277 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
-2026-09-01 22:58:01.298 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
-2026-09-01 22:58:01.298 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
-2026-09-01 22:58:01.789 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
-2026-09-01 22:58:01.790 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
-2026-09-01 22:58:01.790 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-09-02 00:29:33.192 | info     |    BuildKernels | JIT cache stats: 1084/1084 hits (100.0%) [1084 cached, 811 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-02 00:29:33.192 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-02 00:29:33.215 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-02 00:29:33.215 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-02 00:29:33.666 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-02 00:29:33.667 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-02 00:29:33.667 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

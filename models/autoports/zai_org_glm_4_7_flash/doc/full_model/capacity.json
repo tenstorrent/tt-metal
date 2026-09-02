@@ -1,4 +1,12 @@
 {
+  "source_manifest": {
+    "tt/model.py": "e12073e8820e4cd0",
+    "tt/generator.py": "97912ec08b6e8167",
+    "tt/optimized_decoder.py": "b2abc9f36278b32f",
+    "tt/fused_decoder.py": "0dbbe26e401a1716",
+    "tt/functional_decoder.py": "d04c7d1958a8fe74",
+    "tests/test_full_model_perf.py": "0eb21aa7fb3ca8fc"
+  },
   "device": "Blackhole p150-class chip, 1x1 mesh, 11x10 compute grid, 8 DRAM banks",
   "measured_allocatable_dram_bytes": 33822867456,
   "measured_allocatable_dram_note": "measured by probe/dram_capacity_probe.py (dram_capacity.json): 32256 MiB in 512 MiB chunks before the allocator refused",
