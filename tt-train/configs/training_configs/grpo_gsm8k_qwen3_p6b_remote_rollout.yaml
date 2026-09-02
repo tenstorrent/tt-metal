@@ -1,0 +1,73 @@
+# Two-rank Qwen3-0.6B GRPO for the GSM8K math-reasoning task (async rollout):
+# 1 TTML training chip + 1 TTT rollout chip (2 chips total on one host).
+#
+# Sibling of grpo_reverse_text_qwen3_p6b_remote_rollout.yaml. Differences vs
+# reverse-text (all task-driven):
+#   - model_id points at the SFT'd think-tagged Qwen3 checkpoint (the GRPO
+#     starting point);
+#   - max_completion_length raised to 512 to fit GSM8K reasoning (reverse-text
+#     completions are short character reversals);
+#   - prompts_to_train raised to 600 so grad_accum=2 yields 300 optimizer steps,
+#     producing checkpoints at 100 / 200 / 300 for the eval table;
+#   - checkpointing turned on with checkpoint_interval=100.
+#
+# The single-chip batch ceiling on Blackhole is unchanged: 32 completions per
+# generate call (per_device_train_batch_size * gradient_accumulation_steps),
+# matching remote_rollout_config.max_batch_size.
+
+training_config:
+  # Only max_sequence_length is read from here; the Qwen3 architecture comes
+  # from the HuggingFace config of ``model_id`` (loaded by the completer).
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b.yaml"
+
+  # HF repo path (both ranks use this: TTML for the tokenizer + the local ttml
+  # Qwen3 rebuild + reference weights, TTT for stop/pad-token lookup and the
+  # TttGenerationWorker's model source).
+  model_id: "ichovpanTT/qwen3-0.6b-base-think-sft"
+
+  # Cadence (in optimizer steps) at which WeightSyncCallback pushes fresh
+  # policy weights from the TTML rank to the TTT rollout worker. weight_sync_every=1
+  # keeps rollouts on-policy at the cost of a full weight transfer each step;
+  # raise it to trade freshness for wall-clock.
+  weight_sync_every: 1
+
+  # Reproducibility knob picked up by the training example's dataset shuffle.
+  seed: 0
+
+  optimizer:
+    type: MorehAdamW
+    lr: 1.0e-5
+    beta1: 0.9
+    beta2: 0.99
+    epsilon: 1.0e-8
+    weight_decay: 0.0
+    amsgrad: false
+    kahan_summation: false
+
+  grpo_config:
+    epsilon: 0.2
+    per_device_train_batch_size: 16   # one prompt's group of 16 completions
+    num_iterations: 1
+    gradient_accumulation_steps: 2    # 2 prompts x 16 completions = 32 per generate call
+    logging_steps: 1
+    checkpointing: true
+    checkpoint_interval: 20
+    prompts_to_train: 200             # 100 optimizer steps x 2 prompts per batch
+    temperature: 1.0
+    max_completion_length: 512
+    num_generations: 16
+    warmup_steps: 20
+
+device_config:
+  enable_ddp: false
+  mesh_shape: [1, 1]
+  device_ids: [0]
+
+# TTT rollout-rank settings (mesh, batch, seq-len for the generation worker).
+# max_batch_size sizes the KV cache and the on-device sampling batch; keep it at
+# least ``per_device_train_batch_size * gradient_accumulation_steps`` so every
+# generate() call fits without truncation.
+remote_rollout_config:
+  mesh_shape: [1, 1]
+  max_batch_size: 32
+  max_seq_len: 1024

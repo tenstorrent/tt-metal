@@ -243,11 +243,20 @@ class TransformerBlock(LightweightModule):
             unconsumed.discard(key)
             return layer_hf_state_dict[key]
 
+        def maybe_consume(key: str) -> ttnn.Tensor | None:
+            # Optional keys (Qwen3 QK-Norm gammas). Absent for Llama; present for Qwen3.
+            if key not in layer_hf_state_dict:
+                return None
+            unconsumed.discard(key)
+            return layer_hf_state_dict[key]
+
         self.attention.update(
             q_proj=consume("self_attn.q_proj.weight"),
             k_proj=consume("self_attn.k_proj.weight"),
             v_proj=consume("self_attn.v_proj.weight"),
             o_proj=consume("self_attn.o_proj.weight"),
+            q_norm=maybe_consume("self_attn.q_norm.weight"),
+            k_norm=maybe_consume("self_attn.k_norm.weight"),
             hf_rope=hf_rope,
         )
         self.feed_forward.update(

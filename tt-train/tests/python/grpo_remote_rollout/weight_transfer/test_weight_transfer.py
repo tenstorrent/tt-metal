@@ -84,7 +84,6 @@ def _ttml_side() -> None:
     completer: Any = None
     client: Any = None
     try:
-        # Constructing the client blocks on the bridge handshake.
         bridge = HostWeightBridge.init_sender(mesh=mesh_device, peer_rank=TTT_RANK)
         client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
 
@@ -101,6 +100,7 @@ def _ttml_side() -> None:
             inference_client=client,
             enable_ddp=device_config.enable_ddp,
         )
+        client.connect()
 
         tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         prompt_ids = tokenizer.encode(PROMPT, add_special_tokens=True)
@@ -214,6 +214,7 @@ def _ttt_side() -> None:
             generate_fn=worker.generate,
             on_weights_received=_on_weights_received,
         )
+        server.connect()
         server.serve_forever()
 
         # verify all submeshes got correct weights: a batch spanning every submesh
