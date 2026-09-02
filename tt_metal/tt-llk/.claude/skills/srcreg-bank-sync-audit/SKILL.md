@@ -33,11 +33,15 @@ lockstep-check.
 
 `DEST2SRC_NO_MATH_DRAIN` = the **math half of check 5**, flagged mechanically: a
 `MOVD2A`/`MOVD2B` whose nearest preceding `STALLWAIT` gates on the Src bank-valid
-condition but not on `p_stall::MATH`. `DEST2SRC_WAIT_UNSEEN` (no stall in that
-function — the gate may be in the caller or in the MOP that replays the move) and
-`DEST2SRC_WAIT_UNRELATED` (a stall gating neither) are recall candidates, as is
-`DEST2SRC_NO_MATH_DRAIN_UNCONFIRMED`, which is what Quasar emits instead of the flag
-because the mechanism is grounded on the WH/BH bank model only.
+condition but not on `p_stall::MATH`. `DEST2SRC_WRONG_SRC_GATE` (the stall names the OTHER register's bank-valid condition,
+so it says nothing about the bank this move writes) and `DEST2SRC_DRAIN_REARMED` (correctly
+gated, but a Src bank flip was issued between the stall and the move, re-arming the race
+the drain settled) are also flags. `DEST2SRC_WAIT_UNSEEN` (no stall in that function — the
+gate may be in the caller or in the MOP that replays the move) and `DEST2SRC_WAIT_UNRELATED`
+(a stall gating neither the target bank nor the FPU pipe — note a MATH-only drain lands here:
+it settles the bank pointer but never waits for the unpacker to hand the bank over) are recall
+candidates, as is `DEST2SRC_NO_MATH_DRAIN_UNCONFIRMED`, which is what Quasar emits instead of
+the flag because the mechanism is grounded on the WH/BH bank model only.
 
 All are **candidates**, not verdicts. The tool does NOT model bank-flip lockstep (the
 `MOV*2D` consume side), dvalid placement, single-thread ownership, the BH
@@ -76,7 +80,7 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
 
    But a `STALLWAIT` selecting **only** the source-valid condition is still wrong. That condition indexes `MatrixUnit.Src?Bank` **live** at the Wait Gate, and that pointer is advanced in the *epilogue* of the preceding Matrix Unit instruction — see the `if (FlipSrcA)` / `if (FlipSrcB)` block at the end of `ELWMUL.md`'s functional model, and equivalently `SETRWC` with a `CLR_*` operand. With a bank-flipping op still in flight the condition tests the **pre-flip** bank, which the Matrix Unit still owns, is satisfied vacuously, and releases — by the time the move executes the flip has landed and it writes the **post-flip** bank the unpacker owns and may be filling.
 
-   So the wait must **also** select the "this thread has an instruction in any stage of the Matrix Unit (FPU) pipeline" condition (`p_stall::MATH`), draining the pipe so the source-valid test observes the post-flip pointer. That condition's documented precondition is that the block mask blocks new Matrix Unit instructions (`p_stall::STALL_MATH`) — verify that too. Flag any `STALLWAIT` gating a `MOVD2A`/`MOVD2B` whose condition mask carries `SRC?_VLD` without `MATH`. **Symptom is a silent wrong value, never a hang**, because every FPU instruction that *reads* Src does auto-wait — so absence of hangs is not evidence of safety here.
+   So the wait must **also** select the "this thread has an instruction in any stage of the Matrix Unit (FPU) pipeline" condition (`p_stall::MATH`), draining the pipe so the source-valid test observes the post-flip pointer. That condition's documented precondition is that the block mask blocks new Matrix Unit instructions (`p_stall::STALL_MATH`) — verify that too. Flag any `STALLWAIT` gating a `MOVD2A`/`MOVD2B` whose condition mask carries `SRC?_VLD` without `MATH`. Two further requirements on the same wait: it must name the bank-valid condition of the register the move actually **writes** (`SRCA_VLD` for `MOVD2A`, `SRCB_VLD` for `MOVD2B` — a stall naming only the other register proves nothing), and no **Src bank flip** may be issued between the stall and the move (`SETRWC` with `CLR_A`/`CLR_B`/`CLR_AB`, or a matrix op with `clr_src`) — the drain proves the pipe was empty *at the stall*, so a later flip re-arms the same race. A `MATH`-only drain is likewise not a gate: it settles the bank pointer but never waits for the unpacker to hand the bank over. **Symptom is a silent wrong value, never a hang**, because every FPU instruction that *reads* Src does auto-wait — so absence of hangs is not evidence of safety here.
 
    **(b) Unpack side — the dummy publication must wait on the bank it clears.** These moves depend on the unpacker publishing a dummy DVALID (a `UNPACR_NOP` doing ZEROSRC and/or SET_DVALID) to hand the bank over. That instruction clears/publishes `Unpackers[i].SrcBank` but, in its default form, *waits* on `MatrixUnit.Src?Bank` — a **different bank** once double-buffering reaches steady state — so it can clear a bank it never waited for. Correct forms, all present in-tree; accept any one:
    - the "wait like UNPACR" control bit set, so the instruction gates on `Unpackers[i].SrcBank` (BH exposes it as a `STALLWAIT`-clear operand on `UNPACR_NOP`; WH as a distinct `UNP_ZEROSRC_*` encoding), or
