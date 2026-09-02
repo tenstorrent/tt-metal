@@ -153,7 +153,10 @@ class GemmaTokenizerEncoderPair:
         # is evicted after each encode, so every encode would be a fresh (cold) capture — slower
         # than untraced — and the trace never amortizes. Resident (e.g. 4x8) captures once and
         # replays warm.
-        self._encoder_trace = not dynamic_load
+        # Opt-in even when resident: on the 4x8 galaxy a stage-1 trace capture issued right after an
+        # encoder-trace replay never completes, while the same capture after an eager encode does.
+        # Prompt embeddings are disk-cached per prompt, so the eager encode is paid once per prompt.
+        self._encoder_trace = (not dynamic_load) and os.environ.get("LTX_ENCODER_TRACE", "0") == "1"
 
     # Dims the pipeline warmup needs before the encoder is built.
     @property
