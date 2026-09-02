@@ -388,7 +388,7 @@ DROP_KWARGS = {"compute_kernel_config"}
 # is bound in ttnn/__init__.py:478, so even that one needs no wrapper). Ops whose
 # python entry point differs from the captured name go here.
 #
-# Quasar-uplifted ops: the model now calls the ``ttnn.experimental.quasar.transformer``
+# Quasar-uplifted ops: the model now calls the ``ttnn.experimental.quasar``
 # fork of the Metal 2.0 port, so the generated test's callable (``_OP``) must target
 # the fork. Only ``_OP`` is remapped; ``case["op"]`` stays the captured current-gen
 # name so it still keys into graph_case.py's INDEX_VALUES / GOLDEN tables (the op is
@@ -396,6 +396,8 @@ DROP_KWARGS = {"compute_kernel_config"}
 OP_EXPR: dict[str, str] = {
     "ttnn.transformer.scaled_dot_product_attention_decode": "ttnn.experimental.quasar.transformer.scaled_dot_product_attention_decode",
     "ttnn.transformer.paged_scaled_dot_product_attention_decode": "ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode",
+    "ttnn.add": "ttnn.experimental.quasar.add",
+    "ttnn.multiply": "ttnn.experimental.quasar.multiply",
 }
 
 FILE_NAME = {"ttnn.Tensor.__getitem__": "test_tensor_getitem"}

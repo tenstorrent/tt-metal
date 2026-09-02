@@ -190,6 +190,17 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
 
     // Optional compute kernel for data-format conversion.
     if (convert_df) {
+        // Every field of the legacy ComputeConfigDescriptor{} was left at its default, and the
+        // Metal 2.0 Gen1 compute defaults match those field for field (HiFi4; math_approx_mode
+        // false = Precise SFPU; bfp8_pack_precise false = Approximate pack; fp32_dest_acc_en
+        // false; dst_full_sync_en false = double_buffer_dest true), so an all-default Gen1 config
+        // reproduces the legacy settings exactly.
+        ComputeHardwareConfig compute_hw = ComputeGen1Config{};
+        if (input.device()->arch() == tt::ARCH::QUASAR) {
+            // The Gen1 config sets no fields, so the Gen2 config copies none.
+            // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+            compute_hw = ComputeGen2Config{};
+        }
         kernels.push_back(KernelSpec{
             .unique_id = COMPUTE,
             .source = "ttnn/cpp/ttnn/kernel/compute/eltwise_copy_metal2.cpp",
@@ -208,12 +219,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                      .endpoint_type = DFBEndpointType::PRODUCER,
                  }},
             .compile_time_args = {{"per_core_tile_cnt", num_units_per_shard}},
-            // Every field of the legacy ComputeConfigDescriptor{} was left at its default, and the
-            // Metal 2.0 Gen1 compute defaults match those field for field (HiFi4; math_approx_mode
-            // false = Precise SFPU; bfp8_pack_precise false = Approximate pack; fp32_dest_acc_en
-            // false; dst_full_sync_en false = double_buffer_dest true), so an all-default Gen1 config
-            // reproduces the legacy settings exactly.
-            .hw_config = ComputeHardwareConfig{ComputeGen1Config{}},
+            .hw_config = std::move(compute_hw),
         });
         work_unit_kernels.push_back(COMPUTE);
     }

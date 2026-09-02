@@ -26,7 +26,7 @@ import pytest
 import ttnn
 from models.experimental.llama32_1b_quasar.tests.graph_ops import graph_case as G
 
-_OP = ttnn.add
+_OP = ttnn.experimental.quasar.add
 
 CASES = [
     {

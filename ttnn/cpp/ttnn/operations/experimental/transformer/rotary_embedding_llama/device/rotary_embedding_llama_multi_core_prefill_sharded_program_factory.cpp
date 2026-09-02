@@ -182,11 +182,13 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
         .entry_size = output_single_tile_size,
         .num_entries = num_output_tiles,
         .data_format_metadata = output_cb_data_format};
-    DataflowBufferSpec zero_dfb{
-        .unique_id = ZERO_DFB,
-        .entry_size = output_single_tile_size,
-        .num_entries = num_interm_tiles,
-        .data_format_metadata = output_cb_data_format};
+    // Zero-fill staging region for the writer (legacy c_27). Ported first as a self-looped DFB
+    // (writer = PRODUCER + CONSUMER), a shape Gen2 rejects on DM kernels; now a Scratchpad
+    // (dm_self_loop_dfbs.md). The writer only ever used it as raw local memory (fill once, read
+    // repeatedly from the base), so no FIFO semantics are lost. data_format_metadata had no
+    // consumer: the writer takes raw addresses / NOC-sources it, and no LLK touches it.
+    ScratchpadSpec zero_scratchpad{
+        .unique_id = ZERO_SCRATCH, .size_per_node = output_single_tile_size * num_interm_tiles};
 
     // ------------------------------------------------------------------
     // Tensor parameters. INPUT/OUTPUT always accessor-read. COS/SIN and TRANS_MAT are borrowed_from
@@ -199,8 +201,16 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
     TensorParameter output_param{.unique_id = OUTPUT_PARAM, .spec = output.tensor_spec()};
 
     // hw_config — Style B (see the interleaved factory for the rationale).
-    const ComputeHardwareConfig compute_hw_config =
+    ComputeHardwareConfig compute_hw_config =
         ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+    if (device->arch() == tt::ARCH::QUASAR) {
+        // Gen2 copies the fields the Gen1 config sets (gen2_hardware_configs.md shape 4).
+        // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+        compute_hw_config = ComputeGen2Config{
+            .fpu_math_fidelity = math_fidelity,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+        };
+    }
 
     // ------------------------------------------------------------------
     // Reader kernel. cos_sin_sharded / trans_mat_use_global_cb move from CTAs to preprocessor defines
@@ -259,11 +269,10 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
         .unique_id = WRITER,
         .source = kWriterSource,
         .compiler_options = {.defines = reload_define},
-        .dfb_bindings =
-            {DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER},
-             DFBBinding{.dfb_spec_name = ZERO_DFB, .accessor_name = "zero", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{
-                 .dfb_spec_name = ZERO_DFB, .accessor_name = "zero", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        // ZERO is a single-toucher (writer fills + reads it): a Scratchpad, not a DFB (see above).
+        .scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = ZERO_SCRATCH, .accessor_name = "zero"}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "output"}},
         .compile_time_args =
             {{"n_heads", n_heads}, {"Wt", head_dim_t}, {"Ht", seq_len_t}, {"rotary_Ht", rotary_seq_len_t}},
@@ -377,15 +386,8 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
         .name = "rotary_embedding_llama_multi_core_prefill_sharded",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers =
-            {input_dfb,
-             cos_dfb,
-             sin_dfb,
-             trans_mat_dfb,
-             rotated_interm_dfb,
-             cos_interm_dfb,
-             sin_interm_dfb,
-             out_dfb,
-             zero_dfb},
+            {input_dfb, cos_dfb, sin_dfb, trans_mat_dfb, rotated_interm_dfb, cos_interm_dfb, sin_interm_dfb, out_dfb},
+        .scratchpads = {zero_scratchpad},
         .tensor_parameters = {input_param, cos_param, sin_param, trans_mat_param, output_param},
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}}};
 

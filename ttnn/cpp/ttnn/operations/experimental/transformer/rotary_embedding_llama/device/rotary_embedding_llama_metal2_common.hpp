@@ -6,6 +6,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 
 // Shared Metal 2.0 named-resource vocabulary for the three rotary_embedding_llama program
@@ -19,6 +20,7 @@ namespace ttnn::experimental::prim::rope_metal2 {
 
 using tt::tt_metal::experimental::DFBSpecName;
 using tt::tt_metal::experimental::KernelSpecName;
+using tt::tt_metal::experimental::ScratchpadSpecName;
 using tt::tt_metal::experimental::TensorParamName;
 
 // Kernels
@@ -35,7 +37,12 @@ inline const DFBSpecName ROTATED_INTERM_DFB{"rotated_interm"};  // c_24
 inline const DFBSpecName COS_INTERM_DFB{"cos_interm"};          // c_25
 inline const DFBSpecName SIN_INTERM_DFB{"sin_interm"};          // c_26
 inline const DFBSpecName OUT_DFB{"out"};                        // c_16
-inline const DFBSpecName ZERO_DFB{"zero"};                      // c_27
+
+// Scratchpads. The writer's zero-fill staging region (legacy c_27) was ported as a self-looped
+// DFB (the writer bound both PRODUCER and CONSUMER); Gen2 rejects DM self-loop DFBs, so it is a
+// Scratchpad (per ai/post_port/semantic/dm_self_loop_dfbs.md) — a plain node-local L1 region with
+// no FIFO semantics, which is all the kernel ever used it as.
+inline const ScratchpadSpecName ZERO_SCRATCH{"zero"};  // c_27
 
 // Tensor parameters
 inline const TensorParamName INPUT_PARAM{"input"};

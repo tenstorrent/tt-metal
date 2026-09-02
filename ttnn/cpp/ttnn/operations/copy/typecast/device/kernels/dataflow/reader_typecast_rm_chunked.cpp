@@ -33,15 +33,21 @@ void kernel_main() {
         // Process all full chunks for this row
         for (uint32_t chunk_idx = 0; chunk_idx < full_chunks_per_row; ++chunk_idx) {
             dfb_in.reserve_back(onepage);
-            const uint32_t l1_write_addr = dfb_in.get_write_ptr();
 
             const uint32_t byte_offset = chunk_idx * full_chunk_size_bytes;
+#ifdef ARCH_QUASAR
+            // On Quasar DM, get_write_ptr() returns the UNCACHED L1 alias and NOC APIs do not
+            // accept uncached addresses — pass the DFB endpoint so the NoC uses the cached address.
+            noc.async_read(s, dfb_in, full_chunk_size_bytes, {.page_id = row_id, .offset_bytes = byte_offset}, {});
+#else
+            const uint32_t l1_write_addr = dfb_in.get_write_ptr();
             noc.async_read(
                 s,
                 CoreLocalMem<uint32_t>(l1_write_addr),
                 full_chunk_size_bytes,
                 {.page_id = row_id, .offset_bytes = byte_offset},
                 {});
+#endif
 
             noc.async_read_barrier();
             dfb_in.push_back(onepage);
@@ -50,15 +56,20 @@ void kernel_main() {
         // Process partial chunk if it exists
         if constexpr (partial_chunks_per_row > 0) {
             dfb_in.reserve_back(onepage);
-            const uint32_t l1_write_addr = dfb_in.get_write_ptr();
 
             const uint32_t byte_offset = full_chunks_per_row * full_chunk_size_bytes;
+#ifdef ARCH_QUASAR
+            // See the full-chunk read above: the NoC needs the DFB's cached address on Quasar.
+            noc.async_read(s, dfb_in, partial_chunk_size_bytes, {.page_id = row_id, .offset_bytes = byte_offset}, {});
+#else
+            const uint32_t l1_write_addr = dfb_in.get_write_ptr();
             noc.async_read(
                 s,
                 CoreLocalMem<uint32_t>(l1_write_addr),
                 partial_chunk_size_bytes,
                 {.page_id = row_id, .offset_bytes = byte_offset},
                 {});
+#endif
 
             noc.async_read_barrier();
             dfb_in.push_back(onepage);

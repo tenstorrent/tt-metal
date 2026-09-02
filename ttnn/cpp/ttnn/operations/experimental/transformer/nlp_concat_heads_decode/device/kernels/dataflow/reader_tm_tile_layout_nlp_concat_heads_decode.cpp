@@ -5,9 +5,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 // #include "api/debug/dprint.h"  // required in all kernels using DPRINT
@@ -34,7 +34,11 @@ void kernel_main() {
     auto in_tensor = TensorAccessor(tensor::input);
     uint32_t q_start_addr = in_tensor.get_bank_base_address();
 
-    DataflowBuffer dfb_q_out(dfb::q_out);
+    // Node-local L1 view of the output tensor's shard: the kernel writes it in place at computed
+    // offsets (no FIFO traffic), so it is a plain tensor binding, not a DFB. This also keeps the
+    // NoC destination a plain (cached) L1 address on Quasar, where DataflowBuffer's pointer
+    // getters return the uncached alias that NoC APIs do not accept.
+    LocalTensorAccessor<uint8_t> q_out(tensor::q_out);
     UnicastEndpoint src_ep;
 
     // Q
@@ -49,11 +53,11 @@ void kernel_main() {
     uint32_t num_tiles_read_cur_core = 0;
     uint32_t q_write_addr = 0;
     uint32_t tile_size = head_size / head_size_num_tiles;
-    const uint32_t dfb_write_ptr_base = dfb_q_out.get_write_ptr();
+    const uint32_t q_out_base_addr = q_out.get_bank_base_address();
 
     for (uint32_t q = 0; q < batch; ++q) {
         uint32_t wptr_offset = q < 16 ? q * SUBTILE_LINE_BYTES : (q - 16) * SUBTILE_LINE_BYTES + 512 * ELEMENT_SIZE;
-        uint32_t q_write_addr = dfb_write_ptr_base + wptr_offset;
+        uint32_t q_write_addr = q_out_base_addr + wptr_offset;
         for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
             // Read first phase
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {

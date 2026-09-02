@@ -35,9 +35,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeSubcoregridsProgram
 
     const uint32_t single_tile_size = tt::tile_size(data_format);
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
-    auto tile_h = tile_shape[0];
     auto tile_w = tile_shape[1];
-    auto tile_hw = tile_h * tile_w;
 
     auto face_shape = input_tensor.tensor_spec().tile().get_face_shape();
     auto face_h = face_shape[0];
@@ -51,7 +49,6 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeSubcoregridsProgram
     const uint32_t sub_tile_line_bytes = face_w * element_size;
     const auto q_shard_spec = output.shard_spec().value();
     const auto q_cores = q_shard_spec.grid;
-    const auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / tile_hw;
     const auto in_shard_spec = input_tensor.shard_spec().value();
     const auto in_cores = in_shard_spec.grid;
 
@@ -59,19 +56,8 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeSubcoregridsProgram
     // translation unit under unity builds, so no anonymous-namespace constants).
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
-    const DFBSpecName Q_OUT{"q_out"};
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
-
-    // The output-resident DFB: borrowed from the output tensor's L1 shard memory
-    // (the backing address resolves at runtime from the OUTPUT tensor argument).
-    DataflowBufferSpec q_out_dfb{
-        .unique_id = Q_OUT,
-        .entry_size = single_tile_size,
-        .num_entries = q_num_tiles,
-        .data_format_metadata = data_format,
-        .borrowed_from = OUTPUT,
-    };
 
     // cores to read and write to output
     const uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
@@ -114,17 +100,18 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeSubcoregridsProgram
         .source =
             "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
             "reader_tm_tile_layout_nlp_concat_heads_decode_subcoregrid.cpp",
-        // Both instances of the kernel only raw-write the output-resident DFB (no FIFO ops);
-        // the PRODUCER/CONSUMER split between them is cosmetic 1P+1C to satisfy the validator.
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = Q_OUT,
-            .accessor_name = "q_out",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        }},
-        .tensor_bindings = {TensorBinding{
-            .tensor_parameter_name = INPUT,
-            .accessor_name = "input",
-        }},
+        // Both instances of the kernel only raw-write the output shard in place (no FIFO
+        // traffic), so the output is bound as a plain tensor (LocalTensorAccessor kernel-side),
+        // not as a DFB.
+        .tensor_bindings =
+            {TensorBinding{
+                 .tensor_parameter_name = INPUT,
+                 .accessor_name = "input",
+             },
+             TensorBinding{
+                 .tensor_parameter_name = OUTPUT,
+                 .accessor_name = "q_out",
+             }},
         .compile_time_args = std::move(reader_compile_time_args),
         .runtime_arg_schema = {.runtime_arg_names = {"in_tile_offset_by_head"}},
         .hw_config = create_reader_datamovement_config(device->arch()),
@@ -136,15 +123,15 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeSubcoregridsProgram
         .source =
             "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
             "reader_tm_tile_layout_nlp_concat_heads_decode_subcoregrid.cpp",
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = Q_OUT,
-            .accessor_name = "q_out",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        }},
-        .tensor_bindings = {TensorBinding{
-            .tensor_parameter_name = INPUT,
-            .accessor_name = "input",
-        }},
+        .tensor_bindings =
+            {TensorBinding{
+                 .tensor_parameter_name = INPUT,
+                 .accessor_name = "input",
+             },
+             TensorBinding{
+                 .tensor_parameter_name = OUTPUT,
+                 .accessor_name = "q_out",
+             }},
         .compile_time_args = std::move(writer_compile_time_args),
         .runtime_arg_schema = {.runtime_arg_names = {"in_tile_offset_by_head"}},
         .hw_config = create_writer_datamovement_config(device->arch()),
@@ -179,10 +166,9 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeSubcoregridsProgram
     ProgramSpec spec{
         .name = "nlp_concat_heads_decode_subcoregrids",
         .kernels = {std::move(reader), std::move(writer)},
-        .dataflow_buffers = {std::move(q_out_dfb)},
         .tensor_parameters =
             {TensorParameter{.unique_id = INPUT, .spec = input_tensor.tensor_spec()},
-             // OUTPUT is borrow-only: no kernel binds it, but the Q_OUT DFB borrows its memory.
+             // OUTPUT is written in place through the kernels' "q_out" LocalTensorAccessor binding.
              TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()}},
         .work_units = {WorkUnitSpec{
             .name = "main",

@@ -5,9 +5,10 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include <tt-metalium/constants.hpp>
@@ -52,23 +53,33 @@ void kernel_main() {
 
     const auto qkv_reader = TensorAccessor(tensor::qkv_in);
 
-    DataflowBuffer dfb_q_out(dfb::q_out);
-    DataflowBuffer dfb_k_out(dfb::k_out);
-    DataflowBuffer dfb_v_out(dfb::v_out);
+    // The q/k/v output shards are written in place through their local L1 base addresses.
+    // Formerly borrowed DFBs whose write pointer was only ever read at its base — converted to
+    // LocalTensorAccessor (sync_free_dfbs.md). Required on Quasar: DFB get_write_ptr() returns the
+    // uncached L1 alias on Gen2 DM, which NOC APIs reject; get_bank_base_address() is the plain
+    // (cached) shard base on both generations (identical to the old value on Gen1). T = uint8_t:
+    // the kernel never indexes elements, it only hands byte addresses to NOC transfers.
+    LocalTensorAccessor<uint8_t> q_out(tensor::q_out);
+    LocalTensorAccessor<uint8_t> k_out(tensor::k_out);
+    LocalTensorAccessor<uint8_t> v_out(tensor::v_out);
 
     uint32_t qkv_tile_id = 0;
 
 #ifdef USE_ALIGNED_PATH
     {
-        DataflowBuffer dfb_aligned_scratch(dfb::aligned_scratch);
+        // Per-instance staging region. Formerly a self-looped DFB (this kernel bound both
+        // PRODUCER and CONSUMER — a shape Gen2 rejects for DM kernels), converted to a Scratchpad
+        // per sync_free_dfbs.md: the kernel never made a FIFO call on it, only grabbed the base
+        // address once, so the conversion drops no synchronization.
+        Scratchpad<uint8_t> aligned_scratch(scratch::aligned_scratch);
         constexpr bool read_phase_1 = (PHASES_TO_READ == 0 || PHASES_TO_READ == 1);
         constexpr bool read_phase_2 = (PHASES_TO_READ == 0 || PHASES_TO_READ == 2);
         // The NOC alignment rule requires (src & (alignment-1)) == (dst & (alignment-1)).
         // Source addresses are aligned to DRAM_ALIGN_BYTES, so the scratch destination must
         // also be aligned. L1 buffer allocations are only L1-aligned (16 B on BH), so round up the
-        // scratch base; the program factory oversizes the buffer by one DRAM_ALIGN_BYTES chunk to
+        // scratch base; the program factory oversizes the region by one DRAM_ALIGN_BYTES chunk to
         // accommodate this rounding.
-        const uint32_t raw_scratch_base = dfb_aligned_scratch.get_write_ptr();
+        const uint32_t raw_scratch_base = aligned_scratch.get_base_address();
         const uint32_t scratch_base = (raw_scratch_base + DRAM_ALIGN_BYTES - 1u) & ~(DRAM_ALIGN_BYTES - 1u);
 
         auto stage_phase = [&](uint32_t write_addr_base, uint32_t starting_tile_id, uint32_t phase_offset) {
@@ -143,7 +154,7 @@ void kernel_main() {
                                           : (row_in_tile - tt::constants::FACE_HEIGHT) * SUBTILE_LINE_BYTES +
                                                 HALF_TILE_ELEMENTS * ELEMENT_SIZE;
             uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
-            uint32_t q_write_addr = dfb_q_out.get_write_ptr() + wptr_offset;
+            uint32_t q_write_addr = q_out.get_bank_base_address() + wptr_offset;
             handle_one_head(q_write_addr);
         }
 
@@ -156,7 +167,7 @@ void kernel_main() {
                                           : (row_in_tile - tt::constants::FACE_HEIGHT) * SUBTILE_LINE_BYTES +
                                                 HALF_TILE_ELEMENTS * ELEMENT_SIZE;
             uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
-            uint32_t k_write_addr = dfb_k_out.get_write_ptr() + wptr_offset;
+            uint32_t k_write_addr = k_out.get_bank_base_address() + wptr_offset;
             handle_one_head(k_write_addr);
         }
 
@@ -169,7 +180,7 @@ void kernel_main() {
                                           : (row_in_tile - tt::constants::FACE_HEIGHT) * SUBTILE_LINE_BYTES +
                                                 HALF_TILE_ELEMENTS * ELEMENT_SIZE;
             uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
-            uint32_t v_write_addr = dfb_v_out.get_write_ptr() + wptr_offset;
+            uint32_t v_write_addr = v_out.get_bank_base_address() + wptr_offset;
             handle_one_head(v_write_addr);
         }
 
@@ -191,7 +202,7 @@ void kernel_main() {
                 ? row_in_tile * SUBTILE_LINE_BYTES
                 : (row_in_tile - tt::constants::FACE_HEIGHT) * SUBTILE_LINE_BYTES + HALF_TILE_ELEMENTS * ELEMENT_SIZE;
         uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
-        uint32_t q_write_addr = dfb_q_out.get_write_ptr() + wptr_offset;
+        uint32_t q_write_addr = q_out.get_bank_base_address() + wptr_offset;
 
         for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
             // Read first phase
@@ -229,7 +240,7 @@ void kernel_main() {
                 ? row_in_tile * SUBTILE_LINE_BYTES
                 : (row_in_tile - tt::constants::FACE_HEIGHT) * SUBTILE_LINE_BYTES + HALF_TILE_ELEMENTS * ELEMENT_SIZE;
         uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
-        uint32_t k_write_addr = dfb_k_out.get_write_ptr() + wptr_offset;
+        uint32_t k_write_addr = k_out.get_bank_base_address() + wptr_offset;
 
         for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {
@@ -265,7 +276,7 @@ void kernel_main() {
                 ? row_in_tile * SUBTILE_LINE_BYTES
                 : (row_in_tile - tt::constants::FACE_HEIGHT) * SUBTILE_LINE_BYTES + HALF_TILE_ELEMENTS * ELEMENT_SIZE;
         uint32_t wptr_offset = tile_row_index * head_size + offset_in_tile;
-        uint32_t v_write_addr = dfb_v_out.get_write_ptr() + wptr_offset;
+        uint32_t v_write_addr = v_out.get_bank_base_address() + wptr_offset;
 
         for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {
