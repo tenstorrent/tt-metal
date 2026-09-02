@@ -7,13 +7,13 @@ import sys
 import signal
 import os
 import io
-import csv
 import re
 import shutil
 import subprocess
 import tempfile
 import time
 import socket
+import uuid
 
 from loguru import logger
 
@@ -41,31 +41,25 @@ from .common import (
 import tracy.tracy_state
 
 DEFAULT_CHILD_CALLS = ["CompileProgram", "HWCommandQueue_write_buffer"]
-TTNN_SESSION_ID_MESSAGE_PREFIX = "TTNN_SESSION_ID:"
+RUN_SESSION_ID_ENV = "TTNN_RUN_SESSION_ID"
 PROFILE_LOG_SESSION_ID_PATTERN = re.compile(r"(?:^|,\s*)SESSION_ID:\s*([^,\r\n]+)")
 SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 
 
 def validate_session_id(session_id):
-    """Require a compact identifier safe in Tracy and CSV metadata."""
+    """Require a compact identifier safe in environment and CSV metadata."""
     if not SESSION_ID_PATTERN.fullmatch(session_id):
         raise ValueError(f"Session ID must be 1-128 ASCII letters, digits, '.', '_', ':', or '-'; got {session_id!r}")
     return session_id
 
 
-def extract_ttnn_session_ids(messages_file):
-    """Return the non-empty TTNN session IDs in a Tracy message export."""
-    session_ids = set()
-    with open(messages_file, newline="") as csv_file:
-        for row in csv.reader(csv_file, delimiter=";"):
-            if not row:
-                continue
-            message = row[0].strip()
-            if message.startswith(TTNN_SESSION_ID_MESSAGE_PREFIX):
-                session_id = message.removeprefix(TTNN_SESSION_ID_MESSAGE_PREFIX).strip()
-                if session_id:
-                    session_ids.add(validate_session_id(session_id))
-    return session_ids
+def get_or_create_session_id():
+    """Return the caller-supplied session ID or publish a new one for the child process."""
+    session_id = os.environ.get(RUN_SESSION_ID_ENV)
+    if not session_id:
+        session_id = uuid.uuid4().hex
+        os.environ[RUN_SESSION_ID_ENV] = session_id
+    return validate_session_id(session_id)
 
 
 def annotate_profile_log_session_id(profile_log, session_id):
@@ -85,7 +79,7 @@ def annotate_profile_log_session_id(profile_log, session_id):
             if existing_session_id != session_id:
                 raise ValueError(
                     f"{profile_log} already contains SESSION_ID: {existing_session_id}, "
-                    f"but Tracy contains TTNN_SESSION_ID: {session_id}"
+                    f"but the profiler session is {session_id}"
                 )
             return False
 
@@ -101,20 +95,8 @@ def annotate_profile_log_session_id(profile_log, session_id):
     return True
 
 
-def annotate_profile_log_from_tracy_messages(messages_file, profile_log):
-    """Stamp a device log when its Tracy export has exactly one TTNN session ID."""
-    session_ids = extract_ttnn_session_ids(messages_file)
-    if not session_ids:
-        logger.warning("No TTNN_SESSION_ID metadata found; device profile log will not be annotated")
-        return None
-    if len(session_ids) != 1:
-        logger.warning(
-            "Found multiple TTNN session IDs in one Tracy capture ({}); device profile log will not be annotated",
-            ", ".join(sorted(session_ids)),
-        )
-        return None
-
-    session_id = next(iter(session_ids))
+def annotate_profile_log(profile_log, session_id):
+    """Stamp a device log with the profiler session ID."""
     changed = annotate_profile_log_session_id(profile_log, session_id)
     if changed:
         logger.info(f"Added SESSION_ID: {session_id} to {profile_log}")
@@ -208,7 +190,13 @@ def run_report_setup(verbose, outputFolder, binFolder, port):
 
 
 def generate_report(
-    outputFolder, binFolder, nameAppend, childCalls, collect_noc_traces=False, device_analysis_types=[]
+    outputFolder,
+    binFolder,
+    nameAppend,
+    childCalls,
+    collect_noc_traces=False,
+    device_analysis_types=[],
+    session_id=None,
 ):
     logsFolder = generate_logs_folder(outputFolder)
     tracyOutFile = logsFolder / TRACY_FILE_NAME
@@ -258,8 +246,8 @@ def generate_report(
     logger.info(f"Host side ops data report generated at {logsFolder / TRACY_OPS_DATA_FILE_NAME}")
 
     profile_log = logsFolder / PROFILER_DEVICE_SIDE_LOG
-    if profile_log.is_file():
-        annotate_profile_log_from_tracy_messages(logsFolder / TRACY_OPS_DATA_FILE_NAME, profile_log)
+    if session_id and profile_log.is_file():
+        annotate_profile_log(profile_log, session_id)
 
     process_ops(
         outputFolder,

@@ -212,17 +212,17 @@ python -m tracy -p -r -v -m pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov
 
 Both reports carry one overall session ID, so they can be paired without relying on directory timestamps:
 
+- The Tracy launcher creates the session ID before starting the profiled process and exports it as `TTNN_RUN_SESSION_ID`.
 - The memory report stores it in the `session_id` column of each `graph_captures` row in `db.sqlite`.
-- TTNN emits one `TTNN_SESSION_ID: <id>` metadata message into the `.tracy` capture.
-- Tracy report postprocessing copies that ID into the first line of `profile_log_device.csv` as `SESSION_ID: <id>`.
+- Tracy report postprocessing writes the launcher's ID into the first line of `profile_log_device.csv` as `SESSION_ID: <id>`.
 
-This uses Tracy's existing message API and postprocessing, so Metal does not manage the ID. The ID is generated once per process. Set `TTNN_RUN_SESSION_ID` before launch when several ranks must share a caller-supplied ID:
+Metal does not manage the ID. Set `TTNN_RUN_SESSION_ID` before launch when several ranks must share a caller-supplied ID:
 
 ```bash
 export TTNN_RUN_SESSION_ID=$(uuidgen)
 ```
 
-Caller-supplied session IDs must be 1–128 ASCII letters, digits, `.`, `_`, `:`, or `-` so they remain safe in Tracy and CSV metadata.
+Caller-supplied session IDs must be 1–128 ASCII letters, digits, `.`, `_`, `:`, or `-` so they remain safe in environment and CSV metadata.
 
 Match `SESSION_ID` in `profile_log_device.csv` to the memory report's `session_id`, then use the capture ranges to select the work belonging to each graph. Each graph capture gets a row in the `graph_captures` table:
 

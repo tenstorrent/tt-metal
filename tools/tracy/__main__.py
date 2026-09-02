@@ -214,8 +214,22 @@ def main():
             sys.exit(1)
 
     if options.processLogsOnly:
-        generate_report(outputFolder, binaryFolder, "", None, options.collect_noc_traces)
+        session_id = os.environ.get(RUN_SESSION_ID_ENV)
+        if session_id:
+            session_id = validate_session_id(session_id)
+        generate_report(
+            outputFolder,
+            binaryFolder,
+            "",
+            None,
+            options.collect_noc_traces,
+            session_id=session_id,
+        )
         sys.exit(0)
+
+    # Create the ID in the parent before launching the profiled command. The child
+    # inherits it for graph reporting, and this process retains it for CSV annotation.
+    session_id = get_or_create_session_id() if options.report else None
 
     if options.port:
         port = options.port
@@ -491,6 +505,7 @@ def main():
                         options.child_functions,
                         options.collect_noc_traces,
                         options.device_analysis_types,
+                        session_id=session_id,
                     )
             except subprocess.TimeoutExpired as e:
                 captureProcess.terminate()
