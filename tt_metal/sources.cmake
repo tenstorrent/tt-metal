@@ -175,6 +175,14 @@ set(TT_METAL_SOURCES
     impl/experimental/offline_compile/offline_kernel_compile.cpp
     impl/graph/graph_tracking.cpp
     hal.cpp
+    tools/profiler/perf_debug_profiler.cpp
+    tools/profiler/perf_debug_profiler_tracy_handler.cpp
+    tools/profiler/perf_debug_consumer.cpp
+    tools/profiler/perf_debug_ops_csv.cpp
+    tools/profiler/perf_debug_receiver.cpp
+    tools/profiler/perf_debug_stall_csv.cpp
+    tools/profiler/perf_debug_zone_csv.cpp
+    tools/profiler/perf_debug_tracy_consumer.cpp
 )
 
 set(JITAPI_FILES
@@ -227,6 +235,9 @@ set(JITAPI_FILES
     tools/profiler/noc_debugging_profiler.hpp
     tools/profiler/noc_debugging_metadata.hpp
     tools/profiler/cpp_device_analyses.json
+    tools/profiler/kernels/drisc_drain_common.hpp
+    tools/profiler/kernels/drisc_niu_mode.cpp
+    tools/profiler/kernels/drisc_profiler_filler.cpp
     impl/dispatch/kernels/cq_dispatch.cpp
     impl/dispatch/kernels/cq_dispatch_subordinate.cpp
     impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp
