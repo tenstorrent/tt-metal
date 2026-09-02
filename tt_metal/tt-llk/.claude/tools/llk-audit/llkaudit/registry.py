@@ -739,7 +739,17 @@ SRC_BANK_CLR_TOKENS = ("SRCA_CLR", "SRCB_CLR")
 # ~90% of ALL UNPACR_NOP publications in the tree lack the wait (most are ordinary
 # tilize/untilize/matmul publications with no MOVD2A/MOVD2B consumer), which carries
 # no signal.
-DEST_REUSE_PUBLISHER_FN_SUBSTR = ("dummy_valid", "switch_to_reduce", "reuse_dest")
+# Both word orders and both nouns occur in-tree: the canonical helper is named
+# dest_reuse_dummy_unpack() (llk_unpack_A.h), while the per-op publishers are
+# *_dummy_valid_ / *_reuse_dest_*. Listing only one spelling of each left the
+# reference implementation of this very fix outside the tool's scope.
+DEST_REUSE_PUBLISHER_FN_SUBSTR = (
+    "dummy_valid",
+    "dummy_unpack",
+    "switch_to_reduce",
+    "reuse_dest",
+    "dest_reuse",
+)
 
 
 def is_dest_reuse_publisher_fn(name: str) -> bool:
@@ -765,29 +775,129 @@ def macro_args(text: str) -> list:
     return [a.strip() for a in args]
 
 
+# UNPACR_NOP's first operand is Unpacker_Select on every arch, but it is spelled
+# three different ways in-tree: the Src register (SrcA / SrcB), the unpacker that
+# feeds it (UNP0 / UNP_A -> SrcA, UNP1 / UNP_B -> SrcB), or a bare 0 / 1. Quasar
+# uses only the unpacker spelling and several WH/BH sites use UNP0, so keying on
+# SrcA/SrcB alone left those publications unattributed - and an unattributed
+# publication is silently skipped rather than reported. Anchored, not substring:
+# UNP_AB (p_setadc) must not read as UNP_A.
+_SRC_A_OPERAND_RE = re.compile(r"\b(?:SRCA|UNP0|UNP_A)\b")
+_SRC_B_OPERAND_RE = re.compile(r"\b(?:SRCB|UNP1|UNP_B)\b")
+
+
 def src_reg_of(text: str):
     """ "A" / "B" from a macro's first operand (e.g. TTI_UNPACR_NOP(SrcA, ...)), else None."""
     args = macro_args(text)
     if not args:
         return None
-    a0 = args[0]
-    if "SrcA" in a0 or "SRCA" in a0.upper():
+    a0 = args[0].upper()
+    if _SRC_A_OPERAND_RE.search(a0):
         return "A"
-    if "SrcB" in a0 or "SRCB" in a0.upper():
+    if _SRC_B_OPERAND_RE.search(a0):
+        return "B"
+    if a0 == "0":
+        return "A"
+    if a0 == "1":
         return "B"
     return None
 
 
-def publication_waits_own_bank(text: str) -> bool:
-    """True if an UNPACR_NOP publication gates on Unpackers[i].SrcBank.
+# UNPACR_NOP's operand list is per-arch, and the wait-bank select does NOT sit at
+# the same operand index on every arch, so the index cannot be applied blind:
+#   Blackhole  9 operands: Stall_Clr_Cntrl at index 5, Bank_Clr_Ctrl at index 6.
+#   Quasar     6 operands: Stall_Cntrl     at index 2, Bank_Clr_Ctrl at index 3.
+#   Wormhole   2 operands: no such operands at all - both controls are packed into
+#              the single NoOp immediate (WaitLikeUnpacr<<4, BothBanks<<3) and are
+#              named only by the UNP_ZEROSRC_* constants.
+# Blackhole's index 5 is Quasar's Nop_type, so reusing it there reads an unrelated
+# operand. Both arches happen to place the two bits at <<5 and <<4 in the encoded
+# word; it is the OPERAND POSITION that differs.
+_UNPACR_NOP_OPERAND_IDX = {
+    # arch: (wait-own-bank operand index, clear-both-banks operand index)
+    "blackhole": (5, 6),
+    "quasar": (2, 3),
+}
 
-    Two encodings: Blackhole exposes a `Stall_Clr_Cntrl` operand (index 5 of the
-    9-operand form); Wormhole has no such operand and uses a distinct NoOp constant
-    (UNP_ZEROSRC_STALL_RESET_WR_RDY = ZEROSRC | WaitLikeUnpacr<<4)."""
-    if "STALL_RESET_WR_RDY" in text:
-        return True
+# The Wormhole-shaped packed constants are ALSO defined in Blackhole's and Quasar's
+# ckernel_instr_params.h, but those arches take the controls as separate operands and
+# size the last one at 2 bits. Passing UNP_ZEROSRC_STALL_RESET_WR_RDY (0b10001) as
+# Blackhole's Unpack_Pop puts bit 0 and bit 4 = Bank_Clr_Ctrl into the word - an
+# unintended BOTH-BANKS clear - while the wait bit (bit 5) stays clear. TTI_UNPACR_NOP
+# never calls TT_UNPACR_NOP_VALID, so the operand overflow is silent. Off Wormhole the
+# constant is therefore never a guard; it is a defect.
+_WH_PACKED_WAIT = "UNP_ZEROSRC_STALL_RESET_WR_RDY"
+_WH_PACKED_BOTH = "UNP_ZEROSRC_RESET_ALL_BANKS"
+
+_OPERAND_COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
+
+
+def operand_value(arg: str) -> str:
+    """An operand's value with inline comments and whitespace stripped.
+
+    In-tree operands are routinely annotated - `1 /* wait like UNPACR */` is the
+    canonical guarded form emitted by dest_reuse_dummy_unpack(), and
+    `0 /* Stall_Clr_Cntrl */` the annotated default. A raw compare against "1"
+    silently fails on the annotated forms, so it read the correct fix as unguarded."""
+    return _OPERAND_COMMENT_RE.sub("", arg).strip()
+
+
+# Set_Dvalid is a named operand on the arches that take separate operands, so a
+# publication written with a bare literal (`1 /*Dvalid*/`, common on Quasar) is
+# still detectable even though it carries no SET_DVALID token.
+_UNPACR_NOP_DVALID_IDX = {"blackhole": 3, "quasar": 1}
+
+
+def publication_sets_dvalid(text: str, arch: str) -> bool:
+    """True if this UNPACR_NOP hands a bank over via a non-zero Set_Dvalid operand."""
+    i = _UNPACR_NOP_DVALID_IDX.get(arch)
+    if i is None:
+        return False
     a = macro_args(text)
-    return len(a) >= 6 and a[5] == "1"
+    if len(a) <= i:
+        return False
+    v = operand_value(a[i])
+    return bool(v) and v != "0"
+
+
+def publication_bank_controls(text: str, arch: str):
+    """(waits_own_bank, clears_both_banks) for one UNPACR_NOP publication.
+
+    Either element is None when this arch or encoding is not modeled; callers must
+    treat that as UNKNOWN, never as safe.
+
+    waits_own_bank - the instruction gates on Unpackers[i].SrcBank (the bank it
+    actually clears) instead of MatrixUnit.Src?Bank. This is the PIPELINED mode: it
+    lets unpack prepare the next bank while math consumes the current one. The
+    default (bit clear) waits until MatrixUnit.Src?Bank is back with the unpackers,
+    which under the bank-pointer lockstep invariant means no bank is outstanding at
+    all - a strictly STRONGER, serializing wait.
+
+    clears_both_banks - the instruction clears BOTH banks of the register, so
+    waiting on the unpacker's own bank alone is NOT sufficient: the other bank may
+    still belong to the Matrix Unit. The two controls are a matched pair and must
+    never both be set."""
+    if arch == "wormhole":
+        return (_WH_PACKED_WAIT in text, _WH_PACKED_BOTH in text)
+    idx = _UNPACR_NOP_OPERAND_IDX.get(arch)
+    if idx is None:
+        return (None, None)
+    wait_i, both_i = idx
+    a = macro_args(text)
+    if len(a) <= both_i:
+        return (None, None)
+    return (
+        operand_value(a[wait_i]) == "1",
+        operand_value(a[both_i]) == "1",
+    )
+
+
+def publication_misuses_packed_wait(text: str, arch: str) -> bool:
+    """A Wormhole-shaped packed NoOp constant on an arch whose UNPACR_NOP takes the
+    controls as separate operands - the value silently lands in the wrong bit field."""
+    return arch in _UNPACR_NOP_OPERAND_IDX and (
+        _WH_PACKED_WAIT in text or _WH_PACKED_BOTH in text
+    )
 
 
 def required_vld_token(name: str):

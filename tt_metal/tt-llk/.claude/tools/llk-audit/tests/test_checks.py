@@ -1206,9 +1206,11 @@ def test_srcreg_dest_to_src_quasar_is_unconfirmed_not_flagged():
 
 
 @case
-def test_srcreg_dummy_publication_unguarded():
+def test_srcreg_dummy_publication_serializing():
     # BH default form: Stall_Clr_Cntrl=0 -> waits on MatrixUnit.Src?Bank while
-    # clearing Unpackers[i].SrcBank. Recall candidate, never a flag.
+    # clearing Unpackers[i].SrcBank. That wait is STRONGER (it holds until no bank
+    # is outstanding), so this is lost overlap, not corruption. Recall candidate,
+    # never a flag.
     F = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
     facts = [
         fn("_llk_unpack_set_srcb_dummy_valid_", F, 100, 200),
@@ -1233,7 +1235,206 @@ def test_srcreg_dummy_publication_unguarded():
         for f in SrcRegBank().run(FactBase("blackhole", facts))
         if f.kind == "dvalid:DUMMY_PUBLISH"
     ]
-    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_UNGUARDED", out
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SERIALIZING", out
+
+
+@case
+def test_srcreg_dummy_publication_both_banks_pairing():
+    """The wait-like bit and a BOTH-BANKS clear are a matched pair.
+
+    Bank_Clr_Ctrl=1 clears both banks, but the own-bank wait covers only the bank
+    being prepared - so with both set the instruction can overwrite a bank the
+    Matrix Unit still owns. With the default drained wait it is correct, and must
+    NOT be reported as serializing (it has to serialize by design).
+    """
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_unpack_AB_custom_mm.h"
+    # Unsafe: wait bit (idx 5) = 1 AND both-banks (idx 6) = 1.
+    bad = [
+        fn("_llk_unpack_reuse_dest_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 1, 1, 0, p_unpacr_nop::CLR_SRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", bad))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_BOTH_BANKS_WAITLIKE", out
+
+    # Correct in-tree shape (llk_unpack_AB_custom_mm.h): both banks + default wait.
+    good = [
+        fn("_llk_unpack_reuse_dest_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC)",
+            func="u",
+        ),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", good))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+
+
+@case
+def test_srcreg_dummy_publication_packed_constant_is_arch_specific():
+    """UNP_ZEROSRC_STALL_RESET_WR_RDY means the wait bit ONLY on Wormhole.
+
+    Blackhole and Quasar take the controls as separate operands and size the last
+    one at 2 bits, so passing the packed 0b10001 there lands bit 4 = Bank_Clr_Ctrl
+    (an unintended both-banks clear) and leaves the wait bit clear. Crediting the
+    bare substring as a guard was a false all-clear.
+    """
+    WH = "tt_llk_wormhole_b0/llk_lib/llk_unpack_A.h"
+    BH = "tt_llk_blackhole/llk_lib/llk_unpack_A.h"
+    TXT = "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY)"
+
+    # On Wormhole it is the real guard -> clean.
+    wh = [
+        fn("_llk_unpack_dest_reuse_dummy_valid_", WH, 100, 200),
+        macro(WH, 110, "TTI_UNPACR_NOP", TXT, func="u"),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", wh))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+
+    # On Blackhole the same token is a defect, not a guard.
+    bh = [
+        fn("_llk_unpack_dest_reuse_dummy_valid_", BH, 100, 200),
+        macro(BH, 110, "TTI_UNPACR_NOP", TXT, func="u"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", bh))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH", out
+
+
+@case
+def test_srcreg_dummy_publication_quasar_operand_index():
+    """Quasar's wait bit is operand 2, not Blackhole's operand 5 (= Nop_type).
+
+    Indexing Quasar with Blackhole's position read an unrelated operand.
+    """
+    Q = "tt_llk_quasar/llk_lib/llk_unpack_unary_operand.h"
+    # Quasar guarded form: Stall_Cntrl (idx 2) = 1.
+    guarded = [
+        fn("_llk_unpack_dest_reuse_dummy_valid_", Q, 100, 200),
+        macro(
+            Q,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(p_unpacr::UNP_A, 1, 1, 0, 0, p_unpacr::UNP_CLRSRC_ZERO)",
+            func="u",
+        ),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("quasar", guarded))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+
+    # Default form with a 1 sitting at Blackhole's index 5 (Nop_type) must NOT be
+    # mistaken for a guard.
+    default = [
+        fn("_llk_unpack_dest_reuse_dummy_valid_", Q, 100, 200),
+        macro(
+            Q,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(p_unpacr::UNP_A, 1, 0, 0, 0, 1)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("quasar", default))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SERIALIZING", out
+
+
+@case
+def test_srcreg_dummy_publication_annotated_operand_is_read():
+    """Operands carry inline comments in-tree; the value must be read through them.
+
+    dest_reuse_dummy_unpack() emits `1 /* wait like UNPACR */` — the canonical
+    guarded form. A raw compare against "1" read that as the default form, i.e. the
+    tool reported the reference fix as the thing it was meant to detect.
+    """
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_A.h"
+    guarded = [
+        fn("dest_reuse_dummy_unpack", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, "
+            "1 /* wait like UNPACR */, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", guarded))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+
+    # The annotated DEFAULT form must still be reported.
+    default = [
+        fn("dest_reuse_dummy_unpack", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, "
+            "0 /* Stall_Clr_Cntrl */, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", default))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SERIALIZING", out
+
+
+@case
+def test_srcreg_dummy_publication_clr_src_is_a_publication():
+    """CLR_SRC clears the unpacker's bank exactly as ZEROSRC does.
+
+    Keying publication detection on ZEROSRC/SET_DVALID alone hid every
+    both-banks site in the tree, since those are all CLR_SRC with Set_Dvalid=0.
+    """
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_unpack_AB_custom_mm.h"
+    facts = [
+        fn("_llk_unpack_reuse_dest_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::CLR_SRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SERIALIZING", out
 
 
 @case
