@@ -24,34 +24,40 @@ to make a change pass** — a lowered gate is the change failing, recorded as if
 
 ## Candidates
 
-| # | candidate | targets | measured | effort | risk | status |
-|--:|---|---|---|---|---|---|
-| [1](#candidate-1--host-round-trips) | remove host round-trips from SCA | gap | **1917 ms** (62% of baseline wall) | — | — | **transfers done — [residue](#1g-what-is-still-host-side); [1e](#1e-an-empirical-high-water-mark-for-max_len)/[1f](#1f-derive-max_len-where-the-mask-is-produced) open** |
-| [1a](#1a-rebatch-and-scatter-back-on-device) | rebatch + scatter-back on device | gap | **−2344.7 ms wall (−76%)** | L | med | **landed — [01](perf_reports/01-sca-rebatch-on-device.md)** |
-| [1b](#1b-bound-max_len-statically) | bound `max_len` statically | gap, trace | +129 ms kernel for ~9 ms of gap | M | high | **[rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len)** — but its [DRAM argument is gone](#the-memory-half-of-the-rejection-no-longer-holds) |
-| [1c](#1c-hoist-index-computation-above-the-layer-loop) | rebatch plan once per frame, not per layer | gap | −94.6 ms encoder wall (−2.2%) | S | low | **landed — [02](perf_reports/02-rebatch-plan-hoisted.md)** |
-| [1d](#1d-per-call-constant-uploads) | cache what is frame-invariant | gap | −56.4 ms encoder wall (−1.3%) | S | none | **landed — [03](perf_reports/03-constant-uploads-cached.md)** |
-| [1e](#1e-an-empirical-high-water-mark-for-max_len) | grow `rebatch_len` monotonically, never shrink | trace | ≤2.1 ms gap; unblocks 9 | M | med | todo — rank on trace-capturability, not ms |
-| [1f](#1f-derive-max_len-where-the-mask-is-produced) | move the `max_len` reduce to the mask producer | — | 0 ms — structural | S | low | todo — strictly after 1e |
-| [1g](#1g-what-is-still-host-side) | inventory of the surviving host work | gap | ~3.5 ms of layer gap | — | — | **inventory — no action on its own numbers** |
-| [2](#candidate-2--fused-msda) | fused `multi_scale_deformable_attn` | kernel | **−191.6 ms kernel (−28.1%)** | M | med | **landed — [04](perf_reports/04-fused-msda.md)** |
-| [3](#candidate-3--tile-padding-waste) | fold the offset normalizer into the Linear | kernel | **−32.7 ms kernel** | S | low | **landed — [05](perf_reports/05-offset-normalizer-folded.md)** |
-| [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | — | — | — | **moot — deleted by [04](perf_reports/04-fused-msda.md)** |
-| [5](#candidate-5--data-movement-vs-compute) | classify the layout churn, then delete it by shape and order | kernel | **−176.3 ms (−38.6%)**, 456.5 → 280.2 ms | — | — | **closed — all six landed, [result](#result--candidate-5-is-closed)** |
-| [5a](#5a-delete-the-key-permute) | delete the dead SCA `key` permute | kernel | **−18.1 ms (−4.0%)** | XS | none | **landed — [06](perf_reports/06-sca-key-permute-deleted.md)** |
-| [5b](#5b-sampling-location-math-in-row_major) | sampling-location math in ROW_MAJOR; `2/[W,H]` and `2·ref−1` folded | kernel | **−82.2 ms (−18.8%)**; PCC **improved**; cleared the 200×200 OOM | M | low | **landed — [07](perf_reports/07-sampling-grid-in-row-major.md)** |
-| [5c](#5c-prepare-attn-once-not-per-level) | prepare `attn` once per call, not per level | kernel | **−44.9 ms (−12.6%)** | S | low | **landed — [08](perf_reports/08-attn-prepared-once-per-call.md)** |
-| [5d](#5d-value-head-split-without-the-padding) | `value` head split without the tile padding | kernel | **−6.6 ms (−2.3%)** — benchmarked at 0.84× first | M | med | **landed — [10](perf_reports/10-value-head-split-unpadded.md)** |
-| [5e](#5e-head-major-grid-with-a-tile-transpose) | build the grid head-major with a TILE transpose | kernel | **−24.5 ms (−7.9%)** — deletes all five per-level grid permutes | S | low | **landed — [09](perf_reports/09-head-major-sampling-grid.md)** |
-| [5f](#5f-the-per-level-dtype-guards-are-free) | the per-level dtype guards | kernel | **0 ms** — zero `Typecast` rows | XS | none | **verified-zero — no code change** |
-| [6](#candidate-6--permutereshape-by-reformulation) | **[6a](#6a-hoist-the-sca-camera-permute-out-of-the-layer-loop)** only: hoist the SCA camera permute out of the layer loop | kernel | **19.3 ms/layer**, ~96 ms/frame — runs 6× on identical data | S | low | **re-scoped — the weight reorder is [dead](#why-the-weight-reorder-is-dead); the rest is [11](#candidate-11--absorb-msda-layout-prep)'s** |
-| [7](#candidate-7--l1-vs-dram) | place operands in L1 instead of DRAM | kernel | unknown; expected small | S | low | todo — likely small |
-| [8](#candidate-8--fuse-binaryng) | fuse `BinaryNg` into its producers | kernel | **2.9 ms (1.0%)** at stage 10, was 48.2 | — | — | **closed — [5b](#5b-sampling-location-math-in-row_major) deleted the cost instead of fusing it** |
-| [9](#candidate-9--trace-capture) | trace capture the encoder | gap | ≤9 ms/layer | M | low | parked behind 1e |
-| [10](#candidate-10--msdaoperation-itself) | `MSDAOperation` device time | kernel | **167.9 ms — 59.9% of the layer** | ? | ? | todo — upstream, the largest item left |
-| [11](#candidate-11--absorb-msda-layout-prep) | absorb MSDA permute/reshape into the op | kernel | **~40 ms** ([inventory](#the-inventory-at-stage-10)) | L | med | todo — after 6a; **no longer gated on 6** |
-| [12](#candidate-12--one-fused-call-for-all-levels) | multi-level fused op: 4 SCA launches → 1 | kernel | 4× launch + 4× per-level prep | L | med | todo — upstream, with 10 |
-| [13](#candidate-13--dtype-and-math-fidelity) | bfloat8_b weights, bfloat16 activations | kernel | unmeasured; **spends accuracy** | S | med | todo — needs an accuracy budget |
+| # | candidate | ticket | issue | targets | measured | effort | risk | status |
+|--:|---|---|---|---|---|---|---|---|
+| [1](#candidate-1--host-round-trips) | remove host round-trips from SCA | `01` | [#55191](https://github.com/tenstorrent/tt-metal/issues/55191) | gap | **1917 ms** (62% of baseline wall) | — | — | **transfers done — [residue](#1g-what-is-still-host-side); [1e](#1e-an-empirical-high-water-mark-for-max_len)/[1f](#1f-derive-max_len-where-the-mask-is-produced) open** |
+| [1a](#1a-rebatch-and-scatter-back-on-device) | rebatch + scatter-back on device | `01.01` | [#55192](https://github.com/tenstorrent/tt-metal/issues/55192) | gap | **−2344.7 ms wall (−76%)** | L | med | **landed — [01](perf_reports/01-sca-rebatch-on-device.md)** |
+| [1b](#1b-bound-max_len-statically) | bound `max_len` statically | — | — | gap, trace | +129 ms kernel for ~9 ms of gap | M | high | **[rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len)** — but its [DRAM argument is gone](#the-memory-half-of-the-rejection-no-longer-holds) |
+| [1c](#1c-hoist-index-computation-above-the-layer-loop) | rebatch plan once per frame, not per layer | `01.02` | [#55193](https://github.com/tenstorrent/tt-metal/issues/55193) | gap | −94.6 ms encoder wall (−2.2%) | S | low | **landed — [02](perf_reports/02-rebatch-plan-hoisted.md)** |
+| [1d](#1d-per-call-constant-uploads) | cache what is frame-invariant | `01.03` | [#55194](https://github.com/tenstorrent/tt-metal/issues/55194) | gap | −56.4 ms encoder wall (−1.3%) | S | none | **landed — [03](perf_reports/03-constant-uploads-cached.md)** |
+| [1e](#1e-an-empirical-high-water-mark-for-max_len) | grow `rebatch_len` monotonically, never shrink | `01.02.01` | [#55195](https://github.com/tenstorrent/tt-metal/issues/55195) | trace | ≤2.1 ms gap; unblocks 9 | M | med | todo — rank on trace-capturability, not ms |
+| [1f](#1f-derive-max_len-where-the-mask-is-produced) | move the `max_len` reduce to the mask producer | `01.02.02` | [#55196](https://github.com/tenstorrent/tt-metal/issues/55196) | — | 0 ms — structural | S | low | todo — strictly after 1e |
+| [1g](#1g-what-is-still-host-side) | inventory of the surviving host work | — | — | gap | ~3.5 ms of layer gap | — | — | **inventory — no action on its own numbers** |
+| [2](#candidate-2--fused-msda) | fused `multi_scale_deformable_attn` | `05` | [#55198](https://github.com/tenstorrent/tt-metal/issues/55198) | kernel | **−191.6 ms kernel (−28.1%)** | M | med | **landed — [04](perf_reports/04-fused-msda.md)** |
+| [3](#candidate-3--tile-padding-waste) | fold the offset normalizer into the Linear | `02` | [#55197](https://github.com/tenstorrent/tt-metal/issues/55197) | kernel | **−32.7 ms kernel** | S | low | **landed — [05](perf_reports/05-offset-normalizer-folded.md)** |
+| [4](#candidate-4--the-msda-concat) | replace the per-level concat | — | — | kernel | — | — | — | **moot — deleted by [04](perf_reports/04-fused-msda.md)** |
+| [5](#candidate-5--data-movement-vs-compute) | classify the layout churn, then delete it by shape and order | `03` | [#55202](https://github.com/tenstorrent/tt-metal/issues/55202) | kernel | **−176.3 ms (−38.6%)**, 456.5 → 280.2 ms | — | — | **closed — all six landed, [result](#result--candidate-5-is-closed)** |
+| [5a](#5a-delete-the-key-permute) | delete the dead SCA `key` permute | `03.01` | [#55203](https://github.com/tenstorrent/tt-metal/issues/55203) | kernel | **−18.1 ms (−4.0%)** | XS | none | **landed — [06](perf_reports/06-sca-key-permute-deleted.md)** |
+| [5b](#5b-sampling-location-math-in-row_major) | sampling-location math in ROW_MAJOR; `2/[W,H]` and `2·ref−1` folded | `03.02` | [#55204](https://github.com/tenstorrent/tt-metal/issues/55204) | kernel | **−82.2 ms (−18.8%)**; PCC **improved**; cleared the 200×200 OOM | M | low | **landed — [07](perf_reports/07-sampling-grid-in-row-major.md)** |
+| [5c](#5c-prepare-attn-once-not-per-level) | prepare `attn` once per call, not per level | `03.03` | [#55205](https://github.com/tenstorrent/tt-metal/issues/55205) | kernel | **−44.9 ms (−12.6%)** | S | low | **landed — [08](perf_reports/08-attn-prepared-once-per-call.md)** |
+| [5d](#5d-value-head-split-without-the-padding) | `value` head split without the tile padding | `03.05` | [#55207](https://github.com/tenstorrent/tt-metal/issues/55207) | kernel | **−6.6 ms (−2.3%)** — benchmarked at 0.84× first | M | med | **landed — [10](perf_reports/10-value-head-split-unpadded.md)** |
+| [5e](#5e-head-major-grid-with-a-tile-transpose) | build the grid head-major with a TILE transpose | `03.04` | [#55206](https://github.com/tenstorrent/tt-metal/issues/55206) | kernel | **−24.5 ms (−7.9%)** — deletes all five per-level grid permutes | S | low | **landed — [09](perf_reports/09-head-major-sampling-grid.md)** |
+| [5f](#5f-the-per-level-dtype-guards-are-free) | the per-level dtype guards | — | — | kernel | **0 ms** — zero `Typecast` rows | XS | none | **verified-zero — no code change** |
+| [6](#candidate-6--permutereshape-by-reformulation) | **[6a](#6a-hoist-the-sca-camera-permute-out-of-the-layer-loop)** only: hoist the SCA camera permute out of the layer loop | `03.06` | [#55208](https://github.com/tenstorrent/tt-metal/issues/55208) | kernel | **19.3 ms/layer**, ~96 ms/frame — runs 6× on identical data | S | low | **re-scoped — the weight reorder is [dead](#why-the-weight-reorder-is-dead); the rest is [11](#candidate-11--absorb-msda-layout-prep)'s** |
+| [7](#candidate-7--l1-vs-dram) | place operands in L1 instead of DRAM | `03.07` | [#55209](https://github.com/tenstorrent/tt-metal/issues/55209) | kernel | unknown; expected small | S | low | todo — likely small |
+| [8](#candidate-8--fuse-binaryng) | fuse `BinaryNg` into its producers | — | — | kernel | **2.9 ms (1.0%)** at stage 10, was 48.2 | — | — | **closed — [5b](#5b-sampling-location-math-in-row_major) deleted the cost instead of fusing it** |
+| [9](#candidate-9--trace-capture) | trace capture the encoder | `06` | [#55210](https://github.com/tenstorrent/tt-metal/issues/55210) | gap | ≤9 ms/layer | M | low | parked behind 1e |
+| [10](#candidate-10--msdaoperation-itself) | `MSDAOperation` device time | `05.01` | [#55199](https://github.com/tenstorrent/tt-metal/issues/55199) | kernel | **167.9 ms — 59.9% of the layer** | ? | ? | todo — upstream, the largest item left |
+| [11](#candidate-11--absorb-msda-layout-prep) | absorb MSDA permute/reshape into the op | `05.02` | [#55200](https://github.com/tenstorrent/tt-metal/issues/55200) | kernel | **~40 ms** ([inventory](#the-inventory-at-stage-10)) | L | med | todo — after 6a; **no longer gated on 6** |
+| [12](#candidate-12--one-fused-call-for-all-levels) | multi-level fused op: 4 SCA launches → 1 | `05.03` | [#55201](https://github.com/tenstorrent/tt-metal/issues/55201) | kernel | 4× launch + 4× per-level prep | L | med | todo — upstream, with 10 |
+| [13](#candidate-13--dtype-and-math-fidelity) | bfloat8_b weights, bfloat16 activations | `07` | [#55211](https://github.com/tenstorrent/tt-metal/issues/55211) | kernel | unmeasured; **spends accuracy** | S | med | todo — needs an accuracy budget |
+| [14](#candidate-14--sfpu-sampling-geometry) | move MSDA sampling geometry from the reader to the SFPU | `05.04` | [#55231](https://github.com/tenstorrent/tt-metal/issues/55231) | kernel | **167.6 → 29.5 ms** on the profiling branch (N150) | M | med | todo — **the largest single item; obsoletes 10's premise** |
+| [15](#candidate-15--axes-as-addresses) | address MSDA head/level by byte offset instead of materializing them | `05.05` | [#55232](https://github.com/tenstorrent/tt-metal/issues/55232) | kernel | layout plumbing **60.5 → 15.4 ms** (N150) | L | med | todo — four additive op-contract changes |
+| [15a](#candidate-15--axes-as-addresses) | fold the grid point axis into its page | `05.05.01` | [#55233](https://github.com/tenstorrent/tt-metal/issues/55233) | kernel | −12.9 ms (N150) | S | low | todo |
+| [15b](#candidate-15--axes-as-addresses) | value head by byte offset (`num_heads`) | `05.05.02` | [#55234](https://github.com/tenstorrent/tt-metal/issues/55234) | kernel | −20.5 ms (N150) | M | med | todo |
+| [15c](#candidate-15--axes-as-addresses) | attn level run by byte offset | `05.05.03` | [#55235](https://github.com/tenstorrent/tt-metal/issues/55235) | kernel | −17.9 ms (N150) | M | med | todo — 32-byte NoC alignment |
+| [15d](#candidate-15--axes-as-addresses) | rank-3 packed grid (head + level) | `05.05.04` | [#55236](https://github.com/tenstorrent/tt-metal/issues/55236) | kernel | −4.6 ms (N150) | M | med | todo — after 15a |
 
 Ordering rationale is at the [bottom](#ordering).
 
@@ -382,12 +388,12 @@ upstream change, or any accuracy.
 
 | item | predicted | measured | report |
 |---|---:|---:|---|
-| [5a](#5a-delete-the-key-permute) `key` permute deleted | −19.3 | **−18.1** | [06](perf_reports/06-sca-key-permute-deleted.md) |
-| [5b](#5b-sampling-location-math-in-row_major) sampling grid in ROW_MAJOR | −90 | **−82.2** | [07](perf_reports/07-sampling-grid-in-row-major.md) |
-| [5c](#5c-prepare-attn-once-not-per-level) `attn` prepared once | −35 | **−44.9** | [08](perf_reports/08-attn-prepared-once-per-call.md) |
-| [5e](#5e-head-major-grid-with-a-tile-transpose) head-major grid in TILE | −13 | **−24.5** | [09](perf_reports/09-head-major-sampling-grid.md) |
-| [5d](#5d-value-head-split-without-the-padding) `value` head split unpadded | −10…−20 | **−6.6** | [10](perf_reports/10-value-head-split-unpadded.md) |
-| [5f](#5f-the-per-level-dtype-guards-are-free) per-level guards | 0 | **0** (verified) | — |
+| [5a](#5a-delete-the-key-permute) `key` permute deleted | −19.3 | `03.01` | [#55203](https://github.com/tenstorrent/tt-metal/issues/55203) | **−18.1** | [06](perf_reports/06-sca-key-permute-deleted.md) |
+| [5b](#5b-sampling-location-math-in-row_major) sampling grid in ROW_MAJOR | −90 | `03.02` | [#55204](https://github.com/tenstorrent/tt-metal/issues/55204) | **−82.2** | [07](perf_reports/07-sampling-grid-in-row-major.md) |
+| [5c](#5c-prepare-attn-once-not-per-level) `attn` prepared once | −35 | `03.03` | [#55205](https://github.com/tenstorrent/tt-metal/issues/55205) | **−44.9** | [08](perf_reports/08-attn-prepared-once-per-call.md) |
+| [5e](#5e-head-major-grid-with-a-tile-transpose) head-major grid in TILE | −13 | `03.04` | [#55206](https://github.com/tenstorrent/tt-metal/issues/55206) | **−24.5** | [09](perf_reports/09-head-major-sampling-grid.md) |
+| [5d](#5d-value-head-split-without-the-padding) `value` head split unpadded | −10…−20 | `03.05` | [#55207](https://github.com/tenstorrent/tt-metal/issues/55207) | **−6.6** | [10](perf_reports/10-value-head-split-unpadded.md) |
+| [5f](#5f-the-per-level-dtype-guards-are-free) per-level guards | 0 | — | — | **0** (verified) | — |
 
 **456.5 → 280.2 ms, −176.3 ms, −38.6%.** Ops 127 → 106. PCC 0.999611 → **0.999651** — it improved,
 because 5b removed two bf16 rounding steps per coordinate. `tests/pcc/` went from 32 passed / 1 failed
@@ -798,6 +804,55 @@ Do not sequence any other candidate behind this one. It is independent of 6/11 a
 correctness-preserving.
 
 ---
+
+## Candidate 14 — SFPU sampling geometry
+
+**The largest single item, and it obsoletes [candidate 10](#candidate-10--msdaoperation-itself)'s premise.**
+Tracked as [#55231](https://github.com/tenstorrent/tt-metal/issues/55231).
+
+10 reads `MSDAOperation`'s 167.9 ms as a slow kernel and proposes filing it upstream. A profiling
+branch measured the inside of that op and it is neither slow sampling nor bandwidth:
+`CB-COMPUTE-WAIT-FRONT` was **36.1 ms on a 36.0 ms call** — the compute kernel idle for the entire
+op, waiting on a reader deriving per-point coordinates in **soft float at ~140 cycles per operation**
+on a dataflow core with no FPU, while the SFPU sat unused.
+
+Moving that arithmetic to the SFPU: **167.6 → 29.5 ms**, sampling kernel untouched. The "+45% per
+sample versus bare `grid_sample`" this backlog records was measuring the reader.
+
+Two correctness items ride along: out-of-bounds corners lose their mask when the scalar moves to the
+compute kernel (high-error ratio ~0.55 that the PCC gate passed), and `fp32_dest_acc_en` is required
+because bf16's ulp at 200 is 1.0, so `floor(px)` on a 200×200 map degrades bilinear to
+nearest-neighbour — 200×200 PCC 0.996156 → 0.999823, and the op got *faster*.
+
+## Candidate 15 — axes as addresses, not data
+
+**Tracked as [#55232](https://github.com/tenstorrent/tt-metal/issues/55232)**, with four additive op-contract changes beneath it:
+[15a](https://github.com/tenstorrent/tt-metal/issues/55233) grid page fold · [15b](https://github.com/tenstorrent/tt-metal/issues/55234) packed value heads · [15c](https://github.com/tenstorrent/tt-metal/issues/55235) packed attn
+runs · [15d](https://github.com/tenstorrent/tt-metal/issues/55236) rank-3 packed grid.
+
+This is a third route past what [candidate 11](#candidate-11--absorb-msda-layout-prep) owns, and it
+beat both of 11's. **Stop moving the axis; make it an address.** Widen the operand and let the
+reader reach head `h` at a byte offset in the row it already reads, so the head-major tensor is
+never produced.
+
+That is the argument against 11's route 2 and against the `nlp_create_qkv_heads`-family op: a fused
+head-reshape still has to **write** 92.6 MB and read it back. The permute ran at 14 GB/s because
+both its pages were 64 bytes, not because there were four calls — and 11's own note that a hoist
+measured as a wash is the same fact from the other side.
+
+Layout plumbing went **60.5 → 15.4 ms**, the op paying under 1.5 ms total for offset reads.
+
+Two rules, both learned expensively:
+
+- **A NoC source offset must be 32-byte aligned.** attn's `(h*L*P + l*P)*2` gives 8/16/24 at
+  `P=4, L=4`; the reader must round down, index from the boundary, and clamp at the page end.
+- **An offset belongs to the input that packs the axis, never to the call.** Applying it to an
+  unpacked operand read past the page end — which did not fail a test, it hung the kernel and took
+  the chip off the PCIe bus.
+
+**All figures in 14 and 15 are N150, from the profiling branch
+`ctr-ikasic/bev_former_kernel_optimizations`.** That branch is evidence for these proposals, not an
+implementation and not a Blackhole result; every number has to be remeasured on the target.
 
 ## Ordering
 

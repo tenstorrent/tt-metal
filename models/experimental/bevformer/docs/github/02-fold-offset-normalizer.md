@@ -26,7 +26,9 @@ W' = W * scale
 b' = b * scale
 ```
 
-The benefit is not a smaller Linear: it processes the same queries and produces the same output in both paths. The benefit is that the separate `ttnn.div` following it disappears from every forward, along with its dispatch, its read of the Linear output, the normalizer broadcast, and the materialized intermediate. The prototype removes the runtime divide and reduces post-fusion layer kernel time by approximately 6.7%; this describes the prototype branch, not the current implementation. This ticket removes the standalone `1/[W,H]` normalization after the Linear; #55204 later folds the remaining coordinate transformation into sampling-grid construction.
+The benefit is not a smaller Linear — it processes the same queries and produces the same output either way. It is that the `ttnn.div` following it disappears from every forward, with its dispatch, its read of the Linear output, the normalizer broadcast and the intermediate it materializes.
+
+The prototype removes the divide for approximately 6.7% of post-fusion layer kernel time; that describes the prototype branch, not the current implementation. This ticket removes the standalone `1/[W,H]` normalization; #55204 later folds the remaining coordinate transformation into sampling-grid construction.
 
 ```mermaid
 flowchart TB
