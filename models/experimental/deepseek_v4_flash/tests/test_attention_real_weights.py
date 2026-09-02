@@ -201,7 +201,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc  # noqa: E40
 from models.experimental.deepseek_v4_flash.tt.attention import (  # noqa: E402
     DeepSeekV4Attention,
     build_static_layer_cache,
-    host_decode_mask,
+    decode_sdpa_bounds,
     int32_pos_tensor,
     make_rope_table,
 )
@@ -412,7 +412,9 @@ def test_attention_real_weights_decode(
                 win_slot = int32_pos_tensor(pos % cr, device, batch_size)
                 win_row = int32_pos_tensor(cfg.sliding_window + wi, device, batch_size)
 
-            mask = host_decode_mask(cfg.sliding_window, layer_type, cr, pos, seq_len, device)
+            mask, sdpa_cur_pos = decode_sdpa_bounds(
+                cfg.sliding_window, layer_type, cr, pos, seq_len, device, batch_size
+            )
             out_tt = attn.decode(
                 _to_tt(hidden[:, pos : pos + 1].reshape(batch_size, 1, 1, cfg.hidden_size), device),
                 cos_d,
@@ -427,6 +429,7 @@ def test_attention_real_weights_decode(
                 pool_compressor=pool,
                 win_slot=win_slot,
                 win_row=win_row,
+                sdpa_cur_pos=sdpa_cur_pos,
             )
             if pos < split:
                 continue  # seeding the cache; no reference row to compare yet

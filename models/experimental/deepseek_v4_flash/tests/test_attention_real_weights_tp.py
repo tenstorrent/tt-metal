@@ -28,7 +28,7 @@ from models.experimental.deepseek_v4_flash.tests.test_attention_real_weights imp
 from models.experimental.deepseek_v4_flash.tt.attention import (
     DeepSeekV4Attention,
     build_static_layer_cache,
-    host_decode_mask,
+    decode_sdpa_bounds,
     int32_pos_tensor,
     make_rope_table,
 )
@@ -149,6 +149,9 @@ def test_attention_real_weights_decode_tp4(mesh_device, reset_seeds, tmp_path, l
                 win_slot = int32_pos_tensor(pos % compress_rate, submesh, batch)
                 win_row = int32_pos_tensor(cfg.sliding_window + window, submesh, batch)
 
+            mask, sdpa_cur_pos = decode_sdpa_bounds(
+                cfg.sliding_window, layer_type, compress_rate, pos, seq_len, submesh, batch
+            )
             output = attn.decode(
                 _to_tt_replicated(hidden[:, pos : pos + 1].reshape(batch, 1, 1, cfg.hidden_size), submesh),
                 cos,
@@ -156,13 +159,14 @@ def test_attention_real_weights_decode_tp4(mesh_device, reset_seeds, tmp_path, l
                 neg_sin,
                 cos_win,
                 sin_win,
-                host_decode_mask(cfg.sliding_window, layer_type, compress_rate, pos, seq_len, submesh),
+                mask,
                 kv_cache,
                 int32_pos_tensor(pos % cfg.sliding_window, submesh, batch),
                 int32_pos_tensor(pos, submesh, batch),
                 pool_compressor=pool,
                 win_slot=win_slot,
                 win_row=win_row,
+                sdpa_cur_pos=sdpa_cur_pos,
             )
 
             if pos < seq_len - min(_DECODE_STEPS, seq_len):
