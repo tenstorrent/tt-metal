@@ -114,6 +114,7 @@ class SrcRegBank(Check):
                 )
             )
         findings.extend(self._dest_to_src_waits(fb))
+        findings.extend(self._dummy_publication_guard(fb))
         return findings
 
     def _dest_to_src_waits(self, fb: FactBase) -> list[Finding]:
@@ -207,4 +208,60 @@ class SrcRegBank(Check):
                     )
                 )
                 break  # one finding per function
+        return out
+
+    def _dummy_publication_guard(self, fb: FactBase) -> list[Finding]:
+        """The UNPACK half of check 5. A dummy publication (UNPACR_NOP doing
+        ZEROSRC/SET_DVALID) clears Unpackers[i].SrcBank but, in its default form,
+        WAITS on MatrixUnit.Src?Bank — a different bank in double-buffered steady
+        state — so it can clear a bank it never waited for.
+
+        RECALL only, never a flag: the tool cannot pair a publisher with its
+        Dest->Src consumer (cross-thread, usually cross-file), so it cannot prove
+        the publication feeds one. Scoped to functions whose PURPOSE is publishing
+        a dummy bank — unscoped, ~90% of all publications in the tree lack the wait
+        and the bucket carries no signal."""
+        out: list[Finding] = []
+        for fn in fb.functions:
+            if not registry.is_dest_reuse_publisher_fn(fn.name):
+                continue
+            guarded = False
+            for f in fb.facts_in(fn, ("macro",)):
+                name = f.get("name", "")
+                up = name.upper()
+                text = f.get("text", "")
+                if any(t in up for t in registry.STALL_MACRO_SUBSTR):
+                    guarded = registry.condition_drains_unit(
+                        registry.stallwait_wait_operand(text),
+                        registry.SRC_BANK_CLR_TOKENS,
+                    )
+                    continue
+                if "UNPACR" in up and "UNPACR_NOP" not in up:
+                    # A real UNPACR fills the unpacker's own bank and waits for it,
+                    # so a publication sequenced after one inherits a correct wait.
+                    guarded = True
+                    continue
+                if "UNPACR_NOP" not in up or name.startswith("TT_OP_"):
+                    continue
+                if not any(t in text for t in ("ZEROSRC", "SET_DVALID")):
+                    continue
+                if guarded or registry.publication_waits_own_bank(text):
+                    continue
+                out.append(
+                    Finding(
+                        file=f["file"],
+                        line=f.get("line", 0),
+                        function=fn.name,
+                        kind="dvalid:DUMMY_PUBLISH",
+                        hint="DUMMY_PUBLISH_UNGUARDED",
+                        detail=(
+                            f"{name} publishes a dummy Src bank without gating on "
+                            "Unpackers[i].SrcBank (no wait-like-UNPACR bit, no "
+                            "preceding STALLWAIT on SRCA_CLR/SRCB_CLR, no preceding "
+                            "UNPACR) — it can clear a bank it never waited for. "
+                            "Confirm whether a Dest->Src move consumes this bank"
+                        ),
+                        evidence=[self._ev(f, text or name)],
+                    )
+                )
         return out

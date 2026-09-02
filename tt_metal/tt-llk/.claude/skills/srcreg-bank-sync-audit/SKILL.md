@@ -18,8 +18,8 @@ user_invocable: true
 
 ## Recall preflight — run the `llk-audit` tool first (augmentor, not a verdict)
 Get the deterministic candidate list before manual analysis (it enumerates the
-SrcA/SrcB data-valid handshake control points and flags the one ISA-grounded
-mechanical pattern):
+SrcA/SrcB data-valid handshake control points and flags the two ISA-grounded
+mechanical patterns):
 
     tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <wormhole|blackhole|quasar> --checks srcreg-bank
     # from the tt-metal repo root; do NOT cd into the tool dir (run.sh self-locates)
@@ -29,14 +29,29 @@ mechanical pattern):
 `RAW_SETDVALID_BH` = a raw `TTI_SETDVALID` on Blackhole (ISA-unsupported — it
 corrupts `ImpliedSrcBFmt`; the supported form is `UNPACR_NOP(...,SET_DVALID,...)`);
 `DVALID_SET` / `DVALID_CLEAR` = the dvalid handshake control points to place- and
-lockstep-check. All are **candidates**, not verdicts. The tool only recalls the
-dvalid control points — it does NOT model bank-flip lockstep (the `MOV*2D` consume
-side), dvalid placement, single-thread ownership, the BH `DISABLE_IMPLIED_SRC?_FMT`
-bit, the Quasar SrcS lane, or **the `STALLWAIT` condition masks on either side of a
-Dest→Src move (check 5)** — it does not read those masks at all, so a `MOVD2A`/`MOVD2B`
-missing its FPU-pipeline drain, or a dummy publication waiting on the wrong bank, will
-**not** appear in its findings; **widen** with the method below for all of those. It
-never clears a site; you decide. If unbuilt, proceed manually.
+lockstep-check.
+
+`DEST2SRC_NO_MATH_DRAIN` = the **math half of check 5**, flagged mechanically: a
+`MOVD2A`/`MOVD2B` whose nearest preceding `STALLWAIT` gates on the Src bank-valid
+condition but not on `p_stall::MATH`. `DEST2SRC_WAIT_UNSEEN` (no stall in that
+function — the gate may be in the caller or in the MOP that replays the move) and
+`DEST2SRC_WAIT_UNRELATED` (a stall gating neither) are recall candidates, as is
+`DEST2SRC_NO_MATH_DRAIN_UNCONFIRMED`, which is what Quasar emits instead of the flag
+because the mechanism is grounded on the WH/BH bank model only.
+
+All are **candidates**, not verdicts. The tool does NOT model bank-flip lockstep (the
+`MOV*2D` consume side), dvalid placement, single-thread ownership, the BH
+`DISABLE_IMPLIED_SRC?_FMT` bit, or the Quasar SrcS lane. For check 5 specifically it
+reads only the nearest *textually* preceding stall in the *same* function (no control
+flow, so a stall inside an `if constexpr` is credited to a move outside it), and it does
+**not** pair a publication with its consumer: `DUMMY_PUBLISH_UNGUARDED` recalls the
+**unpack half of check 5** — a publication with no wait-like bit, no preceding
+`SRCA_CLR`/`SRCB_CLR` stall and no preceding real `UNPACR` — but only inside functions
+whose NAME marks them as dummy-bank publishers (`*dummy_valid*`, `*switch_to_reduce*`,
+`*reuse_dest*`). A publisher named otherwise (e.g. rmsnorm's MOP-config, which builds
+the publication as a `static constexpr` MOP op) is NOT recalled. **Widen** with the
+method below for all of those. It never clears a site; you decide. If unbuilt, proceed
+manually.
 
 ## The bug class (precise)
 The backend **data** memories are shared and have their own hardware flow control, distinct from config registers, Tensix semaphores, mailboxes, and CBs:
@@ -64,7 +79,7 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
    **(b) Unpack side — the dummy publication must wait on the bank it clears.** These moves depend on the unpacker publishing a dummy DVALID (a `UNPACR_NOP` doing ZEROSRC and/or SET_DVALID) to hand the bank over. That instruction clears/publishes `Unpackers[i].SrcBank` but, in its default form, *waits* on `MatrixUnit.Src?Bank` — a **different bank** once double-buffering reaches steady state — so it can clear a bank it never waited for. Correct forms, all present in-tree; accept any one:
    - the "wait like UNPACR" control bit set, so the instruction gates on `Unpackers[i].SrcBank` (BH exposes it as a `STALLWAIT`-clear operand on `UNPACR_NOP`; WH as a distinct `UNP_ZEROSRC_*` encoding), or
    - an explicit preceding `STALLWAIT` on the **unpacker-owned-bank** conditions (`p_stall::SRCA_CLR` / `SRCB_CLR` — `Src?[Unpackers[i].SrcBank].AllowedClient != Unpackers`), or
-   - a preceding `UNPACR`/`UNPACR_NOP ZEROSRC` that already performs the wait, which a following `SET_DVALID` inherits by sequencing (`UNPACR_NOP_SETDVALID.md`).
+   - a preceding real `UNPACR` (not `UNPACR_NOP`), which fills the unpacker's own bank and waits for it, so a following `SET_DVALID` inherits a correct wait by sequencing (`UNPACR_NOP_SETDVALID.md`). Note a preceding **plain `UNPACR_NOP ZEROSRC` is NOT a guard**: it satisfies `SET_DVALID`'s need to inherit *a* wait, but its own wait is on `MatrixUnit.Src?Bank` — the wrong bank — so the inherited wait is wrong too.
 
    A bare `STALLWAIT` on the unpacker *pipeline* condition (`p_stall::UNPACK`) is **not** one of these — it drains the pipe, it does not establish bank ownership. Diff the arches here: one arch's version of a shared helper is often guarded while the other's is not.
 
@@ -78,7 +93,7 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
    canonical-tt-llk-only search misses:
    ```bash
    # from the repo root
-   grep -rInE "SETDVALID|CLEARDVALID|CLEARSRC|set_dvalid|clear_src|Src[AB]?Bank|unpack.*bank|MOV[AB]2D|MOVD2[AB]|TTI_UNPACR|get_valid" \
+   grep -rInE "SETDVALID|CLEARDVALID|CLEARSRC|set_dvalid|clear_src|Src[AB]?Bank|unpack.*bank|MOV[AB]2D|MOVD2[AB]|TTI_UNPACR|STALLWAIT|get_valid" \
         tt_metal/tt-llk/tt_llk_* tt_metal/hw/inc/api ttnn/cpp models --include=*.h --include=*.cpp 2>/dev/null | grep -v /tests/
    ```
 2. Per unpack→math op, pair the unpacker's fill/flip with the FPU's consume/flip; trace the bank pointer on both sides across the tile loop. Confirm lockstep, valid/clear ordering, and single-thread ownership.

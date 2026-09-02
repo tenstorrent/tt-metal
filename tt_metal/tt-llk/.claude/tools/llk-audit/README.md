@@ -40,7 +40,7 @@ in `registry.py`; you rarely touch a checker and never the C++.**
 | `cfg-word-overlap` | fields sharing one 32-bit CONFIG word (per register file) written by ≥2 threads; intra-thread full-word clobber | `CROSS_THREAD_SHARED_WORD` / `INTRA_THREAD_CLOBBER` / `UNRESOLVED` |
 | `semaphore-handshake` | mutex acquire/release imbalance; semaphore wait with no matching concrete init (emitted as a candidate, `safety: LOW_CONFIDENCE` when a generic init may cover it) | `MUTEX_IMBALANCE` / `WAIT_WITHOUT_INIT` |
 | `reconfig-stall` | reconfig/uninit config write missing a unit-draining stall (walks every write; models unit re-arm) | `NO_UNIT_DRAIN` / `THCON_ONLY` / `DRAIN_REARMED` / `PARTIAL_MATH_DRAIN` |
-| `srcreg-bank` | SrcA/SrcB data-valid handshake control points; raw `SETDVALID` on Blackhole (ISA-unsupported) | `RAW_SETDVALID_BH` / `DVALID_SET` / `DVALID_CLEAR` |
+| `srcreg-bank` | SrcA/SrcB data-valid handshake control points; raw `SETDVALID` on Blackhole (ISA-unsupported); both halves of the Dest→Src gate (`MOVD2A`/`MOVD2B` wait mask, and the dummy publication's bank wait) | `RAW_SETDVALID_BH` / `DVALID_SET` / `DVALID_CLEAR` / `DEST2SRC_NO_MATH_DRAIN` / `DEST2SRC_NO_MATH_DRAIN_UNCONFIRMED` / `DEST2SRC_WAIT_UNSEEN` / `DEST2SRC_WAIT_UNRELATED` / `DUMMY_PUBLISH_UNGUARDED` |
 | `mailbox-sync` | in-tree RISC↔RISC mailbox FIFO endpoints + writer↔reader pairing by directed channel | `PAIRED_CHANNEL` / `UNPAIRED_ENDPOINT` / `UNRESOLVED_ENDPOINT` |
 | `cb-sync` † | circular-buffer reserve/push & wait/pop credit balance per CB (within a function) | `CB_RESERVE_PUSH_IMBALANCE` / `CB_WAIT_POP_IMBALANCE` |
 | `noc-sync` † | NoC credit signal (`noc_semaphore_inc/set_remote/mcast`) with no preceding write flush/barrier | `NOC_SIGNAL_NO_FLUSH` |
@@ -60,9 +60,9 @@ tt-llk (it has in-tree sites too), so it isn't a "surface-outside-tt-llk" checke
 
 Every finding is a **recall bucket, not a verdict**, and every check declares its
 `blind_spots` in the output. `srcreg-bank` and `mailbox-sync` are deliberately
-**narrow recallers**: `srcreg-bank` enumerates the dvalid control points and
-flags the one mechanical ISA pattern (raw `SETDVALID` on BH) but does NOT model
-the bank-flip lockstep verdict; `mailbox-sync` covers only the tiny IN-TREE
+**narrow recallers**: `srcreg-bank` enumerates the dvalid control points and flags
+the two mechanical ISA patterns (raw `SETDVALID` on BH; a `MOVD2A`/`MOVD2B` gated
+without the FPU-pipeline drain) but does NOT model the bank-flip lockstep verdict; `mailbox-sync` covers only the tiny IN-TREE
 mailbox surface (all mailbox use outside tt-llk — the compute API plus the
 hand-written `mailbox_write` in ttnn/models kernels, one-to-one channels and
 fan-outs alike — is out-of-tree, audited by the skill's ttnn-widened grep) and
@@ -93,7 +93,7 @@ their surface lives*:
 - **In tt-llk (findings on a plain run):** `mmio-race`, `cfg-word-overlap`,
   `semaphore-handshake`, `reconfig-stall`, `srcreg-bank`, `mailbox-sync`.
   `srcreg-bank`/`mailbox-sync` are narrow recallers (control-point/endpoint
-  inventory + the one mechanical ISA flag); their kernel-layer surface stays with
+  inventory + the mechanical ISA flags); their kernel-layer surface stays with
   the skills' ttnn-widened grep.
 - **In JIT-compiled kernels outside tt-llk (`cb-sync` / `noc-sync` / `noc-atomic-exit`
   / `noc-read-barrier` / `noc-l1-invalidate`):** the checkers are committed and
