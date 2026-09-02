@@ -26,6 +26,11 @@ on:
         required: false
         default: false
         type: boolean
+      only-group:
+        description: "Run only this split group (1-5). Empty runs every group."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   checks: write
@@ -50,6 +55,8 @@ jobs:
       # scheduled run has no inputs, so the expression falls through to false.
       # Turning it on for every night is this one expression -> true.
       upload-to-warehouse: ${{ inputs.upload-to-warehouse || false }}
+      # Empty for a scheduled run, which therefore keeps every group.
+      only-group: ${{ inputs.only-group || '' }}
     secrets: inherit
 
   llk-perf-summary:

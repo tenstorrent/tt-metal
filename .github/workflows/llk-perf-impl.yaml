@@ -19,6 +19,11 @@ on:
         required: false
         default: false
         type: boolean
+      only-group:
+        description: "Run only this split group (1-5). Empty runs every group."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   checks: write
@@ -39,7 +44,8 @@ jobs:
     runs-on: ubuntu-slim
     needs: [build-images]
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      # An unset trim step yields "", which is falsy, so the full matrix wins.
+      matrix: ${{ steps.trim.outputs.matrix || steps.build-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_perf_tests.yaml
     steps:
@@ -85,6 +91,25 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
+      - name: Keep only one split group
+        id: trim
+        if: ${{ inputs.only-group != '' }}
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          ONLY_GROUP: ${{ inputs.only-group }}
+        run: |
+          # One shard instead of ten. A change to this workflow can then be
+          # tested end to end without occupying every perf machine for two
+          # hours. Fails loud on a group number that matches nothing, so a typo
+          # cannot silently run no tests at all.
+          FILTER='import json, os, sys
+          rows = json.loads(os.environ["MATRIX"])
+          group = os.environ["ONLY_GROUP"]
+          keep = [r for r in rows if str(r.get("split_group")) == group]
+          if not keep:
+              sys.exit("no matrix row with split_group=" + group)
+          print("matrix=" + json.dumps(keep))'
+          python3 -c "$FILTER" >> "$GITHUB_OUTPUT"
 
   compile-quasar-perf:
     if: ${{ inputs.architecture == 'all' || inputs.architecture == 'quasar' }}
