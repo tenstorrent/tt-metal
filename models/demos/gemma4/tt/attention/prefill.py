@@ -238,6 +238,39 @@ def _clone_sliding_prefill_tail(tt_k, tt_v, hist, head_dim, valid_seq_len=None, 
     return (k_owned, v_owned)
 
 
+def _zero_extend_ring_fill(t, modulo):
+    """Right-pad a bounded ring fill with zeros out to the full window.
+
+    A reused ring keeps the previous occupant's KV in ``[L..W)`` when the new
+    request's fill is shorter than the window; sliding SDPA's modulo wrap then
+    attends that stale tail for short prompts (measured at conc32 small-ISL:
+    ~1-3/32 outputs continue the prior request's answer or degenerate). One
+    fill of the full window makes ring reuse hygienic. Transient runtime
+    alloc, post-lm_head same-step — same contract as the merge/left-pad above.
+    Returns (tensor, was_extended); deallocates the input when extended.
+    """
+    if not modulo:
+        return t, False
+    cur = int(t.shape[-2])
+    if cur >= int(modulo):
+        return t, False
+    pad = int(modulo) - cur
+    z = ttnn.zeros(
+        [1, int(t.shape[1]), pad, int(t.shape[-1])],
+        dtype=t.dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=t.device(),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    out = ttnn.concat([t, z], dim=2)
+    z.deallocate(True)
+    try:
+        t.deallocate(True)
+    except Exception:
+        pass
+    return out, True
+
+
 def flush_deferred_bounded_fills(layers):
     """Merge + ``paged_fill_cache`` for stashed bounded ring fills.
 
@@ -253,10 +286,13 @@ def flush_deferred_bounded_fills(layers):
         if batched_pending:
             cfg._deferred_bounded_fill_batched = None
             for p in batched_pending:
+                _mod = p["paged_modulo_kwargs"].get("cache_position_modulo")
+                k_f, _ = _zero_extend_ring_fill(p["k_fill"], _mod)
+                v_f, _ = _zero_extend_ring_fill(p["v_fill"], _mod)
                 try:
                     ttnn.experimental.paged_fill_cache(
                         p["k_cache"],
-                        p["k_fill"],
+                        k_f,
                         p["page_table"],
                         batch_idx=p["user_id"],
                         block_size=p["block_size"],
@@ -264,14 +300,14 @@ def flush_deferred_bounded_fills(layers):
                     )
                     ttnn.experimental.paged_fill_cache(
                         p["v_cache"],
-                        p["v_fill"],
+                        v_f,
                         p["page_table"],
                         batch_idx=p["user_id"],
                         block_size=p["block_size"],
                         **p["paged_modulo_kwargs"],
                     )
                 finally:
-                    for t in (p["k_fill"], p["v_fill"]):
+                    for t in (k_f, v_f):
                         try:
                             t.deallocate(True)
                         except Exception:
@@ -287,6 +323,8 @@ def flush_deferred_bounded_fills(layers):
         try:
             k_merged = _merge_bounded_boundary_fill(k_fill, pending["valid_seq_len"], pending["modulo"])
             v_merged = _merge_bounded_boundary_fill(v_fill, pending["valid_seq_len"], pending["modulo"])
+            k_merged, _ = _zero_extend_ring_fill(k_merged, pending["modulo"])
+            v_merged, _ = _zero_extend_ring_fill(v_merged, pending["modulo"])
             ttnn.experimental.paged_fill_cache(
                 pending["k_cache"],
                 k_merged,
