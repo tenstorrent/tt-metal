@@ -13,11 +13,18 @@ import yaml
 
 SKU_CONFIG_PATH = Path(__file__).resolve().parent.parent / "sku_config.yaml"
 
+# The host-only pool. Deliberately a self-hosted runner rather than
+# `github_hosted_cpu`: the Anthropic organization IP-allowlists, and a
+# GitHub-hosted runner's egress address is not in range (it fails the session
+# with "403 Access Denied: Your IP address is not in the allowed range"). Every
+# pool here must therefore be inside Tenstorrent's network.
+HOST_ONLY_SKU = "cpu_medium"
+
 # Verification runs are untrusted-input driven (an issue body written by anyone),
 # so they may only land on this narrow set of pools. Scarce multi-card and
 # perf-pipeline SKUs are deliberately excluded.
 ALLOWED_SKUS = {
-    "github_hosted_cpu": "No Tenstorrent device. Host-only checks: golden re-execution, "
+    HOST_ONLY_SKU: "No Tenstorrent device. Host-only checks: golden re-execution, "
     "source reading, git history. Sufficient for any claim that reduces to "
     "'the reference value in the report is wrong'.",
     "wh_n150_civ2": "Single Wormhole B0 card. Use when the claim must be observed on "
@@ -27,7 +34,7 @@ ALLOWED_SKUS = {
     "Blackhole-specific or cites a blackhole source path.",
 }
 
-DEFAULT_SKU = "github_hosted_cpu"
+DEFAULT_SKU = HOST_ONLY_SKU
 
 
 class UnknownSku(ValueError):
@@ -49,7 +56,7 @@ def load_runs_on(sku: str) -> list[str]:
 
 
 def needs_hardware(sku: str) -> bool:
-    return sku != "github_hosted_cpu"
+    return sku != HOST_ONLY_SKU
 
 
 def describe_choices() -> str:

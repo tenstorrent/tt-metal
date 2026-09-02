@@ -74,6 +74,7 @@ def stage_plan(number: int, repo: str, workdir: Path, outdir: Path, model: str |
         author=issue["author"],
         body=issue["body"],
         sku_choices=skus.describe_choices(),
+        host_only_sku=skus.HOST_ONLY_SKU,
     )
     result = run_session(prompt, cwd=workdir, tools=PLANNER_TOOLS, model=model, timeout_s=900)
     logger.info(f"planning session done in {result.turns} turns (${result.cost_usd:.2f})")
@@ -136,6 +137,7 @@ def stage_probe(workdir: Path, outdir: Path, model: str | None, timeout_s: int) 
         plan=json.dumps(plan, indent=2),
         sku=sku,
         hardware_note=hardware_note,
+        host_only_sku=skus.HOST_ONLY_SKU,
     )
 
     measurements: dict = {}

@@ -62,7 +62,7 @@ a placeholder entry with null fields.
 
 ## Gate C — run the real op (only when a device is present)
 
-Skip with a reason when the SKU is `github_hosted_cpu`.
+Skip with a reason when the SKU is `{{host_only_sku}}`.
 
 Otherwise write `/tmp/probe_c.py` using the plan's `device_snippet`. Open the
 device once, run all cases, close it, print JSON. Compare each device value

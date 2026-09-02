@@ -46,7 +46,7 @@ prose outside it, matching this schema:
   "op": "ttnn.addcdiv",
   "claim_type": "numeric_parity",
   "claim_summary": "one sentence, your words, describing what the report asserts is broken",
-  "sku": "github_hosted_cpu",
+  "sku": "{{host_only_sku}}",
   "sku_rationale": "why this pool and not a cheaper or more expensive one",
   "cited_files": ["tt_metal/hw/ckernels/wormhole_b0/..."],
   "reference_snippet": "def reference(case):\n    ...\n    return value",
@@ -76,7 +76,7 @@ prose outside it, matching this schema:
 
 {{sku_choices}}
 
-Bias hard toward `github_hosted_cpu`. A claim of the form "the op should return
+Bias hard toward `{{host_only_sku}}`. A claim of the form "the op should return
 X but returns Y" is settled without silicon whenever the reporter's X can be
 checked against the real reference — if their X is wrong, the report is dead
 regardless of what any card does. Only ask for a device when the disputed value
@@ -95,7 +95,7 @@ rather than transcribing the report's formula:
 
 `device_snippet` — Python source defining `device(case, dev)` that runs the real
 op through ttnn on an open device handle and returns the same scalar. Required
-whenever `sku` is not `github_hosted_cpu`; `null` otherwise. Use 32x32 tiles,
+whenever `sku` is not `{{host_only_sku}}`; `null` otherwise. Use 32x32 tiles,
 `ttnn.TILE_LAYOUT`, and the dtype the report specifies (default `ttnn.float32`).
 
 `counterfactual_snippet` — only when the report proposes a specific code change.

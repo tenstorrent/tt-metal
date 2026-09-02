@@ -122,7 +122,11 @@ jobs:
   plan:
     needs: authorize
     if: needs.authorize.outputs.authorized == 'true'
-    runs-on: ubuntu-latest
+    # Self-hosted, not ubuntu-latest: the Anthropic organization IP-allowlists,
+    # and a GitHub-hosted runner's egress address is rejected with
+    # "403 Access Denied: Your IP address is not in the allowed range".
+    # Every job that opens an agent session must stay inside the network.
+    runs-on: ["tt-ubuntu-2204-medium-stable"]
     permissions:
       contents: read
       issues: read
@@ -135,14 +139,14 @@ jobs:
         with:
           fetch-depth: 0 # Gate B walks history on the files the report blames
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-
+      # The runner's own python3 in a venv, rather than actions/setup-python:
+      # this pool is self-hosted and its tool cache is not guaranteed writable.
       - name: Install verifier dependencies
         run: |
           set -euo pipefail
-          pip install -r .github/issue_verifier/requirements-issue-verifier.txt
+          python3 -m venv .verifier-venv
+          .verifier-venv/bin/pip install --quiet --upgrade pip
+          .verifier-venv/bin/pip install --quiet -r .github/issue_verifier/requirements-issue-verifier.txt
           # Native binary install: the tt-metal container has no Node, and the
           # device path below reuses this same command.
           curl -fsSL https://claude.ai/install.sh | bash
@@ -154,7 +158,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.BUG_CHECKER_API_KEY || secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE: ${{ needs.authorize.outputs.issue }}
-        run: python "$VERIFIER" --stage plan --issue "$ISSUE" --outdir out --verbose
+        run: .verifier-venv/bin/python "$VERIFIER" --stage plan --issue "$ISSUE" --outdir out --verbose
 
       - uses: actions/upload-artifact@v4
         with:
@@ -164,7 +168,7 @@ jobs:
   build:
     # Only pay for a build when the plan actually asked for silicon.
     needs: plan
-    if: needs.plan.outputs.verifiable == 'true' && needs.plan.outputs.sku != 'github_hosted_cpu'
+    if: needs.plan.outputs.verifiable == 'true' && needs.plan.outputs.sku != 'cpu_medium'
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -193,20 +197,15 @@ jobs:
           path: out/
 
       - name: Fetch the built wheel
-        if: needs.plan.outputs.sku != 'github_hosted_cpu'
+        if: needs.plan.outputs.sku != 'cpu_medium'
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.build.outputs.wheel-artifact-name }}
 
-      - uses: actions/setup-python@v5
-        if: needs.plan.outputs.sku == 'github_hosted_cpu'
-        with:
-          python-version: "3.10"
-
       # Host-only path: no device, no container. Enough to settle any report
       # whose expected values can be checked against the reference directly.
       - name: Run the experiment (host)
-        if: needs.plan.outputs.sku == 'github_hosted_cpu'
+        if: needs.plan.outputs.sku == 'cpu_medium'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.BUG_CHECKER_API_KEY || secrets.ANTHROPIC_API_KEY }}
           # Suppress the tool's own summary write so both paths publish through
@@ -216,18 +215,23 @@ jobs:
           GITHUB_STEP_SUMMARY: ""
         run: |
           set -euo pipefail
-          pip install -r .github/issue_verifier/requirements-issue-verifier.txt
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python3 -m venv .verifier-venv
+          .verifier-venv/bin/pip install --quiet --upgrade pip
+          .verifier-venv/bin/pip install --quiet -r .github/issue_verifier/requirements-issue-verifier.txt
+          .verifier-venv/bin/pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
           curl -fsSL https://claude.ai/install.sh | bash
           export PATH="$HOME/.local/bin:$PATH"
-          python "$VERIFIER" --stage probe --outdir out --verbose
+          # The probe shells out to `python3`; point that at the venv so its
+          # scripts can import torch.
+          export PATH="$PWD/.verifier-venv/bin:$PATH"
+          .verifier-venv/bin/python "$VERIFIER" --stage probe --outdir out --verbose
 
       # Device path: the standard tt-metal container with the freshly built
       # wheel, so `import ttnn` works and /dev/tenstorrent is visible.
       # run_args is fixed text here; the only event-derived value in this job is
       # the already-validated issue number, and it is not interpolated.
       - name: Run the experiment (device)
-        if: needs.plan.outputs.sku != 'github_hosted_cpu'
+        if: needs.plan.outputs.sku != 'cpu_medium'
         uses: ./.github/actions/docker-run
         with:
           docker_username: ${{ github.actor }}
