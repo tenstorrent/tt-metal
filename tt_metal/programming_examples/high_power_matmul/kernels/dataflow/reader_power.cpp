@@ -34,20 +34,28 @@ void kernel_main() {
             uint32_t out_col = current_tile_id % Nt;
 
             for (uint32_t k = 0; k < Kt; k++) {
+                // When HIGH_POWER_DISABLE_READER is set the reader keeps its full CB handshake --
+                // so compute still gets a tile "delivered" every iteration and never deadlocks --
+                // but issues no DRAM traffic. Compute then runs on whatever stale data is already
+                // sitting in that L1 buffer, which is harmless: the app never verifies its output.
                 {
                     uint32_t tile_A = out_row * Kt + k;
                     cb_reserve_back(cb_id_in0, 1);
+#ifndef HIGH_POWER_DISABLE_READER
                     uint32_t l1_addr = get_write_ptr(cb_id_in0);
                     noc_async_read_tile(tile_A, a, l1_addr);
                     noc_async_read_barrier();
+#endif
                     cb_push_back(cb_id_in0, 1);
                 }
                 {
                     uint32_t tile_B = k * Nt + out_col;
                     cb_reserve_back(cb_id_in1, 1);
+#ifndef HIGH_POWER_DISABLE_READER
                     uint32_t l1_addr = get_write_ptr(cb_id_in1);
                     noc_async_read_tile(tile_B, b, l1_addr);
                     noc_async_read_barrier();
+#endif
                     cb_push_back(cb_id_in1, 1);
                 }
             }
