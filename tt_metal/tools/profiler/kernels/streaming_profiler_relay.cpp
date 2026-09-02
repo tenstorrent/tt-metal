@@ -463,7 +463,9 @@ __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n,
         while (!noc_cmd_buf_ready(kReadNoc, read_cmd_buf)) {
         }
         NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, core_xy(core_noc[c]));
-        // A loop, not unrolled: lane r's bookkeeping hides behind lane r-1's NIU acceptance.
+        // Unrolled: the three induction pointers and the split +2048 stride were 5 of the lane's 29 instructions.
+        // All three read shapes stay inline: at the knee most runs wrap (P ~ take/512), so none of them is rare.
+#pragma GCC unroll 5
         for (uint32_t r = 0; r < kNumRisc; r++) {
             const uint32_t tail = tails[r];
             const uint32_t start = head[r];
@@ -906,7 +908,7 @@ void kernel_main() {
             }
             if constexpr (kSpool) {
                 if (pump.level >= SpoolPump::kLevelInline) {
-                    pump.pass();
+                    pump.pass_cold();
                 }
             }
 
@@ -917,7 +919,7 @@ void kernel_main() {
                 if constexpr (kSpool) {
                     // Inline level means occupancy is over the 5/8 line, so nonempty holds.
                     if (pump.level >= SpoolPump::kLevelInline) {
-                        pump.pass();
+                        pump.pass_cold();
                     }
                 }
             }
