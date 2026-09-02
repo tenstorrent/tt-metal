@@ -707,7 +707,7 @@ each names the row it is priced from, so a miss is diagnosable.
 | [5b](#5b-do-the-sampling-location-math-in-row_major) | sampling-location math in ROW_MAJOR | [msda:110-117](../tt/tt_ms_deformable_attention.py#L110-L117), [313-357](../tt/tt_ms_deformable_attention.py#L313-L357) | **landed: −82.2 ms (−18.8%) — [07](perf_reports/07-sampling-grid-in-row-major.md)** | M | low |
 | [5c](#5c-untilize-attn-once-not-per-level) | untilize `attn` once, slice in ROW_MAJOR | [msda:322-332](../tt/tt_ms_deformable_attention.py#L322-L332), [58-61](../tt/tt_ms_deformable_attention.py#L58-L61) | **landed: −44.9 ms (−12.6%) — [08](perf_reports/08-attn-prepared-once-per-call.md)** | S | low |
 | [5e](#5e-permute-grid-once-slice-after) | build the grid head-major in TILE | [msda:54-56](../tt/tt_ms_deformable_attention.py#L54-L56) | **landed: −24.5 ms (−7.9%) — [09](perf_reports/09-head-major-sampling-grid.md)** | S | low |
-| [5d](#5d-split-value-into-heads-in-row_major) | head-split `value` in ROW_MAJOR | [msda:296-305](../tt/tt_ms_deformable_attention.py#L296-L305), [50-52](../tt/tt_ms_deformable_attention.py#L50-L52) | **−10…−20 ms**, uncertain | M | med |
+| [5d](#5d-split-value-into-heads-in-row_major) | head-split `value` in ROW_MAJOR | [msda:296-305](../tt/tt_ms_deformable_attention.py#L296-L305), [50-52](../tt/tt_ms_deformable_attention.py#L50-L52) | **landed: −6.6 ms (−2.3%) — [10](perf_reports/10-value-head-split-unpadded.md)** | M | med |
 | [5f](#5f-the-per-level-guards-are-free-dont-book-them) | per-level `to_layout` / `typecast` guards | [msda:61-68](../tt/tt_ms_deformable_attention.py#L61-L68) | **0 ms** — measured | XS | none |
 
 Total, excluding 5d's uncertain half and 5f: **~157 ms, −34% of the layer.** That is larger than
@@ -855,6 +855,14 @@ This is the same "hoist the per-level `to_layout`" observation
 worth 35 ms, not a footnote, and it does not need 6's weight reorder.
 
 #### 5d. Split `value` into heads in ROW_MAJOR
+
+**Landed, and the estimate was 2–3x optimistic** — [stage 10](perf_reports/10-value-head-split-unpadded.md),
+**−6.6 ms** against a predicted −10…−20. Benchmarked both whole chains on device first, as this entry
+demanded: route B measured 0.84x route A and bit-identical, predicting −5.6 ms, and the profile
+returned −6.6. The padded reshape and the per-level TILE transposes go away; a 14 ms ROW_MAJOR
+permute takes their place. **The remaining 33.8 ms of Permute is not reachable by reordering** — it
+is [candidate 11](#candidate-11--absorb-msda-layout-prep) route 1's, and worth ~47 ms there.
+
 
 **Measure first — this is the one proposal that can lose.** `value` comes out of `value_proj` as
 `(bs, num_keys, 256)` TILE and is reshaped to `(bs, num_keys, heads, 32)` at
