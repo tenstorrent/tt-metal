@@ -321,6 +321,23 @@ private:
 inline DataflowBuffer buffer(uint32_t dfb) { return DataflowBuffer(static_cast<uint16_t>(dfb)); }
 inline uint32_t dfb_num_entries(uint32_t dfb) { return buffer(dfb).get_total_num_entries(); }
 
+// Per-buffer TILE GEOMETRY, standing in for the constexpr tables the JIT emits into
+// chlkc_descriptors.h. Storage's constructor checks a Shape's declared tile against these,
+// which is the only thing connecting the host's dfb(..., tile=) to the kernel's type.
+//
+// Mutable, and that is the point: a probe can set a buffer's geometry to something the
+// kernel's Shape does not claim and watch the check catch it. On device these are constants
+// and the disagreement is a launcher/kernel mismatch; here it can be manufactured.
+// CONSTEXPR, like the real tables, so the checks that read them can be static_asserts.
+// Every buffer is a full tile unless TT_U_SELFTEST_ROW_DFB names one -- which is how a probe
+// manufactures the host/kernel disagreement, at COMPILE time now rather than at run time.
+#define TT_U_HAVE_DFB_TILE_GEOMETRY 1
+#if !defined(TT_U_SELFTEST_ROW_DFB)
+#define TT_U_SELFTEST_ROW_DFB 0xffffffffu
+#endif
+inline constexpr uint32_t dfb_tile_rows(uint32_t dfb) { return dfb == TT_U_SELFTEST_ROW_DFB ? 1u : 32u; }
+inline constexpr uint32_t dfb_tile_cols(uint32_t) { return 32u; }
+
 // An L1 pointer attribute on device (risc_attribs.h); nothing on the host.
 #define tt_l1_ptr
 

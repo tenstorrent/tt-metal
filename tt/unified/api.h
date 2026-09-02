@@ -206,9 +206,43 @@ struct LogicalMcast {
 // Storage -- a dataflow buffer
 // ---------------------------------------------------------------------------
 
+// A buffer id as a TYPE, so Storage can check against it at compile time.
+//
+// `Storage<X> s(kDfbX)` takes its id as a constructor argument, and nothing inside a
+// constructor can see a runtime argument's value -- so the geometry check there can only
+// ever be a runtime ASSERT. Handing the id over as `u::dfb<kDfbX>` instead makes it a
+// template argument, and the same check becomes a static_assert that fires in every build,
+// release included. Kernels already write `constexpr uint32_t kDfbX = get_arg(...)`, so the
+// value is a constant expression at the call site either way; this is what carries it in.
+template <uint32_t DfbId>
+struct DfbTag {
+    static constexpr uint32_t id = DfbId;
+};
+
+template <uint32_t DfbId>
+inline constexpr DfbTag<DfbId> dfb{};
+
 template <typename S>
 struct Storage {
     using shape = S;
+
+    // The compile-time form. Prefer it: the tile-geometry check below is a static_assert
+    // here and a runtime ASSERT in the other constructor.
+    template <uint32_t DfbId>
+    explicit Storage(DfbTag<DfbId>) : dfb_id(DfbId) {
+#if defined(TT_U_HAVE_DFB_TILE_GEOMETRY)
+        static_assert(
+            dfb_tile_rows(DfbId) == S::tile::rows,
+            "this Storage's tile HEIGHT is not the one the host configured for the buffer. The "
+            "kernel's Shape and the launcher's dfb(..., tile=) are two ends of one contract: a "
+            "plain Shape against a sub-tile buffer computes correctly and then divides a "
+            "reduce_mean by the wrong number, because elements() reads the TYPE. Wrap the shape "
+            "in Tiled<Tile<rows, 32>, ...> to match, or fix the launcher");
+        static_assert(
+            dfb_tile_cols(DfbId) == S::tile::cols,
+            "this Storage's tile WIDTH is not the one the host configured for the buffer");
+#endif
+    }
 
     explicit Storage(uint32_t dfb_id) : dfb_id(dfb_id) {
         // The host sizes the dataflow buffer and the kernel names the Shape, and until
@@ -230,6 +264,25 @@ struct Storage {
         // checking the same number.
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
         ASSERT(dfb_num_entries(dfb_id) >= S::num_entries);
+#endif
+
+        // And the TILE GEOMETRY this Shape claims, against what the host actually configured
+        // -- the authority being the tables the JIT emitted for this build.
+        //
+        // Two places state the same fact: the host through dfb(..., tile=) and the kernel
+        // through Shape's `tile`. Nothing connected them, and both disagreements are silent.
+        // A plain Shape against a 1x32 buffer computes CORRECTLY and then divides a
+        // reduce_mean by 32 instead of 1, because ReduceGeometry::elements() reads the TYPE
+        // and not the buffer. A Shape claiming 1x32 against a full buffer is wrong the other
+        // way. Same shape of hazard as the entry_size/geometry split that preceded it, and as
+        // hazard 21: a contract with two ends and nothing between them.
+        //
+        // Compute only, and UNPACK/MATH at that, because that is where the tables live -- the
+        // mirror of the capacity check above being data-movement only because cb_interface
+        // does not link on a TRISC. Between them, both ends are covered.
+#if defined(TT_U_HAVE_DFB_TILE_GEOMETRY) && defined(ASSERT_ENABLED) && ASSERT_ENABLED
+        ASSERT(dfb_tile_rows(dfb_id) == S::tile::rows);
+        ASSERT(dfb_tile_cols(dfb_id) == S::tile::cols);
 #endif
     }
 
@@ -539,6 +592,19 @@ struct is_storable<T, std::void_t<node_shape_t<T>>> : std::true_type {};
 template <typename S, uint32_t DfbId>
 class ComputeBlock : public ComputeBlock<S, kNoDfb> {
 public:
+#if defined(TT_U_HAVE_DFB_TILE_GEOMETRY)
+    // Free here, and with no new spelling to adopt: the buffer id is already a template
+    // argument of this form, so the geometry check is a static_assert rather than the
+    // runtime ASSERT that Storage's id-by-argument constructor is limited to.
+    static_assert(
+        dfb_tile_rows(DfbId) == S::tile::rows,
+        "this ComputeBlock's tile HEIGHT is not the one the host configured for the buffer -- "
+        "the kernel's Shape and the launcher's dfb(..., tile=) disagree");
+    static_assert(
+        dfb_tile_cols(DfbId) == S::tile::cols,
+        "this ComputeBlock's tile WIDTH is not the one the host configured for the buffer");
+#endif
+
     template <typename Node, typename = std::enable_if_t<is_storable<Node>::value>>
     ComputeBlock(const Node& node) : ComputeBlock<S, kNoDfb>(Storage<S>(DfbId).store(node)) {}
 

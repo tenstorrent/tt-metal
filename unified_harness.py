@@ -280,6 +280,12 @@ def dfb_intermed(name, *, dtype=ttnn.bfloat16, num_entries=2, entry_bytes=None, 
 # the only place that knows which projection stands at which end of a buffer, so it is the
 # place to read it from.
 _RE_STORAGE = re.compile(r"u::Storage<[^;]*?>\s+(\w+)\s*\(\s*(\w+)\s*\)")
+# The COMPILE-TIME id form: u::Storage<S> s(u::dfb<kDfbFoo>). Handing the id over as a
+# template argument is what lets Storage static_assert its tile geometry instead of
+# ASSERTing it, and it is a third spelling this parser has to know -- the same two-audience
+# tax the ComputeBlock shim paid. A buffer declaration is read by the kernel AND by the
+# host, so every new way to write one lands here too.
+_RE_STORAGE_TAG = re.compile(r"u::Storage<[^;]*?>\s+(\w+)\s*\(\s*u::dfb<\s*(\w+)\s*>\s*\)")
 _RE_DFB_NAMED = re.compile(r"(\w+)\s*=\s*get_arg\(\s*args::dfb_(\w+)\s*\)")
 # A Storage built straight from the argument rather than through a named constant:
 #   u::Storage<S> s1(get_arg(args::dfb_s1));
@@ -395,6 +401,9 @@ def derive_roles(kernel_source, defines):
     dfb_const = dict(_RE_DFB_NAMED.findall(src))
     storages = {}
     for var, dfb in _RE_STORAGE.findall(src):
+        if dfb in dfb_const:
+            storages[var] = dfb_const[dfb]
+    for var, dfb in _RE_STORAGE_TAG.findall(src):
         if dfb in dfb_const:
             storages[var] = dfb_const[dfb]
     for var, name in _RE_STORAGE_INLINE.findall(src):
