@@ -75,9 +75,9 @@ struct GroupingInfo {
     // Empty until flattening completes. Used for MGD topology matching and torus variant rebuild.
     std::vector<int32_t> flattened_node_grid_dims;
 
-    // Adjacency graph over LogicalChipId nodes. For flattened groupings, items[node_id] matches
-    // each node in the graph. Empty graph if no connection type is specified.
-    AdjacencyGraph<LogicalChipId> adjacency_graph;
+    // Adjacency graph. For flattened groupings, items[node_id] matches each node in the graph.
+    // Empty graph if no connection type is specified.
+    AdjacencyGraph<uint32_t> adjacency_graph;
 
     // Logical pinning for MESH groupings committed from a PGD<->MGD topology match in get_valid_groupings_for_mgd:
     // mesh-local chip id (row-major, 0..N-1) -> PGD slot (TrayID + ASICLocation). Populated at match time from
@@ -150,7 +150,7 @@ AdjacencyPlacementResult solve_adjacency_guided_placement(
     const std::vector<GroupingInfo>& groupings,
     const std::vector<PlacementCandidate>& pool,
     const std::vector<std::vector<std::size_t>>& mesh_grouping_options,
-    const AdjacencyGraph<LogicalChipId>& logical_mesh_graph,
+    const AdjacencyGraph<std::uint32_t>& logical_mesh_graph,
     const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
     std::size_t node_budget = 0);
 
@@ -309,7 +309,7 @@ public:
     AdjacencyPlacementResult solve_adjacency_guided_placement(
         const GroupingsByMeshName& groupings_by_mesh_name,
         const std::vector<InstanceName>& logical_mesh_names,
-        const AdjacencyGraph<LogicalChipId>& logical_mesh_graph,
+        const AdjacencyGraph<std::uint32_t>& logical_mesh_graph,
         const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         std::size_t node_budget = 0) const;
