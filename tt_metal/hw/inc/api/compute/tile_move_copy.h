@@ -77,22 +77,23 @@ ALWI void copy_init(
 }
 // clang-format off
 /**
- * Issue a single lightweight clear-SrcA unpacker op (UNPACR_NOP, no dvalid) on circular buffer cb_id.
- * Intended to be called between cb_wait_front and cb_pop_front when a circular buffer must be
- * drained/flow-controlled without a real consume. This satisfies the unpacker's requirement that a
- * POP_TILES be ordered after its WAIT_TILES by a real unpacker op (Quasar TEN-4746 / #48552) -- a bare
- * TTI_NOP/DMANOP does NOT (they issue no unpacker transaction); the UNPACR_NOP is a real unpacker TDMA
- * that re-samples the WAIT_TILES stall for the engine. A real read (copy_tile / UNPACR_TILE) is heavier
- * and, if partial, corrupts PACKER_L1_ACC offsets -- but this reads nothing, so L1_ACC is untouched. It
- * clears SrcA only (harmless: the next op re-unpacks SrcA) and never reads the CB.
+ * Drains one entry from the input CB without consuming a tile: issues a single clear-SrcA unpacker
+ * NOP (no CB read, no DST write). Call it between cb_wait_front and cb_pop_front when a CB must be
+ * drained or flow-controlled but its tile data is not needed.
  *
- * cb_id is the buffer being drained; Quasar uses it to disarm that buffer's TEN-4746 tile-counter guard
- * (armed by the preceding cb_wait_front). The clear is preceded by a STALLWAIT on SrcA-clear (stalling
- * the unpacker) so the NOP cannot clobber the SrcA bank while another op still holds it. Each arch
- * supplies its own llk_unpack_dummy() with the matching STALLWAIT + UNPACR_NOP encoding. Outside Quasar
- * there is no such ordering requirement, so this is just a SrcA flush -- not needed unless for debug.
+ * On Quasar this is required: the hardware needs a real unpacker op between a WAIT_TILES and its
+ * POP_TILES on the same CB, or the POP can retire before the tiles are available (TEN-4746 / #48552).
+ * The NOP satisfies that ordering while reading nothing, so it does not disturb PACKER_L1_ACC. On WH/BH
+ * there is no such ordering requirement and this compiles to a bare SrcA flush. Each architecture
+ * supplies its own llk_unpack_dummy(); this helper dispatches to it through UNPACK(...). This call is
+ * only available on the compute engine.
+ *
  * Return value: None
- */
+ *
+ * | Argument | Description                        | Data type | Valid range | required |
+ * |----------|------------------------------------|-----------|-------------|----------|
+ * | cb_id    | The identifier of the CB to drain  | uint32_t  | 0 to 31     | True     |
+ * */
 // clang-format on
 ALWI void dummy_unpack(std::uint32_t cb_id) { UNPACK((llk_unpack_dummy(cb_id))); }
 

@@ -194,19 +194,18 @@ inline void llk_unpack_A_block(
 }
 
 /**
- * @brief Drain / flow-control NOP for the unpacker (no CB read, no DEST write).
+ * @brief Drain the unpacker without consuming a tile: STALLWAIT on SrcA-clear then a clear-SrcA
+ *        UNPACR_NOP (no CB read, no DEST write). Reads nothing from L1.
  *
- * Issues a STALLWAIT on SrcA-clear followed by a clear-SrcA UNPACR_NOP. Used between cb_wait_front and
- * cb_pop_front to order a POP_TILES after its WAIT_TILES with a real unpacker op (TEN-4746 / #48552)
- * without consuming a tile: a bare TTI_NOP / DMANOP issues no unpacker transaction and does not satisfy
- * the ordering. The UNPACR_NOP is a real unpacker TDMA that re-samples the WAIT_TILES stall for this
- * engine, so it orders the following POP after the WAIT even though it reads no tile (a real UNPACR_TILE
- * is heavier and, if partial, corrupts PACKER_L1_ACC offsets -- but this reads nothing from L1, so L1_ACC
- * is untouched). The STALLWAIT ensures SrcA is free before the clear, so this cannot clobber a SrcA bank
- * still owned by an in-flight op. Clears SrcA only (the next op re-unpacks it).
+ * Call between llk_wait_tiles and llk_pop_tiles to drain a buffer whose data is not needed. Unlike the
+ * WH/BH version -- a debug-only SrcA flush with no ordering role -- this is a required Quasar primitive:
+ * the UNPACR_NOP is a real unpacker TDMA that orders the POP_TILES after its WAIT_TILES on dfb_id
+ * (TEN-4746 / #48552). Because it reads nothing, PACKER_L1_ACC is undisturbed. The STALLWAIT ensures
+ * SrcA is free before the clear, so it cannot clobber a SrcA bank still owned by an in-flight op; SrcA is
+ * cleared only (the next op re-unpacks it).
  *
- * dfb_id is the dataflow buffer being drained: the UNPACR_NOP satisfies the TEN-4746 ordering for it, so
- * disarm the per-dfb guard (llk_wait_tiles armed it; without this the following llk_pop_tiles asserts).
+ * @param dfb_id  The dataflow buffer being drained. Disarms the TEN-4746 tile-counter guard that
+ *                llk_wait_tiles armed for it (llk_pop_tiles asserts the buffer was disarmed).
  */
 inline void llk_unpack_dummy(const std::uint32_t dfb_id) {
     TTI_STALLWAIT(p_stall::STALL_UNPACK, 0, 0, p_stall::SRCA_CLR);

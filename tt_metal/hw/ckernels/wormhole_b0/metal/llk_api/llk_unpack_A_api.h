@@ -93,11 +93,16 @@ inline void llk_unpack_A_block(
 }
 
 /**
- * @brief Flush the SrcA bank: STALLWAIT on SrcA-clear (stalling the unpacker) then a clear-SrcA UNPACR_NOP.
+ * @brief Flush the SrcA bank: STALLWAIT on SrcA-clear then a clear-SrcA UNPACR_NOP (no CB read, no DEST
+ *        write). Reads nothing from L1.
  *
  * The STALLWAIT ensures SrcA is free before the clear, so this cannot clobber a SrcA bank still owned by an
- * in-flight op; it clears SrcA only (the next op re-unpacks it) and reads nothing from L1. Kernels do not
- * need this in normal operation -- use it only for debug when an explicit SrcA flush is wanted.
+ * in-flight op; SrcA is cleared only (the next op re-unpacks it). WH/BH have no WAIT/POP ordering
+ * requirement, so this is a debug-only flush -- use it only when an explicit SrcA flush is wanted. (On
+ * Quasar the same call is a required drain primitive; see that arch's llk_unpack_dummy.)
+ *
+ * @param dfb_id  Unused on WH/BH; accepted only to match the Quasar signature, where it names the drained
+ *                dataflow buffer.
  */
 inline void llk_unpack_dummy([[maybe_unused]] const std::uint32_t dfb_id) {
     TTI_STALLWAIT(ckernel::p_stall::STALL_UNPACK, ckernel::p_stall::SRCA_CLR);

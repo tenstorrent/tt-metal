@@ -438,10 +438,9 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
                     if (block < num_blocks_inner_dim - 1) {
-                        // [#48552] TEN-4746: a bare wait_front->pop_front on mm_partials traps the Quasar unpacker
-                        // (POP_TILES races past WAIT_TILES). dummy_unpack() issues the single clear-SrcA
-                        // UNPACR_NOP that orders POP after WAIT; it reads nothing (no PACKER_L1_ACC disturbance)
-                        // and is a no-op on WH/BH. Replaces the old copy_tile-drain dance.
+                        // TEN-4746 (#48552): drain mm_partials without consuming it. dummy_unpack() orders the
+                        // POP after the WAIT via a clear-SrcA UNPACR_NOP (required on Quasar, no-op on WH/BH);
+                        // it reads nothing, so PACKER_L1_ACC is undisturbed.
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
                             dummy_unpack(mm_partials_cb_id);
@@ -453,8 +452,7 @@ void kernel_main() {
 #else
                     // Last iteration does spill and reload to output buffer
                     if (block < num_blocks_inner_dim - 2) {
-                        // [#48552] TEN-4746 (see the FUSE_BIAS drain above): dummy_unpack() orders POP after WAIT
-                        // on mm_partials via a clear-SrcA UNPACR_NOP; no-op on WH/BH.
+                        // TEN-4746 (#48552): drain mm_partials without consuming it (see the FUSE_BIAS drain above).
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
                             dummy_unpack(mm_partials_cb_id);
