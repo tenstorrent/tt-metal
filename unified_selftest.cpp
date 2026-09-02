@@ -581,29 +581,44 @@ void example_fpu_eltwise() {
     ComputeBlock b = noc_load<1>(b_storage, t0, 1).wait();
     ComputeBlock c = noc_load<1>(c_storage, t0, 2).wait();
 
+    // ONE SCOPE PER PROBE. Each of these is a codegen probe whose result is never read,
+    // and several reuse `scratch` or `out_storage` -- which is exactly what ComputeBlock's
+    // occupancy assert rejects, because a second live block over one buffer reads the
+    // first's pages. Scoping them says what was always true: the value dies at the end of
+    // its own statement, and the pop goes with it.
     T("-- a + b - c: seed, then reuse with dst on the left");
-    ComputeBlock chain = scratch.store(a + b - c);
+    {
+        ComputeBlock chain = scratch.store(a + b - c);
+        (void)sizeof(chain);
+    }
 
     T("-- a - (b + c): seed, then reuse with dst on the RIGHT");
-    ComputeBlock flipped = out_storage.store(a - (b + c));
+    {
+        ComputeBlock flipped = out_storage.store(a - (b + c));
+        (void)sizeof(flipped);
+    }
 
     T("-- (a - b).exp(): FPU seed, SFPU unary on top");
-    ComputeBlock fused = scratch.store((a - b).exp());
+    {
+        ComputeBlock fused = scratch.store((a - b).exp());
+        (void)sizeof(fused);
+    }
 
     T("-- max_(a, b): no FPU max, so this falls back to the SFPU tree");
-    ComputeBlock fell_back = out_storage.store(max_(a, b));
+    {
+        ComputeBlock fell_back = out_storage.store(max_(a, b));
+        (void)sizeof(fell_back);
+    }
 
     T("-- (a + b) - (c + a): two non-leaf children, so the shape rule falls back");
-    ComputeBlock both_sides = scratch.store((a + b) - (c + a));
+    {
+        ComputeBlock both_sides = scratch.store((a + b) - (c + a));
+        (void)sizeof(both_sides);
+    }
 
     T("-- a * b: FPU by default; TT_UNIFIED_SFPU_MUL takes the accurate form back");
     Block both = sink.store(a * b);
     noc_store<0>(std::move(both), t3, 0);
-    (void)sizeof(chain);
-    (void)sizeof(flipped);
-    (void)sizeof(fused);
-    (void)sizeof(fell_back);
-    (void)sizeof(both_sides);
 }
 
 // A unary chain: out = exp(in). Exercises Un<> and the in-place SFPU path.
@@ -656,10 +671,14 @@ void example_bcast() {
     Storage<Row> r_storage(6);
     Storage<Shape<1, 1>> one_storage(3);
 
-    ComputeBlock one = fill_reduce_scaler<1>(one_storage);
     ComputeBlock x = noc_load<1>(x_storage, t0, 0).wait();
 
     {  // Cols: a reduction and the broadcast that expands it again, with a fused exp
+        //
+        // The scaler is scoped HERE rather than at function scope: the Both probe below
+        // loads its own block from one_storage, and two live ComputeBlocks over one buffer
+        // is what the occupancy assert rejects -- the second would read the scaler's page.
+        ComputeBlock one = fill_reduce_scaler<1>(one_storage);
         ComputeBlock m = m_storage.store(reduce_max<Axis::Cols>(x, one));
         noc_store<0>(e_storage.store((x - bcast<Axis::Cols>(m)).exp()), t2, 0);
     }
