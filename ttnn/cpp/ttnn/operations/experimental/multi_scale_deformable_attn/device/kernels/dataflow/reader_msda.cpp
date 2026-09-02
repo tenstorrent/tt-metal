@@ -62,13 +62,18 @@ using fixed_point_arithmetic::FIXED_ONE;
 using fixed_point_arithmetic::fixed_one_minus;
 using fixed_point_arithmetic::fixed_to_int;
 
-// bf16 -> Q16.16, saturating at +-2. Any |g| > 1 already samples outside the
-// feature map, so clamping there keeps the out-of-bounds classification while
-// bounding the pixel-coord multiply below to int32. Inf/NaN clamp the same way.
+// bf16 -> Q16.16, saturating at +-clamp_q16, which bounds the pixel-coord
+// multiply below to int32. Inf/NaN saturate the same way.
+//
+// The clamp has to sit far enough out that the clamped coordinate still maps
+// fully outside the feature map, or an out-of-range sample would come back
+// in-bounds. With align_corners the mapping scales by (size - 1), so a 2-wide
+// map needs +-3; without it the scale is size and +-2 is enough. The caller
+// passes the right one for its mapping.
 //
 // The shared header has float_to_fixed but no bf16 entry point and no
 // saturation, so this one stays local.
-inline int32_t bf16_to_q16(uint16_t bf16) {
+inline int32_t bf16_to_q16(uint16_t bf16, int32_t clamp_q16) {
     const int32_t exp = static_cast<int32_t>((bf16 >> 7) & 0xFFu);
     if (exp == 0) {
         return 0;  // zero or subnormal: below Q16.16 resolution anyway
@@ -78,10 +83,10 @@ inline int32_t bf16_to_q16(uint16_t bf16) {
     // the 8-bit significand left by (exp - 118).
     const int32_t shift = exp - 118;
     int32_t magnitude;
-    if (shift > 9) {
-        // The significand occupies 8 bits, so a shift past 9 can exceed the
-        // +-2 clamp anyway (and would overflow int32 for large exponents).
-        magnitude = 2 * FIXED_ONE;
+    if (shift >= 16) {
+        // |value| >= 128 here, past any clamp this op passes, and shifting the
+        // 8-bit significand that far would overflow int32.
+        magnitude = clamp_q16;
     } else if (shift >= 0) {
         magnitude = static_cast<int32_t>((0x80u | (bf16 & 0x7Fu))) << shift;
     } else if (shift > -32) {
@@ -89,8 +94,8 @@ inline int32_t bf16_to_q16(uint16_t bf16) {
     } else {
         magnitude = 0;
     }
-    if (magnitude > 2 * FIXED_ONE) {
-        magnitude = 2 * FIXED_ONE;
+    if (magnitude > clamp_q16) {
+        magnitude = clamp_q16;
     }
     return negative ? -magnitude : magnitude;
 }
@@ -138,10 +143,13 @@ inline uint16_t attn_times_weight_bf16(uint16_t attn_bf16, uint32_t weight_q16) 
     if (out_exp <= 0) {
         return 0;  // underflows bf16's normal range
     }
-    if (out_exp >= 0xFF) {
-        return static_cast<uint16_t>((0xFEu << 7) | 0x7Fu);  // saturate rather than emit inf
-    }
     const uint16_t sign = static_cast<uint16_t>(attn_bf16 & 0x8000u);
+    if (out_exp >= 0xFF) {
+        // Saturate rather than emit inf, keeping the sign: a non-finite attn
+        // weight would otherwise come back as +max and flip that corner's
+        // contribution.
+        return static_cast<uint16_t>(sign | (0xFEu << 7) | 0x7Fu);
+    }
     return static_cast<uint16_t>(sign | (static_cast<uint32_t>(out_exp) << 7) | mantissa);
 }
 
@@ -162,6 +170,10 @@ constexpr uint32_t value_stick_nbytes = get_compile_time_arg_val(10);
 constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(11);
 constexpr uint32_t attn_stick_nbytes = get_compile_time_arg_val(12);
 constexpr bool ALIGN_CORNERS = get_compile_time_arg_val(13) != 0;
+
+// See bf16_to_q16: align_corners scales by (size - 1), so a 2-wide map needs a
+// wider clamp for an out-of-range coordinate to stay out of range.
+constexpr int32_t GRID_CLAMP_Q16 = ALIGN_CORNERS ? 3 * FIXED_ONE : 2 * FIXED_ONE;
 
 constexpr auto value_args = TensorAccessorArgs<14>();
 constexpr auto grid_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
@@ -256,11 +268,11 @@ void kernel_main() {
                 // align_corners selects the pixel-coord mapping (mmcv default
                 // is false: pixel = (g+1)*size/2 - 0.5; true variant uses
                 // pixel = (g+1)*(size-1)/2). Halving (g+1) before scaling by
-                // the size keeps the product inside int32 for any feature map
-                // this op accepts, at the cost of one bit of coordinate
+                // the size keeps the product inside int32 for the feature-map
+                // sizes validation allows, at the cost of one bit of coordinate
                 // precision the bf16 grid never carried anyway.
-                const int32_t gx_half = (bf16_to_q16(grid_ptr[0]) + FIXED_ONE) >> 1;
-                const int32_t gy_half = (bf16_to_q16(grid_ptr[1]) + FIXED_ONE) >> 1;
+                const int32_t gx_half = (bf16_to_q16(grid_ptr[0], GRID_CLAMP_Q16) + FIXED_ONE) >> 1;
+                const int32_t gy_half = (bf16_to_q16(grid_ptr[1], GRID_CLAMP_Q16) + FIXED_ONE) >> 1;
                 int32_t px_q16, py_q16;
                 if constexpr (ALIGN_CORNERS) {
                     px_q16 = gx_half * (w_in_i - 1);

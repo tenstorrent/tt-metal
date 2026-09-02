@@ -126,6 +126,12 @@ def test_msda_grid_at_the_border(device, coord, align_corners):
     out = _run_msda(device, value, grid, attn, align_corners=align_corners)
 
     assert torch.isfinite(out).all(), "border sampling produced non-finite values"
+    # A constant grid makes every query sample the same pixel, so PCC -- which is
+    # scale-invariant -- would pass even if the interpolation weight were wrong.
+    # Check the magnitude too, which is the half this rewrite actually touches.
+    scale = ref.abs().max().clamp(min=1e-6)
+    rel = (out - ref).abs().max() / scale
+    assert rel < 0.05, f"border weight magnitude is off by {rel:.4f} relative"
     assert_with_pcc(ref, out, pcc=0.99)
 
 
@@ -211,3 +217,62 @@ def test_msda_at_encoder_scale(device):
 
     ref = _reference_msda_from_bf16(value, grid, attn)
     assert_with_pcc(ref, _run_msda(device, value, grid, attn), pcc=0.999)
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf"), float("nan")])
+def test_msda_non_finite_attention_weight(device, bad):
+    """A non-finite attention weight saturates with its sign, not to +max.
+
+    The reader turns (attn, corner weight) into a bf16 scalar with integer
+    arithmetic. Only a non-finite attn can drive that product past bf16's range,
+    and an early return there once dropped the sign, turning -inf into +max and
+    flipping the corner's contribution.
+    """
+    torch.manual_seed(0)
+    N, Q, P, D, h_in, w_in = 1, 32, 4, 32, 16, 16
+    value = torch.ones(N, h_in, w_in, D, dtype=torch.float32)
+    # g = -0.0625 is -2^-4, exact in bf16, and puts the pixel coordinate on an
+    # integer for a 16-wide map, so one corner weight is exactly 1.0. That is
+    # what pushes a non-finite attn past bf16's range and into the saturation
+    # branch; a fractional weight stops one exponent short of it.
+    grid = torch.full((N, Q * P, 1, 2), -0.0625, dtype=torch.float32)
+    attn = torch.softmax(torch.randn(N, Q, P, dtype=torch.float32), dim=-1)
+    attn[:, ::2, :] = bad
+
+    out = _run_msda(device, value, grid, attn)
+
+    finite_rows = out[:, 1::2]
+    assert torch.isfinite(finite_rows).all(), "a non-finite attn leaked into other queries"
+    if bad == float("inf"):
+        assert (out[:, ::2] > 0).all(), "+inf attn should saturate positive"
+    elif bad == float("-inf"):
+        assert (out[:, ::2] < 0).all(), "-inf attn should saturate negative, not to +max"
+
+
+@pytest.mark.parametrize("size", [2, 3])
+@pytest.mark.parametrize("align_corners", [False, True])
+def test_msda_tiny_feature_map_out_of_range(device, size, align_corners):
+    """An out-of-range coordinate contributes nothing even on a tiny map.
+
+    align_corners maps the grid onto [0, size - 1] rather than [0, size], so a
+    coordinate saturated at the wrong magnitude lands back inside a 2-wide map.
+    """
+    torch.manual_seed(0)
+    N, Q, P, D = 1, 32, 4, 32
+    value = torch.ones(N, size, size, D, dtype=torch.float32)
+    attn = torch.softmax(torch.randn(N, Q, P, dtype=torch.float32), dim=-1)
+    grid = torch.full((N, Q * P, 1, 2), -3.0, dtype=torch.float32)
+
+    out = _run_msda(device, value, grid, attn, align_corners=align_corners)
+    assert (out == 0).all(), f"out-of-range coord sampled a {size}x{size} map in bounds"
+
+
+@pytest.mark.parametrize("size", [16385, 20000])
+def test_msda_rejects_oversized_feature_map(device, expect_error, size):
+    """Sizes past the reader's Q16.16 range are rejected, not silently wrong."""
+    N, Q, P, D = 1, 32, 4, 16
+    value = ttnn.zeros((N, 1, size, D), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    grid = ttnn.zeros((N, Q * P, 1, 2), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    attn = ttnn.zeros((N, Q, P), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must each be <="):
+        ttnn.experimental.multi_scale_deformable_attn(value, grid, attn)
