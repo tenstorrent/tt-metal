@@ -323,17 +323,14 @@ def run_e2e_pipeline(
                 pass
 
     def _final_tensor(o):
-        if isinstance(o, torch.Tensor):
-            return o
-        if hasattr(o, "last_hidden_state"):
-            return o.last_hidden_state
-        if isinstance(o, (tuple, list)) and len(o) > 0 and isinstance(o[0], torch.Tensor):
-            return o[0]
-        if isinstance(o, dict):
-            for v in o.values():
-                if isinstance(v, torch.Tensor):
-                    return v
-        return o
+        # Shared with the reference-loader gate rather than kept as a fourth private copy. Behaviour
+        # change, stated: an output that carries no `last_hidden_state` used to fall through and be
+        # returned as the WRAPPER, which the comparison below could not read; it now resolves to the
+        # tensor the output actually carries. Both sides go through this, so they move together.
+        from .model_output import result_tensor
+
+        found = result_tensor(o)
+        return o if found is None else found
 
     a = _final_tensor(hf_ref_output)
     b = _final_tensor(hf_with_tt_output)

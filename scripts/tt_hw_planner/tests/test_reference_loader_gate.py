@@ -504,3 +504,24 @@ def test_a_contradicted_constant_fails_the_gate(tmp_path) -> None:
         rlr.load_reference = original
     assert out["ok"] is False and out["status"] == "broken", out
     assert "rms_norm_eps" in out["reason"], out
+
+
+@requires_torch
+def test_the_output_unwrap_needs_no_field_names_at_all() -> None:
+    """Shared helper, so the gate and the e2e harness cannot drift apart on what a result is."""
+    import torch
+
+    from scripts.tt_hw_planner.model_output import result_tensor
+
+    inner = torch.ones(2, 3)
+
+    class Renamed:
+        """Names its result something no table would contain, and offers to unpack itself."""
+
+        def to_tuple(self):
+            return (None, inner)
+
+    assert result_tensor(Renamed()) is inner
+    assert result_tensor({"whatever": (inner,)}) is inner
+    assert result_tensor(inner) is inner
+    assert result_tensor("not a tensor anywhere") is None

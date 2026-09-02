@@ -41,6 +41,8 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from .model_output import result_tensor
+
 _LOADER_FILENAME = "_reference_loader.py"
 _LOADER_FUNC = "load_reference_model"
 _ENV_FLAG = "TT_HW_PLANNER_LOADER_RESOLVER"
@@ -55,6 +57,9 @@ _WEIGHT_GLOB = "*.safetensors"
 _CONSTANT_REL_TOL = 1e-9
 # What a non-transformers checkpoint calls its config; the case this whole module exists for.
 _NATIVE_CONFIG_FILE = "params.json"
+# Positive evidence of a bug, as opposed to a check that could not run or a value that merely did
+# not turn up. Only these refuse a loader; everything else is reported and stays out of the way.
+_FATAL_STATUSES = ("violated", "diverges")
 # Long enough that a causal model has a past to respect, short enough to stay cheap on CPU.
 _PROBE_SEQ = 8
 # The invariants are exact statements, so this is float noise from reordered reductions only.
@@ -290,6 +295,16 @@ def verify(demo_dir: Path, model_id: str) -> dict:
         }
     if not any(True for _ in ref.parameters()):
         return {"ok": False, "status": "broken", "reason": "reference module has no parameters"}
+    return assess(ref, model_id)
+
+
+def assess(ref, model_id: str) -> dict:
+    """Everything that can only be judged once the model has actually been BUILT.
+
+    Split out from `verify` so a caller already holding a reference can consult the same verdict
+    without paying to construct it again -- loading a multi-billion-parameter model a second time
+    to ask one question is not something to do quietly.
+    """
     invariants = check_invariants(ref)
     constants = config_fidelity(model_id, ref)
     detail = {
@@ -300,7 +315,7 @@ def verify(demo_dir: Path, model_id: str) -> dict:
     # `absent` stays out of this: it is a value that did not turn up, which has innocent
     # explanations, whereas these two are the reference contradicting itself or its own checkpoint.
     for verdict in (invariants, constants):
-        if verdict.get("status") in ("violated", "diverges"):
+        if verdict.get("status") in _FATAL_STATUSES:
             return {"ok": False, "status": "broken", "reason": verdict["reason"], **detail}
     return {
         "ok": True,
@@ -472,36 +487,6 @@ def config_fidelity(model_id: str, ref) -> dict:
     return {"status": "unverified", "reason": "no declared constant could be matched by name or value"}
 
 
-def _first_tensor(out):
-    """The tensor a forward returned, whatever wrapper it came in.
-
-    Asks the wrapper to unpack itself instead of reaching for field names: a HuggingFace output
-    orders its own fields and drops the empty ones, so the first tensor out of `to_tuple()` is the
-    result field whether the model calls it logits, hidden states, or something this has never
-    heard of.
-
-    Deliberately not `bringup_loop._normalize_out`, which unwraps one specific field name and so
-    hands back the wrapper untouched for a model that names its result anything else -- a causal
-    LM's logits among them. Unifying the two is worth doing, but that helper is consumed by the
-    generated PCC tests, so widening it is a change to their behaviour and not a free refactor.
-    """
-    import torch
-
-    if isinstance(out, torch.Tensor):
-        return out
-    unpack = getattr(out, "to_tuple", None)
-    if callable(unpack):
-        out = unpack()
-    elif isinstance(out, dict):
-        out = list(out.values())
-    if isinstance(out, (list, tuple)):
-        for item in out:
-            found = _first_tensor(item)
-            if found is not None:
-                return found
-    return None
-
-
 def _probe_input(ref) -> Optional[dict]:
     """Kwargs that will drive this model's forward, asked of the model rather than assumed.
 
@@ -568,7 +553,7 @@ def check_invariants(ref) -> dict:
 
     def _run(kw):
         with torch.no_grad():
-            return _first_tensor(ref(**kw))
+            return result_tensor(ref(**kw))
 
     try:
         base = _run(kwargs)

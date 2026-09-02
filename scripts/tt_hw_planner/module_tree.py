@@ -779,6 +779,21 @@ def _load_reference_module(model_id: str, demo_dir=None):
             ref.eval()
         except Exception:
             pass
+
+        # The gate's verdict is consulted here, not just recorded. Until this existed the only
+        # question asked was whether the loader FILE was present, so a reference the gate had
+        # already condemned -- self-contradictory, or disagreeing with the constants its own
+        # checkpoint declares -- was loaded and used to enumerate the module tree regardless, and
+        # every PCC measured against it inherited the fault. Behaviour change, stated plainly: a
+        # model whose loader is demonstrably wrong now stops here instead of proceeding quietly.
+        # Only positive evidence refuses it; a check that could not run never blocks.
+        verdict = _rlr.assess(ref, model_id)
+        if not verdict["ok"]:
+            _write_loader_blocker(
+                demo_dir,
+                _reference_loader_next_steps(model_id, RuntimeError(verdict["reason"]), loader_file),
+            )
+            return None
         return ref
     except Exception as exc:
         _write_loader_blocker(
