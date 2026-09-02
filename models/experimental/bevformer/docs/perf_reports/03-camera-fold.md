@@ -26,7 +26,7 @@ tensor.
 
 Two parts:
 
-- **The fold runs in ROW_MAJOR.** `_fold_cameras_into_batch` untilizes, permutes,
+- **The fold runs in ROW_MAJOR.** `fold_cameras_into_batch` untilizes, permutes,
   reshapes to `[bs*num_cams, L, embed_dims]`, and tiles *that* — `30125 → 30144`,
   0.06% padding instead of 32×. Converting after the fold is the cheap direction.
 - **It runs once when the arguments alias.** `value_reshaped = key_reshaped if

@@ -59,6 +59,21 @@ Measured on the current build: summed FW is **139.08 ms**, summed kernel is **10
 37.65 ms difference is almost entirely this double count. **Use `DEVICE KERNEL DURATION`.** Section
 7.1 explains why the gap is so large; it is a real problem, just not 37 ms of real *work*.
 
+### What one CSV actually contains
+
+Do not read the CSV total as "one layer". The harness compiles, warms up, then runs the measured
+iteration, so **the layer body appears three times**, and point sampling — which the encoder runs
+once for all layers, not once per layer — appears once. Split by signpost:
+
+| segment | kernel |
+|---|---:|
+| point sampling, once | 9.31 ms |
+| layer body × 3 | 30.67 / 30.73 / 30.73 ms |
+| CSV total | 101.43 ms |
+
+**One layer is 30.7 ms.** A six-layer encoder is `9.31 + 6 × 30.7` ≈ **193.6 ms** of kernel. Those
+two are the numbers worth quoting; the CSV total is an artifact of the harness.
+
 ---
 
 ## 3. Timeline — Wormhole phase (2026-08-25 → 08-28)
@@ -190,14 +205,16 @@ never wraps mid-group. **MSDA: 3965 → 3828 µs per call.**
 
 Same test throughout, 318 device ops, 15 MSDA calls, all runs green.
 
-| | summed kernel | MSDA |
-|---|---:|---:|
-| pre-optimization code (stages 0–10 reverted, measured 09-01) | 336.66 ms | 168.00 ms |
-| start of the Blackhole phase | 121.29 ms | 72.66 ms |
-| **now** | **101.43 ms** | **57.42 ms** |
+Kernel time, split by signpost as in §2:
 
-**Total speedup versus the pre-optimization code: 3.32×.** Of that, 2.78× came from the Wormhole
-stages and a further 1.20× from the Blackhole phase.
+| | point sampling | **one layer** | **encoder (6 layers)** |
+|---|---:|---:|---:|
+| pre-optimization code (stages 0–10 reverted, measured 09-01) | 22.72 ms | **104.65 ms** | **650.6 ms** |
+| start of the Blackhole phase | 14.03 ms | 35.75 ms | 228.5 ms |
+| **now** | **9.31 ms** | **30.71 ms** | **193.6 ms** |
+
+**Total speedup: 3.41× per layer, 3.36× per encoder.** Of that, roughly 2.9× came from the Wormhole
+stages and a further 1.16× from the Blackhole phase.
 
 The "pre-optimization" row is a real measurement, not an estimate — the stages were reverted and the
 old code was run on the same card, same test.
@@ -234,14 +251,17 @@ Everything below is committed on `ctr-mmicic/bev-former`, tests green:
 - `tests/pcc/` for SCA and point sampling — 15 passing, job 038
 - perf gate PCC 0.999590
 
-Where the time goes now, per MSDA call on Blackhole:
+Where the time goes now on Blackhole:
 
 | | |
 |---|---|
-| MSDA op, kernel | ~3.5–3.8 ms |
-| fastest core finishes at | 1565 µs |
-| slowest core finishes at | **3796 µs** |
-| compute active | ~42% |
+| one encoder layer | 30.71 ms |
+| six-layer encoder | ~193.6 ms |
+| pure layout ops | 22.7% of kernel |
+| MSDA op, per call | ~3.5–3.8 ms |
+| — fastest core finishes at | 1565 µs |
+| — slowest core finishes at | **3796 µs** |
+| — compute active | ~42% |
 
 ---
 
