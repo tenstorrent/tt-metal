@@ -1358,7 +1358,7 @@ Repo: `tt-metal`, branch `ttmodelmanager/glm47-flash-probe`, no push.
 | `0f2ac8679bf` | the FM-018 evidence sweep and the report rebuilt from it |
 | `2e194d44cf2` | records the SHA above |
 | `6c15f60ad1f` | round-7 source fixes (FM-019): the lazy-capture warm pass, the swallowed sampling kwargs, wider tripwires, three probes with artifacts, and `tests/check_report_numbers.py` |
-| `FULLMODEL_R7_EV` | the FM-019 evidence sweep and the report rebuilt from it |
+| `95c221562ca` | the FM-019 evidence sweep and the report rebuilt from it |
 | (this commit) | records the SHA above |
 
 The source and the evidence are deliberately in separate commits: the sweep ran
