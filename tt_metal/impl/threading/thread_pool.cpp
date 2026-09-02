@@ -81,6 +81,37 @@ uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physica
     return physical_device_id % num_threads;
 }
 
+void bind_current_thread_to_numa_node(int numa_node) {
+    static std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = get_cpu_cores_per_numa_node();
+    auto it = cpu_cores_per_numa_node.find(numa_node);
+    if (it == cpu_cores_per_numa_node.end() || it->second.empty()) {
+        return;
+    }
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    for (uint32_t cpu : it->second) {
+        CPU_SET(cpu, &cpuset);
+    }
+    int rc = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+    if (rc) {
+        log_warning(
+            tt::LogMetal,
+            "Unable to bind thread to NUMA node {}. May see performance degradation. Error Code: {}",
+            numa_node,
+            rc);
+    }
+}
+
+void bind_memory_to_numa_node(void* base, size_t bytes, int numa_node) {
+    if (base == nullptr || bytes == 0 || numa_node < 0 || numa_available() == -1) {
+        return;
+    }
+    if (numa_node > numa_max_node()) {
+        return;
+    }
+    numa_tonode_memory(base, bytes, numa_node);
+}
+
 void set_worker_affinity(std::thread& worker, uint32_t cpu_core) {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
@@ -109,6 +140,12 @@ void set_process_priority(int requested_priority) {
 }
 
 }  // namespace thread_binding
+
+void bind_current_thread_to_numa_node(int numa_node) { thread_binding::bind_current_thread_to_numa_node(numa_node); }
+
+void bind_memory_to_numa_node(void* base, size_t bytes, int numa_node) {
+    thread_binding::bind_memory_to_numa_node(base, bytes, numa_node);
+}
 
 namespace threading_primitives {
 
