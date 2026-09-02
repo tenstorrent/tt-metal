@@ -120,6 +120,12 @@ concept HasSpecRuntimeArgsOverride = requires {
 //   static MeshWorkloadArtifacts create_mesh_workload_artifacts(
 //       const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&,
 //       const ttnn::MeshCoordinateRangeSet& tensor_coords);
+// Optionally, to refresh run args on a cache hit:
+//   static ProgramRunArgs override_runtime_arguments(
+//       const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&,
+//       const ttnn::MeshCoordinateRange& range);
+// One Program backs a whole range, so the override is called once per range and takes the range
+// rather than a coordinate: what it returns applies to every device the range covers.
 template <typename T>
 concept MeshWorkloadSpecFactoryConcept = requires {
     &T::create_mesh_workload_artifacts;

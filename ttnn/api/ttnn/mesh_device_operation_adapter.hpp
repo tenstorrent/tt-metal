@@ -1037,7 +1037,8 @@ public:
     // Resources are parked once and shared by every range's shared_variables.
     //
     // On cache hit the adapter refreshes tensor bindings per range, or calls the factory's
-    // override_runtime_arguments(attrs, args, ret, coord) if it declares one.
+    // override_runtime_arguments(attrs, args, ret, range) if it declares one. The range is passed
+    // whole: one Program backs it, so the run args it returns apply to every device in it.
     // -----------------------------------------------------------------------
     template <MeshWorkloadSpecFactoryConcept WorkloadSpecFactory>
     struct MeshWorkloadSpecFactoryAdapter : SpecBindingSupport {
@@ -1053,8 +1054,8 @@ public:
                 const operation_attributes_t& attrs,
                 const tensor_args_t& tensor_args,
                 tensor_return_value_t& tensor_return_value,
-                const std::optional<ttnn::MeshCoordinate>& coord) {
-                WorkloadSpecFactory::override_runtime_arguments(attrs, tensor_args, tensor_return_value, coord);
+                const ttnn::MeshCoordinateRange& range) {
+                WorkloadSpecFactory::override_runtime_arguments(attrs, tensor_args, tensor_return_value, range);
             };
         }
 
@@ -1062,7 +1063,8 @@ public:
         static_assert(
             !detail::HasSpecRuntimeArgsOverride<WorkloadSpecFactory> || has_override_runtime_arguments(),
             "override_runtime_arguments must take (operation_attributes_t, tensor_args_t, tensor_return_value_t, "
-            "const std::optional<MeshCoordinate>&) to be called on the cache-hit path.");
+            "const MeshCoordinateRange&) to be called on the cache-hit path. It is called once per range, "
+            "not once per device.");
 
         static auto create_mesh_workload(
             const operation_attributes_t& attrs,
@@ -1130,10 +1132,7 @@ public:
                 const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
                 for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                     auto run_args = WorkloadSpecFactory::override_runtime_arguments(
-                        attrs,
-                        tensor_args,
-                        tensor_return_value,
-                        std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                        attrs, tensor_args, tensor_return_value, coordinate_range);
                     tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, skip_validation);
                 }
             } else {

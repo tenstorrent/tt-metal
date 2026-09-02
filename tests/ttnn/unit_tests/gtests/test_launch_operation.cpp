@@ -159,7 +159,7 @@ struct MeshWorkloadSpecFactory {
     }
 };
 
-// Same, plus a per-coordinate cache-hit run-args refresh.
+// Same, plus a per-range cache-hit run-args refresh.
 struct MeshWorkloadSpecFactoryWithOverride {
     static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const OperationAttributes& /*attrs*/,
@@ -172,7 +172,7 @@ struct MeshWorkloadSpecFactoryWithOverride {
         const OperationAttributes& /*attrs*/,
         const Tensor& /*tensor_args*/,
         Tensor& /*tensor_return_value*/,
-        const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+        const ttnn::MeshCoordinateRange& /*range*/) {
         return {};
     }
 };
@@ -485,7 +485,7 @@ struct PerCoordProdAllFactoryWithOverride : PerCoordProdAllFactory {
         const Op::operation_attributes_t& attrs,
         const Op::tensor_args_t& tensor_args,
         Op::tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+        const ttnn::MeshCoordinateRange& range) {
         ++override_calls;
         return Op::ProdAllProgramFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value).run_params;
     }
