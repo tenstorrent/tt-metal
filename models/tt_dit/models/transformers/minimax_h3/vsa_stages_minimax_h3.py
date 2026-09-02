@@ -117,6 +117,18 @@ class MiniMaxH3VSACoarseStage:
             mesh_axes=mesh_axes,
         )
 
+        # tile -> token broadcast for the coarse output, B = kron(I_tiles_local, ones(1, 64)) as
+        # [tiles_local, S_local] (replicated: every shard has the same local structure). A 0/1
+        # matmul copies each tile's row to its 64 tokens exactly; used in place of
+        # repeat_interleave, whose permute/concat/tilize chain cost ~3 ms at 15 s.
+        bcast = torch.kron(torch.eye(tiles_per_shard), torch.ones(1, VSA_TILE_TOKENS))
+        self.bcast_t = from_torch(
+            bcast.reshape(1, 1, tiles_per_shard, tiles_per_shard * VSA_TILE_TOKENS),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            mesh_axes=None,
+        )
+
         # --- selection constants (replicated; row space is shard-local but content is global) ---
         # additive candidate mask over score columns: 0 for candidates, -inf otherwise
         cand_mask = torch.where(geometry.is_candidate, 0.0, -float("inf")).to(torch.float32)
@@ -176,9 +188,16 @@ class MiniMaxH3VSACoarseStage:
 
     def pool(self, x_bhnd: ttnn.Tensor, *, scaled: bool) -> ttnn.Tensor:
         """[1, H, S_local, d] -> pooled [1, H, tiles_local, d] (fp math in bf16, matches oracle to bf16)."""
+        _, num_heads, s_local, d = x_bhnd.shape
         x_t = ttnn.transpose(x_bhnd, 2, 3)  # [1, H, d, S_local]
-        pooled_t = ttnn.matmul(x_t, self.a_t_q if scaled else self.a_t_kv)  # [1, H, d, tiles_local]
+        # Fold heads into M: per head the product has only (d/32) x (tiles_local/32) output tiles (20 at
+        # 768p), which is all the parallelism a batched matmul gets -- 20 cores grinding K = S_local.
+        # As one [H*d, S_local] @ [S_local, tiles_local] product the same math spans 14x the output
+        # tiles and the whole grid. Tile-aligned merge of adjacent dims: a view, no data movement.
+        x_t = ttnn.reshape(x_t, [1, 1, num_heads * d, s_local])
+        pooled_t = ttnn.matmul(x_t, self.a_t_q if scaled else self.a_t_kv)  # [1, 1, H*d, tiles_local]
         ttnn.deallocate(x_t)
+        pooled_t = ttnn.reshape(pooled_t, [1, num_heads, d, pooled_t.shape[-1]])
         pooled = ttnn.transpose(pooled_t, 2, 3)  # [1, H, tiles_local, d]
         ttnn.deallocate(pooled_t)
         return pooled
@@ -210,8 +229,14 @@ class MiniMaxH3VSACoarseStage:
             probs = ttnn.softmax(scores, dim=-1)
             o_c_tiles = ttnn.matmul(probs, v_c_g)  # [1, H, tiles_local, d]
             ttnn.deallocate(probs)
-            o_c = ttnn.repeat_interleave(o_c_tiles, VSA_TILE_TOKENS, dim=2)  # [1, H, S_local, d]
+            # broadcast tile -> 64 tokens as a folded 0/1 matmul (see bcast_t): [H*d, T] @ [T, S_local]
+            d = o_c_tiles.shape[-1]
+            o_t = ttnn.reshape(ttnn.transpose(o_c_tiles, 2, 3), [1, 1, num_heads * d, o_c_tiles.shape[2]])
             ttnn.deallocate(o_c_tiles)
+            o_c_t = ttnn.matmul(o_t, self.bcast_t)  # [1, 1, H*d, S_local]
+            ttnn.deallocate(o_t)
+            o_c = ttnn.transpose(ttnn.reshape(o_c_t, [1, num_heads, d, o_c_t.shape[-1]]), 2, 3)  # [1, H, S_local, d]
+            ttnn.deallocate(o_c_t)
 
         # (e) selection: top-k over candidate columns only
         masked = ttnn.add(scores, self.cand_mask)  # -inf on non-candidate columns

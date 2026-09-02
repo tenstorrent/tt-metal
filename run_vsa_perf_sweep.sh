@@ -33,8 +33,14 @@ run_one() {
 DENSE=models/tt_dit/tests/models/minimax_h3/test_performance_minimax_h3.py::test_minimax_h3_transformer_block_perf
 VSA=models/tt_dit/tests/models/minimax_h3/test_vsa_performance_minimax_h3.py::test_minimax_h3_vsa_block_perf
 
-for dur in 5 10 15; do
-    run_one "dense_${dur}s" "$DENSE[blackhole-sp_sim1-${dur}s_768p-4x8sp1tp0nl2_ring_is_fsdp0]"
-    run_one "vsa_${dur}s" "$VSA[blackhole-${dur}s_768p-4x8sp1tp0nl2_ring_is_fsdp0]"
+# MODES="dense vsa" (default) or a subset; DURS="5 10 15" likewise.
+for dur in ${DURS:-5 10 15}; do
+    for mode in ${MODES:-dense vsa}; do
+        if [[ "$mode" == dense ]]; then
+            run_one "dense_${dur}s" "$DENSE[blackhole-sp_sim1-${dur}s_768p-4x8sp1tp0nl2_ring_is_fsdp0]"
+        else
+            run_one "vsa_${dur}s" "$VSA[blackhole-${dur}s_768p-4x8sp1tp0nl2_ring_is_fsdp0]"
+        fi
+    done
 done
 echo "PERF_SWEEP_DONE"
