@@ -41,9 +41,16 @@ def test_multi_device_subset_mesh(silicon_arch_name, silicon_arch_wormhole_b0):
     ttnn.close_mesh_device(multi_device)
 
 
-def test_multi_device_open_close_full_mesh_device_fixture(mesh_device):
-    """Using `mesh_device` pytest fixture defined in conftest.py"""
-    pass
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
+def test_worker_core_from_logical_core_at(mesh_device):
+    logical_core = ttnn.CoreCoord(0, 0)
+    for row in range(2):
+        for column in range(2):
+            mesh_coordinate = ttnn.MeshCoordinate(row, column)
+            unit_mesh = mesh_device.create_submesh(ttnn.MeshShape(1, 1), offset=mesh_coordinate)
+            assert mesh_device.worker_core_from_logical_core_at(mesh_coordinate, logical_core) == (
+                unit_mesh.worker_core_from_logical_core(logical_core)
+            )
 
 
 def test_multi_device_open_close_full_mesh_device_fixture(mesh_device):
