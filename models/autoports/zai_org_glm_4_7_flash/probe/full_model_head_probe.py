@@ -115,7 +115,10 @@ def main():
         wt = ttnn.from_torch(
             wh, device=dev, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        for cores, bw in ((110, 4), (110, 8), (110, 2), (88, 8), (64, 8)):
+        # in0_block_w over every legal divisor of kt = 2048/32 = 64 that the
+        # config helper can express, so the shipped value is a measurement
+        # rather than a middle point (work log FM-020).
+        for cores, bw in ((110, 1), (110, 2), (110, 4), (110, 8), (110, 16), (110, 32), (110, 64), (88, 8), (64, 8)):
             pc = lm_head_1d_pc(V // TILE, H // TILE, cores, bw)
             try:
                 out = ttnn.linear(

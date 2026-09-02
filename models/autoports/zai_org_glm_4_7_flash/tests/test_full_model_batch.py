@@ -212,7 +212,9 @@ def test_recapture_mid_decode_leaves_a_deeper_slot_untouched(gen):
     running one eager decode, which *writes a KV row for every slot*, so a
     recapture that warmed would corrupt any slot sitting at a different
     position: at batch > 1 with mixed prompts that is the normal case, not the
-    corner (FM-017). The recapture therefore does not warm, and this is the
+    corner (FM-017). The recapture therefore warms with every slot at position
+    -1, which `paged_update_cache` skips (skipping the warm pass entirely is
+    not an option: Metal refuses to capture an uncached program). This is the
     control: identical tokens with and without one injected mid-decode.
     """
     if BATCH < 2:

@@ -203,9 +203,11 @@ def test_prefill_last_row_agrees_with_all_logits(gen):
     gen.reset()
     device_token = gen._prefill_and_sample_first(ids)
     assert device_token == host_top1, (device_token, host_top1)
-    # the chunked all-positions path must agree on the same row within top-5
-    all_top5 = allp[0, -1].topk(5).indices.tolist()
-    assert device_token in all_top5, (device_token, all_top5)
+    # The all-positions path now walks the same tile-aligned slabs as the
+    # single-position one (`_host_logits_walk`), so its last row runs through
+    # the identical slice/norm/LM-head programs and must agree exactly, not
+    # just within top-5 (work log FM-020).
+    assert int(allp[0, -1].argmax()) == device_token, (int(allp[0, -1].argmax()), device_token)
 
 
 def test_prompt_longer_than_one_prefill_chunk(gen):

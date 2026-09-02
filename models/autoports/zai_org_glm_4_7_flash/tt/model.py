@@ -47,9 +47,12 @@ Model-level additions over the decoder stage
   head's DRAM-fed in0 raster), interleaved at prefill.
 * LM head: one wide-1D mcast matmul over the full 11x10 grid
   (``per_core_N`` = 44 of the 4840 vocab tiles). Measured on this chip at
-  M=1 tile: 871 us at bf8 / 628 us at bf4 / 15310 us with the default config
-  (probe/full_model_head_probe.py) - the default config is a 17x regression,
-  so the explicit program config is mandatory.
+  M = 1 tile and recorded in doc/full_model/head_probe.json: 868 us at bf8,
+  622 us at bf4, against 2479 us with the default (no program config) matmul,
+  i.e. 2.9x. The explicit program config is therefore mandatory rather than a
+  tuning nicety. (An earlier revision of this docstring said 15310 us and 17x;
+  that figure was taken during bring-up with a different output memory config
+  and does not reproduce. See work log FM-019.)
 * Device-side decode state: one persistent position tensor. The captured graph
   advances it with ``ttnn.plus_one(..., skip_negative_entries=True)`` and
   *derives* the RoPE index from it every step
@@ -199,9 +202,18 @@ def load_hf_config(snapshot_dir):
 
 
 def _lm_head_1d_pc(nt, kt, cores, in0_block_w):
-    """Wide-1D mcast LM-head matmul config (probe/full_model_head_probe.py sweep:
-    110 cores is the fastest of {64, 88, 110} at both bf8 and bf4, and
-    ``in0_block_w`` in {2, 4, 8} is within 3%; 4 is kept as the middle point)."""
+    """Wide-1D mcast LM-head matmul config.
+
+    Both parameters come from ``probe/full_model_head_probe.py``, recorded in
+    ``doc/full_model/head_probe.json``. 110 cores beats 88 and 64 at both
+    dtypes (64 does not even fit at bf8). ``in0_block_w`` was swept over every
+    legal divisor of ``kt`` = 64 that the helper can express: at bf8, 1 and 2
+    tie at 865-868 us and it degrades monotonically to 894 us at 8; at bf4, 2
+    is fastest at 622 us. 16, 32 and 64 do not run at all, failing with a
+    static circular buffer / L1 clash (``program.cpp:1875``), which is the
+    op-contract blocker for the larger divisors. 2 is shipped because it is
+    the joint optimum, so the datatype sweep does not have to revisit it.
+    """
     per_core_n = -(-nt // cores)
     blocks = -(-nt // per_core_n)
     cols, rows = _rect_grid(blocks)
@@ -286,7 +298,7 @@ class GLM47FlashModel:
         prefill_buckets=(128, 256, 512, 1024, 2048),
         lm_head_cores: int = 110,
         decode_logits_in_dram: bool = False,
-        lm_head_in0_block_w: int = 4,
+        lm_head_in0_block_w: int = 2,
         share_rope: bool = True,
         progress=None,
     ):
@@ -595,8 +607,8 @@ class GLM47FlashModel:
 
         ``M`` >= 10 tiles uses the 2D mcast config over the 11x10 grid; a
         single-tile slab uses the decode config. The default (no program
-        config) matmul is 17x slower at this N (probe sweep), so it is never
-        used."""
+        config) matmul is 2.9x slower at this N
+        (``doc/full_model/head_probe.json``), so it is never used."""
         m = normed.shape[2]
         pc = _mcast_2d_pc(m, self.hidden, self.vocab_size) if m > TILE else None
         if pc is not None:
