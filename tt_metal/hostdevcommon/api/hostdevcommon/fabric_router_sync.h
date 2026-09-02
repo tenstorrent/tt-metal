@@ -34,6 +34,10 @@ constexpr uint32_t kDiscMagic = 0xFA5CD15Cu;
 constexpr uint32_t kCfgMagic = 0xFA5CCF61u;  // host writes this word LAST; anything else = unconfigured
 constexpr uint32_t kFlagInitiator = 1u << 0;
 constexpr uint32_t kFlagEnabled = 1u << 1;
+// Responder stamps TWICE per sample (t1 at doorbell detection, t1b immediately before the echo
+// send) so the host can subtract the measured turnaround per sample instead of carrying it as a
+// bias. Host-set; the responder reads it from cfg per round, so both A/B arms come from one build.
+constexpr uint32_t kFlagTwoStamp = 1u << 2;
 constexpr uint32_t kMaxSamples = 16;  // triples per round; bounds the ring-room reservation
 
 struct Cfg {

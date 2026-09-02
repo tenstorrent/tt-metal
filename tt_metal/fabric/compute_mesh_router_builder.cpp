@@ -958,6 +958,11 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             defines["FABRIC_ROUTER_SYNC_HOOK"] = "1";
             const char* pm = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_PRESCALER_MASK");
             defines["FABRIC_ROUTER_SYNC_PRESCALER_MASK"] = (pm != nullptr && *pm != '\0') ? pm : "63";
+            // FALSIFIER: stretch the responder turnaround by N cycles (see the hook).
+            const char* ed = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_ECHO_DELAY");
+            if (ed != nullptr && *ed != '\0' && std::strtol(ed, nullptr, 10) > 0) {
+                defines["FABRIC_ROUTER_SYNC_ECHO_DELAY"] = ed;
+            }
             // DIAGNOSTIC / A-B CONTROL: restore the pre-fix behaviour where the responder answers
             // a doorbell only on its own deadline. Kept so the doorbell fix can be measured against
             // its own baseline from one build.

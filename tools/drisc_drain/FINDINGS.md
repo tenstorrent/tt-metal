@@ -7105,3 +7105,71 @@ Writing the caveat is not the same as honoring it. A metric that measures a rela
 deliberately abandons cannot be promoted to "the dominant error" three paragraphs later. When a
 number is 1000x everything else, that is a signal to re-check WHAT IT MEASURES before treating it
 as the headline.
+
+---
+
+## Turnaround bias: falsified into a mechanism, then measured away (two-stamp NTP rounds)
+
+Device<->device alignment is the only target; the host-relationship thread is closed. This section
+takes the eps ~= 23-24 ns per-link bias from "model that fits" to "confirmed with a calibrated
+slope", then removes it by measurement.
+
+### Falsifier 1 (free): eps-equality across links, from data already in hand
+Two topologies give two equations in the four per-link biases. Subtracting the same-boot closure
+means (cancelling -46.9, ring -95.0): the flipped link's bias eps_03 = (95.0-46.9)/2 = **24.05 ns**,
+and the mean of the other three = (95.0-24.05)/3 = **23.65 ns**. Equal to 0.4 ns, as the turnaround
+model requires (same code both ends of every link). Two equations cannot separate the remaining
+three links; the two-stamp fix below measures each link's turnaround directly.
+
+### Falsifier 2: delay injection -- the model's slope, measured
+`TT_METAL_PERF_DEBUG_FABRIC_SYNC_ECHO_DELAY=<cycles>` (JIT define, compiled out otherwise) inserts
+a known busy-wait D between the t1 stamp and the echo send. Prediction: closure shifts by exactly
+k*D/2 -- k=2 cancelling, k=4 ring; a wire-asymmetry bias would not move at all. D = 270 cy (200 ns):
+
+| arm | baseline | measured (2 reps) | shift | predicted |
+|-----|----------|-------------------|-------|-----------|
+| cancelling | -46.9 | -264.4, -260.0 | -217.5, -213.1 | -200 |
+| ring       | -95.0 | -533.3, -524.0 | -438.3, -429.0 | -400 |
+
+Ring/cancel shift ratio **2.02, 2.01** -- the k signature exactly. Per-link injected delta measures
+107-110 ns against 100 commanded; the consistent ~8 ns excess is the busy-wait's exit overshoot
+(loop granularity ~10-27 cy). Sign, slope, and k-structure all confirmed. CONFIRMED, not plausible.
+
+### The fix: two responder stamps, so the turnaround is SUBTRACTED, not minimized
+`kFlagTwoStamp` (cfg flag, host-set from `TT_METAL_PERF_DEBUG_FABRIC_SYNC_TWO_STAMP`, default ON --
+both A/B arms from one build, no JIT re-key): the responder stamps t1 at doorbell detection and t1b
+immediately before the echo send; t1b rides the wire format's unused `which=3` (2-bit field, no
+format change). Host-side, the NTP estimator drops in as a one-line transform -- t2_eff = t2 -
+(t1b - t1) -- which through the UNCHANGED solver yields offset = ((t1-t0)+(t1b-t2))/2 and
+rtt = wire-only rtt. Whatever txq_wait_idle cost on a given round is measured on that round and
+removed from that round. Responder ring reservation 2n+1 -> 4n+1 when the flag is on; CI
+losslessness assert parametrized (3 vs 4 stamps/sample).
+
+### First validation caught a placement bug worth recording
+First two-stamp run: closure only HALVED (cancel -27.2, ring -46.9; eps' ~= 12-13 ns) and rtt_min
+dropped just 843 -> ~817 cy against a known p ~= 63 cy. Cause: the t1b EMIT sat between the stamp
+and the send, so the emit's ring writes (~25-35 cy) were outside the measured window -- unmeasured
+turnaround again, in miniature. The initiator's own T0 pattern (stamp -> send -> emit; emit_sample
+carries the stamp by value) is the correct shape; mirrored for t1b.
+
+### Result after the reorder
+| arm | closure (3 reps) | mean | rtt_min |
+|-----|------------------|------|---------|
+| two-stamp, cancelling | -1.4, -1.1, -0.2 | **-0.9 ns** | 781-786 cy |
+| two-stamp, ring       | +4.2, +6.1, +5.5 | **+5.3 ns** | 778-786 cy |
+| single-stamp control (same binary) | -46.6 | -46.6 ns | 843 cy |
+
+**eps ~= 23.5 ns -> ~1 ns.** The topology structure is gone: the ring is no longer 2x the
+cancelling set, and the residuals' SIGNS differ between topologies -- there is no coherent
+per-link bias left to sum, only per-link detection asymmetries of +-1-2 ns with differing signs,
+below the ~7 ns round noise. rtt_min 843 -> ~780 cy: the full p ~= 63 cy turnaround is measured
+per round and removed (wire-only RTT ~= 578 ns), closing the loop with the eps = p/2 model
+(63/2 = 31.5 cy = 23.3 ns -- the bias that is now gone). Lossless in all 7 arms (0/0/0,
+369-375 rounds/link), geomean 1.0118-1.0120 throughout: the extra stamp costs nothing visible.
+
+Untested but now available as a self-check: with two-stamp ON, an injected ECHO_DELAY should be
+subtracted per-round and move closure NOT AT ALL -- the exact inverse of falsifier 2.
+
+### Incidents
+- UMD DeviceTimeoutError killed 1 run again (ts_ring rep2) -- second occurrence in ~40 runs, both
+  on this box whose MMIO remains degraded. Flagged, not attributed; both times the repeat ran clean.

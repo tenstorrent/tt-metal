@@ -409,6 +409,12 @@ static constexpr std::uint32_t SPSC_TYPE_SYNC = 15;
 static constexpr std::uint32_t SPSC_SYNC_T0 = 0;  // initiator: instant the ping enters the TXQ
 static constexpr std::uint32_t SPSC_SYNC_T1 = 1;  // responder: instant the ping was observed
 static constexpr std::uint32_t SPSC_SYNC_T2 = 2;  // initiator: instant the echo was observed
+static constexpr std::uint32_t SPSC_SYNC_T1B = 3;
+// Two-stamp (NTP-style) responder: T1 is the RX stamp, T1B the TX stamp taken immediately before
+// the echo enters the TXQ. (t1b - t1) IS the measured turnaround of that very sample, so the host
+// can subtract it exactly instead of averaging over it -- the turnaround bias eps = p/2 cancels
+// per-round. Fits the existing 2-bit `which`; value 3 was unused.
+
 static constexpr std::uint32_t SPSC_SYNC_WHICH_SHIFT = 25;
 static constexpr std::uint32_t SPSC_SYNC_ROUND_SHIFT = 8;
 static constexpr std::uint32_t SPSC_SYNC_ROUND_MASK = 0x1FFFF;

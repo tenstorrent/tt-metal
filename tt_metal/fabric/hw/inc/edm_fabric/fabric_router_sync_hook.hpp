@@ -261,7 +261,8 @@ __attribute__((noinline)) void responder_service(uint32_t n) {
         return;  // no doorbell: nothing to do this deadline
     }
     g_round = tag_round(t0tag);
-    if (!ring_has_room(2 * n + 1)) {
+    const bool two_stamp = (b->cfg.flags & kFlagTwoStamp) != 0;
+    if (!ring_has_room((two_stamp ? 4u : 2u) * n + 1)) {
         g_fail++;
         publish_stat();
         return;  // initiator times out sample 0; a logged non-event on both ends
@@ -279,16 +280,40 @@ __attribute__((noinline)) void responder_service(uint32_t n) {
         uint32_t hi, lo;
         kernel_profiler::read_wall_clock(hi, lo);  // t1: the ping's observation instant
         emit_sample(kernel_profiler::SPSC_SYNC_T1, round, i, hi, lo);
+#if defined(FABRIC_ROUTER_SYNC_ECHO_DELAY)
+        // FALSIFIER, normally compiled out: stretch the responder turnaround by a KNOWN number of
+        // cycles between the t1 stamp and the echo send. If the closure bias is the turnaround
+        // (eps = p/2), closure must move by exactly k * DELAY/2 -- k=2 on the cancelling edge set,
+        // k=4 on the directed ring. A wire-asymmetry bias would not move at all.
+        {
+            const uint64_t until = now64() + (FABRIC_ROUTER_SYNC_ECHO_DELAY);
+            while (now64() < until) {
+            }
+        }
+#endif
         b->tx.tag = tag(kTagEcho, round, i);
         asm volatile("fence" ::: "memory");  // pin the echo into L1 before the TXQ command (see above)
         if (!txq_wait_idle<TXQ>(now64() + nw)) {
             ok = false;
             break;
         }
+        uint32_t tb_hi = 0;
+        uint32_t tb_lo = 0;
+        if (two_stamp) {
+            // t1b: the last instant before the echo enters the TXQ. Stamp -> SEND -> emit, exactly
+            // the initiator's T0 pattern: the emit's ring writes must not sit between the stamp and
+            // the wire, or their cost (~25-35 cy) becomes unmeasured turnaround again -- the first
+            // two-stamp validation left eps' ~= 12 ns per link for exactly this reason. emit_sample
+            // carries the stamp by value, so emitting after the send preserves the instant.
+            kernel_profiler::read_wall_clock(tb_hi, tb_lo);
+        }
 #if !defined(FABRIC_ROUTER_SYNC_NO_SEND) && !defined(FABRIC_ROUTER_SYNC_NO_ECHO)
         internal_::eth_send_packet_bytes_unsafe(
             TXQ, BLK + kTxOff, peer + kEchoOff, sizeof(Msg));
 #endif
+        if (two_stamp) {
+            emit_sample(kernel_profiler::SPSC_SYNC_T1B, round, i, tb_hi, tb_lo);
+        }
     }
     ok ? g_ok++ : g_fail++;
     publish_stat();

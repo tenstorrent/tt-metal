@@ -2152,6 +2152,18 @@ bool fabric_sync_balance_roles() {
     return v;
 }
 
+// Two-stamp rounds (default ON): the responder stamps rx and tx, the host subtracts the measured
+// turnaround per sample. This removes the eps = p/2 closure bias by MEASUREMENT rather than by
+// shaving the responder path -- whatever txq_wait_idle cost on a given round is subtracted on that
+// round. 0 restores single-stamp rounds for A/B from the same build.
+bool fabric_sync_two_stamp() {
+    static const bool v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_TWO_STAMP");
+        return s == nullptr || *s == '\0' || *s != '0';
+    }();
+    return v;
+}
+
 double fabric_sync_hz() {
     static const double v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ");
@@ -2187,7 +2199,9 @@ struct PerfDebugProfiler::FabricSyncState {
     };
     struct Round {
         uint64_t t0[kNSamples] = {}, t1[kNSamples] = {}, t2[kNSamples] = {};
+        uint64_t t1b[kNSamples] = {};           // responder tx stamp (two-stamp rounds)
         uint32_t got0 = 0, got1 = 0, got2 = 0;  // bitmasks by sample idx
+        uint32_t got1b = 0;
         std::chrono::steady_clock::time_point first_seen;
     };
     struct Edge {
@@ -2461,7 +2475,8 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
     using namespace tt::tt_fabric::router_sync;
     auto write_cfg = [&](FabricSyncState::End& en, bool initiator, uint64_t interval, uint32_t peer_blk) {
         uint32_t body[7];  // flags .. peer_blk (Cfg minus magic)
-        body[0] = kFlagEnabled | (initiator ? kFlagInitiator : 0);
+        body[0] = kFlagEnabled | (initiator ? kFlagInitiator : 0) |
+                  (fabric_sync_two_stamp() ? tt::tt_fabric::router_sync::kFlagTwoStamp : 0);
         body[1] = static_cast<uint32_t>(interval & 0xFFFFFFFFu);
         body[2] = static_cast<uint32_t>(interval >> 32);
         body[3] = fabric_sync_samples();
@@ -2586,7 +2601,7 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
                 }
                 auto& e = st->edges[it->second.first];
                 const bool from_init = it->second.second == 0;
-                const bool ok = from_init ? (s.which == 0 || s.which == 2) : (s.which == 1);
+                const bool ok = from_init ? (s.which == 0 || s.which == 2) : (s.which == 1 || s.which == 3);
                 if (!ok) {
                     e.stray_samples++;
                     continue;
@@ -2601,6 +2616,9 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
                 } else if (s.which == 1) {
                     r.t1[s.idx] = s.ts;
                     r.got1 |= 1u << s.idx;
+                } else if (s.which == 3) {
+                    r.t1b[s.idx] = s.ts;
+                    r.got1b |= 1u << s.idx;
                 } else {
                     r.t2[s.idx] = s.ts;
                     r.got2 |= 1u << s.idx;
@@ -2613,7 +2631,8 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
                 for (auto it = e.pending.begin(); it != e.pending.end();) {
                     auto& r = it->second;
                     const uint32_t full = (1u << fabric_sync_samples()) - 1;
-                    const bool complete = (r.got0 & r.got1 & r.got2) == full;
+                    const uint32_t t1b_mask = fabric_sync_two_stamp() ? r.got1b : full;
+                    const bool complete = (r.got0 & r.got1 & r.got2 & t1b_mask) == full;
                     const bool stale = now_tp - r.first_seen > std::chrono::milliseconds(complete ? 0 : 700);
                     if (!complete && !stale) {
                         ++it;
@@ -2621,16 +2640,28 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
                     }
                     std::vector<eth_sync::Trip> trips;
                     const size_t draws_before = e.draws.size();
-                    const uint32_t have = r.got0 & r.got1 & r.got2;
+                    const uint32_t have = r.got0 & r.got1 & r.got2 & (fabric_sync_two_stamp() ? r.got1b : ~0u);
                     for (uint32_t i = 0; i < fabric_sync_samples(); i++) {
                         if ((have & (1u << i)) == 0 || r.t2[i] < r.t0[i]) {
                             continue;
                         }
-                        const uint64_t mid = r.t0[i] + (r.t2[i] - r.t0[i]) / 2;
+                        // NTP-style turnaround subtraction: t2_eff = t2 - (t1_tx - t1_rx). Through
+                        // the unchanged solver this yields offset = ((t1-t0) + (t1b-t2))/2 and
+                        // rtt = wire-only rtt -- the turnaround measured on THIS sample is removed
+                        // from THIS sample, so eps = p/2 cancels instead of being minimized.
+                        uint64_t t2e = r.t2[i];
+                        if (fabric_sync_two_stamp() && r.t1b[i] >= r.t1[i]) {
+                            const uint64_t turn = r.t1b[i] - r.t1[i];
+                            t2e = turn < (r.t2[i] - r.t0[i]) ? r.t2[i] - turn : r.t2[i];
+                        }
+                        const uint64_t mid = r.t0[i] + (t2e - r.t0[i]) / 2;
                         trips.push_back(eth_sync::Trip{
-                            r.t0[i], r.t1[i], r.t2[i],
+                            r.t0[i],
+                            r.t1[i],
+                            t2e,
                             static_cast<int64_t>(r.t1[i]) - static_cast<int64_t>(mid),
-                            r.t2[i] - r.t0[i], mid});
+                            t2e - r.t0[i],
+                            mid});
                         if (e.draws.size() < FabricSyncState::kMaxDraws) {
                             e.draws.push_back({r.t0[i], r.t1[i], r.t2[i], 0, 0, 0});
                         }
