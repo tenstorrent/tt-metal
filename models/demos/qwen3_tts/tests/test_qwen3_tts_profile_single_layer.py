@@ -345,6 +345,7 @@ def test_cp_layer_decode(device, code_predictor):
     """One production CodePredictor layer at demo CP decode seq=1."""
     from models.demos.qwen3_tts.tt.kv_cache import create_kv_cache_list
     from models.demos.qwen3_tts.tt.model_config import Qwen3TTSCodePredictorConfig
+    from models.demos.qwen3_tts.tt.rope import shard_decode_rope_tables
 
     cfg = Qwen3TTSCodePredictorConfig(num_hidden_layers=1)
     x = _hidden(device, DEMO_CP_DECODE_SEQ, cfg.hidden_size)
@@ -353,6 +354,9 @@ def test_cp_layer_decode(device, code_predictor):
     cos, sin, trans = _rope(
         device, DEMO_CP_DECODE_SEQ, cfg.head_dim, cfg.rope_theta, positions=torch.tensor([start_pos])
     )
+    # forward_single_step reshards decode cos/sin once per step; mirror that here
+    # so apply_rope_qk skips the per-layer I2S inside the signpost window.
+    cos, sin, _own_rope = shard_decode_rope_tables(cos, sin, cfg.head_dim)
     kv_caches = create_kv_cache_list(device, cfg, max_batch_size=1, max_seq_len=DEMO_CP_KV_MAX)
     _mask_dt = ttnn.bfloat16 if code_predictor._n150 else ttnn.float32
     mask = _cp_decode_mask(device, code_predictor.num_heads, DEMO_CP_KV_MAX, valid=start_pos + 1, dtype=_mask_dt)
@@ -375,6 +379,9 @@ def test_cp_layer_decode(device, code_predictor):
         return y
 
     _profile_forward(device, _fwd)
+    if _own_rope:
+        ttnn.deallocate(cos)
+        ttnn.deallocate(sin)
     print(
         f"[cp_layer_decode] seq_len={DEMO_CP_DECODE_SEQ} hidden={cfg.hidden_size} "
         f"start_pos={start_pos} kv_max={DEMO_CP_KV_MAX}"
