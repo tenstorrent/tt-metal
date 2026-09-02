@@ -33,6 +33,8 @@ no case in this bank can produce a winner in that magnitude range (denormal
 winners flush to exactly +0, which reads back 0x0000 unbiased).
 """
 
+import os
+
 import numpy as np
 import pytest
 import torch
@@ -40,7 +42,16 @@ import ttnn
 
 from models.common.utility_functions import run_for_blackhole
 
-pytestmark = run_for_blackhole("the SFPU argmax path is currently Blackhole-only")
+pytestmark = [
+    run_for_blackhole("the SFPU argmax path is currently Blackhole-only"),
+    # This suite passes under ttsim, but it is far too slow for the sim_bh_p150 budget in
+    # .github/time_budget.yaml -- the cost is simulated device cycles, which scale with the
+    # reduction width. Skipped for runtime only, not for any capability gap.
+    pytest.mark.skipif(
+        bool(os.environ.get("TT_METAL_SIMULATOR")),
+        reason="too slow for the ttsim time budget (passes, but costs ~20 worker-minutes)",
+    ),
+]
 
 _force_sfpu = ttnn._ttnn.operations.reduction.argmax_force_sfpu
 _force_scalar_reader = ttnn._ttnn.operations.reduction.argmax_force_scalar_reader

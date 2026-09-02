@@ -29,6 +29,8 @@ across explicit core counts (including ones that leave a ragged last slice)
 precisely so a merge that got that order wrong would fail.
 """
 
+import os
+
 import numpy as np
 import pytest
 import torch
@@ -36,7 +38,22 @@ import ttnn
 
 from models.common.utility_functions import run_for_blackhole
 
-pytestmark = run_for_blackhole("the RVV argmax path is Blackhole-only (TRISC2 Zve32f)")
+pytestmark = [
+    run_for_blackhole("the RVV argmax path is Blackhole-only (TRISC2 Zve32f)"),
+    # ttsim does not implement TRISC2's Zve32f unit -- it raises
+    #   UnsupportedFunctionality: rv32_v_alu: babyrisc non-compliant V extension
+    #   is explicitly out of scope
+    # and that error path calls _Exit(1), killing the pytest/xdist worker rather than
+    # failing a test. run_for_blackhole() alone does not gate it: is_blackhole() is true
+    # under ttsim. Same shape as skip_routed_topk_on_sim in test_reduction.py.
+    pytest.mark.skipif(
+        bool(os.environ.get("TT_METAL_SIMULATOR")),
+        reason=(
+            "the RVV argmax path runs on TRISC2's Zve32f unit, which ttsim does not "
+            "implement (UnsupportedFunctionality: rv32_v_alu)"
+        ),
+    ),
+]
 
 _force_rvv = ttnn._ttnn.operations.reduction.argmax_force_rvv
 _force_scalar_reader = ttnn._ttnn.operations.reduction.argmax_force_scalar_reader
