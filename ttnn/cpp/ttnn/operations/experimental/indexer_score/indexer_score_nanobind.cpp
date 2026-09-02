@@ -208,9 +208,12 @@ void bind_indexer_score(nb::module_& mod) {
                 shard and the all-gather INPUT; sll = T/sp; must match k's dtype
             ag_multi_device_global_semaphore: list of the all-gather's out-ready global semaphores; requires
                 >= 2 (the forward and backward ring directions)
-            cluster_axis: mesh axis that is the SP ring -- both the gather axis and the causality axis.
-                REQUIRED here (optional in indexer_score_dsa)
-            topology: ttnn.Topology -- ttnn.Topology.Linear (non-torus grid) or ttnn.Topology.Ring
+            cluster_axis: optional mesh axis that is the SP ring -- both the gather axis and the causality
+                axis. Pass 0 or 1 for the existing independent axis-ring mode. Explicit None selects one
+                direct-neighbor snake ring over the complete 2D mesh; tensor shards and causal ranks remain
+                in canonical row-major mesh order. The keyword is required even though its value is optional.
+            topology: ttnn.Topology -- ttnn.Topology.Linear (non-torus grid) or ttnn.Topology.Ring for an
+                axis ring. Complete-mesh mode requires ttnn.Topology.Ring.
             num_links: int, fabric links for the gather (default 1)
             ag_sub_device_id: optional ttnn.SubDeviceId scoping the AG worker cores (kept disjoint from the
                 compute grid so transport and compute cores do not collide)
@@ -225,10 +228,14 @@ void bind_indexer_score(nb::module_& mod) {
             seq_subshard_axis: optional int, 2D SP×TP -- the (TP) mesh axis the query rows are ALSO block-cyclic
                 sub-sharded over, on top of the SP shard. The K cache stays SP-sharded + TP-replicated (the ring
                 AG still gathers along cluster_axis), so only the causal query geometry gains the tp_rank*Sq
-                sub-offset. nullopt = query sharded on the SP axis only. See indexer_score_dsa.
+                sub-offset. nullopt = query sharded on the SP axis only. Must be unset in complete-mesh mode.
+                See indexer_score_dsa.
             block_cyclic_sp_axis: optional int, mesh axis the cache was striped over; MUST equal cluster_axis;
-                see indexer_score_dsa
-            block_cyclic_chunk_local: optional int, per-shard chunk length; required with block_cyclic_sp_axis
+                see indexer_score_dsa. Must be unset in complete-mesh mode because all devices are SP ranks.
+            block_cyclic_chunk_local: optional int, per-shard chunk length. Axis mode requires it together with
+                block_cyclic_sp_axis. In complete-mesh mode pass this argument alone; SP is the complete mesh
+                size and the value must equal q's local sequence length Sq. Leaving it unset selects contiguous
+                K placement.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
