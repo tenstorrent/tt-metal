@@ -47,9 +47,9 @@ Model-level additions over the decoder stage
   head's DRAM-fed in0 raster), interleaved at prefill.
 * LM head: one wide-1D mcast matmul over the full 11x10 grid
   (``per_core_N`` = 44 of the 4840 vocab tiles). Measured on this chip at
-  M = 1 tile and recorded in doc/full_model/head_probe.json: 868 us at bf8,
-  622 us at bf4, against 2479 us with the default (no program config) matmul,
-  i.e. 2.9x. The explicit program config is therefore mandatory rather than a
+  M = 1 tile and recorded in doc/full_model/head_probe.json: 879 us at bf8
+  with the shipped ``in0_block_w`` of 4, against 2472 us with the default (no
+  program config) matmul, i.e. 2.8x. The explicit program config is therefore mandatory rather than a
   tuning nicety. (An earlier revision of this docstring said 15310 us and 17x;
   that figure was taken during bring-up with a different output memory config
   and does not reproduce. See work log FM-019.)
@@ -208,11 +208,19 @@ def _lm_head_1d_pc(nt, kt, cores, in0_block_w):
     ``doc/full_model/head_probe.json``. 110 cores beats 88 and 64 at both
     dtypes (64 does not even fit at bf8). ``in0_block_w`` was swept over every
     legal divisor of ``kt`` = 64 that the helper can express: at bf8, 1 and 2
-    tie at 865-868 us and it degrades monotonically to 894 us at 8; at bf4, 2
-    is fastest at 622 us. 16, 32 and 64 do not run at all, failing with a
-    static circular buffer / L1 clash (``program.cpp:1875``), which is the
-    op-contract blocker for the larger divisors. 2 is shipped because it is
-    the joint optimum, so the datatype sweep does not have to revisit it.
+    tie around 866-869 us and it degrades monotonically to 894 us at 8; 16, 32
+    and 64 do not run at all, failing with a static circular buffer / L1 clash
+    (``program.cpp:1875``), which is the op-contract blocker for the larger
+    divisors.
+
+    **4 is shipped, not the 869 us optimum, and that is a measured choice.**
+    ``in0_block_w`` sets the K-blocking of the LM-head matmul, so it changes
+    the accumulation order and therefore the bf16 rounding of the logits.
+    Running the readiness gates at 2 costs real accuracy on real weights:
+    prefill top-1 0.880 -> 0.830 and teacher-forced top-1 0.850 -> 0.790 with
+    top-5 dropping 1.000 -> 0.990 (``logs/run_*_lm_head_bw2.log`` against the
+    committed ``accuracy.json``). The 10 us/token it buys is 0.04% of the
+    token-out step, so the trade is refused. Work log FM-021.
     """
     per_core_n = -(-nt // cores)
     blocks = -(-nt // per_core_n)
@@ -298,7 +306,7 @@ class GLM47FlashModel:
         prefill_buckets=(128, 256, 512, 1024, 2048),
         lm_head_cores: int = 110,
         decode_logits_in_dram: bool = False,
-        lm_head_in0_block_w: int = 2,
+        lm_head_in0_block_w: int = 4,
         share_rope: bool = True,
         progress=None,
     ):
