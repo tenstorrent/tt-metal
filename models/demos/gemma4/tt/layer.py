@@ -70,6 +70,9 @@ class Gemma4DecoderLayer:
         router_dtype=None,
         bounded_sliding_kv_cache: bool = False,
         ring_prefill_chunk_size=None,
+        ring_kv_cache=None,
+        ring_layer_idx=0,
+        ring_num_layers=1,
         transformation_mats=None,  # Legacy — ignored (HF-style RoPE needs no transformation mats)
     ):
         # Per-module dtype overrides default to the model-wide ``dtype`` so
@@ -140,6 +143,9 @@ class Gemma4DecoderLayer:
             weight_dtype=attention_dtype,
             bounded_sliding_kv_cache=bounded_sliding_kv_cache,
             ring_prefill_chunk_size=ring_prefill_chunk_size,
+            ring_kv_cache=ring_kv_cache,
+            ring_layer_idx=ring_layer_idx,
+            ring_num_layers=ring_num_layers,
             max_seq_len=max_seq_len,
         )
 

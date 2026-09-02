@@ -82,6 +82,9 @@ class Gemma4Attention:
         weight_dtype=ttnn.bfloat16,
         bounded_sliding_kv_cache: bool = False,
         ring_prefill_chunk_size=None,
+        ring_kv_cache=None,
+        ring_layer_idx=0,
+        ring_num_layers=1,
         # Legacy parameter — ignored (no longer needed with HF-style RoPE)
         transformation_mats=None,
     ):
@@ -127,14 +130,16 @@ class Gemma4Attention:
         # CP-sharded along the sequence, which is what ring_joint reads (it takes the
         # cache directly, with no page table). Allocated only when multi-chunk CP
         # prefill is actually in play; the paged cache above is untouched.
-        self.ring_kv_cache = None
-        self.ring_max_seq_len = None
+        self.ring_kv_cache = ring_kv_cache
+        self.ring_layer_idx = ring_layer_idx
+        self.ring_num_layers = ring_num_layers
+        self.ring_max_seq_len = max_seq_len if ring_kv_cache is not None else None
         # Deliberately NOT gated on create_kv_cache. Gemma4Model builds the paged
         # cache itself after constructing the layer and assigns it to
         # ``self_attn.kv_cache``, so this constructor always sees create_kv_cache
         # False on the model path — gating on it left the ring cache unallocated and
         # every cross-chunk read silently fell back to the mask path.
-        if cp_degree(mesh_config) > 1 and ring_prefill_chunk_size:
+        if self.ring_kv_cache is None and cp_degree(mesh_config) > 1 and ring_prefill_chunk_size:
             num_local_kv_heads = 1 if self.weights.kv_replicated else config.num_key_value_heads // mesh_config.tp
             if self.weights.is_global:
                 self.ring_kv_cache = init_packed_ring_kv_cache(
@@ -294,6 +299,8 @@ class Gemma4Attention:
                 cp_attn_mask=self._cp_attn_mask(hidden_states.shape[-2]),
                 ring_kv_cache=self.ring_kv_cache,
                 ring_max_seq_len=self.ring_max_seq_len,
+                ring_layer_idx=self.ring_layer_idx,
+                ring_num_layers=self.ring_num_layers,
                 packed_global_rope=packed_global_rope,
                 packed_sliding_rope=packed_sliding_rope,
             )
