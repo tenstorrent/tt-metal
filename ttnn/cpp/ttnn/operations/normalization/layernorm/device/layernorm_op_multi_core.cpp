@@ -269,6 +269,8 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
     constexpr std::uint32_t variance_tiles = 2;
     const std::uint64_t row_major_staging =
         input_is_row_major ? static_cast<std::uint64_t>(2 * block_size) * (input_tile_size + output_tile_size) : 0;
+    // Live allocator occupancy intentionally participates in planning: every decision it can change is included in
+    // LayerNormDeviceOperation::compute_program_hash, so a contracted L1 span selects a distinct cached programme.
     const std::uint64_t usable_l1 = ttnn::operations::core::usable_program_l1_capacity(device);
     const auto footprint = [&](bool sfpu_statistics) {
         return LayerNormCbFootprint{

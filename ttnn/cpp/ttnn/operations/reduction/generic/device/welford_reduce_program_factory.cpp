@@ -98,6 +98,8 @@ WelfordReducePlan WelfordReduceDeviceOperation::WelfordReduceProgramFactory::sel
     footprint += plan.reduce_w ? tile_size(plan.scratch_format) : 0;
     footprint += plan.reduce_hw ? 4 * tile_size(DataFormat::Float32) + tile_size(plan.combined_format) : 0;
 
+    // Live allocator occupancy intentionally participates in planning. use_l1_replay is included in the operation
+    // hash, so the streaming and replay programmes remain distinct cache entries as the available L1 span changes.
     const auto usable_l1 = ttnn::operations::core::usable_program_l1_capacity(tensor_arg.device());
     plan.use_l1_replay = replay_tiles >= replay_min_tiles && footprint < usable_l1;
     return plan;
