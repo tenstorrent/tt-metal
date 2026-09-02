@@ -270,6 +270,11 @@ void kernel_main() {
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
+    // Channels this worker owns, as [channel_start, channel_end). The page-major split gives every
+    // worker the whole slice and a fraction of the pages in each channel; the channel-major split
+    // gives it a contiguous group of channels and every page within them.
+    const uint32_t channel_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t channel_end = get_arg_val<uint32_t>(arg_idx++);
     // Chunk-paged layout only: staging buffer holding the 2nd-last iteration's direct-to-remote
     // contribution, read back as the 3rd term of the final iteration's local reduce. The tiled
     // layout reads that term from output_tensor instead and leaves this address at 0.
@@ -363,7 +368,10 @@ void kernel_main() {
 
             // address incrementer for input_tensor; the staged partial sums are addressed by
             // interm_source, whose layout depends on contiguous_interm.
-            uint32_t input_tile_id_start = slice_base_tile_id(slice_idx) + batch_offset;
+            // Pre-advanced past the channels this worker does not own; the loop below walks the
+            // rest by adding input_channel_num_pages per channel.
+            uint32_t input_tile_id_start =
+                slice_base_tile_id(slice_idx) + batch_offset + channel_start * input_channel_num_pages;
             interm_source.begin_iteration(b, slice_idx);
 
             uint32_t input_pages_read_in_row = start_pages_read_in_row;
@@ -379,7 +387,7 @@ void kernel_main() {
             };
 
             uint32_t chunk_count = 0;
-            for (uint32_t c = 0; c < slice_C; ++c) {
+            for (uint32_t c = channel_start; c < channel_end; ++c) {
                 // reset addr counters
                 input_pages_read_in_row = start_pages_read_in_row;
                 input_row_offset = start_row_offset;

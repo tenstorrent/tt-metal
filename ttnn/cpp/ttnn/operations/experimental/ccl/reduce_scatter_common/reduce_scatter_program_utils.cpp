@@ -307,6 +307,48 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> reduce_scatter_get_tile_offse
     return {start_tiles_read, start_tiles_to_read, start_pages_read_in_row, start_row_offset};
 }
 
+ReduceScatterWorkerSplit reduce_scatter_get_worker_split(
+    uint32_t worker_id,
+    uint32_t num_workers,
+    uint32_t slice_C,
+    uint32_t output_batch_num_pages,
+    uint32_t output_channel_num_pages,
+    uint32_t slice_Wt,
+    uint32_t input_tensor_Wt,
+    uint32_t normalized_dim) {
+    // Whole channels per worker, when they divide evenly. Balance is then identical to the
+    // page-major split, and each worker enters the channel loop slice_C/num_workers times
+    // rather than slice_C times.
+    const bool channel_major =
+        normalized_dim != 0 && num_workers > 1 && slice_C >= num_workers && slice_C % num_workers == 0;
+    if (channel_major) {
+        return {
+            /*channel_start=*/worker_id * slice_C / num_workers,
+            /*channel_end=*/(worker_id + 1) * slice_C / num_workers,
+            /*start_tiles_read=*/0,
+            /*start_tiles_to_read=*/output_channel_num_pages,
+            /*start_pages_read_in_row=*/0,
+            /*start_row_offset=*/0};
+    }
+
+    const auto [start_tiles_read, start_tiles_to_read, start_pages_read_in_row, start_row_offset] =
+        reduce_scatter_get_tile_offsets(
+            worker_id,
+            num_workers,
+            output_batch_num_pages,
+            output_channel_num_pages,
+            slice_Wt,
+            input_tensor_Wt,
+            normalized_dim);
+    return {
+        /*channel_start=*/0,
+        /*channel_end=*/slice_C,
+        start_tiles_read,
+        start_tiles_to_read,
+        start_pages_read_in_row,
+        start_row_offset};
+}
+
 void append_fabric_mux_connection_ct_args(
     tt::tt_fabric::FabricMuxChannelType channel_type,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,

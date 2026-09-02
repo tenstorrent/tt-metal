@@ -25,6 +25,11 @@ void kernel_main() {
     uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
+    // Channels this worker owns, as [channel_start, channel_end). The page-major split gives every
+    // worker the whole slice and a fraction of the pages in each channel; the channel-major split
+    // gives it a contiguous group of channels and every page within them.
+    const uint32_t channel_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t channel_end = get_arg_val<uint32_t>(arg_idx++);
 
     CircularBuffer cb_input(cb_input_id);
     CircularBuffer cb_interm(cb_interm_id);
@@ -66,7 +71,7 @@ void kernel_main() {
                 reduce_output = false;
             }
 
-            for (uint32_t c = 0; c < slice_C; ++c) {
+            for (uint32_t c = channel_start; c < channel_end; ++c) {
                 uint32_t tiles_read = start_tiles_read;
                 uint32_t total_tiles_to_read = start_tiles_to_read;
 

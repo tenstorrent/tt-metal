@@ -146,6 +146,43 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> reduce_scatter_get_tile_offse
     uint32_t input_tensor_Wt,
     uint32_t normalized_dim);
 
+// Per-worker share of the work inside one ring step, for the dims that iterate over channels.
+//
+// Two ways exist to divide a slice between workers, and they cost differently:
+//
+//   page-major (channel_start=0, channel_end=slice_C)
+//       Every worker visits every channel and takes a fraction of the pages in each. The channel
+//       loop is therefore walked slice_C times per worker per step, and the fixed cost of entering
+//       it -- rebuilding the tile bases, resetting the row counters, re-testing chunk parity -- is
+//       paid on every one of those visits however few pages it carries.
+//
+//   channel-major (channel_start..channel_end a contiguous span, whole pages within)
+//       Each worker owns a distinct group of channels outright. The same tiles are moved, but the
+//       channel loop is entered slice_C/num_workers times instead of slice_C, and each visit
+//       carries a full channel of pages rather than a fraction of one.
+//
+// Channel-major is chosen when the channels divide evenly among the workers, which keeps the split
+// exactly as balanced as the page-major one it replaces. Everything else -- dim 0, a single worker,
+// or an uneven division -- keeps the page-major split.
+struct ReduceScatterWorkerSplit {
+    uint32_t channel_start;
+    uint32_t channel_end;
+    uint32_t start_tiles_read;
+    uint32_t start_tiles_to_read;
+    uint32_t start_pages_read_in_row;
+    uint32_t start_row_offset;
+};
+
+ReduceScatterWorkerSplit reduce_scatter_get_worker_split(
+    uint32_t worker_id,
+    uint32_t num_workers,
+    uint32_t slice_C,
+    uint32_t output_batch_num_pages,
+    uint32_t output_channel_num_pages,
+    uint32_t slice_Wt,
+    uint32_t input_tensor_Wt,
+    uint32_t normalized_dim);
+
 // Appends fabric mux compile-time args to writer_ct_args.
 void append_fabric_mux_connection_ct_args(
     tt::tt_fabric::FabricMuxChannelType channel_type,

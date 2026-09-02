@@ -539,6 +539,11 @@ void kernel_main() {
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+    // Channels this worker owns, as [channel_start, channel_end). The page-major split gives every
+    // worker the whole slice and a fraction of the pages in each channel; the channel-major split
+    // gives it a contiguous group of channels and every page within them.
+    const uint32_t channel_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t channel_end = get_arg_val<uint32_t>(arg_idx++);
     // Chunk-paged layout only: staging buffer for the 2nd-last iteration's direct-to-remote
     // contribution. The tiled layout scatter-writes that contribution into the remote output tensor
     // instead and leaves this address at 0.
@@ -708,7 +713,7 @@ void kernel_main() {
             uint32_t chunk_count = 0;
             uint32_t even_chunk_count = 0;
             uint32_t odd_chunk_count = 0;
-            for (uint32_t c = 0; c < slice_C; ++c) {
+            for (uint32_t c = channel_start; c < channel_end; ++c) {
                 // reset addr counters
                 interm_sink.begin_channel(c);
                 uint32_t tiles_read = start_tiles_read;
