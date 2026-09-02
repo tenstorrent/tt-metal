@@ -412,7 +412,7 @@ def _embed_getter(embeds, num_levels: int):
     level ``k-1``'s *output* -- the window's last ``k`` rows want ``t_P .. t_{P+k-1}``, and
     ``t_{P+k-1}`` is ``argmax lm_head(H^{k-1})`` at the last real row -- so no list can be
     materialized before the loop runs. See
-    :class:`~models.demos.deepseek_v3_d_p.tt.mtp_prefill.token_windows.MTPEmbedSource`.
+    :class:`~models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows.MTPDeviceEmbedSource`.
 
     The callable is handed ``H^k`` (the trunk output after ``model.norm`` at ``k=0``, and the
     previous level's chained output after that), which is exactly the tensor its lm_head needs.

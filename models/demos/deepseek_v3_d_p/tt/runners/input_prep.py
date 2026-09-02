@@ -7,12 +7,10 @@ The model-agnostic engine helpers (mesh open, H2D service, trace loading) live i
 the common package at ``models.demos.common.prefill.runners.runner_utils``. What
 remains here is the one piece of model-specific glue the runtime needs:
 ``prepare_prefill_input_tensor`` (the SP-sharded chunk input), which backs
-``TtPrefillRuntime.make_chunk_input``, plus the MTP lookahead and shift-window uploads built on
-top of it.
+``TtPrefillRuntime.make_chunk_input``, plus the MTP lookahead upload built on top of it.
 
-The MTP index algebra itself lives one layer down in
-``models.demos.deepseek_v3_d_p.tt.mtp_prefill.token_windows``, which has no ``ttnn`` import so it
-can be proven without a mesh; what is here is only the upload.
+The union geometry those MTP ids feed lives one layer down in
+``models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows``; what is here is only the upload.
 
 KV-cache PCC validation + golden loaders live in
 ``models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation``; the host-pull KV
@@ -103,27 +101,6 @@ def _upload_ids(rows: torch.Tensor, mesh_device: ttnn.MeshDevice, mesh_shape: tu
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(sp_axis, None)),
     )
-
-
-def prepare_prefill_mtp_window(
-    token_ids: list[int],
-    mesh_device: ttnn.MeshDevice,
-    sp_factor: int,
-    is_balanced: bool,
-    mesh_shape: tuple,
-    sp_axis: int,
-) -> ttnn.Tensor:
-    """Upload one MTP shift-window, sharded exactly like this chunk's trunk input.
-
-    ``is_balanced`` MUST equal the value used for the trunk input of the same chunk. Sharding is a
-    fixed row -> position permutation applied to the window's contents, so applying the *same* one
-    to a shifted window puts ``t_{p+k}`` on the row whose hidden is at ``p`` -- under either layout.
-    Applying a *different* one pairs every row with the wrong hidden, silently and with no shape
-    error. Chunked prefill is non-balanced throughout (``TtPrefillRuntime.make_chunk_input`` passes
-    ``is_balanced=False``), so in practice this is False; the parameter exists so the coupling is
-    stated rather than assumed.
-    """
-    return prepare_prefill_input_tensor(token_ids, mesh_device, sp_factor, is_balanced, mesh_shape, sp_axis)
 
 
 def build_position_zero_mask(

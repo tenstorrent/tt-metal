@@ -12,7 +12,10 @@ consumes the slice ``[k+1 : k+1+C]``, and that slice -- embedded, not a hidden s
    chunk has no next chunk and must fill ``K`` slots from its own LM head, one per level, in order.
 2. **Slicing / upload.** The window is sharded row -> position by exactly the permutation the trunk
    input took, so ``t_{p+k+1}`` lands on the row whose hidden sits at ``p``. Shift the ids before
-   the shard and it is free; shift after and it is wrong by a whole chip.
+   the shard and it is free; shift after and it is wrong by a whole chip. Prefill itself never
+   shifts on host -- the runner's ids arrive over the H2D socket and every window is a row slice of
+   one on-device union (``mtp_prefill/device_windows.py``) -- so the host driver that feeds this
+   test lives HERE, at the bottom of the imports, and nowhere in the model.
 3. **Numerics, chunked.** ``test_mtp.py::test_mtp_predictor_pcc`` gates ``TtMTPPredictor``
    single-shot; nothing gated it *chunked*, where each level's KV cache is written three times and
    every chunk after the first attends over keys the earlier ones left behind. The reference is
@@ -21,11 +24,10 @@ consumes the slice ``[k+1 : k+1+C]``, and that slice -- embedded, not a hidden s
    have asked for: bit-identical to the device's when the window is right, unrelated to it when it
    is not, so a wrong window and wrong math fail the same assertion.
 
-**Placement is not this test's subject.** ``_mtp_embed_window`` takes a host ``list[int]``, so the
-packing under it is the trunk's own and byte-identical for every level and shift;
-``test_mtp_device_windows.py`` measures that directly, in both balance modes. What this test owns is
-everything upstream of that list: which ids each level asks for, across three chunks, through the
-real predictor and the real LM head.
+**Placement is not this test's subject.** :func:`_embed_window` hands the trunk's own uploader a
+host ``list[int]``, so the packing under it is byte-identical for every level and shift. What this
+test owns is everything upstream of that list: which ids each level asks for, across three chunks,
+through the real predictor and the real LM head.
 
 The prompt id at absolute position ``p`` is ``p + 1`` (0 stays reserved for pad), so a failure reads
 as "row j is carrying position q".
@@ -35,7 +37,7 @@ What it deliberately does NOT claim
 * **A legible diagnosis of a wrong window.** Claim 2 detects one decisively, but reports it as a
   collapsed PCC rather than as "level 2 asked for id X, expected Y":
   ``glm_mtp_predictor_reference`` takes *embeddings* and never sees a token id. The alternative --
-  a test-only recorder wrapped round ``_mtp_embed_window`` -- has no counterpart in production and
+  a test-only recorder wrapped round :func:`_embed_window` -- has no counterpart in production and
   made the numerics blind to the mapping, since the reference was then fed the device's own
   embeddings. Assertion order recovers most of the localisation: fused projection first, at 0.999.
 * **The KVPE cache contents.** Level outputs are compared; the slots they wrote are not
@@ -44,7 +46,7 @@ What it deliberately does NOT claim
   into slots nothing else uses does not.
 * **Mid-slab chunk starts.** All three chunks start at a multiple of the global chunk size, so
   ``rotated_chip_positions``' KV-pad-aware rotation is degenerate. A non-aligned boundary is a
-  placement question, so it belongs to ``test_mtp_device_windows.py``.
+  placement question, so it belongs to ``test_mtp_device_transport.py``.
 * **Multi-rank.** ``TtPrefillTransformer`` asserts MTP needs an embedding table on the rank that
   runs the tail, which today means single-galaxy (``is_first_rank == is_last_rank``).
 * **A checkpoint-free run.** Every weight is a real GLM-5.2 one: the 78-layer trunk, the embedding
@@ -62,6 +64,7 @@ import gc
 import os
 import time
 from pathlib import Path
+from typing import Callable, Optional, Sequence
 
 import pytest
 import torch
@@ -75,7 +78,6 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.mtp_prefill.token_windows import GEN_SLOT, mtp_chunk_stream
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import CHAIN_FROM_NORM, TtMTPPredictor
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import MTP_CACHE_ENV, MTP_CACHE_PREFIX, enable_mtp_indexer_slot
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
@@ -162,6 +164,284 @@ def _from_device(t: ttnn.Tensor, mesh_device) -> torch.Tensor:
 
 
 # ---------------------------------------------------------------------------
+# The host MTP driver
+# ---------------------------------------------------------------------------
+# Prefill builds its windows on device (``mtp_prefill/device_windows.py``): the ids arrive over the
+# H2D socket and every level's window is a row slice of one already-gathered union. This test drives
+# the same transformer from the OTHER end -- host lists it slices itself -- because that is what
+# makes the ids visible: a window here is a python list this file can print, compare and feed to the
+# CPU reference. `TtPrefillTransformer.forward` takes it through `mtp_embed_source`, which exists
+# for exactly this and has no production caller.
+
+
+GEN_SLOT = -1
+"""Sentinel for a last-chunk position whose token has not been generated yet.
+
+It never reaches the device: :meth:`MTPEmbedSource.window` resolves every slot below the last real
+token from the generated list and rewrites any still-unresolved slot (always a pad row) to
+``pad_token``. A sentinel reaching ``TtParallelEmbedding`` would index the vocab table at -1.
+"""
+
+
+def mtp_extended_stream(
+    chunk_tokens: Sequence[int],
+    num_levels: int,
+    *,
+    real_len: Optional[int] = None,
+    lookahead: Optional[Sequence[int]] = None,
+    pad_token: int = 0,
+) -> list[int]:
+    """One chunk's ``C`` ids -> its ``C + K`` stream, indexed by chunk-local position.
+
+    Interior chunk: pass the next chunk's first ``K`` ids as ``lookahead``.
+    Last chunk:     pass ``lookahead=None``; the ``K`` positions after the last real token become
+    :data:`GEN_SLOT`, filled in by :class:`MTPEmbedSource` from each level's own lm_head.
+
+    Args:
+        chunk_tokens: this chunk's ``C`` ids for ``[s, s+C)``. Entries at or after ``real_len`` are
+            the chunk's own padding and are replaced by ``pad_token``.
+        num_levels: ``K``.
+        real_len: this chunk's real-token count (``actual_end - actual_start``). Defaults to ``C``.
+        lookahead: positions ``[s+C, s+C+K)``, or ``None`` for the last chunk of a request.
+        pad_token: id written into pad positions. Any in-vocab id works -- pad rows sit past
+            ``actual_end``, where the trunk's own hidden and KV are already garbage.
+
+    Returns:
+        ``C + K`` ids, indexed by chunk-local position.
+    """
+    c = len(chunk_tokens)
+    k = int(num_levels)
+    assert k >= 1, f"num_levels must be >= 1, got {k}"
+    real = c if real_len is None else int(real_len)
+    assert 0 <= real <= c, f"real_len {real} out of range for a chunk of {c}"
+
+    if lookahead is None:
+        # Last chunk: [ prompt | K generation slots | pad ]. Length is C + K for any real_len,
+        # including real_len == C (a prompt that is an exact multiple of the chunk size).
+        stream = list(chunk_tokens[:real]) + [GEN_SLOT] * k + [pad_token] * (c - real)
+    else:
+        la = list(lookahead)
+        assert real == c, (
+            f"an interior chunk is fully real, got real_len={real} for a chunk of {c}; "
+            "pass lookahead=None for the last chunk of a request"
+        )
+        assert len(la) >= k, f"lookahead must supply at least {k} ids, got {len(la)}"
+        stream = list(chunk_tokens) + la[:k]
+
+    assert len(stream) == c + k, f"extended stream is {len(stream)}, expected {c + k}"
+    return stream
+
+
+def mtp_chunk_stream(
+    all_tokens: Sequence[int],
+    chunk_idx: int,
+    chunk_size: int,
+    num_levels: int,
+    *,
+    pad_token: int = 0,
+) -> tuple[list[int], int]:
+    """A whole prompt + a chunk index -> that chunk's ``(stream, real_len)``.
+
+    Interior/last is the one choice a caller must not get wrong, and it is invisible in every
+    per-chunk check -- the stream is still ``C+K`` long and every window still ``C`` wide. It shows
+    up only as level ``k`` reading the wrong token on a chunk's last ``k`` rows.
+
+    Args:
+        all_tokens: the request's REAL prompt ids, unpadded. ``len(all_tokens)`` is ``P``.
+        chunk_idx: which ``chunk_size``-sized chunk of them to build.
+        chunk_size: ``C``, the padded chunk length.
+        num_levels: ``K``.
+        pad_token: id written into pad positions.
+
+    Returns:
+        ``(stream, real_len)`` -- ``C + K`` ids indexed by chunk-local position, and this chunk's
+        real-token count, which is its ``actual_isl``.
+    """
+    total = len(all_tokens)
+    k = int(num_levels)
+    c = int(chunk_size)
+    s = int(chunk_idx) * c
+    assert 0 <= s < total, f"chunk {chunk_idx} starts at {s}, past the {total} real tokens"
+
+    real = min(c, total - s)
+    chunk = list(all_tokens[s : s + real]) + [pad_token] * (c - real)
+
+    if s + c >= total:
+        return mtp_extended_stream(chunk, k, real_len=real, lookahead=None, pad_token=pad_token), real
+
+    tail = total - (s + c)
+    assert tail >= k, (
+        f"chunk {chunk_idx} is interior but only {tail} real token(s) follow it, fewer than K={k}: "
+        f"its level-{k} window reaches position {s + c + k - 1}, past the prompt end {total}, so "
+        f"those rows want tokens generated from a hidden that chunk {chunk_idx + 1} has not produced "
+        "yet -- chunks run in order, so this is a causality problem, not bookkeeping. Rebalance the "
+        f"last two chunks so the final one carries at least K={k} real tokens."
+    )
+    return mtp_extended_stream(chunk, k, lookahead=list(all_tokens[s + c : s + c + k]), pad_token=pad_token), real
+
+
+class MTPEmbedSource:
+    """``TtMTPPredictor.forward``'s ``embeds`` callable: level ``k`` -> its embedded window.
+
+    Call it once per level, in order. Each call does three things:
+
+      1. SLICE  window ``k+1`` out of the C+K stream: ``ext[k+1 : k+1+C]``.
+      2. FILL   on the LAST chunk only, resolve the :data:`GEN_SLOT`s -- generating ``t_{P+k}`` by
+                running ``next_token_fn`` on the hidden it was just handed.
+      3. EMBED  hand the resulting ``C`` ids to ``embed_fn``.
+
+    On an interior chunk step 2 is skipped entirely: every window is a pure prompt slice,
+    ``next_token_fn`` is never called, and no host round trip happens.
+
+    **Why a callable and not a list of K tensors.** On the last chunk level ``k``'s INPUT depends on
+    level ``k-1``'s OUTPUT: ``t_{P+k} = argmax lm_head(H^k)`` at the last real row. Nothing can be
+    materialized before the loop runs.
+
+    **Which rows are generated.** Window ``shift`` row ``j`` holds global position ``s + shift + j``.
+    Real prompt covers ``j < real_len - shift``; rows ``[real_len - shift, real_len)`` -- exactly
+    ``shift`` of them -- are the generated tokens ``t_P .. t_{P+shift-1}``; rows ``>= real_len`` are
+    pad, as they are for the trunk.
+
+    Args:
+        extended: this chunk's stream from :func:`mtp_extended_stream`.
+        chunk_size: ``C``.
+        num_levels: ``K``.
+        embed_fn: ``list[int] -> ttnn.Tensor``. Shards, uploads and embeds one window, and on the
+            chunk starting at absolute position 0 zeroes row 0 -- see :func:`_embed_window`.
+        next_token_fn: ``H^k -> int``, the greedy token at the last real row. Required whenever the
+            stream carries generation slots -- see :func:`_next_token_fn`.
+        real_len: this chunk's real-token count; where the generation slots start. Defaults to ``C``.
+        pad_token: id substituted for any generation slot still unresolved when a window is built.
+            Such a slot is always a pad row.
+    """
+
+    def __init__(
+        self,
+        extended: Sequence[int],
+        chunk_size: int,
+        num_levels: int,
+        *,
+        embed_fn: Callable[[list[int]], object],
+        next_token_fn: Optional[Callable[[object], int]] = None,
+        real_len: Optional[int] = None,
+        pad_token: int = 0,
+    ):
+        self.chunk_size = int(chunk_size)
+        self.num_levels = int(num_levels)
+        assert self.num_levels >= 1, f"num_levels must be >= 1, got {self.num_levels}"
+        assert len(extended) == self.chunk_size + self.num_levels, (
+            f"extended stream is {len(extended)}, expected {self.chunk_size} + {self.num_levels}; "
+            "build it with mtp_extended_stream()"
+        )
+        self._ext = list(extended)
+        self.real_len = self.chunk_size if real_len is None else int(real_len)
+        assert 0 <= self.real_len <= self.chunk_size
+        self.embed_fn = embed_fn
+        self.next_token_fn = next_token_fn
+        self.pad_token = int(pad_token)
+        self._gen: list[int] = []
+
+        self.generating = GEN_SLOT in self._ext
+        if self.generating:
+            slots = self._ext[self.real_len : self.real_len + self.num_levels]
+            assert slots == [GEN_SLOT] * self.num_levels, (
+                f"generation slots must be the {self.num_levels} positions right after the last real "
+                f"token ({self.real_len}); got {slots}"
+            )
+            assert next_token_fn is not None, (
+                "the last chunk needs next_token_fn to produce t_P..t_{P+K-1}: level k's window "
+                "requires t_{P+k-1} = argmax lm_head(H^{k-1}) at the last real row"
+            )
+
+    @property
+    def generated_tokens(self) -> list[int]:
+        """``[t_P, t_{P+1}, ...]`` produced so far. Always empty on an interior chunk."""
+        return list(self._gen)
+
+    def window(self, shift: int) -> list[int]:
+        """Window ``shift`` as ``C`` in-vocab ids, generation slots resolved."""
+        assert 0 <= shift <= self.num_levels, f"shift {shift} out of range [0, {self.num_levels}]"
+        ext = self._ext
+        if self.generating:
+            assert len(self._gen) >= shift, (
+                f"window {shift} needs {shift} generated token(s) for rows "
+                f"[{self.real_len - shift}, {self.real_len}), have {len(self._gen)}"
+            )
+            ext = list(ext)
+            for i, tok in enumerate(self._gen):
+                ext[self.real_len + i] = int(tok)
+            ext = [self.pad_token if t == GEN_SLOT else t for t in ext]
+        return ext[shift : shift + self.chunk_size]
+
+    def __call__(self, k: int, prev_normed):
+        """``TtMTPPredictor``'s hook: level ``k`` (0-based) wants the shift-``k+1`` embedding.
+
+        ``prev_normed`` is ``H^k`` -- the trunk output after ``model.norm`` at ``k=0``, and level
+        ``k``'s ``shared_head.norm`` output after that. On the last chunk it is exactly the tensor
+        whose lm_head yields ``t_{P+k}``, the one token this level's window is still missing.
+        """
+        assert 0 <= k < self.num_levels, f"level {k} out of range [0, {self.num_levels})"
+        if self.generating:
+            assert len(self._gen) == k, (
+                f"level {k} called with {len(self._gen)} generated token(s); MTPEmbedSource must be "
+                "driven in level order, once each -- it is stateful across the recurrence"
+            )
+            self._gen.append(int(self.next_token_fn(prev_normed)))
+        return self.embed_fn(self.window(k + 1))
+
+
+def _embed_window(transformer: TtPrefillTransformer, window_ids: list[int], zero_position_0: bool) -> ttnn.Tensor:
+    """Shard, upload and embed ONE window -> ``[1, 1, L, H/tp]`` TILE_LAYOUT, through the model.
+
+    ``prepare_prefill_input_tensor`` is the trunk's own uploader, called with the transformer's own
+    ``is_balanced``, and that is what makes the shift correct: sharding is a fixed row -> position
+    permutation applied to the window's *contents*, so applying the trunk's permutation to a window
+    shifted by ``k`` lands ``t_{p+k}`` on the row whose hidden sits at ``p``. Shifting ids rather
+    than embeddings is also what keeps it free -- the token tensor is ROW_MAJOR uint32, so a row
+    offset costs nothing, while the embedding is TILE_LAYOUT and ``k`` in 1..4 is never 32-row
+    aligned.
+
+    The gather and the position-0 mask are the model's own, so what this returns is what the device
+    path would have produced for the same ids; only the slicing is done here.
+    """
+    assert (
+        len(window_ids) == transformer.seq_len
+    ), f"MTP window is {len(window_ids)} ids, expected the padded chunk length {transformer.seq_len}"
+    tt_ids = prepare_prefill_input_tensor(
+        window_ids,
+        transformer.mesh_device,
+        transformer.sp_factor,
+        transformer.is_balanced,
+        transformer.mesh_shape,
+        transformer.sp_axis,
+    )
+    emb = transformer.mtp_embed_ids(tt_ids)
+    ttnn.deallocate(tt_ids)
+    return transformer._mtp_mask_position_zero(emb, zero_position_0)
+
+
+def _next_token_fn(transformer: TtPrefillTransformer, actual_isl: int):
+    """``H^k -> int``: the greedy token at the last real row, through the trunk's own LM head.
+
+    Greedy (argmax), not the transformer's sampler: the MTP chain is a draft and the reference is
+    argmax, and sampling here would make level ``k+1``'s *input* depend on the temperature. Costs one
+    32-row LM head call per level -- ``TtLMHead.forward`` narrows to the single tile containing the
+    target row before the vocab matmul. The device path does the same chain on device
+    (``TtPrefillTransformer.mtp_generate_embedding``), so what differs is the round trip, not the id.
+    """
+
+    def next_token(h_normed):
+        _, logits = transformer._lm_head_and_extract(h_normed, actual_isl)
+        flat = logits.reshape(-1)
+        assert (
+            flat.numel() == transformer.lm_head.vocab_size
+        ), f"expected full-vocab logits, got {flat.numel()} of {transformer.lm_head.vocab_size}"
+        return int(torch.argmax(flat).item())
+
+    return next_token
+
+
+# ---------------------------------------------------------------------------
 # The token-level reference
 # ---------------------------------------------------------------------------
 
@@ -172,8 +452,10 @@ def _expected_window(full_seq: list[int], chunk_idx: int, level: int) -> list[in
     Level ``k`` of chunk ``c`` sees ``full_seq[c*C + k + 1 : c*C + k + 1 + C]``. ``full_seq`` is the
     prompt followed by the ``K`` tokens the last chunk generated, so one expression covers interior
     chunks (lookahead borrowed from the next chunk) and the last one (tail = generated) with no
-    special case. Derived from the definition of MTP, not from ``mtp_chunk_stream`` -- derived from
-    that it would agree with it however wrong it was.
+    special case. Derived from the definition of MTP, not from ``mtp_chunk_stream`` -- the two live
+    in the same file now, but this one indexes the full sequence directly while that one composes
+    per-chunk lookahead, so they stay independent derivations. Written off ``mtp_chunk_stream`` it
+    would agree with it however wrong it was.
     """
     start = chunk_idx * CHUNK + level + 1
     return list(full_seq[start : start + CHUNK])
@@ -183,10 +465,12 @@ def _host_window_embedding(embed_table: torch.Tensor, window_ids: list[int]) -> 
     """The embedding the device MUST have produced for ``window_ids`` [C, H], derived here.
 
     Bit-identical to the device's, not merely close, and that is what lets it drive the CPU
-    reference: ``_mtp_embed_window`` is a token upload, ``ttnn.embedding``'s row gather and an
-    optional multiply by a 0/1 mask -- no arithmetic anywhere -- and ``TtParallelEmbedding`` stores
-    the table as ``ttnn.bfloat16``. Driving the reference from the EXPECTED ids rather than the ones
+    reference. Driving the reference from the EXPECTED ids rather than the ones
     the device actually asked for is what makes the numerics sensitive to the token->window mapping.
+
+    Bit-identical because :func:`_embed_window` is a token upload, ``ttnn.embedding``'s row gather
+    and an optional multiply by a 0/1 mask -- no arithmetic anywhere -- and ``TtParallelEmbedding``
+    stores the table as ``ttnn.bfloat16``.
 
     The position-0 mask is deliberately NOT applied here: ``fused_mtp_reference`` zeroes row 0 itself
     from the ``positions`` this test passes, and leaving it out is what lets the row-0 check below
@@ -544,6 +828,16 @@ def test_mtp_transformer_chunks(
         tt_tokens = prepare_prefill_input_tensor(
             stream[:CHUNK], mesh_device, sp_factor, False, tuple(mesh_shape), SP_AXIS
         )
+        # The host driver for this chunk's K windows. The transformer takes it through
+        # `mtp_embed_source`; prefill itself passes an on-device union instead.
+        source = MTPEmbedSource(
+            stream,
+            CHUNK,
+            NUM_LEVELS,
+            embed_fn=lambda window: _embed_window(transformer, window, zero_position_0=(start == 0)),
+            next_token_fn=_next_token_fn(transformer, real_len),
+            real_len=real_len,
+        )
         h0_host.clear()
         captured.clear()
 
@@ -556,7 +850,7 @@ def test_mtp_transformer_chunks(
             actual_end=start + real_len,
             cache_user_id=0,
             index_kv_cache=index_kv_cache,
-            mtp_token_stream=stream,
+            mtp_embed_source=source,
             on_mtp_complete=_on_mtp_complete,
         )
         ttnn.synchronize_device(mesh_device)

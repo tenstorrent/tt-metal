@@ -6,7 +6,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import torch
 from loguru import logger
@@ -611,30 +611,6 @@ class TtPrefillRuntime:
             num_mtp_tokens=self._num_mtp_tokens(),
         )
 
-    def make_mtp_chunk_input(self, mtp_stream: Sequence[int]) -> ttnn.Tensor:
-        """Trunk input for a chunk whose MTP stream is `mtp_stream` — the `chunk_size + K` list from
-        `mtp_extended_stream()`, i.e. what an inference server hands prefill for this chunk.
-
-        Derives the trunk's `chunk_size` ids from the SAME list the MTP levels slice, so the two
-        cannot disagree. Building the trunk tensor from a separate list is the one MTP wiring error
-        nothing downstream can catch: `mtp_token_stream` still has the right length, every window is still
-        `chunk_size` wide, `_mtp_embed_window`'s length assert still passes — the trunk and the K
-        levels just prefill different text, and the only symptom is bad KV.
-
-        Pair it with the same list:
-
-            stream = mtp_extended_stream(chunk_ids, K, real_len=..., lookahead=...)
-            inp = runtime.make_mtp_chunk_input(stream)
-            runtime.prefill_chunk(inp, ..., mtp_token_stream=stream)
-        """
-        c = self.config.chunk_size
-        assert len(mtp_stream) > c, (
-            f"MTP stream is {len(mtp_stream)} ids, expected chunk_size ({c}) + K. The stream carries "
-            "K positions past the chunk's right edge, so it is strictly longer than the chunk; a "
-            "chunk_size-long list is the trunk input, not an MTP stream."
-        )
-        return self.make_chunk_input(list(mtp_stream[:c]))
-
     def compile(self, kv_caches: MlaKvCaches) -> None:
         """Warm up one chunk so the per-chunk loop hits no first-run cost. The engine passes the
         `MlaKvCaches` it owns; the warm-up writes into it (slot 0) and is harmless. The runtime holds NO
@@ -795,9 +771,7 @@ class TtPrefillRuntime:
         request_id: int = 0,
         d2h_service=None,
         record_dev: Optional[ttnn.Tensor] = None,
-        mtp_token_stream: Optional[list[int]] = None,
         mtp_tokens: Optional[ttnn.Tensor] = None,
-        mtp_seed_token: Optional[int] = None,
         on_mtp_complete=None,
         is_last_chunk: bool = False,
     ) -> Optional[ttnn.Tensor]:
@@ -842,23 +816,16 @@ class TtPrefillRuntime:
                 CQ (no host sync). When None, no ack or zeroing.
             record_dev: the chunk's PrefillMetadata device tensor sent as each ack record; required when
                 d2h_service is set.
-            mtp_token_stream: GLM-5.2 MTP (#53533) — this chunk's chunk_size + K extended token stream from
-                mtp_extended_stream(): the chunk's own ids plus the next chunk's first K, or K
-                generation slots on the last chunk of a request. Build `tokens_or_activation` from
-                this same list with make_mtp_chunk_input() — it slices the trunk's chunk_size ids off
-                the front, so the trunk and the K levels cannot end up prefilling different text.
-                The K MTP levels then write their KV
-                into slots [num_layers, num_layers + K) of this same user's slice, so kv_caches.kvpe
-                must have been allocated with those extra slots — allocate it to
-                `self.model.num_kvpe_cache_layers`, which is the single number every block strides
-                users by. Migration knows about those slots: `kv_migration_stages` declares
-                num_layers + K on the last rank, which is what the chunk-address table strides users
-                by. None disables MTP for this chunk.
-            mtp_tokens: GLM-5.2 MTP, DEVICE path — the first rank's `[sp, 1, num_mtp_tokens]` uint32
+            mtp_tokens: GLM-5.2 MTP (#53533) — the first rank's `[sp, 1, num_mtp_tokens]` uint32
                 companion to `input_tensor`, holding the ids just past each chip's trunk shard
                 (make_mtp_tokens_input, or the tail of the H2D row the runner cut). Required on the first rank
                 whenever config.mtp_levels is set, and rejected on any other rank. Deallocated here.
-            mtp_seed_token: optional t_P for the last chunk (saves one 32-row LM head call).
+                The K MTP levels write their KV into slots [num_layers, num_layers + K) of this same
+                user's slice, so kv_caches.kvpe must have been allocated with those extra slots —
+                allocate it to `self.model.num_kvpe_cache_layers`, which is the single number every
+                block strides users by. Migration knows about those slots: `kv_migration_stages`
+                declares num_layers + K on the last rank, which is what the chunk-address table
+                strides users by.
             on_mtp_complete: tap fired once with (MTPPredictorOutput, generated_tokens).
             is_last_chunk: GLM-5.2 MTP — this chunk ends the request, so the prompt has no ids past
                 `actual_end` and the MTP windows that read there must be filled by generating them on
@@ -903,17 +870,16 @@ class TtPrefillRuntime:
             # That means the pipelined sink's request_id cannot be re-bound per call the way the eager
             # path does below — publish this chunk's id instead; the captured callback built by
             # set_layer_completion_sink() reads it at replay time.
-            # Both MTP entry points are rejected here, and they fail differently if they are not.
-            # `mtp_token_stream` is the host list; `config.mtp_levels` is the device path the runner uses,
-            # where mtp_token_stream is legitimately None -- so checking only the former would let a traced
-            # replay run the trunk and SILENTLY skip every level, producing a plausible KV cache with
-            # slots NUM_LAYERS+k left untouched. The runner refuses this combination up front
-            # (prefill_runner.py's PREFILL_MTP_LEVELS/PREFILL_USE_TRACE assert); this is the backstop
-            # for anyone driving TtPrefillRuntime directly.
-            assert mtp_token_stream is None and mtp_tokens is None and not self.config.mtp_levels, (
-                "use_trace does not support MTP: the shift-windows are sliced/uploaded per chunk (fresh "
-                "addresses) and the levels run after the captured segment, neither of which survives a "
-                "capture; run with PREFILL_USE_TRACE=0"
+            # `config.mtp_levels` is checked as well as the tensor: `mtp_tokens` is legitimately None on
+            # every rank but the first, so checking only it would let a traced replay run the trunk and
+            # SILENTLY skip every level, producing a plausible KV cache with slots NUM_LAYERS+k left
+            # untouched. The runner refuses this combination up front (prefill_runner.py's
+            # PREFILL_MTP_LEVELS/PREFILL_USE_TRACE assert); this is the backstop for anyone driving
+            # TtPrefillRuntime directly.
+            assert mtp_tokens is None and not self.config.mtp_levels, (
+                "use_trace does not support MTP: the union is built per chunk (fresh addresses) and the "
+                "levels run after the captured segment, neither of which survives a capture; run with "
+                "PREFILL_USE_TRACE=0"
             )
             self._trace_request_id = request_id
             ttnn.copy(input_tensor, self._trace_input)
@@ -950,11 +916,6 @@ class TtPrefillRuntime:
                 ttnn.deallocate(input_tensor)
                 self.drafter.import_partial(partial)
         elif self.config.mtp_levels:
-            assert mtp_token_stream is None, (
-                "mtp_token_stream (a host list) was passed to a runtime configured for the DEVICE MTP path "
-                "(config.mtp_levels > 0). The runner's tokens arrive over the H2D socket and are "
-                "sliced on device; passing a host list too would prefill two different streams."
-            )
             mtp_union, model_input = self._mtp_prepare_input(input_tensor, mtp_tokens)
             mtp_owns_input = self.config.is_first_rank
 
@@ -970,11 +931,9 @@ class TtPrefillRuntime:
             actual_end=actual_end,
             cache_user_id=slot_id,
             index_kv_cache=kv_caches.index,
-            mtp_token_stream=mtp_token_stream,
             # Only the rank that BUILT a predictor runs the levels; an upstream rank just carries the
             # union across its socket, so it must not hand it to a transformer that has none.
             mtp_union=mtp_union if self.mtp_predictor is not None else None,
-            mtp_seed_token=mtp_seed_token,
             is_last_chunk=is_last_chunk,
             on_mtp_complete=on_mtp_complete,
             input_is_embedded=mtp_owns_input,

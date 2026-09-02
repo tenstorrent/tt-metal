@@ -5,7 +5,7 @@
 """On-device gate for the MTP union-embedding transport (GLM-5.2, issue #53533).
 
 The runner moves MTP's K token windows from the producer to the rank that runs the levels without a
-host round trip anywhere. Four hardware claims carry it:
+host round trip anywhere. Seven hardware claims carry it:
 
 1. **The producer's three tensors survive ONE H2D socket.** It builds the chunk (``[SP,1,L]``,
    untouched by MTP), the lookahead (``[SP,1,N]``, row ``c`` = ``stream[(c+1)*L : +N]``, where
@@ -33,6 +33,12 @@ host round trip anywhere. Four hardware claims carry it:
    covers that position -- and each level's own row slice then picks up exactly ``g_0..g_k``. The
    failure mode is silent: an embedding on a row no window reads, or on a row read at the wrong
    level, is a draft trained on the wrong token and nothing raises.
+6. **The position-0 mask zeroes exactly the row holding absolute position 0.** vLLM zeroes the MTP
+   embedding there on every level. Under SP the row index is not the absolute position, so the mask
+   derives its row by pushing an indicator through the sharding path rather than assuming chip 0
+   row 0 -- and that derivation is what is measured, under both layouts.
+7. **Ids above 16 bits survive both upload paths.** GLM-5.2's vocab is 154880, so real ids run past
+   65535 while every other case here uses ids under 8192, where a narrowing would be invisible.
 
 **Exact equality, not PCC.** ``embedding`` is a gather: the row it writes is the table row, byte for
 byte, so ``slice(embed(ids)) == embed(slice(ids))`` holds bit-exactly and a correlation would blur
@@ -60,11 +66,15 @@ from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPUnionE
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
     build_mtp_generation_keep_mask,
     build_mtp_generation_select,
+    build_position_zero_mask,
     mtp_generation_union_rows,
+    prepare_prefill_input_tensor,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 
 SP, TP = 8, 4
+SP_AXIS = 0
+"""The mesh is (sp, tp) row-major throughout: device ``d`` is chip ``d // TP``, TP shard ``d % TP``."""
 CHUNK = 5120
 """Production chunk. At sp=8 this is L=640 rows/chip, 20 whole tiles."""
 K = 4
@@ -463,3 +473,85 @@ def test_generated_embedding_reaches_every_window_that_reads_it(mesh_device, str
     union.deallocate()
     for t in (keep_mask, *selects, *gathered):
         ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("is_balanced", [pytest.param(False, id="block-cyclic"), pytest.param(True, id="balanced")])
+@pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
+def test_position_zero_mask_zeroes_exactly_the_row_holding_position_0(mesh_device, is_balanced):
+    """Claim 6: one row zeroed, at full width, and every other row left at 1.
+
+    The row -> position map is MEASURED, not re-derived: this uploads ids ``0..C-1`` through the
+    trunk's own uploader and reads them straight back, so *that* is what defines which chunk-local
+    position each mesh row holds. The test therefore cannot drift from the production sharding and
+    needs to know nothing about either layout -- which is the point of running it under both.
+
+    Full width matters: the mask is materialized at ``H/tp`` rather than broadcast from width 1, so
+    a partly-zeroed row would mean the expand went wrong in a way a PCC on the product would hide.
+    """
+    per_tp = HIDDEN // TP
+    tt_ids = prepare_prefill_input_tensor(list(range(CHUNK)), mesh_device, SP, is_balanced, (SP, TP), SP_AXIS)
+    positions = [g.flatten().to(torch.int64) for g in _shards(tt_ids)]
+    ttnn.deallocate(tt_ids)
+
+    assert sorted(torch.cat(positions[::TP]).tolist()) == list(range(CHUNK)), (
+        "the trunk upload did not come back as a permutation of the chunk's positions, so the map "
+        "this test measures the mask against is itself wrong"
+    )
+    for d, pos in enumerate(positions):
+        assert torch.equal(pos, positions[(d // TP) * TP]), (
+            f"dev {d}: the token tensor is uploaded with dims=(sp_axis, None), i.e. REPLICATED across "
+            "TP, so every TP chip of a row must hold the same positions"
+        )
+
+    mask = build_position_zero_mask(mesh_device, SP, CHUNK, is_balanced, (SP, TP), SP_AXIS, emb_dim_per_chip=per_tp)
+    shards = [g.reshape(-1, per_tp).float() for g in _shards(mask)]
+    ttnn.deallocate(mask)
+
+    zeroed = 0
+    for d, (g, pos) in enumerate(zip(shards, positions)):
+        assert g.shape == (L, per_tp), f"dev {d}: mask shard is {tuple(g.shape)}, expected {(L, per_tp)}"
+        want = torch.ones(L, per_tp)
+        row0 = (pos == 0).nonzero().flatten()
+        if row0.numel():
+            want[int(row0)] = 0.0
+            zeroed += 1
+        bad = (g != want).any(dim=-1).nonzero().flatten()
+        assert bad.numel() == 0, (
+            f"dev {d} (chip {d // TP}): {bad.numel()} mask rows are wrong, first at local row "
+            f"{int(bad[0])} (chunk-local position {int(pos[bad[0]])}) -- the mask must zero the row "
+            f"holding absolute position 0 (local row {row0.tolist()}) and nothing else"
+        )
+    assert zeroed == TP, f"position 0 was masked on {zeroed} devices, expected the {TP} TP shards of one chip"
+
+
+@pytest.mark.parametrize("mesh_device, device_params", MESH, indirect=True)
+def test_token_ids_above_16_bits_survive_both_upload_paths(mesh_device):
+    """Claim 7: real GLM-5.2 ids (vocab 154880) reach the mesh unaltered.
+
+    Both paths that carry ids are checked, because they share no code: the H2D socket plus the op's
+    intra-page split, which is what the runner runs, and ``prepare_prefill_input_tensor``, which is
+    what ``TtPrefillRuntime.make_chunk_input`` runs. A 16-bit narrowing anywhere in either would show
+    up here as ids folded modulo 65536, and nowhere else in this file -- every other case uses ids
+    under 8192 by design, since the vocab stopped mattering to transport once the ids stopped
+    crossing a bf16 wire.
+    """
+    base = 149000
+    assert base + CHUNK + NUM_MTP_TOKENS < 154880, "the probe must stay inside GLM-5.2's vocab"
+    ids = torch.arange(base, base + CHUNK + NUM_MTP_TOKENS, dtype=torch.int64)
+    assert int(ids.min()) > 0xFFFF, "the probe did not actually exercise ids above 16 bits"
+
+    tt_ids, tt_mtp_tokens, want_ids = _cut_stream(ids, mesh_device)
+    for d, (g_trunk, g_over) in enumerate(zip(_shards(tt_ids), _shards(tt_mtp_tokens))):
+        c = d // TP
+        assert torch.equal(g_trunk.flatten().to(torch.int64), want_ids[c, :L]), f"dev {d}: socket trunk ids altered"
+        assert torch.equal(g_over.flatten().to(torch.int64), want_ids[c, L:]), f"dev {d}: socket MTP ids altered"
+    for t in (tt_ids, tt_mtp_tokens):
+        ttnn.deallocate(t)
+
+    host = prepare_prefill_input_tensor(ids[:CHUNK].tolist(), mesh_device, SP, False, (SP, TP), SP_AXIS)
+    for d, g in enumerate(_shards(host)):
+        c = d // TP
+        assert torch.equal(
+            g.flatten().to(torch.int64), ids[c * L : (c + 1) * L]
+        ), f"dev {d} (chip {c}): prepare_prefill_input_tensor altered the ids it uploaded"
+    ttnn.deallocate(host)

@@ -4,11 +4,11 @@
 
 """On-device MTP shift-windows for the prefill runner (GLM-5.2, issue #53533).
 
-``token_windows.py`` solves the same problem on the HOST: it slices python lists and hands each
-window to an ``embed_fn`` that uploads it. That is right for a test driving the transformer
-directly, and wrong for the serving runner, where the tokens arrive over the H2D socket and never
-touch host memory. This module is the device twin -- same ``(k, H^k) -> embedding`` contract that
-``TtMTPPredictor.forward`` consumes, no host round trip anywhere in it.
+Level ``k`` needs the token at position ``p + k`` on the row whose hidden sits at ``p``, for every
+row of the chunk. On the host that is a list slice, uploaded per level. Prefill's tokens never touch
+host memory -- they arrive over the H2D socket -- so this module builds every window on device
+instead: same ``(k, H^k) -> embedding`` contract ``TtMTPPredictor.forward`` consumes, no host round
+trip anywhere in it.
 
 Two things make that possible.
 
@@ -33,8 +33,8 @@ bf16 wire.
 
 **3. The last chunk GENERATES the ids the prompt does not have, on device.** Past a request's real
 length the stream has no more tokens, so level ``k``'s window at the last real row has nothing to
-read. ``MTPEmbedSource`` solves that on the host -- LM head, argmax, feed the id back in -- which is
-a host round trip per level, exactly what this path exists to avoid. Here the same chain runs on
+read. Reading ``H^k`` back to host -- LM head, argmax, feed the id back in -- is a host round trip
+per level, exactly what this path exists to avoid. Here the same chain runs on
 device: ``argmax(lm_head(H^k))`` -> ``embed`` -> SP ``all_gather`` -> a one-hot matmul that writes
 the result into the union at global position ``actual_end + k`` (:class:`MTPDeviceGeneration`).
 Writing it at that ONE position is the whole simplification: every level's window slice then picks
@@ -263,9 +263,6 @@ class MTPDeviceGeneration:
 class MTPDeviceEmbedSource:
     """``TtMTPPredictor.forward``'s ``embeds`` callable, sourced entirely on device.
 
-    Drop-in for :class:`~models.demos.deepseek_v3_d_p.tt.mtp_prefill.token_windows.MTPEmbedSource`:
-    same ``(k, H^k) -> ttnn.Tensor`` signature, same ``generated_tokens`` property.
-
     Without ``generation`` (every interior chunk) it ignores ``H^k`` entirely -- each window is a
     row slice of the union the socket delivered. With it (the last chunk of a request) it runs the
     device generation chain on ``H^k`` and patches the union before slicing, so level ``k``'s last
@@ -291,7 +288,7 @@ class MTPDeviceEmbedSource:
     def __call__(self, k: int, prev_normed):
         assert 0 <= k < self.num_levels, f"level {k} out of range [0, {self.num_levels})"
         if self.generation is not None:
-            # Strict level order, once each -- same contract as MTPEmbedSource. The patches are
+            # Strict level order, once each. The patches are
             # INCREMENTAL: level k's window reads positions actual_end+k-j for j in 0..k, so every
             # earlier level's token must already be in the union.
             assert k == self._next_level, f"generation must run levels in order; expected {self._next_level}, got {k}"
