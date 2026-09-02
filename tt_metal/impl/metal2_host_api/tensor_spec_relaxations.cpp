@@ -4,12 +4,20 @@
 
 #include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 
+#include <cstdint>
+#include <optional>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace tt::tt_metal::experimental {
 
-namespace {
+// File-local helpers. A NAMED namespace rather than an anonymous one: these translation units are
+// built as a unity build, where two anonymous namespaces merge into one and same-named entities
+// collide (or, worse, silently resolve to the wrong one).
+namespace relaxation_fields {
 
 // The TensorSpec fields a relaxation treats as load-bearing. Deriving that set -- including the
 // precedence rule that dynamic_tensor_shape subsumes match_padded_shape_only -- is the one piece
@@ -29,6 +37,13 @@ struct PertinentFields {
 
     bool padded_shape = false;
     bool logical_rank = false;
+
+    // The sharded distribution geometry: the squeezed shard shape and the bank (core) list.
+    //
+    // Only pertinent where the shape is otherwise free. When the logical or padded shape is pinned
+    // the geometry is pinned with it, since it is a pure function of that shape plus the shard spec
+    // -- and tensor_layout, load-bearing everywhere, pins the shard spec.
+    bool shard_distribution = false;
 };
 
 // Both functions below must consume every member; if one gains a term the other does not, they
@@ -37,14 +52,18 @@ struct PertinentFields {
 // a proof -- also extend the flag-combination sweep in test_tensor_spec_relaxations.cpp, which is
 // what actually detects a disagreement.
 static_assert(
-    sizeof(PertinentFields) == 3,
+    sizeof(PertinentFields) == 4,
     "A PertinentFields member was added or removed. Wire the new term into BOTH "
     "hash_tensorspec_with_relaxation and tensorspecs_match_with_relaxation, then update this count.");
 
 PertinentFields pertinent_fields(const TensorSpecRelaxations& relaxation) {
     if (relaxation.dynamic_tensor_shape) {
-        // Per-dim shape values are free. The rank stays load-bearing unless it too is relaxed.
-        return PertinentFields{.logical_rank = !relaxation.relax_logical_rank};
+        // Per-dim shape values are free. The rank stays load-bearing unless it too is relaxed, and
+        // the sharded distribution geometry is load-bearing either way -- see shard_distribution.
+        return PertinentFields{
+            .logical_rank = !relaxation.relax_logical_rank,
+            .shard_distribution = true,
+        };
     }
     if (relaxation.match_padded_shape_only) {
         return PertinentFields{.padded_shape = true};
@@ -58,7 +77,30 @@ PertinentFields pertinent_fields(const TensorSpecRelaxations& relaxation) {
     return PertinentFields{.whole_spec = true};
 }
 
-}  // namespace
+// The sharded distribution geometry a TensorSpec resolves to, or nullopt when it is interleaved.
+//
+// Why this has to be part of the equivalence class. For a sharded TensorParameter the CTA payload
+// bakes the WHOLE geometry from the declared spec -- squeezed rank, num_banks, squeezed shard shape,
+// packed bank coordinates -- and only tensor_shape_in_pages is re-emitted per dispatch as CRTA words
+// (ResolveTensorParameterStaticCTAs / EmitBindingCrtaValues). But squeeze_shape_ranks decides its
+// merges from the tensor AND shard shape VALUES, so a shape change dynamic_tensor_shape permits can
+// move the geometry underneath those CTAs. The device then divides and mods the page coordinate by a
+// stale shard shape (tensor_accessor.h) and silently addresses the wrong memory. Two specs are
+// interchangeable only if the geometry they resolve to agrees.
+//
+// shard_shape_in_pages and cores together cover everything baked: squeeze_shape_ranks pushes to the
+// tensor and shard shapes in lockstep so their ranks are always equal (hence pinning the shard shape
+// pins the squeezed rank), and num_banks is cores().size(). The bank list needs pinning in its own
+// right -- under GRID_2D it is computed from the UNsqueezed shapes, so it can go stale even when the
+// squeeze output is identical.
+std::optional<BufferDistributionSpec> shard_distribution_of(const tt::tt_metal::TensorSpec& spec) {
+    if (!spec.memory_config().is_sharded()) {
+        return std::nullopt;
+    }
+    return spec.compute_buffer_sharding_args().buffer_distribution_spec();
+}
+
+}  // namespace relaxation_fields
 
 // Return type spelled std::uint64_t to match the public header (== ttsl::hash::hash_t); the body
 // works in ttsl::hash and its combiners, which is why reflection.hpp is included here, not there.
@@ -66,7 +108,7 @@ std::uint64_t hash_tensorspec_with_relaxation(
     const tt::tt_metal::TensorSpec& spec, const TensorSpecRelaxations& relaxation) {
     // Hash exactly the load-bearing fields, so two specs that match under the relaxation hash
     // equally. Mirror tensorspecs_match_with_relaxation below term for term.
-    const PertinentFields fields = pertinent_fields(relaxation);
+    const relaxation_fields::PertinentFields fields = relaxation_fields::pertinent_fields(relaxation);
     if (fields.whole_spec) {
         // logical_shape + tensor_layout are TensorSpec's own reflected attributes, so this is
         // equivalent to hashing the whole spec.
@@ -79,6 +121,18 @@ std::uint64_t hash_tensorspec_with_relaxation(
     if (fields.logical_rank) {
         hash = ttsl::hash::hash_objects(hash, spec.logical_shape().rank());
     }
+    if (fields.shard_distribution) {
+        // CoreCoord is a bare tt_xy_pair with no reflected hash, so fold the coordinates directly
+        // rather than rely on hashing the vector.
+        if (const std::optional<BufferDistributionSpec> dist = relaxation_fields::shard_distribution_of(spec);
+            dist.has_value()) {
+            hash = ttsl::hash::hash_objects(hash, dist->shard_shape_in_pages());
+            for (const CoreCoord& core : dist->cores()) {
+                hash = ttsl::hash::hash_objects(
+                    hash, static_cast<std::uint32_t>(core.x), static_cast<std::uint32_t>(core.y));
+            }
+        }
+    }
     return hash;
 }
 
@@ -90,7 +144,7 @@ bool tensorspecs_match_with_relaxation(
     //
     // NOTE: ValidateTensorArgs (program_run_args.cpp) delegates its run-time accept/reject to this,
     // so validation and the program-cache hash share one definition of equivalence.
-    const PertinentFields fields = pertinent_fields(relaxation);
+    const relaxation_fields::PertinentFields fields = relaxation_fields::pertinent_fields(relaxation);
     if (fields.whole_spec) {
         return a == b;
     }
@@ -102,6 +156,21 @@ bool tensorspecs_match_with_relaxation(
     }
     if (fields.logical_rank && a.logical_shape().rank() != b.logical_shape().rank()) {
         return false;
+    }
+    if (fields.shard_distribution) {
+        const std::optional<BufferDistributionSpec> a_dist = relaxation_fields::shard_distribution_of(a);
+        const std::optional<BufferDistributionSpec> b_dist = relaxation_fields::shard_distribution_of(b);
+        if (a_dist.has_value() != b_dist.has_value()) {
+            return false;
+        }
+        if (a_dist.has_value()) {
+            if (!(a_dist->shard_shape_in_pages() == b_dist->shard_shape_in_pages())) {
+                return false;
+            }
+            if (a_dist->cores() != b_dist->cores()) {
+                return false;
+            }
+        }
     }
     return true;
 }

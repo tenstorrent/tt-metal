@@ -17,7 +17,9 @@
 #include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 
 namespace tt::tt_metal::experimental {
-namespace {
+// Named rather than anonymous: these tests are part of a unity build, where two anonymous namespaces
+// merge into one and same-named helpers collide.
+namespace tensor_spec_relaxation_tests {
 
 // Build a TensorSpec with a controllable shape, layout, and dtype. Interleaved/DRAM throughout;
 // the axes that matter here are logical_shape, padded_shape (derived), and tensor_layout.
@@ -203,6 +205,77 @@ TensorSpecRelaxations relaxation_from_bits(unsigned bits) {
 // (match => equal-hash is guaranteed by construction; the reverse holds here absent a 64-bit
 // collision, which won't occur across this small fixed set — so the biconditional is a strong check
 // that the hash is neither too fine nor too coarse relative to the match.)
+// An ND-sharded TensorSpec, so the sharded distribution geometry is exercised. make_spec above is
+// interleaved, where no BufferDistributionSpec exists at all.
+TensorSpec make_nd_sharded_spec(Shape shape, Shape nd_shard_shape) {
+    const CoreRangeSet grid({CoreRange({0, 0}, {7, 7})});
+    MemoryConfig memory_config{BufferType::L1, NdShardSpec{std::move(nd_shard_shape), grid}};
+    TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), memory_config);
+    return TensorSpec(std::move(shape), std::move(tensor_layout));
+}
+
+// REGRESSION: dynamic_tensor_shape must not accept a shape change that moves the sharded
+// distribution geometry.
+//
+// The sharded CTA payload bakes the squeezed shard shape and the bank list from the DECLARED spec
+// and re-emits only tensor_shape_in_pages per dispatch. squeeze_shape_ranks decides its merges from
+// shape VALUES, so a permitted shape change can move that geometry while leaving the squeezed RANK
+// alone -- which is the one thing the bind-time guard in EmitBindingCrtaValues checks. Before this
+// was pinned in the match, the pair below was accepted, and the device then divided the page
+// coordinate by a stale shard shape: silently wrong addresses, no assert.
+//
+// Both tensors are rank 3 with identical tensor_layout, and both squeeze to rank 2 -- so every other
+// gate passes and the geometry is the only thing that separates them.
+TEST(TensorSpecRelaxations, CPU_DynamicTensorShapePinsShardDistribution) {
+    const TensorSpecRelaxations dyn{.dynamic_tensor_shape = true};
+    const Shape nd_shard{1, 64, 64};  // [1, 2, 2] in 32x32 pages
+
+    const auto a = make_nd_sharded_spec(Shape{1, 32, 32}, nd_shard);  // squeezes to shard [2, 2]
+    const auto b = make_nd_sharded_spec(Shape{2, 32, 64}, nd_shard);  // squeezes to shard [1, 4]
+
+    // Preconditions: everything except the geometry agrees, so a pass here would be the real defect.
+    ASSERT_EQ(a.tensor_layout(), b.tensor_layout());
+    ASSERT_EQ(a.logical_shape().rank(), b.logical_shape().rank());
+    const auto a_args = a.compute_buffer_sharding_args();
+    const auto b_args = b.compute_buffer_sharding_args();
+    ASSERT_TRUE(a_args.buffer_distribution_spec().has_value());
+    ASSERT_TRUE(b_args.buffer_distribution_spec().has_value());
+    const auto& a_bds = *a_args.buffer_distribution_spec();
+    const auto& b_bds = *b_args.buffer_distribution_spec();
+    ASSERT_EQ(a_bds.tensor_shape_in_pages().rank(), b_bds.tensor_shape_in_pages().rank());
+    ASSERT_NE(a_bds.shard_shape_in_pages(), b_bds.shard_shape_in_pages());
+
+    EXPECT_FALSE(tensorspecs_match_with_relaxation(a, b, dyn));
+    EXPECT_NE(hash_tensorspec_with_relaxation(a, dyn), hash_tensorspec_with_relaxation(b, dyn));
+}
+
+// ...and relax_logical_rank does not reopen it: it frees the LOGICAL rank, which has no authority
+// over the distribution geometry.
+TEST(TensorSpecRelaxations, CPU_RelaxLogicalRankStillPinsShardDistribution) {
+    const TensorSpecRelaxations relaxed{.dynamic_tensor_shape = true, .relax_logical_rank = true};
+    const Shape nd_shard{1, 64, 64};
+
+    const auto a = make_nd_sharded_spec(Shape{1, 32, 32}, nd_shard);
+    const auto b = make_nd_sharded_spec(Shape{2, 32, 64}, nd_shard);
+
+    EXPECT_FALSE(tensorspecs_match_with_relaxation(a, b, relaxed));
+    EXPECT_NE(hash_tensorspec_with_relaxation(a, relaxed), hash_tensorspec_with_relaxation(b, relaxed));
+}
+
+// A shape change that leaves the geometry alone is still accepted -- the pin must not collapse
+// dynamic_tensor_shape into strict matching on the sharded path.
+TEST(TensorSpecRelaxations, CPU_DynamicTensorShapeStillFreeWhenShardDistributionAgrees) {
+    const TensorSpecRelaxations dyn{.dynamic_tensor_shape = true};
+    const Shape nd_shard{1, 64, 64};
+
+    const auto a = make_nd_sharded_spec(Shape{2, 32, 64}, nd_shard);
+    const auto b = make_nd_sharded_spec(Shape{4, 32, 64}, nd_shard);
+    ASSERT_NE(a.logical_shape(), b.logical_shape());  // the shape really does vary
+
+    EXPECT_TRUE(tensorspecs_match_with_relaxation(a, b, dyn));
+    EXPECT_EQ(hash_tensorspec_with_relaxation(a, dyn), hash_tensorspec_with_relaxation(b, dyn));
+}
+
 // Every flag combination is swept, not a hand-picked list: with the flags composing as modifiers
 // rather than as a chain of modes, the combinations are where a term wired into one function but
 // not the other would show up.
@@ -239,5 +312,5 @@ TEST(TensorSpecRelaxations, CPU_HashConsistentWithMatch) {
     }
 }
 
-}  // namespace
+}  // namespace tensor_spec_relaxation_tests
 }  // namespace tt::tt_metal::experimental

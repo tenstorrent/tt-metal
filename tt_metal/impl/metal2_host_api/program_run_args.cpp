@@ -35,6 +35,16 @@ const AdvancedKernelRunArgs::Varargs& kernel_common_runtime_varargs(const Progra
     return kp.advanced_options.common_runtime_varargs;
 }
 
+// The sharded distribution geometry a spec resolves to, or nullopt when it is interleaved. Mirrors
+// shard_distribution_of in tensor_spec_relaxations.cpp, which is file-private there. Distinct name
+// because these two translation units share a unity build.
+static std::optional<BufferDistributionSpec> resolve_shard_distribution(const TensorSpec& spec) {
+    if (!spec.memory_config().is_sharded()) {
+        return std::nullopt;
+    }
+    return spec.compute_buffer_sharding_args().buffer_distribution_spec();
+}
+
 // Emit a precise diagnostic for a tensor argument that failed tensorspecs_match_with_relaxation, then
 // throw. Called only on the rejection path: the branches mirror the match to produce a specific
 // message, and the trailing TT_THROW guarantees rejection even if a branch ever drifts from the match.
@@ -63,6 +73,28 @@ static void report_tensor_arg_mismatch(
                 param_name,
                 runtime_spec.logical_shape().rank(),
                 expected_spec.logical_shape().rank());
+        }
+        // The distribution geometry stays load-bearing even though the shape values are free, so it
+        // is the remaining way this mode can reject. Worth its own message: with the layout and rank
+        // both matching, the generic backstop below would leave a user staring at a spec that looks
+        // like it should have been accepted.
+        const std::optional<BufferDistributionSpec> runtime_dist = resolve_shard_distribution(runtime_spec);
+        const std::optional<BufferDistributionSpec> expected_dist = resolve_shard_distribution(expected_spec);
+        if (runtime_dist.has_value() && expected_dist.has_value()) {
+            TT_FATAL(
+                runtime_dist->shard_shape_in_pages() == expected_dist->shard_shape_in_pages() &&
+                    runtime_dist->cores() == expected_dist->cores(),
+                "TensorArgument for binding '{}' supplied a MeshTensor whose sharded distribution geometry does not "
+                "match the binding's declared geometry: shard shape in pages {} vs {}, over {} banks vs {}. "
+                "dynamic_tensor_shape frees the shape VALUES, but the shard shape and bank list are baked when the "
+                "ProgramSpec is built and are not re-emitted per dispatch. Note that sharing a shard spec does NOT "
+                "guarantee sharing geometry: the tensor and shard shapes are jointly squeezed to minimize rank, and "
+                "the squeeze depends on the shape values.",
+                param_name,
+                runtime_dist->shard_shape_in_pages(),
+                expected_dist->shard_shape_in_pages(),
+                runtime_dist->cores().size(),
+                expected_dist->cores().size());
         }
     } else if (relaxation.match_padded_shape_only) {
         TT_FATAL(
@@ -710,8 +742,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                     }
                 }
                 if (has_varargs) {
-                    std::copy(
-                        vararg_it->second->begin(), vararg_it->second->end(), combined.begin() + num_named_rtas);
+                    std::copy(vararg_it->second->begin(), vararg_it->second->end(), combined.begin() + num_named_rtas);
                 }
                 kernel->set_runtime_args(node, combined);
             }

@@ -63,6 +63,13 @@ struct TensorSpecRelaxations {
     //  - For a sharded tensor:
     //    The TensorAccessor configuration DYNAMICALLY reflects the tensor argument's actual shape.
     //    Shape, expressed in pages-per-dim, becomes implicit common runtime arguments.
+    //    NOTE: only the shape values are dynamic. The rest of the distribution geometry -- the
+    //    shard shape in pages, the number of banks, and the bank coordinates -- is fixed when the
+    //    ProgramSpec is built, so tensor arguments must agree on it. That is NOT implied by
+    //    agreeing on the shard spec: the tensor and shard shapes are jointly squeezed to minimize
+    //    rank, and the squeeze depends on the shape VALUES, so two shapes sharing a shard spec can
+    //    still resolve to different geometry. Such an argument is REJECTED rather than silently
+    //    mis-addressed; if you need it accepted, the shape you vary must leave the squeeze alone.
     //  - For an interleaved TILED tensor:
     //    TensorAccessor configuration is unchanged
     //    (The page size is fixed by dtype/tile dims, so it cannot vary with shape).
