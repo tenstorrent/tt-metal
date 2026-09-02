@@ -100,6 +100,8 @@ constexpr StatisticsBackend select_sharded_statistics_backend(
     if (arch == tt::ARCH::QUASAR) {
         return StatisticsBackend::TILE_REDUCTION;
     }
+    // Blackhole's centred tile reducer is 1.86-2.23x faster than the former online-Welford route across the
+    // representative sharded matrix and showed no numerical disadvantage. Wormhole retains the two-pass backend.
     if (arch == tt::ARCH::BLACKHOLE) {
         return StatisticsBackend::TILE_REDUCTION;
     }
