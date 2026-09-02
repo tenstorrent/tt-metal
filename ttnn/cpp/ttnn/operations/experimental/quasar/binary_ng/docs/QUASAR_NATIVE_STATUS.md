@@ -8,9 +8,7 @@
 > - `.link_to_claude/plans/*` — the implementation plan, the specialist review findings, and the
 >   measurement-discipline notes, which stayed out of the repo.
 >
-> These state current conclusions directly. Where a measurement protocol exists because getting it wrong
-> was expensive, the protocol is stated as a requirement rather than as an incident.
-
+>
 *Slide-style status deck. Each `---` is a slide. Keep slides to one screen.*
 ***Chronological: newest week first.***
 
@@ -31,7 +29,7 @@ benchmark shape, rising to **4.00x** as tensors grow past the fixed launch cost 
 **bit-exact**, against a
 **1.30x** go/no-go criterion. **GO.**
 
-Also this week: rebased onto main (302 commits; tt-llk #1678 landed, so `C > 1` is live), Tasks 4 and 5
+Also this week: rebased onto main (302 commits; tt-llk #1678 landed, so `C > 1` is live), and craq-sim blocker issue #319 has been fixed. Tasks 4 and 5
 landed (thread-generic kernels + host wiring), and the full legal `(R,C,W)` space was measured
 exhaustively for correctness.
 
@@ -39,9 +37,8 @@ exhaustively for correctness.
 
 ## 2. The legal space, and a platform defect
 
-31 of 108 `(R,C,W)` candidates are legal — where **the 108 already has `C ∈ {1,2,4}` applied**, so it is
-the raw 6³ = 216 grid after the platform's compute rule, and the 31 measures DM-budget and stride
-attrition only. Full ladder, per-`R` breakdown and why `R=3` is legal-but-never-usable: design §3.3.1,
+31 of 108 `(R,C,W)` candidates are legal — where **the 108 already has `C ∈ {1,2,4}` applied**,  and the 31 measures DM-budget and stride
+attrition only. More detailes how 31 is legal is from design doc §3.3.1,
 reproducible via `debug/attrib/enumerate_legal_space.py`. All 31 measured for correctness at 60
 tiles/cluster, one process each, bit-exact vs a torch golden with a routing assertion:
 
@@ -53,14 +50,9 @@ tiles/cluster, one process each, bit-exact vs a torch golden with a routing asse
 **31 of 31 agree; 0 disagreements.** A DFB whose **DM cores outnumber its Tensix cores** silently returns
 wrong data — no hang, no error. Localised per tile: exactly `C` of the `n` DM sub-streams are serviced,
 the other `n - C` receive nothing valid. Upstream DFB gtests never cover `producers != consumers` with a
-Tensix on the narrow side.
+Tensix on the narrow side. Issue is being filed to craq-sim for fix.
 
-Does **not** block the optimum (`4,4,2` satisfies the rule) but **does** block the general case, since
-which config wins is op-specific. Report ready to file.
-
-**It also shapes every perf number below**, which is why this slide comes first. `C >= max(R,W)` is now a
-correctness constraint, not a tuning choice, so **no legal config varies the compute axis independently**
-— the entire cost model rests on the 18 illegal ones (slide 9). Those 18 were measured for perf as well
+Those 18 were measured for perf as well
 as correctness, and they are the only reason the compute term is known at all.
 
 ---
@@ -99,10 +91,10 @@ asymptote.**
 
 Marginal = slope of `span` vs tiles/cluster, fitted over **60/120/180** (the linear region), `span` =
 per-cluster KERNEL-zone span median over 32 clusters, `entries_per_thread = 4`. **Units differ**:
-marginal and raw@60 are cyc/tile; **prologue is absolute cycles** (the fit's intercept). `binds` names
-the roofline term that sets the value.
+marginal and raw@60 are cyc/tile; **prologue is absolute cycles** (the fit's intercept). `bound` names
+the roofline term that sets the value — read it as reader-bound / compute-bound / writer-bound.
 
-| R | C | W | DM | Neo | marginal | speedup | binds | raw @60 | prologue |
+| R | C | W | DM | Neo | marginal | speedup | bound | raw @60 | prologue |
 |---|---|---|---|---|---|---|---|---|---|
 | **4** | **4** | **2** | 6 | 4 | **44.12** | **4.00x** | cmp | 62.55 | 1106 |
 | 2 | 4 | 2 | 4 | 4 | 82.53 | 2.14x | rdr | 102.62 | 1205 |
@@ -125,11 +117,6 @@ fuzzy, the measurement was. Cheapest per tier: `1,1,1` (2 DM) → `2,2,1` (3 DM)
 **Along the balanced frontier scaling is exactly linear.** `2,2,1` (3 DM, 2 Neo) 88.25 → `4,4,2`
 (6 DM, 4 Neo) 44.12 = **2.0002x on exactly 2x the engines**.
 
-**`R=3` is legal but never usable, which is not the same as banned.** The platform bans `C=3`
-(`program_spec.cpp:763`), not `R=3`. The DFB stride rule then needs `max(R,C) % min(R,C) == 0`, so `R=3`
-admits only `C=1` — three legal configs (`3,1,1`, `3,1,2`, `3,1,3`), all of which the slide-2 defect
-corrupts because `C=1 < max(R,W)`. Same shape at `R=5` (`5,1,1` only). So the usable ladder is
-`R = 1, 2, 4` and 4-or-5-DM-core allocations buy nothing.
 
 ---
 
@@ -137,8 +124,9 @@ corrupts because `C=1 < max(R,W)`. Same shape at `R=5` (`5,1,1` only). So the us
 
 **Correctness** for all 31 at 48x40 (60 tiles/cluster), one process each, bit-exact vs a torch golden
 with a routing assertion. **Perf** = marginal fitted over 60/120/180 tiles/cluster; all 31 admitted at
-every point, `occ:OK route:OK` throughout. `pred` is `max(165.0/R, 176.5/C, 83.5/W)` and `binds` names
-the term that sets it. Rules and rejection counts: design §3.3.1.
+every point, `occ:OK route:OK` throughout. `pred` is `max(165.0/R, 176.5/C, 83.5/W)` and `bound` names
+the term that sets it — reader-bound / compute-bound / writer-bound. Rules and rejection counts:
+design §3.3.1.
 
 The **DFB** columns give each config's endpoint shape in the notation the upstream gtest matrix uses:
 `<producers>S x <consumers>S`, where `S` = the STRIDED access pattern (thread *t* takes every *N*-th
@@ -152,7 +140,7 @@ program ran — the consumer `copy_tile`s each entry into dest and discards it, 
 `dfb_test_common.hpp:539-540` states the L1 verification is omitted. So `†` marks a coverage gap and its
 absence marks nothing; see the note under the table.
 
-| pred | binds | R,C,W | DM | Neo | in0/in1 DFB | out DFB | marginal | correctness |
+| pred | bound | R,C,W | DM | Neo | in0/in1 DFB | out DFB | marginal | correctness |
 |---|---|---|---|---|---|---|---|---|
 | 44.12 | **cmp** | **4,4,2** | 6 | 4 | 4Sx4S | 4Sx2S | **44.12** | **PASS — OPTIMUM** |
 | 82.50 | rdr | 2,4,2 | 4 | 4 | 2Sx4S | 4Sx2S | 82.53 | PASS |
@@ -202,7 +190,7 @@ version were the two-point artifact, not a real overlap effect.
 
 **Read the `C=1` block as one result.** Fifteen configs, DM cores rising 2 → 6, marginal pinned at
 **176.47–176.50 — a spread of 0.017%**. Adding four DM cores at `C=1` is worth **1.000x**, measured.
-That block is why the compute term is identified (slide 9) and why the win is compute-led (slide 7).
+That block is why the compute term is identified (slide 8) and why the win is compute-led (slide 7).
 
 **Corrupt timings are still timings** — the trip count and the tensor written are unchanged, only the
 data is wrong. And they cost nothing measurable: the corrupt `C=1` configs sit at 176.47–176.50 against
@@ -268,29 +256,7 @@ asserted against this deck's own table.
 
 ---
 
-## 8. Caveats, and open
-
-- **craq-sim models no contention** — 4.00x is an upper bound, and this op is DM-bound, precisely what
-  contention degrades. Not a silicon forecast.
-- Numbers are bf16 `add`. A compute-heavier binary op shifts the optimum toward higher `C`.
-- **Task 6's remaining two gates ran 2026-08-28 and both pass.** Work-split: the `RD_BAR` sum per core is
-  **320 at both 1 and 4 reader threads** — a duplicating implementation would report 4x — with `max/min`
-  across threads **1.000**, so work is genuinely split in equal shares. Stall signature: `unpack`, `pack`
-  and `sfpu` stalls are **exactly 0**, so the bottleneck did not move to output-DFB backpressure; per
-  active-core-cycle, semaphore stall density *fell* 34% while span fell 2.70x. Raw record:
-  `debug/attrib/milestone1_results.md`.
-- Both gates' own thresholds turned out to be unusable as written — one keys on a stale constant, the
-  other divides by an undefined core count and would reject the baseline. Replaced with equivalents that
-  do not depend on either; the plan records the fix.
-
-**Measurement protocol this week established.** Fit the marginal over at least three tile counts in a
-verified-linear region and check the successive differences are equal; build every golden from the
-operands as the device holds them rather than from intended values; and check any result against a
-theoretical bound where one exists. Design §2.1 carries these as requirements.
-
----
-
-## 9. The cost model — exact, and only the corrupt configs could pin it
+## 8. The cost model — exact, and only the corrupt configs could pin it
 
 `marginal = max(165.0/R, 176.5/C, 83.5/W)` cyc/tile. **31 of 31 configs within 0.04%.**
 
@@ -333,7 +299,7 @@ prologue (767 at `1,1,1` → 1106 at `4,4,2` → 1491 at `1,4,4`), which is why 
 
 ---
 
-## 10. Roadmap — restructured into milestones
+## 9. Roadmap — restructured into milestones
 
 Supersedes the flat `F1–F12` list on 08-21 slide 10. **`M#.#` is the sequence; `F#` is the stable
 identity** — F-labels are cross-referenced throughout the design doc and never get renumbered, so both
@@ -378,6 +344,28 @@ against it — which is also what makes Milestone 3's "broadcast-complete" liter
 
 **Cross-cutting, before any of this is production-ready:** validate fast dispatch for DFB-bearing specs,
 then the hardening pass — strict gate, CI wiring, env-var default flip, knobs into the program hash.
+
+---
+
+## 10. Caveats, and open
+
+- **craq-sim models no contention** — 4.00x is an upper bound, and this op is DM-bound, precisely what
+  contention degrades. Not a silicon forecast.
+- Numbers are bf16 `add`. A compute-heavier binary op shifts the optimum toward higher `C`.
+- **Task 6's remaining two gates ran 2026-08-28 and both pass.** Work-split: the `RD_BAR` sum per core is
+  **320 at both 1 and 4 reader threads** — a duplicating implementation would report 4x — with `max/min`
+  across threads **1.000**, so work is genuinely split in equal shares. Stall signature: `unpack`, `pack`
+  and `sfpu` stalls are **exactly 0**, so the bottleneck did not move to output-DFB backpressure; per
+  active-core-cycle, semaphore stall density *fell* 34% while span fell 2.70x. Raw record:
+  `debug/attrib/milestone1_results.md`.
+- Both gates' own thresholds turned out to be unusable as written — one keys on a stale constant, the
+  other divides by an undefined core count and would reject the baseline. Replaced with equivalents that
+  do not depend on either; the plan records the fix.
+
+**Measurement protocol this week established.** Fit the marginal over at least three tile counts in a
+verified-linear region and check the successive differences are equal; build every golden from the
+operands as the device holds them rather than from intended values; and check any result against a
+theoretical bound where one exists. Design §2.1 carries these as requirements.
 
 ---
 

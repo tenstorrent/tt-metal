@@ -8,35 +8,12 @@
 > - `.link_to_claude/plans/*` — the implementation plan, the specialist review findings, and the
 >   measurement-discipline notes, which stayed out of the repo.
 >
-> These state current conclusions directly. Where a measurement protocol exists because getting it wrong
-> was expensive, the protocol is stated as a requirement rather than as an incident.
-
+>
 Status: **design v3 — measured.** Five specialist reviews (2026-08-19); re-scoped against craq-sim's real
 measurement capability and reviewed again by four specialists (2026-08-20); then **every lever testable
 without the native factory was actually run** (2026-08-20). Not yet implemented.
 
-> **Read §2.4 first.** All three levers measurable on the existing factory are small (~1.17× combined **on
-> craq-sim**; two of them are undervalued there by construction and may be far larger on the emulator), so the
-> project now rests on DM thread count, which cannot be measured before implementing. §2.4 states the
-> expectation and a **kill criterion** to apply at the first milestone. Four magnitude estimates were made from
-> attribution during this work and all four were wrong, while every *mechanism* prediction held — hence the
-> standing rule: **attribution locates cost; only an experiment reveals what is recoverable.**
-
-> **Review provenance — `.link_to_claude/plans/quasar-native-binary-ng-review-findings.md`: round 1 in §A–§F (five specialists),
-> round 2 in §G–§K (five specialists), and §K-MEASURED-1..5 (the measurements).** Four blockers and the bulk of the ~30 other corrections are folded
-> in below; what remains in the findings doc is plan-level detail (`NativeTuning`'s home, pruning the dead
-> `#if` branches, recording `NOC_API_V2`, the `worker_grid` severity note, the one-time cache invalidation, the
-> `log_debug` on gate rejection). Five findings were confirmed independently by two agents each. The blockers
-> were:
-> 1. **`SubtileBroadcastType::NONE` is not "no broadcast"** — it compares H and W only, so leading-dim
->    broadcast passes the gate and breaks both §4.3's linear collapse and §3.2's tile count. Fixed in §3.2.
-> 2. **A byte-identical commit 1 cannot compile or link** — 32 redefinitions (not 4), and
->    `create_program_artifacts` is a duplicate external symbol even with unity off. Fixed in §3.1/§3.4.
-> 3. **The kernels are not thread-generic today** — a faithful copy hangs at R>1. Fixed in §3.4.
-> 4. **`kernel_launches` is a null test** — it counts RISCs out of reset, so R and W cannot move it and C is
->    already saturated. Removed from §2.3.1.
-Working branch `dchen/binary_ng_quasar_native` (cut from `origin/main` @ `0cf20188874`).
-
+>
 - Substrate facts + measured baseline: [`QUASAR_NATIVE_RESEARCH.md`](QUASAR_NATIVE_RESEARCH.md)
 - Review findings this revision is derived from, with all evidence:
   [`.link_to_claude/plans/quasar-native-binary-ng-review-findings.md`](.link_to_claude/plans/quasar-native-binary-ng-review-findings.md)
@@ -521,8 +498,8 @@ groups are op-independent; group C is ours and can be lifted, and group D is a d
 `C != 3` is a **platform** rule, not ours. **It bans `C=3`, not `R=3`** — a distinction worth keeping,
 because `R=3` survives into the legal set. The stride rule below needs `C in {1,3}` for `R=3`, so with 3
 illegal only `C=1` remains, giving three legal configs (`3,1,1`, `3,1,2`, `3,1,3`). All three then fail
-group D's `C >= max(R,W)`, so they are **legal but corrupt** — which is why the usable ladder jumps
-R=2 -> R=4. `R=5` has the same shape (`5,1,1` only, corrupt); `R=6` is excluded outright, since any
+group D's `C >= max(R,W)`, so they are **legal but corrupt today** — which is why the usable ladder
+currently jumps R=2 -> R=4. `R=5` has the same shape (`5,1,1` only, corrupt); `R=6` is excluded outright, since any
 `W >= 1` breaks `R+W <= 6`.
 
 **B. Per DFB (`impl/dataflow_buffer/dataflow_buffer.cpp`, `hw/inc/api/kernel_thread_globals.h`)**
@@ -621,24 +598,34 @@ platform rule changing underneath this section fails loudly rather than silently
 | 6 | 0 | 0 | — (any `W >= 1` breaks `R+W <= 6`) |
 | | **31** | **13** | |
 
-**Why `R=3` and `R=5` are legal but never usable.** The stride rule needs `C` to divide `R` or `R` to
-divide `C`, which for `C in {1,2,4}` leaves only `C=1`:
+**Why `R=3` and `R=5` reach only `C=1`.** Two rules apply in sequence, and only the first is permanent.
 
-| | `C=1` | `C=2` | `C=4` |
+**Step 1 — the in-DFB stride rule**, `max(R,C) % min(R,C) == 0`, needs `C` to divide `R` or `R` to divide
+`C`. For `C in {1,2,4}` that leaves only `C=1`. Each cell is the check written as `max % min`, so the
+operand order flips once `C` exceeds `R`:
+
+| in-DFB stride check | `C=1` | `C=2` | `C=4` |
 |---|---|---|---|
 | `R=3` | `3 % 1 = 0` ✅ | `3 % 2 = 1` ❌ | `4 % 3 = 1` ❌ |
 | `R=5` | `5 % 1 = 0` ✅ | `5 % 2 = 1` ❌ | `5 % 4 = 1` ❌ |
 
-`C=1` then fails group D (`C >= max(R,W)`), so all four survivors corrupt. **Keep "legal but unusable"
-distinct from "illegal":** group D is a defect, so if it is fixed `3,1,1` and `5,1,1` become usable
-immediately, whereas no `C=3` config ever can — one is a bug to be waited out, the other is the hardware.
+✅ means "passes the stride rule", **not** "usable". The four survivors are `3,1,1`, `3,1,2`, `3,1,3` and
+`5,1,1` — the `R=3` and `R=5` rows of the legal set above.
+
+**Step 2 — group D**, `C >= max(R,W)`, then rejects all four, since `C=1` cannot cover `R=3` or `R=5`.
+They are legal, and corrupt **as of this writing**.
+
+**Step 1 is the hardware; step 2 is a defect with a standalone reproducer.** Fix group D and all four
+become usable with no other change — `R=3` and `R=5` are pinned to `C=1`, not excluded from the ladder.
+No `C=3` config can ever be recovered that way (`program_spec.cpp:763`). The `usable` column above is
+therefore a snapshot of the current defect, not a property of the space.
 
 **What `C != 3` actually costs:** `3,3,3` would be legal *and* clean, predicted at
-`max(165/3, 176/3, 83/3) = 58.7` cyc/tile — a real intermediate tier between ~83 and 41.7, using 6 DM and
+`max(165/3, 176/3, 83/3) = 58.7` cyc/tile — a real intermediate tier between ~83 and 44.1, using 6 DM and
 3 Neos. It is dominated by `4,4,2` (44.12 predicted and measured, on the same 6 DM cores plus one more
 Neo), so the ban costs an operating point, not the optimum.
 
-Exhaustive enumeration with measured cost per config is in status 08-27 slide 8.
+Exhaustive enumeration with measured cost per config is in status 08-27 §5.
 
 ### 3.4 Kernels — COPY-THEN-MODIFY, in a parallel tree
 
