@@ -18,8 +18,11 @@
 namespace tt::tt_metal {
 
 class Buffer;
-class IDevice;
 class Program;
+
+namespace distributed {
+class MeshDevice;
+}
 
 namespace experimental {
 
@@ -28,7 +31,7 @@ public:
     // One sender core and a non-empty receiver CoreRangeSet (1:1 or 1:N).
     // Sender and receiver cores must be disjoint.
     CrossNodeDFB(
-        IDevice* device,
+        distributed::MeshDevice* device,
         CoreCoord sender_core,
         const CoreRangeSet& receiver_cores,
         uint32_t entry_size,
@@ -39,7 +42,7 @@ public:
     // `data_buffer` for the CrossNodeDFB lifetime; this object only records its address.
     // The config Buffer is owned by CrossNodeDFB
     CrossNodeDFB(
-        IDevice* device,
+        distributed::MeshDevice* device,
         CoreCoord sender_core,
         const CoreRangeSet& receiver_cores,
         uint32_t entry_size,
@@ -70,7 +73,7 @@ public:
     const CoreRangeSet& sender_cores() const;
     const CoreRangeSet& receiver_cores() const;
     const CoreRangeSet& all_cores() const;
-    IDevice* get_device() const { return device_; }
+    distributed::MeshDevice* get_device() const { return device_; }
 
     // Retarget the data ring to `data_buffer` and rebuild host config pages in place.
     // The next program launch picks up the updates.
@@ -95,7 +98,7 @@ private:
     // Data-ring L1 address. From owned_dfb_buffer_ when owning; from the caller's Buffer
     // when borrowing. Device config/relays only need this address.
     uint32_t data_address_ = 0;
-    IDevice* device_ = nullptr;
+    distributed::MeshDevice* device_ = nullptr;
     CoreCoord sender_core_;
     CoreRangeSet sender_cores_;
     CoreRangeSet receiver_cores_;
@@ -122,7 +125,7 @@ private:
  */
 uint8_t CreateCrossNodeDFB(
     Program& program,
-    IDevice* device,
+    distributed::MeshDevice* device,
     CoreCoord sender_core,
     const CoreRangeSet& receiver_cores,
     uint32_t entry_size,
@@ -143,7 +146,7 @@ uint8_t CreateCrossNodeDFB(
  */
 uint8_t CreateCrossNodeDFB(
     Program& program,
-    IDevice* device,
+    distributed::MeshDevice* device,
     CoreCoord sender_core,
     const CoreRangeSet& receiver_cores,
     uint32_t entry_size,

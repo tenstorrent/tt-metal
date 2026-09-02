@@ -51,10 +51,10 @@ namespace experimental {
 //
 // Sync counters (pages_sent / pages_acked) are in L1_ALIGNMENT-byte units.
 //
-// Each receiver owns a private ring, so the sender needs an independent write position per
-// receiver. No cursor state is stored anywhere: a receiver's write offset is derived from
-// its local entries_sent counter (sent % ring_entries), which dispatch resets to zero on
-// every launch.
+// Each receiver owns a private ring. Writes and credits are collective, so every receiver
+// gets the same payload and advances in lockstep. No cursor state is stored anywhere: a
+// receiver's write offset is derived from its local entries_sent counter
+// (sent % ring_entries), which dispatch resets to zero on every launch.
 //
 // Writes are contiguous: a reserve/write/push of n entries must fit from the current
 // write position to fifo_limit without straddling the wrap (same rule as local CBs). The
@@ -71,32 +71,6 @@ namespace experimental {
 //    write_broadcast(src, n);                 // post NOC writes to all receivers
 //    flush_writes();                          // flush posted writes before credit
 //    push_back(n);                            // credit all receivers (advances positions)
-//
-//  Flow B — Receiver-contiguous / unique-per-receiver:
-//    reserve_back(n);
-//    write_to_receiver(0, src_a, n);          // receiver 0 gets tensor shard A
-//    write_to_receiver(1, src_b, n);          // receiver 1 gets tensor shard B
-//    ...
-//    flush_writes();
-//    push_back(n);                            // one collective credit to all receivers
-//
-//  Flow C — Per-receiver credit (round-robin, uneven shards):
-//    Use reserve_back_for_receiver(r, n) to check only receiver r's space; reserve_back(n)
-//    would poll ALL receivers and block on the slowest even when receiver r is ready.
-//    for r in 0..num_recv:
-//      reserve_back_for_receiver(r, n);         // polls only receiver r, no head-of-line block
-//      write_to_receiver(r, src, n);            // NOC write only to receiver r
-//      flush_writes();
-//      push_back_to_receiver(r, n);             // credit receiver r (advances its position)
-//
-//  Flow D — Interleaved scatter (prefetcher / write_strided):
-//    write_strided is a single call that handles ALL receivers simultaneously.
-//    Staging buffer layout: [recv0_chunk][recv1_chunk]...[recvN_chunk]
-//    Each chunk is written to the corresponding receiver's FIFO in one loop.
-//    reserve_back(n);
-//    write_strided(src, num_rows, pages_per_row, page_size);  // all receivers, one call
-//    flush_writes();
-//    push_back(n);                              // credit all receivers (advances positions)
 //
 // ═══════════════════════════════════════════════════════════════════════
 //  RECEIVER FLOW
@@ -157,8 +131,6 @@ public:
     // -----------------------------------------------------------------------
 
     // Spin until ALL receivers have space for num_entries entries of the current entry_size.
-    // Use this for Flows A, B, D (collective credit patterns).
-    // For Flow C (per-receiver credit), use reserve_back_for_receiver(r, n) instead.
     FORCE_INLINE void reserve_back(uint32_t num_entries) {
         WAYPOINT("GSRW");
         CrossNodeSenderDFBInterface& iface = interface_.sender;
@@ -178,31 +150,13 @@ public:
         WAYPOINT("GSRD");
     }
 
-    // Spin until a SINGLE receiver (receiver_idx) has space for num_entries entries.
-    // Use this for Flow C (per-receiver credit) to avoid blocking on unrelated receivers.
-    FORCE_INLINE void reserve_back_for_receiver(uint32_t receiver_idx, uint32_t num_entries) {
-        WAYPOINT("GSRW");
-        CrossNodeSenderDFBInterface& iface = interface_.sender;
-        const uint32_t fifo_size = get_config_word(iface.config_ptr, 3);
-        const uint32_t num_units = fifo_size / L1_ALIGNMENT;
-        const uint32_t total_units_needed = units_for_write(iface, num_entries);
-
-        volatile tt_l1_ptr uint32_t* sent_ptr = local_sent_ptr(iface, receiver_idx);
-        volatile tt_l1_ptr uint32_t* acked_ptr = sent_ptr + (L1_ALIGNMENT / sizeof(uint32_t));
-        assert_contiguous_write(iface, wr_offset_from_sent(iface, *sent_ptr), num_entries);
-        do {
-            invalidate_l1_cache();
-        } while ((num_units - (*sent_ptr - *acked_ptr)) < total_units_needed);
-        WAYPOINT("GSRD");
-    }
-
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
 
     // ------------------------------------------------------------------
     // Write primitives — kick off NoC writes at each receiver's write position,
     // derived from that receiver's entries_sent credits. They do NOT increment
     // credits, so repeating a write before crediting overwrites the same slots.
-    // Call push_back() or push_back_to_receiver() after all writes.
+    // Call push_back() after all writes.
     // ------------------------------------------------------------------
 
     FORCE_INLINE void noc_unicast_write_l1(
@@ -221,55 +175,9 @@ public:
             {.noc_x = noc_x, .noc_y = noc_y, .addr = dest_l1_addr});
     }
 
-    // Interleaved scatter
-    // Writes rows from src_l1_addr interleaved across num_receivers destinations.
-    // Each receiver i gets rows at src_l1_addr + i * (num_rows * coalesced_page_size),
-    // written at that receiver's write position.
-    FORCE_INLINE void write_strided(
-        uint32_t src_l1_addr,
-        uint32_t num_rows,
-        uint32_t coalesced_num_pages_per_row,
-        uint32_t coalesced_page_size,
-        const Noc& noc = Noc{}) {
-        CrossNodeSenderDFBInterface& iface = interface_.sender;
-        const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
-        volatile tt_l1_ptr uint32_t* xy_base =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr);
-
-        const uint32_t row_bytes_per_recv = coalesced_num_pages_per_row * coalesced_page_size;
-        const uint32_t bytes_per_recv = num_rows * row_bytes_per_recv;
-        const uint32_t row_stride_in_stage = row_bytes_per_recv * num_recv;
-
-        UnicastEndpoint dst;
-        uint32_t recv_src_offset = 0;
-        for (uint32_t i = 0; i < num_recv; ++i) {
-            const uint32_t wr_offset = derived_wr_offset(iface, i);
-            assert_contiguous_bytes(iface, wr_offset, bytes_per_recv);
-            const uint32_t noc_x = xy_base[2 * i];
-            const uint32_t noc_y = xy_base[2 * i + 1];
-
-            uint32_t dest_addr = iface.fifo_start_addr + wr_offset;
-            uint32_t src_addr = src_l1_addr + recv_src_offset;
-            noc.set_async_write_state<NocOptions::POSTED>(
-                dst, coalesced_page_size, {.noc_x = noc_x, .noc_y = noc_y, .addr = dest_addr});
-            for (uint32_t h = 0; h < num_rows; ++h) {
-                const uint32_t row_src_start = src_addr;
-                for (uint32_t w = 0; w < coalesced_num_pages_per_row; ++w) {
-                    noc.async_write_with_state<NocOptions::POSTED>(
-                        CoreLocalMem<uint32_t>(src_addr), dst, coalesced_page_size, {}, {.addr = dest_addr});
-                    src_addr += coalesced_page_size;
-                    dest_addr += coalesced_page_size;
-                }
-                src_addr = row_src_start + row_stride_in_stage;
-            }
-            recv_src_offset += row_bytes_per_recv;
-        }
-    }
-
     // Broadcast: write n entries of identical data from src_l1_addr to all receivers
     // at their current write position. Uses loop-unicast (hardware NOC multicast requires
-    // a rectangular destination grid). For different bytes per receiver, use
-    // write_to_receiver / write_strided instead.
+    // a rectangular destination grid).
     FORCE_INLINE void write_broadcast(uint32_t src_l1_addr, uint32_t num_entries, const Noc& noc = Noc{}) {
         CrossNodeSenderDFBInterface& iface = interface_.sender;
         const uint32_t entry_size = iface.fifo_page_size;
@@ -291,26 +199,6 @@ public:
         }
     }
 
-    // Write n entries from src_l1_addr to a single receiver (receiver_idx) at that
-    // receiver's write position.  Does NOT increment credits.  Pair with push_back()
-    // (collective credit after all per-receiver writes) or push_back_to_receiver()
-    // (per-receiver credit) as appropriate.
-    FORCE_INLINE void write_to_receiver(
-        uint32_t receiver_idx, uint32_t src_l1_addr, uint32_t num_entries, const Noc& noc = Noc{}) {
-        CrossNodeSenderDFBInterface& iface = interface_.sender;
-        const uint32_t entry_size = iface.fifo_page_size;
-        const uint32_t len_bytes = num_entries * entry_size;
-        const uint32_t wr_offset = derived_wr_offset(iface, receiver_idx);
-        assert_contiguous_write(iface, wr_offset, num_entries);
-        const uint32_t dest_l1_addr = iface.fifo_start_addr + wr_offset;
-        volatile tt_l1_ptr uint32_t* xy_base =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr);
-
-        const uint32_t noc_x = xy_base[2 * receiver_idx];
-        const uint32_t noc_y = xy_base[2 * receiver_idx + 1];
-        noc_unicast_write_l1(src_l1_addr, dest_l1_addr, len_bytes, noc_x, noc_y, noc);
-    }
-
     // Flush all posted payload writes from this core before publishing pages_sent.
     // Posted writes do not return completion acknowledgements; receiver visibility of
     // the subsequently posted credit is the end-to-end synchronization point.
@@ -318,7 +206,7 @@ public:
 
     // Credit-only: NOC-inc pages_sent on ALL receivers by num_entries. Advancing each
     // receiver's entries_sent is what moves its derived write position forward.
-    // Call after all write_* for this slot.
+    // Call after write_broadcast for this slot.
     FORCE_INLINE void push_back(uint32_t num_entries, const Noc& noc = Noc{}) {
         CrossNodeSenderDFBInterface& iface = interface_.sender;
         const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
@@ -333,27 +221,6 @@ public:
         const uint8_t noc_id = noc.get_noc_id();
         detail::update_pages_sent(
             reinterpret_cast<const RemoteSenderCBInterface&>(iface), num_units, noc_id, true, write_at_cmd_buf);
-    }
-
-    // Credit-only for one receiver: NOC-inc pages_sent on receiver_idx by num_entries,
-    // which also advances that receiver's derived write position. Used for round-robin /
-    // uneven per-receiver credit distribution (caller manages receiver index).
-    FORCE_INLINE void push_back_to_receiver(uint32_t receiver_idx, uint32_t num_entries, const Noc& noc = Noc{}) {
-        CrossNodeSenderDFBInterface& iface = interface_.sender;
-
-        const uint32_t num_units = units_for_write(iface, num_entries);
-        assert_contiguous_write(iface, derived_wr_offset(iface, receiver_idx), num_entries);
-
-        volatile tt_l1_ptr uint32_t* xy_base =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr);
-        volatile tt_l1_ptr uint32_t* local_sent = local_sent_ptr(iface, receiver_idx);
-        const uint8_t noc_id = noc.get_noc_id();
-        const uint32_t noc_x = xy_base[2 * receiver_idx];
-        const uint32_t noc_y = xy_base[2 * receiver_idx + 1];
-        const uint32_t noc_xy = uint32_t(NOC_XY_ENCODING(DYNAMIC_NOC_X(noc_id, noc_x), DYNAMIC_NOC_Y(noc_id, noc_y)));
-        *local_sent += num_units;
-        const uint64_t remote_addr = get_noc_addr_helper(noc_xy, (uint32_t)local_sent);
-        noc_semaphore_inc<true>(remote_addr, num_units, noc_id);
     }
 
 #endif  // KERNEL_BUILD && !COMPILE_FOR_TRISC
@@ -460,12 +327,11 @@ public:
         return cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
     }
 
-    // Next write address in one receiver's ring, derived from that receiver's credits.
-    // Every receiver has its own position, so callers that fan out unevenly must ask
-    // per receiver.
-    FORCE_INLINE uint32_t get_write_ptr(uint32_t receiver_idx = 0) {
+    // Next collective write address, derived from receiver 0's credits. Collective
+    // pushes keep all receiver write positions in lockstep.
+    FORCE_INLINE uint32_t get_write_ptr() {
         CrossNodeSenderDFBInterface& iface = interface_.sender;
-        return iface.fifo_start_addr + derived_wr_offset(iface, receiver_idx);
+        return iface.fifo_start_addr + derived_wr_offset(iface, 0);
     }
 
     FORCE_INLINE uint32_t get_read_ptr() { return interface_.receiver.fifo_rd_ptr; }
