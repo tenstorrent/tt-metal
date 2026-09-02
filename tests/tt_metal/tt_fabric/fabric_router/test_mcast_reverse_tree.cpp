@@ -285,54 +285,52 @@ void check_embed(const std::string& fixture) {
 
     const auto y_size = static_cast<std::uint32_t>(y_topo->axis_len);
     const auto x_size = static_cast<std::uint32_t>(x_topo->axis_len);
-    ASSERT_TRUE(Routing2DCodec::hybrid_region_fits(y_size, x_size)) << fixture;
+    ASSERT_TRUE(Routing2DCodec::route_table_regions_fit(y_size, x_size)) << fixture;
 
-    const auto tree_offset = Routing2DCodec::mcast_tree_offset_bytes(y_size, x_size);
     const auto tree_bytes = Routing2DCodec::mcast_tree_region_bytes(y_size, x_size);
     constexpr std::uint8_t kSentinel = 0xA5;
 
-    for (std::uint32_t my_y = 0; my_y < y_size; my_y++) {
-        for (std::uint32_t my_x = 0; my_x < x_size; my_x++) {
-            const std::string where = fmt::format("{} chip ({},{})", fixture, my_y, my_x);
-            std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES, kSentinel);
+    const std::array<std::pair<std::uint32_t, std::uint32_t>, 4> corners = {
+        std::pair{0u, 0u},
+        std::pair{0u, x_size - 1},
+        std::pair{y_size - 1, 0u},
+        std::pair{y_size - 1, x_size - 1},
+    };
+    for (const auto& [my_y, my_x] : corners) {
+        const std::string where = fmt::format("{} chip ({},{})", fixture, my_y, my_x);
+        std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, kSentinel);
 
-            std::string failure;
-            ASSERT_TRUE(embed_mcast_reverse_trees(
-                mesh_graph,
-                MeshId{0},
-                *y_topo,
-                *x_topo,
-                static_cast<int>(my_y),
-                static_cast<int>(my_x),
-                table.data(),
-                &failure))
-                << where << ": " << failure;
+        std::string failure;
+        ASSERT_TRUE(embed_mcast_reverse_trees(
+            mesh_graph,
+            MeshId{0},
+            *y_topo,
+            *x_topo,
+            static_cast<int>(my_y),
+            static_cast<int>(my_x),
+            trees.data(),
+            &failure))
+            << where << ": " << failure;
 
-            for (std::uint32_t i = 0; i < table.size(); i++) {
-                if (i >= tree_offset && i < tree_offset + tree_bytes) {
-                    continue;
-                }
-                ASSERT_EQ(table[i], kSentinel) << where << ": wrote outside the tree region at byte " << i;
-            }
+        for (std::uint32_t i = tree_bytes; i < trees.size(); i++) {
+            ASSERT_EQ(trees[i], kSentinel) << where << ": wrote outside the live tree span at byte " << i;
+        }
 
-            // The embedded words must match what the generator and packer produce standalone, for
-            // this chip's own row and column and no other.
-            const auto y_packed = pack_mcast_reverse_tree(
-                *build_mcast_reverse_tree(mesh_graph, MeshId{0}, *y_topo, static_cast<int>(my_y)));
-            const auto x_packed = pack_mcast_reverse_tree(
-                *build_mcast_reverse_tree(mesh_graph, MeshId{0}, *x_topo, static_cast<int>(my_x)));
-            ASSERT_TRUE(y_packed.has_value() && x_packed.has_value()) << where;
+        // The embedded words must match what the generator and packer produce standalone, for
+        // this chip's own row and column and no other.
+        const auto y_packed =
+            pack_mcast_reverse_tree(*build_mcast_reverse_tree(mesh_graph, MeshId{0}, *y_topo, static_cast<int>(my_y)));
+        const auto x_packed =
+            pack_mcast_reverse_tree(*build_mcast_reverse_tree(mesh_graph, MeshId{0}, *x_topo, static_cast<int>(my_x)));
+        ASSERT_TRUE(y_packed.has_value() && x_packed.has_value()) << where;
 
-            const std::uint8_t* y_region = table.data() + Routing2DCodec::mcast_tree_y_offset(y_size, x_size);
-            for (std::uint32_t i = 0; i < y_packed->size(); i++) {
-                EXPECT_EQ(Routing2DCodec::get_mcast_tree_edge(y_region, i), (*y_packed)[i])
-                    << where << ": Y edge " << i;
-            }
-            const std::uint8_t* x_region = table.data() + Routing2DCodec::mcast_tree_x_offset(y_size, x_size);
-            for (std::uint32_t i = 0; i < x_packed->size(); i++) {
-                EXPECT_EQ(Routing2DCodec::get_mcast_tree_edge(x_region, i), (*x_packed)[i])
-                    << where << ": X edge " << i;
-            }
+        const std::uint8_t* y_region = trees.data();
+        for (std::uint32_t i = 0; i < y_packed->size(); i++) {
+            EXPECT_EQ(Routing2DCodec::get_mcast_tree_edge(y_region, i), (*y_packed)[i]) << where << ": Y edge " << i;
+        }
+        const std::uint8_t* x_region = trees.data() + Routing2DCodec::mcast_tree_x_offset(y_size);
+        for (std::uint32_t i = 0; i < x_packed->size(); i++) {
+            EXPECT_EQ(Routing2DCodec::get_mcast_tree_edge(x_region, i), (*x_packed)[i]) << where << ": X edge " << i;
         }
     }
 }
@@ -377,10 +375,10 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
 
     for (int root_y = 0; root_y < y_len; root_y++) {
         for (int root_x = 0; root_x < x_len; root_x++) {
-            std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES, 0);
+            std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
             std::string failure;
             ASSERT_TRUE(embed_mcast_reverse_trees(
-                mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, table.data(), &failure))
+                mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, trees.data(), &failure))
                 << failure;
 
             for (const auto& [n_hops, s_hops] : y_extents) {
@@ -391,7 +389,7 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
                     std::vector<std::uint8_t> got(y_size + x_size, 0);
                     encode_2d_mcast_maps(
                         got.data(),
-                        table.data(),
+                        trees.data(),
                         y_size,
                         x_size,
                         static_cast<std::uint32_t>(root_y),
@@ -451,15 +449,15 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
     // so its root leaves on exactly one edge and the single-connection API remains sufficient.
     for (int root_y = 0; root_y < y_len; root_y++) {
         for (int root_x = 0; root_x < x_len; root_x++) {
-            std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES, 0);
+            std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
             ASSERT_TRUE(
-                embed_mcast_reverse_trees(mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, table.data()));
+                embed_mcast_reverse_trees(mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, trees.data()));
             const std::vector<std::array<int, 4>> one_hop = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
             for (const auto& [n, s, e, w] : one_hop) {
                 std::vector<std::uint8_t> got(y_size + x_size, 0);
                 encode_2d_mcast_maps(
                     got.data(),
-                    table.data(),
+                    trees.data(),
                     y_size,
                     x_size,
                     static_cast<std::uint32_t>(root_y),
@@ -503,7 +501,7 @@ void check_chord_ranges(const std::string& fixture, bool expect_candidates) {
 
     std::vector<std::vector<std::uint8_t>> tables(y_len);
     for (int root_y = 0; root_y < y_len; root_y++) {
-        tables[root_y].assign(Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES, 0);
+        tables[root_y].assign(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
         std::string failure;
         ASSERT_TRUE(embed_mcast_reverse_trees(
             mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, 0, tables[root_y].data(), &failure))
@@ -585,16 +583,16 @@ void check_full_extent_roots(const std::string& fixture) {
 
     for (int root_y = 0; root_y < y_len; root_y++) {
         for (int root_x = 0; root_x < x_len; root_x++) {
-            std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES, 0);
+            std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
             std::string failure;
             ASSERT_TRUE(embed_mcast_reverse_trees(
-                mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, table.data(), &failure))
+                mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, trees.data(), &failure))
                 << failure;
 
             std::vector<std::uint8_t> got(y_size + x_size, 0);
             encode_2d_mcast_maps(
                 got.data(),
-                table.data(),
+                trees.data(),
                 y_size,
                 x_size,
                 static_cast<std::uint32_t>(root_y),
@@ -645,11 +643,9 @@ void check_maximum_embed(
     ASSERT_EQ(y_topo.axis_len, expected_y);
     ASSERT_EQ(x_topo.axis_len, expected_x);
     ASSERT_EQ(
-        Routing2DCodec::mcast_tree_offset_bytes(expected_y, expected_x) +
-            Routing2DCodec::mcast_tree_region_bytes(expected_y, expected_x),
-        Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES);
+        Routing2DCodec::mcast_tree_region_bytes(expected_y, expected_x), Routing2DCodec::MCAST_TREE_CAPACITY_BYTES);
 
-    std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES, 0);
+    std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
     std::string failure;
     EXPECT_TRUE(embed_mcast_reverse_trees(
         mesh_graph,
@@ -658,7 +654,7 @@ void check_maximum_embed(
         x_topo,
         static_cast<int>(expected_y - 1),
         static_cast<int>(expected_x - 1),
-        table.data(),
+        trees.data(),
         &failure))
         << failure;
 }

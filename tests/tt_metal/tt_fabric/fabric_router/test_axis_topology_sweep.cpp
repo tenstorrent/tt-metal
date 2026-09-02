@@ -204,7 +204,7 @@ TEST(AxisTopologySweep, EveryDeclaredShapeFitsThe2DRouteTable) {
             EXPECT_TRUE(Routing2DCodec::shape_fits_route_table(y, x))
                 << path.filename().string() << " mesh " << *mesh_id << " shape " << y << "x" << x
                 << " cannot be packed into the destination-major 2D route table";
-            EXPECT_TRUE(Routing2DCodec::hybrid_region_fits(y, x))
+            EXPECT_TRUE(Routing2DCodec::route_table_regions_fit(y, x))
                 << path.filename().string() << " mesh " << *mesh_id << " shape " << y << "x" << x
                 << " cannot fit action maps and multicast trees in the 2D route-table slot";
             EXPECT_LE(y + x, kMaximumActionMapBytes) << path.filename().string() << " mesh " << *mesh_id << " shape "
