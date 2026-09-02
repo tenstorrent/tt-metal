@@ -103,7 +103,7 @@ class SpeculativeDecoder:
         self._is_mesh = hasattr(mesh_device, "shape")
         self._mapper = target_model._replicate_to_mesh_mapper()
         self._tp = target_model.mesh_config.tp if target_model.mesh_config else 1
-        self._shard_argmax = self._tp > 1 and os.environ.get("GEMMA4_SPEC_SHARD_ARGMAX", "1").lower() not in (
+        self._shard_argmax_enabled = self._tp > 1 and os.environ.get("GEMMA4_SPEC_SHARD_ARGMAX", "1").lower() not in (
             "0",
             "false",
             "no",
@@ -823,7 +823,7 @@ class SpeculativeDecoder:
 
     def _use_shard_argmax(self):
         """Skip the drafter's full-vocab all-gather; reduce per-shard then gather scalars."""
-        return self._shard_argmax
+        return self._shard_argmax_enabled
 
     def _shard_offset_tables(self, shard_w, tp, k):
         """Replicated TILE tables for gathered local-topk: per-slot vocab offsets and column ids."""
@@ -1101,10 +1101,12 @@ class SpeculativeDecoder:
 
         Reads tr["anchor_tok"]/tr["h"] (persistent inputs) and the position /
         page-table / packed-verify buffers; returns the persistent OUTPUT handles
-        (verify_x [1,K+1], vidx [1,1,K+1], vhidden [1,1,K+1,backbone]). Drafts are
-        verify_x[1:]. All argmax/re-embed/concat are on device, so the K drafter
-        steps chain in-graph (no inter-replay copy). Verify is packed (query-head
-        dim + loop-free staging KV write), not K+1 pseudo-users."""
+        (verify_x [1,K+1], vidx [1,1,K+1], vhidden [1,1,K+1,backbone], h_rows).
+        Drafts are verify_x[1:]. All argmax/re-embed/concat are on device, so the
+        K drafter steps chain in-graph (no inter-replay copy). Verify is packed
+        (query-head dim + loop-free staging KV write), not K+1 pseudo-users.
+        ``h_rows`` are captured 1-row slices of vhidden for the allocation-free
+        shift-seed copy between replays."""
         K = self.draft_len
         page_tables = {lt: tr["d_pt"] for lt in self._shared_kv}
         tok = tr["anchor_tok"]
@@ -1154,7 +1156,13 @@ class SpeculativeDecoder:
         else:
             vidx = tail_idx
         vlogits.deallocate(True)
-        return verify_x, vidx, vhidden
+        # Persistent per-row hidden outputs (captured slices). The next iter's
+        # shift seed is ``ttnn.copy(h_rows[m], tr["h"])`` — no slice between
+        # replays, which can alias trace scratch. Capture unrolls these P slices
+        # into the same graph as the K drafter steps.
+        hd = int(vhidden.shape[-1])
+        h_rows = [ttnn.slice(vhidden, [0, 0, r, 0], [1, 1, r + 1, hd]) for r in range(tail_rows)]
+        return verify_x, vidx, vhidden, h_rows
 
     def _capture_fused_trace(self, anchor_token, anchor_hidden, anchor_pos):
         """Capture ONE fused iteration at the real first-call inputs.
@@ -1184,20 +1192,23 @@ class SpeculativeDecoder:
             "c": c,
         }
         _lg.info("[spec-trace] capture fused: compile run")
-        vx, vidx, vh = self._fused_body(tr)
+        vx, vidx, vh, h_rows = self._fused_body(tr)
         ttnn.synchronize_device(self.mesh_device)
         vx.deallocate(True)
         vidx.deallocate(True)
         vh.deallocate(True)
+        for r in h_rows:
+            r.deallocate(True)
         _lg.info("[spec-trace] capture fused: begin_trace_capture")
         tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        vx, vidx, vh = self._fused_body(tr)
+        vx, vidx, vh, h_rows = self._fused_body(tr)
         ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
         _lg.info("[spec-trace] capture fused: DONE")
         tr["id"] = tid
         tr["verify_x"] = vx
         tr["vidx"] = vidx
         tr["vhidden"] = vh
+        tr["h_rows"] = h_rows
         self._fused_trace = tr
         # Compile + capture already wrote this iteration's packed KV; keep the
         # staging rollover index in sync with a real packed verify.
@@ -1207,9 +1218,9 @@ class SpeculativeDecoder:
         """Whether the recurrent seed is carried device-side (default) or via host.
 
         ``GEMMA4_SPEC_DEVICE_SEED=0`` restores the host round trip. Kept as an
-        escape hatch because the host path is allocation-free on device, and the
-        device path allocates a short-lived slice between trace replays -- see
-        :meth:`_hidden_row_to_device`.
+        escape hatch because the host path is allocation-free on device. The
+        device path copies a captured per-row hidden (see
+        :meth:`_hidden_row_to_device`).
         """
         return os.environ.get("GEMMA4_SPEC_DEVICE_SEED", "1").lower() not in ("0", "false", "no")
 
@@ -1223,15 +1234,11 @@ class SpeculativeDecoder:
         spec-decode iteration -- the one place in this file where a host hop is on
         the critical path rather than beside it.
 
-        ``ttnn.slice`` + ``ttnn.copy`` into the persistent buffer does the same
-        selection on device. The original comment avoided a device slice because a
-        freshly allocated tensor could alias trace scratch on a re-replay; the
-        slice here is allocated and freed inside one iteration and never overlaps a
-        live trace tensor, and ``ttnn.copy(src, tr["h"])`` is already the idiom
-        used to reset this same buffer in ``_capture_fused_trace``. ``ttnn.slice``
-        cannot write straight into ``tr["h"]`` -- its ``output_tensor`` requires the
-        unpadded shape, and a TILE [1,1,1,backbone] buffer is padded to 32 rows --
-        hence the temporary.
+        The fused graph writes one persistent tensor per verify row (captured
+        slices in ``tr["h_rows"]``). Between replays we only
+        ``ttnn.copy(h_rows[row], tr["h"])`` — the same allocation-free idiom as
+        the draft-trace ``h_next → h_in`` copy. A fresh ``ttnn.slice`` of
+        ``vhidden`` between replays can alias trace scratch on a re-replay.
 
         Dtype is handled the same way the host path handled it: the old upload
         forced ``dtype=tr["h"].dtype`` through ``from_torch``, and ``ttnn.copy``
@@ -1243,6 +1250,10 @@ class SpeculativeDecoder:
         if not self._device_seed_enabled():
             return self._hidden_row_to_device_host(row)
         tr = self._fused_trace
+        rows = tr.get("h_rows")
+        if rows is not None:
+            ttnn.copy(rows[row], tr["h"])
+            return
         vh = tr["vhidden"]
         sel = ttnn.slice(vh, [0, 0, row, 0], [1, 1, row + 1, int(vh.shape[-1])])
         ttnn.copy(sel, tr["h"])
