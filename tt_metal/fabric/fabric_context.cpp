@@ -63,35 +63,9 @@ uint32_t FabricContext::get_max_1d_hops_from_topology(const ControlPlane& contro
     return compute_max_1d_hops(mesh_shapes);
 }
 
-uint32_t FabricContext::get_max_2d_hops_from_topology(const ControlPlane& control_plane) const {
+uint32_t FabricContext::get_max_2d_action_map_bytes_from_topology(const ControlPlane& control_plane) const {
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
-    // Extract mesh shapes from topology
-    std::vector<MeshShape> mesh_shapes;
-    auto mesh_ids = mesh_graph.get_mesh_ids();
-    mesh_shapes.reserve(mesh_ids.size());
-    for (const auto& mesh_id : mesh_ids) {
-        mesh_shapes.push_back(mesh_graph.get_mesh_shape(mesh_id));
-    }
-
-    // Use helper function for hop calculation
-    return compute_max_2d_hops(mesh_shapes);
-}
-
-// Every 2D packet carries action maps rather than a hop program, so its route buffer holds rows + cols
-// bytes -- two more than the (rows-1) + (cols-1) Manhattan hop count.
-uint32_t FabricContext::get_max_2d_route_buffer_bytes_from_topology(const ControlPlane& control_plane) const {
-    const auto& mesh_graph = control_plane.get_mesh_graph();
-
-    // Every 2D mesh: the action maps occupy Y + X bytes, two more than the (Y-1) + (X-1) hop count
-    // the tiers were sized from, and after the flip every 2D mesh carries them.
-    //
-    // compute_packet_specifications() takes the max of this and the hop count, so this can only grow
-    // the buffer. On [32,4] the extra two bytes cross a tier boundary (35 -> 51, i.e. a 96 B header
-    // becomes 112 B); Phase 4.4 gives those bytes back by retiring is_mcast_active, which dropped the
-    // header base 61 -> 60 and moved the tiers to 36/52/67, so [32,4] lands on 36 and stays at 96 B.
-    // Every other in-tree shape stays on its current tier. (routing_fields was NOT retired -- the
-    // profiler still decodes it.)
     uint32_t max_bytes = 0;
     for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
         // Must match the shape get_2d_kernel_defines emits as FABRIC_2D_MESH_*_SIZE, GLOBAL
@@ -112,56 +86,40 @@ uint32_t FabricContext::compute_1d_pkt_hdr_extension_words(uint32_t max_hops) co
     return (max_hops - 1) / ROUTING_1D_HOPS_PER_WORD;
 }
 
-// required_route_bytes is the hop count for the legacy hop program, or rows + cols for 2D action maps.
-// Precondition: bounds validated by compute_packet_specifications().
+// Precondition: required_route_bytes is validated by compute_packet_specifications().
 uint32_t FabricContext::compute_2d_pkt_hdr_route_buffer_size(uint32_t required_route_bytes) const {
-    // Route buffer tiers aligned to packet header size boundaries
-    for (const auto& tier : ROUTING_2D_BUFFER_TIERS) {
-        if (required_route_bytes <= tier.max_hops) {
-            return tier.buffer_size;
+    for (const auto& tier : ROUTING_2D_HEADER_TIERS) {
+        if (required_route_bytes <= tier.max_action_map_bytes) {
+            return tier.route_buffer_size;
         }
     }
 
-    return Limits::MAX_2D_ROUTE_BUFFER_SIZE;
+    return Limits::MAX_2D_ACTION_MAP_BYTES;
 }
 
 void FabricContext::compute_packet_specifications(
     const ControlPlane& control_plane, const tt_metal::Hal& hal, tt::ARCH arch) {
     // Query topology to determine optimal header sizes
     if (is_2D_routing_enabled_) {
-        // 2D mode: query topology and validate against limits
-        max_2d_hops_ = get_max_2d_hops_from_topology(control_plane);
+        uint32_t required_action_map_bytes = get_max_2d_action_map_bytes_from_topology(control_plane);
 
-        if (max_2d_hops_ == 0) {
+        if (required_action_map_bytes == 0) {
             log_warning(
                 tt::LogFabric,
-                "Max 2D routing hops were determined as 0, check mesh topology before running fabric workloads, "
+                "2D action-map size was determined as 0, check mesh topology before running fabric workloads, "
                 "defaulting to: {}",
-                Limits::MAX_2D_HOPS);
+                Limits::MAX_2D_ACTION_MAP_BYTES);
             // NOTE: Default to a non-zero value as we might be running tests in a simulated/mock environment
-            max_2d_hops_ = Limits::MAX_2D_HOPS;
+            required_action_map_bytes = Limits::MAX_2D_ACTION_MAP_BYTES;
         }
 
-        // Validate 2D topology against route buffer limits
-        // Each byte in route buffer encodes 1 hop, so max_hops cannot exceed buffer size
         TT_FATAL(
-            max_2d_hops_ <= Limits::MAX_2D_HOPS,
-            "2D routing with {} hops exceeds maximum {} hops supported by {}B route buffer.",
-            max_2d_hops_,
-            Limits::MAX_2D_HOPS,
-            Limits::MAX_2D_ROUTE_BUFFER_SIZE);
+            required_action_map_bytes <= Limits::MAX_2D_ACTION_MAP_BYTES,
+            "2D routing requires a {}B packet action map, exceeding the maximum of {}B.",
+            required_action_map_bytes,
+            Limits::MAX_2D_ACTION_MAP_BYTES);
 
-        // Size for whichever encoding demands more, so neither can overrun the buffer.
-        const uint32_t required_2d_route_bytes =
-            std::max(max_2d_hops_, get_max_2d_route_buffer_bytes_from_topology(control_plane));
-
-        TT_FATAL(
-            required_2d_route_bytes <= Limits::MAX_2D_ROUTE_BUFFER_SIZE,
-            "2D routing requires a {}B route buffer, exceeding the maximum of {}B.",
-            required_2d_route_bytes,
-            Limits::MAX_2D_ROUTE_BUFFER_SIZE);
-
-        routing_2d_buffer_size_ = compute_2d_pkt_hdr_route_buffer_size(required_2d_route_bytes);
+        routing_2d_buffer_size_ = compute_2d_pkt_hdr_route_buffer_size(required_action_map_bytes);
     } else {
         // 1D mode: query topology and validate against limits
         max_1d_hops_ = get_max_1d_hops_from_topology(control_plane);
@@ -222,12 +180,13 @@ size_t FabricContext::get_1d_header_size(uint32_t extension_words) const {
 
 size_t FabricContext::get_2d_header_size(uint32_t route_buffer_size) const {
     // Use explicit template instantiation for compile-time type safety
-    // Only max-capacity tiers per header size (20, 36, 52, 67) to avoid switch bloat
+    // Only max-capacity tiers per header size (20, 36, 52, 68) to avoid switch bloat
     switch (route_buffer_size) {
         case 20: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<20>);  // 80B header, max capacity
         case 36: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<36>);  // 96B header, max capacity
         case 52: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<52>);  // 112B header, max capacity
-        case 67: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<67>);  // 128B header, max capacity
+        case Limits::MAX_2D_ACTION_MAP_BYTES:
+            return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<Limits::MAX_2D_ACTION_MAP_BYTES>);
         default: TT_THROW("Unsupported 2D route buffer size: {}", route_buffer_size);
     }
 }

@@ -351,13 +351,13 @@ public:
     //
     // Where:
     //   - Max NoC packet size: Wormhole = 8192 bytes, Blackhole = 16384 bytes
-    //   - Max packet header size: 96 bytes (HybridMeshPacketHeaderT<35> for 2D mesh routing)
+    //   - Max packet header size: 144 bytes (UDMHybridMeshPacketHeader)
     //   - Tile size (Bfp8_b): 1088 bytes
     //
     // Payload is rounded down to tile boundaries for efficient tile-aligned transfers.
     //
-    // Wormhole:  (8192 - 96) / 1088 = 7.44 tiles → 7 tiles = 7616 bytes
-    // Blackhole: (16384 - 96) / 1088 = 14.97 tiles → 14 tiles = 15232 bytes
+    // Wormhole:  (8192 - 144) / 1088 = 7.39 tiles -> 7 tiles = 7616 bytes
+    // Blackhole: (16384 - 144) / 1088 = 14.93 tiles -> 14 tiles = 15232 bytes
     static constexpr size_t max_packet_payload_size_bytes_wormhole =
         tt::tile_size(tt::DataFormat::Bfp8_b) * 7;  // 7616 bytes
     static constexpr size_t max_packet_payload_size_bytes_blackhole =

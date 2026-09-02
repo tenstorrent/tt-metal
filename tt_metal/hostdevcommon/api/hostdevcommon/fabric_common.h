@@ -100,7 +100,8 @@ struct __attribute__((packed)) direction_table_t {
 // Dynamic Packet Header Configuration
 // ============================================================================
 
-// Centralized build-time configuration for packet headers
+// Compile-time packet-header configuration. FabricContext selects and injects these values for
+// device builds; defaults support host compilation and translation units without fabric defines.
 struct FabricHeaderConfig {
     // 1D Routing Configuration
 #ifdef FABRIC_1D_PKT_HDR_EXTENSION_WORDS
@@ -113,12 +114,10 @@ struct FabricHeaderConfig {
     // Derived Constants (Centralized Logic)
     static constexpr uint32_t LOW_LATENCY_NUM_WORDS = 1 + LOW_LATENCY_EXTENSION_WORDS;
 
-    // 2D Routing Configuration
 #ifdef FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE
     static constexpr uint32_t MESH_ROUTE_BUFFER_SIZE = FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE;
 #else
-    // Default: 36 bytes (96B header, 60B base)
-    static constexpr uint32_t MESH_ROUTE_BUFFER_SIZE = 36;
+    static constexpr uint32_t MESH_ROUTE_BUFFER_SIZE = 36;  // 96 B header with the 60 B fixed fields
 #endif
 
     // Validation (Fail fast)
@@ -175,6 +174,22 @@ struct RoutingFieldsConstants {
 // with route_buffer_y[Y] immediately followed by route_buffer_x[X]. The control plane generates the
 // 2-bit tables, workers widen them into packets at setup, and the router decodes an action byte using
 // its own coordinate.
+namespace detail {
+
+// The packed-row footprint is largest at the longest representable axis. The orthogonal extent is
+// bounded by the total device count; both orientations have the same footprint.
+constexpr uint32_t derive_2d_route_table_capacity_bytes(
+    uint32_t max_axis_size, uint32_t max_mesh_size, uint32_t actions_per_byte, uint32_t tree_edge_bytes) {
+    const uint32_t orthogonal_axis_size = max_mesh_size / max_axis_size;
+    const uint32_t vector_bytes =
+        max_axis_size * ((max_axis_size + actions_per_byte - 1) / actions_per_byte) +
+        orthogonal_axis_size * ((orthogonal_axis_size + actions_per_byte - 1) / actions_per_byte);
+    const uint32_t tree_bytes = tree_edge_bytes * ((max_axis_size - 1) + (orthogonal_axis_size - 1));
+    return ((vector_bytes + 3u) & ~3u) + tree_bytes;
+}
+
+}  // namespace detail
+
 struct Routing2DCodec {
     // ---- Packet action byte -------------------------------------------------
     // One-hot per output port; bits 0..4 intentionally match eth_chan_directions so the action bit
@@ -248,16 +263,12 @@ struct Routing2DCodec {
     }
 
     // ---- L1 region sizing -------------------------------------------------------
-    // SLOT_SHAPE defines the fixed 1028 B L1 budget, not a supported mesh shape. MAX_AXIS_SIZE is 64
-    // because packed reverse-tree descriptors use 6-bit row indices. A shape is admissible when both
-    // axes fit those fields and its packed vectors fit ROUTE_TABLE_BYTES.
-    static constexpr uint32_t SLOT_SHAPE_Y = 64;
-    static constexpr uint32_t SLOT_SHAPE_X = 4;
+    // Packed reverse-tree descriptors use 6-bit row indices. The capacity covers packed vectors
+    // plus this chip's two reverse trees for any mesh up to MAX_MESH_SIZE devices.
     static constexpr uint32_t MAX_AXIS_SIZE = 64;
-    // Expanded because Clang cannot call table_bytes() here before the class definition is complete.
-    static constexpr uint32_t ROUTE_TABLE_BYTES =
-        SLOT_SHAPE_Y * ((SLOT_SHAPE_Y + ACTIONS_PER_BYTE - 1) / ACTIONS_PER_BYTE) +
-        SLOT_SHAPE_X * ((SLOT_SHAPE_X + ACTIONS_PER_BYTE - 1) / ACTIONS_PER_BYTE);  // 1028
+    static constexpr uint32_t MCAST_TREE_EDGE_BYTES = 2;
+    static constexpr uint32_t ROUTE_TABLE_CAPACITY_BYTES = detail::derive_2d_route_table_capacity_bytes(
+        MAX_AXIS_SIZE, MAX_MESH_SIZE, ACTIONS_PER_BYTE, MCAST_TREE_EDGE_BYTES);
 
     // ---- Pack (host-side table generation) --------------------------------------
     // The Y region occupies [0, table_bytes(y_size)) and the X region follows it, both as
@@ -272,7 +283,6 @@ struct Routing2DCodec {
     //
     // The offset is derived from the mesh shape on both sides, because the vectors are packed to the
     // live shape and a fixed offset would either waste the [64,4] bound or collide.
-    static constexpr uint32_t MCAST_TREE_EDGE_BYTES = 2;
     // An arborescence over n rows has n-1 edges; a single-row axis has none.
     static constexpr uint32_t mcast_tree_edge_count(uint32_t axis_size) { return axis_size > 1 ? axis_size - 1 : 0; }
     static constexpr uint32_t mcast_tree_region_bytes(uint32_t y_size, uint32_t x_size) {
@@ -281,10 +291,12 @@ struct Routing2DCodec {
     static constexpr uint32_t mcast_tree_offset_bytes(uint32_t y_size, uint32_t x_size) {
         return (vectors_region_bytes(y_size, x_size) + 3u) & ~3u;
     }
-    // Whether vectors plus trees fit the existing union slot. False is a legal answer -- [64,4] does
-    // not fit -- and callers must report it rather than pack over the end of the slot.
+    static constexpr uint32_t required_route_table_bytes(uint32_t y_size, uint32_t x_size) {
+        return mcast_tree_offset_bytes(y_size, x_size) + mcast_tree_region_bytes(y_size, x_size);
+    }
+    // Whether vectors plus trees fit the route-table slot.
     static constexpr bool hybrid_region_fits(uint32_t y_size, uint32_t x_size) {
-        return mcast_tree_offset_bytes(y_size, x_size) + mcast_tree_region_bytes(y_size, x_size) <= ROUTE_TABLE_BYTES;
+        return required_route_table_bytes(y_size, x_size) <= ROUTE_TABLE_CAPACITY_BYTES;
     }
 
     static constexpr uint32_t mcast_tree_y_offset(uint32_t y_size, uint32_t x_size) {
@@ -329,11 +341,11 @@ struct Routing2DCodec {
     }
 
     // Unicast action-map bound only: both axes must be addressable and the packed vectors must fit
-    // the L1 slot. FabricContext separately checks Y + X <= 67 for the packet header, while
-    // hybrid_region_fits() checks multicast trees. [64,4] fills this slot exactly.
+    // the L1 slot. FabricContext separately checks the packet map, while hybrid_region_fits() checks
+    // multicast trees.
     static constexpr bool shape_fits_route_table(uint32_t y_size, uint32_t x_size) {
         return y_size <= MAX_AXIS_SIZE && x_size <= MAX_AXIS_SIZE &&
-               vectors_region_bytes(y_size, x_size) <= ROUTE_TABLE_BYTES;
+               vectors_region_bytes(y_size, x_size) <= ROUTE_TABLE_CAPACITY_BYTES;
     }
 
     template <typename YActionSource, typename XActionSource>
@@ -492,51 +504,12 @@ static_assert(
     (Routing2DCodec::ACTION_VALID_MASK | Routing2DCodec::ACTION_RESERVED_MASK) == 0xFF &&
         (Routing2DCodec::ACTION_VALID_MASK & Routing2DCodec::ACTION_RESERVED_MASK) == 0,
     "2D action-map byte valid/reserved masks must partition the byte");
-static_assert(Routing2DCodec::ROUTE_TABLE_BYTES == 1028, "2D route table must be 1028 B");
-
-// Hybrid footprints: [32,4] is 260 B of vectors plus a 68 B tree region and fits the existing slot;
-// [64,4] is 1160 B and does not.
 static_assert(
-    Routing2DCodec::vectors_region_bytes(32, 4) == 260 && Routing2DCodec::mcast_tree_region_bytes(32, 4) == 68 &&
-        Routing2DCodec::hybrid_region_fits(32, 4),
-    "[32,4] hybrid layout must fit the 2D union slot");
+    Routing2DCodec::required_route_table_bytes(64, 4) == Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES,
+    "The 64x4 maximum must fill the 2D route-table allocation exactly");
 static_assert(
-    !Routing2DCodec::hybrid_region_fits(64, 4),
-    "[64,4] hybrid layout is expected to exceed the slot until routing_l1_info_t grows");
-static_assert(
-    Routing2DCodec::mcast_tree_x_offset(32, 4) == Routing2DCodec::mcast_tree_y_offset(32, 4) + 62,
-    "X tree must follow the Y tree's y_size-1 edges");
-
-// Shapes with X > 4 are declared by in-tree mesh graph descriptors and must be admissible: the old
-// per-axis `X <= 4` cap rejected them even though their tables are far smaller than the slot. Pinned
-// here so the bound cannot silently regress to a per-axis one.
-//   [8,8]   dual_bh_galaxy_torus_xy, dual_galaxy
-//   [8,16]  quad_galaxy, quad_galaxy_torus_xy
-//   [16,8]  16x8_quad_bh_galaxy_torus_xy
-//   [1,16]  bh_lbx2_1x16
-static_assert(
-    Routing2DCodec::vectors_region_bytes(8, 8) == 32 && Routing2DCodec::hybrid_region_fits(8, 8),
-    "[8,8] must fit the 2D union slot");
-static_assert(
-    Routing2DCodec::vectors_region_bytes(8, 16) == 80 && Routing2DCodec::hybrid_region_fits(8, 16),
-    "[8,16] must fit the 2D union slot");
-static_assert(
-    Routing2DCodec::vectors_region_bytes(16, 8) == 80 && Routing2DCodec::hybrid_region_fits(16, 8),
-    "[16,8] must fit the 2D union slot");
-static_assert(Routing2DCodec::hybrid_region_fits(1, 16), "[1,16] must fit the 2D union slot");
-// The widest square shape the current ControlPlane 32-per-axis validation admits.
-static_assert(
-    Routing2DCodec::vectors_region_bytes(32, 32) == 512 && Routing2DCodec::hybrid_region_fits(32, 32),
-    "[32,32] must fit the 2D union slot");
-// The two bounds are independent: an axis may reach 64 even though the slot is sized for [64,4].
-static_assert(
-    Routing2DCodec::MAX_AXIS_SIZE >= Routing2DCodec::SLOT_SHAPE_Y &&
-        Routing2DCodec::MAX_AXIS_SIZE >= Routing2DCodec::SLOT_SHAPE_X,
-    "the per-axis coordinate bound must cover the slot's own shape");
-// 6-bit child/parent fields in the packed reverse-tree descriptor are what fixes the axis bound.
-static_assert(
-    Routing2DCodec::MAX_AXIS_SIZE <= 64,
-    "packed mcast tree edges carry 6-bit row indices, so an axis cannot exceed 64");
+    Routing2DCodec::required_route_table_bytes(4, 64) == Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES,
+    "The 4x64 maximum must fill the 2D route-table allocation exactly");
 
 // ============================================================================
 // 2D action-map multicast encode
@@ -1041,7 +1014,7 @@ struct RouterStateManager {
 //   x_vectors: row dst_x at byte offset dst_x * ceil(X/4), region [Y*ceil(Y/4), Y*ceil(Y/4) + X*ceil(X/4))
 // Typed accessors and the host-side packer live on Routing2DCodec.
 struct __attribute__((packed)) route_table_2d_t {
-    std::uint8_t data[Routing2DCodec::ROUTE_TABLE_BYTES];  // 1028
+    std::uint8_t data[Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES];
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
     // Fills the 2-bit vector table for this mesh by probing ControlPlane's first-hop relation along
@@ -1051,7 +1024,8 @@ struct __attribute__((packed)) route_table_2d_t {
 #endif
 };
 static_assert(
-    sizeof(route_table_2d_t) == Routing2DCodec::ROUTE_TABLE_BYTES, "2D route table must be exactly the [64,4] bound");
+    sizeof(route_table_2d_t) == Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES,
+    "2D route table must match its L1 capacity");
 
 struct routing_l1_info_t {
     RouterStateManager state_manager{};  // 32 bytes
@@ -1067,7 +1041,7 @@ struct routing_l1_info_t {
     // The 2D member stores destination-major action maps.
     union __attribute__((packed)) {
         intra_mesh_routing_path_t<1, false> routing_path_table_1d;  // 1024 bytes
-        route_table_2d_t route_table_2d;                            // 1028 bytes
+        route_table_2d_t route_table_2d;                            // 1160 bytes
     };
 
     std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};               // 1024 bytes
@@ -1075,17 +1049,17 @@ struct routing_l1_info_t {
     // (y = id / x_size, x = id % x_size). Populated host-side with the rest of the table.
     std::uint8_t my_mesh_coord_y = 0;
     std::uint8_t my_mesh_coord_x = 0;
-    uint8_t padding[6] = {};  // pad to 16-byte alignment
+    uint8_t padding[2] = {};  // pad to 16-byte alignment
 };
 static_assert(offsetof(routing_l1_info_t, routing_path_table_1d) == 516);
 static_assert(
     offsetof(routing_l1_info_t, route_table_2d) % alignof(std::uint32_t) == 0,
     "2D route-table storage must be word aligned for device reverse-tree loads");
 static_assert(
-    offsetof(routing_l1_info_t, exit_node_table) == 516 + Routing2DCodec::ROUTE_TABLE_BYTES,
-    "exit_node_table must follow the 1028-byte 2D union slot");
+    offsetof(routing_l1_info_t, exit_node_table) == 516 + Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES,
+    "exit_node_table must follow the 1160-byte 2D union slot");
 static_assert(
-    offsetof(routing_l1_info_t, my_mesh_coord_y) == 516 + Routing2DCodec::ROUTE_TABLE_BYTES + MAX_NUM_MESHES,
+    offsetof(routing_l1_info_t, my_mesh_coord_y) == 516 + Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES + MAX_NUM_MESHES,
     "my_mesh_coord_y must immediately follow exit_node_table");
 static_assert(offsetof(routing_l1_info_t, state_manager) % 16 == 0);
 static_assert(sizeof(routing_l1_info_t) % 16 == 0);
@@ -1099,8 +1073,8 @@ static_assert(sizeof(intra_mesh_routing_path_t<1, true>) == 0, "1D compressed ro
 
 // Verify total struct size
 static_assert(
-    sizeof(routing_l1_info_t) == 2576,
-    "routing_l1_info_t must be 2576 bytes: base(516) + union(1028) + exit(1024) + coords(2) + pad(6)");
+    sizeof(routing_l1_info_t) == 2704,
+    "routing_l1_info_t must be 2704 bytes: base(516) + union(1160) + exit(1024) + coords(2) + pad(2)");
 
 struct worker_routing_l1_info_t {
     routing_l1_info_t routing_info{};

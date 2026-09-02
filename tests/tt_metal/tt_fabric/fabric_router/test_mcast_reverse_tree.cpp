@@ -32,6 +32,7 @@
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/fabric/axis_route_topology.hpp"
 #include "tt_metal/fabric/mcast_reverse_tree.hpp"
+#include "utils.hpp"
 
 namespace tt::tt_fabric::mcast_reverse_tree_tests {
 namespace {
@@ -293,7 +294,7 @@ void check_embed(const std::string& fixture) {
     for (std::uint32_t my_y = 0; my_y < y_size; my_y++) {
         for (std::uint32_t my_x = 0; my_x < x_size; my_x++) {
             const std::string where = fmt::format("{} chip ({},{})", fixture, my_y, my_x);
-            std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_BYTES, kSentinel);
+            std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES, kSentinel);
 
             std::string failure;
             ASSERT_TRUE(embed_mcast_reverse_trees(
@@ -376,7 +377,7 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
 
     for (int root_y = 0; root_y < y_len; root_y++) {
         for (int root_x = 0; root_x < x_len; root_x++) {
-            std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_BYTES, 0);
+            std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES, 0);
             std::string failure;
             ASSERT_TRUE(embed_mcast_reverse_trees(
                 mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, table.data(), &failure))
@@ -450,7 +451,7 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
     // so its root leaves on exactly one edge and the single-connection API remains sufficient.
     for (int root_y = 0; root_y < y_len; root_y++) {
         for (int root_x = 0; root_x < x_len; root_x++) {
-            std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_BYTES, 0);
+            std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES, 0);
             ASSERT_TRUE(
                 embed_mcast_reverse_trees(mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, table.data()));
             const std::vector<std::array<int, 4>> one_hop = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}};
@@ -502,7 +503,7 @@ void check_chord_ranges(const std::string& fixture, bool expect_candidates) {
 
     std::vector<std::vector<std::uint8_t>> tables(y_len);
     for (int root_y = 0; root_y < y_len; root_y++) {
-        tables[root_y].assign(Routing2DCodec::ROUTE_TABLE_BYTES, 0);
+        tables[root_y].assign(Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES, 0);
         std::string failure;
         ASSERT_TRUE(embed_mcast_reverse_trees(
             mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, 0, tables[root_y].data(), &failure))
@@ -584,7 +585,7 @@ void check_full_extent_roots(const std::string& fixture) {
 
     for (int root_y = 0; root_y < y_len; root_y++) {
         for (int root_x = 0; root_x < x_len; root_x++) {
-            std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_BYTES, 0);
+            std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES, 0);
             std::string failure;
             ASSERT_TRUE(embed_mcast_reverse_trees(
                 mesh_graph, MeshId{0}, *y_topo, *x_topo, root_y, root_x, table.data(), &failure))
@@ -634,21 +635,66 @@ TEST(McastReverseTreeTest, Encode32x4) {
 TEST(McastReverseTreeTest, Embed8x4) { check_embed("express_links_8x4_mesh_graph_descriptor.textproto"); }
 TEST(McastReverseTreeTest, Embed32x4) { check_embed("express_links_32x4_mesh_graph_descriptor.textproto"); }
 
-// [64,4] is the documented growth boundary; the embed must reject it rather than run off the union
-// slot. The fit check reads only the axis lengths, so a bare topology is enough to reach it.
-TEST(McastReverseTreeTest, EmbedRejectsShapeThatDoesNotFit) {
-    const auto mesh_graph = load("express_links_32x4_mesh_graph_descriptor.textproto");
-    AxisRouteTopology y_topo;
-    y_topo.axis_dim = 0;
-    y_topo.axis_len = 64;
-    AxisRouteTopology x_topo;
-    x_topo.axis_dim = 1;
-    x_topo.axis_len = 4;
+void check_maximum_embed(
+    const std::string& name, const std::string& descriptor, std::uint32_t expected_y, std::uint32_t expected_x) {
+    const auto path = fabric_router_tests::write_temp_descriptor(name, descriptor);
+    const MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path);
+    const auto y_topo = derive_axis_topology(mesh_graph, MeshId{0}, 0);
+    const auto x_topo = derive_axis_topology(mesh_graph, MeshId{0}, 1);
 
-    std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_BYTES, 0);
+    ASSERT_EQ(y_topo.axis_len, expected_y);
+    ASSERT_EQ(x_topo.axis_len, expected_x);
+    ASSERT_EQ(
+        Routing2DCodec::mcast_tree_offset_bytes(expected_y, expected_x) +
+            Routing2DCodec::mcast_tree_region_bytes(expected_y, expected_x),
+        Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES);
+
+    std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES, 0);
     std::string failure;
-    EXPECT_FALSE(embed_mcast_reverse_trees(mesh_graph, MeshId{0}, y_topo, x_topo, 0, 0, table.data(), &failure));
-    EXPECT_NE(failure.find("union slot"), std::string::npos) << "actual: " << failure;
+    EXPECT_TRUE(embed_mcast_reverse_trees(
+        mesh_graph,
+        MeshId{0},
+        y_topo,
+        x_topo,
+        static_cast<int>(expected_y - 1),
+        static_cast<int>(expected_x - 1),
+        table.data(),
+        &failure))
+        << failure;
+}
+
+TEST(McastReverseTreeTest, EmbedMaximum64x4Shape) {
+    check_maximum_embed(
+        "fabric_64x4_line.textproto",
+        R"(
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [64, 4] dim_types: [LINE, LINE] }
+  host_topology   { dims: [1, 1] }
+  channels { count: 2 }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)",
+        64,
+        4);
+}
+
+TEST(McastReverseTreeTest, EmbedMaximum4x64Shape) {
+    check_maximum_embed(
+        "fabric_4x64_line.textproto",
+        R"(
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [4, 64] dim_types: [LINE, LINE] }
+  host_topology   { dims: [1, 1] }
+  channels { count: 2 }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)",
+        4,
+        64);
 }
 
 TEST(McastReverseTreeTest, Gate8x4) { check_fixture("express_links_8x4_mesh_graph_descriptor.textproto"); }

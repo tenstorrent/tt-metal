@@ -1236,16 +1236,9 @@ struct LowLatencyMeshRoutingFields {
     };
 };
 
-// TODO: https://github.com/tenstorrent/tt-metal/issues/32237
 // Primary template for 2D routing headers with variable route buffer size
-template <int RouteBufferSize = 35>
+template <int RouteBufferSize = FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE>
 struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteBufferSize>> {
-    // Block route buffers >67 bytes until memory map is updated
-    static_assert(
-        RouteBufferSize <= 67,
-        "ERROR: 2D routing with >67-byte route buffer requires memory map updates.\n"
-        "Current L1 allocation (ROUTING_PATH_SIZE_2D = 1024 bytes) supports max 67 hops.");
-
     LowLatencyMeshRoutingFields routing_fields;
     uint8_t route_buffer[RouteBufferSize];
     union {
@@ -1294,39 +1287,24 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
 // Base size = 60 B (command_fields:40 + payload_size:2 + noc_send_type:1 + src_ch_id:1 +
 //              routing_fields:4 + dst_start:4 + mcast_params:8)
 //
-// is_mcast_active was retired with the legacy 2D codec: it had zero readers, only writes. Reclaiming
-// its byte drops the base 61 -> 60, which is exactly what lets [32,4] hold Y+X = 36 route bytes in a
-// 96 B header (60 + 36 = 96) instead of spilling to the 112 B tier.
-//
 // routing_fields (hop_index / branch_east_offset / branch_west_offset) is retained despite being dead
 // to the fabric: tools/profiler/fabric_event_profiler.hpp still decodes branch_*_offset, and the
 // profiler is out of scope. Reclaiming those 4 more bytes is blocked on that decision.
-// Base is 60 B since is_mcast_active was retired, so each tier carries one more route byte than it
-// did. 36 is the one that matters: [32,4] needs Y+X = 36 and now fits the 96 B header.
-//
-// The top tier stays at 67, not 68: the struct is packed+aligned(16), so 60+67=127 still rounds to a
-// 128 B header, and RouteBufferSize <= 67 is a separate L1 memory-map bound (issue #32237) that this
-// change is not entitled to raise. The cost is one wasted padding byte in the largest tier, and a
-// hard ceiling of Y+X <= 67 on indexable shapes -- enforced on the host, see fabric_context.cpp.
+// The 60 B base plus the maximum 68 B action map fills a 128 B header exactly.
 static_assert(sizeof(HybridMeshPacketHeaderT<20>) == 80, "20B buffer must result in 80B header (max capacity)");
 static_assert(sizeof(HybridMeshPacketHeaderT<36>) == 96, "36B buffer must result in 96B header (max capacity)");
 static_assert(sizeof(HybridMeshPacketHeaderT<52>) == 112, "52B buffer must result in 112B header (max capacity)");
-static_assert(sizeof(HybridMeshPacketHeaderT<67>) == 128, "67B buffer fills the 128B header (1B padding)");
+static_assert(sizeof(HybridMeshPacketHeaderT<68>) == 128, "68B buffer must fill the 128B header");
 
 // Used to get the maximum number of hops that this packet header can support
 template <int RouteBufferSize>
 struct get_max_num_hops<HybridMeshPacketHeaderT<RouteBufferSize>> {
-    // Each byte in the packet header's route buffer represents a single hop
+    // Retains the legacy trait name; 2D route-buffer entries are action-map bytes.
     static constexpr uint32_t value = static_cast<uint32_t>(RouteBufferSize);
 };
 
-// Conditional type selection based on injected define
-#ifdef FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE
-using HybridMeshPacketHeader = HybridMeshPacketHeaderT<FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE>;
-#else
-// Default: backward compatibility (96B header with 35B route buffer)
-using HybridMeshPacketHeader = HybridMeshPacketHeaderT<35>;
-#endif
+using HybridMeshPacketHeader = HybridMeshPacketHeaderT<>;
+static_assert(sizeof(HybridMeshPacketHeader) <= 128, "Configured 2D packet header exceeds the 128B allocation");
 
 struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
     UDMControlFields udm_control;
