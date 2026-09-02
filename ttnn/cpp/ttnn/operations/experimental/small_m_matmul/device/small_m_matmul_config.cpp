@@ -392,6 +392,21 @@ MemoryConfig create_small_m_weight_memory_config(const ttnn::Shape& weight_shape
     const uint32_t Kt = cdiv(K, TILE_HEIGHT);
     const uint32_t Nt = cdiv(N, TILE_WIDTH);
 
+    // Reject a width the op itself cannot serve, HERE rather than at the first forward. Building a
+    // valid-looking MemoryConfig for an infeasible N lets a caller lay a weight down at load time and
+    // only discover at program build that no config exists -- by which point the layout choice is
+    // already baked into the loaded parameter. Same bank-interval constraint pick_plan enforces.
+    TT_FATAL(
+        plan::nt_width_shard_feasible(Nt),
+        "create_small_m_weight_memory_config cannot serve N={} (Nt={} tiles): in1 is DRAM width-sharded "
+        "across {} banks, which requires 7*ceil(Nt/8) < Nt so that every bank holds real data. The "
+        "smallest workable widths are Nt = 8, 15, 16, 22, 23, 24, 29.. (N = 256, 480, 512, 704, 736, "
+        "768, 928..). This is a SHAPE-DOMAIN limit of the small-M matmul: use a standard matmul for "
+        "this N. NOTE at tensor parallelism this is the LOCAL (per-device) N, not the global one.",
+        N,
+        Nt,
+        kNumBanks);
+
     // Config-independent + minimal padding: K is NOT padded (shard height = the tile-aligned K rows;
     // the balanced-tail reader never reads beyond valid K). N is padded up to a multiple of 8 tiles so
     // the width shard divides evenly across the 8 banks. Shard spec depends only on (K, N).

@@ -533,24 +533,30 @@ def test_small_m_fused_validation(device, expect_error):
 
 @pytest.mark.skipif(not is_blackhole(), reason="small-M matmul is Blackhole-only")
 def test_small_m_picker_planner_parity_small_nt(device, expect_error):
-    # config=None on a bank-infeasible Nt (Nt <= 7*ceil(Nt/8)) must be rejected cleanly by the picker,
-    # not crash later in build_plan(). Nt=9 (N=288): 7*ceil(9/8)=14 >= 9 -> infeasible. A feasible small
-    # Nt=8 (N=256) must still work. Guards picker/planner feasibility parity (shared nt_width_shard_feasible).
+    # A bank-infeasible Nt (Nt <= 7*ceil(Nt/8)) must be rejected cleanly, not crash later in
+    # build_plan(). Nt=9 (N=288): 7*ceil(9/8)=14 >= 9 -> infeasible. A feasible small Nt=8 (N=256)
+    # must still work. Guards feasibility parity across the three places that share
+    # nt_width_shard_feasible: the weight memory-config builder, the picker, and the planner.
+    #
+    # The rejection now lands at the memory-config builder, which is the EARLIEST reachable point:
+    # the op cannot be called at all without a width-sharded weight, so an infeasible N is refused
+    # before a buffer is allocated rather than after. The picker/planner guards behind it are
+    # unreachable through the public path by construction, which is the intent.
     M, K = 32, 2048
     for N, feasible in [(288, False), (256, True)]:
         t0 = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
         t1 = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+        if not feasible:
+            # the bank-interval limit: Nt=9 cannot fill the 8-bank in1 width shard
+            with expect_error(RuntimeError, "cannot serve N=288"):
+                ttnn.create_small_m_weight_memory_config(list(t1.shape), ttnn.bfloat16, device)
+            continue
         a0 = ttnn.from_torch(t0, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
         wcfg = ttnn.create_small_m_weight_memory_config(list(t1.shape), ttnn.bfloat16, device)
         a1 = ttnn.from_torch(t1, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=wcfg)
-        if feasible:
-            out = ttnn.experimental.small_m_matmul(a0, a1)  # config=None -> auto
-            got = ttnn.to_torch(ttnn.from_device(out))[0, 0]
-            assert_with_pcc((t0.float() @ t1.float())[0, 0], got.float(), 0.999)
-        else:
-            # the bank-interval limit: Nt=9 cannot fill the 8-bank in1 width shard
-            with expect_error(RuntimeError, "cannot serve this N"):
-                ttnn.experimental.small_m_matmul(a0, a1)  # picker must reject, not FATAL in build_plan
+        out = ttnn.experimental.small_m_matmul(a0, a1)  # config=None -> auto
+        got = ttnn.to_torch(ttnn.from_device(out))[0, 0]
+        assert_with_pcc((t0.float() @ t1.float())[0, 0], got.float(), 0.999)
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="small-M matmul is Blackhole-only")

@@ -11,12 +11,11 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ....layers.linear import ColParallelLinear, LoRAColParallelLinear, maybe_cast_activation, resolve_output_dtype
+from ....layers.linear import ColParallelLinear, LoRAColParallelLinear, maybe_cast_activation
 from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils.matmul import get_fabric_agmm_config, get_matmul_config
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from .quant_config import LtxQuantProfile
@@ -432,118 +431,21 @@ class LTXAttention(Module):
         parallel_config: DiTParallelConfig | None = None,
         dtype=None,
     ) -> ttnn.Tensor:
-        """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
-        to_out = self.to_out
-        # to_out inlines the AG-matmul rather than calling ColParallelLinear.forward, so it has to
-        # honour the activation cast itself. The addcmul residual/gate stay bf16 — the kernel ties
-        # their tile size to the weight's, not the activation's — and the output is the residual
-        # stream, so it must be pinned back to bf16 rather than inheriting the bf8 activation.
-        x = maybe_cast_activation(x, to_out.activation_dtype)
-        if to_out.pin_output_bf16:
-            dtype = resolve_output_dtype(dtype, x)
+        """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate.
 
-        if to_out.fsdp_mesh_axis is not None and to_out.mesh_device.shape[to_out.fsdp_mesh_axis] > 1:
-            unsqueezed_weight = ttnn.unsqueeze_to_4D(to_out.weight.data)
-            weight = self.ccl_manager.all_gather_persistent_buffer(
-                unsqueezed_weight, dim=2, mesh_axis=to_out.fsdp_mesh_axis
-            )
-            weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
-        else:
-            weight = to_out.weight.data
-
-        if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
-            M, K, N_out = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
-            full_grid = self.mesh_device.compute_with_storage_grid_size()
-
-            # Known shapes route the addcmul to_out to the strided AG-matmul (out = a + scalar*matmul*b)
-            fabric_cfg = get_fabric_agmm_config(M, K, N_out, 1, full_grid)
-            if fabric_cfg is not None:
-                tp_axis = parallel_config.tensor_parallel.mesh_axis
-                dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-                fabric_matmul_config = ttnn.MinimalMatmulConfig(
-                    M_block_size=fabric_cfg.M_block_size,
-                    K_block_size=fabric_cfg.K_block_size,
-                    N_block_size=fabric_cfg.N_block_size,
-                    subblock_h=fabric_cfg.subblock_h,
-                    subblock_w=fabric_cfg.subblock_w,
-                    compute_with_storage_grid_size=fabric_cfg.mm_core_grid,
-                )
-                outputs = ttnn.experimental.strided_all_gather_minimal_matmul_async(
-                    x,
-                    weight,
-                    persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                        x.shape, 3, tp_axis, dtype=x.get_dtype()
-                    ),
-                    dim=3,
-                    multi_device_global_semaphore=self.ccl_manager.get_strided_ag_mm_semaphore(
-                        tp_axis, fabric_cfg.num_workers_per_link
-                    ),
-                    strided_all_gather_core_grid_offset=fabric_cfg.ag_core_grid_offset,
-                    num_links=self.ccl_manager.num_links,
-                    memory_config_ag=dram,
-                    topology=self.ccl_manager.topology,
-                    cluster_axis=tp_axis,
-                    bias=to_out.bias.data if to_out.bias is not None else None,
-                    config=fabric_matmul_config,
-                    memory_config_mm=dram,
-                    compute_kernel_config=compute_kernel_config or to_out.compute_config,
-                    num_workers_per_link=fabric_cfg.num_workers_per_link,
-                    num_buffers_per_channel=fabric_cfg.num_buffers_per_channel,
-                    read_local_slice_from_input=True,
-                    fused_ternary_input_a=addcmul_residual,
-                    fused_ternary_input_b=addcmul_gate,
-                    fused_ternary_scalar=1.0,
-                    chunks=1,
-                )
-                # Op returns [all_gather_output, matmul_chunk_0]; take the single matmul chunk.
-                return outputs[1]
-
-            core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
-            matmul_config = get_matmul_config(M, K, N_out, core_grid)
-
-            ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
-                x.shape, 3, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
-            )
-            ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
-                parallel_config.tensor_parallel.mesh_axis
-            )
-            output = ttnn.experimental.all_gather_minimal_matmul_async(
-                input_tensor=x,
-                weight_tensor=weight,
-                bias_tensor=to_out.bias.data if to_out.bias is not None else None,
-                config=matmul_config,
-                compute_kernel_config=compute_kernel_config or to_out.compute_config,
-                persistent_output_buffer=ag_persistent_buffer,
-                multi_device_global_semaphore=ag_global_semaphores,
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=parallel_config.tensor_parallel.mesh_axis,
-                barrier_semaphore=None,
-                force_transpose=True,
-                num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
-                num_buffers_per_channel=48 if not is_blackhole() else 24,
-                scalar=1.0,
-                addcmul_input_tensor1=addcmul_residual,
-                addcmul_input_tensor2=addcmul_gate,
-                dtype=dtype,
-            )[0]
-        else:
-            M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
-            core_grid = self.mesh_device.compute_with_storage_grid_size()
-            matmul_config = get_matmul_config(M, K, N_out, core_grid)
-
-            output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
-                x,
-                weight,
-                1.0,
-                addcmul_residual,
-                addcmul_gate,
-                bias_tensor=to_out.bias.data if to_out.bias is not None else None,
-                config=matmul_config,
-                compute_kernel_config=compute_kernel_config or to_out.compute_config,
-                dtype=dtype,
-            )
-        return output
+        Delegates to ColParallelLinear.forward_fused_addcmul rather than inlining the dispatch, so
+        this call site follows to_out's configured matmul backend (including use_small_m_matmul).
+        Inlining it here previously made the projection invisible to any per-layer backend choice.
+        """
+        return self.to_out.forward_fused_addcmul(
+            x,
+            addcmul_residual,
+            addcmul_gate,
+            1.0,
+            compute_kernel_config=compute_kernel_config,
+            parallel_config=parallel_config,
+            dtype=dtype,
+        )
 
     def _gate_is_live(self) -> bool:
         """True when the gate projection will actually run (and so will gather its input).
