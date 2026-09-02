@@ -3595,6 +3595,25 @@ def edge_pair_values(
 # test_sfpu_domains against the suites' own lists, which keeps this module below the tests.
 # ─────────────────────────────────────────────────────────────────────────────
 
+#: Ops no sweep can drive today, and the issue holding each one back.
+#:
+#: Subtracted from every count below. An op that every sweep skips outright delivers no device
+#: variant, so counting its table entries would let the ratchet stay green while executable
+#: coverage falls -- the exact failure the ratchet exists to catch, arriving through the skip
+#: rather than through a deleted table row. ReluMin is the live case: it is enrolled for cat B,
+#: cat D and cat F, and all four unary sweeps skip it for tt-llk#1120.
+#:
+#: The enrolments deliberately stay in place. They are verdicts about the *golden*, measured and
+#: recorded, and the day the issue closes the op is driven by deleting one entry here.
+#:
+#: The sweeps read this table too, through the skip helper each of them calls, so the skip and
+#: the exclusion cannot come apart. Only the unary sweeps consult it today; a binary or ternary
+#: entry would be subtracted from the counts without being skipped anywhere, which understates
+#: coverage rather than overstating it -- add the call alongside the entry.
+SWEEP_SKIPPED_OPS: Dict[MathOperation, str] = {
+    MathOperation.ReluMin: "https://github.com/tenstorrent/tt-llk/issues/1120",
+}
+
 #: The classes this module's own tables can account for, and where each comes from.
 COVERAGE_CLASSES = {
     "A": "singularities -- _OP_SINGULARITIES, straddled by boundary_probes()",
@@ -3621,24 +3640,32 @@ def _emits_negative_zero_at_a_pole(op: MathOperation) -> bool:
 
 
 def coverage_counts() -> Dict[str, int]:
-    """Per class in COVERAGE_CLASSES, the ops this module drives that class of value for."""
+    """Per class in COVERAGE_CLASSES, the ops this module drives that class of value for.
+
+    SWEEP_SKIPPED_OPS is removed from every class, for the reason recorded there: a count is a
+    claim that a device variant drives the value, and an op the sweeps skip outright delivers
+    none however completely its golden is enrolled.
+    """
+    blocked = set(SWEEP_SKIPPED_OPS)
+    singular = ops_with_singularity() - blocked
     return {
-        "A": len(ops_with_singularity()),
+        "A": len(singular),
         "B": len(
             {
                 **SPECIALS_READY_OPS,
                 **BINARY_SPECIALS_READY_OPS,
                 **TERNARY_SPECIALS_READY_OPS,
-            }
+            }.keys()
+            - blocked
         ),
-        "D": len(set(_OP_EDGE_POINTS) | set(_OP_OPERAND_EDGE_POINTS)),
-        "F": len(EXTREMES_READY_OPS),
-        "G": sum(
-            1 for op in ops_with_singularity() if _emits_negative_zero_at_a_pole(op)
-        ),
+        "D": len((set(_OP_EDGE_POINTS) | set(_OP_OPERAND_EDGE_POINTS)) - blocked),
+        "F": len(EXTREMES_READY_OPS.keys() - blocked),
+        "G": sum(1 for op in singular if _emits_negative_zero_at_a_pole(op)),
     }
 
 
 if __name__ == "__main__":  # pragma: no cover - developer entry point
     for _cls, _what in COVERAGE_CLASSES.items():
         print(f"  {_cls} {coverage_counts()[_cls]:>3} ops   {_what}")
+    for _op, _why in SWEEP_SKIPPED_OPS.items():
+        print(f"  -- {_op.name} is out of every count above: {_why}")

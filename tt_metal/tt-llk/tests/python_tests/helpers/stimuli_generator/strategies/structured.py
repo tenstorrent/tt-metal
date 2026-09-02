@@ -71,16 +71,18 @@ class CustomStrategy:
     ) -> torch.Tensor:
         if spec.values is None or len(spec.values) == 0:
             raise ValueError("distribution='custom' requires a non-empty 'values' list")
-        # The over-long check applies to the head-write branch only: writing 300 values at the
-        # head of a 256-element face silently drops 44 of them, which is worth an error, while
-        # tiling a list longer than the face is well defined -- it simply truncates at a value
-        # boundary and every element is still one the caller asked for.
-        if not spec.cycle and len(spec.values) > size:
+        # Over-long is an error on both branches. Writing 300 values at the head of a
+        # 256-element face drops 44 of them; tiling drops the same 44 -- `reps` is 1 and the
+        # slice cuts at `size` -- and drops them identically in every face, so the tail is not
+        # covered more weakly, it is never driven at all. Whichever branch is taken, the
+        # caller's list is wrong about the face and cycle=True cannot make a longer list fit.
+        if len(spec.values) > size:
             raise ValueError(
                 f"custom values list has {len(spec.values)} elements "
                 f"but face has only {size} "
-                f"({face_r_dim} rows × {FACE_C_DIM} cols). "
-                "Pass cycle=True to tile the list across the face instead."
+                f"({face_r_dim} rows × {FACE_C_DIM} cols); "
+                "the values past that would never be driven, tiled or not. "
+                "Split the list across variants, or use custom_faces."
             )
         dtype = _get_dtype_for_format(stimuli_format)
         if stimuli_format.is_integer():

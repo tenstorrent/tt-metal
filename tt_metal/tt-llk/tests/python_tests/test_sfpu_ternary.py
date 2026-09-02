@@ -285,11 +285,15 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
 # against five would test five combinations, not twenty-five, and would spend the rest of every
 # face on the (0, 0, 0) the zero-fill leaves behind.
 #
-# *edge_class* splits the finite edges (cat A's singularity straddled by a ULP step, cat D's
-# knees, the signed zeros) from the non-finite ones (cat B, gated on TERNARY_SPECIALS_READY_OPS
-# and specials_safe()), classified by `math.isfinite` on the probe. One class per variant: a
-# non-finite operand is a different question from a pole, and without the split addcdiv's c = 0
-# and c = inf would share one xfail and a regression in either would hide behind the other.
+# *edge_class* separates the finite edges (cat A's singularity straddled by a ULP step, cat D's
+# knees, the signed zeros) from the two kinds of non-finite operand (cat B, gated on
+# TERNARY_SPECIALS_READY_OPS and specials_safe()), classified by `math.isnan` / `math.isinf` on
+# the probe. One failure class per variant, and the driver's verdict is why: _run_sfpu_ternary
+# asserts a whole tile at once, so every xfail here stands for every probe value in the same
+# tensor. Without the finite/non-finite split addcdiv's c = 0 and c = inf would share one
+# marker; without the NaN/infinity split its c = NaN divergence would cover the c = +/-inf
+# lanes, which are measured green. Not a hypothetical: of the five divergences recorded below,
+# three are the NaN probe alone and two are the infinity alone, and none is both.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _TERNARY_EDGE_OPS = [
@@ -300,13 +304,17 @@ _TERNARY_EDGE_OPS = [
 ]
 
 _TERNARY_EDGE_CLASS_POLE = "pole"
-_TERNARY_EDGE_CLASS_SPECIALS = "specials_in"
+_TERNARY_EDGE_CLASS_NAN = "nan_in"
+_TERNARY_EDGE_CLASS_INF = "inf_in"
+
+#: The two cat-B classes, for the gates that apply to a non-finite operand however it is shaped.
+_TERNARY_SPECIALS_CLASSES = (_TERNARY_EDGE_CLASS_NAN, _TERNARY_EDGE_CLASS_INF)
 
 # Order is documentation, not mechanism -- but the first entry is the one that builds the
 # shared ELF under --compile-producer (conftest._collapse_runtime_only_variants keeps one item
 # per compile key), so the class most likely to be non-empty goes first. See the PRODUCE guard
 # in the test body for what happens when it is not.
-_TERNARY_EDGE_CLASSES = (_TERNARY_EDGE_CLASS_POLE, _TERNARY_EDGE_CLASS_SPECIALS)
+_TERNARY_EDGE_CLASSES = (_TERNARY_EDGE_CLASS_POLE,) + _TERNARY_SPECIALS_CLASSES
 
 _TERNARY_OPERANDS = (Operand.A, Operand.B, Operand.C)
 
@@ -351,8 +359,10 @@ def _ternary_edge_class_values(
 ):
     """The probe values of *edge_class* for (*mathop*, *operand*) on this pipeline.
 
-    One edge_values() call partitioned by finiteness rather than two calls with different
-    `specials`, so the two classes cannot come to disagree about which value belongs where.
+    One edge_values() call partitioned three ways rather than three calls with different
+    `specials`, so the classes cannot come to disagree about which value belongs where. The
+    partition is total -- every float is finite, a NaN or an infinity -- which is what keeps a
+    probe from being dropped by all three classes and silently leaving the sweep.
     """
     vals = edge_values(
         mathop,
@@ -362,8 +372,10 @@ def _ternary_edge_class_values(
         specials=specials,
         dest_acc=dest_acc,
     )
-    if edge_class == _TERNARY_EDGE_CLASS_SPECIALS:
-        return [v for v in vals if not math.isfinite(v)]
+    if edge_class == _TERNARY_EDGE_CLASS_NAN:
+        return [v for v in vals if math.isnan(v)]
+    if edge_class == _TERNARY_EDGE_CLASS_INF:
+        return [v for v in vals if math.isinf(v)]
     return [v for v in vals if math.isfinite(v)]
 
 
@@ -372,8 +384,10 @@ def _producer_probe_values(mathop, formats, dest_acc, specials):
 
     For the compile-producer pass only. `operand` and `edge_class` are both runtime() axes, so
     _collapse_runtime_only_variants keeps one item per compile key -- operand A, class pole --
-    and that item builds the ELF the other five share; a skip there leaves them running against
-    a binary that was never built, which presents as TENSIX TIMED OUT.
+    and that item builds the ELF every other variant on that key shares (eight in the operand x
+    edge_class sweep, two in test_ttnn_where_specials, which has the operand axis alone); a skip
+    there leaves them running against a binary that was never built, which presents as TENSIX
+    TIMED OUT.
 
     So the fallback drops *both* axes. Dropping the class alone is not enough, and Float16_b /
     dest_acc=Yes is why: cat B is off there, leaving operands A and B with no edge of either
@@ -418,10 +432,17 @@ def _cat_b_cells(applies=lambda _in_fmt, _out_fmt, _dest_acc: True):
 
 
 # What driving the ternary specials found, once both goldens modelled the Dest write and the pack
-# (which accounted for 10 cells on its own). Keyed by (op, operand), scoped to the specials_in
-# class -- every entry is a non-finite *operand*, and the pole class agreed everywhere.
+# (which accounted for 10 cells on its own). Keyed by (op, operand, edge_class) -- every entry is
+# a non-finite *operand*, and the pole class agreed everywhere, so nothing names it yet; a pole
+# divergence found later registers here the same way rather than needing a second table.
 # Non-strict, so each case still executes and reports XPASS if behaviour changes, and derived from
 # the delivery gates rather than listed so a cell drifting in or out shows up.
+#
+# The class is in the key because a NaN operand and an infinite one turned out to be separate
+# verdicts on every op here: three entries diverge at the NaN with the infinity measured green,
+# and two diverge at the infinity with the NaN measured green. Keying by (op, operand) alone put
+# both inside one marker, so on every one of the five a regression on the agreeing half would
+# have reported as the expected failure.
 #
 # The first two causes were measured on a Blackhole p150 and are arch-independent. The third is
 # Wormhole-only and carries a _TERNARY_EDGE_ARCH_GATE entry; it was found by running this sweep
@@ -434,17 +455,27 @@ def _cat_b_cells(applies=lambda _in_fmt, _out_fmt, _dest_acc: True):
 #   SFPARECIP, which returns +0 for 1/NaN instead of propagating, so the result is `a` where the
 #   golden says NaN -- the divergence unary Reciprocal already carries, through the same
 #   primitive. On every specials-carrying cell, being arithmetic rather than a delivery fact.
-#   Measured: c = +/-inf agrees on both cells, which is what makes this the NaN probe alone.
+#   Measured: c = +/-inf agrees on both cells, which is why only the nan_in class is registered
+#   and the inf_in one is asserted.
 #
-#   A non-finite reaching the sin (snake_beta, operands A and B). sin(b*a) then has a square of
+#   An *infinity* reaching the sin (snake_beta, operands A and B). sin(b*a) then has a square of
 #   +inf against a golden NaN, and SFPLUTFP32 documents no NaN/inf handling, so what the
 #   polynomial does there is an LLK decision with no ISA ruling. Scoped to the cells where a NaN
-#   *survives to L1*, from nan_survives_to_l1() rather than transcribed: where it does not, the
-#   golden's NaN packs to the same +inf and the two agree by substitution.
+#   *survives to L1*, from nan_survives_to_l1() rather than transcribed -- the divergence is
+#   against the golden's NaN answer, so where the pack substitutes an infinity for it the two
+#   agree.
+#
+#   THE CLASS SPLIT MOVED THIS ONE. It was recorded as "a non-finite reaching the sin", against
+#   a variant whose tile carried the NaN and both infinities together, and the marker could not
+#   say which lanes it was standing for. Split, the NaN lanes XPASS on both operands: a NaN
+#   argument comes back out of the polynomial as a NaN and the golden agrees. Only the infinity
+#   diverges, which the wording of the old reason string was already describing without being
+#   able to claim it -- "a value whose square is +inf" is not what a NaN argument produces.
 #
 #   a = NaN wrapping to an exact zero in the software RNE (lerp, operand A, Wormhole only). See
 #   _LERP_RNE_WRAP_NOTE: this one is a defect in a *shared* conversion helper, not in lerp, so it
-#   is the entry most likely to be resolved by a kernel fix rather than by an ISA ruling.
+#   is the entry most likely to be resolved by a kernel fix rather than by an ISA ruling. The
+#   wrap needs the NaN's mantissa bits, so a = +/-inf agrees and only nan_in is registered.
 
 
 def _software_rne_path(_in_fmt, _out_fmt, dest_acc):
@@ -458,11 +489,23 @@ def _software_rne_path(_in_fmt, _out_fmt, dest_acc):
 
 
 _TERNARY_EDGE_KNOWN_DIVERGENCES = {
-    (MathOperation.SfpuAddcdiv, Operand.C): _cat_b_cells(),
-    (MathOperation.SfpuSnakeBeta, Operand.C): _cat_b_cells(),
-    (MathOperation.SfpuSnakeBeta, Operand.A): _cat_b_cells(nan_survives_to_l1),
-    (MathOperation.SfpuSnakeBeta, Operand.B): _cat_b_cells(nan_survives_to_l1),
-    (MathOperation.SfpuLerp, Operand.A): _cat_b_cells(_software_rne_path),
+    (MathOperation.SfpuAddcdiv, Operand.C, _TERNARY_EDGE_CLASS_NAN): _cat_b_cells(),
+    (MathOperation.SfpuSnakeBeta, Operand.C, _TERNARY_EDGE_CLASS_NAN): _cat_b_cells(),
+    (
+        MathOperation.SfpuSnakeBeta,
+        Operand.A,
+        _TERNARY_EDGE_CLASS_INF,
+    ): _cat_b_cells(nan_survives_to_l1),
+    (
+        MathOperation.SfpuSnakeBeta,
+        Operand.B,
+        _TERNARY_EDGE_CLASS_INF,
+    ): _cat_b_cells(nan_survives_to_l1),
+    (
+        MathOperation.SfpuLerp,
+        Operand.A,
+        _TERNARY_EDGE_CLASS_NAN,
+    ): _cat_b_cells(_software_rne_path),
 }
 
 # The arch each divergence was measured on, for the ones that are not arch-independent. Absent
@@ -474,7 +517,9 @@ _TERNARY_EDGE_KNOWN_DIVERGENCES = {
 # so on the arch that promises that pattern the wrap cannot happen. If a Blackhole run ever does
 # hit it, this gate is what makes that a fresh failure instead of a silent xfail.
 _TERNARY_EDGE_ARCH_GATE = {
-    (MathOperation.SfpuLerp, Operand.A): (ChipArchitecture.WORMHOLE,),
+    (MathOperation.SfpuLerp, Operand.A, _TERNARY_EDGE_CLASS_NAN): (
+        ChipArchitecture.WORMHOLE,
+    ),
 }
 
 _LERP_RNE_WRAP_NOTE = (
@@ -491,49 +536,67 @@ _RECIPROCAL_NAN_NOTE = (
     "same SFPARECIP composition. c = +/-inf agrees, so this is the NaN probe alone"
 )
 
+_SNAKE_BETA_SIN_NOTE = (
+    "sin(b*a) at an infinite argument gives the kernel a value whose square is +inf, where "
+    "torch gives NaN, so the result is +inf against a golden NaN. SFPLUTFP32 documents no "
+    "NaN/inf handling, so this is an LLK decision with no ISA ruling. Only on the cells where "
+    "a NaN survives to L1 -- the divergence is against the *golden's* NaN, so where the pack "
+    "substitutes an infinity for it the two agree. A NaN operand does not take this path: it "
+    "comes back out of the polynomial as a NaN and the golden agrees, measured -- which is why "
+    "only the inf_in class is registered"
+)
+
 _TERNARY_EDGE_REASON = {
-    (MathOperation.SfpuAddcdiv, Operand.C): f"addcdiv(a, b, NaN) returns a, not NaN "
-    f"({_RECIPROCAL_NAN_NOTE}).",
+    (
+        MathOperation.SfpuAddcdiv,
+        Operand.C,
+        _TERNARY_EDGE_CLASS_NAN,
+    ): f"addcdiv(a, b, NaN) returns a, not NaN ({_RECIPROCAL_NAN_NOTE}).",
     (
         MathOperation.SfpuSnakeBeta,
         Operand.C,
-    ): f"snake_beta(a, b, NaN) returns a, not NaN "
-    f"({_RECIPROCAL_NAN_NOTE}).",
+        _TERNARY_EDGE_CLASS_NAN,
+    ): f"snake_beta(a, b, NaN) returns a, not NaN ({_RECIPROCAL_NAN_NOTE}).",
     (
         MathOperation.SfpuSnakeBeta,
         Operand.A,
-    ): "sin(b*a) with a non-finite gives the kernel a "
-    "value whose square is +inf, where torch gives NaN, so the result is +inf against a golden "
-    "NaN. SFPLUTFP32 documents no NaN/inf handling, so this is an LLK decision with no ISA "
-    "ruling. Only on the cells where a NaN survives to L1 -- elsewhere the pack substitutes the "
-    "same +inf and the two agree.",
+        _TERNARY_EDGE_CLASS_INF,
+    ): f"snake_beta(+/-inf, b, c): {_SNAKE_BETA_SIN_NOTE}.",
     (
         MathOperation.SfpuSnakeBeta,
         Operand.B,
-    ): "As operand A: the non-finite reaches the same "
-    "sin through the b*a product.",
+        _TERNARY_EDGE_CLASS_INF,
+    ): "As operand A: the infinity reaches the same sin through the b*a product.",
     (
         MathOperation.SfpuLerp,
         Operand.A,
+        _TERNARY_EDGE_CLASS_NAN,
     ): f"lerp(NaN, b, c) returns an exact 0 instead of a non-finite when c is a power of two "
     f"of magnitude >= 0.5, on the dest_acc=No path only ({_LERP_RNE_WRAP_NOTE}). Measured on an "
     "n300 with a = NaN, b = 1.0: c in 0.5, 1, 2, 4, 8, 16 all give 0, while every non-power-of-"
     "two c and every c below 0.5 give the packed infinity the golden expects, and a = +/-inf "
-    "agrees throughout -- so this is the NaN probe on that one path. The multiply by a power of "
+    "agrees throughout -- which is why the inf_in class is left asserted. The multiply by a "
+    "power of "
     "two is what preserves the NaN's high mantissa bits all the way into the round; a "
     "non-power-of-two c perturbs them and the carry stops short. Not lerp's defect: the wrap is "
     "in a conversion helper the binary ops share, so a fix belongs there.",
 }
 
 assert set(_TERNARY_EDGE_REASON) == set(_TERNARY_EDGE_KNOWN_DIVERGENCES), (
-    "_TERNARY_EDGE_REASON and _TERNARY_EDGE_KNOWN_DIVERGENCES disagree on which (op, operand) "
-    f"pairs diverge: {set(_TERNARY_EDGE_REASON) ^ set(_TERNARY_EDGE_KNOWN_DIVERGENCES)}"
+    "_TERNARY_EDGE_REASON and _TERNARY_EDGE_KNOWN_DIVERGENCES disagree on which "
+    "(op, operand, edge_class) keys diverge: "
+    f"{set(_TERNARY_EDGE_REASON) ^ set(_TERNARY_EDGE_KNOWN_DIVERGENCES)}"
 )
 assert all(
-    cells for cells in _TERNARY_EDGE_KNOWN_DIVERGENCES.values()
-), "an (op, operand) claiming a divergence with no cell to apply it to is a dead xfail"
+    edge_class in _TERNARY_EDGE_CLASSES
+    for _op, _operand, edge_class in _TERNARY_EDGE_KNOWN_DIVERGENCES
+), "a divergence keyed on an edge_class no variant runs is a dead xfail"
+assert all(cells for cells in _TERNARY_EDGE_KNOWN_DIVERGENCES.values()), (
+    "an (op, operand, edge_class) claiming a divergence with no cell to apply it to is a dead "
+    "xfail"
+)
 assert set(_TERNARY_EDGE_ARCH_GATE) <= set(_TERNARY_EDGE_KNOWN_DIVERGENCES), (
-    "_TERNARY_EDGE_ARCH_GATE names (op, operand) pairs with no divergence to scope: "
+    "_TERNARY_EDGE_ARCH_GATE names (op, operand, edge_class) keys with no divergence to scope: "
     f"{set(_TERNARY_EDGE_ARCH_GATE) - set(_TERNARY_EDGE_KNOWN_DIVERGENCES)}"
 )
 
@@ -557,20 +620,21 @@ def test_sfpu_ternary_operand_edges(
 
     specials = _ternary_cat_b_enabled(mathop, formats, dest_acc)
 
-    # Marked before the stimulus is built, but only for the specials_in class: every recorded
-    # divergence is a non-finite operand, and the pole class shares neither the cause nor the
-    # cells. Where the class is empty the variant skips below and the marker never fires.
-    reason = _TERNARY_EDGE_REASON.get((mathop, operand))
+    # Marked before the stimulus is built. The class is part of the key rather than a condition
+    # on it, so a divergence measured at a NaN operand cannot excuse the same op's infinity
+    # lanes -- or its pole, which shares neither the cause nor the cells. Where the class is
+    # empty the variant skips below and the marker never fires.
+    key = (mathop, operand, edge_class)
+    reason = _TERNARY_EDGE_REASON.get(key)
     # The arch gate defaults to every arch, so an entry without one behaves exactly as before.
     arch_ok = TestConfig.CHIP_ARCH in _TERNARY_EDGE_ARCH_GATE.get(
-        (mathop, operand), (TestConfig.CHIP_ARCH,)
+        key, (TestConfig.CHIP_ARCH,)
     )
     if (
         reason is not None
         and arch_ok
-        and edge_class == _TERNARY_EDGE_CLASS_SPECIALS
         and (formats.input_format, formats.output_format, dest_acc)
-        in _TERNARY_EDGE_KNOWN_DIVERGENCES[(mathop, operand)]
+        in _TERNARY_EDGE_KNOWN_DIVERGENCES[key]
     ):
         request.node.add_marker(pytest.mark.xfail(reason=reason, strict=False))
 
@@ -589,7 +653,7 @@ def test_sfpu_ternary_operand_edges(
             "this pipeline"
             + (
                 ""
-                if edge_class != _TERNARY_EDGE_CLASS_SPECIALS or specials
+                if edge_class not in _TERNARY_SPECIALS_CLASSES or specials
                 else " (cat B is off for this op or this pipeline)"
             )
         )

@@ -37,6 +37,7 @@ from helpers.sfpu_domains import (
     EXTREMES_READY_OPS,
     SHIFT_EDGE_AMOUNTS,
     SPECIALS_READY_OPS,
+    SWEEP_SKIPPED_OPS,
     block_spread_spec,
     edge_spec,
     exclude_undefined,
@@ -204,17 +205,22 @@ COVERAGE_COMPILE_SKIP_OPS = [
 ]
 
 
-def _skip_relu_min(mathop):
-    """tt-llk#1120, applied by every sweep that can drive ReluMin.
+def _skip_sweep_blocked_op(mathop):
+    """The ops an open issue holds out of every sweep, from the table the ratchet reads.
 
     A helper rather than a copy per sweep, because the issue is a property of the *op* and not
-    of one sweep's stimulus: it reads as a general ReluMin defect ("fails on assert for various
-    input format variants"), so a sweep that skipped it on the random domain and drove it at a
-    format extreme would be claiming a scoping the issue does not state. When #1120 closes, this
-    is one deletion.
+    of one sweep's stimulus: #1120 reads as a general ReluMin defect ("fails on assert for
+    various input format variants"), so a sweep that skipped it on the random domain and drove
+    it at a format extreme would be claiming a scoping the issue does not state.
+
+    The list is sfpu_domains.SWEEP_SKIPPED_OPS rather than a literal here, so the skip and the
+    coverage count come from one place: those ops are subtracted from coverage_counts(), and a
+    local copy would let the ratchet credit an op this helper is still skipping. When #1120
+    closes it is one deletion, in the table.
     """
-    if mathop == MathOperation.ReluMin:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
+    reason = SWEEP_SKIPPED_OPS.get(mathop)
+    if reason is not None:
+        pytest.skip(reason=reason)
 
 
 def _skip_coverage_unsupported(mathop):
@@ -459,7 +465,7 @@ def test_eltwise_unary_sfpu(
             )
         )
 
-    _skip_relu_min(mathop)
+    _skip_sweep_blocked_op(mathop)
 
     if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
         pytest.skip(reason="Metal tanh does not support approximation mode")
@@ -590,12 +596,14 @@ _EDGE_KNOWN_DIVERGENCES = {
 # axis grows or a delivery measurement is revised.
 #
 #   Reciprocal  every combination carrying specials at all -- 1/NaN is the probe.
-#   Sqrt, Rsqrt every combination that also delivers a real -0.0, the strictly smaller
-#               unpack-to-dest set. At dest_acc=No the kernel is handed +0.0 and agrees.
 #
-# Measured on a Blackhole p300a: Reciprocal on all 3 reachable combinations, Sqrt and Rsqrt on
-# both of theirs. The rest of each set is Wormhole-only (_skip_bh_unless_fp32 takes dest_acc=No
-# down to Float32->Float32 there) and follows from the same kernel path.
+# Sqrt and Rsqrt were derived here too, on negative_zero_delivered(). They are registered
+# through _signed_zero_pole_divergences() below instead, for the reason recorded there: their
+# probe is a -0.0 at a registered pole, which boundary_probes() emits with or without cat B.
+#
+# Measured on a Blackhole p300a: Reciprocal on all 3 reachable combinations. The rest of the set
+# is Wormhole-only (_skip_bh_unless_fp32 takes dest_acc=No down to Float32->Float32 there) and
+# follows from the same kernel path.
 def _cat_b_divergences(delivers):
     return tuple(
         (fmt.input_format, fmt.output_format, dest_acc)
@@ -606,12 +614,8 @@ def _cat_b_divergences(delivers):
     )
 
 
-_EDGE_KNOWN_DIVERGENCES.update(
-    {
-        MathOperation.Reciprocal: _cat_b_divergences(lambda _fmt, _dest_acc: True),
-        MathOperation.Sqrt: _cat_b_divergences(negative_zero_delivered),
-        MathOperation.Rsqrt: _cat_b_divergences(negative_zero_delivered),
-    }
+_EDGE_KNOWN_DIVERGENCES[MathOperation.Reciprocal] = _cat_b_divergences(
+    lambda _fmt, _dest_acc: True
 )
 
 
@@ -626,6 +630,30 @@ def _signed_zero_pole_divergences():
     )
 
 
+# Sqrt and Rsqrt are registered here rather than through _cat_b_divergences, and the move is a
+# bug fix, not a tidy-up. Both diverge on a -0.0, and while cat B was that value's only source
+# the two derivations picked the same cells and the marker could be gated on `specials`. Adding
+# the cat-G probe took the -0.0 out of cat B's hands: boundary_probes() now emits it at their
+# registered zero pole whenever delivery allows, gated on nothing else.
+#
+# The gap that opened is _gate_unspecified_nan_sign(). On Wormhole at Float32->Float16_b /
+# dest_acc=Yes it withdraws cat B for Rsqrt -- its NaN result would reach L1 as an infinity
+# whose sign SFPMAD leaves open -- so `specials` went False, the marker was withheld, and the
+# -0.0 went in anyway and failed. Measured: rsqrt(-0.0) comes back as +inf there against the
+# golden's -inf, the same kernel NaN the fp32-dest cell shows, substituted by the pack. Sqrt and
+# Reciprocal survive the same gate on that cell, which is why Rsqrt was the only red.
+#
+# Derived from delivery alone now, like RsqrtCompat below, so the registration matches where the
+# probe comes from. The assert underneath pins that this did not change which cells are excused.
+_EDGE_KNOWN_DIVERGENCES[MathOperation.Sqrt] = _signed_zero_pole_divergences()
+_EDGE_KNOWN_DIVERGENCES[MathOperation.Rsqrt] = _signed_zero_pole_divergences()
+
+assert _signed_zero_pole_divergences() == _cat_b_divergences(negative_zero_delivered), (
+    "the signed-zero pole cells and the cat-B cells that deliver a -0.0 have come apart, so "
+    "moving Sqrt and Rsqrt between the two derivations is no longer cell-for-cell: re-measure "
+    "before trusting either set"
+)
+
 # RsqrtCompat is the one op the signed-zero pole probe found. Measured on a Blackhole p150 at
 # Float32->Float32, dest_acc=Yes: rsqrt_compat(-0.0) returns +inf where IEEE and the golden give
 # -inf. Recorded on its own rather than folded in with Rsqrt, because the two do *not* agree:
@@ -637,11 +665,15 @@ def _signed_zero_pole_divergences():
 # That is the headline result of driving it -- the divergence is the exception.
 _EDGE_KNOWN_DIVERGENCES[MathOperation.RsqrtCompat] = _signed_zero_pole_divergences()
 
-# The three whose divergence needs the cat-B probe to be sent. Their xfails are conditional on
-# specials surviving the NaN-sign gate; see where the marker is applied.
-_CAT_B_DERIVED_DIVERGENCES = frozenset(
-    {MathOperation.Reciprocal, MathOperation.Sqrt, MathOperation.Rsqrt}
-)
+# The one whose divergence needs the cat-B probe to be sent: 1/NaN, which only the specials set
+# carries. Its xfail is conditional on specials surviving the NaN-sign gate; see where the
+# marker is applied.
+#
+# Sqrt and Rsqrt were in here and are not any more. Their probe is the -0.0 boundary_probes()
+# emits at a registered pole, so the gate can withdraw cat B without withdrawing the stimulus,
+# and conditioning the marker on `specials` left one cell failing -- see the note above their
+# entries.
+_CAT_B_DERIVED_DIVERGENCES = frozenset({MathOperation.Reciprocal})
 
 _EDGE_DIVERGENCE_REASON = {
     MathOperation.Sign: "sign(-0.0) returns -1; torch and IEEE give 0. Outside the "
@@ -659,9 +691,14 @@ _EDGE_DIVERGENCE_REASON = {
     "usual IEEE754 rules'.",
     MathOperation.Sqrt: "sqrt(-0) returns NaN; IEEE and the golden give -0. Scoped to the "
     "unpack-to-dest combinations, the only ones where a real -0.0 reaches the LREG — at "
-    "dest_acc=No the kernel is handed +0.0 and agrees, so the probe is not sent there.",
+    "dest_acc=No the kernel is handed +0.0 and agrees, so the probe is not sent there. What "
+    "reaches L1 depends on the pack: the NaN itself on an fp32 output, and a signed infinity "
+    "where the pack narrows, which is one kernel behaviour with two presentations rather than "
+    "two divergences.",
     MathOperation.Rsqrt: "rsqrt(-0) returns NaN; IEEE and the golden give -inf. Same cause "
-    "and same unpack-to-dest scoping as Sqrt.",
+    "and same unpack-to-dest scoping as Sqrt, including the pack's substitution: measured on a "
+    "Wormhole n300, Float32->Float32 at dest_acc=Yes returns the NaN and Float32->Float16_b "
+    "returns +inf against the golden's -inf.",
     MathOperation.RsqrtCompat: "rsqrt_compat(-0.0) returns +inf; IEEE and the golden give "
     "-inf. A wrongly-signed infinity, not the NaN Rsqrt returns for the same input, so the "
     "two are recorded separately. Reached through the cat-A zero pole rather than cat B -- "
@@ -758,7 +795,7 @@ def test_eltwise_unary_sfpu_edges(
 
     _skip_bh_unless_fp32(formats, dest_acc)
 
-    _skip_relu_min(mathop)
+    _skip_sweep_blocked_op(mathop)
 
     # Two independent gates, and both have to pass: _SPECIALS_READY_OPS says the *golden*
     # defines a result for non-finite inputs, specials_safe() says the *pipeline* delivers
@@ -865,7 +902,7 @@ def test_eltwise_unary_sfpu_extremes(
 ):
     """Drive the format's ceiling, its neighbour, its smallest normal and one subnormal."""
     _skip_coverage_unsupported(mathop)
-    _skip_relu_min(mathop)
+    _skip_sweep_blocked_op(mathop)
     _skip_bh_unless_fp32(formats, dest_acc)
 
     if not extremes_safe(formats.input_format, formats.output_format, dest_acc):
@@ -1123,7 +1160,7 @@ def test_eltwise_unary_sfpu_block_spread(
 ):
     """Each op against a block whose small elements the shared exponent has quantized away."""
     _skip_coverage_unsupported(mathop)
-    _skip_relu_min(mathop)
+    _skip_sweep_blocked_op(mathop)
 
     custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
 

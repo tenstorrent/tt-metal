@@ -828,11 +828,15 @@ def test_signed_zero_probe_survives_the_dedup():
 #
 # Raising a floor is the last step of enrolling an op. `python -m helpers.sfpu_domains` prints
 # the five it derives.
+#
+# The counts are net of SWEEP_SKIPPED_OPS, so B, D and F each sit one below their table size
+# while ReluMin waits on tt-llk#1120: an op every sweep skips is enrolled but not driven, and
+# a floor that counted it would be a floor under nothing.
 _COVERAGE_FLOORS = {
     "A": 23,
-    "B": 92,
-    "D": 66,
-    "F": 69,
+    "B": 91,
+    "D": 65,
+    "F": 68,
     "G": 17,
 }
 _SUITE_FLOORS = {
@@ -886,6 +890,125 @@ def test_coverage_does_not_regress():
     assert not shortfalls, (
         "coverage went backwards (class: got, floor): "
         f"{shortfalls}. Either an op lost its enrolment or a table entry was dropped."
+    )
+
+
+def test_edge_classes_partition_every_probe_a_variant_can_drive():
+    """No probe value falls out of every class, and none is driven by two.
+
+    A per-failure-class runtime axis only holds a sweep's coverage while the classes *partition*
+    the probe list. A value matched by no class leaves the sweep with nothing failing -- the
+    silent loss the ratchet exists to catch, arriving through a predicate instead of a table --
+    and one matched by two is driven under two markers, so a divergence on it can be excused by
+    either.
+
+    Both split sweeps are checked here rather than in their own modules, because the property is
+    about the classifier and not about a device: the ternary three-way split of an operand probe
+    (finite / NaN / infinity) and the logsigmoid two-way split of a derived pair (NaN golden /
+    the rest).
+    """
+    import test_eltwise_binary_sfpu as binary
+    import test_sfpu_ternary as ternary
+    from helpers.sfpu_domains import edge_values
+
+    total_probes = 0
+    for op in ternary._TERNARY_EDGE_OPS:
+        for operand in ternary._TERNARY_OPERANDS:
+            probes = edge_values(
+                op,
+                DataFormat.Float32,
+                DataFormat.Float32,
+                operand=operand,
+                specials=True,
+                dest_acc=DestAccumulation.Yes,
+            )
+            by_class = [
+                ternary._ternary_edge_class_values(
+                    op,
+                    InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+                    operand,
+                    edge_class,
+                    DestAccumulation.Yes,
+                    True,
+                )
+                for edge_class in ternary._TERNARY_EDGE_CLASSES
+            ]
+            partitioned = [v for vals in by_class for v in vals]
+            assert len(partitioned) == len(probes), (
+                f"{op.name} operand {operand.name}: the three edge classes deliver "
+                f"{len(partitioned)} of {len(probes)} probes -- a value matched by no class is "
+                "coverage lost without a failure, and one matched by two is excused twice"
+            )
+            total_probes += len(probes)
+    # Not vacuous: an equality between two empty lists holds for every op.
+    assert total_probes > 0, "no ternary op has a probe on this cell any more"
+
+    pairs = binary._logsigmoid_derived_pairs(
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32), DestAccumulation.Yes
+    )
+    split = [
+        pair
+        for edge_class in (
+            binary._LOGSIGMOID_CLASS_NAN,
+            binary._LOGSIGMOID_CLASS_NON_NAN,
+        )
+        for pair in binary._logsigmoid_derived_pairs(
+            InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+            DestAccumulation.Yes,
+            edge_class=edge_class,
+        )
+    ]
+    assert len(split) == len(
+        pairs
+    ), f"the two logsigmoid classes deliver {len(split)} of {len(pairs)} derived pairs"
+    # And the NaN really is on its own side, since that is the whole point of the split: the
+    # four agreeing pairs must not share a tile with the pair that carries the marker.
+    nan_pairs = binary._logsigmoid_derived_pairs(
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        DestAccumulation.Yes,
+        edge_class=binary._LOGSIGMOID_CLASS_NAN,
+    )
+    assert nan_pairs and all(math.isnan(a) for a, _b in nan_pairs)
+
+
+def test_coverage_counts_exclude_the_ops_no_sweep_can_drive():
+    """An op every sweep skips is not coverage, however completely its golden is enrolled.
+
+    The ratchet counts enrolment tables, and an op can be enrolled and still undrivable: ReluMin
+    carries a measured cat-B verdict and cat-D and cat-F entries, and all four unary sweeps skip
+    it for tt-llk#1120. Counted, the floors would claim three classes of coverage that no
+    collected device variant delivers -- and would stay green if a *fourth* op were skipped the
+    same way, which is the failure the ratchet exists to catch.
+
+    Both halves are pinned here, because either alone is satisfiable while the other is false:
+    the count really subtracts the table, and the sweeps really skip what the table names.
+    """
+    import test_eltwise_unary_sfpu as unary
+    from _pytest.outcomes import Skipped
+    from helpers.sfpu_domains import (
+        EXTREMES_READY_OPS,
+        SWEEP_SKIPPED_OPS,
+        coverage_counts,
+    )
+
+    assert SWEEP_SKIPPED_OPS, (
+        "with the table empty this test asserts nothing -- if the last issue closed, delete "
+        "the test with the entry"
+    )
+    for op in SWEEP_SKIPPED_OPS:
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            Skipped
+        ):
+            unary._skip_sweep_blocked_op(op)
+
+    # Cat F specifically, because EXTREMES_READY_OPS is one flat table and the subtraction is
+    # therefore checkable against it: the other classes union several.
+    assert coverage_counts()["F"] == len(
+        EXTREMES_READY_OPS.keys() - SWEEP_SKIPPED_OPS.keys()
+    )
+    assert SWEEP_SKIPPED_OPS.keys() & EXTREMES_READY_OPS.keys(), (
+        "no skipped op is enrolled for cat F any more, so the assertion above passes "
+        "trivially -- move it to a class the table still overlaps"
     )
 
 
@@ -1220,31 +1343,34 @@ def test_uncycled_custom_face_still_zero_fills():
     assert int((face == 0.0).sum()) == 254
 
 
-def test_custom_rejects_an_over_long_list_only_when_it_would_drop_values():
-    """Longer than a face is an error when writing at the head, and fine when tiling.
+def test_custom_rejects_an_over_long_list_on_both_branches():
+    """Longer than a face is an error whether the values are written at the head or tiled.
 
-    Writing 300 values at the head of a 256-element face silently drops 44 of them, which is
-    the worst failure mode an edge list can have. Tiling truncates at a value boundary instead,
-    and every element is still one the caller asked for.
+    Writing 300 values at the head of a 256-element face drops 44 of them, which is the worst
+    failure mode an edge list can have. Tiling was previously accepted as the fix and is not
+    one: it drops the same 44, in every face, so the trailing probes are not sampled less often
+    -- they are never driven, and the variant reports coverage of a list it never delivered.
     """
     from helpers.stimuli_generator.strategies.structured import CustomStrategy
 
     long_list = [float(i) for i in range(300)]
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        ValueError, match="cycle=True"
-    ):
-        CustomStrategy().generate_face(
-            StimuliSpec.custom(values=long_list), DataFormat.Float32, 16, 256, None
-        )
-
-    face = CustomStrategy().generate_face(
+    for spec in (
+        StimuliSpec.custom(values=long_list),
         StimuliSpec.custom(values=long_list, cycle=True),
-        DataFormat.Float32,
-        16,
-        256,
-        None,
-    )
-    assert face.tolist() == long_list[:256]
+    ):
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            ValueError, match="face has only 256"
+        ):
+            CustomStrategy().generate_face(spec, DataFormat.Float32, 16, 256, None)
+
+    # Exactly a face still fits on both branches, so the bound is the face size and not a
+    # margin below it: a 256-value edge list is the largest either branch can deliver whole.
+    for spec in (
+        StimuliSpec.custom(values=long_list[:256]),
+        StimuliSpec.custom(values=long_list[:256], cycle=True),
+    ):
+        face = CustomStrategy().generate_face(spec, DataFormat.Float32, 16, 256, None)
+        assert face.tolist() == long_list[:256]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

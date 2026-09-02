@@ -1015,8 +1015,25 @@ def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop):
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
 
-def _logsigmoid_derived_pairs(formats, dest_acc):
+#: The two failure classes of the derived logsigmoid probe.
+#:
+#: Split because sfpu_binary makes one aggregate assert over the whole override, so a marker on
+#: it stands for every pair in the tile: bundled, the NaN pair's sign divergence excused the four
+#: pairs measured to agree, and a regression at +/-inf or +/-0 would have reported as the
+#: expected failure. Two test functions rather than a runtime() axis on one, following
+#: test_ttnn_where_negative_zero_condition -- there is no shared-ELF starvation to guard when
+#: neither variant can empty the other's compile key.
+_LOGSIGMOID_CLASS_NAN = "nan_in"
+_LOGSIGMOID_CLASS_NON_NAN = "non_nan_specials"
+
+
+def _logsigmoid_derived_pairs(formats, dest_acc, edge_class=None):
     """(x, exp(-x)) pairs at the IEEE specials, for the one op whose operand B is derived.
+
+    *edge_class* keeps one failure class per variant: _LOGSIGMOID_CLASS_NAN is the pair whose
+    golden is a NaN the kernel emitted, _LOGSIGMOID_CLASS_NON_NAN is the +/-inf and +/-0 pairs,
+    whose goldens are finite or infinite and were all measured to agree. None returns both,
+    which nothing drives -- it is what the host tests compare the two halves against.
 
     Cat B elsewhere in this suite is edge_pair_values(), a cartesian *product* of two free
     lists -- right for `div(a, b)`, wrong here: logsigmoid's contract is in1 == exp(-in0), so a
@@ -1034,6 +1051,10 @@ def _logsigmoid_derived_pairs(formats, dest_acc):
         specials=True,
         dest_acc=dest_acc,
     )
+    if edge_class == _LOGSIGMOID_CLASS_NAN:
+        x_values = [v for v in x_values if math.isnan(v)]
+    elif edge_class == _LOGSIGMOID_CLASS_NON_NAN:
+        x_values = [v for v in x_values if not math.isnan(v)]
     x = torch.tensor(x_values, dtype=torch.float32)
     return list(zip(x.tolist(), torch.exp(-x).tolist()))
 
@@ -1053,7 +1074,9 @@ def _logsigmoid_derived_pairs(formats, dest_acc):
 # a subnormal survives. What SrcA does to a NaN's sign is not established here; that it is the
 # same boundary is.
 #
-# The other four pairs agree everywhere.
+# The other four pairs agree everywhere, and are driven unmarked by
+# test_eltwise_binary_sfpu_logsigmoid_specials -- this reason belongs to the NaN pair and to
+# nothing else, which is what splitting the two variants makes true rather than merely stated.
 _LOGSIGMOID_NAN_SIGN_REASON = (
     "logsigmoid(NaN) returns a sign-flipped NaN -- the polynomial arm negates, and SFPSETCC's "
     "contract excludes a NaN operand -- so where the pack substitutes a signed infinity the "
@@ -1077,20 +1100,57 @@ def _logsigmoid_nan_sign_cells():
     )
 
 
-@pytest.mark.nightly
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
-    mathop=[MathOperation.SfpuLogsigmoid],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-)
-def test_eltwise_binary_sfpu_logsigmoid_specials(request, formats, dest_acc, mathop):
-    """IEEE specials in x, with operand B derived from it rather than drawn against it."""
+def _skip_logsigmoid_specials_unsupported(formats, dest_acc):
+    """The cells both derived-probe variants share, asked once so they cannot diverge."""
     _skip_fp32_no_dest_acc(formats, dest_acc)
     if not specials_safe(formats.input_format, formats.output_format, dest_acc):
         pytest.skip(
             reason="this pipeline does not deliver non-finites intact "
             "(see sfpu_domains.specials_safe)"
         )
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[MathOperation.SfpuLogsigmoid],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_logsigmoid_specials(formats, dest_acc, mathop):
+    """The +/-inf and +/-0 pairs of the derived probe, asserted with no marker over them.
+
+    Unmarked is the point of the split: these four pairs were measured to agree on every safe
+    cell, and while they shared a tile with the NaN pair the xfail that pair needs stood for
+    them too. No golden here is a NaN -- logsigmoid(-inf) = -inf, (+inf) = 0, (+/-0) = -log 2 --
+    so the generated-NaN sign question does not arise and the comparison stays exact, which is
+    the other half of the same point: the relaxation belongs only to the variant that needs it.
+    """
+    _skip_logsigmoid_specials_unsupported(formats, dest_acc)
+
+    pairs = _logsigmoid_derived_pairs(
+        formats, dest_acc, edge_class=_LOGSIGMOID_CLASS_NON_NAN
+    )
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_paired_tile_override(pairs, torch.float32),
+    )
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[MathOperation.SfpuLogsigmoid],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_logsigmoid_nan(request, formats, dest_acc, mathop):
+    """The NaN pair of the derived probe alone, carrying the sign divergence it measured.
+
+    Its own variant so the marker below covers one pair and one failure class. The other four
+    pairs are in test_eltwise_binary_sfpu_logsigmoid_specials, unmarked.
+    """
+    _skip_logsigmoid_specials_unsupported(formats, dest_acc)
 
     # logsigmoid(NaN) leaves the polynomial arm as a NaN the datapath *built*, not the operand
     # forwarded, so `SFPMAD.md`'s wording covers it: canonical 0x7fc00000 on Blackhole, "might or
@@ -1121,7 +1181,9 @@ def test_eltwise_binary_sfpu_logsigmoid_specials(request, formats, dest_acc, mat
             pytest.mark.xfail(reason=_LOGSIGMOID_NAN_SIGN_REASON, strict=False)
         )
 
-    pairs = _logsigmoid_derived_pairs(formats, dest_acc)
+    pairs = _logsigmoid_derived_pairs(
+        formats, dest_acc, edge_class=_LOGSIGMOID_CLASS_NAN
+    )
     sfpu_binary(
         formats,
         dest_acc,
