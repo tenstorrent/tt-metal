@@ -26,24 +26,26 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-
-constexpr uint32_t CB_MERGE = 0u;
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t base_unit = get_arg_val<uint32_t>(1);
-    const uint32_t num_units = get_arg_val<uint32_t>(2);
+    const uint32_t base_unit = get_arg(args::base_unit);
+    const uint32_t num_units = get_arg(args::num_units);
 
-    constexpr uint32_t CHUNK = get_compile_time_arg_val(0);
-    constexpr uint32_t CHUNKS_PER_MERGE = get_compile_time_arg_val(1);
-    constexpr uint32_t IS_BF16 = get_compile_time_arg_val(2);
-
-    constexpr auto rm_args = TensorAccessorArgs<3>();
+    constexpr uint32_t CHUNK = get_arg(args::chunk);
+    constexpr uint32_t CHUNKS_PER_MERGE = get_arg(args::chunks_per_merge);
+    constexpr uint32_t IS_BF16 = get_arg(args::is_bf16);
 
     constexpr uint32_t elem_bytes = IS_BF16 ? 2u : 4u;
     constexpr uint32_t chunk_bytes = CHUNK * elem_bytes;
 
-    const auto dst_gen = TensorAccessor(rm_args, dst_addr);
+    const auto dst_gen = TensorAccessor(tensor::dst);
+
+    Noc noc;
+    DataflowBuffer block(dfb::block);
 
     // Starting page and chunk-within-page for base_unit.
     uint32_t dst_page = base_unit / CHUNKS_PER_MERGE;
@@ -52,15 +54,18 @@ void kernel_main() {
     for (uint32_t u = 0u; u < num_units; ++u) {
         const uint32_t col_offset = chunk_in_page * chunk_bytes;
 
-        cb_wait_front(CB_MERGE, 1u);
-        const uint32_t l1_ptr = get_read_ptr(CB_MERGE);
+        block.wait_front(1u);
 
         // Write CHUNK elements at the correct byte offset within the large page.
-        const uint64_t noc_addr = dst_gen.get_noc_addr(dst_page, col_offset);
-        noc_async_write(l1_ptr, noc_addr, chunk_bytes);
-        noc_async_write_barrier();
+        noc.async_write(
+            block,
+            dst_gen,
+            chunk_bytes,
+            {},
+            {.page_id = dst_page, .offset_bytes = col_offset});
+        noc.async_write_barrier();
 
-        cb_pop_front(CB_MERGE, 1u);
+        block.pop_front(1u);
 
         // Advance position within the destination row.
         if (++chunk_in_page == CHUNKS_PER_MERGE) {

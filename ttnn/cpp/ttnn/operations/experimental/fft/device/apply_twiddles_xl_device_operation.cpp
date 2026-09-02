@@ -4,6 +4,8 @@
 #include "apply_twiddles_xl_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 
+#include "apply_twiddles_xl_host.hpp"
+
 namespace ttnn::experimental::prim {
 
 namespace {
@@ -117,9 +119,17 @@ std::tuple<Tensor, Tensor> apply_twiddles_xl(
         .big_modulus = big_modulus,
         .full_N = full_N,
     };
+    // Resolved here rather than in the factory so the tables are reachable
+    // from tensor_args; the lookup is a hit on everything but the first call
+    // for a given (device, big_modulus, full_N).
+    auto delta_plan = ttnn::experimental::prim::apply_twiddles_xl_host::get_or_create(
+        input_real.device()->get_mesh_device(), big_modulus, full_N);
+
     OperationType::tensor_args_t args{
         .input_real = input_real,
         .input_imag = input_imag,
+        .delta_real = delta_plan->dr,
+        .delta_imag = delta_plan->di,
     };
 
     return ttnn::device_operation::launch<OperationType>(attrs, args);

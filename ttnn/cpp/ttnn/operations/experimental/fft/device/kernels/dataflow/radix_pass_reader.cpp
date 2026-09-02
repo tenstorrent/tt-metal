@@ -21,28 +21,29 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "radix_pass_common.h"
+#include "experimental/kernel_args.h"
 
 constexpr uint32_t kScalarCutoff = 64;
 
 FORCE_INLINE void async_local_memcpy(
-    uint32_t src_l1, uint32_t dst_l1, uint32_t n_bytes, uint32_t my_noc_x, uint32_t my_noc_y) {
-    const uint64_t dst_noc = get_noc_addr(my_noc_x, my_noc_y, dst_l1);
-    noc_async_write(src_l1, dst_noc, n_bytes);
+    Noc& noc, uint32_t src_l1, uint32_t dst_l1, uint32_t n_bytes, uint32_t my_noc_x, uint32_t my_noc_y) {
+    CoreLocalMem<uint32_t> src(src_l1);
+    UnicastEndpoint dst;
+    noc.async_write(src, dst, n_bytes, {}, {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = dst_l1});
 }
 
 void kernel_main() {
-    const uint32_t in_r_addr = get_arg_val<uint32_t>(0);
-    const uint32_t in_i_addr = get_arg_val<uint32_t>(1);
-    const uint32_t tw_r_addr = get_arg_val<uint32_t>(2);
-    const uint32_t tw_i_addr = get_arg_val<uint32_t>(3);
-    const uint32_t base_tile_idx = get_arg_val<uint32_t>(4);
-    const uint32_t batch_per_core = get_arg_val<uint32_t>(5);
-    const uint32_t my_noc_x = get_arg_val<uint32_t>(6);
-    const uint32_t my_noc_y = get_arg_val<uint32_t>(7);
-    // Post-twiddle args.  When APPLY_POST_TWIDDLE=0, the factory passes
-    // zeros for 10..13 and they are never dereferenced.  When =1:
-    //   pt_r_addr / pt_i_addr — tile-sized fp32 twiddle table, layout
+    const uint32_t base_tile_idx = get_arg(args::base_tile_idx);
+    const uint32_t batch_per_core = get_arg(args::batch_per_core);
+    const uint32_t my_noc_x = get_arg(args::noc_x);
+    const uint32_t my_noc_y = get_arg(args::noc_y);
+    // Post-twiddle tensors are tile-sized fp32 tables with layout
     //     identical to apply_twiddles_host::build_twiddle_table(P, N2):
     //     N2 tiles total, tile n2 holds T[n2, 0..P-1] in slots [0, P).
     //   pt_modulus = N2 (twiddle modulus on row index).
@@ -51,61 +52,62 @@ void kernel_main() {
     //                enumeration (b, n1, k3) — laid out at stride N3 —
     //                picks the right n1 twiddle without an extra
     //                transpose.
-    // Slots 8-9 are two 0u placeholders (pre-migration these held
-    // in_page_size_override and in_imag_page_size_override; the
-    // TensorAccessor migration removed both from the kernel but we keep
-    // the two slots reserved on the factory side to preserve the
-    // original runtime-arg layout at slots 10-13).
-    const uint32_t pt_r_addr = get_arg_val<uint32_t>(10);
-    const uint32_t pt_i_addr = get_arg_val<uint32_t>(11);
-    const uint32_t pt_modulus = get_arg_val<uint32_t>(12);
-    const uint32_t pt_stride = get_arg_val<uint32_t>(13);
+    const uint32_t pt_modulus = get_arg(args::pt_modulus);
+    const uint32_t pt_stride = get_arg(args::pt_stride);
 
-    constexpr uint32_t SUB_N = get_compile_time_arg_val(0);
-    constexpr uint32_t LOG2_SUB_N = get_compile_time_arg_val(1);
+    constexpr uint32_t SUB_N = get_arg(args::sub_n);
+    constexpr uint32_t LOG2_SUB_N = get_arg(args::log2_sub_n);
     constexpr uint32_t LOCAL_PAIRS = SUB_N / 2;
-    constexpr uint32_t BIT_REVERSE_ON_LOAD = get_compile_time_arg_val(2);
-    constexpr uint32_t INPUT_BF16 = get_compile_time_arg_val(3);
-    constexpr uint32_t APPLY_POST_TWIDDLE = get_compile_time_arg_val(4);
+    constexpr uint32_t BIT_REVERSE_ON_LOAD = get_arg(args::bit_reverse_on_load);
 
-    constexpr auto in_0_args = TensorAccessorArgs<5>();
-    constexpr auto in_1_args = TensorAccessorArgs<in_0_args.next_compile_time_args_offset()>();
-    constexpr auto tw_args = TensorAccessorArgs<in_1_args.next_compile_time_args_offset()>();
+    const auto in_r_gen = TensorAccessor(tensor::in_r);
+    const auto in_i_gen = TensorAccessor(tensor::in_i);
 
-    const auto in_r_gen = TensorAccessor(in_0_args, in_r_addr);
-    const auto in_i_gen = TensorAccessor(in_1_args, in_i_addr);
+    const auto tw_r_gen = TensorAccessor(tensor::tw_r);
+    const auto tw_i_gen = TensorAccessor(tensor::tw_i);
 
-    const auto tw_r_gen = TensorAccessor(tw_args, tw_r_addr);
-    const auto tw_i_gen = TensorAccessor(tw_args, tw_i_addr);
-
-    // Post-twiddle accessor CTAs are ALWAYS present (factory pushes
-    // create_dram_interleaved() sentinel when apply_pt=0, real
-    // TensorAccessorArgs(pt_plan->tw_r_buf) when apply_pt=1) — see
-    // fft_radix_pass_factory.cpp for the rationale.  We declare
-    // pt_args here unconditionally because `if constexpr` does not
-    // discard non-dependent statements in a non-template function like
-    // kernel_main().  pt_r_gen / pt_i_gen are built inside the
-    // if-constexpr below and are never touched when APPLY_POST_TWIDDLE=0.
-    constexpr auto pt_args = TensorAccessorArgs<tw_args.next_compile_time_args_offset()>();
+    Noc noc;
+    DataflowBuffer cb_even_r(dfb::even_r);
+    DataflowBuffer cb_even_i(dfb::even_i);
+    DataflowBuffer cb_odd_r(dfb::odd_r);
+    DataflowBuffer cb_odd_i(dfb::odd_i);
+    DataflowBuffer cb_tw_r(dfb::twiddle_r);
+    DataflowBuffer cb_tw_i(dfb::twiddle_i);
+    DataflowBuffer cb_out0_r(dfb::out0_r);
+    DataflowBuffer cb_out0_i(dfb::out0_i);
+    DataflowBuffer cb_out1_r(dfb::out1_r);
+    DataflowBuffer cb_out1_i(dfb::out1_i);
+    DataflowBuffer cb_state_r(dfb::state_r);
+    DataflowBuffer cb_state_i(dfb::state_i);
+    DataflowBuffer cb_sync(dfb::sync);
+#ifdef INPUT_BF16
+    DataflowBuffer cb_in_r_bf16(dfb::in_r_bf16);
+    DataflowBuffer cb_in_i_bf16(dfb::in_i_bf16);
+#endif
+#ifdef APPLY_POST_TWIDDLE
+    DataflowBuffer cb_pt_r(dfb::post_twiddle_r);
+    DataflowBuffer cb_pt_i(dfb::post_twiddle_i);
+#endif
 
     for (uint32_t k = 0; k < batch_per_core; ++k) {
         const uint32_t tile_idx = base_tile_idx + k;
 
-        cb_reserve_back(CB_STATE_R, 1);
-        cb_reserve_back(CB_STATE_I, 1);
-        const uint32_t state_r_l1 = get_write_ptr(CB_STATE_R);
-        const uint32_t state_i_l1 = get_write_ptr(CB_STATE_I);
+        cb_state_r.reserve_back(1);
+        cb_state_i.reserve_back(1);
+        const uint32_t state_r_l1 = cb_state_r.get_write_ptr();
+        const uint32_t state_i_l1 = cb_state_i.get_write_ptr();
 
-        if constexpr (INPUT_BF16) {
-            cb_reserve_back(CB_IN_R_BF16, 1);
-            cb_reserve_back(CB_IN_I_BF16, 1);
-            const uint32_t in_r_bf16_l1 = get_write_ptr(CB_IN_R_BF16);
-            const uint32_t in_i_bf16_l1 = get_write_ptr(CB_IN_I_BF16);
-            noc_async_read_page(tile_idx, in_r_gen, in_r_bf16_l1);
-            noc_async_read_page(tile_idx, in_i_gen, in_i_bf16_l1);
-            noc_async_read_barrier();
-            cb_push_back(CB_IN_R_BF16, 1);
-            cb_push_back(CB_IN_I_BF16, 1);
+#ifdef INPUT_BF16
+        {
+            cb_in_r_bf16.reserve_back(1);
+            cb_in_i_bf16.reserve_back(1);
+            const uint32_t in_r_bf16_l1 = cb_in_r_bf16.get_write_ptr();
+            const uint32_t in_i_bf16_l1 = cb_in_i_bf16.get_write_ptr();
+            noc.async_read(in_r_gen, cb_in_r_bf16, in_r_gen.get_aligned_page_size(), {.page_id = tile_idx}, {});
+            noc.async_read(in_i_gen, cb_in_i_bf16, in_i_gen.get_aligned_page_size(), {.page_id = tile_idx}, {});
+            noc.async_read_barrier();
+            cb_in_r_bf16.push_back(1);
+            cb_in_i_bf16.push_back(1);
 
             volatile tt_l1_ptr uint16_t* const sb_r = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_r_bf16_l1);
             volatile tt_l1_ptr uint16_t* const sb_i = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_i_bf16_l1);
@@ -116,16 +118,19 @@ void kernel_main() {
                 dst_i[kk] = static_cast<uint32_t>(sb_i[kk]) << 16;
             }
 
-            cb_pop_front(CB_IN_R_BF16, 1);
-            cb_pop_front(CB_IN_I_BF16, 1);
-        } else {
-            noc_async_read_page(tile_idx, in_r_gen, state_r_l1);
-            noc_async_read_page(tile_idx, in_i_gen, state_i_l1);
-            noc_async_read_barrier();
+            cb_in_r_bf16.pop_front(1);
+            cb_in_i_bf16.pop_front(1);
         }
+#else
+        {
+            noc.async_read(in_r_gen, cb_state_r, in_r_gen.get_aligned_page_size(), {.page_id = tile_idx}, {});
+            noc.async_read(in_i_gen, cb_state_i, in_i_gen.get_aligned_page_size(), {.page_id = tile_idx}, {});
+            noc.async_read_barrier();
+        }
+#endif
 
-        cb_push_back(CB_STATE_R, 1);
-        cb_push_back(CB_STATE_I, 1);
+        cb_state_r.push_back(1);
+        cb_state_i.push_back(1);
 
         volatile tt_l1_ptr float* const state_r = reinterpret_cast<volatile tt_l1_ptr float*>(state_r_l1);
         volatile tt_l1_ptr float* const state_i = reinterpret_cast<volatile tt_l1_ptr float*>(state_i_l1);
@@ -156,23 +161,23 @@ void kernel_main() {
             const uint32_t block_bytes = stride * 4u;
             const bool use_dma = block_bytes >= kScalarCutoff;
 
-            cb_reserve_back(CB_TW_R, 1);
-            cb_reserve_back(CB_TW_I, 1);
-            noc_async_read_page(s, tw_r_gen, get_write_ptr(CB_TW_R));
-            noc_async_read_page(s, tw_i_gen, get_write_ptr(CB_TW_I));
-            noc_async_read_barrier();
-            cb_push_back(CB_TW_R, 1);
-            cb_push_back(CB_TW_I, 1);
+            cb_tw_r.reserve_back(1);
+            cb_tw_i.reserve_back(1);
+            noc.async_read(tw_r_gen, cb_tw_r, tw_r_gen.get_aligned_page_size(), {.page_id = s}, {});
+            noc.async_read(tw_i_gen, cb_tw_i, tw_i_gen.get_aligned_page_size(), {.page_id = s}, {});
+            noc.async_read_barrier();
+            cb_tw_r.push_back(1);
+            cb_tw_i.push_back(1);
 
-            cb_reserve_back(CB_EVEN_R, 1);
-            cb_reserve_back(CB_EVEN_I, 1);
-            cb_reserve_back(CB_ODD_R, 1);
-            cb_reserve_back(CB_ODD_I, 1);
+            cb_even_r.reserve_back(1);
+            cb_even_i.reserve_back(1);
+            cb_odd_r.reserve_back(1);
+            cb_odd_i.reserve_back(1);
 
-            const uint32_t even_r_l1 = get_write_ptr(CB_EVEN_R);
-            const uint32_t even_i_l1 = get_write_ptr(CB_EVEN_I);
-            const uint32_t odd_r_l1 = get_write_ptr(CB_ODD_R);
-            const uint32_t odd_i_l1 = get_write_ptr(CB_ODD_I);
+            const uint32_t even_r_l1 = cb_even_r.get_write_ptr();
+            const uint32_t even_i_l1 = cb_even_i.get_write_ptr();
+            const uint32_t odd_r_l1 = cb_odd_r.get_write_ptr();
+            const uint32_t odd_i_l1 = cb_odd_i.get_write_ptr();
 
             if (use_dma) {
                 for (uint32_t g = 0; g < num_groups; ++g) {
@@ -184,12 +189,12 @@ void kernel_main() {
                     const uint32_t dst_odd = odd_r_l1 + (g * stride) * 4u;
                     const uint32_t dst_evi = even_i_l1 + (g * stride) * 4u;
                     const uint32_t dst_odi = odd_i_l1 + (g * stride) * 4u;
-                    async_local_memcpy(src_even, dst_even, block_bytes, my_noc_x, my_noc_y);
-                    async_local_memcpy(src_odd, dst_odd, block_bytes, my_noc_x, my_noc_y);
-                    async_local_memcpy(src_evi, dst_evi, block_bytes, my_noc_x, my_noc_y);
-                    async_local_memcpy(src_odi, dst_odi, block_bytes, my_noc_x, my_noc_y);
+                    async_local_memcpy(noc, src_even, dst_even, block_bytes, my_noc_x, my_noc_y);
+                    async_local_memcpy(noc, src_odd, dst_odd, block_bytes, my_noc_x, my_noc_y);
+                    async_local_memcpy(noc, src_evi, dst_evi, block_bytes, my_noc_x, my_noc_y);
+                    async_local_memcpy(noc, src_odi, dst_odi, block_bytes, my_noc_x, my_noc_y);
                 }
-                noc_async_write_barrier();
+                noc.async_write_barrier();
             } else {
                 volatile tt_l1_ptr float* const even_r = reinterpret_cast<volatile tt_l1_ptr float*>(even_r_l1);
                 volatile tt_l1_ptr float* const even_i = reinterpret_cast<volatile tt_l1_ptr float*>(even_i_l1);
@@ -207,20 +212,20 @@ void kernel_main() {
                 }
             }
 
-            cb_push_back(CB_EVEN_R, 1);
-            cb_push_back(CB_EVEN_I, 1);
-            cb_push_back(CB_ODD_R, 1);
-            cb_push_back(CB_ODD_I, 1);
+            cb_even_r.push_back(1);
+            cb_even_i.push_back(1);
+            cb_odd_r.push_back(1);
+            cb_odd_i.push_back(1);
 
-            cb_wait_front(CB_OUT0_R, 1);
-            cb_wait_front(CB_OUT0_I, 1);
-            cb_wait_front(CB_OUT1_R, 1);
-            cb_wait_front(CB_OUT1_I, 1);
+            cb_out0_r.wait_front(1);
+            cb_out0_i.wait_front(1);
+            cb_out1_r.wait_front(1);
+            cb_out1_i.wait_front(1);
 
-            const uint32_t o0r_l1 = get_read_ptr(CB_OUT0_R);
-            const uint32_t o0i_l1 = get_read_ptr(CB_OUT0_I);
-            const uint32_t o1r_l1 = get_read_ptr(CB_OUT1_R);
-            const uint32_t o1i_l1 = get_read_ptr(CB_OUT1_I);
+            const uint32_t o0r_l1 = cb_out0_r.get_read_ptr();
+            const uint32_t o0i_l1 = cb_out0_i.get_read_ptr();
+            const uint32_t o1r_l1 = cb_out1_r.get_read_ptr();
+            const uint32_t o1i_l1 = cb_out1_i.get_read_ptr();
 
             if (use_dma) {
                 for (uint32_t g = 0; g < num_groups; ++g) {
@@ -232,12 +237,12 @@ void kernel_main() {
                     const uint32_t src_o0i = o0i_l1 + (g * stride) * 4u;
                     const uint32_t src_o1r = o1r_l1 + (g * stride) * 4u;
                     const uint32_t src_o1i = o1i_l1 + (g * stride) * 4u;
-                    async_local_memcpy(src_o0r, dst_lo_r, block_bytes, my_noc_x, my_noc_y);
-                    async_local_memcpy(src_o1r, dst_hi_r, block_bytes, my_noc_x, my_noc_y);
-                    async_local_memcpy(src_o0i, dst_lo_i, block_bytes, my_noc_x, my_noc_y);
-                    async_local_memcpy(src_o1i, dst_hi_i, block_bytes, my_noc_x, my_noc_y);
+                    async_local_memcpy(noc, src_o0r, dst_lo_r, block_bytes, my_noc_x, my_noc_y);
+                    async_local_memcpy(noc, src_o1r, dst_hi_r, block_bytes, my_noc_x, my_noc_y);
+                    async_local_memcpy(noc, src_o0i, dst_lo_i, block_bytes, my_noc_x, my_noc_y);
+                    async_local_memcpy(noc, src_o1i, dst_hi_i, block_bytes, my_noc_x, my_noc_y);
                 }
-                noc_async_write_barrier();
+                noc.async_write_barrier();
             } else {
                 volatile tt_l1_ptr float* const o0r = reinterpret_cast<volatile tt_l1_ptr float*>(o0r_l1);
                 volatile tt_l1_ptr float* const o0i = reinterpret_cast<volatile tt_l1_ptr float*>(o0i_l1);
@@ -255,10 +260,10 @@ void kernel_main() {
                 }
             }
 
-            cb_pop_front(CB_OUT0_R, 1);
-            cb_pop_front(CB_OUT0_I, 1);
-            cb_pop_front(CB_OUT1_R, 1);
-            cb_pop_front(CB_OUT1_I, 1);
+            cb_out0_r.pop_front(1);
+            cb_out0_i.pop_front(1);
+            cb_out1_r.pop_front(1);
+            cb_out1_i.pop_front(1);
         }
 
         // ── Load post-twiddle tile (consumed by the writer) ─────────────
@@ -267,21 +272,23 @@ void kernel_main() {
         // T[tile_idx % pt_modulus, :] into CB_PT_R/I so the writer can
         // do the scalar complex-multiply right before its
         // noc_async_write_page (see header comment for the rationale).
-        if constexpr (APPLY_POST_TWIDDLE) {
-            const auto pt_r_gen = TensorAccessor(pt_args, pt_r_addr);
-            const auto pt_i_gen = TensorAccessor(pt_args, pt_i_addr);
+#ifdef APPLY_POST_TWIDDLE
+        {
+            const auto pt_r_gen = TensorAccessor(tensor::post_tw_r);
+            const auto pt_i_gen = TensorAccessor(tensor::post_tw_i);
 
             const uint32_t pt_tile_idx = (tile_idx / pt_stride) % pt_modulus;
-            cb_reserve_back(CB_PT_R, 1);
-            cb_reserve_back(CB_PT_I, 1);
-            noc_async_read_page(pt_tile_idx, pt_r_gen, get_write_ptr(CB_PT_R));
-            noc_async_read_page(pt_tile_idx, pt_i_gen, get_write_ptr(CB_PT_I));
-            noc_async_read_barrier();
-            cb_push_back(CB_PT_R, 1);
-            cb_push_back(CB_PT_I, 1);
+            cb_pt_r.reserve_back(1);
+            cb_pt_i.reserve_back(1);
+            noc.async_read(pt_r_gen, cb_pt_r, pt_r_gen.get_aligned_page_size(), {.page_id = pt_tile_idx}, {});
+            noc.async_read(pt_i_gen, cb_pt_i, pt_i_gen.get_aligned_page_size(), {.page_id = pt_tile_idx}, {});
+            noc.async_read_barrier();
+            cb_pt_r.push_back(1);
+            cb_pt_i.push_back(1);
         }
+#endif
 
-        cb_reserve_back(CB_SYNC, 1);
-        cb_push_back(CB_SYNC, 1);
+        cb_sync.reserve_back(1);
+        cb_sync.push_back(1);
     }
 }

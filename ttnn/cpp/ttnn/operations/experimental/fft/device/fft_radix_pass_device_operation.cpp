@@ -3,6 +3,8 @@
 
 #include "fft_radix_pass_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "stockham_host.hpp"
+#include "apply_twiddles_host.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -73,8 +75,8 @@ void FftRadixPassDeviceOperation::validate_on_program_cache_miss(
             attrs.twiddle_N2);
     }
 
-    if (args.input_imag.has_value()) {
-        const auto& imag = *args.input_imag;
+    if (attrs.input_imag_provided) {
+        const auto& imag = args.input_imag;
         TT_FATAL(
             imag.dtype() == in.dtype() && imag.layout() == in.layout() && imag.padded_shape() == shape,
             "fft_radix_pass: input_imag must match input_real in "
@@ -112,7 +114,7 @@ tt::stl::hash::hash_t FftRadixPassDeviceOperation::compute_program_hash(
         args.input_real.dtype(),
         args.input_real.memory_config(),
         args.input_real.padded_shape(),
-        args.input_imag.has_value(),
+        attrs.input_imag_provided,
         apply_scale);
 }
 
@@ -134,11 +136,30 @@ std::tuple<Tensor, Tensor> fft_radix_pass(
         .twiddle_N2 = twiddle_N2,
         .stride = stride,
         .output_scale = output_scale,
+        .input_imag_provided = input_imag.has_value(),
     };
+    const auto& shape = input_real.padded_shape();
+    uint32_t B = 1u;
+    for (int d = 0; d < static_cast<int>(shape.size()) - 1; ++d) {
+        B *= static_cast<uint32_t>(shape[d]);
+    }
+    auto md = input_real.device()->get_mesh_device();
+    auto twiddles = fft_stockham::get_cached_batch_plan(md, P);
+    auto zeros = input_imag.has_value() ? nullptr : fft_stockham::get_cached_zero_imag(md, input_real.dtype(), B);
+    auto post_twiddles =
+        twiddle_N2 == 0u ? nullptr
+                         : ttnn::experimental::prim::apply_twiddles_host::get_or_create(md, P, twiddle_N2);
+    const Tensor& effective_imag = input_imag.has_value() ? *input_imag : zeros->zero;
+    const Tensor& effective_pt_r = post_twiddles ? post_twiddles->tw_r : twiddles->tw_r;
+    const Tensor& effective_pt_i = post_twiddles ? post_twiddles->tw_i : twiddles->tw_i;
+
     OperationType::tensor_args_t args{
         .input_real = input_real,
-        .input_imag = input_imag,
-    };
+        .input_imag = effective_imag,
+        .tw_real = twiddles->tw_r,
+        .tw_imag = twiddles->tw_i,
+        .post_tw_real = effective_pt_r,
+        .post_tw_imag = effective_pt_i};
 
     return ttnn::device_operation::launch<OperationType>(attrs, args);
 }

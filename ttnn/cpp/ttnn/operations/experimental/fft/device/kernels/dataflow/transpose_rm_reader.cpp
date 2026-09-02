@@ -27,24 +27,28 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "transpose_rm_common.h"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t base_unit = get_arg_val<uint32_t>(1);
-    const uint32_t num_units = get_arg_val<uint32_t>(2);
+    const uint32_t base_unit = get_arg(args::base_unit);
+    const uint32_t num_units = get_arg(args::num_units);
 
-    constexpr uint32_t A_TILES = get_compile_time_arg_val(0);
-    constexpr uint32_t C_TILES = get_compile_time_arg_val(1);
-    constexpr uint32_t IS_BF16 = get_compile_time_arg_val(2);
-
-    constexpr auto rm_args = TensorAccessorArgs<3>();
+    constexpr uint32_t A_TILES = get_arg(args::a_tiles);
+    constexpr uint32_t C_TILES = get_arg(args::c_tiles);
+    constexpr uint32_t IS_BF16 = get_arg(args::is_bf16);
 
     constexpr uint32_t elem_bytes = IS_BF16 ? 2u : 4u;
     constexpr uint32_t row_bytes = T_BLOCK * elem_bytes;   // 128B fp32, 64B bf16
     constexpr uint32_t block_bytes = T_BLOCK * row_bytes;  // one block in L1
 
-    const auto src_gen = TensorAccessor(rm_args, src_addr);
+    const auto src_gen = TensorAccessor(tensor::src);
+
+    Noc noc;
+    DataflowBuffer block(dfb::block);
 
     for (uint32_t u = 0; u < num_units; ++u) {
         const uint32_t unit_idx = base_unit + u;
@@ -58,18 +62,22 @@ void kernel_main() {
         const uint32_t src_row_base = b * (A_TILES * T_BLOCK) + tile_a * T_BLOCK;
         const uint32_t src_col_offset = tile_c * T_BLOCK * elem_bytes;
 
-        cb_reserve_back(CB_TR_BLOCK, 1);
-        const uint32_t l1_base = get_write_ptr(CB_TR_BLOCK);
+        block.reserve_back(1);
+        const uint32_t l1_base = block.get_write_ptr();
 
         // 32 row-segment reads (each = 32 elements).  All in-flight at
         // once — NoC tolerates many outstanding requests; single barrier
         // at the end.
         for (uint32_t r = 0; r < T_BLOCK; ++r) {
             const uint32_t src_row = src_row_base + r;
-            const uint64_t src_noc_addr = src_gen.get_noc_addr(src_row, src_col_offset);
-            noc_async_read(src_noc_addr, l1_base + r * row_bytes, row_bytes);
+            noc.async_read(
+                src_gen,
+                block,
+                row_bytes,
+                {.page_id = src_row, .offset_bytes = src_col_offset},
+                {.offset_bytes = r * row_bytes});
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
         // In-place transpose of the 32×32 L1 block.
         //   L1[i*T_BLOCK + j] ↔ L1[j*T_BLOCK + i]   for i < j
@@ -98,6 +106,6 @@ void kernel_main() {
             }
         }
 
-        cb_push_back(CB_TR_BLOCK, 1);
+        block.push_back(1);
     }
 }

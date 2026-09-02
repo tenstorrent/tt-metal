@@ -15,7 +15,7 @@ def _isolate_fft_device_state(device):
     cause:
 
     * ttnn's per-device program cache carries entries from earlier tests
-      in the same session.  A cached ProgramDescriptor entry keyed on
+      in the same session.  A cached ProgramSpec entry keyed on
       (shape, dtype, has_imag) reuses whatever runtime args were baked in
       by the first caller, which is only safe when the second caller's
       tensor addresses / plan buffers match.  Clearing the cache before
@@ -27,7 +27,7 @@ def _isolate_fft_device_state(device):
       before the next test starts (see the Bluestein-small intermittent
       failure noted in the PR body).
     * The FFT-specific host plan caches (Bluestein, Stockham twiddles,
-      apply_twiddles delta tables, ...) own device MeshBuffers whose
+      apply_twiddles delta tables, ...) own device tensors whose
       destructors race GraphTracker teardown at process exit.  Releasing
       them after each test reclaims device memory and shortens exit.
 

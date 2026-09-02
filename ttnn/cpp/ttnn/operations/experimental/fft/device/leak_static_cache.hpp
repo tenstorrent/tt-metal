@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Process-exit safety for FFT host-side plan caches that own MeshBuffers or
-// device tensors.  Their destructors consult GraphTracker / deallocate device
+// Process-exit safety for FFT host-side plan caches that own device tensors.
+// Their destructors consult GraphTracker / deallocate device
 // memory; if the static map is destroyed after Metal teardown, exit segfaults.
 // Heap-allocate and never destroy these maps (OS reclaims at exit).
 

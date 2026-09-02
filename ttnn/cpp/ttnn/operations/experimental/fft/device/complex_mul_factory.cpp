@@ -9,34 +9,35 @@
 #include "complex_mul_factory.hpp"
 
 #include <cstdint>
-#include <vector>
 
-#include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "apply_twiddles_shared.hpp"
 #include "stockham_host.hpp"  // pick_batch_grid, max_cores_for_grid, batch_logical_core
 
 namespace ttnn::experimental::prim {
+
+using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace {
 
 // `_cm` suffix avoids Unity-build ODR collision with anonymous-namespace
 // symbols in apply_twiddles_factory.cpp / apply_twiddles_xl_factory.cpp.
-constexpr uint32_t kTileHW_cm = 32u;
-constexpr uint32_t kTileElems_cm = kTileHW_cm * kTileHW_cm;               // 1024
-constexpr uint32_t kTileBytesFp32_cm = kTileElems_cm * sizeof(float);     // 4096
-constexpr uint32_t kTileBytesBf16_cm = kTileElems_cm * sizeof(uint16_t);  // 2048
+const KernelSpecName CM_READER{"reader"};
+const TensorParamName CM_A_R{"a_real"};
+const TensorParamName CM_A_I{"a_imag"};
+const TensorParamName CM_B_R{"b_real"};
+const TensorParamName CM_B_I{"b_imag"};
 
 }  // namespace
 
-tt::tt_metal::ProgramDescriptor ComplexMulFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts ComplexMulFactory::create_program_artifacts(
     const ComplexMulParams& /*attrs*/,
     const ComplexMulTensorArgs& tensor_args,
     std::tuple<ttnn::Tensor, ttnn::Tensor>& tensor_return_value) {
-    using namespace tt::tt_metal;
-
     const auto& a_r_tensor = tensor_args.a_real;
     const auto& a_i_tensor = tensor_args.a_imag;
     const auto& b_r_tensor = tensor_args.b_real;
@@ -57,14 +58,9 @@ tt::tt_metal::ProgramDescriptor ComplexMulFactory::create_descriptor(
     const DataType dtype = a_r_tensor.dtype();
     const bool is_bf16 = (dtype == DataType::BFLOAT16);
 
-    auto* const a_r_buf = a_r_tensor.buffer();
-    auto* const a_i_buf = a_i_tensor.buffer();
-    auto* const b_r_buf = b_r_tensor.buffer();
-    auto* const b_i_buf = b_i_tensor.buffer();
-    auto* const out_r_buf = out_r_tensor.buffer();
-    auto* const out_i_buf = out_i_tensor.buffer();
     TT_FATAL(
-        a_r_buf && a_i_buf && b_r_buf && b_i_buf && out_r_buf && out_i_buf,
+        a_r_tensor.buffer() && a_i_tensor.buffer() && b_r_tensor.buffer() && b_i_tensor.buffer() &&
+            out_r_tensor.buffer() && out_i_tensor.buffer(),
         "ComplexMulFactory: all input/output tensors must be on device.");
 
     auto* device_raw = a_r_tensor.device();
@@ -92,122 +88,82 @@ tt::tt_metal::ProgramDescriptor ComplexMulFactory::create_descriptor(
     const uint32_t rows_per_core = M / num_cores;
     auto [grid_cols, grid_rows] = fft_stockham::pick_batch_grid(num_cores, dev_grid.x);
 
-    ProgramDescriptor desc;
     const CoreCoord first{0, 0};
     const CoreCoord last{grid_cols - 1u, grid_rows - 1u};
     const CoreRange cr(first, last);
     const CoreRangeSet crs({cr});
 
-    // ── Circular Buffers — IDENTICAL to apply_twiddles_(xl_)factory so
-    //   we can reuse apply_twiddles_compute.cpp + apply_twiddles_writer.cpp
-    //   binaries verbatim.  CB IDs 0..7 are the fp32 compute pipeline
-    //   (A=input1, T=input2, B=output, TMP=SFPU scratch); IDs 8..11 are
-    //   bf16 staging tiles allocated only when input/output is bf16.
-    constexpr uint32_t kNumFp32Cbs = 8;
-    constexpr uint32_t kCbTilesFp32[kNumFp32Cbs] = {
-        2, 2, 2, 2, 2, 2, 1, 1  // A_R, A_I, T_R, T_I, B_R, B_I, TMP_R, TMP_I
-    };
-    for (uint32_t id = 0; id < kNumFp32Cbs; ++id) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = kCbTilesFp32[id] * kTileBytesFp32_cm,
-            .core_ranges = crs,
-            .format_descriptors = {CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(id),
-                .data_format = tt::DataFormat::Float32,
-                .page_size = kTileBytesFp32_cm,
-            }},
-        });
-    }
-    if (is_bf16) {
-        // 4 bf16 staging tiles: IN_R_BF16(8), IN_I_BF16(9),
-        // OUT_R_BF16(10), OUT_I_BF16(11).  IN_R/I_BF16 are reused for
-        // BOTH A and B by the reader (read A → expand to A_R/A_I, then
-        // read B → expand to T_R/T_I, with push/pop in between).
-        constexpr uint32_t kBf16CbIds[4] = {8u, 9u, 10u, 11u};
-        for (uint32_t i = 0; i < 4; ++i) {
-            desc.cbs.push_back(CBDescriptor{
-                .total_size = kTileBytesBf16_cm,
-                .core_ranges = crs,
-                .format_descriptors = {CBFormatDescriptor{
-                    .buffer_index = static_cast<uint8_t>(kBf16CbIds[i]),
-                    .data_format = tt::DataFormat::Float16_b,
-                    .page_size = kTileBytesBf16_cm,
-                }},
-            });
-        }
-    }
+    namespace shared = apply_tw_shared;
 
-    // ── Kernels ────────────────────────────────────────────────────────
-    const uint32_t input_bf16_flag = is_bf16 ? 1u : 0u;
-    const uint32_t output_bf16_flag = is_bf16 ? 1u : 0u;
-
-    KernelDescriptor reader{
-        .kernel_source = "ttnn/cpp/ttnn/operations/experimental/fft/device/kernels/dataflow/complex_mul_reader.cpp",
-        .core_ranges = crs,
-        // {P, INPUT_BF16} + TensorAccessorArgs (all 4 inputs share same layout)
-        .compile_time_args = [&]{
-            std::vector<uint32_t> c = {P, input_bf16_flag};
-            TensorAccessorArgs(a_r_buf).append_to(c);
-            return c;
-        }(),
-        .runtime_args = {},
-        .config = ReaderConfigDescriptor{},
+    // The reader feeds the second operand into the twiddle slots, so the
+    // shared compute kernel's "input × twiddle" is exactly A × B here.
+    // For bf16 it reuses one pair of staging buffers for both operands
+    // (read A → expand into a_r/a_i, then read B → expand into t_r/t_i).
+    KernelSpec reader{
+        .unique_id = CM_READER,
+        .source = "ttnn/cpp/ttnn/operations/experimental/fft/device/kernels/dataflow/complex_mul_reader.cpp",
+        .compiler_options = {.defines = shared::reader_defines(is_bf16)},
+        .dfb_bindings = shared::reader_dfb_bindings(is_bf16),
+        .tensor_bindings =
+            {TensorBinding{.tensor_parameter_name = CM_A_R, .accessor_name = "a_r"},
+             TensorBinding{.tensor_parameter_name = CM_A_I, .accessor_name = "a_i"},
+             TensorBinding{.tensor_parameter_name = CM_B_R, .accessor_name = "b_r"},
+             TensorBinding{.tensor_parameter_name = CM_B_I, .accessor_name = "b_i"}},
+        .compile_time_args = {{"p", P}},
+        .runtime_arg_schema = {.runtime_arg_names = {"base_row", "num_rows"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device_raw->arch()),
     };
 
-    // Writer is the SAME binary as apply_twiddles_writer.cpp.
-    KernelDescriptor writer{
-        .kernel_source = "ttnn/cpp/ttnn/operations/experimental/fft/device/kernels/dataflow/apply_twiddles_writer.cpp",
-        .core_ranges = crs,
-        // {N1=P, OUTPUT_BF16} + TensorAccessorArgs for output
-        .compile_time_args = [&]{
-            std::vector<uint32_t> c = {P, output_bf16_flag};
-            TensorAccessorArgs(out_r_buf).append_to(c);
-            return c;
-        }(),
-        .runtime_args = {},
-        .config = WriterConfigDescriptor{},
-    };
+    KernelSpec writer = shared::make_writer(device_raw->arch(), P, is_bf16);
+    KernelSpec compute = shared::make_compute();
 
-    std::vector<UnpackToDestMode> u2d(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    for (uint32_t id = 0; id < kNumFp32Cbs; ++id) {
-        u2d[id] = UnpackToDestMode::UnpackToDestFp32;
-    }
-
-    // Compute is the SAME binary as apply_twiddles_compute.cpp.
-    KernelDescriptor compute{
-        .kernel_source = "ttnn/cpp/ttnn/operations/experimental/fft/device/kernels/compute/apply_twiddles_compute.cpp",
-        .core_ranges = crs,
-        .compile_time_args = {},
-        .runtime_args = {},
-        .config =
-            ComputeConfigDescriptor{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = true,
-                .unpack_to_dest_mode = u2d,
-            },
-    };
-
-    // ── Per-core runtime args ──────────────────────────────────────────
-    reader.runtime_args.reserve(num_cores);
-    writer.runtime_args.reserve(num_cores);
-    compute.runtime_args.reserve(num_cores);
+    KernelRunArgs reader_run_args{.kernel = CM_READER};
+    KernelRunArgs writer_run_args{.kernel = shared::WRITER};
+    KernelRunArgs compute_run_args{.kernel = shared::COMPUTE};
 
     for (uint32_t c = 0; c < num_cores; ++c) {
         const CoreCoord logical = fft_stockham::batch_logical_core(c, grid_cols);
         const uint32_t base = c * rows_per_core;
 
-        reader.emplace_runtime_args(logical, {a_r_buf, a_i_buf, b_r_buf, b_i_buf, base, rows_per_core});
-
-        writer.emplace_runtime_args(logical, {out_r_buf, out_i_buf, base, rows_per_core});
-
-        compute.runtime_args.emplace_back(logical, KernelDescriptor::CoreRuntimeArgs{rows_per_core});
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values, logical, {{"base_row", base}, {"num_rows", rows_per_core}});
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values, logical, {{"base_row", base}, {"num_rows", rows_per_core}});
+        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, logical, {{"num_tiles", rows_per_core}});
     }
 
-    desc.kernels.push_back(std::move(reader));
-    desc.kernels.push_back(std::move(writer));
-    desc.kernels.push_back(std::move(compute));
+    ProgramSpec spec{
+        .name = "fft_complex_mul",
+        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
+        .dataflow_buffers = shared::make_dataflow_buffers(is_bf16),
+        .tensor_parameters =
+            {TensorParameter{.unique_id = CM_A_R, .spec = a_r_tensor.tensor_spec()},
+             TensorParameter{.unique_id = CM_A_I, .spec = a_i_tensor.tensor_spec()},
+             TensorParameter{.unique_id = CM_B_R, .spec = b_r_tensor.tensor_spec()},
+             TensorParameter{.unique_id = CM_B_I, .spec = b_i_tensor.tensor_spec()},
+             TensorParameter{.unique_id = shared::OUT_R, .spec = out_r_tensor.tensor_spec()},
+             TensorParameter{.unique_id = shared::OUT_I, .spec = out_i_tensor.tensor_spec()}},
+        .work_units =
+            {WorkUnitSpec{
+                .name = "main",
+                .kernels = {CM_READER, shared::WRITER, shared::COMPUTE},
+                .target_nodes = crs,
+            }},
+    };
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
+    run_args.tensor_args = {
+        {CM_A_R, TensorArgument{a_r_tensor.mesh_tensor()}},
+        {CM_A_I, TensorArgument{a_i_tensor.mesh_tensor()}},
+        {CM_B_R, TensorArgument{b_r_tensor.mesh_tensor()}},
+        {CM_B_I, TensorArgument{b_i_tensor.mesh_tensor()}},
+        {shared::OUT_R, TensorArgument{out_r_tensor.mesh_tensor()}},
+        {shared::OUT_I, TensorArgument{out_i_tensor.mesh_tensor()}},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::experimental::prim

@@ -4,6 +4,7 @@
 
 #include "fft_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "stockham_host.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -58,8 +59,8 @@ FFTDeviceOperation::program_factory_t FFTDeviceOperation::select_program_factory
     // Complex-input case (used by the composite router when it feeds an
     // already-complex tensor into a single Stockham pass).  Both halves
     // must be layout/dtype/shape-compatible.
-    if (args.input_imag.has_value()) {
-        const auto& imag = *args.input_imag;
+    if (attrs.input_imag_provided) {
+        const auto& imag = args.input_imag;
         TT_FATAL(
             imag.dtype() == dt && imag.layout() == input.layout() && imag.padded_shape() == shape,
             "prim::fft: input_imag must match input_real in dtype/layout/shape.");
@@ -97,10 +98,10 @@ void FFTDeviceOperation::validate_on_program_cache_miss(
         N);
 
     if (attrs.inverse) {
-        TT_FATAL(args.input_imag.has_value(), "fft (inverse): both real and imag spectrum tensors required.");
+        TT_FATAL(attrs.input_imag_provided, "fft (inverse): both real and imag spectrum tensors required.");
         TT_FATAL(
-            args.input_imag->dtype() == input.dtype() && args.input_imag->layout() == input.layout() &&
-                args.input_imag->padded_shape() == shape,
+            args.input_imag.dtype() == input.dtype() && args.input_imag.layout() == input.layout() &&
+                args.input_imag.padded_shape() == shape,
             "fft (inverse): spectrum_real and spectrum_imag must match "
             "in dtype/layout/shape.");
     }
@@ -124,18 +125,17 @@ FFTDeviceOperation::tensor_return_value_t FFTDeviceOperation::create_output_tens
 tt::stl::hash::hash_t FFTDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     const auto& shape = args.input_real.padded_shape();
-    // Include has_value() so a real-only call (SingleTileStockhamFactory,
-    // index 0) and a complex call (BatchedStockhamFactory, index 1) for the
-    // same shape/dtype never share a cache entry.  Without this bit, a
-    // real-only N=32 bf16 test that runs first caches factory_index=0; the
-    // Bluestein b_cyc FFT (complex, same shape) then gets a cache HIT and
-    // blindly uses SingleTileStockhamFactory::create_descriptor, which
-    // hard-codes zscratch (all-zeros) as the imaginary input regardless of
-    // tensor_args.input_imag — corrupting plan->B_re for every subsequent
-    // Bluestein call.  FftRadixPassDeviceOperation has the same fix; see that
-    // file's comment for the full rationale.
+    // attrs carries input_imag_provided, which keeps a real-only call
+    // (SingleTileStockhamFactory, index 0) and a complex call
+    // (BatchedStockhamFactory, index 1) on separate cache entries. Without
+    // that bit, a real-only N=32 bf16 test that runs first caches
+    // factory_index=0; the Bluestein b_cyc FFT (complex, same shape) then
+    // gets a cache HIT and reuses the real-only program, which binds the
+    // zero tensor as the imaginary input — corrupting plan->B_re for every
+    // subsequent Bluestein call.  FftRadixPassDeviceOperation has the same
+    // fix; see that file's comment for the full rationale.
     return tt::tt_metal::operation::hash_operation<FFTDeviceOperation>(
-        attrs, args.input_real.dtype(), args.input_real.memory_config(), shape, args.input_imag.has_value());
+        attrs, args.input_real.dtype(), args.input_real.memory_config(), shape);
 }
 
 }  // namespace ttnn::experimental::prim
@@ -152,8 +152,23 @@ std::tuple<Tensor, Tensor> fft(
     OperationType::operation_attributes_t attrs{
         .inverse = inverse,
         .precision = precision,
+        .input_imag_provided = input_imag.has_value(),
     };
-    OperationType::tensor_args_t args{.input_real = input_real, .input_imag = input_imag};
+    const auto& shape = input_real.padded_shape();
+    const uint32_t N = static_cast<uint32_t>(shape[-1]);
+    uint32_t B = 1u;
+    for (int d = 0; d < static_cast<int>(shape.size()) - 1; ++d) {
+        B *= static_cast<uint32_t>(shape[d]);
+    }
+    auto md = input_real.device()->get_mesh_device();
+    auto twiddles = fft_stockham::get_cached_batch_plan(md, N);
+    auto zeros = input_imag.has_value() ? nullptr : fft_stockham::get_cached_zero_imag(md, input_real.dtype(), B);
+
+    OperationType::tensor_args_t args{
+        .input_real = input_real,
+        .input_imag = input_imag.has_value() ? *input_imag : zeros->zero,
+        .tw_real = twiddles->tw_r,
+        .tw_imag = twiddles->tw_i};
 
     return ttnn::device_operation::launch<OperationType>(attrs, args);
 }

@@ -7,9 +7,8 @@
 //     (B_R, B_I) = (A_R * T_R - A_I * T_I,
 //                   A_R * T_I + A_I * T_R)
 //
-// CB layout is identical to pass2_common.h, so this kernel is structurally
-// identical to pass2_compute.cpp — the only difference is the wrapper
-// header it includes (apply_twiddles_common.h instead of pass2_common.h).
+// This shared compute kernel serves table twiddles, XL twiddles, and generic
+// complex multiplication through the same named dataflow-buffer layout.
 // We keep them as separate translation units to avoid coupling the legacy
 // pass2 path to apply_twiddles' lifecycle.
 
@@ -20,25 +19,19 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/compute_kernel_api.h"
-
-constexpr auto CB_A_R = tt::CBIndex::c_0;
-constexpr auto CB_A_I = tt::CBIndex::c_1;
-constexpr auto CB_T_R = tt::CBIndex::c_2;
-constexpr auto CB_T_I = tt::CBIndex::c_3;
-constexpr auto CB_B_R = tt::CBIndex::c_4;
-constexpr auto CB_B_I = tt::CBIndex::c_5;
-constexpr auto CB_TMP_R = tt::CBIndex::c_6;
-constexpr auto CB_TMP_I = tt::CBIndex::c_7;
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 enum : uint32_t { OP_ADD = 0, OP_SUB = 1, OP_MUL = 2 };
 
-template <uint32_t OP>
-FORCE_INLINE void sfpu_binop_push(uint32_t a, uint32_t b, uint32_t out) {
+template <uint32_t OP, typename DfbA, typename DfbB, typename DfbOut>
+FORCE_INLINE void sfpu_binop_push(DfbA a, DfbB b, DfbOut out) {
     tile_regs_acquire();
 
-    copy_tile_to_dst_init_short(a);
+    copy_init(a);
     copy_tile(a, 0, 0);
-    copy_tile_to_dst_init_short_with_dt(a, b);
+    reconfig_data_format_srca(a, b);
+    copy_init(b);
     copy_tile(b, 0, 1);
 
     if constexpr (OP == OP_ADD) {
@@ -54,46 +47,54 @@ FORCE_INLINE void sfpu_binop_push(uint32_t a, uint32_t b, uint32_t out) {
 
     tile_regs_commit();
 
-    cb_reserve_back(out, 1);
+    DataflowBuffer cb_out(out);
+    cb_out.reserve_back(1);
     tile_regs_wait();
     pack_tile(0, out);
     tile_regs_release();
-    cb_push_back(out, 1);
+    cb_out.push_back(1);
 }
 
 void kernel_main() {
-    const uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    const uint32_t num_tiles = get_arg(args::num_tiles);
 
-    unary_op_init_common(CB_A_R, CB_B_R);
-    copy_tile_to_dst_init_short(CB_A_R);
+    compute_kernel_hw_startup(dfb::a_r, dfb::b_r);
+    copy_init(dfb::a_r);
+
+    DataflowBuffer cb_a_r(dfb::a_r);
+    DataflowBuffer cb_a_i(dfb::a_i);
+    DataflowBuffer cb_t_r(dfb::t_r);
+    DataflowBuffer cb_t_i(dfb::t_i);
+    DataflowBuffer cb_tmp_r(dfb::tmp_r);
+    DataflowBuffer cb_tmp_i(dfb::tmp_i);
 
     for (uint32_t k = 0; k < num_tiles; ++k) {
-        cb_wait_front(CB_A_R, 1);
-        cb_wait_front(CB_A_I, 1);
-        cb_wait_front(CB_T_R, 1);
-        cb_wait_front(CB_T_I, 1);
+        cb_a_r.wait_front(1);
+        cb_a_i.wait_front(1);
+        cb_t_r.wait_front(1);
+        cb_t_i.wait_front(1);
 
         // B_R = A_R * T_R - A_I * T_I
-        sfpu_binop_push<OP_MUL>(CB_A_R, CB_T_R, CB_TMP_R);
-        sfpu_binop_push<OP_MUL>(CB_A_I, CB_T_I, CB_TMP_I);
-        cb_wait_front(CB_TMP_R, 1);
-        cb_wait_front(CB_TMP_I, 1);
-        sfpu_binop_push<OP_SUB>(CB_TMP_R, CB_TMP_I, CB_B_R);
-        cb_pop_front(CB_TMP_R, 1);
-        cb_pop_front(CB_TMP_I, 1);
+        sfpu_binop_push<OP_MUL>(dfb::a_r, dfb::t_r, dfb::tmp_r);
+        sfpu_binop_push<OP_MUL>(dfb::a_i, dfb::t_i, dfb::tmp_i);
+        cb_tmp_r.wait_front(1);
+        cb_tmp_i.wait_front(1);
+        sfpu_binop_push<OP_SUB>(dfb::tmp_r, dfb::tmp_i, dfb::b_r);
+        cb_tmp_r.pop_front(1);
+        cb_tmp_i.pop_front(1);
 
         // B_I = A_R * T_I + A_I * T_R
-        sfpu_binop_push<OP_MUL>(CB_A_R, CB_T_I, CB_TMP_R);
-        sfpu_binop_push<OP_MUL>(CB_A_I, CB_T_R, CB_TMP_I);
-        cb_wait_front(CB_TMP_R, 1);
-        cb_wait_front(CB_TMP_I, 1);
-        sfpu_binop_push<OP_ADD>(CB_TMP_R, CB_TMP_I, CB_B_I);
-        cb_pop_front(CB_TMP_R, 1);
-        cb_pop_front(CB_TMP_I, 1);
+        sfpu_binop_push<OP_MUL>(dfb::a_r, dfb::t_i, dfb::tmp_r);
+        sfpu_binop_push<OP_MUL>(dfb::a_i, dfb::t_r, dfb::tmp_i);
+        cb_tmp_r.wait_front(1);
+        cb_tmp_i.wait_front(1);
+        sfpu_binop_push<OP_ADD>(dfb::tmp_r, dfb::tmp_i, dfb::b_i);
+        cb_tmp_r.pop_front(1);
+        cb_tmp_i.pop_front(1);
 
-        cb_pop_front(CB_A_R, 1);
-        cb_pop_front(CB_A_I, 1);
-        cb_pop_front(CB_T_R, 1);
-        cb_pop_front(CB_T_I, 1);
+        cb_a_r.pop_front(1);
+        cb_a_i.pop_front(1);
+        cb_t_r.pop_front(1);
+        cb_t_i.pop_front(1);
     }
 }

@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Tests for the new ProgramDescriptor-based SingleTileStockhamFactory path
-(commits 1 + 2 of the host-to-device refactor).
+Tests for the Metal 2.0 ProgramSpec SingleTileStockhamFactory path.
 
 Scope:
   - fp32, real input, forward FFT, pow-2 N in [2, 1024]
@@ -81,7 +80,7 @@ def test_singletile_program_cache_hit(device, tt_dtype, torch_dtype, label, tol)
 
     assert n_after_repeat == n_after_warmup, (
         f"[{label}] Program cache regression: {n_after_warmup} entries "
-        f"after warmup, {n_after_repeat} after repeat. New ProgramDescriptor "
+        f"after warmup, {n_after_repeat} after repeat. ProgramSpec "
         f"path is not cacheable."
     )
 

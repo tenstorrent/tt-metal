@@ -36,12 +36,9 @@ Tolerances:
   bf16 Bluestein : 1.5e-1 (three cmul + two FFT stages add rounding)
   large Bluestein fp32: 1e-3, bf16: 1e-1
 
-Known Bluestein limitations (xfail):
-  bf16, N=11/97: correlated bf16 rounding errors in the on-device FFTs of
-    b_cyc, a_pad, and c produce catastrophically wrong output for these two
-    specific prime N values.  N=13/31 (same M) are unaffected.
-  fp32, N=509: FIXED — bluestein_M now guarantees ≥8 zero-pad elements,
-    routing N=509 to M=2048 (fft_two_pass) instead of the problematic M=1024.
+The program-cache collision between real-only SingleTileStockham and
+complex BatchedStockham for the same shape is fixed by hashing
+input_imag_provided. N=11/97 bf16 are expected to pass.
 """
 
 import math
@@ -666,7 +663,7 @@ def test_three_pass_ifft_roundtrip(device, N):
 # ════════════════════════════════════════════════════════════════════════════
 # 12. Metal Trace compatibility
 #     Verifies that capturing and replaying a Metal Trace does not alter
-#     FFT numerical results.  Exercises the ProgramDescriptor-based paths
+#     FFT numerical results.  Exercises the ProgramSpec-based paths
 #     (SingleTileStockham, fft_radix_pass) which must be trace-safe.
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -700,8 +697,9 @@ def test_metal_trace(device, N):
 # 13. bf16 prime sweep — characterise all primes in the Stockham range
 #
 # For non-pow-2 N in bf16, Bluestein's algorithm runs the inner FFTs on the
-# Stockham kernel (M ≤ 1024).  Certain primes (e.g. N=11, N=97) suffer
-# catastrophic rounding error due to worst-case chirp-phase cancellation.
+# Stockham kernel (M ≤ 1024). A previous program-cache collision made N=11
+# and N=97 look uniquely broken; that is fixed. This sweep still covers every
+# prime 3 ≤ N ≤ 503 (bluestein_M(N) ≤ 1024).
 #
 # This sweep tests every prime 3 ≤ N ≤ 503  (bluestein_M(N) ≤ 1024)
 # to identify the complete set of unstable primes on this hardware.

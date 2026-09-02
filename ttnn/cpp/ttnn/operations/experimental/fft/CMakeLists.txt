@@ -22,7 +22,7 @@ set_target_properties(
 #   device/kernels/dataflow/{*_reader,*_writer,*_common.h}
 #   device/kernels/compute/*_compute.cpp
 #
-# Kernels are referenced from the ProgramDescriptor factories in
+# Kernels are referenced from the ProgramSpec factories in
 # device/*_factory.cpp via canonical paths
 # `ttnn/cpp/ttnn/operations/experimental/fft/device/kernels/...`.
 # See device/kernels/README.md for the full file → backend mapping.

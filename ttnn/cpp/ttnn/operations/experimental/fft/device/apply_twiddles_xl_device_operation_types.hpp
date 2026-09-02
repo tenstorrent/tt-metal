@@ -43,9 +43,18 @@ struct ApplyTwiddlesXlParams {
     uint32_t full_N = 0;
 };
 
+// The delta table is a declared input rather than something the factory
+// reaches for on its own: the program-spec adapter binds tensor parameters
+// by identity against the tensors reachable from here, and the table is
+// owned by a per-device host cache, so it cannot be handed over as an
+// op-owned tensor. The launch site fills these in from that cache; they are
+// fully determined by (big_modulus, full_N) and so stay out of the program
+// hash.
 struct ApplyTwiddlesXlTensorArgs {
     Tensor input_real;
     Tensor input_imag;
+    Tensor delta_real;
+    Tensor delta_imag;
 };
 
 }  // namespace ttnn::experimental::prim

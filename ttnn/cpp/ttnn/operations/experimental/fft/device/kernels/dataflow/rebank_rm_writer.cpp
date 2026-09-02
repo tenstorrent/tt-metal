@@ -20,34 +20,34 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-
-constexpr uint32_t CB_REBANK = 0u;
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t base_unit = get_arg_val<uint32_t>(1);
-    const uint32_t num_units = get_arg_val<uint32_t>(2);
+    const uint32_t base_unit = get_arg(args::base_unit);
+    const uint32_t num_units = get_arg(args::num_units);
 
-    constexpr uint32_t CHUNK = get_compile_time_arg_val(0);
-    constexpr uint32_t IS_BF16 = get_compile_time_arg_val(1);
-
-    constexpr auto rm_args = TensorAccessorArgs<2>();
+    constexpr uint32_t CHUNK = get_arg(args::chunk);
+    constexpr uint32_t IS_BF16 = get_arg(args::is_bf16);
 
     constexpr uint32_t elem_bytes = IS_BF16 ? 2u : 4u;
     constexpr uint32_t chunk_bytes = CHUNK * elem_bytes;
 
-    const auto dst_gen = TensorAccessor(rm_args, dst_addr);
+    const auto dst_gen = TensorAccessor(tensor::dst);
+
+    Noc noc;
+    DataflowBuffer block(dfb::block);
 
     for (uint32_t u = 0u; u < num_units; ++u) {
         const uint32_t dst_row = base_unit + u;
 
-        cb_wait_front(CB_REBANK, 1u);
-        const uint32_t l1_ptr = get_read_ptr(CB_REBANK);
+        block.wait_front(1u);
 
-        const uint64_t noc_addr = dst_gen.get_noc_addr(dst_row, 0u);
-        noc_async_write(l1_ptr, noc_addr, chunk_bytes);
-        noc_async_write_barrier();
+        noc.async_write(block, dst_gen, chunk_bytes, {}, {.page_id = dst_row, .offset_bytes = 0u});
+        noc.async_write_barrier();
 
-        cb_pop_front(CB_REBANK, 1u);
+        block.pop_front(1u);
     }
 }

@@ -25,9 +25,19 @@ struct ApplyTwiddlesParams {
 // Tensor inputs: real + imag of the intermediate (post-Pass-1) signal.
 // Last dim of both must equal N1; product of leading dims must be a
 // multiple of N2.
+//
+// The twiddle table is a declared input rather than something the factory
+// reaches for on its own: the program-spec adapter binds tensor parameters
+// by identity against the tensors reachable from here, and the table is
+// owned by a per-device host cache shared with the radix pass, so it cannot
+// be handed over as an op-owned tensor. The launch site fills these in from
+// that cache; they are fully determined by (N1, N2) and so stay out of the
+// program hash.
 struct ApplyTwiddlesTensorArgs {
     Tensor input_real;
     Tensor input_imag;
+    Tensor tw_real;
+    Tensor tw_imag;
 };
 
 }  // namespace ttnn::experimental::prim

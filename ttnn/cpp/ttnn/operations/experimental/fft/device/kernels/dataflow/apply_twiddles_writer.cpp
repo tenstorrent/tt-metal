@@ -9,50 +9,56 @@
 // matches the allocator for ROW_MAJOR pages where page_size < tile_size.
 //
 // Runtime args:
-//   0: out_r_addr
-//   1: out_i_addr
-//   2: base_row
-//   3: num_rows
-//   4: out_page_size_override   (bytes per output row in DRAM; 0 → ts)
+//   base_row, num_rows
 //
 // Compile-time args:
-//   0: N1                       (output row length in elements)
-//   1: OUTPUT_BF16              (0 = fp32 fast path, 1 = bf16 output)
+//   n1                          (output row length in elements)
+//
+// Defines:
+//   OUTPUT_BF16                 (set → bf16 output; unset → fp32 fast path)
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "apply_twiddles_common.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t out_r_addr = get_arg_val<uint32_t>(0);
-    const uint32_t out_i_addr = get_arg_val<uint32_t>(1);
-    const uint32_t base_row = get_arg_val<uint32_t>(2);
-    const uint32_t num_rows = get_arg_val<uint32_t>(3);
+    const uint32_t base_row = get_arg(args::base_row);
+    const uint32_t num_rows = get_arg(args::num_rows);
 
-    constexpr uint32_t N1 = get_compile_time_arg_val(0);
-    constexpr uint32_t OUTPUT_BF16 = get_compile_time_arg_val(1);
+    constexpr uint32_t N1 = get_arg(args::n1);
 
-    constexpr auto out_args = TensorAccessorArgs<2>();
+    const auto out_r_gen = TensorAccessor(tensor::out_r);
+    const auto out_i_gen = TensorAccessor(tensor::out_i);
 
-    const auto out_r_gen = TensorAccessor(out_args, out_r_addr);
-    const auto out_i_gen = TensorAccessor(out_args, out_i_addr);
+    Noc noc;
+    DataflowBuffer cb_b_r(dfb::b_r);
+    DataflowBuffer cb_b_i(dfb::b_i);
+#ifdef OUTPUT_BF16
+    DataflowBuffer cb_out_r_bf16(dfb::out_r_bf16);
+    DataflowBuffer cb_out_i_bf16(dfb::out_i_bf16);
+#endif
 
     for (uint32_t k = 0; k < num_rows; ++k) {
         const uint32_t row = base_row + k;
 
-        cb_wait_front(CB_B_R, 1);
-        cb_wait_front(CB_B_I, 1);
+        cb_b_r.wait_front(1);
+        cb_b_i.wait_front(1);
 
-        if constexpr (OUTPUT_BF16) {
-            cb_reserve_back(CB_OUT_R_BF16, 1);
-            cb_reserve_back(CB_OUT_I_BF16, 1);
-            const uint32_t out_r_bf16_l1 = get_write_ptr(CB_OUT_R_BF16);
-            const uint32_t out_i_bf16_l1 = get_write_ptr(CB_OUT_I_BF16);
+#ifdef OUTPUT_BF16
+        {
+            cb_out_r_bf16.reserve_back(1);
+            cb_out_i_bf16.reserve_back(1);
+            const uint32_t out_r_bf16_l1 = cb_out_r_bf16.get_write_ptr();
+            const uint32_t out_i_bf16_l1 = cb_out_i_bf16.get_write_ptr();
 
             volatile tt_l1_ptr uint32_t* const src_r =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(CB_B_R));
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_b_r.get_read_ptr());
             volatile tt_l1_ptr uint32_t* const src_i =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(CB_B_I));
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_b_i.get_read_ptr());
             volatile tt_l1_ptr uint16_t* const dst_r = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(out_r_bf16_l1);
             volatile tt_l1_ptr uint16_t* const dst_i = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(out_i_bf16_l1);
             // Truncate fp32 → bf16 (drop low 16 bits).  Matches
@@ -62,22 +68,25 @@ void kernel_main() {
                 dst_r[i] = static_cast<uint16_t>(src_r[i] >> 16);
                 dst_i[i] = static_cast<uint16_t>(src_i[i] >> 16);
             }
-            cb_push_back(CB_OUT_R_BF16, 1);
-            cb_push_back(CB_OUT_I_BF16, 1);
+            cb_out_r_bf16.push_back(1);
+            cb_out_i_bf16.push_back(1);
 
-            noc_async_write_page(row, out_r_gen, out_r_bf16_l1);
-            noc_async_write_page(row, out_i_gen, out_i_bf16_l1);
-            noc_async_write_barrier();
+            noc.async_write(cb_out_r_bf16, out_r_gen, out_r_gen.get_aligned_page_size(), {}, {.page_id = row});
+            noc.async_write(cb_out_i_bf16, out_i_gen, out_i_gen.get_aligned_page_size(), {}, {.page_id = row});
+            noc.async_write_barrier();
 
-            cb_pop_front(CB_OUT_R_BF16, 1);
-            cb_pop_front(CB_OUT_I_BF16, 1);
-        } else {
-            noc_async_write_page(row, out_r_gen, get_read_ptr(CB_B_R));
-            noc_async_write_page(row, out_i_gen, get_read_ptr(CB_B_I));
-            noc_async_write_barrier();
+            cb_out_r_bf16.pop_front(1);
+            cb_out_i_bf16.pop_front(1);
         }
+#else
+        {
+            noc.async_write(cb_b_r, out_r_gen, out_r_gen.get_aligned_page_size(), {}, {.page_id = row});
+            noc.async_write(cb_b_i, out_i_gen, out_i_gen.get_aligned_page_size(), {}, {.page_id = row});
+            noc.async_write_barrier();
+        }
+#endif
 
-        cb_pop_front(CB_B_R, 1);
-        cb_pop_front(CB_B_I, 1);
+        cb_b_r.pop_front(1);
+        cb_b_i.pop_front(1);
     }
 }

@@ -223,14 +223,14 @@ def test_cache_fft_single_tile(device, N, dtype):
 
 
 # ─── 6b. fft — real-only vs complex MUST produce DISTINCT cache entries ──
-# Root-cause of the bf16 Bluestein N=11/N=97 failures:
+# Historical root cause of the bf16 Bluestein N=11/N=97 failures:
 #   real-only (1,32) bf16  → SingleTileStockhamFactory  (factory_index=0)
 #   complex   (1,32) bf16  → BatchedStockhamFactory     (factory_index=1)
 #
-# Without `input_imag.has_value()` in compute_program_hash both calls share
+# Without `input_imag_provided` in compute_program_hash both calls share
 # the same hash.  The complex call gets a cache HIT, blindly reuses factory
-# index 0, and SingleTileStockhamFactory::create_descriptor hard-codes
-# zscratch (zeros) as the imaginary input — silently computing
+# index 0, and SingleTileStockhamFactory binds the cached zero tensor as
+# the imaginary input — silently computing
 # FFT(b_cyc_re + i·0) instead of FFT(b_cyc_re + i·b_cyc_im).
 # plan->B_re / B_im are then wrong for every Bluestein call at that N.
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])

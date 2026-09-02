@@ -1,57 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Hardware-bug proof for bf16 Bluestein failures at N=11 and N=97
-================================================================
+Regression tests for bf16 Bluestein at N=11 (M=32) and N=97 (M=256).
 
-GOAL
-----
-Prove definitively that the accuracy failures for N=11 (M=32) and N=97 (M=256)
-in bf16 Bluestein are caused by a hardware-specific SFPU anomaly in the
-Wormhole B0 Stockham FFT kernel, NOT by a software algorithmic error.
+These lengths used to fail because a real-only Stockham program for shape
+(1, M) was reused for Bluestein's complex inner FFT. That is fixed by hashing
+`input_imag_provided`. These tests keep the isolation ladder so a regression
+fails at the first broken step rather than only at the public API.
 
-PROOF STRATEGY
---------------
-The Bluestein algorithm rewrites the N-point DFT as:
-
-    X[k] = chirp_k[k] · IFFT_M( FFT_M(a_pad) ⊙ B_fft )
-
-where a_pad = x * chirp_n zero-padded to M.
-
-If the device FFT is working correctly, then:
-
-    FFT_M(a_pad) on device  ≈  numpy.fft.fft(a_pad)
-
-This test bypasses the Bluestein wrapper entirely and directly tests
-ttnn.experimental.fft on the EXACT a_pad tensors produced by the
-Bluestein pre-processing steps, for each N value.
-
-If device FFT(a_pad) is WRONG for N=11's a_pad but CORRECT for N=7's
-a_pad (same M=32), that is the smoking gun: the hardware FFT kernel is
-input-data-dependent and misbehaves for these specific chirp sequences.
-
-HOW TO RUN
-----------
-    pytest tests/ttnn/unit_tests/operations/experimental/fft/\\
-           test_hw_bug_proof_n11_n97.py -v -s
-
-Expected output when hardware bug is present:
-    PASS  N=7   M=32   step=FFT_apad  rel_err=<small>
-    FAIL  N=11  M=32   step=FFT_apad  rel_err=<large>   ← hardware bug here
-    PASS  N=101 M=256  step=FFT_apad  rel_err=<small>
-    FAIL  N=97  M=256  step=FFT_apad  rel_err=<large>   ← hardware bug here
-
-If ALL four pass, the hardware FFT is fine and the bug is in Bluestein
-orchestration (different investigation needed).
-
-ISOLATION LEVELS
-----------------
-  Level 1 — FFT of a_pad       (most sensitive, tests exact Bluestein input)
-  Level 2 — FFT of b_cyc       (tests the cached B_fft input)
-  Level 3 — FFT of unit circle  (tests random-phase chirp-like inputs)
-  Level 4 — FFT of pure random  (baseline: should always pass)
-
-A pass at Level 4 but fail at Level 1 proves the failure is input-data-specific.
+Isolation levels:
+  Level 4 — FFT of pure random input (baseline)
+  Level 3 — FFT of unit-circle chirp-like input
+  Level 2 — FFT of the Bluestein b_cyc kernel
+  Level 1 — FFT of a_pad (Bluestein step 3)
+  Level 0 — full Bluestein vs isolated step-3 FFT
+  Stepwise — each Bluestein stage vs numpy
 """
 
 import math
@@ -257,12 +220,8 @@ def test_level3_unit_circle_input(device, N, M):
     re_t[0, :N] = torch.tensor(vals_re, dtype=torch.bfloat16)
     im_t[0, :N] = torch.tensor(vals_im, dtype=torch.bfloat16)
 
-    err, ok, clearly_wrong = _check_fft(device, re_t, im_t, label=f"unit-circle chirp N={N} M={M}")
-
-    tag = "HARDWARE ANOMALY" if clearly_wrong else ("warn" if not ok else "ok")
-    print(f"    → {tag}")
-    # This is diagnostic: don't assert, just report.
-    # (We expect N=11/97 to potentially show the anomaly here.)
+    err, ok, _ = _check_fft(device, re_t, im_t, label=f"unit-circle chirp N={N} M={M}")
+    assert ok, f"Level-3 unit-circle N={N} M={M}: rel_err={err:.3e}"
 
 
 # ---------------------------------------------------------------------------
@@ -274,51 +233,24 @@ def test_level3_unit_circle_input(device, N, M):
 def test_level2_b_cyc_fft(device, N, M):
     """
     FFT of the exact b_cyc tensor used by Bluestein's B_fft precomputation.
-    If this fails for N=11/97 but passes for N=7/101, the bug is in
-    the Stockham FFT for these specific cyclic-kernel inputs.
     """
     re_t, im_t = _build_b_cyc_bf16(N, M)
-    err, ok, clearly_wrong = _check_fft(device, re_t, im_t, label=f"b_cyc N={N} M={M} (Bluestein kernel)")
-
-    tag = "HARDWARE ANOMALY CONFIRMED" if clearly_wrong else ("warn" if not ok else "ok")
-    print(f"    → {tag}")
+    err, ok, _ = _check_fft(device, re_t, im_t, label=f"b_cyc N={N} M={M} (Bluestein kernel)")
+    assert ok, f"Level-2 b_cyc N={N} M={M}: rel_err={err:.3e}"
 
 
 # ---------------------------------------------------------------------------
 # Test: Level 1 — exact a_pad tensor (the per-call Bluestein FFT input)
 #
 # This is the CRITICAL test. a_pad = (x * chirp_n) zero-padded to M.
-# The device FFT of a_pad is step 3 of Bluestein.  If it fails for N=11/97
-# but passes for N=7/101 (same M), the hardware FFT is data-dependent.
+# The device FFT of a_pad is step 3 of Bluestein. N=11/97 share M with
+# the N=7/101 controls and must meet the same accuracy bound.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "N,M,passing",
-    [
-        (7, 32, True),  # control: same M=32,  should pass
-        (11, 32, False),  # failing: same M=32,  may show anomaly
-        (101, 256, True),  # control: same M=256, should pass
-        (97, 256, False),  # failing: same M=256, may show anomaly
-    ],
-)
-def test_level1_a_pad_fft(device, N, M, passing):
-    """
-    KEY PROOF TEST.
-
-    Computes the exact a_pad vector that Bluestein step 3 would pass to
-    the device FFT, then calls ttnn.experimental.fft on it directly.
-
-    Control pairs (passing=True):  N=7 (M=32), N=101 (M=256)
-    Failing pairs  (passing=False): N=11 (M=32), N=97  (M=256)
-
-    If the rel_err for N=11/97 is large EVEN FOR THIS ISOLATED FFT CALL
-    (no Bluestein wiring, just a direct device FFT), then the hardware
-    Stockham kernel itself is producing wrong results for this data.
-
-    That is conclusive proof of a hardware bug: same kernel, same M,
-    same dtype, but different input data → different accuracy.
-    """
+@pytest.mark.parametrize("N,M", [(7, 32), (11, 32), (101, 256), (97, 256)])
+def test_level1_a_pad_fft(device, N, M):
+    """FFT of the exact a_pad vector that Bluestein step 3 feeds the device."""
     torch.manual_seed(N)  # same seed as test_fft_all_n.py
     x_raw = torch.randn(N, dtype=torch.float32)
     x_bf16 = [float(v) for v in x_raw.to(torch.bfloat16).tolist()]
@@ -326,31 +258,8 @@ def test_level1_a_pad_fft(device, N, M, passing):
     chirp_re, chirp_im = _build_chirp_n_bf16(N, sign=-1)  # forward chirp
     re_t, im_t = _build_a_pad(x_bf16, chirp_re, chirp_im, M)
 
-    # Also compute the reference: numpy FFT of the same (fp32-cast) a_pad
-    err, ok, clearly_wrong = _check_fft(device, re_t, im_t, label=f"a_pad N={N} M={M} (Bluestein step-3 input)")
-
-    print(f"\n  N={N}  M={M}  passing={passing}  rel_err={err:.3e}")
-    if passing:
-        assert ok, (
-            f"Control case N={N} M={M} FAILED: rel_err={err:.3e}\n"
-            "The Stockham FFT is broken even for the passing N's a_pad.\n"
-            "This suggests a DIFFERENT bug (not data-specific)."
-        )
-    else:
-        if clearly_wrong:
-            print(f"  ✓ Hardware anomaly CONFIRMED for N={N}: " f"rel_err={err:.3e} >> 1.0")
-            print(f"    Same Stockham kernel (M={M}, bf16), different N → different result.")
-            print(f"    This is input-data-dependent misbehaviour = hardware bug.")
-        elif ok:
-            print(f"  ? Hardware anomaly NOT reproduced for N={N}: rel_err={err:.3e}")
-            print(f"    The isolated FFT passed — the bug may be in Bluestein orchestration.")
-        else:
-            print(f"  ~ Partial degradation for N={N}: rel_err={err:.3e} (between tol bounds)")
-        # Do NOT assert-fail for the expected-bad cases; we're DIAGNOSING.
-        pytest.xfail(
-            reason=f"bf16 N={N} known hardware anomaly candidate; "
-            f"rel_err={err:.3e} (large=confirmed, small=orchestration bug)"
-        )
+    err, ok, _ = _check_fft(device, re_t, im_t, label=f"a_pad N={N} M={M} (Bluestein step-3 input)")
+    assert ok, f"Level-1 a_pad N={N} M={M}: rel_err={err:.3e}"
 
 
 # ---------------------------------------------------------------------------
@@ -364,10 +273,7 @@ def test_level1_a_pad_fft(device, N, M, passing):
 
 @pytest.mark.parametrize("N,M", [(11, 32), (97, 256)])
 def test_level0_full_vs_step3(device, N, M):
-    """
-    Cross-check: run both the full Bluestein and the isolated step-3 FFT.
-    Prints a side-by-side comparison that definitively locates the bug.
-    """
+    """Full Bluestein and isolated step-3 FFT must both match the reference."""
     print(f"\n{'='*65}")
     print(f"  Level-0 cross-check: N={N}  M={M}  dtype=bf16")
     print(f"{'='*65}")
@@ -391,21 +297,11 @@ def test_level0_full_vs_step3(device, N, M):
     err_step3, ok_step3, _ = _check_fft(device, re_t, im_t, label=f"  step-3 FFT(a_pad) N={N}", print_always=True)
 
     print(f"\n  SUMMARY for N={N}:")
-    print(f"    Full Bluestein rel_err = {err_full:.3e}  " f"({'FAIL' if err_full > 0.15 else 'pass'})")
-    print(f"    Step-3 isolated rel_err = {err_step3:.3e}  " f"({'FAIL' if err_step3 > 0.05 else 'pass'})")
-    print()
+    print(f"    Full Bluestein rel_err = {err_full:.3e}")
+    print(f"    Step-3 isolated rel_err = {err_step3:.3e}")
 
-    if err_full > 0.15 and err_step3 > 0.05:
-        print("  CONCLUSION: Step-3 FFT itself is WRONG for this data.")
-        print("              → Hardware bug in Stockham FFT kernel (data-dependent).")
-    elif err_full > 0.15 and err_step3 <= 0.05:
-        print("  CONCLUSION: Step-3 FFT is CORRECT but full Bluestein is wrong.")
-        print("              → Bug is in Bluestein orchestration (CB reuse / tensor aliasing).")
-    elif err_full <= 0.15:
-        print("  CONCLUSION: Full Bluestein PASSED (no bug visible this run).")
-        print("              → May be JIT cache / seed dependent; retry with cleared cache.")
-
-    pytest.xfail(reason=f"bf16 N={N} known hardware anomaly candidate")
+    assert err_full <= 0.15, f"Level-0 full Bluestein N={N}: rel_err={err_full:.3e}"
+    assert ok_step3, f"Level-0 step-3 FFT N={N}: rel_err={err_step3:.3e}"
 
 
 # ---------------------------------------------------------------------------
@@ -600,17 +496,4 @@ def test_stepwise_bluestein_chain(device, N, M):
 
     if first_fail:
         s, nm, e = first_fail
-        print(f"  FIRST FAILURE: Step {s} ({nm})  rel_err={e:.3e}")
-        print(f"  All steps BEFORE step {s} are CORRECT.")
-        print(f"  Bug is in ttnn.experimental.{'ifft' if s==5 else 'complex_mul' if s in (1,4,67) else 'fft/pad'}.")
-    else:
-        print(f"  ALL steps PASS — stepwise chain is correct.")
-        print(f"  The full Bluestein failure must come from TENSOR ALIASING")
-        print(f"  between the CACHED plan->B_re and a freshly allocated tensor.")
-        print(f"  Key evidence: this test uses a FRESH B_fft (not cached).")
-        print(f"  → Try: does replacing plan->B_re with a fresh computation fix it?")
-
-    print()
-    # Don't assert — this is diagnostic only
-    if N in (11, 97):
-        pytest.xfail(reason=f"bf16 N={N} orchestration bug under investigation")
+        pytest.fail(f"Stepwise Bluestein N={N} first failure at step {s} ({nm}): rel_err={e:.3e}")

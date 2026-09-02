@@ -298,7 +298,7 @@ def test_trace_ifft(device, N, dtype):
 
 
 # Small-N IFFT now routes through small_pow2_ifft → fft_radix_pass, a
-# single ProgramDescriptor dispatch that is trace-safe by construction.
+# single ProgramSpec dispatch that is trace-safe by construction.
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
 def test_trace_ifft_small_n(device, dtype):
     N = 16

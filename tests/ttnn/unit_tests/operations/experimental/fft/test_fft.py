@@ -365,7 +365,7 @@ def test_fft_complex_input(device, N, dtype, tol):
 # Blackhole bring-up is intentionally out of scope for this PR. Small-N
 # (N <= 1024) currently passes on BH; cross-core stages (N >= 4096 fp32 pow2,
 # N >= 1000 fp32 non-pow2) fail due to a NoC ordering / L1 coherence issue
-# in fft_reader.cpp that needs a dedicated investigation. Tests are kept in
+# in batch_fft_reader.cpp that needs a dedicated investigation. Tests are kept in
 # place but unconditionally skipped so CI is green on both archs and the
 # follow-up PR can flip the gate without touching test code.
 _BH_FOLLOWUP = "Blackhole bring-up tracked in follow-up PR (#TBD)"
@@ -384,7 +384,7 @@ _BH_FOLLOWUP = "Blackhole bring-up tracked in follow-up PR (#TBD)"
 )
 def test_fft_blackhole_fp32_pow2(device, N, tol):
     """BH parity for the Stockham fp32 pow-2 path. Verifies cross-core sync
-    in fft_reader.cpp under various LOG2P values."""
+    in batch_fft_reader.cpp under various LOG2P values."""
     if not _is_blackhole(device):
         pytest.skip("Blackhole-specific")
     torch_in = torch.randn(N, dtype=torch.float32)

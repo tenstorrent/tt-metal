@@ -3,7 +3,7 @@
 //
 // Device-op skeleton for ttnn::prim::fft_radix_pass — fused batched
 // length-P FFT + optional post-twiddle complex multiply.  Single
-// dispatch, single ProgramDescriptor, trace-safe.
+// dispatch, single ProgramSpec, trace-safe.
 
 #pragma once
 

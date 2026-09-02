@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// BatchedStockhamFactory — modern ProgramDescriptor program factory for the
+// BatchedStockhamFactory — Metal 2.0 ProgramSpec factory for the
 // BATCHED single-tile Stockham FFT path. Handles input tensors of shape
 // (B, N) where N is a pow-2 in [2, 1024], runs B independent length-N FFTs
 // in parallel across multiple Tensix cores.
@@ -16,18 +16,14 @@
 
 #include <tuple>
 
-#include <tt-metalium/program_descriptors.hpp>
-
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "fft_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct BatchedStockhamFactory {
-    // ProgramDescriptor pattern: pure declarative program construction.
-    // Like SingleTileStockhamFactory, no CachedProgram / no shared_variables /
-    // no override_runtime_arguments.
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const FFTParams& operation_attributes,
         const FFTTensorArgs& tensor_args,
         std::tuple<ttnn::Tensor, ttnn::Tensor>& tensor_return_value);

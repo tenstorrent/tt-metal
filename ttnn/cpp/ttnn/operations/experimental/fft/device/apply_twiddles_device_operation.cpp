@@ -4,6 +4,8 @@
 #include "apply_twiddles_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 
+#include "apply_twiddles_host.hpp"
+
 namespace ttnn::experimental::prim {
 
 namespace {
@@ -86,9 +88,18 @@ std::tuple<Tensor, Tensor> apply_twiddles(
     using OperationType = ttnn::experimental::prim::ApplyTwiddlesDeviceOperation;
 
     OperationType::operation_attributes_t attrs{.N1 = N1, .N2 = N2};
+
+    // Resolved here rather than in the factory so the tables are reachable
+    // from tensor_args; the lookup is a hit on everything but the first call
+    // for a given (device, N1, N2).
+    auto tw_plan = ttnn::experimental::prim::apply_twiddles_host::get_or_create(
+        input_real.device()->get_mesh_device(), N1, N2);
+
     OperationType::tensor_args_t args{
         .input_real = input_real,
         .input_imag = input_imag,
+        .tw_real = tw_plan->tw_r,
+        .tw_imag = tw_plan->tw_i,
     };
 
     return ttnn::device_operation::launch<OperationType>(attrs, args);

@@ -19,21 +19,22 @@
 // apply_twiddles (no extra L1 budget).
 //
 // Runtime args:
-//   0: a_r_addr               (input A real, DRAM base)
-//   1: a_i_addr               (input A imag, DRAM base)
-//   2: b_r_addr               (input B real, DRAM base)
-//   3: b_i_addr               (input B imag, DRAM base)
-//   4: base_row               (first row index this core handles)
-//   5: num_rows               (rows per core)
-//   6: in_page_size_override  (bytes per input row in DRAM; 0 → ts)
+//   base_row                  (first row index this core handles)
+//   num_rows                  (rows per core)
 //
 // Compile-time args:
-//   0: P                      (row length in elements, 1..1024)
-//   1: INPUT_BF16             (0 = fp32 fast path, 1 = bf16 input)
+//   p                         (row length in elements, 1..1024)
+//
+// Defines:
+//   INPUT_BF16                (set → bf16 input; unset → fp32 fast path)
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "apply_twiddles_common.h"
+#include "experimental/kernel_args.h"
 
 namespace {
 
@@ -43,14 +44,14 @@ namespace {
 // the SAME CB can be reused for both A and B reads.
 template <uint32_t P, typename AddrGen>
 FORCE_INLINE void read_bf16_row_and_expand_fp32(
-    uint32_t row, const AddrGen& gen, uint32_t bf16_cb, uint32_t fp32_cb) {
-    cb_reserve_back(bf16_cb, 1);
-    cb_reserve_back(fp32_cb, 1);
-    const uint32_t bf16_l1 = get_write_ptr(bf16_cb);
-    const uint32_t fp32_l1 = get_write_ptr(fp32_cb);
+    uint32_t row, const AddrGen& gen, DataflowBuffer& bf16_cb, DataflowBuffer& fp32_cb, Noc& noc) {
+    bf16_cb.reserve_back(1);
+    fp32_cb.reserve_back(1);
+    const uint32_t bf16_l1 = bf16_cb.get_write_ptr();
+    const uint32_t fp32_l1 = fp32_cb.get_write_ptr();
 
-    noc_async_read_page(row, gen, bf16_l1);
-    noc_async_read_barrier();
+    noc.async_read(gen, bf16_cb, gen.get_aligned_page_size(), {.page_id = row}, {});
+    noc.async_read_barrier();
 
     volatile tt_l1_ptr uint16_t* const src = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(bf16_l1);
     volatile tt_l1_ptr uint32_t* const dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fp32_l1);
@@ -58,61 +59,69 @@ FORCE_INLINE void read_bf16_row_and_expand_fp32(
         dst[i] = static_cast<uint32_t>(src[i]) << 16;
     }
 
-    cb_push_back(bf16_cb, 1);
-    cb_push_back(fp32_cb, 1);
-    cb_pop_front(bf16_cb, 1);
+    bf16_cb.push_back(1);
+    fp32_cb.push_back(1);
+    bf16_cb.pop_front(1);
 }
 
 }  // namespace
 
 void kernel_main() {
-    const uint32_t a_r_addr = get_arg_val<uint32_t>(0);
-    const uint32_t a_i_addr = get_arg_val<uint32_t>(1);
-    const uint32_t b_r_addr = get_arg_val<uint32_t>(2);
-    const uint32_t b_i_addr = get_arg_val<uint32_t>(3);
-    const uint32_t base_row = get_arg_val<uint32_t>(4);
-    const uint32_t num_rows = get_arg_val<uint32_t>(5);
+    const uint32_t base_row = get_arg(args::base_row);
+    const uint32_t num_rows = get_arg(args::num_rows);
 
-    constexpr uint32_t P = get_compile_time_arg_val(0);
-    constexpr uint32_t INPUT_BF16 = get_compile_time_arg_val(1);
-
-    constexpr auto in_args = TensorAccessorArgs<2>();
+    constexpr uint32_t P = get_arg(args::p);
 
     // All four inputs share the same shape / dtype / layout (validated
     // host-side), so they all use the same per-bank page_size.
-    const auto a_r_gen = TensorAccessor(in_args, a_r_addr);
-    const auto a_i_gen = TensorAccessor(in_args, a_i_addr);
-    const auto b_r_gen = TensorAccessor(in_args, b_r_addr);
-    const auto b_i_gen = TensorAccessor(in_args, b_i_addr);
+    const auto a_r_gen = TensorAccessor(tensor::a_r);
+    const auto a_i_gen = TensorAccessor(tensor::a_i);
+    const auto b_r_gen = TensorAccessor(tensor::b_r);
+    const auto b_i_gen = TensorAccessor(tensor::b_i);
+
+    Noc noc;
+    DataflowBuffer cb_a_r(dfb::a_r);
+    DataflowBuffer cb_a_i(dfb::a_i);
+    DataflowBuffer cb_t_r(dfb::t_r);
+    DataflowBuffer cb_t_i(dfb::t_i);
+#ifdef INPUT_BF16
+    DataflowBuffer cb_in_r_bf16(dfb::in_r_bf16);
+    DataflowBuffer cb_in_i_bf16(dfb::in_i_bf16);
+#endif
 
     for (uint32_t k = 0; k < num_rows; ++k) {
         const uint32_t row = base_row + k;
 
-        if constexpr (INPUT_BF16) {
+#ifdef INPUT_BF16
+        {
             // bf16 path: stage each row through the shared bf16 CB,
             // expand to fp32 in the matching compute CB.  The 4 reads
             // happen sequentially and the bf16 staging CB is re-used.
-            read_bf16_row_and_expand_fp32<P>(row, a_r_gen, CB_IN_R_BF16, CB_A_R);
-            read_bf16_row_and_expand_fp32<P>(row, a_i_gen, CB_IN_I_BF16, CB_A_I);
-            read_bf16_row_and_expand_fp32<P>(row, b_r_gen, CB_IN_R_BF16, CB_T_R);
-            read_bf16_row_and_expand_fp32<P>(row, b_i_gen, CB_IN_I_BF16, CB_T_I);
-        } else {
-            // fp32 fast path: NoC reads land directly in the fp32 compute CBs.
-            cb_reserve_back(CB_A_R, 1);
-            cb_reserve_back(CB_A_I, 1);
-            cb_reserve_back(CB_T_R, 1);
-            cb_reserve_back(CB_T_I, 1);
-
-            noc_async_read_page(row, a_r_gen, get_write_ptr(CB_A_R));
-            noc_async_read_page(row, a_i_gen, get_write_ptr(CB_A_I));
-            noc_async_read_page(row, b_r_gen, get_write_ptr(CB_T_R));
-            noc_async_read_page(row, b_i_gen, get_write_ptr(CB_T_I));
-            noc_async_read_barrier();
-
-            cb_push_back(CB_A_R, 1);
-            cb_push_back(CB_A_I, 1);
-            cb_push_back(CB_T_R, 1);
-            cb_push_back(CB_T_I, 1);
+            read_bf16_row_and_expand_fp32<P>(row, a_r_gen, cb_in_r_bf16, cb_a_r, noc);
+            read_bf16_row_and_expand_fp32<P>(row, a_i_gen, cb_in_i_bf16, cb_a_i, noc);
+            read_bf16_row_and_expand_fp32<P>(row, b_r_gen, cb_in_r_bf16, cb_t_r, noc);
+            read_bf16_row_and_expand_fp32<P>(row, b_i_gen, cb_in_i_bf16, cb_t_i, noc);
         }
+#else
+        {
+            // fp32 fast path: NoC reads land directly in the fp32 compute CBs.
+            cb_a_r.reserve_back(1);
+            cb_a_i.reserve_back(1);
+            cb_t_r.reserve_back(1);
+            cb_t_i.reserve_back(1);
+
+            const uint32_t page_size = a_r_gen.get_aligned_page_size();
+            noc.async_read(a_r_gen, cb_a_r, page_size, {.page_id = row}, {});
+            noc.async_read(a_i_gen, cb_a_i, page_size, {.page_id = row}, {});
+            noc.async_read(b_r_gen, cb_t_r, page_size, {.page_id = row}, {});
+            noc.async_read(b_i_gen, cb_t_i, page_size, {.page_id = row}, {});
+            noc.async_read_barrier();
+
+            cb_a_r.push_back(1);
+            cb_a_i.push_back(1);
+            cb_t_r.push_back(1);
+            cb_t_i.push_back(1);
+        }
+#endif
     }
 }

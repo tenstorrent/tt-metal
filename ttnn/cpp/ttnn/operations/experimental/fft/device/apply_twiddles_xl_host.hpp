@@ -28,8 +28,10 @@
 #include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
 
-#include "fft_inner_host.hpp"  // fft_example::make_mesh_buf
 #include "ttnn/operations/experimental/fft/device/leak_static_cache.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim::apply_twiddles_xl_host {
 
@@ -40,12 +42,16 @@ constexpr uint32_t kTileBytesFp32 = kTileElems * 4u;  // 4096
 struct DeltaPlan {
     uint32_t big_modulus = 0;
     uint32_t full_N = 0;
-    // Tile-padded fp32 buffers, big_modulus entries each.  Stored as two
-    // separate buffers (real, imag) so the reader can do two independent
-    // 4-byte DRAM reads per row.
-    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> dr_buf;
-    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> di_buf;
-    // Total bytes of EACH of dr_buf/di_buf — tile-rounded.
+    // Tile-padded fp32 tables, big_modulus entries each, shaped
+    // (padded/kTileElems, kTileElems) so each page is one tile — the page
+    // geometry the reader's TensorAccessor expects.  Stored as two separate
+    // tensors (real, imag) so the reader can do two independent 4-byte DRAM
+    // reads per row, and as tensors (rather than raw MeshBuffers) so Metal 2.0
+    // factories can bind them as tensor parameters instead of smuggling
+    // addresses through RTAs.
+    ttnn::Tensor dr;
+    ttnn::Tensor di;
+    // Total bytes of EACH of dr/di — tile-rounded.
     uint32_t bytes_per_buf = 0;
 };
 
@@ -96,14 +102,14 @@ inline std::shared_ptr<DeltaPlan> get_or_create(
     const uint32_t padded = ((big_modulus + kTileElems - 1u) / kTileElems) * kTileElems;
     const uint32_t bytes = padded * 4u;
     plan->bytes_per_buf = bytes;
-    plan->dr_buf = fft_example::make_mesh_buf(md, bytes, kTileBytesFp32);
-    plan->di_buf = fft_example::make_mesh_buf(md, bytes, kTileBytesFp32);
 
     auto [r, i] = build_delta_table(big_modulus, full_N);
     // Vectors are padded to `padded` already.
-    MeshCommandQueue& cq = md->mesh_command_queue();
-    WriteShard(cq, plan->dr_buf, r, MeshCoordinate(0, 0), /*blocking=*/true);
-    WriteShard(cq, plan->di_buf, i, MeshCoordinate(0, 0), /*blocking=*/true);
+    using namespace tt::tt_metal;
+    const ttnn::Shape shape{ttnn::SmallVector<uint32_t>{padded / kTileElems, kTileElems}};
+    const TensorSpec spec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+    plan->dr = Tensor::from_vector(std::move(r), spec, md.get());
+    plan->di = Tensor::from_vector(std::move(i), spec, md.get());
 
     c.emplace(key, plan);
     return plan;

@@ -11,8 +11,8 @@
 #     stage) is corrupted, and (c) the per-core error spectrum.
 #
 # HOW IT HELPS
-#   The cross-core stages in fft_reader.cpp send tiles between partner
-#   cores via NoC + semaphore. Each stage k contributes a different
+#   The cross-core stages in batch_fft_reader.cpp send tiles between partner
+#   cores via NoC + a named sync dataflow buffer. Each stage k contributes a different
 #   "stride" in the output indexing. By looking at WHERE the error
 #   concentrates, you can pinpoint WHICH cross-core stage the patch
 #   broke (or the original kernel never got right on BH).
@@ -139,7 +139,7 @@ def test_diag_repeatability(device, N):
     if delta > 1e-7:
         pytest.fail(
             f"BH non-determinism at N={N}: two runs differ by {delta:.2e}. "
-            "This indicates a NoC/semaphore race in fft_reader.cpp's "
+            "This indicates a NoC/sync-buffer race in batch_fft_reader.cpp's "
             "cross-core block (data corruption depends on timing, not "
             "input). Increase the BH-only barriers / cache-invalidates."
         )

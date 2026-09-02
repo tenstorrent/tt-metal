@@ -23,8 +23,6 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
-
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim {
@@ -54,14 +52,23 @@ struct FftRadixPassParams {
     // controls whether the writer compiles in the per-element multiply
     // loop).  We hash on the boolean only.
     float output_scale = 1.0f;
+    // Whether the caller supplied an imaginary input. Lives here rather than
+    // alongside the tensors because tensor_args is walked by the reflection
+    // visitor, which only handles tensor-like leaves.
+    bool input_imag_provided = false;
 };
 
-// input_imag is optional: for a Pass-1 (real input) radix pass we leave
-// it empty and the factory wires up a cached zero scratch.  For Pass-2
-// (complex input) the caller passes the imag tensor.
+// Public input_imag is optional. The launch site resolves an absent value to
+// the cached zero tensor before entering the device-operation adapter.
 struct FftRadixPassTensorArgs {
     Tensor input_real;
-    std::optional<Tensor> input_imag;
+    Tensor input_imag;
+    Tensor tw_real;
+    Tensor tw_imag;
+    // Bound only when post-twiddle is enabled; otherwise these aliases keep
+    // the aggregate fully populated without introducing an unowned tensor.
+    Tensor post_tw_real;
+    Tensor post_tw_imag;
 };
 
 }  // namespace ttnn::experimental::prim

@@ -29,35 +29,35 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-
-constexpr uint32_t CB_MERGE = 0u;
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t base_unit = get_arg_val<uint32_t>(1);
-    const uint32_t num_units = get_arg_val<uint32_t>(2);
+    const uint32_t base_unit = get_arg(args::base_unit);
+    const uint32_t num_units = get_arg(args::num_units);
 
-    constexpr uint32_t CHUNK = get_compile_time_arg_val(0);
-    constexpr uint32_t IS_BF16 = get_compile_time_arg_val(1);
-
-    constexpr auto rm_args = TensorAccessorArgs<2>();
+    constexpr uint32_t CHUNK = get_arg(args::chunk);
+    constexpr uint32_t IS_BF16 = get_arg(args::is_bf16);
 
     constexpr uint32_t elem_bytes = IS_BF16 ? 2u : 4u;
     constexpr uint32_t chunk_bytes = CHUNK * elem_bytes;
 
-    const auto src_gen = TensorAccessor(rm_args, src_addr);
+    const auto src_gen = TensorAccessor(tensor::src);
+
+    Noc noc;
+    DataflowBuffer block(dfb::block);
 
     for (uint32_t u = 0u; u < num_units; ++u) {
         const uint32_t src_page = base_unit + u;  // sequential full-page reads
 
-        cb_reserve_back(CB_MERGE, 1u);
-        const uint32_t l1_ptr = get_write_ptr(CB_MERGE);
+        block.reserve_back(1u);
 
         // Read the entire source page (CHUNK elements) at offset 0.
-        const uint64_t noc_addr = src_gen.get_noc_addr(src_page, 0u);
-        noc_async_read(noc_addr, l1_ptr, chunk_bytes);
-        noc_async_read_barrier();
+        noc.async_read(src_gen, block, chunk_bytes, {.page_id = src_page, .offset_bytes = 0u}, {});
+        noc.async_read_barrier();
 
-        cb_push_back(CB_MERGE, 1u);
+        block.push_back(1u);
     }
 }

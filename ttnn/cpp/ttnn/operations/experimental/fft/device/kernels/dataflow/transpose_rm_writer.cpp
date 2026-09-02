@@ -19,23 +19,27 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "transpose_rm_common.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t base_unit = get_arg_val<uint32_t>(1);
-    const uint32_t num_units = get_arg_val<uint32_t>(2);
+    const uint32_t base_unit = get_arg(args::base_unit);
+    const uint32_t num_units = get_arg(args::num_units);
 
-    constexpr uint32_t A_TILES = get_compile_time_arg_val(0);
-    constexpr uint32_t C_TILES = get_compile_time_arg_val(1);
-    constexpr uint32_t IS_BF16 = get_compile_time_arg_val(2);
-
-    constexpr auto rm_args = TensorAccessorArgs<3>();
+    constexpr uint32_t A_TILES = get_arg(args::a_tiles);
+    constexpr uint32_t C_TILES = get_arg(args::c_tiles);
+    constexpr uint32_t IS_BF16 = get_arg(args::is_bf16);
 
     constexpr uint32_t elem_bytes = IS_BF16 ? 2u : 4u;
     constexpr uint32_t row_bytes = T_BLOCK * elem_bytes;
 
-    const auto dst_gen = TensorAccessor(rm_args, dst_addr);
+    const auto dst_gen = TensorAccessor(tensor::dst);
+
+    Noc noc;
+    DataflowBuffer block(dfb::block);
 
     for (uint32_t u = 0; u < num_units; ++u) {
         const uint32_t unit_idx = base_unit + u;
@@ -47,18 +51,22 @@ void kernel_main() {
         const uint32_t dst_row_base = b * (C_TILES * T_BLOCK) + tile_c * T_BLOCK;
         const uint32_t dst_col_offset = tile_a * T_BLOCK * elem_bytes;
 
-        cb_wait_front(CB_TR_BLOCK, 1);
-        const uint32_t l1_base = get_read_ptr(CB_TR_BLOCK);
+        block.wait_front(1);
 
         // Reader has already done the in-L1 transpose, so L1 row i now
         // holds dst row (dst_row_base + i)'s contribution to this tile.
+        // CB as source resolves to its read pointer (+ offset_bytes).
         for (uint32_t r = 0; r < T_BLOCK; ++r) {
             const uint32_t dst_row = dst_row_base + r;
-            const uint64_t dst_noc_addr = dst_gen.get_noc_addr(dst_row, dst_col_offset);
-            noc_async_write(l1_base + r * row_bytes, dst_noc_addr, row_bytes);
+            noc.async_write(
+                block,
+                dst_gen,
+                row_bytes,
+                {.offset_bytes = r * row_bytes},
+                {.page_id = dst_row, .offset_bytes = dst_col_offset});
         }
-        noc_async_write_barrier();
+        noc.async_write_barrier();
 
-        cb_pop_front(CB_TR_BLOCK, 1);
+        block.pop_front(1);
     }
 }

@@ -6,24 +6,19 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "batch_fft_common.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t out_r_addr = get_arg_val<uint32_t>(0);
-    const uint32_t out_i_addr = get_arg_val<uint32_t>(1);
-    const uint32_t base_tile_idx = get_arg_val<uint32_t>(2);
-    const uint32_t batch_per_core = get_arg_val<uint32_t>(3);
-    // arg 4: out_page_size_override.  0 = use CB-derived tile size (legacy);
-    //        nonzero = ttnn output buffer page_size (ROW_MAJOR N*elem_size).
-
-    // OUTPUT_BF16: when set, convert fp32 STATE → bf16 in CB_OUT_*_BF16 and
+    const uint32_t base_tile_idx = get_arg(args::base_tile_idx);
+    const uint32_t batch_per_core = get_arg(args::batch_per_core);
+    // OUTPUT_BF16: when defined, convert fp32 STATE → bf16 in CB_OUT_*_BF16 and
     // write bf16 tiles (2048 B) to the output buffers. Default 0 preserves
     // the legacy fp32 fast path.
-    constexpr uint32_t OUTPUT_BF16 = get_compile_time_arg_val(0);
-    // SUB_N (only needed for OUTPUT_BF16 conversion loop; harmless when 0).
-    constexpr uint32_t SUB_N = get_compile_time_arg_val(1);
-
-    constexpr auto out_args = TensorAccessorArgs<2>();
+    constexpr uint32_t SUB_N = get_arg(args::sub_n);
 
     // Output generators.  See reader for full rationale: we MUST use
     // computed from page_size (aligned to dram_alignment) instead of the
@@ -33,27 +28,37 @@ void kernel_main() {
     //
     // no operator= ; construct directly with the right page_size.
 
-    const auto out_r_gen = TensorAccessor(out_args, out_r_addr);
-    const auto out_i_gen = TensorAccessor(out_args, out_i_addr);
+    const auto out_r_gen = TensorAccessor(tensor::out_r);
+    const auto out_i_gen = TensorAccessor(tensor::out_i);
+
+    Noc noc;
+    DataflowBuffer cb_sync(dfb::sync);
+    DataflowBuffer cb_state_r(dfb::state_r);
+    DataflowBuffer cb_state_i(dfb::state_i);
+#ifdef OUTPUT_BF16
+    DataflowBuffer cb_out_r_bf16(dfb::out_r_bf16);
+    DataflowBuffer cb_out_i_bf16(dfb::out_i_bf16);
+#endif
 
     for (uint32_t k = 0; k < batch_per_core; ++k) {
         const uint32_t tile_idx = base_tile_idx + k;
 
-        cb_wait_front(CB_SYNC, 1);
-        cb_wait_front(CB_STATE_R, 1);
-        cb_wait_front(CB_STATE_I, 1);
+        cb_sync.wait_front(1);
+        cb_state_r.wait_front(1);
+        cb_state_i.wait_front(1);
 
-        if constexpr (OUTPUT_BF16) {
+#ifdef OUTPUT_BF16
+        {
             // Convert fp32 STATE → bf16 in CB_OUT_*_BF16, then DMA bf16 tile.
-            cb_reserve_back(CB_OUT_R_BF16, 1);
-            cb_reserve_back(CB_OUT_I_BF16, 1);
-            const uint32_t out_r_bf16_l1 = get_write_ptr(CB_OUT_R_BF16);
-            const uint32_t out_i_bf16_l1 = get_write_ptr(CB_OUT_I_BF16);
+            cb_out_r_bf16.reserve_back(1);
+            cb_out_i_bf16.reserve_back(1);
+            const uint32_t out_r_bf16_l1 = cb_out_r_bf16.get_write_ptr();
+            const uint32_t out_i_bf16_l1 = cb_out_i_bf16.get_write_ptr();
 
             volatile tt_l1_ptr uint32_t* const src_r =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(CB_STATE_R));
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_state_r.get_read_ptr());
             volatile tt_l1_ptr uint32_t* const src_i =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(CB_STATE_I));
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_state_i.get_read_ptr());
             volatile tt_l1_ptr uint16_t* const dst_r = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(out_r_bf16_l1);
             volatile tt_l1_ptr uint16_t* const dst_i = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(out_i_bf16_l1);
             // Truncation (drop low 16 bits). Round-to-nearest-even costs
@@ -63,23 +68,26 @@ void kernel_main() {
                 dst_r[i] = static_cast<uint16_t>(src_r[i] >> 16);
                 dst_i[i] = static_cast<uint16_t>(src_i[i] >> 16);
             }
-            cb_push_back(CB_OUT_R_BF16, 1);
-            cb_push_back(CB_OUT_I_BF16, 1);
+            cb_out_r_bf16.push_back(1);
+            cb_out_i_bf16.push_back(1);
 
-            noc_async_write_page(tile_idx, out_r_gen, out_r_bf16_l1);
-            noc_async_write_page(tile_idx, out_i_gen, out_i_bf16_l1);
-            noc_async_write_barrier();
+            noc.async_write(cb_out_r_bf16, out_r_gen, out_r_gen.get_aligned_page_size(), {}, {.page_id = tile_idx});
+            noc.async_write(cb_out_i_bf16, out_i_gen, out_i_gen.get_aligned_page_size(), {}, {.page_id = tile_idx});
+            noc.async_write_barrier();
 
-            cb_pop_front(CB_OUT_R_BF16, 1);
-            cb_pop_front(CB_OUT_I_BF16, 1);
-        } else {
-            noc_async_write_page(tile_idx, out_r_gen, get_read_ptr(CB_STATE_R));
-            noc_async_write_page(tile_idx, out_i_gen, get_read_ptr(CB_STATE_I));
-            noc_async_write_barrier();
+            cb_out_r_bf16.pop_front(1);
+            cb_out_i_bf16.pop_front(1);
         }
+#else
+        {
+            noc.async_write(cb_state_r, out_r_gen, out_r_gen.get_aligned_page_size(), {}, {.page_id = tile_idx});
+            noc.async_write(cb_state_i, out_i_gen, out_i_gen.get_aligned_page_size(), {}, {.page_id = tile_idx});
+            noc.async_write_barrier();
+        }
+#endif
 
-        cb_pop_front(CB_SYNC, 1);
-        cb_pop_front(CB_STATE_R, 1);
-        cb_pop_front(CB_STATE_I, 1);
+        cb_sync.pop_front(1);
+        cb_state_r.pop_front(1);
+        cb_state_i.pop_front(1);
     }
 }

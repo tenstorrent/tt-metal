@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <optional>
-
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim {
@@ -19,14 +17,22 @@ enum class FFTPrecision : uint8_t {
 struct FFTParams {
     bool inverse = false;
     FFTPrecision precision = FFTPrecision::Precise;
+    // Whether the caller supplied an imaginary input. Lives here rather than
+    // alongside the tensors because tensor_args is walked by the reflection
+    // visitor, which only handles tensor-like leaves.
+    bool input_imag_provided = false;
 };
 
-// Tensor inputs to the device op. Forward FFT uses input_real only; IFFT
-// also requires input_imag (the imaginary half of the spectrum). Carrying
-// an optional through the device-op layer keeps the dispatch single-path.
+// Tensor inputs to the device op. The public optional imaginary input is
+// resolved to a real tensor before launch so ProgramSpec sees only owned,
+// adapter-visible tensor bindings.
 struct FFTTensorArgs {
     Tensor input_real;
-    std::optional<Tensor> input_imag;
+    // Effective imaginary input. For real-only calls this is the cached zero
+    // tensor, making every ProgramSpec tensor binding visible to the adapter.
+    Tensor input_imag;
+    Tensor tw_real;
+    Tensor tw_imag;
 };
 
 }  // namespace ttnn::experimental::prim

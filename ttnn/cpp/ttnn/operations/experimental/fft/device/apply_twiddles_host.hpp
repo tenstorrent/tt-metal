@@ -6,9 +6,8 @@
 //
 // The twiddle table T[n2, k1] = exp(-2*pi*i*n2*k1/N) (N == N1*N2) is a
 // pure function of (N1, N2).  We upload it to DRAM ONCE per (device, N1,
-// N2) tuple and reuse the MeshBuffer for every subsequent op call.  The
-// hot path (apply_twiddles_factory::create_descriptor) only does a cache
-// lookup — no CPU FFT-math, no host→device transfer.
+// N2) tuple and reuse the Tensor for every subsequent op call. The hot path
+// only does a cache lookup — no CPU FFT-math or host→device transfer.
 //
 // Layout:
 //   - N2 tiles per buffer (one tile per twiddle row)
@@ -26,11 +25,12 @@
 #include <vector>
 
 #include "tt-metalium/distributed.hpp"
-#include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
 
-#include "fft_inner_host.hpp"  // fft_example::make_mesh_buf, kTileElems, ...
 #include "ttnn/operations/experimental/fft/device/leak_static_cache.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim::apply_twiddles_host {
 
@@ -41,8 +41,12 @@ constexpr uint32_t kTileBytesFp32_at = kTileElems_at * 4u;  // 4096
 struct TwiddlePlan {
     uint32_t N1 = 0;
     uint32_t N2 = 0;
-    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> tw_r_buf;
-    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> tw_i_buf;
+    // (N2, kTileElems) fp32 ROW_MAJOR — one tile-sized page per twiddle row,
+    // the same page geometry the reader's TensorAccessor expects.  Held as
+    // tensors (rather than raw MeshBuffers) so Metal 2.0 factories can bind
+    // them as tensor parameters instead of smuggling addresses through RTAs.
+    ttnn::Tensor tw_r;
+    ttnn::Tensor tw_i;
     // Weak reference to the owning device.  lock() returns nullptr once the
     // device is fully destroyed, correctly detecting stale entries even when
     // the heap allocator reuses the same raw MeshDevice* address.
@@ -103,14 +107,13 @@ inline std::shared_ptr<TwiddlePlan> get_or_create(
     plan->N2 = N2;
     plan->device_weak = md;
 
-    const uint32_t bytes = N2 * kTileBytesFp32_at;
-    plan->tw_r_buf = fft_example::make_mesh_buf(md, bytes, kTileBytesFp32_at);
-    plan->tw_i_buf = fft_example::make_mesh_buf(md, bytes, kTileBytesFp32_at);
-
     auto [r, i] = build_twiddle_table(N1, N2);
-    MeshCommandQueue& cq = md->mesh_command_queue();
-    WriteShard(cq, plan->tw_r_buf, r, MeshCoordinate(0, 0), /*blocking=*/true);
-    WriteShard(cq, plan->tw_i_buf, i, MeshCoordinate(0, 0), /*blocking=*/true);
+
+    using namespace tt::tt_metal;
+    const ttnn::Shape shape{ttnn::SmallVector<uint32_t>{N2, kTileElems_at}};
+    const TensorSpec spec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+    plan->tw_r = Tensor::from_vector(std::move(r), spec, md.get());
+    plan->tw_i = Tensor::from_vector(std::move(i), spec, md.get());
 
     c.emplace(key, plan);
     return plan;
