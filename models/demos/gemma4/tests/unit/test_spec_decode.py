@@ -2857,10 +2857,11 @@ def test_mtp_current_path_breakdown(mesh_device, reset_seeds):
         P = K + 1
         spec._pv_setup()
         spec._pv_a_prev = -1
-        spec._pv_seed_staging(anchor_pos)
+        if not spec._seq_kv_enabled():
+            spec._pv_seed_staging(anchor_pos)
         packed_host = spec._pv_host_inputs(anchor_pos, P)
         packed = spec._pv_device_inputs([anchor_token] * P, packed_host)
-        packed["pt"] = spec._page_table(P if spec._batch_sdpa_enabled() else 1)
+        packed["pt"] = spec._page_table(spec._pv_page_table_batch(P))
 
         def _packed_verify():
             return spec._pv_call(packed, P)
