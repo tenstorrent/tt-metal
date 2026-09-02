@@ -313,6 +313,11 @@ struct PackedWdOffset {
 };
 
 void kernel_main() {
+    // Ahead of the runtime args, not because it needs them -- the operand CBs are compile-time --
+    // but because it programs the UNPACK/MATH/PACK config and must precede every compute API call,
+    // including the activation init below. Nothing may be inserted above it.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_tiles, cb_w_gate, cb_gate_acc);
+
     (void)get_arg_val<uint32_t>(0);  // retained runtime slot for cache-compatible argument layout
     const uint32_t kr_rows = get_arg_val<uint32_t>(1);
     const uint32_t hn_cols = get_arg_val<uint32_t>(2);
@@ -321,7 +326,6 @@ void kernel_main() {
     const uint32_t my_col = get_arg_val<uint32_t>(5);  // grid column == this core's x-injection slot
     const uint32_t my_row = get_arg_val<uint32_t>(6);  // row in the column == which scatter slice I own
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_tiles, cb_w_gate, cb_gate_acc);
     // The activation is compile-time selected and therefore gets its own cached program.
 #ifdef SITU_GLU
     situ_glu_tile_init();
