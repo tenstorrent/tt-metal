@@ -210,7 +210,11 @@ def load_attention_weights(
 
     # Main's DRAM-width-sharded full-QKV remains the decode path.
     is_moe = bool(getattr(config, "enable_moe_block", False))
-    dram_shard = _DRAM_SHARD_ATTN and tp > 1 and not is_moe
+    # Context-parallel prefill keeps the pre-rebase interleaved representation.
+    # Besides avoiding decode-only DRAM-sharding machinery, this preserves the
+    # established tensor-cache names used by the long-context service.
+    is_context_parallel = bool(mesh_config and mesh_config.prefill.sp > 1)
+    dram_shard = _DRAM_SHARD_ATTN and tp > 1 and not is_moe and not is_context_parallel
     qkv_cache = get_cache_file_name(tensor_cache_path, f"wqkv{tp_suffix}{dtype_suffix}")
     oproj_cache = get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{tp_suffix}{dtype_suffix}")
     qkv_cache_ws = (qkv_cache + ".ws") if qkv_cache else None
