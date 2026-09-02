@@ -1,3 +1,4 @@
++ FAILED=
 + export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 + HF_HUB_OFFLINE=1
 + TRANSFORMERS_OFFLINE=1
@@ -11,156 +12,322 @@
 + :
 + provenance started
 + ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/probe/dram_capacity_probe.py
++ step dram 0
++ local name=dram
++ local code=0
 + echo dram=0
 dram=0
++ '[' 0 '!=' 0 ']'
 + TT_METAL_TRACE_ALLOC_TRACKING=1
 + ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/probe/trace_alloc_probe.py
++ step tracealloc 0
++ local name=tracealloc
++ local code=0
 + echo tracealloc=0
 tracealloc=0
++ '[' 0 '!=' 0 ']'
 + TT_METAL_TRACE_ALLOC_TRACKING=1
 + ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/dev_full_model.py capacity --seq 128
-+ echo tracealloc_full=0
-tracealloc_full=0
+Terminated
++ step tracealloc_full 143
++ local name=tracealloc_full
++ local code=143
++ echo tracealloc_full=143
+tracealloc_full=143
++ '[' 143 '!=' 0 ']'
++ FAILED=' tracealloc_full'
 + ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/measure_cold_compile.py --repeats 4
++ step warmcompile 0
++ local name=warmcompile
++ local code=0
 + echo warmcompile=0
 warmcompile=0
++ '[' 0 '!=' 0 ']'
 + cp models/autoports/zai_org_glm_4_7_flash/doc/full_model/compile_cost.json models/autoports/zai_org_glm_4_7_flash/doc/full_model/compile_cost_warm.json
 + rm -rf /tmp/glm47_coldhome
 + mkdir -p /tmp/glm47_coldhome
 + HOME=/tmp/glm47_coldhome
 + GLM47_FLASH_SNAPSHOT=/home/stisi/.cache/huggingface/hub/models--zai-org--GLM-4.7-Flash/snapshots/7dd20894a642a0aa287e9827cb1a1f7f91386b67
 + ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/measure_cold_compile.py --repeats 4
++ step coldcompile 0
++ local name=coldcompile
++ local code=0
 + echo coldcompile=0
 coldcompile=0
++ '[' 0 '!=' 0 ']'
 + rm -rf /tmp/glm47_coldhome
 + ./python_env/bin/python -m pytest models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py -q -s -p no:randomly
++ step mainonly 0
++ local name=mainonly
++ local code=0
 + echo mainonly=0
 mainonly=0
++ '[' 0 '!=' 0 ']'
 + ./python_env/bin/python -m pytest models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py -q -s -p no:randomly
++ step main 0
++ local name=main
++ local code=0
 + echo main=0
 main=0
++ '[' 0 '!=' 0 ']'
 + ./python_env/bin/python -m pytest models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py -q -s -p no:randomly
++ step padding 0
++ local name=padding
++ local code=0
 + echo padding=0
 padding=0
++ '[' 0 '!=' 0 ']'
 + ./python_env/bin/python -m pytest models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_perf.py -q -s -p no:randomly
++ step perf 0
++ local name=perf
++ local code=0
 + echo perf=0
 perf=0
++ '[' 0 '!=' 0 ']'
 + GLM47_FM_BATCH=32
 + GLM47_FM_BATCH_SEQ=8192
 + ./python_env/bin/python -m pytest models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py -q -s -p no:randomly
++ step batch 0
++ local name=batch
++ local code=0
 + echo batch=0
 batch=0
++ '[' 0 '!=' 0 ']'
 + ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/probe/decode_position_scaling_probe.py
++ step posscale 0
++ local name=posscale
++ local code=0
 + echo posscale=0
 posscale=0
++ '[' 0 '!=' 0 ']'
 + ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/probe/decode_cache_scaling_probe.py
++ step cachescale 0
++ local name=cachescale
++ local code=0
 + echo cachescale=0
 cachescale=0
++ '[' 0 '!=' 0 ']'
 + ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/probe/full_model_head_probe.py
++ step head 0
++ local name=head
++ local code=0
 + echo head=0
 head=0
++ '[' 0 '!=' 0 ']'
 + ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/probe/logits_memory_ab_probe.py
++ step logitsab 0
++ local name=logitsab
++ local code=0
 + echo logitsab=0
 logitsab=0
++ '[' 0 '!=' 0 ']'
 + ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/probe/first_use_ttft_probe.py
++ step firstuse 0
++ local name=firstuse
++ local code=0
 + echo firstuse=0
 firstuse=0
++ '[' 0 '!=' 0 ']'
 + ./python_env/bin/python -m models.common.readiness_check.run_prefill_check --model-dir models/autoports/zai_org_glm_4_7_flash --reference models/autoports/zai_org_glm_4_7_flash/readiness_aime24_chat.refpt --mesh-device N150 --trace-region-size 350000000 --l1-small-size 32768
++ step prefillcheck 0
++ local name=prefillcheck
++ local code=0
 + echo prefillcheck=0
 prefillcheck=0
++ '[' 0 '!=' 0 ']'
 + ./python_env/bin/python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/zai_org_glm_4_7_flash --reference models/autoports/zai_org_glm_4_7_flash/readiness_aime24_chat.refpt --mesh-device N150 --trace-region-size 350000000 --l1-small-size 32768
++ step tf 0
++ local name=tf
++ local code=0
 + echo tf=0
 tf=0
++ '[' 0 '!=' 0 ']'
 + ./python_env/bin/python -m models.common.readiness_check.run_autoregressive --model-dir models/autoports/zai_org_glm_4_7_flash --hf-model zai-org/GLM-4.7-Flash --prompt-file models/autoports/zai_org_glm_4_7_flash/doc/full_model/autoregressive_prompt_chat.txt --mesh-device N150 --trace-region-size 350000000 --l1-small-size 32768 --max-new-tokens 256
++ step autoreg 0
++ local name=autoreg
++ local code=0
 + echo autoreg=0
 autoreg=0
++ '[' 0 '!=' 0 ']'
 + ./python_env/bin/python models/common/readiness_check/check_degenerate_output.py --model-dir models/autoports/zai_org_glm_4_7_flash --missing-artifacts critical --scope autoregressive --json models/autoports/zai_org_glm_4_7_flash/doc/full_model/degenerate_check.json
++ step degen 0
++ local name=degen
++ local code=0
 + echo degen=0
 degen=0
++ '[' 0 '!=' 0 ']'
 + ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/run_qualitative_suite.py --max-new-tokens 128 --skip-hf
++ step qual 0
++ local name=qual
++ local code=0
 + echo qual=0
 qual=0
++ '[' 0 '!=' 0 ']'
 + rm -rf models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy
 + mkdir -p models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy
 + ./python_env/bin/python -m tracy -r -p -v -m pytest models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_profile.py -q -s -p no:randomly
++ step tracy 0
++ local name=tracy
++ local code=0
 + echo tracy=0
 tracy=0
++ '[' 0 '!=' 0 ']'
 ++ grep -a 'OPs csv generated at' /tmp/tracy_run.log
 ++ tail -1
 ++ sed 's/.*at: //'
-+ CSV=/home/stisi/tt-metal/generated/profiler/reports/2026_09_02_12_26_55/ops_perf_results_2026_09_02_12_26_55.csv
-+ test -s /home/stisi/tt-metal/generated/profiler/reports/2026_09_02_12_26_55/ops_perf_results_2026_09_02_12_26_55.csv
++ CSV=/home/stisi/tt-metal/generated/profiler/reports/2026_09_02_15_19_25/ops_perf_results_2026_09_02_15_19_25.csv
++ test -s /home/stisi/tt-metal/generated/profiler/reports/2026_09_02_15_19_25/ops_perf_results_2026_09_02_15_19_25.csv
++ step tracycsv 0
++ local name=tracycsv
++ local code=0
 + echo tracycsv=0
 tracycsv=0
++ '[' 0 '!=' 0 ']'
 + for w in DECODE_MODEL DECODE_TOKENOUT PREFILL
 ++ echo DECODE_MODEL
 ++ tr A-Z a-z
 + out=models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_model_perf_report
-+ ./python_env/bin/tt-perf-report --arch p150 /home/stisi/tt-metal/generated/profiler/reports/2026_09_02_12_26_55/ops_perf_results_2026_09_02_12_26_55.csv --start-signpost PERF_FM_DECODE_MODEL --end-signpost PERF_FM_DECODE_MODEL_END --csv models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_model_perf_report.csv
++ ./python_env/bin/tt-perf-report --arch p150 /home/stisi/tt-metal/generated/profiler/reports/2026_09_02_15_19_25/ops_perf_results_2026_09_02_15_19_25.csv --start-signpost PERF_FM_DECODE_MODEL --end-signpost PERF_FM_DECODE_MODEL_END --csv models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_model_perf_report.csv
 + echo perfreport_DECODE_MODEL=0
 perfreport_DECODE_MODEL=0
 + for w in DECODE_MODEL DECODE_TOKENOUT PREFILL
 ++ echo DECODE_TOKENOUT
 ++ tr A-Z a-z
 + out=models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_tokenout_perf_report
-+ ./python_env/bin/tt-perf-report --arch p150 /home/stisi/tt-metal/generated/profiler/reports/2026_09_02_12_26_55/ops_perf_results_2026_09_02_12_26_55.csv --start-signpost PERF_FM_DECODE_TOKENOUT --end-signpost PERF_FM_DECODE_TOKENOUT_END --csv models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_tokenout_perf_report.csv
++ ./python_env/bin/tt-perf-report --arch p150 /home/stisi/tt-metal/generated/profiler/reports/2026_09_02_15_19_25/ops_perf_results_2026_09_02_15_19_25.csv --start-signpost PERF_FM_DECODE_TOKENOUT --end-signpost PERF_FM_DECODE_TOKENOUT_END --csv models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_tokenout_perf_report.csv
 + echo perfreport_DECODE_TOKENOUT=0
 perfreport_DECODE_TOKENOUT=0
 + for w in DECODE_MODEL DECODE_TOKENOUT PREFILL
 ++ echo PREFILL
 ++ tr A-Z a-z
 + out=models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/prefill_perf_report
-+ ./python_env/bin/tt-perf-report --arch p150 /home/stisi/tt-metal/generated/profiler/reports/2026_09_02_12_26_55/ops_perf_results_2026_09_02_12_26_55.csv --start-signpost PERF_FM_PREFILL --end-signpost PERF_FM_PREFILL_END --csv models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/prefill_perf_report.csv
++ ./python_env/bin/tt-perf-report --arch p150 /home/stisi/tt-metal/generated/profiler/reports/2026_09_02_15_19_25/ops_perf_results_2026_09_02_15_19_25.csv --start-signpost PERF_FM_PREFILL --end-signpost PERF_FM_PREFILL_END --csv models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/prefill_perf_report.csv
 + echo perfreport_PREFILL=0
 perfreport_PREFILL=0
 + gzip -c /tmp/tracy_run.log
++ step gzip_tracy 0
++ local name=gzip_tracy
++ local code=0
 + echo gzip_tracy=0
 gzip_tracy=0
++ '[' 0 '!=' 0 ']'
 + ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/summarize_perf_report.py --tracy-dir models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy
++ step summary 0
++ local name=summary
++ local code=0
 + echo summary=0
 summary=0
++ '[' 0 '!=' 0 ']'
 + gzip -f models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_model_perf_report.csv models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_tokenout_perf_report.csv
++ step gzip_csv 0
++ local name=gzip_csv
++ local code=0
 + echo gzip_csv=0
 gzip_csv=0
++ '[' 0 '!=' 0 ']'
 + rm -rf generated/watcher models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/watcher
 + mkdir -p models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/watcher
 + TT_METAL_WATCHER=2
 + ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/dev_full_model.py smoke
++ rc=0
 ++ grep -aicE 'error|assert|sanitize|fatal|exception' generated/watcher/watcher.log
-+ echo 'wsmoke=0 faults=0'
-wsmoke=0 faults=0
++ faults=0
++ echo wsmoke_faults=0
+wsmoke_faults=0
++ step wsmoke 0
++ local name=wsmoke
++ local code=0
++ echo wsmoke=0
+wsmoke=0
++ '[' 0 '!=' 0 ']'
++ step wsmoke_faults 0
++ local name=wsmoke_faults
++ local code=0
++ echo wsmoke_faults=0
+wsmoke_faults=0
++ '[' 0 '!=' 0 ']'
 + gzip -c generated/watcher/watcher.log
++ step gzip_wsmoke 0
++ local name=gzip_wsmoke
++ local code=0
 + echo gzip_wsmoke=0
 gzip_wsmoke=0
++ '[' 0 '!=' 0 ']'
 + rm -rf generated/watcher
 + TT_METAL_WATCHER=2
 + ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/dev_full_model.py trace --layers probe --seq-cap 202752
++ rc=0
 ++ grep -aicE 'error|assert|sanitize|fatal|exception' generated/watcher/watcher.log
-+ echo 'wtrace=0 faults=0'
-wtrace=0 faults=0
++ faults=0
++ echo wtrace_faults=0
+wtrace_faults=0
++ step wtrace 0
++ local name=wtrace
++ local code=0
++ echo wtrace=0
+wtrace=0
++ '[' 0 '!=' 0 ']'
++ step wtrace_faults 0
++ local name=wtrace_faults
++ local code=0
++ echo wtrace_faults=0
+wtrace_faults=0
++ '[' 0 '!=' 0 ']'
 + gzip -c generated/watcher/watcher.log
++ step gzip_wtrace 0
++ local name=gzip_wtrace
++ local code=0
 + echo gzip_wtrace=0
 gzip_wtrace=0
++ '[' 0 '!=' 0 ']'
 + rm -rf generated/watcher
 + TT_METAL_WATCHER=2
 + ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/dev_full_model.py capacity --seq 128
++ rc=0
 ++ grep -aicE 'error|assert|sanitize|fatal|exception' generated/watcher/watcher.log
-+ echo 'wfull=0 faults=0'
-wfull=0 faults=0
++ faults=0
++ echo wfull_faults=0
+wfull_faults=0
++ step wfull 0
++ local name=wfull
++ local code=0
++ echo wfull=0
+wfull=0
++ '[' 0 '!=' 0 ']'
++ step wfull_faults 0
++ local name=wfull_faults
++ local code=0
++ echo wfull_faults=0
+wfull_faults=0
++ '[' 0 '!=' 0 ']'
 + gzip -c generated/watcher/watcher.log
++ step gzip_wfull 0
++ local name=gzip_wfull
++ local code=0
 + echo gzip_wfull=0
 gzip_wfull=0
++ '[' 0 '!=' 0 ']'
 + rm -rf generated/watcher
 + PYTHONUNBUFFERED=1
 + ./python_env/bin/python -m pytest models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py -q -s -p no:randomly
++ step fullctx 0
++ local name=fullctx
++ local code=0
 + echo fullctx=0
 fullctx=0
++ '[' 0 '!=' 0 ']'
 + ./python_env/bin/python .agents/scripts/check_context_contract.py --model-dir models/autoports/zai_org_glm_4_7_flash --hf-model zai-org/GLM-4.7-Flash --stage full-model --require-contract
++ step ctx 0
++ local name=ctx
++ local code=0
 + echo ctx=0
 ctx=0
++ '[' 0 '!=' 0 ']'
 + ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/check_report_numbers.py
-+ echo reportnums=1
-reportnums=1
++ echo 'reportnums=1 (expected non-zero if any figure moved; regenerate the documents and re-run)'
+reportnums=1 (expected non-zero if any figure moved; regenerate the documents and re-run)
 + provenance finished
-+ echo SWEEP_DONE
-SWEEP_DONE
++ '[' -n ' tracealloc_full' ']'
++ echo 'SWEEP_FAILED: tracealloc_full'
+SWEEP_FAILED: tracealloc_full
++ exit 1

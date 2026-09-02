@@ -1,49 +1,72 @@
-2026-09-02 12:08:26.338 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+2026-09-02 15:00:46.147 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
 Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
-2026-09-02 12:08:26.457 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
-2026-09-02 12:08:26.457 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
-2026-09-02 12:08:26.457 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
-2026-09-02 12:08:26.457 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
-2026-09-02 12:08:26.470 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
-2026-09-02 12:08:26.470 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
-2026-09-02 12:08:26.503 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
-2026-09-02 12:08:26.503 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
-2026-09-02 12:08:26.503 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
-2026-09-02 12:08:26.503 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
-2026-09-02 12:08:26.504 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
-2026-09-02 12:08:26.748 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
-2026-09-02 12:08:26.848 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
-2026-09-02 12:08:26.848 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
-2026-09-02 12:08:26.848 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
-2026-09-02 12:08:26.848 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
-2026-09-02 12:08:26.848 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
-2026-09-02 12:08:26.888 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
-2026-09-02 12:08:28.604 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1623040 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-09-02 15:00:46.269 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-02 15:00:46.269 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-02 15:00:46.269 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-02 15:00:46.269 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-02 15:00:46.282 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-02 15:00:46.282 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-02 15:00:46.316 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-02 15:00:46.316 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-09-02 15:00:46.316 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-09-02 15:00:46.316 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-02 15:00:46.318 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-02 15:00:46.545 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-02 15:00:46.652 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-02 15:00:46.652 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-02 15:00:46.652 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-02 15:00:46.652 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-02 15:00:46.652 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-02 15:00:46.692 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-02 15:00:48.399 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1799168 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-09-02 15:00:48.401 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3396608 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-09-02 15:00:48.404 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 3396608 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-09-02 15:00:48.427 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-7] grow to 1623040 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-09-02 15:00:49.233 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1954816 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-09-02 15:00:49.236 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1954816 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
 embedding in(1, 1, 1, 4) -> Shape([1, 4, 2048])  4D=Shape([1, 1, 4, 2048])
 embedding in(1, 4) -> Shape([1, 4, 2048])  4D=Shape([1, 1, 4, 2048])
 plus_one int32 [B]: [6, -1]
 plus_one uint32 [1,B]: [[6, 1]]
 plus_one uint32 [1,1,1,B]: [[[[6, 1]]]]
-LM head bf8 1D cores=110 bw=4 pcn=44: 882.5 us  out=Shape([1, 1, 32, 154880])
-LM head bf8 1D cores=110 bw=8 pcn=44: 892.1 us  out=Shape([1, 1, 32, 154880])
-LM head bf8 1D cores=110 bw=2 pcn=44: 867.6 us  out=Shape([1, 1, 32, 154880])
-LM head bf8 1D cores=88 bw=8 pcn=55: 903.5 us  out=Shape([1, 1, 32, 154880])
+LM head bf8 1D cores=110 bw=1 pcn=44: 865.2 us  out=Shape([1, 1, 32, 154880])
+LM head bf8 1D cores=110 bw=2 pcn=44: 868.4 us  out=Shape([1, 1, 32, 154880])
+LM head bf8 1D cores=110 bw=4 pcn=44: 877.9 us  out=Shape([1, 1, 32, 154880])
+LM head bf8 1D cores=110 bw=8 pcn=44: 893.5 us  out=Shape([1, 1, 32, 154880])
+LM head bf8 1D cores=110 bw=16: FAIL TT_THROW @ /home/stisi/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 10-9] gro
+LM head bf8 1D cores=110 bw=32: FAIL TT_THROW @ /home/stisi/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 10-9] gro
+LM head bf8 1D cores=110 bw=64: FAIL TT_THROW @ /home/stisi/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 10-9] gro
+LM head bf8 1D cores=88 bw=8 pcn=55: 902.7 us  out=Shape([1, 1, 32, 154880])
 LM head bf8 1D cores=64 bw=8: FAIL TT_THROW @ /home/stisi/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
 info:
 Statically allocated circular buffers on core range [0-0 - 7-7] grow
-LM head bf8 default cfg: 2490.7 us
-LM head bf4 1D cores=110 bw=4 pcn=44: 633.1 us  out=Shape([1, 1, 32, 154880])
-LM head bf4 1D cores=110 bw=8 pcn=44: 655.8 us  out=Shape([1, 1, 32, 154880])
-LM head bf4 1D cores=110 bw=2 pcn=44: 626.0 us  out=Shape([1, 1, 32, 154880])
-LM head bf4 1D cores=88 bw=8 pcn=55: 665.6 us  out=Shape([1, 1, 32, 154880])
-LM head bf4 1D cores=64 bw=8 pcn=76: 679.0 us  out=Shape([1, 1, 32, 154880])
-LM head bf4 default cfg: 2239.6 us
+LM head bf8 default cfg: 2475.5 us
+LM head bf4 1D cores=110 bw=1 pcn=44: 642.2 us  out=Shape([1, 1, 32, 154880])
+LM head bf4 1D cores=110 bw=2 pcn=44: 624.3 us  out=Shape([1, 1, 32, 154880])
+LM head bf4 1D cores=110 bw=4 pcn=44: 627.0 us  out=Shape([1, 1, 32, 154880])
+LM head bf4 1D cores=110 bw=8 pcn=44: 658.6 us  out=Shape([1, 1, 32, 154880])
+LM head bf4 1D cores=110 bw=16 pcn=44: 683.0 us  out=Shape([1, 1, 32, 154880])
+LM head bf4 1D cores=110 bw=32: FAIL TT_THROW @ /home/stisi/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 10-9] gro
+LM head bf4 1D cores=110 bw=64: FAIL TT_THROW @ /home/stisi/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 10-9] gro
+LM head bf4 1D cores=88 bw=8 pcn=55: 665.5 us  out=Shape([1, 1, 32, 154880])
+LM head bf4 1D cores=64 bw=8 pcn=76: 676.0 us  out=Shape([1, 1, 32, 154880])
+LM head bf4 default cfg: 2204.6 us
 wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/full_model/head_probe.json
 HEAD_PROBE_OK
-2026-09-02 12:08:29.778 | info     |    BuildKernels | JIT cache stats: 81/81 hits (100.0%) [81 cached, 5 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
-2026-09-02 12:08:29.778 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
-2026-09-02 12:08:29.790 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
-2026-09-02 12:08:29.790 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
-2026-09-02 12:08:30.252 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
-2026-09-02 12:08:30.252 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
-2026-09-02 12:08:30.252 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)
+2026-09-02 15:00:49.695 | info     |    BuildKernels | JIT cache stats: 129/129 hits (100.0%) [129 cached, 5 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-02 15:00:49.695 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-02 15:00:49.707 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-02 15:00:49.707 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-02 15:00:50.153 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-02 15:00:50.153 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-02 15:00:50.153 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

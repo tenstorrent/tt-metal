@@ -1,7 +1,7 @@
 {
   "source_manifest": {
     "tt/provenance.py": "3b162e8ac0fe0674",
-    "tt/model.py": "984d9a9d8199f57f",
+    "tt/model.py": "110441277ab0e2a1",
     "tt/generator.py": "ecba72e1e945a51a",
     "tt/optimized_decoder.py": "b2abc9f36278b32f",
     "tt/fused_decoder.py": "0dbbe26e401a1716",
@@ -12,9 +12,9 @@
   "l1": {
     "decode_logits_memory_config": "L1",
     "iterations": 64,
-    "traced_model_only_ms": 1.784,
-    "traced_model_only_spread_ms": 0.023,
-    "traced_token_out_ms": 2.907,
+    "traced_model_only_ms": 1.788,
+    "traced_model_only_spread_ms": 0.035,
+    "traced_token_out_ms": 2.911,
     "traced_token_out_spread_ms": 0.048,
     "sampling_ms": 1.123,
     "tokens": [
@@ -31,11 +31,11 @@
   "dram": {
     "decode_logits_memory_config": "DRAM",
     "iterations": 64,
-    "traced_model_only_ms": 1.837,
-    "traced_model_only_spread_ms": 0.038,
-    "traced_token_out_ms": 2.957,
-    "traced_token_out_spread_ms": 0.027,
-    "sampling_ms": 1.12,
+    "traced_model_only_ms": 1.829,
+    "traced_model_only_spread_ms": 0.026,
+    "traced_token_out_ms": 2.941,
+    "traced_token_out_spread_ms": 0.038,
+    "sampling_ms": 1.112,
     "tokens": [
       16159,
       83714,
@@ -47,8 +47,8 @@
       48364
     ]
   },
-  "token_out_delta_ms_dram_minus_l1": 0.05,
-  "sampling_delta_ms_dram_minus_l1": -0.003,
+  "token_out_delta_ms_dram_minus_l1": 0.03,
+  "sampling_delta_ms_dram_minus_l1": -0.011,
   "same_tokens": true,
   "decision": "Whichever arm is faster, the choice is only defensible if the tokens match; they do. The shipped default is L1 (decode_logits_in_dram=False) and the other arm is one constructor argument away."
 }

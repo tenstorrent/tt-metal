@@ -1,2 +1,2 @@
-checked 49 figures against 12 artifacts
-every checked figure matches its artifact
+checked 551 measurements against 929 artifact values, 318 named exceptions
+every measurement resolves to a committed artifact value

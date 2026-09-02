@@ -1,7 +1,7 @@
 {
   "source_manifest": {
     "tt/provenance.py": "3b162e8ac0fe0674",
-    "tt/model.py": "984d9a9d8199f57f",
+    "tt/model.py": "110441277ab0e2a1",
     "tt/generator.py": "ecba72e1e945a51a",
     "tt/optimized_decoder.py": "b2abc9f36278b32f",
     "tt/fused_decoder.py": "0dbbe26e401a1716",

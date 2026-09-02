@@ -1,26 +1,34 @@
 {
   "source_manifest": {
     "tt/provenance.py": "3b162e8ac0fe0674",
-    "tt/model.py": "984d9a9d8199f57f",
+    "tt/model.py": "110441277ab0e2a1",
     "tt/generator.py": "ecba72e1e945a51a",
     "tt/optimized_decoder.py": "b2abc9f36278b32f",
     "tt/fused_decoder.py": "0dbbe26e401a1716",
     "tt/functional_decoder.py": "d04c7d1958a8fe74",
-    "probe/full_model_head_probe.py": "5ffac47d651b8ea1"
+    "probe/full_model_head_probe.py": "c6a12fec686be22c"
   },
   "lm_head_us": {
-    "bf8_1d_cores110_bw4": 882.5,
-    "bf8_1d_cores110_bw8": 892.1,
-    "bf8_1d_cores110_bw2": 867.6,
-    "bf8_1d_cores88_bw8": 903.5,
+    "bf8_1d_cores110_bw1": 865.2,
+    "bf8_1d_cores110_bw2": 868.4,
+    "bf8_1d_cores110_bw4": 877.9,
+    "bf8_1d_cores110_bw8": 893.5,
+    "bf8_1d_cores110_bw16": "FAIL: TT_THROW @ /home/stisi/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception",
+    "bf8_1d_cores110_bw32": "FAIL: TT_THROW @ /home/stisi/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception",
+    "bf8_1d_cores110_bw64": "FAIL: TT_THROW @ /home/stisi/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception",
+    "bf8_1d_cores88_bw8": 902.7,
     "bf8_1d_cores64_bw8": "FAIL: TT_THROW @ /home/stisi/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception",
-    "bf8_default_program_config": 2490.7,
-    "bf4_1d_cores110_bw4": 633.1,
-    "bf4_1d_cores110_bw8": 655.8,
-    "bf4_1d_cores110_bw2": 626.0,
-    "bf4_1d_cores88_bw8": 665.6,
-    "bf4_1d_cores64_bw8": 679.0,
-    "bf4_default_program_config": 2239.6
+    "bf8_default_program_config": 2475.5,
+    "bf4_1d_cores110_bw1": 642.2,
+    "bf4_1d_cores110_bw2": 624.3,
+    "bf4_1d_cores110_bw4": 627.0,
+    "bf4_1d_cores110_bw8": 658.6,
+    "bf4_1d_cores110_bw16": 683.0,
+    "bf4_1d_cores110_bw32": "FAIL: TT_THROW @ /home/stisi/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception",
+    "bf4_1d_cores110_bw64": "FAIL: TT_THROW @ /home/stisi/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception",
+    "bf4_1d_cores88_bw8": 665.5,
+    "bf4_1d_cores64_bw8": 676.0,
+    "bf4_default_program_config": 2204.6
   },
   "notes": [
     "One decode row (M = 32 padded rows) x 2048 x 154880, 20 iterations each, wall clock with an explicit synchronize. `*_default_program_config` is the figure the report cites for why the explicit 1D mcast config is required."

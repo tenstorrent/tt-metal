@@ -1,7 +1,7 @@
 {
   "source_manifest": {
     "tt/provenance.py": "3b162e8ac0fe0674",
-    "tt/model.py": "984d9a9d8199f57f",
+    "tt/model.py": "110441277ab0e2a1",
     "tt/generator.py": "ecba72e1e945a51a",
     "tt/optimized_decoder.py": "b2abc9f36278b32f",
     "tt/fused_decoder.py": "0dbbe26e401a1716",
@@ -15,23 +15,23 @@
       "physical_len": 256,
       "first_request": {
         "new_programs_compiled": 0,
-        "harness_style_ttft_ms": 583.6,
-        "reset_ms": 28.4,
-        "prefill_plus_first_token_ms": 555.3,
+        "harness_style_ttft_ms": 583.7,
+        "reset_ms": 28.3,
+        "prefill_plus_first_token_ms": 555.4,
         "trace_recapture_ms": 0.0,
         "trace_recaptures": 0,
         "wall_ms": 606.4
       },
       "second_request": {
         "new_programs_compiled": 0,
-        "harness_style_ttft_ms": 583.9,
-        "reset_ms": 28.3,
-        "prefill_plus_first_token_ms": 555.6,
+        "harness_style_ttft_ms": 583.5,
+        "reset_ms": 28.2,
+        "prefill_plus_first_token_ms": 555.2,
         "trace_recapture_ms": 0.0,
         "trace_recaptures": 0,
-        "wall_ms": 606.7
+        "wall_ms": 606.2
       },
-      "first_use_penalty_ms": -0.3,
+      "first_use_penalty_ms": 0.2,
       "note": "The penalty is one program compile for this exact prompt length plus one trace recapture; both are one-time per shape. build_generator(warmup_prefill_lens=[...]) pre-pays them before the traces are captured."
     },
     {
@@ -39,23 +39,23 @@
       "physical_len": 4352,
       "first_request": {
         "new_programs_compiled": 18,
-        "harness_style_ttft_ms": 10281.7,
-        "reset_ms": 28.3,
-        "prefill_plus_first_token_ms": 10076.2,
-        "trace_recapture_ms": 177.2,
+        "harness_style_ttft_ms": 10282.5,
+        "reset_ms": 28.2,
+        "prefill_plus_first_token_ms": 10075.7,
+        "trace_recapture_ms": 178.6,
         "trace_recaptures": 1,
-        "wall_ms": 10307.4
+        "wall_ms": 10308.2
       },
       "second_request": {
         "new_programs_compiled": 0,
         "harness_style_ttft_ms": 10098.4,
         "reset_ms": 28.3,
-        "prefill_plus_first_token_ms": 10070.2,
+        "prefill_plus_first_token_ms": 10070.1,
         "trace_recapture_ms": 0.0,
         "trace_recaptures": 0,
-        "wall_ms": 10124.2
+        "wall_ms": 10124.1
       },
-      "first_use_penalty_ms": 183.3,
+      "first_use_penalty_ms": 184.1,
       "note": "The penalty is one program compile for this exact prompt length plus one trace recapture; both are one-time per shape. build_generator(warmup_prefill_lens=[...]) pre-pays them before the traces are captured."
     }
   ]

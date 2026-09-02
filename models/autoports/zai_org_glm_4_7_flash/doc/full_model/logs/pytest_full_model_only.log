@@ -1,4 +1,4 @@
-2026-09-02 11:48:54.827 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+2026-09-02 14:41:16.737 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
 Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
 ============================= test session starts ==============================
 platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/stisi/tt-metal/python_env/bin/python
@@ -13,40 +13,39 @@ timeout func_only: False
 collecting ... collected 45 items
 
 models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_readiness_reference_is_present PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_context_and_capacity_contract 2026-09-02 11:48:56.717 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
-2026-09-02 11:48:56.717 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
-2026-09-02 11:48:56.717 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
-2026-09-02 11:48:56.717 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
-2026-09-02 11:48:56.730 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
-2026-09-02 11:48:56.730 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
-2026-09-02 11:48:56.791 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
-2026-09-02 11:48:56.791 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
-2026-09-02 11:48:56.791 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
-2026-09-02 11:48:56.791 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
-2026-09-02 11:48:56.792 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
-2026-09-02 11:48:56.797 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:256)
-2026-09-02 11:48:56.946 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
-2026-09-02 11:48:57.054 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
-2026-09-02 11:48:57.054 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
-2026-09-02 11:48:57.054 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
-2026-09-02 11:48:57.054 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
-2026-09-02 11:48:57.054 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
-2026-09-02 11:48:57.096 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
-2026-09-02 11:51:53.988 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:51:53.988 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:51:54.216 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:51:54.216 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:51:54.612 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:51:54.612 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:51:55.362 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:51:55.362 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:51:57.093 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:51:57.093 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:51:58.460 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:51:58.460 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:51:58.558 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:130)
-2026-09-02 11:51:58.558 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:51:58.558 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_context_and_capacity_contract 2026-09-02 14:41:18.629 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-02 14:41:18.629 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-02 14:41:18.629 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-02 14:41:18.629 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-02 14:41:18.642 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-02 14:41:18.642 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-02 14:41:18.703 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-02 14:41:18.703 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-09-02 14:41:18.703 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-09-02 14:41:18.703 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-02 14:41:18.704 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-02 14:41:18.944 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-02 14:41:19.049 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-02 14:41:19.049 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-02 14:41:19.049 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-02 14:41:19.049 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-02 14:41:19.049 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-02 14:41:19.091 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-02 14:44:16.394 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:16.394 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:16.622 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:16.622 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:17.018 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:17.018 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:17.768 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:17.768 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:19.499 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1248256 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:19.499 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:20.865 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:20.865 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:20.964 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:130)
+2026-09-02 14:44:20.965 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:20.965 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 building 47 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-org--GLM-4.7-Flash/snapshots/7dd20894a642a0aa287e9827cb1a1f7f91386b67
   layer 0 (dense) built [1/47]
   layer 1 (moe) built [2/47]
@@ -126,160 +125,160 @@ models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_non_aligne
 PASSED
 models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_non_aligned_prompt_lengths[1057] seq=1057 physical=2048 logits=(1, 1057, 154880)
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_non_aligned_prompt_lengths[2049] 2026-09-02 11:52:15.086 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
-2026-09-02 11:52:15.160 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:15.160 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:15.261 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:15.261 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_non_aligned_prompt_lengths[2049] 2026-09-02 14:44:37.499 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
+2026-09-02 14:44:37.572 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:37.572 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:37.675 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:37.675 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 seq=2049 physical=2176 logits=(1, 2049, 154880)
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_prefill_last_row_agrees_with_all_logits 2026-09-02 11:52:17.302 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:17.302 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_prefill_last_row_agrees_with_all_logits 2026-09-02 14:44:39.699 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:39.699 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_prompt_longer_than_one_prefill_chunk 2026-09-02 11:52:25.361 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(3))
-2026-09-02 11:52:25.432 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:25.432 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:25.534 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:25.534 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_prompt_longer_than_one_prefill_chunk 2026-09-02 14:44:47.768 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(3))
+2026-09-02 14:44:47.840 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:47.840 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:47.943 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:47.943 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 PASSED
 models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_prefill_topk_vs_reference prefill {'top1': 0.88, 'top5': 1.0, 'top100': 1.0, 'matches_top1': 88, 'matches_top5': 100, 'matches_top100': 100, 'total': 100}
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_teacher_forcing_topk_vs_reference 2026-09-02 11:52:27.408 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:27.408 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_teacher_forcing_topk_vs_reference 2026-09-02 14:44:49.811 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:49.811 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 teacher-forced decode {'top1': 0.85, 'top5': 1.0, 'top100': 1.0, 'matches_top1': 85, 'matches_top5': 100, 'matches_top100': 100, 'total': 100}
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_greedy_generation_deterministic 2026-09-02 11:52:30.350 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:30.350 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:31.237 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:31.237 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_greedy_generation_deterministic 2026-09-02 14:44:52.749 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:52.749 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:53.636 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:53.636 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_traced_decode_matches_eager_decode 2026-09-02 11:52:32.329 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:32.329 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:33.034 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:33.034 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:33.247 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:33.247 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:33.316 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:33.316 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:33.384 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:33.384 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:33.452 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:33.452 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:33.519 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:33.519 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:33.586 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:33.586 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:33.653 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:33.653 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:33.720 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:33.720 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:33.787 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:33.787 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:33.854 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:33.854 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:33.922 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:33.922 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:33.990 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:33.990 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:34.058 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:34.058 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:34.125 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:34.125 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:34.193 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:34.193 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_traced_decode_matches_eager_decode 2026-09-02 14:44:54.726 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:54.726 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:55.431 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:55.431 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:55.644 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:55.644 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:55.713 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:55.713 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:55.782 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:55.782 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:55.851 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:55.851 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:55.919 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:55.919 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:55.988 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:55.988 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:56.057 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:56.057 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:56.126 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:56.126 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:56.195 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:56.195 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:56.263 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:56.263 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:56.331 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:56.331 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:56.400 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:56.400 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:56.468 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:56.468 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:56.536 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:56.536 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:56.604 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:56.604 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 PASSED
 models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_prefill_logits_bitwise_reproducible PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_decode_logits_independent_of_cache_history 2026-09-02 11:52:35.982 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:35.982 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:36.352 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:36.352 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:36.822 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:36.822 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_decode_logits_independent_of_cache_history 2026-09-02 14:44:58.404 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:58.404 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:58.773 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:58.773 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:44:59.243 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:59.243 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_split_sampling_trace_feedback 2026-09-02 11:52:37.382 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:37.383 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_split_sampling_trace_feedback 2026-09-02 14:44:59.801 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:44:59.801 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 trace feedback inputs: [6724, 773, 279, 45681] positions: [80, 81, 82, 83] outputs: [773, 279, 45681, 18611]
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_unchanged_and_changed_page_table 2026-09-02 11:52:38.007 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:38.007 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:38.395 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:38.395 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:38.783 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:38.783 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_unchanged_and_changed_page_table 2026-09-02 14:45:00.426 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:00.426 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:00.814 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:00.814 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:01.202 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:01.202 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_no_host_fallback_during_traced_decode 2026-09-02 11:52:39.376 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:39.376 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_no_host_fallback_during_traced_decode 2026-09-02 14:45:01.792 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:01.792 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 PASSED
 models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_static_no_torch_in_runtime_modules PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_host_sampling_compatibility_mode 2026-09-02 11:52:40.142 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:40.142 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_host_sampling_compatibility_mode 2026-09-02 14:45:02.563 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:02.563 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_topk_topp_sampling_runs_and_greedy_still_works 2026-09-02 11:52:41.584 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:41.584 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:42.089 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:42.089 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:42.595 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:42.595 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_topk_topp_sampling_runs_and_greedy_still_works 2026-09-02 14:45:04.002 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:04.002 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:04.507 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:04.507 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:05.012 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:05.012 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 PASSED
 models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_low_level_prefill_decode_api PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_reset_clears_cache_and_state 2026-09-02 11:52:44.137 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:44.137 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:44.647 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:44.647 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:45.150 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:45.150 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_reset_clears_cache_and_state 2026-09-02 14:45:06.555 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:06.555 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:07.064 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:07.064 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:07.567 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:07.567 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_reset_zeroes_cache_rows_the_request_never_wrote 2026-09-02 11:52:45.852 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:45.852 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_reset_zeroes_cache_rows_the_request_never_wrote 2026-09-02 14:45:08.268 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:08.268 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_single_chunk_prompt_shape_does_not_recapture 2026-09-02 11:52:46.388 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(5))
-2026-09-02 11:52:46.458 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:46.458 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:46.561 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:46.561 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:46.931 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:46.931 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_single_chunk_prompt_shape_does_not_recapture 2026-09-02 14:45:08.799 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(5))
+2026-09-02 14:45:08.870 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:08.870 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:08.974 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:08.974 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:09.344 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:09.344 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 PASSED
 models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_host_logits_paths_compile_nothing_at_an_unaligned_length PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_lazy_trace_capture_in_decode_forward_preserves_the_prompt 2026-09-02 11:52:49.313 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:49.313 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:49.748 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:49.748 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:49.896 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(7))
-2026-09-02 11:52:49.966 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:49.966 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:52:50.069 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:50.070 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_lazy_trace_capture_in_decode_forward_preserves_the_prompt 2026-09-02 14:45:11.730 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:11.730 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:12.164 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:12.164 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:12.312 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(7))
+2026-09-02 14:45:12.382 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:12.382 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:12.486 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:12.486 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_generate_rejects_swallowed_sampling_kwargs 2026-09-02 11:52:50.364 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] TypeError message="sampling_params"
-2026-09-02 11:52:50.371 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] TypeError message="sampling_params"
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_generate_rejects_swallowed_sampling_kwargs 2026-09-02 14:45:12.778 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] TypeError message="sampling_params"
+2026-09-02 14:45:12.785 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] TypeError message="sampling_params"
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_low_level_prefill_rejects_the_old_slot_kwarg 2026-09-02 11:52:50.569 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] TypeError message="user_ids"
-2026-09-02 11:52:50.569 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] TypeError message="user_ids"
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_low_level_prefill_rejects_the_old_slot_kwarg 2026-09-02 14:45:12.981 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] TypeError message="user_ids"
+2026-09-02 14:45:12.982 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] TypeError message="user_ids"
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_first_use_multi_chunk_shape_recaptures_and_stays_correct 2026-09-02 11:52:59.543 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:52:59.543 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:53:00.853 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(9))
-2026-09-02 11:53:00.924 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:53:00.924 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:53:01.029 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:53:01.029 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:53:09.880 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:53:09.880 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_first_use_multi_chunk_shape_recaptures_and_stays_correct 2026-09-02 14:45:21.962 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:21.962 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:23.273 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(9))
+2026-09-02 14:45:23.344 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:23.344 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:23.450 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:23.450 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:32.301 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:32.301 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_sampling_trace_is_captured_on_demand_if_capture_skipped_it 2026-09-02 11:53:11.694 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:53:11.694 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:53:11.895 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(11))
-2026-09-02 11:53:12.110 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:53:12.110 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:53:12.317 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:53:12.317 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 11:53:12.423 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 11:53:12.423 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_sampling_trace_is_captured_on_demand_if_capture_skipped_it 2026-09-02 14:45:34.117 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:34.117 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:34.318 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(11))
+2026-09-02 14:45:34.532 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:34.532 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:34.740 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:34.740 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 14:45:34.845 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 14:45:34.845 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
 PASSED
-models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_decode_positions_reject_more_rows_than_slots 2026-09-02 11:53:12.690 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="at most"
-2026-09-02 11:53:12.690 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="at most"
-PASSED2026-09-02 11:53:12.722 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(13))
+models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_decode_positions_reject_more_rows_than_slots 2026-09-02 14:45:35.113 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="at most"
+2026-09-02 14:45:35.113 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="at most"
+PASSED2026-09-02 14:45:35.145 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(13))
 
 
 =============================== warnings summary ===============================
@@ -293,13 +292,13 @@ PASSED2026-09-02 11:53:12.722 | DEBUG    | models.common.sampling.generator:rese
 ==================================== PASSES ====================================
 - generated xml file: /home/stisi/tt-metal/generated/test_reports/most_recent_tests.xml -
 ============================= slowest 25 durations =============================
-182.07s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_context_and_capacity_contract
+182.57s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_context_and_capacity_contract
 20.51s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_first_use_multi_chunk_shape_recaptures_and_stays_correct
 8.16s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_prompt_longer_than_one_prefill_chunk
-6.10s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_non_aligned_prompt_lengths[2049]
-4.74s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_non_aligned_prompt_lengths[1057]
+6.09s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_non_aligned_prompt_lengths[2049]
+4.76s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_non_aligned_prompt_lengths[1057]
 2.87s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_teacher_forcing_topk_vs_reference
-2.10s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_traced_decode_matches_eager_decode
+2.11s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_traced_decode_matches_eager_decode
 1.79s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_prefill_last_row_agrees_with_all_logits
 1.78s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_greedy_generation_deterministic
 1.52s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_topk_topp_sampling_runs_and_greedy_still_works
@@ -315,7 +314,7 @@ PASSED2026-09-02 11:53:12.722 | DEBUG    | models.common.sampling.generator:rese
 0.73s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_prefill_topk_vs_reference
 0.64s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_non_aligned_prompt_lengths[154]
 0.63s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_low_level_prefill_decode_api
-0.61s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_non_aligned_prompt_lengths[129]
+0.62s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_non_aligned_prompt_lengths[129]
 0.55s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_reset_zeroes_cache_rows_the_request_never_wrote
 0.43s call     models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_split_sampling_trace_feedback
 =========================== short test summary info ============================
@@ -364,11 +363,11 @@ PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_low
 PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_first_use_multi_chunk_shape_recaptures_and_stays_correct
 PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_sampling_trace_is_captured_on_demand_if_capture_skipped_it
 PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py::test_decode_positions_reject_more_rows_than_slots
-================== 45 passed, 2 warnings in 257.21s (0:04:17) ==================
+================== 45 passed, 2 warnings in 257.73s (0:04:17) ==================
 sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
 nanobind: leaked 2 instances!
- - leaked instance 0x711d5a703908 of type "ttnn._ttnn.tensor.MemoryConfig"
- - leaked instance 0x711d5acba748 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x736689e326b8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x736689a77908 of type "ttnn._ttnn.tensor.MemoryConfig"
 nanobind: leaked 20 types!
  - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
  - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
@@ -383,21 +382,21 @@ nanobind: leaked 20 types!
  - ... skipped remainder
 nanobind: leaked 253 functions!
  - leaked function ""
+ - leaked function "reset_sub_device_stall_group"
+ - leaked function "buffer_page_size"
+ - leaked function "to_json"
+ - leaked function "pad"
+ - leaked function "__init__"
+ - leaked function "load_sub_device_manager"
  - leaked function ""
- - leaked function "ranges"
- - leaked function "devices"
- - leaked function "element_size"
- - leaked function "from_json"
+ - leaked function "__repr__"
  - leaked function ""
- - leaked function ""
- - leaked function "clear_program_cache"
- - leaked function "merge"
  - ... skipped remainder
 nanobind: this is likely caused by a reference counting issue in the binding code.
-See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-09-02 11:53:14.452 | info     |    BuildKernels | JIT cache stats: 1299/1299 hits (100.0%) [1299 cached, 957 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
-2026-09-02 11:53:14.452 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
-2026-09-02 11:53:14.476 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
-2026-09-02 11:53:14.476 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
-2026-09-02 11:53:14.973 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
-2026-09-02 11:53:14.973 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
-2026-09-02 11:53:14.973 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-09-02 14:45:36.861 | info     |    BuildKernels | JIT cache stats: 1299/1299 hits (100.0%) [1299 cached, 957 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-02 14:45:36.861 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-02 14:45:36.885 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-02 14:45:36.885 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-02 14:45:37.373 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-02 14:45:37.373 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-02 14:45:37.373 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

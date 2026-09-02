@@ -1,38 +1,38 @@
-2026-09-02 12:08:22.962 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+2026-09-02 15:00:42.651 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
 Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
-2026-09-02 12:08:23.088 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
-2026-09-02 12:08:23.088 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
-2026-09-02 12:08:23.088 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
-2026-09-02 12:08:23.088 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
-2026-09-02 12:08:23.101 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
-2026-09-02 12:08:23.101 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
-2026-09-02 12:08:23.162 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
-2026-09-02 12:08:23.162 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
-2026-09-02 12:08:23.162 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
-2026-09-02 12:08:23.162 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
-2026-09-02 12:08:23.164 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
-2026-09-02 12:08:23.347 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
-2026-09-02 12:08:23.450 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
-2026-09-02 12:08:23.450 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
-2026-09-02 12:08:23.450 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
-2026-09-02 12:08:23.450 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
-2026-09-02 12:08:23.450 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
-2026-09-02 12:08:23.491 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-02 15:00:42.770 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-02 15:00:42.770 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-02 15:00:42.770 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-02 15:00:42.770 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-02 15:00:42.782 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-02 15:00:42.782 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-02 15:00:42.842 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-02 15:00:42.842 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-09-02 15:00:42.842 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-09-02 15:00:42.842 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-02 15:00:42.843 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-02 15:00:43.145 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-02 15:00:43.247 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-02 15:00:43.247 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-02 15:00:43.247 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-02 15:00:43.248 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-02 15:00:43.248 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-02 15:00:43.287 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
       ctx  blocks  update us   flash us  flash(pt64) us
-     4096      64        5.6       32.3            32.3
-    16384     256        5.9       32.3            32.3
-    65536    1024        6.1       32.4            32.5
-   202752    3168        6.3       32.5            32.1
-rope tile table ctx=4096: 26.4 us
-rope row_major table ctx=4096: 17.4 us
-rope tile table ctx=202752: 209.6 us
-rope row_major table ctx=202752: 34.2 us
+     4096      64        5.5       32.3            32.2
+    16384     256        5.9       32.4            32.4
+    65536    1024        5.8       32.8            32.5
+   202752    3168        5.9       32.6            32.4
+rope tile table ctx=4096: 26.2 us
+rope row_major table ctx=4096: 17.1 us
+rope tile table ctx=202752: 209.2 us
+rope row_major table ctx=202752: 20.0 us
 wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/full_model/cache_scaling.json
 CACHE_SCALING_PROBE_OK
-2026-09-02 12:08:24.373 | info     |    BuildKernels | JIT cache stats: 61/61 hits (100.0%) [61 cached, 13 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
-2026-09-02 12:08:24.373 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
-2026-09-02 12:08:24.386 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
-2026-09-02 12:08:24.386 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
-2026-09-02 12:08:24.851 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
-2026-09-02 12:08:24.852 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
-2026-09-02 12:08:24.852 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)
+2026-09-02 15:00:44.187 | info     |    BuildKernels | JIT cache stats: 61/61 hits (100.0%) [61 cached, 13 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-02 15:00:44.187 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-02 15:00:44.200 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-02 15:00:44.200 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-02 15:00:44.652 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-02 15:00:44.652 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-02 15:00:44.652 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

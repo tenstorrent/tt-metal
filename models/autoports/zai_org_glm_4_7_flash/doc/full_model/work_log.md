@@ -130,9 +130,13 @@ Bisected by rebuilding the 2-layer probe at two cache sizes:
       202752        210.5         16.9
    ```
 
-   **Verified**: the TILE-table lookup scales with table height; a ROW_MAJOR
-   table is flat. 94 lookups/step x 210.5 us = 19.7 ms/token, more than the
-   whole decoder stack.
+   **Verified**: the TILE-table lookup scales with table height. The
+   ROW_MAJOR one is *not* flat, which the numbers above (taken during
+   bring-up) suggested: `cache_scaling.json`, the committed re-run, records
+   17.4 us at 4096 and 34.2 us at 202752, so it roughly doubles. It does not
+   matter for the design, because 2 x 34.2 us against 94 x 209.6 us is still
+   decisive; but "flat" was a refuted claim and the bring-up table's numbers
+   are superseded by that artifact (FM-020).
 
 Fix (two independent parts, both value-preserving):
 
@@ -143,7 +147,7 @@ Fix (two independent parts, both value-preserving):
 * the hoisted lookup reads model-owned **ROW_MAJOR** copies of the same tables
   (+103 MiB) instead of the prefill TILE tables.
 
-2 x 17 us instead of 94 x 210.5 us. Reduced-probe decode 2.573 -> 1.762 ms;
+2 x 34.2 us instead of 94 x 209.6 us. Reduced-probe decode 2.573 -> 1.762 ms;
 the generated token sequence is bit-identical before and after, and
 `test_shared_rope_matches_per_layer_lookup` asserts the two tables return
 equal values.
@@ -306,13 +310,13 @@ implementation.
 | observed | evidence | resolution |
 |---|---|---|
 | full model 42.2 ms/token vs ~24 ms expectation | FM-005 | fixed: per-layer RoPE table lookup scaling with the advertised context |
-| 16.7 s readiness TTFT | FM-006 | fixed: prefill bucketing + construction-time warmup; warmed TTFT 388.7 ms at prompt 128 |
+| 16.7 s readiness TTFT | FM-006 | fixed: prefill bucketing + construction-time warmup, and the readiness TTFT is now 590.8 ms at the reference's 154 tokens (`logs/run_teacher_forcing.log`), of which 28.4 ms is the request-boundary reset. The warmed prefill-plus-first-token figure at prompt 128 is 334.4 ms (`perf.json`). |
 | `generate()` wall 16.15 s vs 3.2 s of accounted work | FM-007 | fixed: `ttnn.zeros(device=...)` host upload in cache reset |
 | model trace (21.75 ms) *below* the 23.03 ms layer-stack lower bound | `perf.json` | expected, not an error: the decoder-stage per-layer figure is a single-layer traced replay measured through its own harness, so its per-replay dispatch overhead is counted 47 times in the naive sum. The full model amortises it into one 47-layer trace. Both terminal costs (LM head, sampler) are measured separately and are on top of the stack figure. |
 | `SparseMatmulDeviceOperation rows without numeric nnz` warning from `tt-perf-report` | `doc/full_model/tracy/*.txt` | expected: the report cannot know how many experts a sparse matmul activated, so it omits DRAM/FLOP utilisation for those rows. Row timings are unaffected. |
 | `tt-perf-report` "Unclassified operation" warnings (TopK*, Sampling, ManualSeed, PlusOne, UntilizeCodegen) | same | cosmetic: those ops are not in the tool's category table, so they land in "other". Timings are reported. |
 | `Profiler DRAM buffers were full, markers were dropped!` (295 lines in the final tracy run, all before the first signpost) | `logs/tracy_profile_run.log.gz` | controlled: they come from the un-flushed wall-clock loops that run *before* the signposted windows. Each signposted decode window drains the profiler every iteration and captures all 8 steps - the once-per-step LM head appears exactly 8 times (1264 / 1600 rows), and `perf_report_summary.json` records that `anchor_calls_in_window` so a truncated capture cannot be mistaken for a fast one. Before the fix the same run dropped 1100 markers and captured 17 of 32 steps, and the summary divided by the assumed 32 (FM-011 P1). |
-| `ttnn.split: L1 budget exceeded ... DRAM downgrade` + `migrating L1 input (9912320 B)` | every run log | controlled and disclosed: the sampler-ready logits are produced in L1, so `TTSampling`'s first `ttnn.split` migrates them. Removing it by producing DRAM logits is measured 34 us *slower* end to end with identical tokens (`logits_memory_ab.json`), so L1 is kept and the fallback is named in the runtime fallback audit. `decode_logits_in_dram=True` reproduces the other arm. |
+| `ttnn.split: L1 budget exceeded ... DRAM downgrade` + `migrating L1 input (9912320 B)` | every run log | controlled and disclosed: the sampler-ready logits are produced in L1, so `TTSampling`'s first `ttnn.split` migrates them. Removing it by producing DRAM logits is measured *slower* end to end with identical tokens, now over 64 repeats per arm with per-arm spreads (`logits_memory_ab.json`, from the committed `probe/logits_memory_ab_probe.py`; the earlier single-sample 34 us figure is superseded), so L1 is kept and the fallback is named in the runtime fallback audit. `decode_logits_in_dram=True` reproduces the other arm. |
 | `Allocating device buffers is potentially unsafe due to the existence of an active trace` (one line per process) | every run log; `trace_alloc.json` | **was mis-classified as controlled; measured and fixed in FM-016.** The earlier resolution read the single log line as "one unsafe allocation, at capture". Both halves were wrong: `allocator.cpp` suppresses repeats behind a `thread_local static bool`, so the line count carries no information, and `mesh_device.cpp` registers a trace as active at `end_mesh_trace` and keeps allocations unsafe until it is released, so the window is the whole life of the retained traces. Measured with `TT_METAL_TRACE_ALLOC_TRACKING=1`, which found the cache-reset zero buffer (a real hazard, fixed by allocating it before capture) and post-capture program compilation (fixed by `recapture_decode_traces`). All shipped paths now report zero unsafe buffers. |
 | free-running TT and HF greedy diverge after 8-45 tokens | `doc/full_model/qualitative/` | expected for a 30.6B MoE with bf4 routed experts: the teacher-forced top-1 agreement is 85% per step, so a free-running greedy chain separates within tens of tokens. Both sides stay coherent, on-topic and same-language; the degeneracy check is clean. No control shows TT-specific wrongness. |
 | `preds[:16]: [278, 77, 944, 312, 64, 501, 502, 503, ...]` in `logs/watcher_full_model.log` - an 11-step +1 token-id ramp, which reads like stale token feedback | that log | controlled: `tests/dev_full_model.py capacity` builds its prompt as `list(range(500, 500 + seq))`, i.e. raw token ids that happen to be an arithmetic ramp and decode to gibberish. Ids 501-511 decode to exactly `prompt[1:12]`, so the model is copying the prompt (induction), not repeating itself. Counter-controls: the coherent 256-token chat completion, the six coherent suite completions with adjacent duplication 0.000, teacher-forced top-5 1.000 over 100 positions, and `test_split_sampling_trace_feedback`. The synthetic prompt is a debug convenience, not evidence. |
@@ -352,10 +356,13 @@ Every run logged `ttnn.split: L1 budget exceeded (need ~9945088 B, have
 `9912320 = 32 x 154880 x 2` is the sampler-ready logits tensor, produced in L1
 by `lm_head_decode`. A/B measured (`logits_memory_ab.json`, reduced probe):
 DRAM logits 1.813 / 2.937 ms (model / token-out, 0 warnings) vs L1 logits
-1.768 / 2.903 ms, identical tokens. Removing the fallback is **34 us slower**,
-so L1 is kept, `decode_logits_in_dram` exposes the other arm, and the fallback
-is now named in the runtime fallback audit and the anomaly ledger instead of
-being invisible. The prefill last-position logits were also moved onto the same
+1.768 / 2.903 ms, identical tokens: one sample per arm, 34 us apart. FM-019
+replaced that with 64 repeats per arm and per-arm spreads, and the committed
+`logits_memory_ab.json` is that run; read the deltas there against those
+spreads rather than these two numbers. The conclusion is unchanged: removing
+the fallback is slower, so L1 is kept, `decode_logits_in_dram` exposes the
+other arm, and the fallback is named in the runtime fallback audit and the
+anomaly ledger instead of being invisible. The prefill last-position logits were also moved onto the same
 knob so the two paths agree.
 
 **P2: unclassified `Allocating device buffers is potentially unsafe due to the
@@ -605,7 +612,7 @@ check unrelated things. Fixed at the root rather than by editing numbers:
 * every number in the README headline, the performance-accounting block and
   the compile-cost table is taken from that one sweep's artifacts. The two
   artifacts that predate `source_manifest`
-  (`greedy_sampler_benchmark.json`, `logits_memory_ab.json`) and the reused CPU
+  (`greedy_sampler_benchmark.json`; `logits_memory_ab.json` was regenerated in FM-019 and now carries one) and the reused CPU
   HF control (`qualitative/hf_control.json`) are named in the README instead of
   being covered by a blanket claim.
 
@@ -1000,7 +1007,7 @@ reduced model, because the property is the arithmetic and not the depth.
 **P2: FM-016 quoted trace-allocation numbers the artifact does not contain.**
 18 per trace / 36 total / 23 op types came from a probe run that predated the
 whole-tile terminal slice; the committed `trace_alloc.json` is 16 / 32 / 6 and
-its program-cache counter agrees exactly (469 against 453 at capture). FM-016
+its program-cache counter agrees exactly (599 against 583 at capture in the committed artifact). FM-016
 now quotes the committed run and says where the other numbers came from.
 
 **P2: the `source_manifest` exception set was still incomplete and the README
@@ -1071,7 +1078,7 @@ both ends. Every step exited 0, all three watcher runs reported 0 faults.
 | cold-cache penalty at an un-warmed shape | +1336 ms | +1341 ms |
 | generator construction, cold / warm | 264.2 / 180.6 s | 270.2 / 181.8 s |
 | unsafe buffers at replay, shipped paths | 0 | 0, and a single-chunk prompt needs no recapture at all |
-| `Bound == SLOW` rows, prefill / decode / token-out | not counted | 17 of 110 (21.1%) / 112 of 1264 (15.0%) / 112 of 1600 (9.4%) |
+| `Bound == SLOW` rows, prefill / decode / token-out | not counted | 17 of 110 (21.2%) / 112 of 1264 (15.0%) / 111 of 1600 (9.1%) |
 | main / padding / combined / perf / batch / profile / full context | 39 / 11 / 50 / 2 / 5 / 2 / 3 passed | **41 / 13 / 54 / 2 / 9 / 2 / 3 passed** |
 
 The readiness TTFT row is the one that matters: 763.6 ms was round 4's
@@ -1336,6 +1343,187 @@ repeats per arm: L1 is 2.907 ms token-out against DRAM's 2.957, spreads 0.048
 and 0.027, so L1 is ahead by about its own spread. Identical tokens either way,
 which is what the choice rests on.
 
+## FM-020: stage review round 8 (`more-work-needed`) and the fixes
+
+Round 8 verified the round-7 P1 cache-corruption fix, the accuracy bar, the
+qualitative output, all 64 logged source hashes and all 126 `source_manifest`
+prefixes, and returned two P1s and six P2s. Every one was an evidence-integrity
+or documentation defect; none touched the model. The reviewer's summary of the
+pattern is the useful part: "the provenance layer has now been rewritten by
+hand in eight consecutive rounds and been wrong in at least six. The only
+durable fix is a check that fails on *unmatched* numbers."
+
+**The durable fix.** `tests/check_report_numbers.py` was a *presence* check: it
+took values out of the artifacts and required the string to appear somewhere.
+That cannot see a contradiction, which is exactly how "584.0 ms" survived in
+the headline while the correct "583.6 ms" satisfied the check further down, and
+how "628 us" survived next to "633 us". It is now an **absence** check:
+
+* it scans every measurement-shaped literal (a number followed by a unit) in
+  `README.md`, `work_log.md`, `doc/context_contract.json` **and the `tt/*.py`
+  module docstrings**, which is where a retracted figure had survived seven
+  rounds because nothing looked there;
+* each must resolve to a value some committed artifact contains, at the
+  precision the document quotes it. The artifact set is every JSON under
+  `doc/full_model/`, the contract, the readiness runners' `AGGREGATE` lines and
+  the `tt-perf-report` window summaries;
+* anything else must be named in `ALLOWED` with a reason, and
+  `--list-allowed` prints the table. It currently holds 296 entries, almost all
+  figures from earlier sweeps that this journal quotes in comparison columns on
+  purpose, plus derivations and spec constants. An unexplained entry there is
+  the same defect as an unexplained figure in the report, which is why the
+  reason is mandatory.
+
+It checks 510 measurements against 923 artifact values. On the first run it
+found 65 unmatched.
+
+**P1: the capability contract carried a stale commit and three figures no
+artifact contains.** `source_commit` named the round-6 fix commit;
+`full_context_evidence.prefill_s` was 2236.6 against the artifact's 2237.0; the
+notes said "0.1 ms first-use penalty" (-0.3) and "177.6 ms" recapture (177.2).
+The contract is now generated from the artifacts, and the absence check reads
+it, which the presence check never did (it loaded the file and then checked
+nothing in it).
+
+**P1: the LM-head figures were inconsistent across four places and the shipped
+source still carried the retracted ones.** `tt/model.py` still said "871 us /
+628 us / 15310 us ... a 17x regression" in two docstrings, which FM-019's own
+`head_probe.json` refutes, and the README said 628 in one place and 633 in
+another. All four sites are now generated from the artifact. And since the
+probe was being re-run anyway, `in0_block_w` was swept over every legal divisor
+of `kt` = 64 instead of {2, 4, 8}: at bf8, 1 and 2 tie at 865-868 us and it
+degrades monotonically to 894 at 8; 16, 32 and 64 fail outright with a static
+circular buffer / L1 clash (`program.cpp:1875`), which is the op-contract
+blocker for them. The shipped value moves from 4 to **2**, which is the joint
+optimum at bf8 and bf4, so the datatype sweep does not have to revisit it. That
+is 10 us/token, 0.04% of the step; the point is that the choice is now a
+measurement rather than "the middle point".
+
+**P2: the two headline TTFT rows used different clocks.** Row 1 excluded the
+28.3 ms request-boundary reset; row 2 is the harness figure, which includes it.
+Both rows now say which boundary they use, row 1 quotes the inclusive 362.7 ms
+as well, and row 2 carries the harness split (28.4 + 555.3 = 583.6).
+
+**P2: the sweep recorded a failing step and reported success.** `sweep_run.log`
+had `reportnums=1` and the sweep printed `SWEEP_DONE` and exited 0; with
+`set -x` but no `set -e`, no step could fail the sweep. Every step now reports
+through a `step` helper that accumulates failures, the sweep exits non-zero and
+names them, and the watcher fault *counts* are aggregated the same way, so a
+non-zero fault count fails the sweep instead of sitting in a log line. The
+figure check is deliberately outside that aggregation and says so inline: a
+sweep that moved a number *should* fail it, and its measurements are still
+valid evidence.
+
+**P2: two anomaly-ledger resolutions cited retracted numbers.** The
+readiness-TTFT row still resolved with "388.7 ms", and the `ttnn.split`
+L1-to-DRAM row still resolved on the superseded single-sample 34 us A/B that
+FM-019 replaced with 64 repeats per arm. Both rewritten from the current
+artifacts.
+
+**P2: FM-005's "a ROW_MAJOR table is flat" is refuted by the artifact FM-019
+created to support it.** `cache_scaling.json` records the ROW_MAJOR lookup at
+17.4 us at 4096 and 34.2 us at 202752, so it roughly doubles. The design
+conclusion survives comfortably (2 x 34.2 us against 94 x 209.6 us), but the
+stated property was wrong and the bring-up table's numbers are superseded.
+
+**P2: FM-017 still carried the program-cache pair FM-018 said it corrected**
+(469/453 against the artifact's 599/583) and SLOW-row shares that disagreed
+with `perf_report_summary.json`. Fixed, and now inside the absence check.
+
+**Also from the review.** The provenance paragraph is rewritten from the log
+rather than by hand for the third time: the untracked-file lists are *not*
+identical at both ends, because the sweep writes new artifacts, and
+`logs/sweep_run.log` is tracked so it appears in neither list. The 5.9%
+disagreement between `perf_reduced_decode.json` and `logits_memory_ab.json`'s
+L1 arm on the same configuration is classified: the former is measured inside a
+device-profiler-enabled process and the latter is not, and the two un-profiled
+measurements (the A/B probe and `decode_position_scaling.json`) agree with each
+other. `test_prefill_last_row_agrees_with_all_logits` now asserts exact
+equality between the two terminal paths instead of top-5 membership, which the
+tile-aligned walk makes correct. A batch-test docstring said the recapture
+"does not warm" when it warms with every slot inactive, which is the rejected
+design FM-017 recorded.
+
+## FM-021: the LM-head `in0_block_w` micro-optimization, measured and refused
+
+FM-020 swept `in0_block_w` over every legal divisor of `kt` = 64 because round
+8 objected, fairly, that the shipped value of 4 was justified as "the middle
+point" against the probe's own data. The sweep says 1 and 2 come in at
+865 and 868 us and it degrades monotonically to 894 us at 8, with 16/32/64
+failing outright on a static circular buffer / L1 clash. So I moved the
+shipped value to 2 and ran the evidence sweep.
+
+The readiness gates caught what the probe could not:
+
+| | `in0_block_w` 4 (shipped) | `in0_block_w` 2 |
+|---|---|---|
+| LM head, bf8, M = 1 tile | 877.9 us | 868.4 us |
+| prefill top-1 / top-5 / top-100 | **0.880** / 1.000 / 1.000 | 0.830 / 1.000 / 1.000 |
+| teacher-forced top-1 / top-5 / top-100 | **0.850** / **1.000** / 1.000 | 0.790 / **0.990** / 1.000 |
+
+`in0_block_w` sets the K-blocking of the LM-head matmul, so it changes the
+accumulation order and therefore the bf16 rounding of the logits. 10 us/token
+is 0.04% of the token-out step; five points of top-1 and a top-5 that leaves
+1.000 are not worth it, so the shipped value goes back to 4 and the reason is
+now a measurement instead of a preference. The bw=2 readiness runs are kept as
+`logs/run_prefill_check_lm_head_bw2.log` and
+`logs/run_teacher_forcing_lm_head_bw2.log`.
+
+Two things worth naming. First, the bar (top-5 >= 0.98, top-100 = 1.00) would
+have *passed* at bw=2, and the batch-1 suite passed too, so nothing except
+reading the aggregate line would have stopped this from shipping. Second, this
+is the first change in the stage that traded accuracy for speed, and it came
+from a review objection that was correct about the justification and silent
+about the risk. The lesson is recorded rather than the number: an LM-head
+program-config change is an accuracy change, and the readiness gates have to
+be re-read after one, not just the perf artifacts.
+
+## FM-022: the sweep that confirms FM-021, and the stage's closing state
+
+FM-021 reverted `lm_head_in0_block_w` to 4 on the strength of one bw=2 sweep
+that showed the accuracy cost. This sweep is the other half of that
+measurement: the same script, the same gates, against `d91df21262a` with the
+revert in place.
+
+| readiness gate | `in0_block_w` 2 (FM-021) | `in0_block_w` 4 (shipped, this sweep) |
+|---|---|---|
+| prefill top-1 / top-5 / top-100 | 0.830 / 1.000 / 1.000 | **0.880** / 1.000 / 1.000 |
+| teacher-forced top-1 / top-5 / top-100 | 0.790 / 0.990 / 1.000 | **0.850** / **1.000** / 1.000 |
+
+So the regression was entirely the LM-head K-blocking, and reverting it
+restores the numbers this stage has reported since FM-014. The bw=2 evidence is
+kept as `logs/run_prefill_check_lm_head_bw2.log` and
+`logs/run_teacher_forcing_lm_head_bw2.log`; the shipped arm is the ordinary
+`logs/run_*.log`.
+
+**Everything else from this sweep.** TTFT 334.0 ms at prompt 128 (383.2 tok/s),
+readiness TTFT 590.8 ms at prompt 154, traced model-only decode 21.760 ms/token
+(45.96 t/s/u), token-out 23.007 ms/token (43.47 t/s/u), end to end 3.240 s
+(39.51 tok/s). Resident DRAM 23.022 GiB, byte-identical for the seventh sweep
+running. 45 + 13 + 58 + 2 + 10 + 2 + 3 tests passed, degeneracy clean, context
+contract OK at 202752, zero unsafe buffers on every shipped path,
+`single_chunk_prompt_needs_no_recapture` true, three watcher runs with 0
+faults. Full context unchanged: 202733 tokens, 9/9 periodic continuation to
+position 202751, needle top-1 ` jade` from 201727 positions away.
+
+**One step in this sweep was re-run.** `tracealloc_full` exited 143 because a
+stray `kill -TERM` from the previous session's cleanup landed on its child, not
+because of anything the model or the device did. The sweep therefore ends with
+`SWEEP_FAILED: tracealloc_full`, which is the aggregation added in FM-020
+working as intended. The arm was re-run on its own afterwards and passed;
+`logs/trace_alloc_full_model.log` carries a note saying so at the bottom. That
+one log is the only artifact in `doc/full_model/` that is not from the single
+run recorded in `sweep_provenance.log`.
+
+**Closing state.** The stage has run nine independent `$stage-review` rounds
+(FM-011, FM-012, FM-015 through FM-020, and the round-9 review recorded in the
+README's "Known limitations"). Rounds 1 through 7 each found at least one
+correctness defect and each was fixed with a regression test. Round 8 found no
+correctness defect, and the review budget for this stage caps further rounds:
+remaining freshness, provenance and documentation-polish findings are recorded
+as limitations rather than chased with more sweeps, because each sweep is 90
+minutes of hardware and the functional gates have been green since FM-014.
+
 ## FM-011b: checkpoint
 
 Repo: `tt-metal`, branch `ttmodelmanager/glm47-flash-probe`, no push.
@@ -1359,6 +1547,10 @@ Repo: `tt-metal`, branch `ttmodelmanager/glm47-flash-probe`, no push.
 | `2e194d44cf2` | records the SHA above |
 | `6c15f60ad1f` | round-7 source fixes (FM-019): the lazy-capture warm pass, the swallowed sampling kwargs, wider tripwires, three probes with artifacts, and `tests/check_report_numbers.py` |
 | `95c221562ca` | the FM-019 evidence sweep and the report rebuilt from it |
+| `5823e5ddf6c` | records the SHA above |
+| `188541a6a7b` | round-8 source fixes (FM-020): the absence-checking figure check, the LM-head docstrings and `in0_block_w` sweep, the failing sweep, and the tightened terminal-path assertion |
+| `d91df21262a` | FM-021: `in0_block_w` back to 4 after the readiness gates measured what it costs |
+| `FULLMODEL_R9_EVIDENCE_SHA` | the FM-020/021/022 evidence sweep and the report rebuilt from it |
 | (this commit) | records the SHA above |
 
 The source and the evidence are deliberately in separate commits: the sweep ran

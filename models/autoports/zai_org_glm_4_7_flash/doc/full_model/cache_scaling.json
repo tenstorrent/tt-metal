@@ -1,7 +1,7 @@
 {
   "source_manifest": {
     "tt/provenance.py": "3b162e8ac0fe0674",
-    "tt/model.py": "984d9a9d8199f57f",
+    "tt/model.py": "110441277ab0e2a1",
     "tt/generator.py": "ecba72e1e945a51a",
     "tt/optimized_decoder.py": "b2abc9f36278b32f",
     "tt/fused_decoder.py": "0dbbe26e401a1716",
@@ -12,36 +12,36 @@
     {
       "context": 4096,
       "blocks": 64,
-      "paged_update_cache_us": 5.6,
+      "paged_update_cache_us": 5.5,
       "flash_decode_us": 32.3,
-      "flash_decode_64_block_page_table_us": 32.3
+      "flash_decode_64_block_page_table_us": 32.2
     },
     {
       "context": 16384,
       "blocks": 256,
       "paged_update_cache_us": 5.9,
-      "flash_decode_us": 32.3,
-      "flash_decode_64_block_page_table_us": 32.3
+      "flash_decode_us": 32.4,
+      "flash_decode_64_block_page_table_us": 32.4
     },
     {
       "context": 65536,
       "blocks": 1024,
-      "paged_update_cache_us": 6.1,
-      "flash_decode_us": 32.4,
+      "paged_update_cache_us": 5.8,
+      "flash_decode_us": 32.8,
       "flash_decode_64_block_page_table_us": 32.5
     },
     {
       "context": 202752,
       "blocks": 3168,
-      "paged_update_cache_us": 6.3,
-      "flash_decode_us": 32.5,
-      "flash_decode_64_block_page_table_us": 32.1
+      "paged_update_cache_us": 5.9,
+      "flash_decode_us": 32.6,
+      "flash_decode_64_block_page_table_us": 32.4
     }
   ],
   "rope_table_lookup_us": {
-    "tile_ctx4096": 26.4,
-    "row_major_ctx4096": 17.4,
-    "tile_ctx202752": 209.6,
-    "row_major_ctx202752": 34.2
+    "tile_ctx4096": 26.2,
+    "row_major_ctx4096": 17.1,
+    "tile_ctx202752": 209.2,
+    "row_major_ctx202752": 20.0
   }
 }

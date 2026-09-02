@@ -1,7 +1,7 @@
 {
   "source_manifest": {
     "tt/provenance.py": "3b162e8ac0fe0674",
-    "tt/model.py": "984d9a9d8199f57f",
+    "tt/model.py": "110441277ab0e2a1",
     "tt/generator.py": "ecba72e1e945a51a",
     "tt/optimized_decoder.py": "b2abc9f36278b32f",
     "tt/fused_decoder.py": "0dbbe26e401a1716",
@@ -16,9 +16,9 @@
   "context_allocated": 8192,
   "decode_position": 128,
   "iterations": 8,
-  "traced_model_only_ms": 1.89,
-  "traced_token_out_ms": 2.979,
-  "sampling_ms": 1.088,
+  "traced_model_only_ms": 1.888,
+  "traced_token_out_ms": 2.982,
+  "sampling_ms": 1.093,
   "wall_clock_note": "measured before the signposted windows, with no profiler flushes in the loop",
   "signposts": [
     "PERF_FM_DECODE_MODEL",
