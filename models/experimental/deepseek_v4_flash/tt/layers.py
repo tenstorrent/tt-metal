@@ -808,7 +808,10 @@ class LinearDecode(DeepSeekV4Module):
             assert not self.keep_weights_in_l1, "the resident L1 weight was deallocated by someone else"
             self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         m = x.shape[-2]
-        m_padded = ((m + 31) // 32) * 32
+        # Single-user decode uses a 1x32 tile. The width-sharded output must
+        # use the same physical height as the matmul output, not a full-tile
+        # height of 32.
+        m_padded = ((m + self.tile_height - 1) // self.tile_height) * self.tile_height
         if self.partial_width_sharded:
             # The partial layout reduces the K-partials onto n_blocks output cores, so shard the
             # output WIDTH_SHARDED across n_blocks cores (shard
