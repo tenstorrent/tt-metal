@@ -14,7 +14,7 @@ from ....layers.module import Module, ModuleList
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils.tracing import traced_function
+from ....utils.tracing import StateTensor, traced_function
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 
@@ -247,6 +247,14 @@ class MiniMaxH3Transformer3DModel(Module):
         self.ccl_manager = ccl_manager
         self._pad_key: tuple[int, ttnn.DataType, ttnn.Layout] | None = None
         self._pad_buffer: ttnn.Tensor | None = None
+        # `norm_out` reads `temb` and `timestep_idx` *after* `run_blocks` replays its trace, so under
+        # tracing they must occupy buffers allocated before the capture and refreshed in place: a
+        # fresh per-step allocation lands where the capture baked an intermediate, and
+        # `execute_trace` overwrites it before `norm_out` reads it (see `Tracer`'s "tensors allocated
+        # after trace capture may be overwritten" contract). The untraced first pass binds each
+        # buffer; traced passes `ttnn.copy` into it.
+        self._temb_state = StateTensor()
+        self._timestep_idx_state = StateTensor()
         self.parallel_config = parallel_config
         self.tp_mesh_axis = parallel_config.tensor_parallel.mesh_axis
         self.tp_factor = parallel_config.tensor_parallel.factor
@@ -356,6 +364,8 @@ class MiniMaxH3Transformer3DModel(Module):
         timestep_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
+        logical_n: ttnn.Tensor,
+        traced: bool = False,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         video_1BVC: [1, 1, V, in_channels * prod(patch_size)], replicated on SP and TP. The *target*
@@ -371,9 +381,10 @@ class MiniMaxH3Transformer3DModel(Module):
             for the padded global sequence `[text | condition | audio | video | pad]` and sharded on SP
         timestep_indices: [1, 1, 1, S_padded_local] integers, same order
         rope_cos/rope_sin: [1, 1, S_padded_local, rotary_dim] float32, same order, replicated on TP
+        logical_n: the true packed length `L + K + A + V` as a [1, 1, 1, 1] uint32 device tensor.
 
         V, A, L and K are arbitrary; only their sum is padded, to a multiple of `sp_factor * TILE`. The
-        true packed length `L + K + A + V` is derived here, so the caller passes no lengths.
+        packed length is derived here for slicing; `logical_n` carries the same value into the loop.
 
         Returns `(video_velocity, audio_velocity)`, each replicated, in that modality's row order.
 
@@ -448,8 +459,10 @@ class MiniMaxH3Transformer3DModel(Module):
             hidden = ttnn.to_layout(hidden, ttnn.TILE_LAYOUT)
         hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
-        # 3. One timestep embedding per slot, shared by every AdaLN projection.
-        temb = self.time_embedder(self.time_proj(timestep))
+        # 3. One timestep embedding per slot, shared by every AdaLN projection. Stabilized because it
+        # is read again by `norm_out` after the trace replay -- see `_temb_state` in `__init__`.
+        self._temb_state.update(self.time_embedder(self.time_proj(timestep)), traced=traced)
+        temb = self._temb_state.value
 
         # 4. Integer index tensors for the two gathers. ttnn.embedding wants [batch, seq] uint32.
         def as_indices(t: ttnn.Tensor) -> ttnn.Tensor:
@@ -457,18 +470,19 @@ class MiniMaxH3Transformer3DModel(Module):
             return t if t.dtype == ttnn.uint32 else ttnn.typecast(t, ttnn.uint32)
 
         adaln_idx = as_indices(adaln_indices)
-        timestep_idx = as_indices(timestep_indices)
+        # Only `norm_out`, after the replay, reads `timestep_idx` -- same hazard as `temb`.
+        self._timestep_idx_state.update(as_indices(timestep_indices), traced=traced)
+        timestep_idx = self._timestep_idx_state.value
 
-        # 5. The block stack. `logical_n` is the *true* length, so ring attention ignores the pad tail.
-        for block in self.transformer_blocks:
-            hidden = block(
-                hidden,
-                N=seq_len,
-                temb=temb,
-                adaln_indices=adaln_idx,
-                rope_cos=rope_cos,
-                rope_sin=rope_sin,
-            )
+        hidden = self.run_blocks(
+            hidden,
+            logical_n,
+            temb,
+            adaln_idx,
+            rope_cos,
+            rope_sin,
+            traced=traced,
+        )
 
         # 6. Output norm, then the two heads. Both heads are narrow (96 and 32), so projecting while
         # still SP-fractured and gathering afterwards moves far less data than gathering the 5376-wide
@@ -520,44 +534,28 @@ class MiniMaxH3Transformer3DModel(Module):
             self._pad_key = key
         return self._pad_buffer
 
-    # `prep_run=False`, as in Wan: `_denoise` guarantees a complete untraced generation first. A single
-    # prep forward is not enough -- it fills the program cache, but `CCLManager` still allocates its
-    # persistent buffers lazily, which a capture rejects as a write.
-    #
-    # `clone_prep_inputs=False` because `forward` does not write to its inputs.
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
-    def traced_step(
+    def run_blocks(
         self,
-        *,
-        video_1BVC: ttnn.Tensor,
-        audio_1BAC: ttnn.Tensor,
-        prompt_1BLP: ttnn.Tensor,
-        condition_blocks: list[tuple[ttnn.Tensor, str]] | None,
-        timestep: ttnn.Tensor,
+        hidden: ttnn.Tensor,
+        logical_n: ttnn.Tensor,
+        temb: ttnn.Tensor,
         adaln_indices: ttnn.Tensor,
-        timestep_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """One denoising forward, shaped so `Tracer` can capture it.
+    ) -> ttnn.Tensor:
+        for block in self.transformer_blocks:
+            hidden = block(
+                hidden,
+                logical_n,
+                temb=temb,
+                adaln_indices=adaln_indices,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+            )
+        return hidden
 
-        `Tracer` accepts only tensors and plain scalars, nested in tuples/lists/dicts, and validates
-        that every input keeps its shape across calls. `timestep` is `[1, 1, num_slots, 1]`: the
-        caller assigns each row a *fixed* slot by role rather than deduplicating levels per step, so
-        `num_slots` is constant for the whole request and the tensor is a valid traced input -- only
-        its values change, which the tracer copies in place.
-
-        Everything else is fixed-shape for a given request: the row counts are set by the packed
-        layout and the index tensors are built against `padded_len`.
-        """
-        return self.forward(
-            video_1BVC=video_1BVC,
-            audio_1BAC=audio_1BAC,
-            prompt_1BLP=prompt_1BLP,
-            condition_blocks=condition_blocks,
-            timestep=timestep,
-            adaln_indices=adaln_indices,
-            timestep_indices=timestep_indices,
-            rope_cos=rope_cos,
-            rope_sin=rope_sin,
-        )
+    def release_traces(self) -> None:
+        tracer = type(self).run_blocks._tracers.get(self)
+        if tracer is not None:
+            tracer.release_trace()

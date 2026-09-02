@@ -55,6 +55,18 @@ from .common import (
     upload_rope,
 )
 
+
+def logical_length_tensor(mesh_device: ttnn.MeshDevice, value: int) -> ttnn.Tensor:
+    """The `logical_n` device tensor the forwards take: [1, 1, 1, 1] uint32 ROW_MAJOR, replicated."""
+    return from_torch(
+        torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        mesh_axes=[..., None, None],
+    )
+
+
 NUM_ATTENTION_HEADS = REAL_BLOCK_CONFIG["num_attention_heads"]
 ATTENTION_HEAD_DIM = REAL_BLOCK_CONFIG["attention_head_dim"]
 HIDDEN_SIZE = REAL_BLOCK_CONFIG["hidden_size"]
@@ -263,6 +275,7 @@ def _prepare_tt_inputs(
         timestep_indices=upload_row_metadata(ts_idx),
         rope_cos=tt_rope_cos,
         rope_sin=tt_rope_sin,
+        logical_n=logical_length_tensor(mesh_device, seq_len),
     )
 
     return SimpleNamespace(
@@ -708,7 +721,7 @@ def test_minimax_h3_attention(
     logger.info("Running TT model")
     tt_out = tt_model(
         tt_spatial,
-        N=seq_len,
+        logical_n=logical_length_tensor(mesh_device, seq_len),
         rope_cos=tt_rope_cos,
         rope_sin=tt_rope_sin,
     )
@@ -811,7 +824,7 @@ def _block_setup(
     def run(block, **extra) -> torch.Tensor:
         out = block(
             tt_spatial,
-            N=seq_len,
+            logical_length_tensor(mesh_device, seq_len),
             temb=extra.pop("temb", tt_temb),
             adaln_indices=tt_adaln_indices,
             rope_cos=tt_rope_cos,
@@ -1029,7 +1042,7 @@ def test_minimax_h3_transformer_block_perf(
     def run_block() -> ttnn.Tensor:
         out = tt_block(
             tt_spatial,
-            N=sim_seq_len,  # simulated unpadded length: ring attention masks the pad tail via logical_n
+            logical_length_tensor(mesh_device, sim_seq_len),  # simulated unpadded length
             temb=tt_temb,
             adaln_indices=tt_adaln,
             rope_cos=tt_rope_cos,
