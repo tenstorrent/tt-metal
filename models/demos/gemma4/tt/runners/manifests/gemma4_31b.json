@@ -5,7 +5,7 @@
     "PREFILL_SP": "8",
     "PREFILL_TP": "4",
     "PREFILL_CHUNK_SIZE": "8192",
-    "PREFILL_MAX_SEQ_LEN": "262144",
+    "PREFILL_MAX_SEQ_LEN": "65536",
     "PREFILL_NUM_USERS": "8",
     "PREFILL_USE_TRACE": "1",
     "PREFILL_H2D_SERVICE_ID": "gemma4_prefill"
