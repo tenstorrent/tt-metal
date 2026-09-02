@@ -203,9 +203,10 @@ class TtMHCWrap(LightweightModule):
         """
         T = residual.shape[1]
         post_col = _row_to_batch(post, [1, T, self.n, 1])
-        # Deliberately composite: both matmuls already run at ~55% of peak DRAM bandwidth and
-        # account for ~81% of the time, so this is bandwidth-bound. A fused kernel could only
-        # absorb the add -- a ~1.2x ceiling -- while reimplementing ttnn's tuned matmul.
+        # Both matmuls are shape-bound, not bandwidth-bound: n=4 pads to a full tile row and the
+        # contraction axis is 1 here and 4 below, so they hold 0.005% FPU and 213 GB/s while the
+        # add over the same tensors reaches 445 GB/s. A fused kernel would inherit that padding --
+        # the win is packing the n axis, which is a layout change rather than a kernel.
         term1 = ttnn.matmul(post_col, x, compute_kernel_config=self.ckc)  # outer product
         term2 = ttnn.matmul(ttnn.transpose(comb, -2, -1), residual, compute_kernel_config=self.ckc)
         return ttnn.add(term1, term2)
