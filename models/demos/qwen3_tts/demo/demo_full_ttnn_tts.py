@@ -194,6 +194,27 @@ def run_full_ttnn_tts(
             ref_codes = ref_codes_original
             timings["encode_ref"] = time.time() - encode_start
 
+            # Capture the ECAPA traces once, before the first speaker-embedding call
+            # and before the heavier CP/Talker captures — the same ordering
+            # init_server_context relies on (traces captured later can land on
+            # trace_region positions overlapping executed ones). Off by default:
+            # a capture costs ~1 s and a one-shot run cannot amortise it.
+            if os.environ.get("QWEN3_TTS_SE_TRACE", "0") != "0":
+                se = model.speaker_encoder
+                cap_start = time.time()
+                se.capture_se_block_traces()
+                se.capture_fc_trace()
+                se_mel = se.compute_mel_spectrogram(audio_data)
+                se.capture_forward_trace(int(se_mel.shape[-1]))
+                se.activate_traced_extract()
+                timings["se_trace_capture"] = time.time() - cap_start
+                print(
+                    f"  ECAPA traces captured in {timings['se_trace_capture']*1000:.1f} ms "
+                    f"(SE blocks {len(getattr(se, '_se_traces', {}))}, "
+                    f"fc {getattr(se, '_fc_trace', None) is not None}, "
+                    f"forward lengths {sorted(se._fwd_traces)})"
+                )
+
             spk_start = time.time()
             speaker_embedding = model.extract_speaker_embedding(audio_data)
             timings["speaker_embed"] = time.time() - spk_start
@@ -299,6 +320,11 @@ def run_full_ttnn_tts(
         print(f"{'Encode ref audio':<30} {timings['encode_ref']*1000:>10.1f}   Reference (Speech Tok Enc)")
         print(f"{'  Warmup (compile)':<30} {timings.get('warmup', 0)*1000:>10.1f}   TTNN [excluded from inference]")
         print(f"{'  Trace capture':<30} {timings.get('trace_capture', 0)*1000:>10.1f}   TTNN [excluded from inference]")
+        if "se_trace_capture" in timings:
+            print(
+                f"{'  ECAPA trace capture':<30} {timings['se_trace_capture']*1000:>10.1f}"
+                "   TTNN [excluded from inference]"
+            )
         print(f"{'Speaker embedding':<30} {timings['speaker_embed']*1000:>10.1f}   TTNN")
         print(f"{'ICL embedding':<30} {timings['icl_embed']*1000:>10.1f}   TTNN")
         print(f"{'Generation (' + str(num_frames) + ' frames)':<30} {timings['generation']*1000:>10.1f}   TTNN")

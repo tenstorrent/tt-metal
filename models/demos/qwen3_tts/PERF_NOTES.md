@@ -106,6 +106,46 @@ Constraints worth knowing:
 
 ---
 
+### 2.3 ECAPA SpeakerEncoder host fusion — NOT gated
+
+`models/demos/qwen3_tts/tt/speaker_encoder.py`, env kill-switch `QWEN3_TTS_SE_HOST_FUSE=0`.
+
+The Res2Net branch convs are k=3 **dilated with reflect pad**, which TTNN cannot express, so
+they run in torch on the host. The device path put the cheap glue *between* them, so each of
+the 7 branches paid a full round-trip:
+
+```
+slice(dev) -> D2H -> conv(host) -> H2D -> relu(dev) -> add(dev) -> D2H -> conv(host) -> ...
+```
+
+The block profile is unambiguous about what that costs: **30 device ops, 121 us of device
+time, 24,565 us of op-to-op gap.** The 2 us ReLU carried a 3,365 us gap in front of it — that
+gap *is* the D2H/conv/H2D. Device work was 0.5 % of the block.
+
+Three fusions, all of the same shape — move the glue to the side of the fence the conv is
+already on:
+
+| | before | after |
+|---|---|---|
+| Res2Net glue / block | 22 ops (8 slice, 7 relu, 6 add, 1 concat) | 0 |
+| Res2Net round-trips / block | 7 | 1 |
+| entry TDNN (k=5) ReLU | 1 device Unary | folded into the host conv |
+| ASP relu+tanh | 2 ops + 1 round-trip | folded |
+
+The SE 1x1 convs, both TDNN matmuls, the softmax and the pooling statistics all stay on
+device — that is real device work, not glue.
+
+**Not gated by device.** This removes host<->device ping-pong, which costs the same on N150
+and N300. It is gated by *shape*: the host cascade is taken only when every branch conv is
+non-pointwise, so a k=1 variant would keep the device path.
+
+Numerics: the ReLU fold is **bit-exact** (bf16 round-to-nearest preserves sign and zero, so
+`relu(bf16(y)) == bf16(relu(y))` — asserted over 65k values plus +/-0 and subnormals). The
+cascade is not bit-exact but is strictly *more* accurate: it removes a bf16 rounding step per
+branch, so the fp32 path now runs end to end.
+
+---
+
 ## 3. Measured results
 
 ### 3.1 Accuracy — no change
@@ -168,7 +208,169 @@ N300 (medians of 3 captures):
 | CP prefill seq=2 | 517 us | **424 us** | **-18 %** |
 | Talker decode | 659 us | 654 us | within noise — see below |
 
-### 3.4 End-to-end
+### 3.4 ECAPA SpeakerEncoder
+
+Runs **once per request** off the reference audio, so this is time-to-first-audio, not RTF.
+
+`SpeakerEncoder.forward`, warm, N300, mel T=384 — interleaved A/B over 24 samples each so
+drift cannot fake a winner:
+
+| config | median | min | max | vs off |
+|---|---|---|---|---|
+| `off` — original device glue | 65.6 ms | 58.1 | 91.1 | |
+| `fuse` — host-fused glue | 45.4 ms | 42.9 | 60.0 | **−20.2 ms** |
+| `+asp` — ASP convs on device | **27.7 ms** | 26.3 | 32.4 | **−37.8 ms, −58 %** |
+
+Op counts and host round-trips, from a `ttnn` call spy plus counters on the D2H/H2D helpers
+(not a config assertion — the spy proves the calls actually stop being issued):
+
+| config | slice | relu | tanh | add | concat | multiply | glue ops | D2H/H2D |
+|---|---|---|---|---|---|---|---|---|
+| off | 24 | 23 | 1 | 21 | 6 | 7 | 82 | 24 / 24 |
+| fuse | 0 | 0 | 0 | 3 | 3 | 7 | 13 | 5 / 5 |
+| +asp | 0 | 0 | 1 | 3 | 3 | 7 | 14 | **4 / 4** |
+
+The survivors are the 3 residual adds, the MFA + 2 ASP concats, the 7 SE scale multiplies and
+ASP's tanh — all real device work. Round-trips start at one per host conv (entry TDNN + 3×7
+Res2Net branches + 2 ASP = 24); fusion collapses each block's 7 into 1; device ASP drops its own.
+
+> **These are warm numbers, and the demo does not see them.** The demo calls
+> `extract_speaker_embedding` exactly once per process, so it is always the *first* call and
+> pays device program-cache population: 866–1019 ms measured across runs, statistically
+> unchanged by any of this. The change is worth having for a server handling more than one
+> request; the fix for the one-shot case is separate — warm the encoder at startup next to
+> `capture_se_block_traces`, moving that ~900 ms off the first request. The very first run
+> after this change also pays a one-time on-disk JIT cost for the two new ASP matmul shapes
+> (2958 ms, then 866 ms).
+
+Block windows under Tracy:
+
+| block | before | after |
+|---|---|---|
+| SERes2Net block_idx=1 | 30 ops, 121 us device, 24,565 us gap | **9 ops, 82 us device, 10,484 us gap** |
+| entry TDNN 128->512 | 1 op (6 us Unary) | **0 ops** — empty report |
+
+Accuracy, full encoder vs the fp32 reference `speaker_encoder_forward`:
+
+| | PCC vs reference |
+|---|---|
+| device glue | 0.999570 |
+| host-fused | **0.999571** |
+| device ASP (`+asp`) | 0.999570 |
+
+Fusion moves *toward* the reference, and moving ASP onto the device costs nothing back — the
+bf16 matmul lands on the same sixth decimal as the fp32 host conv it replaced. A/B
+between the two paths is 0.999930 — so the speaker embedding does shift at the 1e-4 level,
+which reseeds AR sampling and changes the generated audio length. Both demo runs
+(`QWEN3_TTS_SE_HOST_FUSE=0` and `=1`) complete and produce healthy audio (no NaN, rms 0.15 /
+0.11, peak 0.93 / 0.61); byte-identical wavs are **not** an available gate for this change.
+
+**Everything convertible IS on device, and traced it is a 5x win — but only traced.**
+`QWEN3_TTS_SE_DEVICE_CONV=1` expresses the k>1 reflect-pad convs as im2col + one matmul, so
+nothing leaves the device: **0 host round-trips**, and the whole forward captures as a single
+Metal trace. The reflect shift is exact — the row map comes from `F.pad(arange, "reflect")`
+itself — and is materialised two ways (`QWEN3_TTS_SE_CONV_SHIFT`):
+
+* `slice` (default): decompose the tap's row order into maximal ascending runs, one
+  `ttnn.slice` each, then concat. ~3.3 us/slice. More ops, far less device time.
+* `gather`: one `ttnn.gather` per tap. Fewer ops, but ~500 us each.
+
+Measured, mel T=384, PCC **0.999561 in every cell** (vs 0.999570 for the host path):
+
+| | 1 chip eager | 1 chip **traced** | 2 chip eager | 2 chip **traced** |
+|---|---|---|---|---|
+| `+asp` (host convs) | 23.0 ms | n/a — host in the loop | 28.2 ms | n/a |
+| `+conv` / gather | 24.6 | 24.5 | 93.7 | 24.6 |
+| `+conv` / slice | 43.5 | **4.89** | 208.1 | **5.15** |
+
+Three things to take from this:
+
+1. **Traced + slice is the answer: 23.0 -> 4.89 ms on one chip, 28.2 -> 5.15 ms on two**
+   (-79 % / -82 %). Traced replay is essentially SKU-independent because it is pure device
+   time with no per-op host dispatch.
+2. **Eager, slice is a disaster** (208 ms on two chips). It trades 8 transfers for ~310 small
+   ops, and eager dispatch cost scales with op count and with device count. So
+   `QWEN3_TTS_SE_DEVICE_CONV` must never be enabled without capturing the trace — which is
+   why it defaults to **0**.
+3. **`gather` is the wrong primitive.** Traced it stalls at 24.5 ms: from Tracy,
+   `GatherDeviceOperation` is 481 us/op (61.8 % of device time) and lowers to a
+   transpose-based composite (a further 34.5 %), while the matmuls that do the actual conv are
+   **1.6 %**. Same 481 us/op on one chip and on two, so this is the op, not the mesh.
+
+**Shipped as a trace cache keyed by mel length (option A).** `forward` replays a captured
+trace when one exists for this mel length and otherwise runs the host path, so nothing has to
+be bucketed and no accuracy is traded. `capture_forward_trace(L)` does the capture;
+`QWEN3_TTS_SE_AUTO_TRACE=1` captures lazily on first sight of a length.
+
+| | host path | **traced replay** | capture cost (warm) |
+|---|---|---|---|
+| 1 chip | 23.5 ms | **5.44 ms** | 313 ms |
+| 2 chips | 30.2 ms | **6.75 ms** | 384 ms |
+
+A length with no trace falls back cleanly (L=377 measured at 26.2 / 30.3 ms, PCC intact), and
+capturing it afterwards gives 6.97 / 7.73 ms. Non-tile-aligned lengths capture fine.
+PCC vs the fp32 reference is 0.999561 traced against 0.999570 on the host path.
+
+Why a cache and not buckets: mel frames are about `audio_samples / 256`, so L moves with every
+~10.7 ms of reference audio, and **there is no masking anywhere in this encoder** (the
+reference builds an all-ones mask; ASP's mean/std/softmax pool the whole sequence). Padding a
+mel to a bucket would fold pad frames straight into the embedding, and the per-conv reflect pad
+would reflect against the pad region instead of the real signal end. In a service the reference
+audio per voice is a fixed asset, so the set of distinct L is small — capture one per voice.
+
+Two constraints worth keeping:
+
+* **The fallback must be the host path, never eager device-conv** (43 ms on one chip, 208 ms on
+  two). `capture_forward_trace` forces the device-conv flags on for the capture and restores
+  them, so the eager path is never left enabled.
+* **A cold capture is expensive.** In the demo — one call per process — the speaker-embedding
+  stage goes 994 ms -> 11,987 ms with `QWEN3_TTS_SE_AUTO_TRACE=1`, because capture JIT-compiles
+  ~310 new op shapes. Amortises over a server's requests; a straight loss for one-shot use.
+  Leave auto-trace off for the demo.
+
+**End to end in the demo** (`QWEN3_TTS_SE_TRACE=1`, which captures SE-block + FC + forward
+traces once before the first speaker-embedding call, in the early phase `init_server_context`
+requires):
+
+| | speaker-embedding stage | capture (reported separately) |
+|---|---|---|
+| untraced | 824 - 832 ms | - |
+| traced | **14.3 / 13.9 / 14.0 ms** | 6016 ms cold, then 1275 / 1755 ms |
+
+**59x on that stage**, and the 14 ms covers the host mel, the H2D, the ~6.8 ms replay and the
+D2H. Three consecutive runs give byte-identical audio (2.32 s, 29 code frames, rms 0.1104,
+peak 0.7968, crest 7.22, no NaN, no clipping), so the traced path is deterministic. It differs
+in amplitude from the untraced path only because the embedding shifts at the 1e-4 level and
+reseeds sampling.
+
+For a one-shot demo the capture still outweighs the 816 ms saved, which is why
+`QWEN3_TTS_SE_TRACE` and `QWEN3_TTS_SE_AUTO_TRACE` both default to off — the capture belongs at
+server startup.
+
+> **Note this run was also the first time the pre-existing SE-block and FC traces were ever
+> exercised.** `init_server_context` is the only caller of `capture_se_block_traces` /
+> `capture_fc_trace`, nothing in the repo calls `init_server_context`, and
+> `activate_traced_extract()` had no callers at all, so `_se_traces_active` was never True and
+> every `use_traces` guard in the encoder was dead. All three traces (3 SE blocks, fc, forward)
+> capture and replay correctly.
+
+**Reflect vs replicate padding — probed, not free.** TTNN conv offers only `Zeros` and
+`Replicate`, so the tempting shortcut to getting the k>1 convs on device is to accept
+`Replicate`. Measured in fp32 with real 1.7B weights and the demo reference audio, patching only
+the pad mode in the reference implementation (22 convs have k>1):
+
+| pad mode | PCC vs reflect | cosine | rel RMS diff |
+|---|---|---|---|
+| replicate | 0.999844 | 0.999844 | **1.80 %** |
+| zeros | 0.998929 | 0.998928 | 4.83 % |
+
+PCC flatters it. 1.8 % relative RMS on the speaker embedding is ~250× the numerical noise of
+every other change here, and this codebase already has a case where the embedding drifted at
+PCC 0.96 / 30 % RMS and produced audibly wrong output. Do not treat replicate as free — it needs
+a listening test. The exact route is `ttnn.gather` with a constant index tensor, which builds a
+reflect pad in one op.
+
+### 3.5 End-to-end
 
 Traced AR decode frame, single chip: **75,528 -> 70,784 us (-6.3 %)** from the RoPE change
 alone (the CP N300 sharding does not apply on one chip). CP decodes -8.3 %, Talker decode
@@ -215,6 +417,23 @@ tt-perf-report --start-signpost start --end-signpost stop "$CSV"
 Use the **full** test name — `-k talker_layer_prefill` matches all three buckets and puts
 three windows in one capture — and one `-k` per Tracy run, since the CSV is picked by
 newest timestamp.
+
+---
+
+**Use `python_env/bin/python3`, not the bare `python3`.** On this host the bare interpreter
+resolves `ttnn` to a stale April build in a *different* checkout (`/home/user/ign_fs/tt-metal`)
+whose `physical_system_discovery.cpp` asserts `Bus ID 0 not found` on an N300 — the remote
+chip has no PCI bus. It looks exactly like wedged hardware, but the board is fine; check
+`python3 -c "import ttnn, os; print(os.path.dirname(ttnn.__file__))"` before blaming the card.
+
+To take a single N300 while someone else is using the machine:
+
+```bash
+export TT_VISIBLE_DEVICES=0 \
+       TT_METAL_CACHE=$HOME/.cache/tt_metal_n300_0 \
+       TT_MESH_GRAPH_DESC_PATH=$PWD/tt_metal/fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto \
+       MESH_DEVICE=N300
+```
 
 ---
 
@@ -310,8 +529,10 @@ Prefill runs once per utterance, so this matters for time-to-first-audio, not st
 | `tt/attention.py` | Talker uses `apply_rope_qk`; builds `_decode_trans_mat` at init |
 | `tt/code_predictor.py` | N300 fast path (`_n300_cp_opt`) + `apply_rope_qk` |
 | `tt/mesh_utils.py` | `is_n300`, `tp_all_reduce_2chip` |
+| `tt/speaker_encoder.py` | ECAPA host fusion (`_se_host_fuse`, `_res2net_cascade_torch`, `_conv1d_same_padding_torch_ncl`) |
 | `tests/test_qwen3_tts_rope_decode.py` | RoPE bit-exactness + routing guard |
 | `tests/test_qwen3_tts_cp_n300_opt.py` | CP fast path A/B + Metal-trace replay guard |
+| `tests/test_qwen3_tts_speaker_encoder_host_fuse.py` | ECAPA op-count spy + cascade equality vs reference |
 | `qwen3_tts_block_report.sh` (repo root) | regenerates the block report |
 
 ### Validation run before merging
@@ -323,6 +544,7 @@ export TT_METAL_HOME=$(pwd) PYTHONPATH="$(pwd)" ARCH_NAME=wormhole_b0
 pytest -s models/demos/qwen3_tts/tests/test_qwen3_tts_pcc.py            # accuracy, real weights
 pytest -s models/demos/qwen3_tts/tests/test_qwen3_tts_rope_decode.py    # RoPE bit-exact + routing
 pytest -s models/demos/qwen3_tts/tests/test_qwen3_tts_cp_n300_opt.py    # CP A/B + trace (opens its own 1x2 mesh)
+pytest -s models/demos/qwen3_tts/tests/test_qwen3_tts_speaker_encoder_host_fuse.py  # ECAPA ops + PCC
 pytest    models/demos/qwen3_tts/tests/test_qwen3_tts_trace_perf.py     # full model under Metal trace
 MESH_DEVICE=N150 pytest models/demos/qwen3_tts/tests/test_qwen3_tts_profile_single_layer.py
 MESH_DEVICE=N300 pytest models/demos/qwen3_tts/tests/test_qwen3_tts_profile_single_layer.py
