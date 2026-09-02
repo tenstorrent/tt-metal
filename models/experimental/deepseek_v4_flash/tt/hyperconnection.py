@@ -23,6 +23,7 @@ from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _m
 # K = H*D = 16384 it is a [256, 32] slab on 64 B cores, the receiver count every other
 # decode weight uses.
 _HC_FN_K_BLOCKS = DECODE_LAYOUTS[HC_FN_GCB]["k_blocks"]
+_HC_COLLAPSE_CORES = 8
 
 
 class DeepSeekV4HyperConnection(DeepSeekV4Module):
@@ -195,11 +196,35 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
             tile=FULL_TILE,
             memory_config=with_tile_height(fused_w.memory_config(), t, tile_height=ttnn.TILE_SIZE),
         )
-
-        fused_w = ttnn.reshape(
-            fused_w, [1, 1, t, (2 + hc) * hc], fused_w.padded_shape, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        fused_w = ttnn.to_memory_config(fused_w, ttnn.DRAM_MEMORY_CONFIG)
+        if t == 1:
+            # The single-user fused device program assigns cores 0..7 to
+            # width-sharded collapse, core 8 to post, and core 9 to comb.
+            hidden_streams = ttnn.to_memory_config(
+                hidden_streams,
+                width_sharded_l1_config(
+                    hc,
+                    d,
+                    self.device,
+                    num_cores=_HC_COLLAPSE_CORES,
+                    tile_height=ttnn.TILE_SIZE,
+                ),
+            )
+            fused_width_padded = ((2 * hc + hc * hc + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            fused_w = ttnn.to_memory_config(
+                fused_w,
+                width_sharded_l1_config(
+                    1,
+                    fused_width_padded,
+                    self.device,
+                    num_cores=1,
+                    tile_height=ttnn.TILE_SIZE,
+                ),
+            )
+        else:
+            fused_w = ttnn.reshape(
+                fused_w, [1, 1, t, (2 + hc) * hc], fused_w.padded_shape, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            fused_w = ttnn.to_memory_config(fused_w, ttnn.DRAM_MEMORY_CONFIG)
         _profile(self.device)
 
         # The pre_w / post_w / comb_w slices are split out of `fused_w` inside the op
