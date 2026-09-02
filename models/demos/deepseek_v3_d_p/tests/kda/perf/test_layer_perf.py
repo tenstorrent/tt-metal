@@ -55,8 +55,8 @@ _PERF_REFERENCE_MS = {
     "SP2xTP4": 9.539,
     "SP4xTP2": 9.991,
 }
-_GALAXY_PERF_REFERENCE_MS: float | None = None
-_GALAXY_CALIBRATION_ENV = "KDA_GALAXY_PERF_CALIBRATE"
+# Temporary impossible reference: the first hosted Galaxy run must emit samples and fail.
+_GALAXY_PERF_REFERENCE_MS = 0.0
 
 
 def _tensor_sha256(tensor: torch.Tensor) -> str:
@@ -198,6 +198,37 @@ def _device_program_label(kernel_sources: tuple[str, ...]) -> str:
         return "+".join(sorted(names))
     basenames = {Path(source).stem for source in kernel_sources}
     return "+".join(sorted(basenames)) if basenames else "unknown"
+
+
+def test_device_program_label_preserves_material_operation_identity() -> None:
+    assert (
+        _device_program_label(("src/operations/experimental/kda/recurrent_chunk_scan/kernel.cpp",))
+        == "experimental.kda.recurrent_chunk_scan"
+    )
+    assert _device_program_label(("src/operations/ccl/all_gather_async/kernel.cpp",)) == "ccl.all_gather_async"
+    assert _device_program_label(("src/operations/matmul/kernel.cpp",)) == "matmul"
+    assert _device_program_label(("src/operations/experimental/matmul/kernel.cpp",)) == "experimental.matmul"
+    assert (
+        _device_program_label(("src/operations/experimental/ccl/reduce_scatter/kernel.cpp",))
+        == "experimental.ccl.reduce_scatter"
+    )
+    assert _device_program_label(("src/reader.cpp", "src/writer.cpp")) == "reader+writer"
+    assert _device_program_label(()) == "unknown"
+
+
+def _assert_galaxy_performance(median_wall_ms: float) -> None:
+    lower = _GALAXY_PERF_REFERENCE_MS * (1.0 - _PERF_MARGIN)
+    upper = _GALAXY_PERF_REFERENCE_MS * (1.0 + _PERF_MARGIN)
+    assert lower <= median_wall_ms <= upper, (
+        f"SP8xTP4 median trace wall {median_wall_ms:.3f} ms is outside Galaxy range "
+        f"[{lower:.3f}, {upper:.3f}] ms "
+        f"(reference {_GALAXY_PERF_REFERENCE_MS:.3f} ms ± {_PERF_MARGIN:.0%})"
+    )
+
+
+def test_temporary_galaxy_reference_rejects_positive_latency(expect_error) -> None:
+    with expect_error(AssertionError, "outside Galaxy range"):
+        _assert_galaxy_performance(1.0)
 
 
 def _log_device_program_times(mesh_device: ttnn.MeshDevice, layer: ttKDA, hidden: ttnn.Tensor, layout: str) -> None:
@@ -455,16 +486,15 @@ def test_kimi_k3_layer_1_perf(
         "device_forward_ms": device_forward_ms,
     }
     print("KDA_LAYER_PERF=" + json.dumps(result, sort_keys=True))
-    assert min_wall_ms <= median_wall_ms <= max_wall_ms, (
-        f"{layout} median trace wall {median_wall_ms:.3f} ms is outside LoudBox range "
-        f"[{min_wall_ms:.3f}, {max_wall_ms:.3f}] ms (reference {reference_ms:.3f} ms ± {_PERF_MARGIN:.0%})"
-    )
     if layout == "SP2xTP4":
-        # Best-effort diagnostics run once after the five samples and their sole regression assertion.
         try:
             _log_device_program_times(mesh_device, layer, hidden_tt, layout)
         except Exception as error:
             print("KDA_LAYER_DEVICE_TIMES_ERROR=" + json.dumps({"layout": layout, "error": str(error)}, sort_keys=True))
+    assert min_wall_ms <= median_wall_ms <= max_wall_ms, (
+        f"{layout} median trace wall {median_wall_ms:.3f} ms is outside LoudBox range "
+        f"[{min_wall_ms:.3f}, {max_wall_ms:.3f}] ms (reference {reference_ms:.3f} ms ± {_PERF_MARGIN:.0%})"
+    )
 
 
 @pytest.mark.parametrize(
@@ -483,7 +513,7 @@ def test_synthetic_kimi_k3_perf(
     mesh_device: ttnn.MeshDevice,
     device_params: dict,
 ) -> None:
-    """Measure checkpoint-free production K3 latency; calibrate before enabling its gate."""
+    """Measure checkpoint-free production K3 latency and fail until its reference is calibrated."""
     tensor_parallel_axis = 1
     case = make_synthetic_kimi_k3_test_case(sequence=_SEQUENCE)
     layer, hidden_tt = make_kimi_k3_device_case(
@@ -507,20 +537,8 @@ def test_synthetic_kimi_k3_perf(
         "perf_margin_pct": _PERF_MARGIN * 100.0,
     }
     print("KDA_SYNTHETIC_PERF=" + json.dumps(result, sort_keys=True))
-    if _GALAXY_PERF_REFERENCE_MS is None:
-        assert os.environ.get(_GALAXY_CALIBRATION_ENV) == "1", (
-            "Galaxy KDA perf target is not calibrated; set "
-            f"{_GALAXY_CALIBRATION_ENV}=1 only for the first hosted measurement"
-        )
-    else:
-        lower = _GALAXY_PERF_REFERENCE_MS * (1.0 - _PERF_MARGIN)
-        upper = _GALAXY_PERF_REFERENCE_MS * (1.0 + _PERF_MARGIN)
-        assert lower <= median_wall_ms <= upper, (
-            f"SP8xTP4 median trace wall {median_wall_ms:.3f} ms is outside Galaxy range "
-            f"[{lower:.3f}, {upper:.3f}] ms "
-            f"(reference {_GALAXY_PERF_REFERENCE_MS:.3f} ms ± {_PERF_MARGIN:.0%})"
-        )
     try:
         _log_device_program_times(mesh_device, layer, hidden_tt, "SP8xTP4")
     except Exception as error:
         print("KDA_LAYER_DEVICE_TIMES_ERROR=" + json.dumps({"layout": "SP8xTP4", "error": str(error)}, sort_keys=True))
+    _assert_galaxy_performance(median_wall_ms)
