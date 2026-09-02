@@ -55,9 +55,9 @@ AdjacencyGraph<AsicID> make_chip_graph(
     return AdjacencyGraph<AsicID>(adjacency);
 }
 
-AdjacencyGraph<std::uint32_t> make_mesh_graph(
+AdjacencyGraph<LogicalChipId> make_mesh_graph(
     std::uint32_t mesh_count, const std::vector<std::pair<std::uint32_t, std::uint32_t>>& edges) {
-    AdjacencyGraph<std::uint32_t>::AdjacencyMap adjacency;
+    AdjacencyGraph<LogicalChipId>::AdjacencyMap adjacency;
     for (std::uint32_t i = 0; i < mesh_count; ++i) {
         adjacency[i];
     }
@@ -65,7 +65,7 @@ AdjacencyGraph<std::uint32_t> make_mesh_graph(
         adjacency[a].push_back(b);
         adjacency[b].push_back(a);
     }
-    return AdjacencyGraph<std::uint32_t>(adjacency);
+    return AdjacencyGraph<LogicalChipId>(adjacency);
 }
 
 // A flattened grouping shaped like a 1xN line, which is what find_all_in_psd hands to the packer.
@@ -74,7 +74,7 @@ GroupingInfo make_line_grouping(const std::string& name, std::uint32_t width) {
     grouping.name = name;
     grouping.type = "MESH";
     grouping.asic_count = width;
-    AdjacencyGraph<std::uint32_t>::AdjacencyMap adjacency;
+    AdjacencyGraph<LogicalChipId>::AdjacencyMap adjacency;
     for (std::uint32_t i = 0; i < width; ++i) {
         std::vector<std::uint32_t> neighbors;
         if (i > 0) {
@@ -85,7 +85,7 @@ GroupingInfo make_line_grouping(const std::string& name, std::uint32_t width) {
         }
         adjacency[i] = std::move(neighbors);
     }
-    grouping.adjacency_graph = AdjacencyGraph<std::uint32_t>(adjacency);
+    grouping.adjacency_graph = AdjacencyGraph<LogicalChipId>(adjacency);
     return grouping;
 }
 

@@ -52,7 +52,7 @@ static tt::tt_metal::PhysicalSystemDescriptor create_psd_from_mock_cluster() {
 
 // Helper to check that a node's neighbors match expected (order-independent)
 static void expect_neighbors(
-    const AdjacencyGraph<uint32_t>& graph, uint32_t node_id, const std::vector<uint32_t>& expected) {
+    const AdjacencyGraph<LogicalChipId>& graph, uint32_t node_id, const std::vector<uint32_t>& expected) {
     const auto& neighbors = graph.get_neighbors(node_id);
     std::set<uint32_t> actual_set(neighbors.begin(), neighbors.end());
     std::set<uint32_t> expected_set(expected.begin(), expected.end());
@@ -61,7 +61,7 @@ static void expect_neighbors(
 
 // Helper for checking neighbors by node ID (now using uint32_t directly)
 static void expect_neighbors_by_id(
-    const AdjacencyGraph<uint32_t>& graph, uint32_t node_id, const std::vector<uint32_t>& expected_neighbor_ids) {
+    const AdjacencyGraph<LogicalChipId>& graph, uint32_t node_id, const std::vector<uint32_t>& expected_neighbor_ids) {
     const auto& nodes = graph.get_nodes();
     ASSERT_TRUE(std::find(nodes.begin(), nodes.end(), node_id) != nodes.end())
         << "Node with id " << node_id << " not found";

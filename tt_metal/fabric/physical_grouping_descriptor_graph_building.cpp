@@ -72,7 +72,7 @@ namespace {
 
 using tt::tt_fabric::AdjacencyGraph;
 
-AdjacencyGraph<uint32_t> build_all_to_all_graph(const std::vector<uint32_t>& instance_ids) {
+AdjacencyGraph<LogicalChipId> build_all_to_all_graph(const std::vector<uint32_t>& instance_ids) {
     std::map<uint32_t, std::vector<uint32_t>> adj_map;
 
     // All-to-all: every node connects to every other node
@@ -86,13 +86,13 @@ AdjacencyGraph<uint32_t> build_all_to_all_graph(const std::vector<uint32_t>& ins
         }
     }
 
-    return AdjacencyGraph<uint32_t>(adj_map);
+    return AdjacencyGraph<LogicalChipId>(adj_map);
 }
 
 // Helper function to build adjacency graph from row-major mesh connection.
 // LINE neighbors are always included. When `ring_dims[d]` is true, also wrap both ends of dimension d.
 // Missing `ring_dims` entries are treated as LINE (no wrap). RING wrap is skipped when dim < 3.
-AdjacencyGraph<uint32_t> build_row_major_mesh_graph(
+AdjacencyGraph<LogicalChipId> build_row_major_mesh_graph(
     const std::vector<uint32_t>& instance_ids,
     const std::vector<int32_t>& dims,
     const std::string& grouping_name = "",
@@ -101,7 +101,7 @@ AdjacencyGraph<uint32_t> build_row_major_mesh_graph(
     std::map<uint32_t, std::vector<uint32_t>> adj_map;
 
     if (instance_ids.empty() || dims.empty()) {
-        return AdjacencyGraph<uint32_t>(adj_map);
+        return AdjacencyGraph<LogicalChipId>(adj_map);
     }
 
     // Calculate total size
@@ -196,12 +196,12 @@ AdjacencyGraph<uint32_t> build_row_major_mesh_graph(
         }
     }
 
-    return AdjacencyGraph<uint32_t>(adj_map);
+    return AdjacencyGraph<LogicalChipId>(adj_map);
 }
 
 // Helper function to build adjacency graph from custom connections
 // Ensures no duplicate connections and all connections are bidirectional
-AdjacencyGraph<uint32_t> build_custom_connections_graph(
+AdjacencyGraph<LogicalChipId> build_custom_connections_graph(
     const std::vector<uint32_t>& instance_ids, const proto::CustomConnections& custom_connections) {
     std::map<uint32_t, std::vector<uint32_t>> adj_map;
 
@@ -247,7 +247,7 @@ AdjacencyGraph<uint32_t> build_custom_connections_graph(
         }
     }
 
-    return AdjacencyGraph<uint32_t>(adj_map);
+    return AdjacencyGraph<LogicalChipId>(adj_map);
 }
 
 }  // namespace
@@ -456,7 +456,7 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
         info.adjacency_graph = build_custom_connections_graph(node_ids, custom);
     } else {
         // No connection specified - empty adjacency graph (instances are not connected)
-        info.adjacency_graph = tt::tt_fabric::AdjacencyGraph<uint32_t>();
+        info.adjacency_graph = tt::tt_fabric::AdjacencyGraph<LogicalChipId>();
     }
 
     return info;
@@ -481,7 +481,7 @@ struct NodeMetadata {
 };
 
 struct FlattenedMesh {
-    tt::tt_fabric::AdjacencyGraph<uint32_t> graph;
+    tt::tt_fabric::AdjacencyGraph<LogicalChipId> graph;
     // Grid at this mesh level: instance tile layout when compound, local node grid when leaf.
     std::vector<int32_t> local_grid_dims;
     // Full ASIC node grid [rows, cols] for this subtree, in nodes_row_major order.
@@ -594,7 +594,7 @@ std::vector<int32_t> compute_combined_node_grid_dims(
 
 // Add RING wrap edges to a LINE mesh graph by pairing opposite boundary edges (same pairing as
 // build_row_major_mesh_graph ring_dims). Avoids rebuilding the full graph from a row-major node list.
-tt::tt_fabric::AdjacencyGraph<uint32_t> add_torus_wrap_edges(
+tt::tt_fabric::AdjacencyGraph<LogicalChipId> add_torus_wrap_edges(
     const FlattenedMesh& mesh, const std::vector<bool>& ring_dims) {
     std::map<uint32_t, std::set<uint32_t>> adj_set;
     for (const auto& [node, neighbors] : mesh.graph.get_adjacency_map()) {
@@ -628,7 +628,7 @@ tt::tt_fabric::AdjacencyGraph<uint32_t> add_torus_wrap_edges(
     for (const auto& [node, neighbors] : adj_set) {
         adj_map[node] = std::vector<uint32_t>(neighbors.begin(), neighbors.end());
     }
-    return tt::tt_fabric::AdjacencyGraph<uint32_t>(adj_map);
+    return tt::tt_fabric::AdjacencyGraph<LogicalChipId>(adj_map);
 }
 
 // Join two adjacent meshes by connecting their corresponding boundary edges
@@ -715,14 +715,14 @@ std::vector<int32_t> normalize_dims(const std::vector<int32_t>& dims, size_t tot
 //   1. Copy all internal edges from each mesh
 //   2. Connect adjacent meshes along their shared boundaries (horizontal and vertical)
 //   3. Convert from set-based to vector-based adjacency representation
-tt::tt_fabric::AdjacencyGraph<uint32_t> join_mesh_level(
+tt::tt_fabric::AdjacencyGraph<LogicalChipId> join_mesh_level(
     const std::vector<FlattenedMesh>& meshes, const std::vector<int32_t>& instance_tile_layout_dims) {
     constexpr size_t SINGLE_MESH = 1;
     constexpr int32_t ROW_INDEX = 0;
     constexpr int32_t COL_INDEX = 1;
 
     if (meshes.empty()) {
-        return tt::tt_fabric::AdjacencyGraph<uint32_t>();
+        return tt::tt_fabric::AdjacencyGraph<LogicalChipId>();
     }
     if (meshes.size() == SINGLE_MESH) {
         // Validate single mesh has valid dimensions
@@ -801,7 +801,7 @@ tt::tt_fabric::AdjacencyGraph<uint32_t> join_mesh_level(
     for (const auto& [node, neighbors] : adj_set) {
         adj_map[node] = std::vector<uint32_t>(neighbors.begin(), neighbors.end());
     }
-    return tt::tt_fabric::AdjacencyGraph<uint32_t>(adj_map);
+    return tt::tt_fabric::AdjacencyGraph<LogicalChipId>(adj_map);
 }
 
 // Join sub-meshes in `instance_tile_layout_dims` and wire adjacency across tile boundaries.
@@ -929,8 +929,8 @@ std::vector<FlattenedMesh> build_flattened_meshes_for_item(
 
         mesh.nodes_row_major = {node_id};
         mesh.node_metadata[node_id] = metadata;
-        mesh.graph = tt::tt_fabric::AdjacencyGraph<uint32_t>(
-            tt::tt_fabric::AdjacencyGraph<uint32_t>::AdjacencyMap{{node_id, {}}});
+        mesh.graph = tt::tt_fabric::AdjacencyGraph<LogicalChipId>(
+            tt::tt_fabric::AdjacencyGraph<LogicalChipId>::AdjacencyMap{{node_id, {}}});
 
         // PSD validation is done at the top level only, not for individual leaf nodes
         return {std::move(mesh)};
@@ -1105,7 +1105,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
     if (grouping.items.empty()) {
         GroupingInfo result = grouping;
         result.name = grouping.name + "_flat";
-        result.adjacency_graph = tt::tt_fabric::AdjacencyGraph<uint32_t>();
+        result.adjacency_graph = tt::tt_fabric::AdjacencyGraph<LogicalChipId>();
         return {result};
     }
 

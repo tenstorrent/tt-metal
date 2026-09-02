@@ -45,7 +45,7 @@ namespace {
 // Helper function to build adjacency graph from row-major mesh connection.
 // LINE neighbors are always included. When `ring_dims[d]` is true, also wrap both ends of dimension d.
 // Missing `ring_dims` entries are treated as LINE (no wrap). RING wrap is skipped when dim < 3.
-AdjacencyGraph<uint32_t> build_row_major_mesh_graph(
+AdjacencyGraph<LogicalChipId> build_row_major_mesh_graph(
     const std::vector<uint32_t>& instance_ids,
     const std::vector<int32_t>& dims,
     const std::string& grouping_name,
@@ -54,7 +54,7 @@ AdjacencyGraph<uint32_t> build_row_major_mesh_graph(
     std::map<uint32_t, std::vector<uint32_t>> adj_map;
 
     if (instance_ids.empty() || dims.empty()) {
-        return AdjacencyGraph<uint32_t>(adj_map);
+        return AdjacencyGraph<LogicalChipId>(adj_map);
     }
 
     // Calculate total size
@@ -149,7 +149,7 @@ AdjacencyGraph<uint32_t> build_row_major_mesh_graph(
         }
     }
 
-    return AdjacencyGraph<uint32_t>(adj_map);
+    return AdjacencyGraph<LogicalChipId>(adj_map);
 }
 
 struct MgdDeviceTopology {
@@ -237,13 +237,13 @@ GroupingInfo finalize_mesh_grouping_with_device_topology(
 struct MeshTopologyMatch {
     std::string name;
     size_t idx = 0;
-    MappingResult<uint32_t, uint32_t> mapping;
+    MappingResult<LogicalChipId, LogicalChipId> mapping;
 };
 
 // Helper function to build adjacency graph from MGD mesh instance's device topology
 // Builds a row-major mesh graph based on the mesh's device_topology dims
 // This represents the topology at the ASIC level, which matches the flattened physical grouping graphs
-AdjacencyGraph<uint32_t> build_mgd_mesh_instance_adjacency(
+AdjacencyGraph<LogicalChipId> build_mgd_mesh_instance_adjacency(
     const MeshGraphDescriptor& mesh_graph_descriptor, GlobalNodeId mesh_instance_id) {
     const auto& mesh_instance = mesh_graph_descriptor.get_instance(mesh_instance_id);
     TT_FATAL(mesh_instance.kind == NodeKind::Mesh, "build_mgd_mesh_instance_adjacency called on non-mesh instance");
@@ -257,7 +257,7 @@ AdjacencyGraph<uint32_t> build_mgd_mesh_instance_adjacency(
 
     if (device_dims.empty()) {
         // No device topology - return empty graph
-        return AdjacencyGraph<uint32_t>();
+        return AdjacencyGraph<LogicalChipId>();
     }
 
     // Calculate number of ASICs
@@ -287,7 +287,7 @@ AdjacencyGraph<uint32_t> build_mgd_mesh_instance_adjacency(
 
 // Helper function to build adjacency graph from MGD switch instance
 // Similar to build_mgd_mesh_instance_adjacency - builds row-major mesh graph from device_topology
-AdjacencyGraph<uint32_t> build_mgd_switch_instance_adjacency(
+AdjacencyGraph<LogicalChipId> build_mgd_switch_instance_adjacency(
     const MeshGraphDescriptor& mesh_graph_descriptor, GlobalNodeId switch_instance_id) {
     const auto& switch_instance = mesh_graph_descriptor.get_instance(switch_instance_id);
     TT_FATAL(
@@ -302,7 +302,7 @@ AdjacencyGraph<uint32_t> build_mgd_switch_instance_adjacency(
 
     if (device_dims.empty()) {
         // No device topology - return empty graph
-        return AdjacencyGraph<uint32_t>();
+        return AdjacencyGraph<LogicalChipId>();
     }
 
     // Calculate number of ASICs
@@ -325,7 +325,7 @@ AdjacencyGraph<uint32_t> build_mgd_switch_instance_adjacency(
 // Helper function to build adjacency graph from MGD graph instance
 // The graph instance's sub_instances become nodes, and connections between them become edges
 // Ensures no duplicate connections and all connections are bidirectional
-AdjacencyGraph<uint32_t> build_mgd_graph_instance_adjacency(
+AdjacencyGraph<LogicalChipId> build_mgd_graph_instance_adjacency(
     const MeshGraphDescriptor& mesh_graph_descriptor, GlobalNodeId graph_instance_id) {
     const auto& graph_instance = mesh_graph_descriptor.get_instance(graph_instance_id);
 
@@ -375,7 +375,7 @@ AdjacencyGraph<uint32_t> build_mgd_graph_instance_adjacency(
         }
     }
 
-    return AdjacencyGraph<uint32_t>(adj_map);
+    return AdjacencyGraph<LogicalChipId>(adj_map);
 }
 
 }  // namespace
@@ -492,7 +492,8 @@ PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(const MeshGraphDescri
         processed_mesh_definitions.insert(mesh_name);
 
         // Build adjacency graph for this mesh instance (use first instance of this mesh definition)
-        AdjacencyGraph<uint32_t> adjacency_graph = build_mgd_mesh_instance_adjacency(mesh_graph_descriptor, mesh_id);
+        AdjacencyGraph<LogicalChipId> adjacency_graph =
+            build_mgd_mesh_instance_adjacency(mesh_graph_descriptor, mesh_id);
 
         // Get required ASIC count (calculated above)
         uint32_t asic_count = required_asics_map.at(mesh_type).at(mesh_name);
@@ -540,7 +541,7 @@ PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(const MeshGraphDescri
         processed_switch_definitions.insert(switch_name);
 
         // Build adjacency graph for this switch instance (use first instance of this switch definition)
-        AdjacencyGraph<uint32_t> adjacency_graph =
+        AdjacencyGraph<LogicalChipId> adjacency_graph =
             build_mgd_switch_instance_adjacency(mesh_graph_descriptor, switch_id);
 
         // Get required ASIC count (calculated above, stored under MESH type)
@@ -586,7 +587,8 @@ PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(const MeshGraphDescri
         }
 
         // Build adjacency graph for this graph instance
-        AdjacencyGraph<uint32_t> adjacency_graph = build_mgd_graph_instance_adjacency(mesh_graph_descriptor, graph_id);
+        AdjacencyGraph<LogicalChipId> adjacency_graph =
+            build_mgd_graph_instance_adjacency(mesh_graph_descriptor, graph_id);
 
         // Get required ASIC count (calculated above)
         uint32_t asic_count = required_asics_map.at(graph_type).at(graph_name);
@@ -689,7 +691,8 @@ void process_higher_layer_and_recurse(
         }
     }
 
-    AdjacencyGraph<uint32_t> mgd_adjacency = build_mgd_graph_instance_adjacency(mesh_graph_descriptor, repr_graph_id);
+    AdjacencyGraph<LogicalChipId> mgd_adjacency =
+        build_mgd_graph_instance_adjacency(mesh_graph_descriptor, repr_graph_id);
 
     size_t mgd_nodes = mgd_adjacency.get_nodes().size();
     if (mgd_nodes == 0) {
@@ -720,7 +723,7 @@ void process_higher_layer_and_recurse(
                     continue;
                 }
 
-                auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
+                auto mapping_result = solve_topology_mapping<LogicalChipId, LogicalChipId>(
                     mgd_adjacency, pgd_grouping.adjacency_graph, {}, ConnectionValidationMode::STRICT, true);
 
                 if (mapping_result.success) {
@@ -842,7 +845,7 @@ std::map<LogicalChipId, tt::tt_metal::ASICPosition> compose_mesh_node_to_asic_po
 // ASIC positions resolve to no node here does not apply and is dropped. Returns 0 when nothing applies or
 // when the groups that do apply are not jointly satisfiable, and the caller then skips the grouping.
 std::size_t add_mgd_to_pgd_asic_position_pinning_constraints(
-    MappingConstraints<uint32_t, uint32_t>& constraints,
+    MappingConstraints<LogicalChipId, LogicalChipId>& constraints,
     const GroupingInfo& pgd_grouping,
     const std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>& pinnings) {
     std::size_t constraints_added = 0;
@@ -990,7 +993,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         // same grid drop wrap edges, so they have strictly fewer edges and can never contain it. Counting
         // edges is O(V); the SAT solve it skips is many orders of magnitude slower (seconds per 128-node
         // candidate), so this eliminates the provably-impossible variants up front instead of solving them.
-        auto count_undirected_edges = [](const AdjacencyGraph<uint32_t>& g) -> size_t {
+        auto count_undirected_edges = [](const AdjacencyGraph<LogicalChipId>& g) -> size_t {
             size_t directed = 0;
             for (uint32_t node : g.get_nodes()) {
                 directed += g.get_neighbors(node).size();
@@ -1082,7 +1085,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                         continue;
                     }
 
-                    MappingConstraints<uint32_t, uint32_t> constraints;
+                    MappingConstraints<LogicalChipId, LogicalChipId> constraints;
                     if (!active_pinnings.empty()) {
                         // Keep only groupings that host at least one pin, with the pins that do apply
                         // required to hold together.
@@ -1095,7 +1098,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                         // instead of running unconstrained.
                         constraints.add_required_constraint(0, 0);
                     }
-                    auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
+                    auto mapping_result = solve_topology_mapping<LogicalChipId, LogicalChipId>(
                         mgd_grouping_info.adjacency_graph,
                         grouping_info.adjacency_graph,
                         constraints,
@@ -1673,7 +1676,7 @@ std::vector<MappingResult<LogicalChipId, AsicID>> solve_for_many_groupings_to_ps
     const GroupingInfo& grouping_info,
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
-    const AdjacencyGraph<uint32_t>& flat_mesh = grouping_info.adjacency_graph;
+    const AdjacencyGraph<LogicalChipId>& flat_mesh = grouping_info.adjacency_graph;
 
     // Check if mesh is empty
     size_t flat_mesh_size = flat_mesh.get_nodes().size();
@@ -2168,7 +2171,7 @@ AdjacencyPlacementResult solve_adjacency_guided_placement(
     const std::vector<GroupingInfo>& groupings,
     const std::vector<PlacementCandidate>& pool,
     const std::vector<std::vector<std::size_t>>& mesh_grouping_options,
-    const AdjacencyGraph<std::uint32_t>& logical_mesh_graph,
+    const AdjacencyGraph<LogicalChipId>& logical_mesh_graph,
     const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
     std::size_t node_budget) {
     AdjacencyPlacementResult result;
@@ -2414,7 +2417,7 @@ std::vector<MappingResult<LogicalChipId, AsicID>> PhysicalGroupingDescriptor::fi
 AdjacencyPlacementResult PhysicalGroupingDescriptor::solve_adjacency_guided_placement(
     const GroupingsByMeshName& groupings_by_mesh_name,
     const std::vector<InstanceName>& logical_mesh_names,
-    const AdjacencyGraph<std::uint32_t>& logical_mesh_graph,
+    const AdjacencyGraph<LogicalChipId>& logical_mesh_graph,
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     std::size_t node_budget) const {
