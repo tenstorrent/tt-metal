@@ -1296,6 +1296,51 @@ def test_srcreg_dummy_publication_packed_constant_is_arch_specific():
     WH = "tt_llk_wormhole_b0/llk_lib/llk_unpack_A.h"
     BH = "tt_llk_blackhole/llk_lib/llk_unpack_A.h"
     TXT = "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY)"
+    # All three of Blackhole's un-migrated WH-packed constants must be caught, not
+    # just the wait one. UNP_ZEROSRC_SET_DVALID is the worst: dropped into
+    # Blackhole's Unpack_Pop it sets Clr_to1_fmt_Ctrl and leaves Set_Dvalid (at <<8)
+    # at zero, so the DVALID is never published at all.
+    for const in (
+        "UNP_ZEROSRC_STALL_RESET_WR_RDY",
+        "UNP_ZEROSRC_RESET_ALL_BANKS",
+        "UNP_ZEROSRC_SET_DVALID",
+    ):
+        facts = [
+            fn("_llk_unpack_dest_reuse_dummy_valid_", BH, 100, 200),
+            macro(
+                BH,
+                110,
+                "TTI_UNPACR_NOP",
+                f"TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::{const})",
+                func="u",
+            ),
+        ]
+        got = [
+            f
+            for f in SrcRegBank().run(FactBase("blackhole", facts))
+            if f.kind == "dvalid:DUMMY_PUBLISH"
+        ]
+        assert (
+            len(got) == 1 and got[0].hint == "DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH"
+        ), (const, got)
+    # UNP_NEGINFSRC is NOT one of them: on Blackhole it lands as
+    # Src_ClrVal_Ctrl=CLR_SRC_NEGINF + Unpack_Pop=CLR_SRC, bit-identical to
+    # Blackhole's own idiomatic neginf clear. Flagging it would be a false positive.
+    benign = [
+        fn("_llk_unpack_dest_reuse_dummy_valid_", BH, 100, 200),
+        macro(
+            BH,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::UNP_NEGINFSRC)",
+            func="u",
+        ),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", benign))
+        if f.hint == "DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH"
+    ]
 
     # On Wormhole it is the real guard -> clean.
     wh = [
