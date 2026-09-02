@@ -115,6 +115,13 @@ inline uint32_t count_leading_zeros(uint32_t v) {
 
 // (bf16 attention weight) * (Q16.16 corner weight) -> bf16, in integers.
 //
+// Non-finite attention weights come back as finite max magnitude with their
+// sign, where the float path this replaces emitted inf or propagated NaN. That
+// keeps a bad weight from poisoning the whole output tile, matching how the
+// grid side of this kernel already treats non-finite sampling locations, but it
+// does mean a caller debugging invalid weights sees a large finite number
+// rather than a non-finite one.
+//
 // The shared header's fixed_to_bf16 converts a Q16.16 value on its own; there
 // is no bf16-times-fixed entry point, and going through it would round the
 // corner weight to bf16 before the multiply rather than after.
@@ -267,19 +274,22 @@ void kernel_main() {
 
                 // align_corners selects the pixel-coord mapping (mmcv default
                 // is false: pixel = (g+1)*size/2 - 0.5; true variant uses
-                // pixel = (g+1)*(size-1)/2). Halving (g+1) before scaling by
-                // the size keeps the product inside int32 for the feature-map
-                // sizes validation allows, at the cost of one bit of coordinate
-                // precision the bf16 grid never carried anyway.
-                const int32_t gx_half = (bf16_to_q16(grid_ptr[0], GRID_CLAMP_Q16) + FIXED_ONE) >> 1;
-                const int32_t gy_half = (bf16_to_q16(grid_ptr[1], GRID_CLAMP_Q16) + FIXED_ONE) >> 1;
+                // pixel = (g+1)*(size-1)/2). Scale first and halve afterwards,
+                // through a 64-bit intermediate: halving (g + 1) up front would
+                // keep the product in int32 but drop its low bit, and that
+                // rounding is worth up to 0.5 * size / 2^16 of a pixel. For a
+                // coordinate near zero -- where bf16 resolves finely -- that
+                // exceeds the grid's own quantisation, so it is a real loss
+                // rather than a free one.
+                const int32_t gx_plus_one = bf16_to_q16(grid_ptr[0], GRID_CLAMP_Q16) + FIXED_ONE;
+                const int32_t gy_plus_one = bf16_to_q16(grid_ptr[1], GRID_CLAMP_Q16) + FIXED_ONE;
                 int32_t px_q16, py_q16;
                 if constexpr (ALIGN_CORNERS) {
-                    px_q16 = gx_half * (w_in_i - 1);
-                    py_q16 = gy_half * (h_in_i - 1);
+                    px_q16 = static_cast<int32_t>((static_cast<int64_t>(gx_plus_one) * (w_in_i - 1)) >> 1);
+                    py_q16 = static_cast<int32_t>((static_cast<int64_t>(gy_plus_one) * (h_in_i - 1)) >> 1);
                 } else {
-                    px_q16 = gx_half * w_in_i - FIXED_HALF;
-                    py_q16 = gy_half * h_in_i - FIXED_HALF;
+                    px_q16 = static_cast<int32_t>((static_cast<int64_t>(gx_plus_one) * w_in_i) >> 1) - FIXED_HALF;
+                    py_q16 = static_cast<int32_t>((static_cast<int64_t>(gy_plus_one) * h_in_i) >> 1) - FIXED_HALF;
                 }
 
                 // An arithmetic shift right is floor() for negatives too, and

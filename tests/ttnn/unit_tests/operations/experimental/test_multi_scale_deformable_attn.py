@@ -108,7 +108,10 @@ def _run_msda(device, value, grid, attn, align_corners=False):
 
 
 @pytest.mark.parametrize("align_corners", [False, True])
-@pytest.mark.parametrize("coord", [-1.0, 1.0, -0.999, 0.999, -1.001, 1.001])
+# 0.999 and 1.001 both round to exactly 1.0 in bf16, so they would not exercise
+# anything the +-1.0 case does not. These are the actual bf16 neighbours of the
+# border: 1 - 2^-8 just inside, 1 + 2^-7 just outside.
+@pytest.mark.parametrize("coord", [-1.0, 1.0, -0.99609375, 0.99609375, -1.0078125, 1.0078125])
 def test_msda_grid_at_the_border(device, coord, align_corners):
     """Sampling exactly on, just inside and just outside the [-1, 1] border.
 
@@ -276,3 +279,34 @@ def test_msda_rejects_oversized_feature_map(device, expect_error, size):
     attn = ttnn.zeros((N, Q, P), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     with expect_error(RuntimeError, "must each be <="):
         ttnn.experimental.multi_scale_deformable_attn(value, grid, attn)
+
+
+def test_msda_small_coordinate_precision(device):
+    """Coordinates near zero on a wide feature map.
+
+    The mapping scales the coordinate by the feature-map size, so any rounding
+    done before that scale gets multiplied by it. Near the border bf16's own
+    quantisation swamps such an error; near zero bf16 resolves finely and the
+    error surfaces, and a wide map magnifies it.
+
+    Rounding the coordinate before the scale -- which keeps the product in
+    int32 without a 64-bit intermediate -- takes the measured error here from
+    0.021 to 0.074, so the bound below separates the two.
+    """
+    torch.manual_seed(0)
+    N, Q, P, D, h_in, w_in = 2, 64, 4, 32, 16, 4096
+    value = torch.randn(N, h_in, w_in, D, dtype=torch.float32)
+    grid = torch.zeros(N, Q * P, 1, 2, dtype=torch.float32)
+    # Spread over the bf16 exponents near zero that the mapping magnifies most.
+    small = torch.tensor([2.0**-e for e in range(4, 18)], dtype=torch.float32)
+    picks = small[torch.randint(0, small.numel(), (N, Q * P))]
+    signs = torch.where(torch.rand(N, Q * P) < 0.5, -1.0, 1.0)
+    grid[..., 0, 0] = picks * signs
+    attn = torch.softmax(torch.randn(N, Q, P, dtype=torch.float32), dim=-1)
+
+    ref = _reference_msda_from_bf16(value, grid, attn)
+    out = _run_msda(device, value, grid, attn)
+
+    err = (out - ref).abs().max().item()
+    assert err < 0.04, f"coordinate path lost precision: max abs error {err:.4f}"
+    assert_with_pcc(ref, out, pcc=0.999)
