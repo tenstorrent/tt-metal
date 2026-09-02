@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //
-// Auto-generated file, do not modify -- except for the intrinsic redirect
+// Auto-generated file, do not modify, except for the intrinsic redirect
 // block guarded by #if defined(__riscv_xtttensixwh) at the end.  That block is
 // maintained by hand and appended after the generated content; regenerating
 // this file drops it.
@@ -976,9 +976,9 @@ extern volatile std::uint32_t __instrn_buffer[];
 // TT_<OP> (runtime issue, formerly a store to instrn_buffer) and TTI_<OP>
 // (compile-time issue, formerly .ttinsn) both become the same intrinsic call.
 // The compiler emits the immediate instruction when every operand is a
-// constant and materialises the word otherwise, so the choice those two
-// spellings used to make by hand is now the compiler's to make.  Kernels are
-// unchanged: they keep writing TTI_FOO(...) / TT_FOO(...).
+// constant and materialises the word otherwise.  That choice used to be
+// made by hand, by picking which macro to write; now the compiler makes it.
+// Kernels are unchanged: they keep writing TTI_FOO(...) / TT_FOO(...).
 //
 // It also makes the instruction stream legible to the compiler: a .ttinsn is
 // inline asm, so every instruction issued that way was something it had to
