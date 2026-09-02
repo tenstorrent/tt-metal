@@ -444,7 +444,7 @@ void kernel_main() {
                         // and is a no-op on WH/BH. Replaces the old copy_tile-drain dance.
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
-                            dummy_unpack();
+                            dummy_unpack(mm_partials_cb_id);
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
                     }
@@ -457,7 +457,7 @@ void kernel_main() {
                         // on mm_partials via a clear-SrcA UNPACR_NOP; no-op on WH/BH.
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
-                            dummy_unpack();
+                            dummy_unpack(mm_partials_cb_id);
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
                     }

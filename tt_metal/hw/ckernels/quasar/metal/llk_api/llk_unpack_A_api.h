@@ -199,13 +199,19 @@ inline void llk_unpack_A_block(
  * Issues a STALLWAIT on SrcA-clear followed by a clear-SrcA UNPACR_NOP. Used between cb_wait_front and
  * cb_pop_front to order a POP_TILES after its WAIT_TILES with a real unpacker op (TEN-4746 / #48552)
  * without consuming a tile: a bare TTI_NOP / DMANOP issues no unpacker transaction and does not satisfy
- * the ordering, while a real read (UNPACR_TILE) is heavier and, if partial, corrupts PACKER_L1_ACC offsets.
- * The STALLWAIT ensures SrcA is free before the clear, so this cannot clobber a SrcA bank still owned by an
- * in-flight op. Clears SrcA only (the next op re-unpacks it) and reads nothing from L1.
+ * the ordering. The UNPACR_NOP is a real unpacker TDMA that re-samples the WAIT_TILES stall for this
+ * engine, so it orders the following POP after the WAIT even though it reads no tile (a real UNPACR_TILE
+ * is heavier and, if partial, corrupts PACKER_L1_ACC offsets -- but this reads nothing from L1, so L1_ACC
+ * is untouched). The STALLWAIT ensures SrcA is free before the clear, so this cannot clobber a SrcA bank
+ * still owned by an in-flight op. Clears SrcA only (the next op re-unpacks it).
+ *
+ * dfb_id is the dataflow buffer being drained: the UNPACR_NOP satisfies the TEN-4746 ordering for it, so
+ * disarm the per-dfb guard (llk_wait_tiles armed it; without this the following llk_pop_tiles asserts).
  */
-inline void llk_unpack_dummy() {
+inline void llk_unpack_dummy(const std::uint32_t dfb_id) {
     TTI_STALLWAIT(p_stall::STALL_UNPACK, 0, 0, p_stall::SRCA_CLR);
     TTI_UNPACR_NOP(p_unpacr::UNP_A, 0, 0, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
+    LLK_TDMA_GUARD_NOTE_TDMA(dfb_id);  // TEN-4746: UNPACR_NOP orders POP after WAIT -> disarm this dfb
 }
 
 template <BroadcastType BType = BroadcastType::NONE>

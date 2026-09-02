@@ -77,22 +77,24 @@ ALWI void copy_init(
 }
 // clang-format off
 /**
- * Issue a single lightweight clear-SrcA unpacker op (UNPACR_NOP, no dvalid). Intended to be called between
- * cb_wait_front and cb_pop_front when a circular buffer must be drained/flow-controlled without a real
- * consume. This satisfies the unpacker's requirement that a POP_TILES be ordered after its WAIT_TILES by a
- * real unpacker op (Quasar TEN-4746 / #48552) -- a bare TTI_NOP/DMANOP does NOT (they issue no unpacker
- * transaction), and a real read (copy_tile / UNPACR_TILE) is heavier and, if partial, corrupts
- * PACKER_L1_ACC offsets. This clears SrcA only (harmless: the next op re-unpacks SrcA) and never reads the
- * CB, so it is correct and side-effect free.
+ * Issue a single lightweight clear-SrcA unpacker op (UNPACR_NOP, no dvalid) on circular buffer cb_id.
+ * Intended to be called between cb_wait_front and cb_pop_front when a circular buffer must be
+ * drained/flow-controlled without a real consume. This satisfies the unpacker's requirement that a
+ * POP_TILES be ordered after its WAIT_TILES by a real unpacker op (Quasar TEN-4746 / #48552) -- a bare
+ * TTI_NOP/DMANOP does NOT (they issue no unpacker transaction); the UNPACR_NOP is a real unpacker TDMA
+ * that re-samples the WAIT_TILES stall for the engine. A real read (copy_tile / UNPACR_TILE) is heavier
+ * and, if partial, corrupts PACKER_L1_ACC offsets -- but this reads nothing, so L1_ACC is untouched. It
+ * clears SrcA only (harmless: the next op re-unpacks SrcA) and never reads the CB.
  *
- * The clear is preceded by a STALLWAIT on SrcA-clear (stalling the unpacker) so the NOP cannot clobber the
- * SrcA bank while another op still holds it -- we only clear once SrcA is no longer in use. Each arch
+ * cb_id is the buffer being drained; Quasar uses it to disarm that buffer's TEN-4746 tile-counter guard
+ * (armed by the preceding cb_wait_front). The clear is preceded by a STALLWAIT on SrcA-clear (stalling
+ * the unpacker) so the NOP cannot clobber the SrcA bank while another op still holds it. Each arch
  * supplies its own llk_unpack_dummy() with the matching STALLWAIT + UNPACR_NOP encoding. Outside Quasar
  * there is no such ordering requirement, so this is just a SrcA flush -- not needed unless for debug.
  * Return value: None
  */
 // clang-format on
-ALWI void dummy_unpack() { UNPACK((llk_unpack_dummy())); }
+ALWI void dummy_unpack(std::uint32_t cb_id) { UNPACK((llk_unpack_dummy(cb_id))); }
 
 // clang-format off
 /**

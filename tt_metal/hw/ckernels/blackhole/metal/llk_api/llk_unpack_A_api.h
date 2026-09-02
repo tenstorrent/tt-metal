@@ -120,7 +120,7 @@ inline void llk_unpack_A_block(
  * in-flight op; it clears SrcA only (the next op re-unpacks it) and reads nothing from L1. Kernels do not
  * need this in normal operation -- use it only for debug when an explicit SrcA flush is wanted.
  */
-inline void llk_unpack_dummy() {
+inline void llk_unpack_dummy([[maybe_unused]] const std::uint32_t dfb_id) {
     TTI_STALLWAIT(ckernel::p_stall::STALL_UNPACK, ckernel::p_stall::SRCA_CLR);
     TTI_UNPACR_NOP(ckernel::SrcA, 0, 0, 0, 0, 0, 0, ckernel::p_unpacr_nop::CLR_SRC_0, ckernel::p_unpacr_nop::CLR_SRC);
 }
