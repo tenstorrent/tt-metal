@@ -122,23 +122,23 @@ def test_randn_dtype_layout_and_distribution_no_check(device, dtype, layout):
     assert not torch.isnan(torch_tensor).any(), "Tensor contains NaN values!"
 
 
-def test_randn_invalid_args(device):
-    with pytest.raises(TypeError):
+def test_randn_invalid_args(device, expect_error):
+    with expect_error(TypeError, "incompatible function arguments"):
         ttnn.randn(5, device=device)
 
-    with pytest.raises(TypeError):
+    with expect_error(TypeError, "incompatible function arguments"):
         ttnn.randn([2, -1], device=device)
 
-    with pytest.raises(TypeError):
+    with expect_error(TypeError, "incompatible function arguments"):
         ttnn.randn([2, 2], device=device, layout="ROW_MAJOR")
 
-    with pytest.raises(TypeError):
+    with expect_error(TypeError, "incompatible function arguments"):
         ttnn.randn([2, 2], device=device, memory_config="DRAM")
 
-    with pytest.raises(TypeError):
+    with expect_error(TypeError, "incompatible function arguments"):
         ttnn.randn([2, 2], device="WORMHOLE")
 
-    with pytest.raises(TypeError):
+    with expect_error(TypeError, "incompatible function arguments"):
         ttnn.randn([2, 2], device=device, dtype="ttnn.bfloat16")
 
 
