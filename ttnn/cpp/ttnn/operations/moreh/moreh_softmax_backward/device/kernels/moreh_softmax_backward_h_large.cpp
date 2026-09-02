@@ -27,6 +27,7 @@ void kernel_main() {
 
     for (uint32_t n = 0; n < N; ++n) {
 #ifdef LOG
+        // sum(dy)
         for (uint32_t h = 0; h < Ht; ++h) {
             if (h == Ht - 1) {
                 if (h == 0) {
