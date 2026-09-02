@@ -96,6 +96,9 @@ constexpr uint32_t IDX_PAGE = CT(IDX_PAGE);
 // Entries in the counts tensor, i.e. the one past-the-end global expert id. Bounds the routing
 // table's values, which are device-resident and so beyond anything the host can check.
 constexpr uint32_t NUM_GLOBAL_EXPERTS = CT(NUM_GLOBAL_EXPERTS);
+// Token rows in the shared activation buffer, which the output mirrors. Bounds the region
+// offsets, which are device-produced and so beyond anything the host can check.
+constexpr uint32_t ROW_CAPACITY = CT(ROW_CAPACITY);
 constexpr uint32_t W_TILE = CT(W_TILE_BYTES);  // weight tile stride: bfp4 576, bfp8 1088, bf16 2048
 constexpr uint32_t BFP8_TILE = CT(BFP8_TILE);
 // h is bfp8, like x, the output and the reduce operands. It cannot be bfp4: the packer emits bfp8,
@@ -417,23 +420,19 @@ void kernel_main() {
         ASSERT(expert_in_range);
         const uint32_t raw_count =
             expert_in_range ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_cnt)[global_expert_id] : 0u;
-        const uint32_t count = (raw_count < MIN_ACTIVE_TOKENS || raw_count > MAX_ACTIVE_TOKENS) ? 0u : raw_count;
+        const uint32_t banded_count = (raw_count < MIN_ACTIVE_TOKENS || raw_count > MAX_ACTIVE_TOKENS) ? 0u : raw_count;
 
-        uint32_t m_t = (count + TILE_H - 1) / TILE_H;
+        uint32_t m_t = (banded_count + TILE_H - 1) / TILE_H;
         if (m_t > M_T_MAX) {
             m_t = M_T_MAX;
         }
-        const uint32_t m_blocks = (m_t + M_BLOCK - 1) / M_BLOCK;
-        // One dispatch owns one resident W_down payload layout. Group only when every block is full,
-        // so a ragged tail can never switch out_col_start/ec underneath the weights loaded at block_idx == 0.
-        const bool wd_mgroup = WD_MGROUPS && (m_blocks >= WD_MGROUP_MIN_BLOCKS) && (m_t != 0) && ((m_t % M_BLOCK) == 0);
-        const uint32_t wd_out_width = wd_mgroup ? ec_group : ec;
-        const uint32_t wd_jstart = wd_mgroup ? jstart_group : out_col_start;
 
         // This expert's REGION BASE in a shared buffer, in token rows. Reuses cb_counts_scratch's page,
-        // dead once `count` is extracted and exactly the right size (host validates equal lengths), so
-        // the fused mode costs zero extra L1.
+        // dead once the count is extracted and exactly the right size (host validates equal lengths), so
+        // the fused mode costs zero extra L1. Read ahead of the M-block derivations, not after, so a
+        // rejected region can zero the count they are built from.
         uint32_t start_row = 0;
+        bool region_ok = true;
         if constexpr (NEED_START) {
             // Same bound as the count: this lookup is the one that becomes the writer's NOC base.
             if (expert_in_range) {
@@ -442,12 +441,31 @@ void kernel_main() {
                 noc_async_read_barrier();
                 invalidate_l1_cache();
                 start_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_start)[global_expert_id];
-                // Region bases are tile-aligned by construction (the dispatch lays experts out in
-                // whole tile-rows) and every consumer floors by TILE_H, so a misaligned base would
-                // silently shift this expert's rows rather than fail.
-                ASSERT(start_row % TILE_H == 0);
+                // The offsets are device-produced too, so the host sizes the table and cannot bound
+                // what it holds. This value becomes the x read base below and, through the mailbox,
+                // the writer's output base, so a region running past the buffer reads and writes
+                // outside it. Alignment alone was checked here before, and only under ASSERT, which
+                // is absent from release builds -- the out-of-range half is the dangerous one and
+                // every consumer floors by TILE_H, so a misaligned base merely shifts rows.
+                region_ok = (start_row % TILE_H == 0) && (start_row <= ROW_CAPACITY) &&
+                            (m_t <= (ROW_CAPACITY - start_row) / TILE_H);
+                ASSERT(region_ok);
             }
         }
+        // Out of range means no work, as with the active-token band and the expert-id bound. Zeroing
+        // m_t here is what keeps it out of the mailbox and out of both NOC bases.
+        const uint32_t count = region_ok ? banded_count : 0u;
+        if (!region_ok) {
+            m_t = 0;
+            start_row = 0;
+        }
+
+        const uint32_t m_blocks = (m_t + M_BLOCK - 1) / M_BLOCK;
+        // One dispatch owns one resident W_down payload layout. Group only when every block is full,
+        // so a ragged tail can never switch out_col_start/ec underneath the weights loaded at block_idx == 0.
+        const bool wd_mgroup = WD_MGROUPS && (m_blocks >= WD_MGROUP_MIN_BLOCKS) && (m_t != 0) && ((m_t % M_BLOCK) == 0);
+        const uint32_t wd_out_width = wd_mgroup ? ec_group : ec;
+        const uint32_t wd_jstart = wd_mgroup ? jstart_group : out_col_start;
 
         // Publish {count, M_t, m_blocks, start_row} so compute (all three TRISCs) and the writer can
         // read it. The writer's half of the fusion arrives ONLY through this word. The magic carries the
