@@ -5,9 +5,14 @@
 #include "impl/allocator/persistent_l1_arena.hpp"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
+#include <mutex>
+#include <utility>
+#include <vector>
 
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal {

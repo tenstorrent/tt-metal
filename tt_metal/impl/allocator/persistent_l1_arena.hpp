@@ -4,12 +4,15 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
 
 namespace tt::tt_metal {
 

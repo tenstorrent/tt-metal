@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <buffer_types.hpp>
 #include <core_coord.hpp>
@@ -218,6 +219,7 @@ void PrefetcherPipe::release_allocations() noexcept {
     } catch (...) {
         // Destructors must not throw. A missing allocation indicates an internal
         // lifetime error and will be caught by focused arena tests.
+        log_warning(LogMetal, "PrefetcherPipe destructor: persistent L1 release failed with unknown exception");
     }
 }
 
