@@ -44,8 +44,6 @@ head_dim to GPT-OSS's values, which Gemma4 does not match.
 
 from dataclasses import dataclass
 
-import torch
-
 import ttnn
 from models.demos.gemma4.tt.ccl import cp_degree
 
@@ -71,6 +69,24 @@ def migration_ring_memory_config(mesh_device, row_dim):
             shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
         ),
     )
+
+
+def _allocate_migration_ring_cache(mesh_device, shape, dtype, row_dim):
+    """Allocate and zero a replicated mesh buffer without a host-sized staging tensor."""
+    from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
+
+    cache = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, mesh_device, migration_ring_memory_config(mesh_device, row_dim)
+    )
+    DRAMZeroFill.op(cache)
+    dist_shape = ttnn.MeshShape(*tuple(mesh_device.shape))
+    coords = [
+        ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())]) for coord in ttnn.MeshCoordinateRange(dist_shape)
+    ]
+    cache.update_tensor_topology(
+        ttnn.TensorTopology(dist_shape, [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()], coords)
+    )
+    return cache
 
 
 # Counts ring_joint history reads. The long-context test asserts this advances:
@@ -123,15 +139,8 @@ def init_ring_kv_cache(
     shape = [num_users * num_layers, num_local_kv_heads, seq_local, head_dim]
 
     def _zeros():
-        return ttnn.from_torch(
-            torch.zeros(shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=cache_dtype,
-            memory_config=migration_ring_memory_config(mesh_device, head_dim),
-            # Every rank holds an identically shaped slab; content is per-rank.
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
+        # Every rank holds an identically shaped slab; content diverges on first write.
+        return _allocate_migration_ring_cache(mesh_device, shape, cache_dtype, head_dim)
 
     return [_zeros(), _zeros()]
 
@@ -156,14 +165,7 @@ def init_packed_ring_kv_cache(
     cp = cp_degree(mesh_config)
     seq_local = ring_cache_seq_len(max_seq_len, cp)
     shape = [num_users * num_layers, num_local_kv_heads, seq_local, GLOBAL_PACKED_DIM]
-    cache = ttnn.from_torch(
-        torch.zeros(shape),
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=cache_dtype,
-        memory_config=migration_ring_memory_config(mesh_device, GLOBAL_PACKED_DIM),
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    cache = _allocate_migration_ring_cache(mesh_device, shape, cache_dtype, GLOBAL_PACKED_DIM)
     return PackedRingKVCache(cache)
 
 

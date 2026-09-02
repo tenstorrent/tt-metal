@@ -56,6 +56,7 @@ def create_tt_model(
     bounded_sliding_kv_cache: bool = False,
     bounded_sliding_cache_slots: int | None = None,
     prefill_chunk_size=None,
+    ring_kv_caches=None,
 ):
     """
     Create Gemma4 model with all weights loaded to device.
@@ -156,6 +157,7 @@ def create_tt_model(
         precision=precision,
         bounded_sliding_kv_cache=bounded_sliding_kv_cache,
         bounded_sliding_cache_slots=bounded_sliding_cache_slots,
+        ring_kv_caches=ring_kv_caches,
     )
 
     # After a full cold build, record completion (+ capture host-consumed weights to the sidecar)
