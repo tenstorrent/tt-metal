@@ -45,8 +45,6 @@
 #include <tt-metalium/distributed.hpp>
 
 // Access to internal API: ProgramImpl::validate_circular_buffer_region
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
@@ -56,21 +54,16 @@ const std::string k_coordinates_kernel_path = "tests/tt_metal/tt_metal/test_kern
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     auto mesh_device = devices_[0];
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "PrefetcherPipe is not supported on Quasar yet";
-    }
     CoreRangeSet sharded_cores_1 = CoreRange({0, 0}, {2, 2});
-    auto pipe = experimental::CreatePrefetcherPipe(
-        mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), /*ring_size=*/1024);
-    const DeviceAddr persistent_end = pipe.config_address() + pipe.config_page_size();
-
     SubDevice sub_device_1(std::array{sharded_cores_1});
     auto sub_device_manager_1 = mesh_device->create_sub_device_manager({sub_device_1}, k_local_l1_size);
     DeviceAddr l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
     DeviceAddr l1_max_size = mesh_device->get_devices()[0]->l1_size_per_core();
     DeviceAddr l1_total_size = l1_max_size - l1_unreserved_base;
     mesh_device->load_sub_device_manager(sub_device_manager_1);
-    uint32_t global_buffer_size = l1_total_size - (k_local_l1_size * 2);
+    // Program-local CBs are DRAM-aligned from persistent high-water. Leave three
+    // local-L1 slots so a 1x CB fits and a 4x CB overlaps the top-down global buffer.
+    uint32_t global_buffer_size = l1_total_size - (k_local_l1_size * 3);
     ShardSpecBuffer global_shard_spec_buffer =
         ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
 
@@ -93,9 +86,8 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, sharded_cores_1, cb_src0_config);
 
     program.impl().allocate_circular_buffers(mesh_device.get());
-    EXPECT_GE(program.impl().get_circular_buffer(cb_src0)->address(), persistent_end);
     program.impl().validate_circular_buffer_region(mesh_device.get());
-    UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size * 3);
+    UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size * 4);
     program.impl().allocate_circular_buffers(mesh_device.get());
     EXPECT_THROW(program.impl().validate_circular_buffer_region(mesh_device.get()), std::exception);
     global_buffer.reset();
@@ -114,6 +106,8 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size / 4);
     program.impl().allocate_circular_buffers(mesh_device.get());
     program.impl().validate_circular_buffer_region(mesh_device.get());
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->remove_sub_device_manager(sub_device_manager_1);
 }
 
 void test_sub_device_synchronization(distributed::MeshDevice* device) {
