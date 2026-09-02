@@ -2,14 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Properties of the requirement-driven stream-register assignment: every configuration's total
-// fits under the pinned region, the placement policy is deterministic, the pinned dual-use id has
-// at most one live consumer, and the emitted name set is exactly the 38 the kernel declares (an
-// omitted name is an unset CT arg; the out-of-range sentinel marks an inactive consumer). Includes
-// the formerly failing {express, VC1 absent} configuration: the need-driven assignment fits at 20
-// of 32 where the old delta encoding (baseline plus release) fatals -- the register shortage is
-// fixed and pinned here; the standalone single-mesh express configuration itself remains
-// unexercised on hardware.
+// Verifies requirement-driven stream-register placement, budget enforcement, pinned-id exclusivity,
+// deterministic layout, the kernel's 38-name CT-arg set, and inactive-consumer sentinels. The
+// {express, VC1 absent} case requires 20 of 32 registers.
 
 #include <gtest/gtest.h>
 
@@ -113,10 +108,7 @@ TEST(StreamAssignmentTest, ExpressFullFitsWithVc1OnCounters) {
 }
 
 TEST(StreamAssignmentTest, Vc2ReceiverTakesChannelOneWhenVc1IsAbsent) {
-    // The kernel densifies VC2's receiver onto channel 1 when VC1 has none, and indexes
-    // to_receiver_packets_sent_streams by channel. Keying this role by VC instead left channel 1
-    // unassigned in exactly this shape, so the sending router incremented the out-of-range sentinel
-    // and the receiver polled it forever with the packets already across the link.
+    // Receiver roles use dense channel indices: when VC1 is absent, VC2 occupies channel 1.
     CreditTransportPlan plan{};
     plan.vc2_uses_counters = true;
     const auto a = make_stream_assignment(stream_requirements(vc2_without_vc1_placement(), plan));
@@ -127,9 +119,8 @@ TEST(StreamAssignmentTest, Vc2ReceiverTakesChannelOneWhenVc1IsAbsent) {
 }
 
 TEST(StreamAssignmentTest, ExpressFullWithVc1OnRegistersOverruns) {
-    // The maximal express configuration with VC1 on registers needs 33: the counters decision is
-    // load-bearing, and the overrun now reads as a legible message instead of a late take_spare.
-    // VC2 stays on counters so the register budget is what fails here, not the VC2 transport guard.
+    // Maximal express with VC1 on registers needs 33 registers, exceeding the 30 below the pinned
+    // pair. VC2 stays on counters so this isolates the register budget.
     CreditTransportPlan plan{};
     plan.vc2_uses_counters = true;
     EXPECT_ANY_THROW(make_stream_assignment(stream_requirements(express_full_placement(), plan)));
@@ -143,12 +134,9 @@ TEST(StreamAssignmentTest, Vc2OnRegistersIsRefused) {
 }
 
 TEST(StreamAssignmentTest, BoundaryOnRegistersStatesFullNeedAndHitsTheBudgetWall) {
-    // Legacy single-TXQ boundary fabric (5,4), both VCs on registers: with the cap removed the
-    // need states the family's full width -- the fourth VC1 sender's completion register included
-    // -- and the budget wall refuses it: 2 receivers + 5 acked + 9 completed + 8 downstream + 9
-    // sender-free = 33, over the 30 below the pinned pair (and over 32 even with the pinned pair
-    // freed). A fabric this wide on register-based credits is unservable; the fatal is the
-    // protection, and it is what any credit-plan change toward registers hits.
+    // A 5/4 boundary fabric with both VCs on registers needs 33: 2 receivers + 5 acked + 9 completed
+    // + 8 downstream + 9 sender-free. This exceeds both the 30 below the pinned pair and all 32
+    // registers, so register-based credits cannot serve this shape.
     const auto need = stream_requirements(legacy_with_boundary_placement(), CreditTransportPlan{});
     uint32_t vc1_completed = 0;
     for (const auto& g : need.groups) {
@@ -161,11 +149,9 @@ TEST(StreamAssignmentTest, BoundaryOnRegistersStatesFullNeedAndHitsTheBudgetWall
 }
 
 TEST(StreamAssignmentTest, NinthCompletedNameCoversFlat8WhenAVc1GroupIsAllocated) {
-    // The completed table's declared extent now covers the full family position range (5+4 ->
-    // positions 0..8): flat 8 -- the boundary family's fourth VC1 sender -- gets a real register
-    // wherever a VC1 completed group is allocated and the budget fits. This plan (VC0 on counters,
-    // VC1 on registers) is host-only: production derives vc0-on-counters == multi-TXQ ==
-    // vc1-on-counters. The case pins table coverage, not a configuration any fabric runs.
+    // The completed table covers flat positions 0..8, including the boundary family's fourth VC1
+    // sender. This VC0-counter/VC1-register plan is host-only; it pins table coverage rather than a
+    // production configuration.
     CreditTransportPlan plan{};
     plan.vc0_uses_counters = true;
     const auto a = make_stream_assignment(stream_requirements(legacy_with_boundary_placement(), plan));
@@ -182,9 +168,8 @@ TEST(StreamAssignmentTest, ExpressVc1AbsentFits) {
     CreditTransportPlan plan{};
     plan.vc1_uses_counters = true;
 
-    // The configuration the old delta encoding could not serve: VC1 on counters frees nothing
-    // (zero VC1 senders), so the five-wide VC0's fifth ack had no register to take. Need-driven:
-    // 1 receiver (VC1 absent takes none) + 5 acked + 5 completed + 4 downstream + 5 sender-free = 20.
+    // VC1 is absent, so the need is 1 receiver + 5 acked + 5 completed + 4 downstream + 5
+    // sender-free = 20 registers.
     const auto a = make_stream_assignment(stream_requirements(express_vc1_absent_placement(), plan));
     EXPECT_EQ(a.id(StreamRole::SENDER_PKTS_ACKED, 0, 4), 10u);  // the fifth ack exists
     EXPECT_EQ(a.id(StreamRole::SENDER_PKTS_COMPLETED, 0, 4), 15u);
@@ -229,14 +214,9 @@ TEST(StreamAssignmentTest, EmittedNameSetIsExactlyTheKernelSet) {
 }
 
 TEST(StreamAssignmentTest, BoundaryChipAgreementOnTheBoundaryOnlyChannel) {
-    // The defect's own case: a legacy fabric with a boundary chip has a five-wide VC0 at the
-    // fabric max, so the free-slots group covers channels 0-4 at ids 0-4 -- and a mesh router's
-    // table position 4 holds the boundary router's channel-4 register, so a downstream lookup
-    // resolves it identically on both. Placement follows the fabric max, not the narrower router.
-    //
-    // Note the plan (VC0 on counters, VC1 on registers) is host-only: production derives
-    // vc0-on-counters == multi-TXQ == vc1-on-counters. It is used here to keep a VC1 completed
-    // group in play for the placement pins.
+    // A boundary fabric's five-wide VC0 maps channels 0..4 to ids 0..4 for every router, including
+    // narrower mesh routers. The host-only VC0-counter/VC1-register plan keeps a VC1 completed group
+    // present while testing these placement pins.
     CreditTransportPlan plan{};
     plan.vc0_uses_counters = true;  // VC0 credits on counters, VC1 left on registers
     const auto a = make_stream_assignment(stream_requirements(legacy_with_boundary_placement(), plan));
@@ -248,8 +228,7 @@ TEST(StreamAssignmentTest, BoundaryChipAgreementOnTheBoundaryOnlyChannel) {
 }
 
 TEST(StreamAssignmentTest, PlacementIsFabricScopedAndDeterministic) {
-    // The defect was a per-router divergence; now one fabric has one assignment. Two independent
-    // derivations of the same fabric produce byte-identical placements.
+    // Independent derivations of one fabric produce identical placements.
     CreditTransportPlan plan{};
     plan.vc0_uses_counters = true;
     const auto a = make_stream_assignment(stream_requirements(legacy_with_boundary_placement(), plan));

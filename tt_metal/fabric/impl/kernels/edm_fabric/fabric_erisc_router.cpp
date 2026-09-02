@@ -37,9 +37,7 @@
 #include "hostdev/fabric_telemetry_msgs.h"
 #ifdef FABRIC_2D
 // The router re-encodes an intermesh packet's route when it lands, via
-// fabric_set_2d_intermesh_landing_route(). That declaration used to arrive transitively through
-// fabric_edge_node_router.hpp, which included tt_fabric_api.h; deleting that header in 4.2 took the
-// router's only path to it. Included directly and 2D-gated, matching the sole call site.
+// fabric_set_2d_intermesh_landing_route(). Include its declaration directly and only for the 2D call site.
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #endif
 
@@ -604,23 +602,14 @@ constexpr bool dispatch_arm_is_realizable() {
     return get_downstream_edm_interface_index<DIRECTION>() < DOWNSTREAM_EDM_SIZE;
 }
 
-// Credit read is get_ptr_val<stream_id>() with stream_id = vc0_local_free_slots_stream_id<compact>(),
-// the same compact-keyed table init writes onto the adapter. Going through
-// adapter.edm_has_space_for_packet() reloads worker_credits_stream_id from the stack and rebuilds
-// the overlay address at runtime (lbu / slli 12). Compact is the LIVE slot: fwd_dirs order is the
-// compact ranking, pinned below. The adapter still holds the id for send/credit decrement.
+// The selected downstream array determines the carrier VC. Query its adapter so crossover traffic
+// reads VC1 credits rather than the compact-indexed VC0 counter.
 template <typename DownstreamSenderT, eth_chan_directions DIRECTION, size_t DOWNSTREAM_EDM_SIZE>
 FORCE_INLINE bool check_downstream_has_space(
     [[maybe_unused]] std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces) {
     if constexpr (DIRECTION == my_direction) {
         return true;
     } else {
-        // FIX: this must read the credit counter of the VC the packet is actually sent on. The
-        // compact-keyed fast path below hardcoded VC0, but admit_2d_dispatch is also reached with
-        // the VC1 downstream array under FABRIC_2D_VC0_CROSSOVER_TO_VC1, so a landed intermesh
-        // packet was admitted against VC0's free slots and then sent on VC1 -- two counters that
-        // never agree. Asking the adapter reads whichever VC it belongs to.
-        //     was: get_ptr_val<vc0_local_free_slots_stream_id<compact>()>() != 0
         constexpr auto edm_index = get_downstream_edm_interface_index<DIRECTION>();
         return downstream_edm_interfaces[edm_index].template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
     }

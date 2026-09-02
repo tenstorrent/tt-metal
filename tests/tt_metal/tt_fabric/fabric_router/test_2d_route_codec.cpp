@@ -63,8 +63,8 @@ eth_chan_directions dor_x(uint32_t cur, uint32_t dst) {
 // Shape admissibility
 // ---------------------------------------------------------------------------------------------
 
-// Guards B1: the prior per-axis X bound was 4, which silently excluded [8,8], [8,16], [16,8] and
-// [1,16]. The bound is now the addressable coordinate range, not the physical slot shape.
+// The prior per-axis X bound of 4 excluded [8,8], [8,16], [16,8] and [1,16]. The bound is now the
+// addressable coordinate range, not the physical slot shape.
 TEST(Routing2DCodec, EveryInTreeShapeFitsTheRouteTable) {
     for (const auto& s : kInTreeShapes) {
         EXPECT_TRUE(Codec::shape_fits_route_table(s.y, s.x)) << s.name << " must fit the 2D route table";
@@ -107,7 +107,7 @@ TEST(Routing2DCodec, GalaxyLeavesRoomForItsMulticastTrees) {
 // ---------------------------------------------------------------------------------------------
 
 // The 2D action maps occupy Y + X bytes -- two more than the (Y-1) + (X-1) hop count the tiers were
-// originally sized from. Guards B6: [32,4] needs 36, which is one past the old 35 B tier.
+// originally sized from. [32,4] needs 36 bytes, one past the old 35 B tier.
 TEST(Routing2DCodec, EveryInTreeShapeFitsTheNinetySixByteHeader) {
     constexpr uint32_t kTier96 = 36;
     for (const auto& s : kInTreeShapes) {

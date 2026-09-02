@@ -29,14 +29,13 @@ namespace {
 //   Z-facing intermesh boundary router: 9 sender (5 VC0 + 4 VC1), 2 receiver
 //   2D with VC1 (flat max):             9 sender, 2 receiver -- an ordinary chip is 7 (4+3),
 //                                       a boundary-chip mesh router 8 (4+4), and the boundary
-//                                       router 9 (5+4); see the TODO below on telling them apart
+//                                       router 9 (5+4)
 //   2D without VC1 (VC0 only):          4 sender, 1 receiver
 //   1D:                                 2 sender, 1 receiver
 std::pair<uint32_t, uint32_t> get_expected_channels(
     Topology topology, const std::string& direction, bool has_vc1) {
-    // TODO: this infers the boundary family from a direction string. It should read the edge's
-    // capability (or the port's role) instead, once the report input carries it -- a same-mesh
-    // express chord is Z-facing too but is not the boundary family.
+    // TODO: Report input needs edge capability; direction "Z" also identifies same-mesh express
+    // chords, which are not boundary routers.
     if (direction == "Z") {
         // Z-facing intermesh boundary routers always have both VCs: boundary VC0 (worker + every
         // mesh producer) plus boundary VC1 (from-Z fanout) = 9, with one receiver per carrier VC.

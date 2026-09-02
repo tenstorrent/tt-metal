@@ -2,18 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Sweeps AxisRouteTopology over *every* mesh graph descriptor in the tree, on both axes of every
-// mesh, and checks the routing invariants that make a derived topology usable.
-//
-// Why this exists: the per-axis derivation used to run only for express meshes, and the existing
-// coverage (test_mcast_reverse_tree.cpp, test_express_ring_topology.cpp) sweeps only the four
-// express_links_*x4 fixtures. The codec unification made derivation unconditional -- express, then
-// ring, then LINE -- so the shapes with no coverage at all are exactly the ones the change added:
-// plain non-express meshes, and meshes wider than X = 4.
-//
-// The invariant that matters most is that a hop must cross a **declared edge**. A line has no
-// closing edge, so a topology that reasoned modularly would route "the short way" from row 0 to the
-// last row over a link that does not exist. On device that is a hang, not a wrong answer.
+// Sweeps both axes of every in-tree mesh descriptor across express, ordinary-ring, and line
+// topologies. Every hop must use a declared edge; in particular, a line cannot route modularly over
+// a nonexistent closing edge.
 //
 // Machine-free: MeshGraph(ClusterType, path) needs no cluster, no discovery and no topology mapper.
 

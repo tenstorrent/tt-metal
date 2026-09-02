@@ -15,28 +15,21 @@ class ControlPlane;
 
 // Is this egress one of the Y resources dimension order protects?
 //
-// The Y phase of a route runs on same-mesh N/S edges and on the express chord, so those are the
-// egresses an X-phase packet may not turn back into. An INTERMESH egress is the packet leaving the
-// mesh entirely rather than re-entering a Y ring, so it is not one of them whatever compass letter
-// discovery put the seam on -- which is what keeps an exit chip's E/W routers wired to the
-// boundary (builder contract section 4.4).
+// Same-mesh N/S and express-chord edges are protected Y resources. An intermesh egress leaves the
+// mesh, so it is excluded regardless of direction; this keeps E/W exit routers wired to the boundary.
 bool is_protected_y_egress(RoutingDirection egress, EdgeCapability egress_capability);
 
 // Would forwarding from `ingress` to `egress` violate the fixed Y-before-X dimension order?
 //
-// True only for an ordinary same-mesh X ingress turning back into a protected Y egress. Dimension
-// order is what keeps X resources from ever waiting on Y ones, which the deadlock-freedom argument
-// relies on, so such a producer is never wired.
-//
-// An INTERMESH ingress is deliberately exempt even on an E or W port: a boundary landing is a route
-// root rather than a packet already in its X phase, so it may legally begin Y.
+// Forbids a same-mesh X ingress from turning back into protected Y. An intermesh ingress is exempt,
+// even on E/W, because a boundary landing is a new route root and may begin Y.
 bool is_static_dor_forbidden(
     RoutingDirection ingress,
     EdgeCapability ingress_capability,
     RoutingDirection egress,
     EdgeCapability egress_capability);
 
-// What one wired producer does to protected-ring occupancy (builder contract section 4.4).
+// What one wired producer does to protected-ring occupancy.
 //
 // This is the fact that selects a sender's flow-control guard, and it is not derivable from the
 // command letter: the same express output is transit when fed by the ring and an acquisition when fed
@@ -51,21 +44,16 @@ enum class ProtectedDomainEffect : uint8_t {
 // Only an acquisition is an injection channel.
 bool is_injection_effect(ProtectedDomainEffect effect);
 
-// The protected-ring facts the derivation below needs, already bound to one local node.
-//
-// Bound rather than queried directly so the ladder stays free of ControlPlane, which lets regression
-// drive it from a real derived ring model without a device.
+// Protected-ring queries bound to one local node. Keeping the derivation independent of ControlPlane
+// lets machine-free tests supply the same facts from a derived topology.
 struct ProtectedRingQueries {
     std::function<bool(RoutingDirection egress)> is_protected_ring_edge;
     std::function<bool(RoutingDirection ingress, RoutingDirection egress)> are_same_directed_ring_edges;
     std::function<bool(RoutingDirection ingress, RoutingDirection egress)> continuation_allowed;
 };
 
-// The per-chip facts a router build needs, bound once at chip scope: the edge capabilities
-// classified at discovery, and the ring predicates bound at FabricBuilder construction (a live
-// handle onto ControlPlane's node-scoped predicates, not data). Threaded through create -> build
-// alongside the per-router RouterLocation. Membership rule: only per-node, bound-once facts --
-// nothing mesh-wide, nothing derivable from what's already here.
+// Per-chip facts bound once and shared by every router on that chip: discovered edge capabilities
+// and live handles to ControlPlane's node-scoped ring predicates.
 struct ChipRoutingFacts {
     PerDirectionCapabilities per_direction_capabilities;
     ProtectedRingQueries protected_ring_queries;

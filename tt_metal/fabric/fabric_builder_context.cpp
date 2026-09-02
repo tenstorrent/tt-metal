@@ -120,15 +120,9 @@ void FabricBuilderContext::compute_max_channel_counts() {
         any_mesh_uses_express,
         intermesh_vc_config_active ? &intermesh_vc_config_ : nullptr));
 
-    // If Z-facing intermesh boundary routers exist in this fabric, enumerate both families they
-    // introduce: the boundary itself (5 VC0 / 4 VC1 by its wiring rules), and the mesh routers on
-    // the same chips, whose VC1 gains the from-Z slot (4 VC0 / 4 VC1 in the non-express case).
-    // The boundary family's 9 dominates the maximum today, but the enumeration is the contract:
-    // every family present in the fabric is represented here.
-    //
-    // Gated on VC1 as well as on the edge: the boundary family's entire shape is its from-boundary
-    // VC1 fanout, so without VC1 it cannot be constructed at all (router_vc_shape rejects it). That
-    // also reproduces the condition under which the intermesh config was enabled in the first place.
+    // A Z-facing intermesh boundary introduces the boundary family (5 VC0 / 4 VC1) and mesh routers
+    // on the same chips (4 VC0 / 4 VC1 when non-express); enumerate both. VC1 is required because
+    // the boundary shape is defined by its from-boundary VC1 fanout.
     const bool has_intermesh_z_boundary =
         intermesh_vc_config_.requires_vc1 && fabric_has_intermesh_z_edge(control_plane.get_mesh_graph());
     if (has_intermesh_z_boundary) {
@@ -208,9 +202,7 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
 
     tensix_config_ = nullptr;
 
-    // Derive each local mesh's stream assignment now that its inputs exist (the family maxima above
-    // and the router config just built). It is read during kernel creation, which runs one thread
-    // per device against this shared context, so it has to be in place before that starts.
+    // Populate immutable per-mesh assignments before concurrent per-device kernel creation reads them.
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
         stream_assignments_.emplace(mesh_id, compute_stream_assignment(mesh_id));
