@@ -1528,6 +1528,7 @@ jobs:
                           "gemma-4-31b",
                           "flux.1-schnell",
                           "flux.1-dev",
+                          "flux.2-dev",
                           "wan-2.2-t2v",
                           "wan-2.2-i2v",
                           "ltx-2.3-pro-t2v",

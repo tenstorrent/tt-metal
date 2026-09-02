@@ -948,6 +948,45 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# ── FLUX.2 (TT-DiT) ────────────────────────────────────────────────
+# bh_sc1 only, deliberately. The perf test always traces (trace_warmup=True, traced=True), and
+# on 4 chips the bh_qb row cannot run either way: with dynamic_load=False the encoder OOMs part
+# way through weight conversion with DRAM ~99% full, and dynamic_load=True needs the
+# release_traces() fix on branch stisi/flux2-qb2 (92919ba7f5d), because a trace bakes its
+# weights' device addresses and dynamic_load evicts them. The 4x8 galaxy rows need neither: 32
+# chips hold the whole pipeline resident. They also run Ring topology, the path the
+# ColParallelLinear addcmul bug does not affect. Add a bh_quietbox_2 leg once that fix lands.
+- name: TT-DiT Flux.2-dev multihost e2e tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    # FLUX.2-dev is staged on the yyz4 mount, not this one; switch to HF_HUB_OFFLINE=1 once the
+    # checkpoint is present under /mnt/models/huggingface.
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    export HF_HOME=/mnt/models/huggingface
+    # $HOME is /home/user on the exabox runner and persists. Matches the LTX-2.3 bh_sc1 legs.
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/flux2/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # One config, one resolution. require_exact_physical_num_devices leaves all four 4x8 rows
+    # eligible on a galaxy, so the mesh id is still needed here to pick the headline Ring config;
+    # 1024x1024 matches what the Flux.1 legs measure and keeps the other three resolutions
+    # (up to 8192) out of a nightly.
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 4200 -rs models/tt_dit/tests/models/flux2/test_performance_flux2.py \
+        -k "bh_glx_ring_sp0tp1_nofsdp and 1024x1024"
+  model: flux.2-dev
+  model_family: Flux
+  skus:
+    bh_sc1:
+      # First-run allowance: FLUX.2-dev is not staged on this mount. Recalibrate after one run.
+      timeout: 75
+      tier: 1
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # ── Z-Image ────────────────────────────────────────────────────────
 
 - name: Z-Image-Turbo e2e tests
