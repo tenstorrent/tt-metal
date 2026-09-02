@@ -28,6 +28,15 @@ import ttnn
 GLOBAL_HEAD_DIM = 512
 GLOBAL_ROTARY_DIM = 128
 GLOBAL_PACKED_DIM = GLOBAL_HEAD_DIM + GLOBAL_ROTARY_DIM
+SLIDING_HEAD_DIM = 256
+
+
+def sliding_kv_indices(head_dim: int = SLIDING_HEAD_DIM) -> torch.Tensor:
+    """Return NeoX channels in adjacent-pair order for decode-compatible K."""
+    if head_dim <= 0 or head_dim % 2:
+        raise ValueError(f"head_dim must be a positive even number, got {head_dim}")
+    half = head_dim // 2
+    return torch.stack((torch.arange(half), torch.arange(half, head_dim)), dim=1).reshape(-1)
 
 
 def global_kv_indices(
@@ -155,6 +164,20 @@ def pack_global_query_device(
     result = ttnn.multiply(ordered, scale, memory_config=memory_config)
     ordered.deallocate(True)
     return result
+
+
+def pack_sliding_rope_device(
+    cos_cache: ttnn.Tensor,
+    sin_cache: ttnn.Tensor,
+    *,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Prepare adjacent-pair RoPE lanes once for all sliding layers."""
+    order = sliding_kv_indices(int(cos_cache.shape[-1]))
+    return (
+        _gather_columns(cos_cache, order, memory_config),
+        _gather_columns(sin_cache, order, memory_config),
+    )
 
 
 def pack_global_rope_device(
