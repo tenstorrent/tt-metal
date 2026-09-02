@@ -983,6 +983,46 @@ def test_slice_rm_bw_sharded_nonzero_width_begin(shard_factory, device):
     )
 
 
+def test_slice_rm_bw_sharded_subaligned_shard_row_in(device):
+    """RM WIDTH-sharded input whose shard row is 12 bf16 elems = 24B, not a multiple of any buffer
+    alignment. W=96 is tile-aligned and width-begin is 0, so only the shard-row check routes this
+    through L1 interleaved; natively the accessor strides pages by the aligned page size while
+    `noc_async_read_sharded` reuses that same value as the per-page payload."""
+    in_shape = (1, 1, 64, 96)
+    _run_slice(
+        in_shape,
+        (0, 0, 0, 0),
+        (1, 1, 32, 96),
+        (1, 1, 1, 1),
+        ttnn.ROW_MAJOR_LAYOUT,
+        _width_sharded(in_shape, device, num_cores=8, layout=ttnn.ROW_MAJOR_LAYOUT),
+        L1_INTERLEAVED,
+        ttnn.bfloat16,
+        device,
+        ulp_when_exact=True,
+    )
+
+
+def test_slice_rm_bw_sharded_subaligned_shard_row_out(device):
+    """Mirror of the input-side case on the writer: RM interleaved → WIDTH-sharded output with a
+    24B shard row. Input W is tile-aligned, so needs_rm_composite_output must fire on the shard row
+    alone."""
+    in_shape = (1, 1, 64, 96)
+    out_shape = (1, 1, 32, 96)
+    _run_slice(
+        in_shape,
+        (0, 0, 0, 0),
+        out_shape,
+        (1, 1, 1, 1),
+        ttnn.ROW_MAJOR_LAYOUT,
+        L1_INTERLEAVED,
+        _width_sharded(out_shape, device, num_cores=8, layout=ttnn.ROW_MAJOR_LAYOUT),
+        ttnn.bfloat16,
+        device,
+        ulp_when_exact=True,
+    )
+
+
 # Focused dtype spot-checks on representative paths. The core suites above run bf16 only to keep
 # the file under budget; this hits f32 across TILE+RM paths and bf8b on the TILE-only path.
 @pytest.mark.parametrize(
