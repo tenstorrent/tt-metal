@@ -74,6 +74,17 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
         assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
+def test_std_w_streaming_output_padding_is_finite(device):
+    torch.manual_seed(0)
+    torch_input = -torch.rand((1, 1, 32, 96), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.std(input_tensor, dim=-1, correction=False)
+    padded_output = output_tensor.cpu().to_torch_with_padded_shape()
+
+    assert torch.isfinite(padded_output).all()
+
+
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])

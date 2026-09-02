@@ -49,16 +49,12 @@ void kernel_main() {
             dfb_in0.push_back(read_batch);
         }
 #else
-#ifdef WELFORD_TWO_PASS_BFP8_INPUT
         constexpr std::uint32_t num_front_retained = 2;
-#else
-        constexpr std::uint32_t num_front_retained = 3;
-#endif
         constexpr std::uint32_t num_passes = Wt <= num_front_retained + 1 ? 1 : 2;
         for (std::uint32_t pass = 0; pass < num_passes; ++pass) {
-            // Compute retains the first two or three transposed tiles and the final
-            // tile in DEST across passes, so only stream the middle tiles on
-            // pass two. Tile order remains unchanged.
+            // Compute retains the first two transposed tiles and the final tile in
+            // DEST across passes, so only stream the middle tiles on pass two. Tile
+            // order remains unchanged.
             const std::uint32_t pass_start = pass == 0 ? 0 : std::min(Wt, num_front_retained);
             const std::uint32_t pass_end = pass == 0 ? Wt : Wt - 1;
             for (std::uint32_t wt_base = pass_start; wt_base < pass_end;) {

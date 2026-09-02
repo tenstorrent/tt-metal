@@ -83,13 +83,7 @@ void kernel_main() {
             constexpr uint32_t stats_input_dst = input_dst;
 #else
             dfb_in.wait_front(onetile);
-#ifdef WELFORD_TWO_PASS_BFP8_INPUT
-            // Keep var_dst clean: finalization writes only the variance row,
-            // and stale large values elsewhere would coarsen BFP8 block packing.
             const uint32_t stats_input_dst = wt < 2 ? (wt == 0 ? retained_input_dst : mean_dst) : input_dst;
-#else
-            const uint32_t stats_input_dst = wt < 3 ? (wt == 0 ? retained_input_dst : wt) : input_dst;
-#endif
             transpose_tile(dfb::in, 0, stats_input_dst);
             dfb_in.pop_front(onetile);
 #endif
@@ -110,15 +104,11 @@ void kernel_main() {
         }
         dfb_in.pop_front(Wt);
 #else
-        // Keep the first two or three tiles in otherwise idle DEST slots and the final
-        // pass-one tile in input_dst. BFP8 retains one fewer tile so var_dst
-        // stays clean for sparse result packing. Replay retained tiles in
-        // order, using the now-free retained slot for any middle tiles.
-#ifdef WELFORD_TWO_PASS_BFP8_INPUT
+        // Keep the first two tiles in otherwise idle DEST slots and the final pass-one
+        // tile in input_dst. var_dst must stay clean because finalization writes only
+        // the result row. Replay retained tiles in order, using the now-free retained
+        // slot for any middle tiles.
         constexpr uint32_t num_front_retained_limit = 2;
-#else
-        constexpr uint32_t num_front_retained_limit = 3;
-#endif
         constexpr uint32_t num_front_retained = Wt < num_front_retained_limit ? Wt : num_front_retained_limit;
         for (uint32_t wt = 0; wt < num_front_retained; ++wt) {
             const uint32_t stats_input_dst = wt == 0 ? retained_input_dst : wt;

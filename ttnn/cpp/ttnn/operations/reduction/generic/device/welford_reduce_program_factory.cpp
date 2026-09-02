@@ -322,9 +322,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     if (two_pass_l1_replay) {
         reduce_defines["WELFORD_TWO_PASS_L1_REPLAY"] = "1";
     }
-    if (input_cb_data_format == tt::DataFormat::Bfp8_b) {
-        reduce_defines["WELFORD_TWO_PASS_BFP8_INPUT"] = "1";
-    }
     if (use_sfpu_leaf_combine) {
         reduce_defines["WELFORD_SFPU_LEAF_COMBINE"] = "1";
     }
