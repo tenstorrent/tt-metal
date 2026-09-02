@@ -66,7 +66,14 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
     // Forward neighbour along the ring axis (Ring topology wraps last -> first, giving one-way coverage).
     std::optional<MeshCoordinate> forward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
         input_tensor, coord, 1, operation_attributes.topology, operation_attributes.cluster_axis);
+    std::optional<MeshCoordinate> backward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        input_tensor, coord, -1, operation_attributes.topology, operation_attributes.cluster_axis);
     TT_FATAL(forward_coord.has_value(), "broadcast_ring needs a forward neighbour (Ring topology)");
+
+    // 1-hop line-unicast route args to the forward neighbour (dst_mesh_id, dst_chip_id).
+    auto [unicast_forward_args, unicast_backward_args] =
+        ::ttnn::ccl::get_forward_backward_line_unicast_configuration(coord, forward_coord, backward_coord, mesh_device);
+    (void)unicast_backward_args;
 
     // Role: sender reads local input; the final recipient (ring_size-1 hops from sender) does not forward.
     const uint32_t hops_from_sender = (ring_index + ring_size - operation_attributes.sender_ring_index) % ring_size;
@@ -105,11 +112,6 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
             .set_page_size(packet_header_cb_id, packet_header_size);
     CreateCircularBuffer(program, worker_core_range, packet_header_cb_config);
 
-    // TODO(on-device): forward-neighbour fabric route args (dst_mesh_id, dst_chip_id) for the 1-hop
-    //   unicast. Derive from forward_coord via the fabric node id, as ring_attention_all_gather does.
-    const uint32_t fabric_route_arg0 = 0;  // placeholder
-    const uint32_t fabric_route_arg1 = 0;  // placeholder
-
     // CT layout must match broadcast_ring_relay.cpp exactly.
     std::vector<uint32_t> ct_args = {
         ring_size,
@@ -120,8 +122,8 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
         chunk_num_pages,  // packet_size_in_pages (tiles per chunk)
         cb_id,
         packet_header_cb_id,
-        fabric_route_arg0,  // unicast_route_arg0
-        fabric_route_arg1,  // unicast_route_arg1
+        unicast_forward_args[0],  // unicast_route_arg0 (dst_mesh_id)
+        unicast_forward_args[1],  // unicast_route_arg1 (dst_chip_id)
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(ct_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(ct_args);
@@ -138,13 +140,12 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
 
     // Downstream worker core noc coords (target for the completion atomic-inc). The relay forwards to the
     // same logical worker core on the forward-neighbour device, so translate this core to noc coords.
-    // TODO(on-device): confirm the downstream core is the same logical core on forward_coord's device.
     const CoreCoord ds_core_noc = mesh_device->worker_core_from_logical_core(worker_cores.front());
 
     // Runtime args (per worker core), matching broadcast_ring_relay.cpp:
     //   input_addr, output_addr, recv_sem_addr, ds_sem_noc_x, ds_sem_noc_y, ds_sem_addr, then fabric args.
-    // TODO(on-device): append the FabricConnectionManager args for the forward connection (only when
-    //   !is_last), via append_worker_to_fabric_edm_sender_rt_args (see ring_attention_all_gather).
+    const auto src_fabric_node_id = mesh_device->get_fabric_node_id(coord);
+    const auto fwd_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
     for (uint32_t link = 0; link < operation_attributes.num_links; ++link) {
         const CoreCoord core = worker_cores[link];
         std::vector<uint32_t> rt = {
@@ -154,9 +155,16 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
             static_cast<uint32_t>(ds_core_noc.x),
             static_cast<uint32_t>(ds_core_noc.y),
             recv_semaphore.address(),  // downstream recv-sem: same L1 offset (global semaphore)
-            // TODO(on-device): + fabric connection args here (FabricConnectionManager::build_from_args).
         };
-        (void)is_last;
+        // Fabric connection args, in the exact layout FabricConnectionManager::build_from_args expects:
+        //   [forward_flag] [forward sender args if flag] [backward_flag] [backward args if flag].
+        // v1 forwards only; the final recipient opens no connection (both flags 0).
+        rt.push_back(is_last ? 0u : 1u);  // forward connection flag
+        if (!is_last) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                src_fabric_node_id, fwd_fabric_node_id, link, program, core, rt);
+        }
+        rt.push_back(0u);  // backward connection flag (unused in v1)
         tt::tt_metal::SetRuntimeArgs(program, relay_kernel_id, core, rt);
     }
 
