@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 """PyTorch ground-truth reference for Manifold-Constrained Hyper-Connections (mHC).
 
 This is Deliverable 1 of tenstorrent/tt-metal#40703: a clear, unoptimised reference

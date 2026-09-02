@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 """CPU equivalence check for the NON-Sinkhorn parts of the mHC path.
 
 Everything in DeepSeek-V4's mHC computation except the Sinkhorn is already pure torch

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2023 DeepSeek-AI
+# SPDX-License-Identifier: MIT
+
 """VERBATIM copy of the Sinkhorn parametrization from DeepSeek-V4-Pro.
 
 Source: huggingface.co/deepseek-ai/DeepSeek-V4-Pro  inference/kernel.py

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 """Isolated cross-check: DeepSeek-V4's TileLang Sinkhorn kernel vs our torch reference.
 
 The Sinkhorn parametrization is the ONLY non-torch piece of the mHC path. This script
