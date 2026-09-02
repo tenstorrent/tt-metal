@@ -1230,7 +1230,7 @@ Repo: `tt-metal`, branch `ttmodelmanager/glm47-flash-probe`, no push.
 | `8b5f776276c` | the FM-017 evidence sweep and the report rebuilt from it |
 | `c10e2d72d13` | records the SHA above |
 | `acc2b26b83d` | round-6 source fixes (FM-018): the tile-aligned host-logits walk and its warmup, host-side row trim, `generate` leaving other slots inactive, the mixed-depth recapture control, the `user_id=` guard, the sweep's own log |
-| `FULLMODEL_R6_EVIDENCE_SHA` | the FM-018 evidence sweep and the report rebuilt from it |
+| `0f2ac8679bf` | the FM-018 evidence sweep and the report rebuilt from it |
 | (this commit) | records the SHA above |
 
 The source and the evidence are deliberately in separate commits: the sweep ran
