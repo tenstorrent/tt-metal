@@ -42,7 +42,7 @@ TILE = 32
 
 # CB assignment (semantic names).
 CB_IN = 0  # input tiles, sharded L1 (resident): Ht*Wt*NC tiles, row-major, batch-major
-CB_SCALER = 1  # AVG reduce scaler tile (reduce_tile / library paths only)
+CB_SCALER = 1  # scalar/mask/zero auxiliary tiles
 CB_ACC = 2  # cross-call accumulate: running RAW partial-sum tile per output (accumulate path only)
 CB_OUT = 16  # output tiles, fp32, tensor-backed (count depends on dim)
 
@@ -637,6 +637,32 @@ void kernel_main() {
 """
 
 
+# Composite host-planned payload: mask at CB index 0 followed by zero at index 1. This is the partial-input
+# form used by CopySeedZeroPair, and deliberately exercises prepare_planned_reduce_aux's combined recipe.
+_MASK_ZERO_KERNEL = r"""
+#include <cstdint>
+#include "api/dataflow/circular_buffer.h"
+#define REDUCE_AUX_MASK 1
+#define REDUCE_AUX_ZERO 1
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
+void kernel_main() {
+    constexpr uint32_t cb_scaler = 1;
+    constexpr uint32_t dim = get_compile_time_arg_val(0);
+    constexpr uint32_t partial_elems = get_compile_time_arg_val(1);
+    using ckernel::PoolType;
+    using ckernel::ReduceDim;
+    if constexpr (dim == 0) {
+        dataflow_kernel_lib::prepare_planned_reduce_aux<cb_scaler, PoolType::SUM, ReduceDim::REDUCE_ROW>(
+            1.0f, partial_elems);
+    } else {
+        dataflow_kernel_lib::prepare_planned_reduce_aux<cb_scaler, PoolType::SUM, ReduceDim::REDUCE_COL>(
+            1.0f, partial_elems);
+    }
+}
+"""
+
+
 # =============================================================================
 # Zero-tile dataflow kernel (CopySeedZeroPair accumulate) — fills the scaler CB with an all-zero tile that the
 # odd-leftover add_tiles pairs with. prepare_reduce_scaler zeroes the whole tile then skips the fill for a 0
@@ -969,8 +995,6 @@ def create_accumulate_program_descriptor(
             raise ValueError("row_stride + partial not wired in the accumulate example")
         if row_stride < Wt:
             raise ValueError(f"row_stride ({row_stride}) must be >= Wt ({Wt})")
-    if reload == "copy_zero" and partial_elems:
-        raise ValueError("copy_zero uses the scaler CB for the zero tile; incompatible with a partial mask")
     if reload == "fold" and acc_unpack_to_dest:
         raise ValueError(
             "reload='fold' (FoldViaAdd) reads the accumulator via SrcB, disabled for an "
@@ -982,7 +1006,7 @@ def create_accumulate_program_descriptor(
     fidelity = math_fidelity or ttnn.MathFidelity.HiFi4
     out_tiles = out_tile_count(dim, Ht, Wt, NC)
     use_mask = bool(partial_elems)
-    use_zero = reload == "copy_zero"  # scaler CB holds an all-zero tile (aligned only; guarded above)
+    use_zero = reload == "copy_zero"
     # MEAN over the accumulated chunks: each chunk re-reduces the same block, so the GRAND-total element
     # count is num_chunks * (elements reduced per chunk, incl. the partial count). This compile-time factor
     # must span all chunks, not just the last block's count. 0 selects SUM.
@@ -991,8 +1015,12 @@ def create_accumulate_program_descriptor(
     cbs = [
         ttnn.cb_descriptor_from_sharded_tensor(CB_IN, input_tensor),
         ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor),
-        # SCALER CB: a 0/1 mask tile (partial) or an all-zero tile (copy_zero), both bf16; else unused.
-        _scratch_cb(CB_SCALER, ttnn.bfloat16 if (use_mask or use_zero) else _dtype_of(accum)),
+        # Auxiliary CB: mask, zero, or [mask, zero] for partial CopySeedZeroPair.
+        _scratch_cb(
+            CB_SCALER,
+            ttnn.bfloat16 if (use_mask or use_zero) else _dtype_of(accum),
+            num=2 if (use_mask and use_zero) else 1,
+        ),
         # Running RAW partial-sum tile per output, at the accumulation (DEST) dtype — fp32 when fp32_dest_acc
         # is on, so the cross-chunk partial keeps full precision. The library reconfigures SRCA/SRCB around
         # each accumulator read (copy_tile / add_tiles do NOT), so the accumulator CB may differ in format
@@ -1028,11 +1056,11 @@ def create_accumulate_program_descriptor(
     )
     kernels = [compute]
     if use_mask:
-        # 0/1 mask tile the partial fold multiplies the last reduce-dim tile by (padding -> 0).
+        # The partial fold consumes mask[0]. CopySeedZeroPair additionally consumes zero[1].
         kernels.insert(
             0,
             ttnn.KernelDescriptor(
-                kernel_source=_MASK_KERNEL,
+                kernel_source=_MASK_ZERO_KERNEL if use_zero else _MASK_KERNEL,
                 source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
                 core_ranges=_single_core(),
                 compile_time_args=[dim_id, partial_elems],

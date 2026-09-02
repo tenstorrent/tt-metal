@@ -1042,6 +1042,34 @@ def test_reduce_block_accumulate_partial(device):
     assert not failures, "accumulate-partial mismatches:\n" + "\n".join(failures)
 
 
+def test_reduce_block_accumulate_partial_zero_pair(device):
+    """A later call has three full tiles plus one partial: it needs mask[0] and zero[1]."""
+    Ht, Wt, valid_width, num_chunks = 1, 4, 3 * TILE + 7, 2
+    data = torch.full((TILE, Wt * TILE), 999.0, dtype=torch.float32)
+    data[:, :valid_width] = 1.0
+    x = ttnn.from_torch(
+        data.to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=create_sharded_memory_config(data.shape),
+    )
+    out = run_accumulate(
+        x,
+        dim="row",
+        Ht=Ht,
+        Wt=Wt,
+        NC=1,
+        accum="fp32",
+        num_chunks=num_chunks,
+        partial_elems=7,
+        reload="copy_zero",
+        acc_unpack_to_dest=True,
+    )
+    expected = float(valid_width * num_chunks)
+    assert torch.all(_readout(out, "row") == expected), "mask or zero auxiliary tile was read from the wrong slot"
+
+
 def test_reduce_block_accumulate_row_stride(device):
     """row_stride + cross-call Accumulate (ROW/COL): each chunk reduces the first Wt columns of a wider
     row_stride-wide resident block (the padding tiles are skipped by the row-pitch indexing), so summing

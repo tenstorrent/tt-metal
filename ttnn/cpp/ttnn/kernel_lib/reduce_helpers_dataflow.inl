@@ -246,6 +246,11 @@ FORCE_INLINE void prepare_planned_reduce_aux(float scaler_f, uint32_t valid_redu
     prepare_reduce_scaler<dfb_id, pool_type, reduce_dim>(scaler_f, valid_elements);
 #elif defined(REDUCE_AUX_MASK)
     prepare_reduce_mask<dfb_id, reduce_dim>(valid_elements);
+#if defined(REDUCE_AUX_ZERO)
+    // Composite AccumulateViaAdd payload: the compute helper infers zero_idx as the first slot after the
+    // mask/scaler representation, so the stable layout here is [mask, zero].
+    prepare_reduce_scaler<dfb_id, pool_type, reduce_dim>(0.0f, full_dim);
+#endif
 #elif defined(REDUCE_AUX_ZERO)
     prepare_reduce_scaler<dfb_id, pool_type, reduce_dim>(0.0f, full_dim);
 #else
