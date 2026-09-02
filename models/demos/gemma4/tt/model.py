@@ -1048,8 +1048,9 @@ class Gemma4Model:
                 layer_packed = {
                     "packed_p": packed["packed_p"],
                     "position_idx": packed["position_idx"],
+                    "position_idx_cache": packed.get("position_idx_cache"),
                     "kv_write_idxs": packed.get("kv_write_idxs"),
-                    "attn_mask": packed["attn_mask_sliding"] if sliding else packed["attn_mask_full"],
+                    "attn_mask": packed.get("attn_mask_sliding") if sliding else packed.get("attn_mask_full"),
                     "rope_packed": rope_packed.get(lt),
                     "embed_idx": packed.get("embed_idx_sliding") if sliding else packed.get("embed_idx_full"),
                     "hot_pt": packed.get("hot_pt"),
@@ -1409,6 +1410,7 @@ class Gemma4Model:
         attn_mask_full,
         attn_mask_sliding,
         packed_p,
+        position_idx_cache=None,
         page_table=None,
         kv_cache=None,
         kv_write_idxs=None,
@@ -1458,6 +1460,7 @@ class Gemma4Model:
         packed = {
             "packed_p": packed_p,
             "position_idx": position_idx,
+            "position_idx_cache": position_idx_cache,
             "kv_write_idxs": kv_write_idxs,
             "attn_mask_full": attn_mask_full,
             "attn_mask_sliding": attn_mask_sliding,

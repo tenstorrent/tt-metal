@@ -186,6 +186,7 @@ class Gemma4Attention:
                 mesh_config=self.mesh_config,
                 mesh_device=self.mesh_device,
                 position_idx=packed["position_idx"],
+                position_idx_cache=packed.get("position_idx_cache"),
                 kv_write_idxs=packed.get("kv_write_idxs"),
                 attn_mask=packed["attn_mask"],
                 packed_p=packed["packed_p"],

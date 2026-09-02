@@ -637,6 +637,7 @@ def packed_decode_forward(
     mesh_config,
     mesh_device,
     position_idx,
+    position_idx_cache,
     kv_write_idxs,
     attn_mask,
     packed_p,
@@ -740,8 +741,17 @@ def packed_decode_forward(
         ttnn.deallocate(tt_k)
         ttnn.deallocate(tt_v)
 
+    # Diagnostic-only timing switch used by the MTP current-path breakdown.
+    # It deliberately leaves cache contents stale, so never enable it for a
+    # correctness/generation run.
+    skip_kv_write = os.environ.get("GEMMA4_PACKED_VERIFY_SKIP_KV_WRITE", "0") == "1"
+
     # ── ⑤ KV write — loop-free persistent staging (primary) ────────────────
-    if not is_kv_shared and kv_staging is not None and embed_idx is not None:
+    if not is_kv_shared and skip_kv_write:
+        tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(tt_k)
+        ttnn.deallocate(tt_v)
+    elif not is_kv_shared and kv_staging is not None and embed_idx is not None:
         # Park Q off L1 (idle until the SDPA pack ⑥); merge intermediates live
         # in DRAM and Q never re-enters L1 before the SDPA call.
         tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
@@ -822,6 +832,52 @@ def packed_decode_forward(
         ttnn.deallocate(tt_v_bp)
 
     k_cache_use, v_cache_use = kv_cache
+
+    # P-as-batch SDPA: Q/K/V + staging write still run once over P rows, but
+    # SDPA uses the native decode batch axis and per-row current positions.
+    # Avoids folding P into the query-head axis, additive masks, and the
+    # ROW_MAJOR pack/unpack below. Default on; GEMMA4_PACKED_VERIFY_BATCH_SDPA=0
+    # restores the packed-head SDPA.
+    if os.environ.get("GEMMA4_PACKED_VERIFY_BATCH_SDPA", "1").lower() not in ("0", "false", "no", "off"):
+        if position_idx_cache is None:
+            raise ValueError("batch-SDPA packed verify requires position_idx_cache")
+        tt_q_decode = ttnn.transpose(tt_q, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(tt_q)
+        device_grid = mesh_device.compute_with_storage_grid_size()
+        sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(device_grid.x, device_grid.y),
+            q_chunk_size=32,
+            k_chunk_size=64,
+            exp_approx_mode=False,
+        )
+        sdpa_compute_kernel_config = decode_sdpa_compute_kernel_config(mesh_device)
+        sliding_window = config.sliding_window if config.is_sliding else None
+        tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            tt_q_decode,
+            k_cache_use,
+            v_cache_use,
+            cur_pos_tensor=position_idx_cache,
+            page_table_tensor=page_table,
+            scale=1.0,
+            sliding_window_size=sliding_window,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_kernel_config,
+            paged_cache_geometry=ttnn.PagedCacheGeometryOverride(
+                block_size=effective_block_size(k_cache_use, head_dim, nkv_local),
+                num_kv_heads=nkv_local,
+            ),
+        )
+        ttnn.deallocate(tt_q_decode)
+        tt_out = concat_heads(
+            tt_sdpa,
+            is_decode_mode=True,
+            num_heads=H_local,
+            head_dim=head_dim,
+            mesh_device=mesh_device,
+        )
+        tt_out = apply_output_projection(tt_out, weights)
+        return apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 
     # ── ⑥ Head-major pack Q → [1, B, H_local*P, head_dim] → SDPA ────────────
     # ROW_MAJOR on purpose: P (< 32) never lands on a tile axis, so the

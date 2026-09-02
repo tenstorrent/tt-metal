@@ -366,6 +366,16 @@ class SpeculativeDecoder:
         )
         self._pv_ready = True
 
+    def _batch_sdpa_enabled(self):
+        """Native decode-batch SDPA for packed verify (default). Set
+        ``GEMMA4_PACKED_VERIFY_BATCH_SDPA=0`` for the packed-head + mask path."""
+        return os.environ.get("GEMMA4_PACKED_VERIFY_BATCH_SDPA", "1").lower() not in (
+            "0",
+            "false",
+            "no",
+            "off",
+        )
+
     def _pv_seed_staging(self, c):
         """Seed every layer's staging block-slot 0 with the committed content of
         the hot block at position ``c`` (read from the cache — the only
@@ -401,23 +411,28 @@ class SpeculativeDecoder:
         bs, S2, BLK = self._pv_bs, self._pv_s2, self._pv_blk
         a, off = c // bs, c % bs
         roll = 1 if a == self._pv_a_prev + 1 else 0
-        H, W = self._pv_h_local, self._pv_window
 
         pos = torch.arange(c, c + P, dtype=torch.int32).reshape(1, P)
 
         # Additive masks, head-major rows h*P+p: causal upper bound c+p; sliding
         # adds the window lower bound. S_k is bucket-padded for trace stability.
-        NEG = -1e9
+        # Batch-SDPA uses cur_pos + the decode sliding-window kwarg instead, so
+        # skip the TILE mask build/H2D (the bulk of host glue).
         S_k = ((c + P + self._pv_sk_bucket - 1) // self._pv_sk_bucket) * self._pv_sk_bucket
-        j = torch.arange(S_k)
-        rows_full = torch.empty(P, S_k)
-        rows_slide = torch.empty(P, S_k)
-        for p in range(P):
-            upper = c + p
-            rows_full[p] = torch.where(j <= upper, 0.0, NEG)
-            rows_slide[p] = torch.where((j <= upper) & (j > upper - W), 0.0, NEG)
-        mask_full = rows_full.repeat(H, 1).reshape(1, 1, H * P, S_k).to(torch.bfloat16)
-        mask_slide = rows_slide.repeat(H, 1).reshape(1, 1, H * P, S_k).to(torch.bfloat16)
+        if self._batch_sdpa_enabled():
+            mask_full = mask_slide = None
+        else:
+            NEG = -1e9
+            H, W = self._pv_h_local, self._pv_window
+            j = torch.arange(S_k)
+            rows_full = torch.empty(P, S_k)
+            rows_slide = torch.empty(P, S_k)
+            for p in range(P):
+                upper = c + p
+                rows_full[p] = torch.where(j <= upper, 0.0, NEG)
+                rows_slide[p] = torch.where((j <= upper) & (j > upper - W), 0.0, NEG)
+            mask_full = rows_full.repeat(H, 1).reshape(1, 1, H * P, S_k).to(torch.bfloat16)
+            mask_slide = rows_slide.repeat(H, 1).reshape(1, 1, H * P, S_k).to(torch.bfloat16)
 
         # merge_idx over staging positions: committed prefix from staging
         # (identity, or +bs on a rollover — the prefix came from the spill
@@ -459,19 +474,31 @@ class SpeculativeDecoder:
 
     def _pv_device_inputs(self, tokens, h):
         """Device tensors for one packed verify from host dict ``h``."""
-        return {
+        dev = {
             "x": self._tokens_tensor(tokens),
             "pos": self._pv_from_torch(h["pos"], ttnn.uint32),
-            "mask_full": self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
-            "mask_slide": self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            "mask_full": (
+                self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                if h["mask_full"] is not None
+                else None
+            ),
+            "mask_slide": (
+                self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                if h["mask_slide"] is not None
+                else None
+            ),
             "embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
             "hot": self._pv_from_torch(h["hot"], ttnn.int32),
         }
+        if self._batch_sdpa_enabled():
+            dev["pos_cache"] = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32)
+        return dev
 
     def _pv_call(self, dev, P):
         return self.target.ttnn_packed_verify_forward(
             x=dev["x"],
             position_idx=dev["pos"],
+            position_idx_cache=dev.get("pos_cache"),
             attn_mask_full=dev["mask_full"],
             attn_mask_sliding=dev["mask_slide"],
             packed_p=P,
@@ -503,19 +530,29 @@ class SpeculativeDecoder:
 
     def _copy_pv_into_tr(self, tr, h):
         """Refresh persistent fused-trace packed inputs from host dict ``h``."""
-        for src, dst in (
+        pairs = [
             (self._pv_from_torch(h["pos"], ttnn.uint32, device=False), tr["v_pos"]),
-            (
-                self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
-                tr["mask_full"],
-            ),
-            (
-                self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
-                tr["mask_slide"],
-            ),
             (self._pv_from_torch(h["hot"], ttnn.int32, device=False), tr["hot"]),
-        ):
+        ]
+        if tr.get("mask_full") is not None and h["mask_full"] is not None:
+            pairs.append(
+                (
+                    self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
+                    tr["mask_full"],
+                )
+            )
+            pairs.append(
+                (
+                    self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
+                    tr["mask_slide"],
+                )
+            )
+        for src, dst in pairs:
             ttnn.copy_host_to_device_tensor(src, dst)
+            src.deallocate(True)
+        if "v_pos_cache" in tr:
+            src = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32, device=False)
+            ttnn.copy_host_to_device_tensor(src, tr["v_pos_cache"])
             src.deallocate(True)
         for lt, e in h["embed"].items():
             src = self._pv_from_torch(e, ttnn.uint32, device=False)
@@ -531,16 +568,29 @@ class SpeculativeDecoder:
         dev = {
             "x": verify_x,
             "pos": self._pv_from_torch(h["pos"], ttnn.uint32),
-            "mask_full": self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
-            "mask_slide": self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            "mask_full": (
+                self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                if h["mask_full"] is not None
+                else None
+            ),
+            "mask_slide": (
+                self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                if h["mask_slide"] is not None
+                else None
+            ),
             "embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
             "hot": self._pv_from_torch(h["hot"], ttnn.int32),
-            "pt": self._page_table(1),
+            "pt": self._page_table(P if self._batch_sdpa_enabled() else 1),
         }
+        if self._batch_sdpa_enabled():
+            dev["pos_cache"] = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32)
         logits, hidden = self._pv_call(dev, P)
         self._pv_a_prev = c // self._pv_bs
         for t in (dev["pos"], dev["mask_full"], dev["mask_slide"], dev["hot"], dev["pt"]):
-            t.deallocate(True)
+            if t is not None:
+                t.deallocate(True)
+        if "pos_cache" in dev:
+            dev["pos_cache"].deallocate(True)
         for e in dev["embed"].values():
             e.deallocate(True)
         return logits, hidden
@@ -554,13 +604,16 @@ class SpeculativeDecoder:
             self._pv_seed_staging(c)
         h = self._pv_host_inputs(c, P)
         dev = self._pv_device_inputs(tokens, h)
-        dev["pt"] = self._page_table(1)
+        dev["pt"] = self._page_table(P if self._batch_sdpa_enabled() else 1)
         logits, hidden = self._pv_call(dev, P)
         self._pv_a_prev = c // self._pv_bs
         lh = self._logits_to_host(logits).reshape(P, -1)
         logits.deallocate(True)
         for t in (dev["x"], dev["pos"], dev["mask_full"], dev["mask_slide"], dev["hot"], dev["pt"]):
-            t.deallocate(True)
+            if t is not None:
+                t.deallocate(True)
+        if "pos_cache" in dev:
+            dev["pos_cache"].deallocate(True)
         for e in dev["embed"].values():
             e.deallocate(True)
         return lh, hidden
@@ -593,18 +646,24 @@ class SpeculativeDecoder:
             self._pv_traces[key] = dev
         else:
             ttnn.copy_host_to_device_tensor(self._host_tokens(tokens), tr["x"])
-            for src, dst in (
+            pairs = [
                 (self._pv_from_torch(h["pos"], ttnn.uint32, device=False), tr["pos"]),
-                (
-                    self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
-                    tr["mask_full"],
-                ),
-                (
-                    self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
-                    tr["mask_slide"],
-                ),
                 (self._pv_from_torch(h["hot"], ttnn.int32, device=False), tr["hot"]),
-            ):
+            ]
+            if tr.get("mask_full") is not None and h["mask_full"] is not None:
+                pairs.extend(
+                    (
+                        (
+                            self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
+                            tr["mask_full"],
+                        ),
+                        (
+                            self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
+                            tr["mask_slide"],
+                        ),
+                    )
+                )
+            for src, dst in pairs:
                 ttnn.copy_host_to_device_tensor(src, dst)
             for lt, e in h["embed"].items():
                 ttnn.copy_host_to_device_tensor(self._pv_from_torch(e, ttnn.uint32, device=False), tr["embed"][lt])
@@ -1138,8 +1197,9 @@ class SpeculativeDecoder:
         vlogits, vhidden = self.target.ttnn_packed_verify_forward(
             x=verify_x,
             position_idx=tr["v_pos"],
-            attn_mask_full=tr["mask_full"],
-            attn_mask_sliding=tr["mask_slide"],
+            position_idx_cache=tr.get("v_pos_cache"),
+            attn_mask_full=tr.get("mask_full"),
+            attn_mask_sliding=tr.get("mask_slide"),
             packed_p=P,
             page_table=tr["v_pt"],
             kv_cache=self.tt_kv_cache,
@@ -1182,15 +1242,25 @@ class SpeculativeDecoder:
             "d_pi": d_pi,
             "d_pt": self._page_table(1),
             "v_pos": self._pv_from_torch(h["pos"], ttnn.uint32),
-            "mask_full": self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
-            "mask_slide": self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            "mask_full": (
+                self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                if h["mask_full"] is not None
+                else None
+            ),
+            "mask_slide": (
+                self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                if h["mask_slide"] is not None
+                else None
+            ),
             "embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
             "hot": self._pv_from_torch(h["hot"], ttnn.int32),
-            "v_pt": self._page_table(1),
+            "v_pt": self._page_table(P if self._batch_sdpa_enabled() else 1),
             "S_k": h["S_k"],
             "P": P,
             "c": c,
         }
+        if self._batch_sdpa_enabled():
+            tr["v_pos_cache"] = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32)
         _lg.info("[spec-trace] capture fused: compile run")
         vx, vidx, vh, h_rows = self._fused_body(tr)
         ttnn.synchronize_device(self.mesh_device)
@@ -1296,8 +1366,9 @@ class SpeculativeDecoder:
         while len(out) < max_new_tokens:
             if not first:
                 c, P, h = self._fused_pv_prepare(cur_pos)
-                if h["S_k"] != tr["S_k"]:
+                if h["S_k"] != tr["S_k"] and not self._batch_sdpa_enabled():
                     # Mask key-length bucket rolled; recapture at the new shape.
+                    # Batch-SDPA has no S_k-shaped masks, so skip this cliff.
                     # tr["h"] already holds this iter's shift seed.
                     self._capture_fused_trace(cur_token, tr["h"], cur_pos)
                     tr = self._fused_trace

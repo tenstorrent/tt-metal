@@ -2743,6 +2743,196 @@ def test_fused_trace_minimal(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
+def test_mtp_current_path_breakdown(mesh_device, reset_seeds):
+    """Measure the current greedy MTP path as four independently traced costs.
+
+    Reports a single-token target forward, packed P-token verify, the fused K
+    drafter chain (including sharded greedy reductions), and the production
+    fused iteration.  It also compares direct fused-trace replay with the real
+    generation loop to isolate host preparation/readback.  Unlike the older
+    perf probes below, this follows the current packed-verify + shard-argmax
+    production graph.
+    """
+    import time
+
+    from models.demos.gemma4.tt.common import create_assistant_model
+    from models.demos.gemma4.tt.generator import Gemma4Generator
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+
+    model_path = os.getenv("HF_MODEL")
+    if not model_path:
+        pytest.skip("set HF_MODEL (target) to run")
+
+    max_seq_len = 1024
+    block_size = 64
+    K = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))
+    reps = int(os.environ.get("GEMMA4_SPEC_PERF_REPS", 20))
+    n_new = int(os.environ.get("GEMMA4_SPEC_TEST_TOKENS", 96))
+    paged_attention_config = PagedAttentionConfig(
+        block_size=block_size, max_num_blocks=math.ceil(max_seq_len / block_size)
+    )
+    generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=1,
+        max_seq_len=max_seq_len,
+        num_layers=None,
+        paged_attention_config=paged_attention_config,
+        bounded_sliding_kv_cache=False,
+    )
+    target = generator.model[0]
+    _, assistant = create_assistant_model(
+        mesh_device=mesh_device,
+        target_model=target,
+        mesh_config=target.mesh_config,
+        ccl_manager=target.ccl_manager,
+        assistant_path=ASSISTANT_PATH,
+    )
+    from models.demos.gemma4.demo.text_demo_v2 import create_tt_page_table
+
+    page_table = create_tt_page_table(1, paged_attention_config)
+    prompt = os.environ.get("GEMMA4_SPEC_PROMPT", "Write a short paragraph about the history of the Eiffel Tower.")
+    in_pt, encoded, decoding_pos, prefill_lens = preprocess_inputs_prefill(
+        [prompt], tokenizer, generator.model_args, True, n_new, max_prefill_len=max_seq_len
+    )
+    in_pt = torch.stack(in_pt).view(1, -1)
+    anchor_token = int(encoded[0][prefill_lens[0] - 1])
+    anchor_pos = prefill_lens[0] - 1
+    spec = SpeculativeDecoder(
+        target_model=target,
+        assistant_model=assistant,
+        mesh_device=mesh_device,
+        tt_kv_cache=tt_kv_cache,
+        page_table_torch=page_table,
+        stop_tokens=tokenizer.stop_tokens,
+        draft_len=K,
+    )
+    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+
+    def _capture_and_time(build):
+        outputs = build()
+        ttnn.synchronize_device(mesh_device)
+        for tensor in outputs:
+            tensor.deallocate(True)
+
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        outputs = build()
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        start = time.perf_counter()
+        for _ in range(reps):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        elapsed_ms = (time.perf_counter() - start) * 1e3 / reps
+        ttnn.release_trace(mesh_device, trace_id)
+        for tensor in outputs:
+            tensor.deallocate(True)
+        return elapsed_ms
+
+    # A process may capture exactly one CCL-bearing component. Even after
+    # release_trace, capturing a different CCL graph in the same process can
+    # deadlock Wormhole's fabric. The caller runs this test once per component.
+    component = os.environ.get("GEMMA4_SPEC_PROFILE_COMPONENT", "full")
+    if component not in {"target", "packed", "draft", "full"}:
+        raise ValueError(f"unknown GEMMA4_SPEC_PROFILE_COMPONENT={component!r}")
+
+    if component == "target":
+        x1 = spec._tokens_tensor([anchor_token])
+        pu1, pi1 = spec._pos_tensors([anchor_pos])
+        pt1 = spec._page_table(1)
+
+        def _target_one():
+            return target.ttnn_verify_forward(
+                x=x1, current_pos=pu1, current_pos_cache=pi1, page_table=pt1, kv_cache=spec.tt_kv_cache
+            )
+
+        target_ms = _capture_and_time(_target_one)
+        for tensor in (x1, pu1, pi1, pt1):
+            tensor.deallocate(True)
+        logger.info(f"[mtp-bd] component=target target-one trace={target_ms:.2f} ms")
+        return
+
+    if component == "packed":
+        P = K + 1
+        spec._pv_setup()
+        spec._pv_a_prev = -1
+        spec._pv_seed_staging(anchor_pos)
+        packed_host = spec._pv_host_inputs(anchor_pos, P)
+        packed = spec._pv_device_inputs([anchor_token] * P, packed_host)
+        packed["pt"] = spec._page_table(P if spec._batch_sdpa_enabled() else 1)
+
+        def _packed_verify():
+            return spec._pv_call(packed, P)
+
+        packed_ms = _capture_and_time(_packed_verify)
+        for tensor in (
+            packed["x"],
+            packed["pos"],
+            packed["mask_full"],
+            packed["mask_slide"],
+            packed["hot"],
+            packed["pt"],
+        ):
+            if tensor is not None:
+                tensor.deallocate(True)
+        if "pos_cache" in packed:
+            packed["pos_cache"].deallocate(True)
+        for tensor in packed["embed"].values():
+            tensor.deallocate(True)
+        logger.info(f"[mtp-bd] component=packed packed-verify-P{P} trace={packed_ms:.2f} ms")
+        return
+
+    if component == "draft":
+        spec._use_trace = False
+        draft_h = spec.seed(anchor_token, anchor_pos)
+        draft_tok = spec._tokens_tensor([anchor_token])
+        draft_pu, draft_pi = spec._pos_tensors([anchor_pos])
+        draft_pt = spec._page_table(1)
+        draft_page_tables = {layer_type: draft_pt for layer_type in spec._shared_kv}
+
+        def _draft_chain():
+            token = draft_tok
+            hidden = draft_h
+            idx = None
+            for _ in range(K):
+                idx, hidden = spec._greedy_draft_idx(token, hidden, draft_page_tables, draft_pu, draft_pi, rows=1)
+                token = ttnn.reshape(idx, (1, 1))
+            return idx, hidden
+
+        draft_ms = _capture_and_time(_draft_chain)
+        for tensor in (draft_h, draft_tok, draft_pu, draft_pi, draft_pt):
+            tensor.deallocate(True)
+        logger.info(f"[mtp-bd] component=draft fused-K{K}-draft-chain trace={draft_ms:.2f} ms")
+        return
+
+    generated, accepts = spec.generate_fused(anchor_token, anchor_pos, n_new)
+    ttnn.synchronize_device(mesh_device)
+    loop_ms = spec._last_fused_replay_s * 1e3 / len(accepts)
+    fused_trace = spec._fused_trace
+    start = time.perf_counter()
+    for _ in range(reps):
+        ttnn.execute_trace(mesh_device, fused_trace["id"], cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    fused_ms = (time.perf_counter() - start) * 1e3 / reps
+    host_ms = max(loop_ms - fused_ms, 0.0)
+    mean_accept = sum(accepts) / len(accepts)
+    tokens_per_iter = mean_accept + 1.0
+    logger.info(
+        f"[mtp-bd] component=full device-trace={fused_ms:.2f} ms "
+        f"loop={loop_ms:.2f} ms/iter host-glue={host_ms:.2f} ms/iter "
+        f"accept={mean_accept:.2f}/{K} tokens/iter={tokens_per_iter:.2f} "
+        f"steady={tokens_per_iter/(loop_ms/1e3):.2f} tok/s setup={spec._last_fused_setup_s:.2f} s"
+    )
+
+
+@_needs_assistant
+@_assistant_probe
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
+    indirect=True,
+)
 def test_verify_seqkv_cost(mesh_device, reset_seeds):
     """MEASURE how much of the verify cost is the sequential_kv_write loop.
 
