@@ -833,6 +833,24 @@ _UNPACR_NOP_OPERAND_IDX = {
 # naming Blackhole, so a future Quasar copy of the constants is caught too.
 _WH_PACKED_WAIT = "UNP_ZEROSRC_STALL_RESET_WR_RDY"
 _WH_PACKED_BOTH = "UNP_ZEROSRC_RESET_ALL_BANKS"
+# All three of Blackhole's un-migrated Wormhole-packed p_unpacr_nop constants, with
+# what each ACTUALLY encodes when dropped into Blackhole's 2-bit Unpack_Pop slot -
+# the natural slot, since the legitimate UNP_ZEROSRC lives there:
+#   ..._RESET_ALL_BANKS    (0b1001)    -> Src_ClrVal_Ctrl=0b10, i.e. clear to ONE,
+#                                         not "reset all banks" (that is Bank_Clr_Ctrl)
+#   ..._STALL_RESET_WR_RDY (0b10001)   -> Bank_Clr_Ctrl=1, i.e. clear BOTH banks,
+#                                         not "wait like UNPACR" (that is bit 5)
+#   ..._SET_DVALID         (0b1000001) -> Clr_to1_fmt_Ctrl=0b01 and Set_Dvalid=0, i.e.
+#                                         the DVALID is NEVER published (Set_Dvalid is
+#                                         at <<8) - the worst of the three
+# UNP_NEGINFSRC (0b101) is deliberately NOT listed: it lands as
+# Src_ClrVal_Ctrl=CLR_SRC_NEGINF + Unpack_Pop=CLR_SRC, which is bit-identical to
+# Blackhole's own idiomatic neginf clear, so it is harmless.
+_WH_PACKED_ANY = (
+    _WH_PACKED_WAIT,
+    _WH_PACKED_BOTH,
+    "UNP_ZEROSRC_SET_DVALID",
+)
 
 _OPERAND_COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
 
@@ -924,9 +942,7 @@ def publication_bank_controls(text: str, arch: str):
 def publication_misuses_packed_wait(text: str, arch: str) -> bool:
     """A Wormhole-shaped packed NoOp constant on an arch whose UNPACR_NOP takes the
     controls as separate operands - the value silently lands in the wrong bit field."""
-    return arch in _UNPACR_NOP_OPERAND_IDX and (
-        _WH_PACKED_WAIT in text or _WH_PACKED_BOTH in text
-    )
+    return arch in _UNPACR_NOP_OPERAND_IDX and any(c in text for c in _WH_PACKED_ANY)
 
 
 def required_vld_token(name: str):
