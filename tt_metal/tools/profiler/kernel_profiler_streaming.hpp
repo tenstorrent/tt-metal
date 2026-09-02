@@ -29,7 +29,8 @@
 #error "The streaming profiler has no Quasar producer; TT_METAL_STREAMING_PROFILER is not supported on Quasar."
 #endif
 #if !defined(PROFILE_STREAMING)
-#error "streaming_profiler.hpp is selected by kernel_profiler.hpp under PROFILE_STREAMING; do not include it directly."
+#error \
+    "kernel_profiler_streaming.hpp is selected by kernel_profiler.hpp under PROFILE_STREAMING; do not include it directly."
 #endif
 
 #include <climits>

@@ -343,7 +343,7 @@ void JitBuildEnv::init(
         // Streaming (perf_debug) profiler. Mutually exclusive with get_profiler_enabled() (rtoptions
         // TT_FATALs on both), so this branch never stacks on the one above. PROFILE_KERNEL=1 keeps every
         // DeviceZoneScopedN / DeviceTimestampedData site compiled; PROFILE_STREAMING makes
-        // tools/profiler/kernel_profiler.hpp select the SPSC producer (streaming_profiler.hpp) instead of
+        // tools/profiler/kernel_profiler.hpp select the SPSC producer (kernel_profiler_streaming.hpp) instead of
         // the DRAM one. No DRAM options (dispatch cores, trace-only, sum, accumulate) apply here.
         TT_FATAL(
             this->arch_ != tt::ARCH::QUASAR,

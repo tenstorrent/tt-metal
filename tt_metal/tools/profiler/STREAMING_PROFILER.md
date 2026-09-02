@@ -25,7 +25,7 @@ Sub-switches:
 | `TT_METAL_DRISC_PROFILER` | mode 3 only | arm the producers but do not boot the built-in receiver (caller supplies a DRISC drainer) |
 
 Device-side selection is one header: `tools/profiler/kernel_profiler.hpp` is main's DRAM producer
-verbatim, wrapped so that `-DPROFILE_STREAMING` swaps in `tools/profiler/streaming_profiler.hpp`.
+verbatim, wrapped so that `-DPROFILE_STREAMING` swaps in `tools/profiler/kernel_profiler_streaming.hpp`.
 Shared streaming constants live in `hw/inc/hostdev/streaming_profiler_common.h`;
 `hw/inc/hostdev/profiler_common.h` is the DRAM profiler's own. Not supported on the streaming
 producer: sum zones (`DeviceZoneScopedSumN*`) and `DeviceRecordEvent` (both compile to nothing).
