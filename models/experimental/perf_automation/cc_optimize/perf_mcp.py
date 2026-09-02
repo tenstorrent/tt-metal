@@ -6446,6 +6446,68 @@ def _ceiling_armed(target, rep: dict) -> tuple:
 
 
 @mcp.tool()
+def _stage_of_op(op, profile) -> str:
+    """Which stage this op costs the most in, read from the capture, or "" when it cannot say.
+
+    next_target names an OP and never said where it lives, and the prompt's only stage-shaped signal
+    is the metric -- which describes the recurring stage. So an agent handed a stage-less op reasoned
+    about the one stage it had been told to care about, and kept returning there while the ranking
+    pointed elsewhere: on voxtral it chased ~5ms of remaining decode while ~195ms sat in prefill.
+
+    NOT the first stage the op appears in. The same op runs in several stages -- a matmul runs in all
+    of them -- so first-match returns whichever stage the capture happened to serialise first, which
+    is a coin toss dressed as an answer. The op is attributed to the stage where it costs the MOST,
+    because that is the stage where fixing it pays. Ties and unattributable ops return "", and the
+    caller behaves exactly as it did before the field existed.
+
+    Matching prefers the fuller signature the target carries (op code plus shape) and falls back to
+    the code alone, so a target named by shape is not lost. Stage names come from the capture's own
+    marks -- never a name this tool typed.
+    """
+    try:
+        want = str(op or "").strip()
+        if not want:
+            return ""
+        by_stage: dict = {}
+        for stage, buckets in ((profile or {}).get("stage_buckets") or {}).items():
+            for bucket in buckets or []:
+                for o in (bucket or {}).get("top_ops") or []:
+                    code = str((o or {}).get("op_code") or "").strip()
+                    if not code:
+                        continue
+                    shape = str((o or {}).get("shape") or "").strip()
+                    full = ("%s %s" % (code, shape)).strip()
+                    if want in (code, full) or want.startswith(full) or want.startswith(code):
+                        by_stage[str(stage)] = by_stage.get(str(stage), 0.0) + float((o or {}).get("device_ms") or 0.0)
+        if not by_stage:
+            return ""
+        ranked = sorted(by_stage.items(), key=lambda kv: -kv[1])
+        if len(ranked) > 1 and ranked[0][1] <= ranked[1][1]:
+            return ""  # a tie names no stage more than another; say nothing rather than guess
+        return ranked[0][0]
+    except Exception:  # noqa: BLE001 -- a missing attribution must not fail the gate
+        return ""
+
+
+def _stage_gap_share(profile) -> dict:
+    """{stage: device_ms} from the capture, so the agent can see where the time actually is.
+
+    Ranked elsewhere by op; summarised here by stage. Empty when the capture carried no marks.
+    """
+    out: dict = {}
+    try:
+        for stage, buckets in ((profile or {}).get("stage_buckets") or {}).items():
+            total = 0.0
+            for bucket in buckets or []:
+                for o in (bucket or {}).get("top_ops") or []:
+                    total += float((o or {}).get("device_ms") or 0.0)
+            if total > 0:
+                out[str(stage)] = round(total, 2)
+    except Exception:  # noqa: BLE001
+        return {}
+    return out
+
+
 def termination_check() -> dict:
     """THE BINDING STOP GATE and SOLE authority on 'optimize more or not' — you may declare DONE ONLY
     when this returns can_stop=true. It decides PURELY from its own deterministic measurement (the
@@ -6624,6 +6686,10 @@ def termination_check() -> dict:
             "rung": blocking[0]["next_rung"],
             "gap_ms": blocking[0]["gap_ms"],
             "reason": blocking[0]["reason"],
+            # WHERE THIS OP LIVES. Without it the agent has an op and a metric, and the metric names
+            # only the recurring stage -- so it worked that stage regardless of where the ranking
+            # pointed. Discovered from the capture's own marks; "" when the capture carried none.
+            "stage": _stage_of_op(blocking[0]["op"], prof),
         }
         if blocking
         else None
@@ -6639,6 +6705,18 @@ def termination_check() -> dict:
                 "knob:fidelity/knob:dtype rung, then check_pcc + measure_candidate and commit/revert "
                 "as usual -- it is a starting guess, not a verdict." % _ws
             )
+    # WHERE THE TIME ACTUALLY IS, handed over as data rather than left implicit in the ranking. The
+    # agent sees an op and a metric; the metric names only the recurring stage, so without this it
+    # cannot tell that the stage it is being scored on is the one with least left to win.
+    _shares = _stage_gap_share(prof)
+    _stage_time_note = (
+        (
+            "Device time by stage in this capture: %s. "
+            % ", ".join("%s %.1fms" % (k, v) for k, v in sorted(_shares.items(), key=lambda kv: -kv[1]))
+        )
+        if _shares
+        else ""
+    )
     _persist_target(next_target)
     return {
         "can_stop": can_stop,
@@ -6656,7 +6734,10 @@ def termination_check() -> dict:
             "DONE — every material-gap op has its full checklist ticked (grid + dtype knobs + tt-lang "
             "+ C++). No reachable rung remains."
             if can_stop
-            else "NOT DONE — work next_target (the largest-gap blocking op) at its rung. REUSE-FIRST: "
+            else "NOT DONE — work next_target (the largest-gap blocking op) at its rung, IN THE STAGE "
+            "next_target.stage names: the ranking already accounts for where the time is, and the "
+            "metric in your instructions describes only the recurring stage, so following the metric "
+            "instead of the target spends effort where little is left. " + _stage_time_note + "REUSE-FIRST: "
             "BEFORE editing, call recall_knobs(next_target.op_class, next_target.grid, "
             "next_target.bound_by) and APPLY/ADAPT any matching "
             "catalogued knob (heed its negative knowledge); improvise from scratch ONLY if nothing "
