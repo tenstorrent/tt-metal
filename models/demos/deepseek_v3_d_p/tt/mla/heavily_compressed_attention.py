@@ -88,12 +88,11 @@ class TtHCA(LightweightModule):
         self.rms_norm_eps = float(rms_norm_eps)
         self.compressor = compressor
 
-        self.is_mesh = hasattr(device, "shape")
         self.sp_axis, self.tp_axis = sp_axis, tp_axis
-        self.sp_factor = device.shape[sp_axis] if self.is_mesh else 1
-        self.tp_factor = device.shape[tp_axis] if self.is_mesh else 1
+        self.sp_factor = device.shape[sp_axis]
+        self.tp_factor = device.shape[tp_axis]
         self.tp_ccl_topology = topology
-        self.tt_ccl = get_tt_ccl(device) if (self.is_mesh and (self.sp_factor > 1 or self.tp_factor > 1)) else None
+        self.tt_ccl = get_tt_ccl(device) if (self.sp_factor > 1 or self.tp_factor > 1) else None
         self.ccl_num_links = 2 if is_blackhole() else 1
         self.ops = TtCompressorUtils(
             device,
