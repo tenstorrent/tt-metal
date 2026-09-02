@@ -12,6 +12,8 @@ Supports two layer types:
 - full_attention: head_dim=512, 2 KV heads, K=V tying, partial RoPE (0.25), full context
 """
 
+import os
+
 import ttnn
 from models.demos.gemma4.config import MeshConfig, Mode
 
@@ -132,9 +134,16 @@ class Gemma4Attention:
         # allocation reserves addresses no later capture can alias; tails are
         # ttnn.copy'd in at stash time and cloned out (transient, same-call) at
         # consume time.
+        # GEMMA4_TAIL_POOL_SLOTS bounds concurrent chunked-prefill requests per
+        # sliding layer (evict-oldest beyond it). The pool is boot-DRAM-resident
+        # on every sliding layer, so memory-starved parts (WH T3K: 12 GB/chip
+        # cannot boot 31B with 8 slots) can shrink it; 0 disables the pool and
+        # falls back to the legacy runtime stash, which is NOT trace-safe under
+        # interleaved replay (the G8 clobber) — use only for bring-up.
         self._tail_pool = None
         self._tail_pool_map = {}
-        if config.is_sliding and config.sliding_window:
+        _pool_slots = max(0, int(os.environ.get("GEMMA4_TAIL_POOL_SLOTS", "8")))
+        if config.is_sliding and config.sliding_window and _pool_slots:
             tp = max(1, int(getattr(mesh_config, "tp", 1)))
             nkv_local = 1 if self.weights.kv_replicated else max(1, config.num_key_value_heads // tp)
             shape = [1, nkv_local, int(config.sliding_window), int(config.head_dim)]
@@ -155,7 +164,7 @@ class Gemma4Attention:
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     ),
                 )
-                for _ in range(8)
+                for _ in range(_pool_slots)
             ]
 
     def __call__(
