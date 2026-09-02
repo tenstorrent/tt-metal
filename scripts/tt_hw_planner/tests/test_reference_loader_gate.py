@@ -19,6 +19,7 @@ import pytest
 from scripts.tt_hw_planner.reference_loader_resolver import (
     _resolved,
     _validates,
+    check_invariants,
     loader_path,
     uses_random_weights,
     verify,
@@ -230,3 +231,163 @@ def test_unreachable_checkpoint_is_unverified_not_a_failure(tmp_path: Path) -> N
 
     out = weight_provenance(str(tmp_path / "nothing-here"), _module_with(torch.randn(4096)))
     assert out["status"] == "unverified", out
+
+
+# --------------------------------------------------------------------------------------------
+# Self-consistency. Provenance proves the weights are the shipped ones; it says nothing about
+# whether they are wired up correctly, and a miswired reference has no golden to be caught by.
+# These models are deliberately broken in the three ways a generated loader actually breaks.
+# --------------------------------------------------------------------------------------------
+
+
+def _tiny_lm(flaw: str = "none"):
+    """A minimal causal LM, optionally carrying one specific wiring bug."""
+    import torch
+    import torch.nn as nn
+
+    class Cfg:
+        vocab_size, hidden_size = 32, 8
+        is_decoder = True  # how a decoder announces that causality applies to it
+
+    class LM(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = Cfg()
+            self.embed = nn.Embedding(Cfg.vocab_size, Cfg.hidden_size)
+            self.head = nn.Linear(Cfg.hidden_size, Cfg.vocab_size)
+
+        def forward(self, input_ids: torch.LongTensor):
+            h = self.embed(input_ids)
+            if flaw == "acausal":
+                # Averages the WHOLE sequence, so every position can see the future. This is what a
+                # forgotten causal mask looks like: it trains, it runs, the numbers look fine.
+                h = h.mean(dim=1, keepdim=True).expand_as(h)
+            elif flaw == "batch_mixing":
+                # A transposed axis, so one sample's values land in another's row.
+                h = h + h.mean(dim=0, keepdim=True)
+            else:
+                h = torch.cumsum(h, dim=1) / torch.arange(1, h.shape[1] + 1).view(1, -1, 1)
+            out = self.head(h)
+            return out + torch.randn_like(out) if flaw == "nondeterministic" else out
+
+    return LM().eval()
+
+
+@requires_torch
+def test_a_correctly_wired_reference_satisfies_every_invariant() -> None:
+    out = check_invariants(_tiny_lm())
+    assert out["status"] == "holds", out
+    assert out["checks"] == {"determinism": "pass", "batch_invariance": "pass", "causality": "pass"}
+
+
+@requires_torch
+def test_a_reference_that_can_see_its_own_future_is_caught() -> None:
+    """The failure with no golden: right weights, missing causal mask, plausible numbers."""
+    out = check_invariants(_tiny_lm("acausal"))
+    assert out["status"] == "violated", out
+    assert out["checks"]["causality"] == "FAIL", out
+
+
+@requires_torch
+def test_a_reference_that_leaks_across_the_batch_is_caught() -> None:
+    out = check_invariants(_tiny_lm("batch_mixing"))
+    assert out["status"] == "violated", out
+    assert out["checks"]["batch_invariance"] == "FAIL", out
+
+
+@requires_torch
+def test_a_reference_that_will_not_reproduce_itself_is_caught() -> None:
+    out = check_invariants(_tiny_lm("nondeterministic"))
+    assert out["status"] == "violated", out
+    assert out["checks"]["determinism"] == "FAIL", out
+
+
+@requires_torch
+def test_a_bidirectional_encoder_is_not_condemned_for_being_bidirectional() -> None:
+    """An audio tower or text encoder sees the whole sequence BY DESIGN.
+
+    The acausal model here is wired identically to the one two tests above that gets rejected --
+    the only difference is that this one does not claim to be a decoder. Causality is a law for
+    decoders, so for anything else the honest answer is `skipped`, not a failure.
+    """
+    encoder = _tiny_lm("acausal")
+    encoder.config.is_decoder = False
+    out = check_invariants(encoder)
+    assert out["status"] == "holds", out
+    assert out["checks"]["causality"] == "skipped", out
+
+
+@requires_torch
+def test_a_model_that_states_its_own_inputs_is_taken_at_its_word() -> None:
+    """`dummy_inputs` is the model describing itself, which beats anything inferred about it."""
+    import torch
+
+    lm = _tiny_lm()
+    lm.dummy_inputs = {"input_ids": torch.zeros(1, 4, dtype=torch.long)}
+    assert check_invariants(lm)["status"] in {"holds", "unverified"}
+
+
+@requires_torch
+def test_an_output_field_this_has_never_heard_of_is_still_found() -> None:
+    """The checks must not depend on a model naming its output the way other models do."""
+    import torch
+    import torch.nn as nn
+
+    class OddlyNamed(nn.Module):
+        """Wraps its result in a field no name table would contain."""
+
+        def __init__(self):
+            super().__init__()
+            self.inner = _tiny_lm()
+            self.config = self.inner.config
+
+        def forward(self, input_ids: torch.LongTensor):
+            result = self.inner(input_ids)
+
+            class Wrapped:
+                def to_tuple(self_inner):
+                    return (result,)
+
+            return Wrapped()
+
+    out = check_invariants(OddlyNamed())
+    assert out["status"] == "holds", out
+    assert out["checks"]["causality"] == "pass", out
+
+
+@requires_torch
+def test_a_model_that_cannot_be_driven_is_unverified_not_broken() -> None:
+    """Absence of evidence is not evidence of a bug -- this must never fail a good loader."""
+    import torch.nn as nn
+
+    class Opaque(nn.Module):
+        def forward(self, mystery):  # no annotation, no config to size it from
+            return mystery
+
+    out = check_invariants(Opaque())
+    assert out["status"] == "unverified", out
+
+
+@requires_torch
+def test_a_violated_invariant_fails_the_gate_and_says_why(tmp_path) -> None:
+    """The verdict has to reach `verify`, or the check is a comment."""
+    import scripts.tt_hw_planner.reference_loader_resolver as rlr
+
+    demo = tmp_path / "demo"
+    loader_path(demo).parent.mkdir(parents=True, exist_ok=True)
+    loader_path(demo).write_text(
+        textwrap.dedent(
+            """
+            def load_reference_model(model_id):
+                raise AssertionError("patched out")
+            """
+        )
+    )
+    monkey = _tiny_lm("acausal")
+    original, rlr.load_reference = rlr.load_reference, lambda *a, **k: monkey
+    try:
+        out = verify(demo, str(tmp_path))
+    finally:
+        rlr.load_reference = original
+    assert out["ok"] is False and out["status"] == "broken", out
+    assert "causality" in out["reason"], out

@@ -16,6 +16,8 @@ What validation here does and does NOT mean, in three layers:
   2. RUNTIME — it is executed, and must hand back an `nn.Module` that has parameters (`verify`).
   3. PROVENANCE — its parameters are sampled against the shipped checkpoint, which catches a
      reference built from config with weights never loaded (`weight_provenance`, advisory).
+  4. Self-consistency, which catches a reference that loads the right weights but wires them up
+     wrongly -- the one failure with no golden to be caught by (`check_invariants`).
 
 What none of them establish is that the reference computes the RIGHT thing. For these checkpoints
 there is by definition no golden to compare against — that is why the loader had to be written at
@@ -25,9 +27,11 @@ wrong RoPE base) will still be the yardstick every later PCC score is measured a
 OFF BY DEFAULT: `resolve` is a no-op unless `TT_HW_PLANNER_LOADER_RESOLVER=1` (or `enabled=True`).
 Correctness is still gated by PCC — the resolver only produces a loader; it never weakens a test.
 """
+
 from __future__ import annotations
 
 import ast
+import inspect
 import json
 import os
 import re
@@ -44,6 +48,11 @@ _ENV_FLAG = "TT_HW_PLANNER_LOADER_RESOLVER"
 # purpose: the fallback used to be recorded in a module docstring, which nothing reads, so a run
 # could be scored against a reference unrelated to the shipped weights with no trace in the result.
 _RANDOM_WEIGHTS_FLAG = "REFERENCE_USES_RANDOM_WEIGHTS"
+
+# Long enough that a causal model has a past to respect, short enough to stay cheap on CPU.
+_PROBE_SEQ = 8
+# The invariants are exact statements, so this is float noise from reordered reductions only.
+_INVARIANT_ATOL = 1e-4
 
 # Weight-provenance sampling. Small tensors (norms, biases) are skipped because their moments
 # collide easily -- a vector of ones matches a vector of ones whatever checkpoint it came from.
@@ -275,12 +284,225 @@ def verify(demo_dir: Path, model_id: str) -> dict:
         }
     if not any(True for _ in ref.parameters()):
         return {"ok": False, "status": "broken", "reason": "reference module has no parameters"}
+    invariants = check_invariants(ref)
+    if invariants.get("status") == "violated":
+        return {
+            "ok": False,
+            "status": "broken",
+            "reason": invariants["reason"],
+            "invariants": invariants,
+            "provenance": weight_provenance(model_id, ref),
+        }
     return {
         "ok": True,
         "status": "verified",
         "reason": "loader returned an nn.Module with parameters",
         "provenance": weight_provenance(model_id, ref),
+        "invariants": invariants,
     }
+
+
+def _is_autoregressive(ref) -> bool:
+    """Does this model claim to generate left-to-right?
+
+    Causality is only a law for decoders. An encoder -- a text embedder, or the audio tower in
+    front of a speech model -- is bidirectional BY DESIGN, and every position legitimately sees
+    every other. Applying the check to one would condemn a perfectly good reference, so it is asked
+    rather than assumed: `is_decoder` and `can_generate()` are the model's own statements about
+    itself, which is also why neither is a name to keep in step with anything.
+    """
+    cfg = getattr(ref, "config", None)
+    if getattr(cfg, "is_decoder", False) or getattr(cfg, "is_causal", False):
+        return True
+    can_generate = getattr(ref, "can_generate", None)
+    try:
+        return bool(can_generate()) if callable(can_generate) else False
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _close(a, b) -> bool:
+    """Equal up to float noise, refusing to compare tensors of different shapes.
+
+    Shape-strict on purpose: `torch.allclose` would happily broadcast a one-row slice against a
+    many-row reference and call the result a mismatch, turning a comparison mistake into a verdict
+    about the model. The tolerance scales with the values because logits run to tens or hundreds,
+    where a fixed 1e-4 is below the noise of a reordered reduction.
+    """
+    import torch
+
+    if a.shape != b.shape:
+        return False
+    return torch.allclose(a, b, rtol=0, atol=_INVARIANT_ATOL * max(1.0, float(b.abs().max())))
+
+
+def _first_tensor(out):
+    """The tensor a forward returned, whatever wrapper it came in.
+
+    Asks the wrapper to unpack itself instead of reaching for field names: a HuggingFace output
+    orders its own fields and drops the empty ones, so the first tensor out of `to_tuple()` is the
+    result field whether the model calls it logits, hidden states, or something this has never
+    heard of.
+
+    Deliberately not `bringup_loop._normalize_out`, which unwraps one specific field name and so
+    hands back the wrapper untouched for any model that does not use it -- and which lives in a
+    module that pulls in ttnn, where this one must keep working on a box with no torch at all.
+    """
+    import torch
+
+    if isinstance(out, torch.Tensor):
+        return out
+    unpack = getattr(out, "to_tuple", None)
+    if callable(unpack):
+        out = unpack()
+    elif isinstance(out, dict):
+        out = list(out.values())
+    if isinstance(out, (list, tuple)):
+        for item in out:
+            found = _first_tensor(item)
+            if found is not None:
+                return found
+    return None
+
+
+def _probe_input(ref) -> Optional[dict]:
+    """Kwargs that will drive this model's forward, asked of the model rather than assumed.
+
+    Order matters: a model that publishes `dummy_inputs` has stated what it takes, so that is used
+    verbatim. Otherwise the required parameters are read off the forward signature and sized from
+    the model's own config, with the element type taken from the annotation the module carries.
+    Nothing here names an argument -- a model that calls its tokens something unusual still works.
+    """
+    import torch
+
+    published = getattr(ref, "dummy_inputs", None)
+    if isinstance(published, dict) and published:
+        return dict(published)
+
+    cfg = getattr(ref, "config", None)
+    if cfg is None:
+        return None
+    vocab = getattr(cfg, "vocab_size", None)
+    hidden = getattr(cfg, "hidden_size", None)
+    try:
+        params = inspect.signature(ref.forward).parameters
+    except (TypeError, ValueError):
+        return None
+
+    built = {}
+    for p in params.values():
+        if p.name == "self" or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+            continue
+        if p.default is not inspect.Parameter.empty:
+            continue  # the model defaults it; leave it to the model
+        text = (p.annotation if isinstance(p.annotation, str) else str(p.annotation)).lower()
+        if "long" in text or "int" in text:
+            if not isinstance(vocab, int) or vocab < 2:
+                return None
+            built[p.name] = torch.randint(1, min(vocab, 1000), (1, _PROBE_SEQ), dtype=torch.long)
+        elif isinstance(hidden, int):
+            built[p.name] = torch.randn(1, _PROBE_SEQ, hidden)
+        else:
+            return None
+    return built or None
+
+
+def check_invariants(ref) -> dict:
+    """Advisory: does this reference obey properties every correct implementation must obey?
+
+    Provenance answers "are these the shipped weights"; it cannot answer "are they wired up
+    right". A transposed projection or a wrong RoPE base loads real weights, returns real-looking
+    numbers, and has no golden to be checked against -- that is the whole reason the loader had to
+    be generated. These sidestep the missing golden: rather than asking whether an output is
+    CORRECT, they ask whether the model contradicts itself, which needs nothing to compare to.
+
+    A violation is positive evidence of a wiring bug and the gate treats it as fatal. Absence of
+    evidence is not: each check reports `skipped` when its precondition is absent, and a model
+    this cannot drive comes back `unverified` rather than broken.
+    """
+    try:
+        import torch
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "unverified", "reason": f"torch unavailable: {exc}"}
+
+    kwargs = _probe_input(ref)
+    if not kwargs:
+        return {"status": "unverified", "reason": "could not build an input the model would accept"}
+
+    def _run(kw):
+        with torch.no_grad():
+            return _first_tensor(ref(**kw))
+
+    try:
+        base = _run(kwargs)
+    except Exception as exc:  # noqa: BLE001 -- an un-runnable probe is not a verdict on the model
+        return {"status": "unverified", "reason": f"probe forward raised {type(exc).__name__}: {exc}"}
+    if base is None:
+        return {"status": "unverified", "reason": "forward returned no tensor to inspect"}
+
+    checks: dict = {}
+
+    # Same input twice. A model that cannot reproduce its own output cannot be a stable reference.
+    try:
+        checks["determinism"] = "pass" if _close(_run(kwargs), base) else "FAIL"
+    except Exception:
+        checks["determinism"] = "skipped"
+
+    # An input batched beside a DIFFERENT one must come back unchanged: samples do not interact.
+    # The second row has to differ, which is the whole subtlety here -- batching an input against a
+    # copy of itself leaves any averaging across the batch invisible, since the mean of identical
+    # rows is the row. Rolling gives a neighbour that is genuinely different but equally valid.
+    try:
+        batched = {
+            k: torch.cat([v, torch.roll(v, 1, dims=-1)], dim=0) if hasattr(v, "dim") and v.dim() > 0 else v
+            for k, v in kwargs.items()
+        }
+        out = _run(batched)
+        # The rolled rows were APPENDED, so the original input is the leading base.shape[0] of
+        # them. Slicing a single row instead would broadcast against a multi-row base and report a
+        # mismatch that is an artefact of the comparison rather than anything the model did.
+        checks["batch_invariance"] = "pass" if out is not None and _close(out[: base.shape[0]], base) else "FAIL"
+    except Exception:
+        checks["batch_invariance"] = "skipped"
+
+    # Editing a later position must not move an earlier one: a causal model cannot see its future.
+    # Attention-mask and position/RoPE mistakes show up here, and only here, without a golden.
+    try:
+        edited = None
+        for k, v in kwargs.items() if _is_autoregressive(ref) else ():
+            if hasattr(v, "dim") and v.dim() == 2 and not v.is_floating_point() and v.shape[1] > 1:
+                # Swap in a value the tensor already holds rather than incrementing: an id one past
+                # the largest drawn can be one past the vocabulary, and the embedding lookup would
+                # raise -- which this reads as "could not run", quietly losing the check.
+                differs = (v[0, :-1] != v[0, -1]).nonzero()
+                if differs.numel() == 0:
+                    continue
+                bumped = v.clone()
+                bumped[0, -1] = v[0, int(differs[0])]
+                edited = dict(kwargs, **{k: bumped})
+                break
+        if edited is None:
+            checks["causality"] = "skipped"
+        else:
+            out = _run(edited)
+            checks["causality"] = "pass" if out is not None and _close(out[:, :-1], base[:, :-1]) else "FAIL"
+    except Exception:
+        checks["causality"] = "skipped"
+
+    failed = sorted(k for k, v in checks.items() if v == "FAIL")
+    if failed:
+        return {
+            "status": "violated",
+            "checks": checks,
+            "reason": (
+                f"the reference breaks {', '.join(failed)}, which every correct implementation "
+                f"holds regardless of weights -- it is wired wrongly, and every PCC measured "
+                f"against it inherits that"
+            ),
+        }
+    if all(v == "skipped" for v in checks.values()):
+        return {"status": "unverified", "checks": checks, "reason": "no invariant could be driven"}
+    return {"status": "holds", "checks": checks, "reason": "self-consistent under the checks that ran"}
 
 
 def _checkpoint_files(model_id: str) -> List[Path]:
