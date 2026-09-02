@@ -87,7 +87,7 @@ on:
         required: false
         default: false
         type: boolean
-        description: "Run LLK sanity tests: tt-llk python_tests smoke (WH+BH) and the Quasar compile check. Opt-in, like run-models-sanity-tests."
+        description: "Run LLK sanity tests: tt-llk python_tests smoke (WH+BH) and the Quasar compile check. Opt-in — unlike the other run-* toggles this defaults to false, so an omitted input means off."
       enable-watcher:
         required: false
         type: boolean
@@ -552,9 +552,11 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
       summary-scope: ${{ inputs.platform }}
 
-  # LLK sanity (tt-llk python_tests smoke, WH + BH). Opt-in: like models-sanity-tests
-  # the gate requires an explicit true, so a push to main and the scheduled runs leave
-  # this leg out (`inputs` is null on those events).
+  # LLK sanity (tt-llk python_tests smoke, WH + BH). Opt-in: run-llk-sanity-tests defaults
+  # to false, so this leg is off unless a caller asks for it. The `== 'true'` gate is the
+  # same shape models-sanity-tests uses — note that input defaults to true, so for it the
+  # gate only excludes push/schedule, where `inputs` is null; here it excludes those events
+  # *and* every call that does not opt in.
   llk-sanity-tests:
     needs: [resolve-docker-pull-refs, generate-sku-matrix]
     if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' &&
@@ -574,6 +576,10 @@ jobs:
       # is a separate call about sanity's time budget, not a side effect of wiring it up.
       pytest-markers: "not perf and not nightly and not quasar and not accuracy"
       per-test-timeout: 15
+      # Charge this run against sanity's own allowance (llk.sanity in time_budget.yaml),
+      # as every other sanity impl does, rather than the PR gate's — otherwise widening
+      # one pipeline's markers would silently eat into the other's budget.
+      test-category: sanity
       ref: ${{ inputs.ref || github.sha }}
 
   # LLK Quasar build check (compile-only, no hardware). Mirrors pr-gate's llk-build-quasar.
@@ -619,14 +625,12 @@ jobs:
       - runtime-sim-sanity-tests
       - blackhole-multi-card-fast-sanity-tests
       - models-sanity-tests
-      # Both LLK legs contribute their `result` to run-result, but neither adds rows to
-      # expected-jobs: llk-smoke-impl declares no workflow-level `matrix` output (unlike
-      # ttnn-sanity-tests-impl et al) and llk-build-quasar is a plain job with none. The
-      # aggregation jq selects non-null matrices, so this is safe, not silent breakage —
-      # it just means a dead runner on an LLK leg is not synthesized as INFRA_FAILURE.
-      # Exposing `matrix` from llk-smoke-impl would close that gap.
-      - llk-sanity-tests
-      - llk-build-quasar
+      # The two LLK legs are deliberately absent, as fabric-sanity-tests already is: an
+      # impl belongs here only once it uploads per-leg ai_summary/job artifacts, and
+      # llk-smoke-impl uploads none (it publishes JUnit instead). Reconciliation flags an
+      # expected leg with no artifact as INFRA_FAILURE, so exposing `matrix` from
+      # llk-smoke-impl on its own would report every passing LLK leg as infra-failed.
+      # Both halves — the artifact upload and the `matrix` output — have to land together.
     # Reports on a run that failed — the case the summary exists for — but not
     # on one that was cancelled: an aborted run has no outcome to summarize, and
     # asking for one spends an LLM call to say it stopped early.

@@ -16,6 +16,14 @@ on:
         required: false
         type: string
         default: "not perf and not nightly and not quasar"
+      test-category:
+        required: false
+        type: string
+        default: pr_gate
+        description: >-
+          Time-budget workflow key passed to verify_time_budget.py — the pipeline whose
+          hardware allowance this run is charged against (pr_gate for the PR gate, sanity
+          for sanity-tests). Must exist under `llk` in .github/time_budget.yaml.
       per-test-timeout:
         required: false
         type: string
@@ -78,7 +86,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            pr_gate \
+            "${{ inputs.test-category }}" \
             "${extra[@]}"
       - name: Build test matrix
         id: build-matrix
