@@ -408,6 +408,11 @@ FORCE_INLINE const std::pair<PerfCounterType, uint16_t>* get_counters_for_counte
     return counters_for_group[static_cast<uint32_t>(g)];
 }
 
+// Ordinary structural zone id + ELF record, named "PERF-COUNTERS" on the host. Replaces the magic
+// PERF_COUNTER_PROFILER_ID (9090) as the STREAMING wire's id for these samples; the DRAM decoder in
+// impl/profiler/profiler.cpp still uses the old constant, which is why it is left defined.
+TT_ZONE_DEFINE_ID(kPerfCounterZoneId, "PERF-COUNTERS");
+
 __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group) {
     if (counter_group >= PerfCounterGroup::L1_0 && counter_group != PerfCounterGroup::INSTRN) {
         set_l1_mux_ctrl(counter_group);
@@ -427,12 +432,7 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
         uint32_t ref_cnt_val = read_reg[0];
         uint32_t counter_val = read_reg[1];
         PerfCounter counter(counter_val, ref_cnt_val, counters[i].first);
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
-            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2);
-        kernel_profiler::timeStampedData<
-            PERF_COUNTER_PROFILER_ID,
-            kernel_profiler::DoingDispatch::DISPATCH,
-            kernel_profiler::PacketTypes::TS_DATA_16B>(counter.raw_data_1, counter.raw_data_2);
+        kernel_profiler::time_stamped_data<kPerfCounterZoneId>(counter.raw_data_1, counter.raw_data_2);
     }
     // Toggle start bit to clear the counters for this group
     cntl_reg[2] = 0;
