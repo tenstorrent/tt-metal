@@ -1056,9 +1056,17 @@ class Attention(LightweightModule):
             attn_concat_sharded = ttnn.experimental.nlp_concat_heads(attn_sharded, memory_config=concat_out_memcfg)
             if _own_attn_sharded_pre:
                 ttnn.deallocate(attn_sharded)
-            if use_dram_shard_o and use_sharded_concat:
-                attn_output = ttnn.to_memory_config(attn_concat_sharded, _wo_in0_for_concat)
-                ttnn.deallocate(attn_concat_sharded)
+            # Direct sharded→sharded reshard into wo's in0 layout (K-width shard).
+            # Independent of N-padding: pad is on the wo *output*, not this in0.
+            # TP=2 decode: concat_out is already that layout (8 local heads, shard (32, 128)
+            # on a 1×8 row). to_memory_config is then a no-op/alias — deallocating
+            # concat would free the matmul in0 ("buffer is not allocated").
+            if use_dram_shard_o:
+                if attn_concat_sharded.memory_config() == _wo_in0_for_concat:
+                    attn_output = attn_concat_sharded
+                else:
+                    attn_output = ttnn.to_memory_config(attn_concat_sharded, _wo_in0_for_concat)
+                    ttnn.deallocate(attn_concat_sharded)
                 _attn_already_in_wo_in0 = True
             else:
                 attn_output = ttnn.to_memory_config(attn_concat_sharded, ttnn.L1_MEMORY_CONFIG)
@@ -1070,8 +1078,8 @@ class Attention(LightweightModule):
 
         if use_dram_shard_o:
             if _attn_already_in_wo_in0:
-                attn_sharded = attn_output
-                _own_attn_sharded = False
+                attn_sharded = attn_output  # concat-out or a dedicated reshard into wo in0
+                _own_attn_sharded = True
             else:
                 attn_sharded = ttnn.to_memory_config(attn_output, self._decode_wo_in0_memcfg)
                 ttnn.deallocate(attn_output)
