@@ -249,68 +249,61 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
 
     uint32_t num_links = operation_attributes.axis_num_links[axis];
 
-    // Packed bytes of the gathered output crossing one link. Same expression the factory-selection
-    // heuristic uses, so the thresholds there and here are comparable. At the *requested* link count, so
-    // if the core grid later forces links down (which warns) the choices below stay the ones for the
+    // Packed bytes of the gathered output crossing one link. At the *requested* link count, so if
+    // the core grid later forces links down (which warns) the choices below stay the ones for the
     // wider config.
     const uint64_t per_link_bytes =
         output_tensor.tensor_spec().compute_packed_buffer_size_bytes() / std::max(1u, num_links);
 
     // --- Per-arch tuning ---
-    // Sweep results, each arch at a single axis length (Wormhole 8 devices, Blackhole 4). Defaults are the
-    // fallback for an uncalibrated arch, not either arch's values.
     uint32_t workers_per_dir = 1;  // >1 needs a fabric mux core per direction per link
     uint32_t packets_per_cb_entry = 1;
     uint32_t run_cap_bytes = 0;
     uint8_t mux_slots_per_channel = 2;
     const uint32_t cb_depth = 2;  // two entries: one filling while the other drains.
     if (arch == tt::ARCH::WORMHOLE_B0) {
-        // A second worker needs a fabric mux: 6 cores per link instead of 2, and an extra hop per packet. So
-        // take one wherever it is not slower (T3000 sweep, 64 KB..1.6 GB per link) -- while the op is
-        // latency-bound, and with a long stripe, which holds at every ring size measured but on a line only
-        // up to ~4 MB/link.
-        // A long stripe outlasts a transfer many times over, so a worker's runs stay inside one row and its
-        // writes land sequentially at the destination. Short stripes straddle a row edge on every transfer.
+        // Calibrated on T3000 at 2, 4 and 8 devices.
+        //
+        // workers_per_dir: a second worker needs a fabric mux -- 6 cores per link instead of 2, plus a
+        // hop per packet -- so take it only where it is not slower, i.e. while the op is latency-bound.
+        // A long stripe outlasts a transfer many times over, so a worker's runs stay inside one row and
+        // its writes land sequentially at the destination; short stripes straddle a row edge on every
+        // transfer, which is where the extra worker starts paying.
         const bool long_stripe = output_chunks_per_stripe >= 64;
-        // Thresholds are on this device's own share of the link, not the whole gathered output, because
-        // that is the form that transfers: measured at 2, 4 and 8 devices, the boundaries below sit at the
-        // same per-device figure each time. Stated against the total they would only be right at 8 -- at 4
-        // the long-stripe rule then takes one worker where two are 5% faster, and at 2 it does the same and
-        // also holds one worker 9% past where the second starts paying.
+        // Keyed on this device's own share of the link, not the whole gathered output: that share is what
+        // actually transfers, and the boundaries below sit at the same per-device figure at 2, 4 and 8
+        // devices. Stated against the total they would only be right at 8.
         const uint64_t device_bytes_per_link = per_link_bytes / std::max(1u, num_devices);
         const bool small = device_bytes_per_link <= 64 * 1024;
         const bool long_stripe_wins = long_stripe && (is_ring || device_bytes_per_link <= 512 * 1024);
         workers_per_dir = (small || long_stripe_wins) ? 1 : 2;
         packets_per_cb_entry = 3;  // multicast wants 1 here; every cell was swept on its own
-        // Two slots let a worker stage its next packet while the mux forwards the last. On a ring at scale
-        // that only interleaves the two workers' packets more finely at the receiver, scattering its DRAM
-        // writes, so one slot wins there; a line, whose per-hop relay is already serialised, keeps two.
-        // Ring only, and a ring cannot be shortened on a T3000 (the wrap-around link needs all 8), so this
-        // one stays in whole-output terms at the 8-device calibration.
+        // mux_slots_per_channel: two slots let a worker stage its next packet while the mux forwards the
+        // last. On a ring at scale that only interleaves the two workers' packets more finely at the
+        // receiver, scattering its DRAM writes, so one slot wins there; a line, whose per-hop relay is
+        // already serialised, keeps two. Ring only, and a ring cannot be shortened on a T3000 (the
+        // wrap-around link needs all 8), so this one stays in whole-output terms.
         mux_slots_per_channel = (is_ring && per_link_bytes >= 2 * 1024 * 1024) ? 1 : 2;
-        // No run cap: the sweeps put the best run length at the hardware ceiling (7616 B), so any value
-        // settable here is already above it and would only cost payload.
+        // No run cap: the best run length lands at the hardware ceiling (7616 B), so any value settable
+        // here is already above it and would only cost payload.
     } else if (arch == tt::ARCH::BLACKHOLE) {
-        // Blackhole sweep on two machines: 8 devices x 2 links, and 4 devices x 4 links with the link
-        // count also forced down to 2 and 1. Page size was swept from 64 B to 8 KB at fixed volume and
-        // moved none of the boundaries below; stripe length and link count both do move them, so both
-        // appear in the rules. Where a rule could only be pinned on two machines it says so.
+        // Calibrated on two machines: 8 devices x 2 links, and 4 devices x 4 links with the link count
+        // also forced down to 2 and 1. Page size moves none of the boundaries below; stripe length and
+        // link count do, so both appear in the rules.
         //
-        // Workers per direction. Each extra worker feeds a link harder but costs a core and, past one, a
-        // mux core plus a NOC hop per packet. Three is the ceiling on either topology; four regresses, and
-        // it regresses *more* the more links there are (2% at 1 link, 11% at 2, 28% at 4) because workers
-        // are per-link while DRAM is shared, so link count multiplies the total worker pressure.
-        //
-        // The two topologies scale differently, and the variable that transfers is different for each:
-        //  - Ring: total output bytes. Measured at 1, 2 and 4 links, the boundary sits at the same total
-        //    volume each time (the per-link figure moves with links, the total does not), and the same
-        //    total also matches the 8-device/2-link machine.
+        // workers_per_dir: each extra worker feeds a link harder but costs a core and, past one, a mux
+        // core plus a NOC hop per packet. Three is the ceiling on either topology; four regresses, and
+        // it regresses *more* the more links there are, because workers are per-link while DRAM is
+        // shared, so link count multiplies the total worker pressure.
+        // The scaling variable differs by topology:
+        //  - Ring: total output bytes. The boundary sits at the same total volume at every link count
+        //    measured (the per-link figure moves with links, the total does not).
         //  - Line: per-link bytes divided by device count. A line's relay crosses N-1 hops, so its
         //    per-device relay load -- and with it the point where another worker pays -- scales with N.
         //    This one is a two-machine fit (4 and 8 devices), not a measured law.
         const uint64_t total_output_bytes = per_link_bytes * num_links;
         // A stripe shorter than a transfer straddles a row edge on nearly every send, so the extra workers
-        // cannot land sequential writes and stop paying: 8 chunks and up take the third worker, 4 does not.
+        // cannot land sequential writes and stop paying.
         const bool long_stripe = output_chunks_per_stripe >= 8;
         if (is_ring) {
             workers_per_dir = total_output_bytes < 64u * 1024u
@@ -322,33 +315,27 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                                   ? 1u
                                   : (per_link_bytes < (3072u * 1024u / dev) ? 2u : 3u);
         }
-        // Packets per CB entry. A two-packet entry halves the reader/writer handshake count, which a ring
-        // wants once there is volume to amortise the writer trailing an extra packet behind. Once the run
-        // cap below is active this is worth under 1% either way, but it costs nothing to keep.
+        // packets_per_cb_entry: a two-packet entry halves the reader/writer handshake count, which only a
+        // ring has the volume to amortise against the writer trailing an extra packet behind. Near-free
+        // either way once the run cap below is active, but it costs nothing to keep.
         packets_per_cb_entry = (is_ring && per_link_bytes >= 2u * 1024u * 1024u) ? 2u : 1u;
-        // Run cap. Capping a run costs packet fill but stops the walk parking in one DRAM bank. On a ring
-        // the right cap is set by *link count*, not volume: every link runs its own 2 x workers_per_dir
+        // run_cap_bytes: capping a run costs packet fill but stops the walk parking in one DRAM bank. On
+        // a ring the cap follows *link count*, not volume: every link runs its own 2 x workers_per_dir
         // readers against one shared DRAM, so the more links, the shorter each run has to be to keep the
-        // banks spread. Measured at three link counts, and the product is constant:
-        //     1 link -> no cap (capping to 8192 costs 10%, to 4096 costs 16%)
-        //     2 links -> 8192   (best by 1-4%)
-        //     4 links -> 4096   (best by 22% at 24 MB/link; the 8192 the 2-link machine wanted is the worst)
-        // 16384 / links reproduces all three, and at one link it lands above the hardware transfer ceiling
-        // so it correctly stops biting.
-        // A line instead tracks the slice split, at every volume measured: an uneven split leaves one worker
-        // holding an extra page and finishing last, and shortening its runs only makes that straggler slower
-        // (-3 to -4%); split evenly and the cap pays (+4 to +6%). A ring hides the same imbalance by pulling
-        // from two neighbours, which is why only the line sees it. The line's cap effects at 4 links are
-        // under 2% either way, so it keeps the 8192 fitted on the 2-link machine.
+        // banks spread. 16384 / links reproduces every link count measured, and at one link it lands
+        // above the hardware transfer ceiling so it correctly stops biting.
+        // A line instead tracks the slice split: an uneven split leaves one worker holding an extra page
+        // and finishing last, and shortening its runs only makes that straggler slower. A ring hides the
+        // same imbalance by pulling from two neighbours, which is why only the line sees it.
         const bool even_split = (num_input_pages % (num_links * workers_per_dir)) == 0;
         if (is_ring) {
-            // Below ~8 MB of output the cap is worth under 4% and can cost that much, so gate it.
+            // Below ~8 MB of output the cap can cost as much as it wins, so gate it.
             run_cap_bytes = total_output_bytes >= 8u * 1024u * 1024u ? (16384u / std::max(1u, num_links)) : 0u;
         } else {
             run_cap_bytes = even_split ? 8192u : 0u;
         }
-        // Two mux slots. One slot only wins where num_input_pages divides evenly by total_slices, and it
-        // wins ~5% there against 12-18% lost when the split is uneven, so the even case is not worth taking.
+        // mux_slots_per_channel: one slot wins only on an even split, and loses more when the split is
+        // uneven than it wins there, so the even case is not worth special-casing.
         mux_slots_per_channel = 2;
     }
 

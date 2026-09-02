@@ -298,9 +298,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     ////////////////////////////////////////////////////////////////
 
     // --- Per-arch tuning ---
-    // Sweep results, each arch at a single axis length (Wormhole 8 devices, Blackhole 4). Two CB entries is
-    // the floor on any arch: the reader runs one entry ahead of the sender, so a single entry deadlocks.
-    // Defaults are the fallback for an uncalibrated arch.
+    // Two CB entries is the floor on any arch: the reader runs one entry ahead of the sender, so a single
+    // entry deadlocks.
     uint32_t cb_depth = 2;
     uint32_t packets_per_cb_entry = 1;
     uint32_t run_cap_bytes = 0;
@@ -312,18 +311,17 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         // ids and with no per-entry flush to stall on, so a one-packet entry just pipelines finer and wins
         // on a line and on small row-major pages.
         packets_per_cb_entry = 1;
-        // No run cap: the sweeps put the best run length at the hardware ceiling (7616 B), so any value
-        // settable here is already above it and would only cost payload.
+        // No run cap: the best run length lands at the hardware ceiling (7616 B), so any value settable
+        // here is already above it and would only cost payload.
     } else if (arch == tt::ARCH::BLACKHOLE) {
-        // Re-swept at 8 devices x 2 links. cb_depth and the run cap were both already at their optimum --
-        // every other value measured within ~1.3% of these, which is inside the run-to-run spread.
+        // Calibrated at 8 devices x 2 links, and at 1, 2 and 4 links. cb_depth and the run cap were both
+        // already at their optimum -- every other value measured fell inside the run-to-run spread.
         cb_depth = 3;
-        // Packets per CB entry. Four amortises the reader/sender handshake and is right almost everywhere,
-        // but on a line carrying a long stripe it is not: there the sender is already serialised per hop,
-        // and a four-packet entry just delays the first send behind three more packet loads (-6%). A ring,
-        // sending in both directions at once, wants the amortisation even at a long stripe (+6%), so the
-        // rule is line-only. Measured across stripes 4..64 at 1.3 MB..48 MB per link; the boundary sits
-        // between 16 and 32 chunks and does not move with volume.
+        // packets_per_cb_entry: four amortises the reader/sender handshake and is right almost everywhere,
+        // but not on a line carrying a long stripe: there the sender is already serialised per hop, and a
+        // four-packet entry just delays the first send behind three more packet loads. A ring, sending in
+        // both directions at once, wants the amortisation even at a long stripe, so the rule is line-only.
+        // The stripe boundary does not move with volume.
         bool any_ring = false;
         for (uint32_t ax = 0; ax < 2; ++ax) {
             any_ring = any_ring || (operation_attributes.axis_num_devices[ax] > 1 &&
@@ -331,8 +329,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         }
         const bool long_stripe = output_chunks_per_stripe >= 32;
         // ...and only while the link count is low. With 4 links the per-hop send is no longer the
-        // serialising step, so the amortisation a four-packet entry buys comes back (+5.8% measured at
-        // 4 links, against -2% at 2 links and a tie at 1). Measured at all three link counts.
+        // serialising step, so the amortisation a four-packet entry buys comes back.
         const bool few_links = min_num_links <= 2;
         packets_per_cb_entry = (!any_ring && long_stripe && few_links) ? 1 : 4;  // unicast differs here
         // Past ~8 KB a run gains little packet fill but keeps the walk in one DRAM bank longer. Only chunks

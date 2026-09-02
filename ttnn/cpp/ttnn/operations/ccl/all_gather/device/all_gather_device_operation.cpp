@@ -244,37 +244,23 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         const auto& input_tensor = tensor_args.input_tensor;
         const uint32_t axis = args.get_1d_axis();
         const bool is_ring = tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis]);
-        // Packed bytes of the gathered output crossing one link -- the same expression both factories use,
-        // so the thresholds here and there are comparable. Each arch was swept at a single axis length
-        // (Wormhole 8 devices, Blackhole 4); nothing checks the thresholds carry to other lengths.
+        // Packed bytes of the gathered output crossing one link.
         const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
         const uint64_t per_link_bytes = args.output_spec.compute_packed_buffer_size_bytes() / num_links;
 
         switch (input_tensor.device()->arch()) {
             case tt::ARCH::WORMHOLE_B0: {
-                // Sweep result (T3000, both factories tuned; tile and row-major, 64 B..4 KB pages,
-                // 64 KB..1.6 GB per link).
-                // A ring always uses multicast: it won every ring measured, by 5-20% on big tensors and
-                // more on small ones. Unicast has to re-read and re-send the data at each of the N/2
-                // hops, while a multicast packet is copied onward by the fabric.
-                // A line uses unicast once the tensor is big enough: unicast's relay splits the sending
-                // across devices, which helps once the link is the bottleneck. Drop this test and small
-                // tensors pick unicast and run up to 71% slower.
-                //
-                // A short stripe favours unicast on top of that, because a long one gives multicast long
-                // runs to send instead. That refinement is left out: it cost 5 of the 17 big line shapes
-                // measured 0.5-2.2%, which is not worth walking the stripe geometry here to recover.
-                //
-                // Device count decides more than size does on a line, and not monotonically. Measured at
-                // 2, 3, 4, 6 and 8 devices with the per-device tensor held fixed:
-                //   2 devices  unicast by 23-37% at every size -- one hop, so unicast never relays, while
-                //              multicast still pays its barrier fan-in and packet setup.
-                //   3 devices  a tie, to within 0.1%.
-                //   4 devices  multicast by 18-30% at every size; 6 devices, by 3-11%. Unicast re-reads
-                //              and re-sends at each hop, which is what the fabric does for free here.
-                //   8 devices  back to a near tie, and there size picks the winner (below).
-                // Above 8 is untested; the 4->6->8 trend has multicast's edge shrinking, so the size test
-                // is the safer extrapolation.
+                // Multicast's packets are copied onward by the fabric; unicast re-reads and re-sends at
+                // every hop, but its relay splits the sending across devices. So hop count decides, and
+                // device count sets hop count -- non-monotonically:
+                //   ring       always multicast; the fabric does the relay for free.
+                //   2 devices  one hop, so unicast never relays while multicast still pays its barrier
+                //              fan-in and packet setup.
+                //   3-6        multicast, its edge shrinking as N grows.
+                //   7+         near tie, so size decides: unicast's split sending pays once the link
+                //              saturates.
+                // Calibrated on T3000 at 2-8 devices; the shrinking-edge trend makes the size test the
+                // safer extrapolation above 8.
                 if (is_ring) {
                     use_unicast = false;
                 } else if (args.num_devices <= 2) {
@@ -287,22 +273,14 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 break;
             }
             case tt::ARCH::BLACKHOLE: {
-                // Factory-vs-factory sweep with both factories tuned, tile and row-major, on 8
-                // devices x 2 links and on 4 devices x 4 links.
-                //
-                // What multicast is buying is the hops unicast's store-and-forward relay has to pay:
-                // N/2 on a ring, N-1 on a line. So the crossover moves sharply with device count. At 8
-                // devices multicast won a wide band at the small end; at 4 the ring has only 2 hops and
-                // unicast wins outright at every size measured (+13 to +27%), while the line's band
-                // shrinks from 2.5 MB/link to under 0.4 MB/link.
-                //
-                // Page size does not move it (swept 64 B..8 KB at fixed volume), nor does stripe length
-                // (2..32 chunks) beyond ~1.5% right at the line boundary.
-                //
-                // Below is linear in device count through the two machines measured. That is a two-point
-                // fit, not a law: re-measure before trusting it beyond 8 devices. Both thresholds floor
-                // at zero, which is also the right answer for the 2- and 3-device cases they extrapolate
-                // to -- one or two hops of relay is never worth a multicast.
+                // Multicast buys the hops unicast's store-and-forward relay must pay (N/2 on a ring,
+                // N-1 on a line), so the crossover moves sharply with device count: at 4 devices a ring
+                // is 2 hops and unicast wins outright; at 8, multicast takes a wide band at the small
+                // end. Neither page size nor stripe length moves it.
+                // Linear in device count is a two-point fit (4 and 8 devices), not a law: re-measure
+                // before trusting it beyond 8. Both thresholds floor at zero, which is also right for
+                // the 2- and 3-device cases they extrapolate to -- one or two hops of relay is never
+                // worth a multicast.
                 const int64_t dev = static_cast<int64_t>(args.num_devices);
                 const int64_t threshold_kb = std::max<int64_t>(
                     0,
