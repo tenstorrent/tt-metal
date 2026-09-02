@@ -412,8 +412,16 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
         }
         else if constexpr (bcast_type == BroadcastType::ROW)
         {
-            innerloop      = (total_rows >> 3);
-            broadcast_type = p_movb2d::MOV_8_ROW_BRCST;
+            innerloop = (total_rows >> 3); // both ELWADD and MOV_8_ROW_BRCST produce 8 rows per op
+            // ELWADD against a zeroed SrcA, as COL and SCALAR already do: MOVB2D writes 16 bits at a
+            // time, so with a 32-bit DEST it leaves the low half of every datum untouched and skips
+            // the faces the 16-bit addressing never reaches. ELWADD writes the full 32-bit datum.
+            broadcast_type = p_elwise::SRCB_BCAST_ROW;
+            if (dst_format == to_underlying(DataFormat::UInt16))
+            {
+                // ELWADD would have the FPU read the integer bit pattern as a float with exponent 0.
+                broadcast_type = p_movb2d::MOV_8_ROW_BRCST;
+            }
         }
         else if constexpr (bcast_type == BroadcastType::SCALAR)
         {
@@ -459,9 +467,18 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
         }
         else if constexpr (bcast_type == BroadcastType::ROW)
         {
-            ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0));
-            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_B, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
-            tmp.program();
+            if (dst_format == to_underlying(DataFormat::UInt16))
+            {
+                ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0));
+                tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_B, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
+                tmp.program();
+            }
+            else
+            {
+                ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0));
+                tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_B, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
+                tmp.program();
+            }
         }
         else
         {
