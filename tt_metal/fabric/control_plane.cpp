@@ -1983,6 +1983,7 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
     {
         route_table_2d_t route_table_2d;
         route_table_2d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
+        std::memset(route_table_2d.mcast_trees, 0, sizeof(route_table_2d.mcast_trees));
 
         // Unicast rows are mesh-identical, but each chip stores reverse trees for its own row and
         // column. Use axis_topology() for its ring-or-line fallback; a missing tree decodes as an
@@ -2022,7 +2023,7 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
                     *x_topo,
                     static_cast<int>(coord[0]),
                     static_cast<int>(coord[1]),
-                    route_table_2d.data,
+                    route_table_2d.mcast_trees,
                     &failure),
                 "mesh {} chip {}: cannot encode 2D multicast: {}",
                 *mesh_id,

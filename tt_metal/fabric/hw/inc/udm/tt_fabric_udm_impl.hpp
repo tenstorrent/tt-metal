@@ -125,7 +125,7 @@ FORCE_INLINE uint32_t calculate_initial_direction(uint16_t dst_chip_id, uint16_t
     const uint32_t my_x = routing_info->my_mesh_coord_x;
     (void)my_chip_id;
     if (my_y != dst_y) {
-        const std::uint8_t* y_vec = Routing2DCodec::y_row(routing_info->route_table_2d.data, y_size, dst_y);
+        const std::uint8_t* y_vec = Routing2DCodec::y_row(routing_info->route_table_2d.action_vectors, y_size, dst_y);
         switch (Routing2DCodec::get_action_2bit(y_vec, my_y)) {
             case Routing2DCodec::Y2_NORTH: return static_cast<uint32_t>(eth_chan_directions::NORTH);
             case Routing2DCodec::Y2_SOUTH: return static_cast<uint32_t>(eth_chan_directions::SOUTH);
@@ -133,7 +133,8 @@ FORCE_INLINE uint32_t calculate_initial_direction(uint16_t dst_chip_id, uint16_t
             default: ASSERT(false); return static_cast<uint32_t>(eth_chan_directions::EAST);
         }
     } else {
-        const std::uint8_t* x_vec = Routing2DCodec::x_row(routing_info->route_table_2d.data, y_size, x_size, dst_x);
+        const std::uint8_t* x_vec =
+            Routing2DCodec::x_row(routing_info->route_table_2d.action_vectors, y_size, x_size, dst_x);
         switch (Routing2DCodec::get_action_2bit(x_vec, my_x)) {
             case Routing2DCodec::X2_EAST: return static_cast<uint32_t>(eth_chan_directions::EAST);
             case Routing2DCodec::X2_WEST: return static_cast<uint32_t>(eth_chan_directions::WEST);
