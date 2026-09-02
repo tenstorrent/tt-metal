@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.kv_cache.fill_cache_for_user_ &mdash; TT-NN™  documentation</title>
+  <title>ttnn.experimental.indexed_fused_update_cache &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.kv_cache.fill_cache_for_user_.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.experimental.indexed_fused_update_cache.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -24,8 +24,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.kv_cache.update_cache_for_token_" href="ttnn.kv_cache.update_cache_for_token_.html" />
-    <link rel="prev" title="ttnn.generic_op" href="ttnn.generic_op.html" />
+    <link rel="next" title="ttnn.abs_bw" href="ttnn.abs_bw.html" />
+    <link rel="prev" title="ttnn.update_cache" href="ttnn.update_cache.html" />
  <link rel="stylesheet" href="https://docs.tenstorrent.com/_static/tt_theme.css">
 
 <script>
@@ -252,11 +252,11 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#generic">Generic</a></li>
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a><ul class="current">
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.kv_cache.fill_cache_for_user_</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.kv_cache.fill_cache_for_user_.html">ttnn.kv_cache.fill_cache_for_user_</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.kv_cache.update_cache_for_token_.html">ttnn.kv_cache.update_cache_for_token_</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.fill_cache.html">ttnn.fill_cache</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.update_cache.html">ttnn.update_cache</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.indexed_fused_update_cache.html">ttnn.experimental.indexed_fused_update_cache</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.experimental.indexed_fused_update_cache</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#backward-operations">Backward operations</a></li>
@@ -318,9 +318,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.kv_cache.fill_cache_for_user_</li>
+      <li class="breadcrumb-item active">ttnn.experimental.indexed_fused_update_cache</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.kv_cache.fill_cache_for_user_.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/ttnn/api/ttnn.experimental.indexed_fused_update_cache.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -328,35 +328,52 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-kv-cache-fill-cache-for-user">
-<h1>ttnn.kv_cache.fill_cache_for_user_<a class="headerlink" href="#ttnn-kv-cache-fill-cache-for-user" title="Permalink to this heading"></a>
+  <section id="ttnn-experimental-indexed-fused-update-cache">
+<h1>ttnn.experimental.indexed_fused_update_cache<a class="headerlink" href="#ttnn-experimental-indexed-fused-update-cache" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
-<dt class="sig sig-object py" id="ttnn.kv_cache.fill_cache_for_user_">
-<span class="sig-prename descclassname"><span class="pre">ttnn.kv_cache.</span></span><span class="sig-name descname"><span class="pre">fill_cache_for_user_</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cache</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">batch_index</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">update_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.kv_cache.fill_cache_for_user_" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.experimental.indexed_fused_update_cache">
+<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">indexed_fused_update_cache</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cache_tensor1</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor1</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_tensor2</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor2</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">physical_update_idxs_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">ttnn.Tensor</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">ttnn.Tensor</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#ttnn.experimental.indexed_fused_update_cache" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Populates the <code class="xref py py-attr docutils literal notranslate"><span class="pre">cache</span></code> tensor in-place with values sourced from <code class="xref py py-attr docutils literal notranslate"><span class="pre">input</span></code> at <code class="xref py py-attr docutils literal notranslate"><span class="pre">batch_index</span></code>,
-optionally offset along the sequence dimension by <code class="xref py py-attr docutils literal notranslate"><span class="pre">update_idx</span></code> (tile-aligned).</p>
+<p>Writes packed rows from two input tensors into two cache tensors in parallel.</p>
+<p><code class="docutils literal notranslate"><span class="pre">physical_update_idxs_tensor</span></code> is a row-major INT32 tensor with shape
+<code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">num_indices]</span></code>. Entry <code class="docutils literal notranslate"><span class="pre">i</span></code> gives the physical cache row for input
+row <code class="docutils literal notranslate"><span class="pre">i</span></code>; negative and out-of-range entries are skipped. Physical rows
+flatten cache dimensions 0 and 2: <code class="docutils literal notranslate"><span class="pre">page</span> <span class="pre">=</span> <span class="pre">index</span> <span class="pre">//</span> <span class="pre">cache.shape[2]</span></code> and
+<code class="docutils literal notranslate"><span class="pre">row_in_page</span> <span class="pre">=</span> <span class="pre">index</span> <span class="pre">%</span> <span class="pre">cache.shape[2]</span></code>. This operation does not perform
+logical page-table translation.</p>
+<p>Both caches and inputs must be interleaved BF16 TILE tensors. Cache shape
+is <code class="docutils literal notranslate"><span class="pre">[num_pages,</span> <span class="pre">num_heads,</span> <span class="pre">rows_per_page,</span> <span class="pre">head_dim]</span></code> and packed input
+shape is <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">num_heads,</span> <span class="pre">packed_rows,</span> <span class="pre">head_dim]</span></code>, where
+<code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">&lt;=</span> <span class="pre">packed_rows</span> <span class="pre">&lt;=</span> <span class="pre">256</span></code> and
+<code class="docutils literal notranslate"><span class="pre">packed_rows</span> <span class="pre">&lt;=</span> <span class="pre">num_indices</span> <span class="pre">&lt;=</span> <span class="pre">256</span></code>. The operation updates the cache
+tensors in place and serializes all rows owned by a head/width worker, so
+multiple rows may safely target the same physical page.</p>
+<p>Replicated tensors are supported on single- or multi-device meshes. The
+four cache/input tensors may also use one identical tensor-parallel mesh
+topology sharded over <code class="docutils literal notranslate"><span class="pre">num_heads</span></code> (dimension 1), <code class="docutils literal notranslate"><span class="pre">head_dim</span></code>
+(dimension 3), or both. Physical update indices must use the same mesh
+shape and coordinates and remain replicated across those mesh axes.
+Cache page/row sharding, sharded physical indices, and per-device index
+remapping are not supported. Initial hardware support is Wormhole and
+Blackhole.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>cache</strong> (<em>ttnn.Tensor</em>) – the cache tensor to be written to.</p></li>
-<li><p><strong>input</strong> (<em>ttnn.Tensor</em>) – the input tensor to be written to the cache.</p></li>
-<li><p><strong>batch_index</strong> (<em>int</em>) – the index into the cache tensor.</p></li>
+<li><p><strong>cache_tensor1</strong> (<em>ttnn.Tensor</em>) – First paged cache, updated in place.</p></li>
+<li><p><strong>input_tensor1</strong> (<em>ttnn.Tensor</em>) – Packed rows for <code class="docutils literal notranslate"><span class="pre">cache_tensor1</span></code>.</p></li>
+<li><p><strong>cache_tensor2</strong> (<em>ttnn.Tensor</em>) – Second paged cache, updated in place.</p></li>
+<li><p><strong>input_tensor2</strong> (<em>ttnn.Tensor</em>) – Packed rows for <code class="docutils literal notranslate"><span class="pre">cache_tensor2</span></code>.</p></li>
+<li><p><strong>physical_update_idxs_tensor</strong> (<em>ttnn.Tensor</em>) – Physical destination rows.</p></li>
 </ul>
 </dd>
-<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+<dt class="field-even">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><strong>update_idx</strong> (<em>int</em>) – seq-dim offset within the user slot, must be a multiple of TILE_HEIGHT. Default = 0.</p>
-</dd>
-<dt class="field-odd">Returns<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the output tensor.</p>
+<p><em>Tuple[ttnn.Tensor, ttnn.Tensor]</em> – The two in-place cache tensors.</p>
 </dd>
 </dl>
 </dd>
@@ -369,8 +386,8 @@ optionally offset along the sequence dimension by <code class="xref py py-attr d
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.generic_op.html" class="btn btn-neutral float-left" title="ttnn.generic_op" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.kv_cache.update_cache_for_token_.html" class="btn btn-neutral float-right" title="ttnn.kv_cache.update_cache_for_token_" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.update_cache.html" class="btn btn-neutral float-left" title="ttnn.update_cache" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.abs_bw.html" class="btn btn-neutral float-right" title="ttnn.abs_bw" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
