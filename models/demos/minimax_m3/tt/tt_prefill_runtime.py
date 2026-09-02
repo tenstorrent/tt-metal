@@ -399,31 +399,62 @@ class TtPrefillRuntime:
         assert self.compiled, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink
 
+    def _slot_block(self, tensor, start: int, end: int, *, collapse_tp: bool = False, composer=None):
+        """This range of user-major packed-cache rows, gathered to host in one mesh compose.
+
+        Same pattern as DeepSeek ``TtPrefillRuntime.read_slot_kv._slot_block``: slice on device with
+        DRAM_MEMORY_CONFIG (the cache is ND-sharded ROUND_ROBIN_1D; slicing into another ND-shard
+        miscomputes the DRAM core on read-back), then ``ConcatMesh2dToTensor`` ``dims=(2, 1)`` so SP
+        concatenates on seq and TP on heads — one ``to_torch`` instead of per-chip ``get_device_tensors``.
+        ``collapse_tp`` keeps a single TP replica (index_k is replicated across cols). Returns
+        ``[end - start, heads(or 1), seq_cache, head_dim]`` in on-device (block-cyclic) seq order.
+        """
+        if composer is None:
+            composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=self.mesh_device.shape)
+        s = list(tensor.shape)
+        sl = ttnn.slice(
+            tensor,
+            [start, 0, 0, 0],
+            [end, s[1], s[2], s[3]],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        host = ttnn.to_torch(sl, mesh_composer=composer).float()
+        ttnn.deallocate(sl)
+        return host[:, :1] if collapse_tp else host
+
+    def naturalize_kv_block(self, block: torch.Tensor, n_tokens: int) -> torch.Tensor:
+        """Un-rotate a host cache block from on-device block-cyclic seq order to NATURAL token order.
+
+        ``block`` is ``[..., seq_cache, head_dim]`` (seq is dim -2), the ConcatMesh2dToTensor layout.
+        Inverse of the ``update_padded_kv_cache`` writer. Returns ``[..., n_tokens, head_dim]``.
+        """
+        p = blockcyclic_positions(self.config.sp_factor, self.config.chunk_size, self.config.max_seq_len)
+        nat = torch.empty_like(block)
+        nat[..., p, :] = block
+        return nat[..., :n_tokens, :]
+
     def gather_layer(self, kv_cache, slot_id: int, layer_idx: int, n_tokens: int):
         """Read one layer's device cache back to NATURAL token order (un-rotating the block-cyclic SP
         layout). Returns (k, v, index_k) torch tensors in DEVICE convention (K / index_k are Meta-RoPE
         swizzled over the rotary slice — the caller reconciles vs the HF golden). Shapes:
         k,v -> [1, num_kv_heads, n_tokens, head_dim]; index_k -> [1, 1, n_tokens, head_dim] (zeros on
         dense layers, which carry no index_k). Optional bring-up hook — never used in production
-        serving."""
-        sp = self.config.sp_factor
-        cols = self.config.tp_factor  # K/V head c on col c; index_k replicated -> read col 0
-        nkv = self.hf_config.num_key_value_heads
-        slot = slot_id * self.config.num_layers + layer_idx
-        # shard-row -> natural global position (inverse of the update_padded_kv_cache writer).
-        p = blockcyclic_positions(sp, self.config.chunk_size, self.config.max_seq_len)
+        serving.
 
-        def gather(cache_tensor, col):
-            dts = ttnn.get_device_tensors(cache_tensor)
-            dev = torch.cat([ttnn.to_torch(dts[r * cols + col])[slot, 0].float() for r in range(sp)], dim=0)
-            nat = torch.empty_like(dev)
-            nat[p] = dev
-            return nat[:n_tokens]
-
-        k = torch.stack([gather(kv_cache.k, c) for c in range(nkv)], dim=0).unsqueeze(0)
-        v = torch.stack([gather(kv_cache.v, c) for c in range(nkv)], dim=0).unsqueeze(0)
-        index_k = gather(kv_cache.index_k, 0).unsqueeze(0).unsqueeze(0)
-        return k, v, index_k
+        Slices the packed row on device and composes the mesh once per cache (see ``_slot_block``),
+        matching DeepSeek slot readback — not per-chip ``to_torch`` of the full packed buffer. A caller
+        that walks EVERY layer should read the slot once (``read_slot_kv``) and un-rotate each layer with
+        ``naturalize_kv_block`` instead of calling this per layer.
+        """
+        packed = slot_id * self.config.num_layers + layer_idx
+        composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=self.mesh_device.shape)
+        return (
+            self.naturalize_kv_block(self._slot_block(kv_cache.k, packed, packed + 1, composer=composer), n_tokens),
+            self.naturalize_kv_block(self._slot_block(kv_cache.v, packed, packed + 1, composer=composer), n_tokens),
+            self.naturalize_kv_block(
+                self._slot_block(kv_cache.index_k, packed, packed + 1, collapse_tp=True, composer=composer), n_tokens
+            ),
+        )
 
     def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
         """One ``KvCacheStage`` per migratable device cache, in the order ``build_kv_chunk_table``
@@ -478,26 +509,18 @@ class TtPrefillRuntime:
         """Read one slot's KV cache from device to host: ``[k, v, index_k]``, one host tensor per cache
         tensor, each ``[num_layers, heads(or 1), seq_cache, head_dim]`` (index_k collapsed to one TP
         replica), in the raw on-device (block-cyclic) layout — not un-rotated to natural token order.
-        DRAM_MEMORY_CONFIG on the slice is REQUIRED — the cache is ND-sharded ROUND_ROBIN_1D, and slicing
-        into another ND-shard miscomputes the DRAM core on host read-back."""
-        mesh_device = self.mesh_device
-        num_layers = self.config.num_layers
 
-        def _block(tensor, collapse_tp: bool):
-            s = list(tensor.shape)
-            sl = ttnn.slice(
-                tensor,
-                [slot * num_layers, 0, 0, 0],
-                [(slot + 1) * num_layers, s[1], s[2], s[3]],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            block = ttnn.to_torch(
-                sl, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-            ).float()  # [num_layers, nkv (or cols), seq_cache, head_dim]
-            ttnn.deallocate(sl)
-            return block[:, :1] if collapse_tp else block
-
-        return [_block(kv_cache.k, False), _block(kv_cache.v, False), _block(kv_cache.index_k, True)]
+        Mirrors DeepSeek ``TtPrefillRuntime.read_slot_kv``: one device slice + one mesh compose per
+        cache (see ``_slot_block``).
+        """
+        start = slot * self.config.num_layers
+        end = start + self.config.num_layers
+        composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=self.mesh_device.shape)
+        return [
+            self._slot_block(kv_cache.k, start, end, composer=composer),
+            self._slot_block(kv_cache.v, start, end, composer=composer),
+            self._slot_block(kv_cache.index_k, start, end, collapse_tp=True, composer=composer),
+        ]
 
     def kv_cache_pcc_check(
         self,

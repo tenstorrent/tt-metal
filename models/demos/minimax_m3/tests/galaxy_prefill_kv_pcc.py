@@ -93,10 +93,13 @@ def plan(n_tokens, chunk_size, chunked):
 
 
 def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config):
-    """Per-layer K / V / index_k PCC: device cache (one slot read, then host un-rotate) vs the golden
-    trace. The device stores K / index_k Meta-RoPE swizzled over the rotary slice; the golden is HF
-    half-split, so permute the golden's rotary slice (identity tail) before comparing. V is raw (no
-    swizzle).
+    """Per-layer K / V / index_k PCC: device cache vs the golden trace. The device stores K / index_k
+    Meta-RoPE swizzled over the rotary slice; the golden is HF half-split, so permute the golden's
+    rotary slice (identity tail) before comparing. V is raw (no swizzle).
+
+    The whole slot is read back ONCE (``read_slot_kv``: a device-side slot slice plus one mesh compose
+    per cache) and each layer is un-rotated on host. Reading per layer instead would re-copy the packed
+    cache num_layers times over PCIe.
 
     Fails if overall min PCC is below PREFILL_STANDALONE_CHUNKED_PCC (default 0.88), matching
     models/demos/minimax_m3/tt/runners/prefill_kv_validation.py.
@@ -104,7 +107,6 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config)
     from safetensors import safe_open
 
     from models.common.utility_functions import comp_pcc
-    from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 
     threshold = float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88"))
     head_dim = hf_config.head_dim
@@ -118,17 +120,11 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config)
     kv_dir = Path(golden_dir) / "kv_cache"
     logger.info(f"[kv-pcc] per-layer K / V / index_k vs golden ({golden_dir}):")
     mins = {"k": 1.0, "v": 1.0, "index_k": 1.0}
-    # One device slice + mesh compose per cache (read_slot_kv), not 60 full-buffer gathers.
-    p = blockcyclic_positions(runtime.config.sp_factor, runtime.config.chunk_size, runtime.config.max_seq_len)
-
-    def _naturalize(block):
-        nat = torch.empty_like(block)
-        nat[..., p, :] = block
-        return nat[..., :n_tokens, :]
-
-    k_nat, v_nat, ik_nat = (_naturalize(t) for t in runtime.read_slot_kv(kv_cache, 0))
+    k_blk, v_blk, ik_blk = runtime.read_slot_kv(kv_cache, 0)  # still block-cyclic; un-rotated per layer below
     for L in range(num_layers):
-        dev_k, dev_v, dev_ik = k_nat[L].unsqueeze(0), v_nat[L].unsqueeze(0), ik_nat[L].unsqueeze(0)
+        dev_k = runtime.naturalize_kv_block(k_blk[L], n_tokens).unsqueeze(0)
+        dev_v = runtime.naturalize_kv_block(v_blk[L], n_tokens).unsqueeze(0)
+        dev_ik = runtime.naturalize_kv_block(ik_blk[L], n_tokens).unsqueeze(0)
         with safe_open(str(kv_dir / f"layer_{L}.safetensors"), framework="pt") as h:
             keys = set(h.keys())
             g_k = h.get_tensor(f"key_cache_layer_{L}").float()[:, :, :n_tokens, :][..., src]  # HF -> Meta
