@@ -1225,6 +1225,19 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
         runtime.capture_trace(kv_caches)
 
+    # TEMP(#53533): REMOVE BEFORE PR. The runner does not measure PCC -- but the GLM-5.2 golden trace
+    # stops at layer 77, so nothing validates the four MTP KV slots numerically. See
+    # tt/mtp_prefill/_temp_runner_mtp_pcc.py; off unless PREFILL_MTP_REF_PCC=1.
+    _mtp_ref_pcc = None  # TEMP(#53533)
+    if MTP_LEVELS:  # TEMP(#53533)
+        from models.demos.deepseek_v3_d_p.tt.mtp_prefill import _temp_runner_mtp_pcc as _tmp_pcc  # TEMP(#53533)
+
+        _mtp_ref_pcc = _tmp_pcc if _tmp_pcc.enabled() else None  # TEMP(#53533)
+        if _mtp_ref_pcc is not None:  # TEMP(#53533)
+            _mtp_ref_pcc.install(  # TEMP(#53533)
+                runtime, hf_config, os.environ.get("PREFILL_HF_MODEL", ADAPTER.hf_model_default)
+            )  # TEMP(#53533)
+
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
     try:
@@ -1240,6 +1253,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2d_out=d2d_out,
             d2h_service=d2h_service,
         )
+        if _mtp_ref_pcc is not None:  # TEMP(#53533)
+            _mtp_ref_pcc.report(  # TEMP(#53533)
+                runtime, kv_caches, hf_config, os.environ.get("PREFILL_HF_MODEL", ADAPTER.hf_model_default)
+            )  # TEMP(#53533)
     finally:
         # Always tear down — the request loop can raise (e.g. the layer-completion sink's ring-full
         # spin timing out on a stalled router); without this, producer/router/ack segments + the
