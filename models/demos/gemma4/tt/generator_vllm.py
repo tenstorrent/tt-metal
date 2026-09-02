@@ -206,13 +206,6 @@ def _patch_model_args(
 
 
 class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCausalLM):
-    # Ask the plugin to null stale block-table tails (vLLM move_row keeps the
-    # previous occupant's block ids past a reused row's valid count; this
-    # wrapper slices continuation chunks to full-prompt width, so a stale tail
-    # cross-writes another live request's KV — corrupt from decode step 2 at
-    # concurrency >= 2 wherever the prefill budget makes prompts multi-chunk).
-    tt_null_stale_block_table_tail = True
-
     """Gemma4 — hybrid attention (sliding-window + full).
 
     Gemma4's decoder alternates ``sliding_attention`` and ``full_attention``
