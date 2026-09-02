@@ -21,12 +21,17 @@ MMSignalAggregatorMode = ttnn._ttnn.operations.experimental.ccl_experimental.MMS
 
 def _preprocess_collective_golden_inputs(function_args, function_kwargs):
     """Convert a collective mesh input into per-device Torch shards.
-    Adds mesh shape and shard-mode metadata for global golden preprocessing.
+    Adds mesh topology metadata for local and global golden processing.
     """
 
     input_tensor = function_args[0] if function_args else function_kwargs["input_tensor"]
     input_tensors = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(input_tensor)]
-    mesh_shape = tuple(input_tensor.device().shape)
+    tensor_topology = input_tensor.tensor_topology()
+    mesh_shape = tuple(int(dimension) for dimension in tensor_topology.distribution_shape())
+    mesh_shard_dims = tuple(
+        placement.dim if isinstance(placement, ttnn.PlacementShard) else None
+        for placement in tensor_topology.placements()
+    )
 
     function_args = list(function_args)
     function_kwargs = dict(function_kwargs)
@@ -35,22 +40,78 @@ def _preprocess_collective_golden_inputs(function_args, function_kwargs):
     else:
         function_kwargs["input_tensor"] = input_tensors
     function_kwargs["_ttnn_golden_mesh_shape"] = mesh_shape
+    function_kwargs["_ttnn_golden_mesh_shard_dims"] = mesh_shard_dims
     function_kwargs["_ttnn_global_golden_mesh_shards"] = True
     return tuple(function_args), function_kwargs
 
 
-def _get_first_collective_group(input_tensors, mesh_shape, cluster_axis):
-    """Select the first collective group along the requested mesh axis.
-    Returns every input when no cluster axis restricts the group.
-    """
+def _mesh_coordinate_to_index(coordinate, mesh_shape):
+    """Convert a row-major mesh coordinate to its flat device index."""
+
+    index = 0
+    for value, dimension in zip(coordinate, mesh_shape):
+        index = index * dimension + int(value)
+    return index
+
+
+def _get_collective_groups(mesh_shape, cluster_axis):
+    """Return row-major device indices grouped along the collective axis."""
+
+    import itertools
+    import math
 
     if cluster_axis is None:
-        return input_tensors
+        return [list(range(math.prod(mesh_shape)))]
 
-    stride = 1
-    for dimension in mesh_shape[cluster_axis + 1 :]:
-        stride *= dimension
-    return [input_tensors[index * stride] for index in range(mesh_shape[cluster_axis])]
+    groups = {}
+    for coordinate in itertools.product(*(range(dimension) for dimension in mesh_shape)):
+        group_coordinate = coordinate[:cluster_axis] + coordinate[cluster_axis + 1 :]
+        groups.setdefault(group_coordinate, []).append(_mesh_coordinate_to_index(coordinate, mesh_shape))
+    return list(groups.values())
+
+
+def _compose_mesh_golden_outputs(per_device_outputs, mesh_shape, mesh_shard_dims):
+    """Compose per-device Torch values according to mesh shard placements."""
+
+    import itertools
+    import math
+    import torch
+
+    if len(per_device_outputs) != math.prod(mesh_shape):
+        raise ValueError("Collective golden output count does not match the mesh volume")
+    if len(mesh_shard_dims) != len(mesh_shape):
+        raise ValueError("Collective golden placement count does not match the mesh rank")
+
+    values = {
+        coordinate: per_device_outputs[_mesh_coordinate_to_index(coordinate, mesh_shape)]
+        for coordinate in itertools.product(*(range(dimension) for dimension in mesh_shape))
+    }
+    for axis in range(len(mesh_shape) - 1, -1, -1):
+        grouped_values = {}
+        for coordinate, value in values.items():
+            group_coordinate = coordinate[:axis] + coordinate[axis + 1 :]
+            grouped_values.setdefault(group_coordinate, []).append((coordinate[axis], value))
+
+        values = {}
+        for group_coordinate, indexed_values in grouped_values.items():
+            ordered_values = [value for _, value in sorted(indexed_values)]
+            shard_dim = mesh_shard_dims[axis]
+            values[group_coordinate] = (
+                ordered_values[0] if shard_dim is None else torch.cat(ordered_values, dim=shard_dim)
+            )
+    return values[()]
+
+
+def _normalize_dim(dim, rank):
+    return dim if dim >= 0 else dim + rank
+
+
+def _replace_matching_shards_with_replicas(mesh_shard_dims, dim, rank):
+    normalized_dim = _normalize_dim(dim, rank)
+    return tuple(
+        None if shard_dim is not None and _normalize_dim(shard_dim, rank) == normalized_dim else shard_dim
+        for shard_dim in mesh_shard_dims
+    )
 
 
 def _golden_function_all_broadcast(
@@ -58,13 +119,29 @@ def _golden_function_all_broadcast(
     *args,
     cluster_axis=None,
     _ttnn_golden_mesh_shape=None,
+    _ttnn_golden_mesh_shard_dims=None,
     **kwargs,
 ):
-    if _ttnn_golden_mesh_shape is None:
+    if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
         return None
 
-    # Each result broadcasts one rank's payload across the first cluster group.
-    return _get_first_collective_group(input_tensor, _ttnn_golden_mesh_shape, cluster_axis)
+    groups = _get_collective_groups(_ttnn_golden_mesh_shape, cluster_axis)
+    group_size = len(groups[0])
+    per_result_device_outputs = [[None] * len(input_tensor) for _ in range(group_size)]
+    for group in groups:
+        for result_index, source_index in enumerate(group):
+            for destination_index in group:
+                per_result_device_outputs[result_index][destination_index] = input_tensor[source_index]
+
+    output_shard_dims = list(_ttnn_golden_mesh_shard_dims)
+    if cluster_axis is None:
+        output_shard_dims = [None] * len(output_shard_dims)
+    else:
+        output_shard_dims[cluster_axis] = None
+    return [
+        _compose_mesh_golden_outputs(outputs, _ttnn_golden_mesh_shape, output_shard_dims)
+        for outputs in per_result_device_outputs
+    ]
 
 
 ttnn.attach_golden_function(
@@ -80,15 +157,22 @@ def _golden_function_all_gather(
     *args,
     cluster_axis=None,
     _ttnn_golden_mesh_shape=None,
+    _ttnn_golden_mesh_shard_dims=None,
     **kwargs,
 ):
     import torch
 
-    if _ttnn_golden_mesh_shape is None:
+    if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
         return None
-    input_group = _get_first_collective_group(input_tensor, _ttnn_golden_mesh_shape, cluster_axis)
-    # The first rank receives every rank's shard concatenated along the requested dimension.
-    return torch.cat(input_group, dim=dim)
+
+    per_device_outputs = [None] * len(input_tensor)
+    for group in _get_collective_groups(_ttnn_golden_mesh_shape, cluster_axis):
+        gathered = torch.cat([input_tensor[index] for index in group], dim=dim)
+        for index in group:
+            per_device_outputs[index] = gathered
+
+    output_shard_dims = _replace_matching_shards_with_replicas(_ttnn_golden_mesh_shard_dims, dim, input_tensor[0].ndim)
+    return _compose_mesh_golden_outputs(per_device_outputs, _ttnn_golden_mesh_shape, output_shard_dims)
 
 
 ttnn.attach_golden_function(
@@ -103,15 +187,26 @@ def _golden_function_all_reduce(
     *args,
     cluster_axis=None,
     _ttnn_golden_mesh_shape=None,
+    _ttnn_golden_mesh_shard_dims=None,
     **kwargs,
 ):
     import torch
 
-    if _ttnn_golden_mesh_shape is None:
+    if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
         return None
-    input_group = _get_first_collective_group(input_tensor, _ttnn_golden_mesh_shape, cluster_axis)
-    # Stable all-reduce always performs a sum and replicates it to the group.
-    return torch.stack(input_group).sum(dim=0)
+
+    per_device_outputs = [None] * len(input_tensor)
+    for group in _get_collective_groups(_ttnn_golden_mesh_shape, cluster_axis):
+        reduced = torch.stack([input_tensor[index] for index in group]).sum(dim=0)
+        for index in group:
+            per_device_outputs[index] = reduced
+
+    output_shard_dims = list(_ttnn_golden_mesh_shard_dims)
+    if cluster_axis is None:
+        output_shard_dims = [None] * len(output_shard_dims)
+    else:
+        output_shard_dims[cluster_axis] = None
+    return _compose_mesh_golden_outputs(per_device_outputs, _ttnn_golden_mesh_shape, output_shard_dims)
 
 
 ttnn.attach_golden_function(
@@ -127,16 +222,30 @@ def _golden_function_reduce_scatter(
     *args,
     cluster_axis=None,
     _ttnn_golden_mesh_shape=None,
+    _ttnn_golden_mesh_shard_dims=None,
     **kwargs,
 ):
     import torch
 
-    if _ttnn_golden_mesh_shape is None:
+    if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
         return None
-    input_group = _get_first_collective_group(input_tensor, _ttnn_golden_mesh_shape, cluster_axis)
-    reduced = torch.stack(input_group).sum(dim=0)
-    # The first rank receives the first equal chunk of the reduced tensor.
-    return torch.chunk(reduced, len(input_group), dim=dim)[0]
+
+    per_device_outputs = [None] * len(input_tensor)
+    for group in _get_collective_groups(_ttnn_golden_mesh_shape, cluster_axis):
+        reduced = torch.stack([input_tensor[index] for index in group]).sum(dim=0)
+        for index, chunk in zip(group, torch.chunk(reduced, len(group), dim=dim)):
+            per_device_outputs[index] = chunk
+
+    output_shard_dims = list(
+        _replace_matching_shards_with_replicas(_ttnn_golden_mesh_shard_dims, dim, input_tensor[0].ndim)
+    )
+    normalized_dim = _normalize_dim(dim, input_tensor[0].ndim)
+    if cluster_axis is None:
+        for axis, dimension in enumerate(_ttnn_golden_mesh_shape):
+            output_shard_dims[axis] = normalized_dim if dimension > 1 else None
+    else:
+        output_shard_dims[cluster_axis] = normalized_dim
+    return _compose_mesh_golden_outputs(per_device_outputs, _ttnn_golden_mesh_shape, output_shard_dims)
 
 
 ttnn.attach_golden_function(
@@ -144,41 +253,6 @@ ttnn.attach_golden_function(
     golden_function=_golden_function_reduce_scatter,
     preprocess_golden_function_inputs=_preprocess_collective_golden_inputs,
 )
-
-
-def _golden_function_mesh_partition(
-    input_tensor,
-    dim,
-    cluster_axis=None,
-    *args,
-    _ttnn_golden_mesh_shape=None,
-    **kwargs,
-):
-    import torch
-
-    if _ttnn_golden_mesh_shape is None:
-        return None
-    input_group = _get_first_collective_group(input_tensor, _ttnn_golden_mesh_shape, cluster_axis)
-    # The first rank keeps the first equal partition of its local input.
-    return torch.chunk(input_group[0], len(input_group), dim=dim)[0]
-
-
-ttnn.attach_golden_function(
-    ttnn.mesh_partition,
-    golden_function=_golden_function_mesh_partition,
-    preprocess_golden_function_inputs=_preprocess_collective_golden_inputs,
-)
-
-
-def _mesh_coordinate_to_index(coordinate, mesh_shape):
-    """Convert a row-major mesh coordinate to its flat device index.
-    Uses each mesh dimension as the radix for the corresponding coordinate.
-    """
-
-    index = 0
-    for value, dimension in zip(coordinate, mesh_shape):
-        index = index * dimension + int(value)
-    return index
 
 
 def _golden_function_point_to_point(

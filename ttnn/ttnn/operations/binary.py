@@ -611,42 +611,6 @@ def _golden_function_assign(
 ttnn.attach_golden_function(ttnn.assign, golden_function=_golden_function_assign)
 
 
-def _preprocess_broadcast_golden_inputs(function_args, function_kwargs):
-    """Convert a mesh broadcast input into per-device Torch shards.
-    Adds mesh metadata required by local and global golden comparison paths.
-    """
-
-    input_tensor = function_args[0] if function_args else function_kwargs["input_tensor"]
-    input_tensors = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(input_tensor)]
-
-    function_args = list(function_args)
-    function_kwargs = dict(function_kwargs)
-    if function_args:
-        function_args[0] = input_tensors
-    else:
-        function_kwargs["input_tensor"] = input_tensors
-    function_kwargs["_ttnn_golden_mesh_shape"] = tuple(input_tensor.device().shape)
-    function_kwargs["_ttnn_global_golden_mesh_shards"] = True
-    return tuple(function_args), function_kwargs
-
-
-def _golden_function_broadcast(input_tensor, sender_coord, *args, _ttnn_golden_mesh_shape=None, **kwargs):
-    if _ttnn_golden_mesh_shape is None:
-        return None
-
-    sender_index = 0
-    for coordinate, dimension in zip(sender_coord, _ttnn_golden_mesh_shape):
-        sender_index = sender_index * dimension + int(coordinate)
-    return input_tensor[sender_index]
-
-
-ttnn.attach_golden_function(
-    ttnn.broadcast,
-    golden_function=_golden_function_broadcast,
-    preprocess_golden_function_inputs=_preprocess_broadcast_golden_inputs,
-)
-
-
 def _golden_function(a, b, *args, **kwargs):
     import torch
 
