@@ -1,6 +1,11 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
-
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright (c) Meta Platforms, Inc. and affiliates.
+# SPDX-License-Identifier: LicenseRef-LICENSE-FILE
+# All rights reserved.
+#
+# This source code is licensed under the terms described in LICENSE-Llama-3.1
+# in this folder.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# This software may be used and distributed in accordance with the terms of the Llama 3 Community License Agreement.
 
 """Frozen Llama-3.1 reference goldens for tests.
 
