@@ -9,7 +9,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <bit>
-#include <cmath>
 #include <variant>
 
 namespace ttnn::prim {
@@ -41,14 +40,6 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         "ReduceSingleCoreHwProgramFactory supports HW dim only, got dim enum value {}",
         static_cast<int>(operation_attributes.dim));
 
-    // The single-core HW path uses REDUCE_SCALAR mode, which applies the
-    // scaler twice internally (once per dimension). Here we compensate with
-    // sqrt(scaler). However, sqrt of a negative number is NaN, so negative scalers
-    // must not reach this code path. Instead negative scalers are handled via the two-step
-    // W-then-H path where the scaler is applied once (see the reduce function in reduce_op.cpp).
-    TT_FATAL(operation_attributes.scaler >= 0, "Scalar must be non-negative");
-    float scaler = std::sqrt(operation_attributes.scaler);
-
     TT_FATAL(
         H % tile_height == 0 && W % tile_width == 0, "Reduce HW expects tile-aligned padded shape H={}, W={}", H, W);
     uint32_t num_tensor_tiles = NC * H * W / tile_hw;
@@ -79,11 +70,9 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    // For min/max with non-unity scalar, the GMPOOL hardware path only respects the scaler's
-    // exponent, so the device reduces with scaler=1.0 and the user scalar is applied after the
-    // reduction via SFPU mul_unary_tile inside the compute kernel.
-    const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
-    uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
+    // PostMul applies the scalar after the reduction, in the compute kernel; derive_scaler_mode
+    // says which paths need it.
+    const bool use_post_mul = operation_attributes.scaler_mode == ScalerMode::PostMul;
 
     // ---- Program-scope resource names (drive the generated dfb:: / tensor:: tokens) ----
     // Declared function-local: the reduce factory .cpp files land in the same unity-build
@@ -170,7 +159,9 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
                 },
             },
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
-        .compile_time_args = {{"scaler_bits", std::bit_cast<uint32_t>(scaler)}},
+        // REDUCE_SCALAR applies the tile once per reduced dimension, squaring it. The HW path is
+        // therefore always ScalerMode::PostMul, so the tile only ever carries the identity.
+        .compile_time_args = {{"scaler_bits", std::bit_cast<uint32_t>(1.0f)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config = ttnn::create_reader_datamovement_config(a.device().arch()),
     });
@@ -284,11 +275,10 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
                 {"Ht", Ht},
                 {"Wt", Wt},
                 {"NC", NC},
-                // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
-                {"post_mul_scaler_bits", post_mul_scaler_bits},
                 // enable_fp32_sfpu: always 0 (accurate fp32 HW is forced to the two-step W-then-H path)
                 {"enable_fp32_sfpu", 0u},
             },
+        .runtime_arg_schema = {.common_runtime_arg_names = {"post_mul_scaler_bits"}},
         .hw_config = compute_hw,
     });
 
@@ -317,10 +307,41 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
             selected_node_coord, {{"num_pages", num_tensor_tiles / out_dim_divider}, {"start_id", 0u}}),
     });
 
+    run_args.kernel_run_args.push_back(KernelRunArgs{
+        .kernel = COMPUTE,
+        .common_runtime_arg_values =
+            {{"post_mul_scaler_bits", std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler)}},
+    });
+
     run_args.tensor_args.emplace(INPUT_TENSOR, TensorArgument{a});
     run_args.tensor_args.emplace(OUTPUT_TENSOR, TensorArgument{output});
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+tt::tt_metal::experimental::ProgramRunArgs
+ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::override_runtime_arguments(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    using namespace tt::tt_metal::experimental;
+
+    // Names must match create_program_artifacts.
+    const KernelSpecName COMPUTE{"compute"};
+    const TensorParamName INPUT_TENSOR{"input"};
+    const TensorParamName OUTPUT_TENSOR{"output"};
+
+    // compute_program_hash excludes the scalar values, so the post-mul must be re-applied here.
+    // The reader's tile is pinned to the identity, and every other arg is shape-derived and hashed.
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(KernelRunArgs{
+        .kernel = COMPUTE,
+        .common_runtime_arg_values = {
+            {"post_mul_scaler_bits", std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler)}}});
+    params.tensor_args.emplace(INPUT_TENSOR, TensorArgument{tensor_args.mesh_tensor()});
+    params.tensor_args.emplace(OUTPUT_TENSOR, TensorArgument{tensor_return_value.mesh_tensor()});
+    return params;
 }
 
 }  // namespace ttnn::prim

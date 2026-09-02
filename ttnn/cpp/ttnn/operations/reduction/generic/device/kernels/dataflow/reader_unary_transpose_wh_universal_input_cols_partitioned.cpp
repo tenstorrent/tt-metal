@@ -22,7 +22,7 @@ void kernel_main() {
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto HtWt = get_arg(args::HtWt);
 
-    constexpr auto scaler_bits = get_arg(args::scaler_bits);
+    const uint32_t scaler_bits = get_arg(args::scaler_bits);
     constexpr bool use_welford = get_arg(args::use_welford) != 0;
     constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 

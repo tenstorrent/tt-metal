@@ -13,12 +13,18 @@ The ReduceDeviceOperation uses 3 ProgramFactory variants:
     MULTI_CORE_HW which also maps to ReduceSingleCoreHwProgramFactory
 
 compute_program_hash() includes:
-  math_op, dim, scaler, output_mem_config, output_dtype, compute_kernel_config,
+  math_op, dim, scaler_mode, output_mem_config, output_dtype, compute_kernel_config,
   sub_core_grids, negate, program_factory.index(), input dtype,
   input memory_config, input padded_shape.
 
-override_runtime_arguments() only updates buffer addresses — shape/work distribution
-changes require separate cache entries (padded_shape is in hash).
+It deliberately EXCLUDES the two scalar floats (scaler / post_mul_scaler): they reach the
+kernels as common runtime args, so distinct scalar values share one program (#54180).
+scaler_mode stands in for the structural half — which slot is live, hence which defines the
+kernels are built with — and is derived from op semantics alone, never from the value.
+
+Each program factory re-applies all per-dispatch state on a cache hit via
+override_runtime_arguments(), so shape/work distribution still requires separate cache
+entries (padded_shape is in hash) but scalar values do not.
 """
 
 import pytest
@@ -289,3 +295,319 @@ def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
     )
 
     assert device.cache_entries_counter.total == 2
+
+
+# =============================================================================
+# Scalar values are runtime args (#54180): one program must serve every value
+# =============================================================================
+
+# Positive scalars only: for max/min a negative scalar flips the op (see
+# test_reduce_negative_scalar_flips_min_max), which is a different reduction, not a cache miss.
+# 1.0 is the identity the kernels skip at runtime; 0.03125 is a representative mean-style 1/N.
+SCALARS = [1.0, 0.5, 2.0, 0.03125]
+
+TORCH_REDUCE = {"sum": torch.sum, "max": torch.amax, "min": torch.amin}
+TTNN_REDUCE = {"sum": ttnn.sum, "max": ttnn.max, "min": ttnn.min}
+
+
+def _reduce_and_check(device, op, dim, scalar, torch_input, ttnn_input):
+    """Run one scaled reduce and assert it matches torch. ttnn_op(x, scalar=s) == torch_op(s * x)."""
+    ttnn_result = ttnn.to_torch(TTNN_REDUCE[op](ttnn_input, dim=dim, scalar=scalar))
+    torch_result = TORCH_REDUCE[op](scalar * torch_input, dim=dim)
+    # Tolerances suit bf16/fp32 accumulation over signed inputs, where cancellation amplifies
+    # relative error. They stay orders of magnitude tighter than a stale scalar would be, since
+    # that is wrong by the ratio between two entries in SCALARS.
+    assert_numeric_metrics(
+        torch_result,
+        ttnn_result,
+        pcc_threshold=0.999,
+        rtol=0.02,
+        atol=0.3,
+        frobenius_threshold=0.02,
+    )
+
+
+def _assert_scalars_share_one_program(device, op, dim, scalars, shape=(1, 1, 64, 64), dtype=torch.bfloat16):
+    """Assert that N distinct scalars cost no more cache entries than a single scalar does.
+
+    Asserted relative to a measured baseline rather than a hardcoded count: some dims lower to
+    more than one op, and the invariant under test is that the entry count does not GROW with the
+    number of distinct scalar values.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=dtype)
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Baseline: what one scalar costs, whatever this dim happens to lower to.
+    with device.cache_entries_counter.measure():
+        _reduce_and_check(device, op, dim, scalars[0], torch_input, ttnn_input)
+    baseline = device.cache_entries_counter.total
+
+    with device.cache_entries_counter.measure():
+        for scalar in scalars[1:]:
+            _reduce_and_check(device, op, dim, scalar, torch_input, ttnn_input)
+
+    # The success criterion from #54180: same program, correct result per value.
+    assert device.cache_entries_counter.total == baseline, (
+        f"{len(scalars)} scalar values cost {device.cache_entries_counter.total} cache entries; "
+        f"one scalar costs {baseline}. A scalar value is still reaching the program hash."
+    )
+
+
+@pytest.mark.parametrize("op", ["sum", "max", "min"])
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_reduce_cache_reuse_across_scalars(device, isolate_program_cache, op, dim):
+    """Distinct scalar values share one cache entry on the W (dim=-1) and H (dim=-2) factories.
+
+    Covers both scaler modes: sum takes ScalerTile (the scaler CB), while max/min take PostMul
+    (GMPOOL keeps only the scaler's exponent for them). bf16 min additionally lowers to -MAX(-x),
+    exercising the fused-negate compute kernels.
+    """
+    _assert_scalars_share_one_program(device, op, dim, SCALARS)
+
+
+@pytest.mark.parametrize(
+    "op, scalars",
+    [
+        # sum with scalar=1.0 additionally qualifies for the fast_reduce_nc fused path, which
+        # cannot apply a scalar at all (see call_fast_nc in generic_reductions.cpp). Selecting a
+        # different, faster op for unity is deliberate and unrelated to #54180, so 1.0 is excluded
+        # here; the identity case is covered on the H/W dims and by the Int32 test below.
+        # Mixed signs: the HW path applies the scalar after the reduction, so the sign no longer
+        # selects a different topology.
+        ("sum", [0.5, 2.0, 0.03125, -0.25, -3.0]),
+        # max flips to min for a negative scalar, so that stays a separate program by design.
+        ("max", SCALARS),
+    ],
+)
+def test_reduce_cache_reuse_across_scalars_hw(device, isolate_program_cache, op, scalars):
+    """Distinct scalar values share one cache entry on the HW path, both signs included for sum."""
+    _assert_scalars_share_one_program(device, op, dim=None, scalars=scalars)
+
+
+def test_reduce_cache_reuse_across_scalars_float32(device, isolate_program_cache):
+    """Distinct scalar values share one cache entry on the fp32 path."""
+    _assert_scalars_share_one_program(device, "sum", dim=-1, scalars=SCALARS, dtype=torch.float32)
+
+
+def test_reduce_sum_cache_reuse_across_scalar_signs(device, isolate_program_cache):
+    """For sum, scalar sign does not change the reduction, so signs share one cache entry too."""
+    _assert_scalars_share_one_program(device, "sum", dim=-1, scalars=[1.0, 0.5, -3.0, -0.25])
+
+
+@pytest.mark.parametrize("op", ["max", "min"])
+def test_reduce_negative_scalar_flips_min_max(device, isolate_program_cache, op):
+    """A negative scalar turns max into min (and back), so it needs its own cache entry.
+
+    The scalar is applied after the reduction, and max(s*x) == s*min(x) for s < 0, so the
+    dispatcher flips the op. That is a different reduction, not a stale-hash cache miss: exactly
+    one extra entry appears, and both results are correct.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 1, 64, 64, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with device.cache_entries_counter.measure():
+        _reduce_and_check(device, op, -1, 2.0, torch_input, ttnn_input)
+    after_positive = device.cache_entries_counter.total
+
+    with device.cache_entries_counter.measure():
+        _reduce_and_check(device, op, -1, -3.0, torch_input, ttnn_input)
+    after_first_negative = device.cache_entries_counter.total
+
+    with device.cache_entries_counter.measure():
+        _reduce_and_check(device, op, -1, -0.25, torch_input, ttnn_input)
+    after_second_negative = device.cache_entries_counter.total
+
+    assert after_first_negative > after_positive, "the flipped op should need its own program"
+    assert (
+        after_second_negative == after_first_negative
+    ), "two negative scalars differ only in value, so they must share the flipped op's program"
+
+
+def test_reduce_int32_identity_scalar_is_not_lossy(device, isolate_program_cache):
+    """An Int32 reduce with scalar=1.0 must stay bit-exact above 2^24.
+
+    Int32 post-multiply brackets mul_unary_tile with Int32<->Float32 typecasts, and fp32 has only
+    24 mantissa bits. Since one program now serves every scalar, the post-multiply is compiled in
+    even when the caller passes no scalar, so the kernels must skip a 1.0f scalar at runtime rather
+    than execute a lossy multiply-by-one. This asserts that skip is in place.
+    """
+    # 31 * 2^20 + (2^20 + 1) == 2^25 + 1, which is NOT representable in fp32 (ulp at 2^25 is 4),
+    # so a round trip through float32 would return 2^25 instead.
+    row = torch.full((32,), 1048576, dtype=torch.int32)
+    row[0] = 1048577
+    torch_input = row.reshape(1, 1, 1, 32).expand(1, 1, 32, 32).contiguous()
+    expected = 2**25 + 1
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.int32)
+    ttnn_result = ttnn.to_torch(ttnn.sum(ttnn_input, dim=-1, keepdim=True, scalar=1.0))
+
+    assert torch.all(ttnn_result == expected), (
+        f"Int32 sum with scalar=1.0 returned {ttnn_result.flatten()[0].item()}, expected {expected}. "
+        "A multiply-by-one survived the runtime identity check and truncated through fp32."
+    )
+
+
+def _height_sharded_config(shard_h, shard_w, num_cores):
+    return ttnn.create_sharded_memory_config(
+        shape=(shard_h, shard_w),
+        core_grid=ttnn.CoreGrid(x=num_cores, y=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
+def test_reduce_cache_reuse_across_scalars_height_sharded(device, isolate_program_cache):
+    """Distinct scalar values share one cache entry on the height-sharded W path.
+
+    This is the branch whose input and output shards are aliased as circular buffers instead of
+    being passed as runtime-arg addresses, so it is the branch whose cache-hit path re-points CB
+    addresses. Covered here because a stale CB address would survive every interleaved test.
+    """
+    shape = (1, 1, 256, 128)
+    num_cores = 8
+    input_config = _height_sharded_config(shape[2] // num_cores, shape[3], num_cores)
+    output_config = _height_sharded_config(shape[2] // num_cores, 32, num_cores)
+
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_config)
+
+    def run(scalar):
+        result = ttnn.to_torch(ttnn.sum(ttnn_input, dim=-1, keepdim=True, scalar=scalar, memory_config=output_config))
+        expected = torch.sum(scalar * torch_input, dim=-1, keepdim=True)
+        assert_numeric_metrics(expected, result, pcc_threshold=0.999, rtol=0.02, atol=0.3, frobenius_threshold=0.02)
+
+    with device.cache_entries_counter.measure():
+        run(SCALARS[0])
+    baseline = device.cache_entries_counter.total
+
+    with device.cache_entries_counter.measure():
+        for scalar in SCALARS[1:]:
+            run(scalar)
+
+    assert device.cache_entries_counter.total == baseline, (
+        f"{len(SCALARS)} scalar values cost {device.cache_entries_counter.total} cache entries; "
+        f"one scalar costs {baseline}."
+    )
+
+
+@pytest.mark.parametrize("op", ["sum", "mean", "max", "min"])
+@pytest.mark.parametrize("shape", [(1, 1, 32, 32), (1, 1, 64, 64)], ids=["single-tile", "multi-tile"])
+def test_reduce_hw_negative_scalar(device, isolate_program_cache, op, shape):
+    """A negative scalar over dim=None must be correct on the HW path.
+
+    REDUCE_SCALAR applies the scaler tile once per reduced dimension, so the host used to hand it
+    sqrt(scaler) -- NaN for a negative value, which forced negative scalars onto the two-step
+    W-then-H path. The scalar is now applied once after the reduction, so both signs run the same
+    program. Single-tile exercises the single-core HW factory; multi-tile the two-step path.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+    torch_op = {"sum": torch.sum, "mean": torch.mean, "max": torch.amax, "min": torch.amin}[op]
+    ttnn_op = {"sum": ttnn.sum, "mean": ttnn.mean, "max": ttnn.max, "min": ttnn.min}[op]
+
+    for scalar in (-3.0, -0.25, 2.0):
+        result = ttnn.to_torch(ttnn_op(ttnn_input, dim=None, scalar=scalar))
+        expected = torch_op(scalar * torch_input)
+        # A dim=None reduce yields one element, so correlation is undefined; allclose and the
+        # Frobenius ratio still pin the value.
+        assert_numeric_metrics(
+            expected.reshape(result.shape),
+            result,
+            pcc_threshold=0.999,
+            rtol=0.02,
+            atol=0.3,
+            frobenius_threshold=0.02,
+            check_pcc=False,
+        )
+
+
+# =============================================================================
+# Welford (std/var): scalar and Bessel correction are runtime args too (#54180)
+# =============================================================================
+
+TORCH_WELFORD = {"std": torch.std, "var": torch.var}
+TTNN_WELFORD = {"std": ttnn.std, "var": ttnn.var}
+
+
+@pytest.mark.parametrize("op", ["std", "var"])
+@pytest.mark.parametrize("dim", [-1, -2, None])
+def test_welford_cache_reuse_across_scalars(device, isolate_program_cache, op, dim):
+    """Distinct scalar values share one cache entry for std/var.
+
+    The Welford reduction runs unscaled and the scalar is applied afterwards, shaped by the
+    statistic: var(s*x) = s^2 var(x), std(s*x) = |s| std(x). That transform is derived on the host,
+    so a cache hit has to re-apply it; a stale value would be wrong by a factor of the scalar.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn((1, 1, 64, 64), dtype=torch.float32)
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def run(scalar):
+        result = ttnn.to_torch(TTNN_WELFORD[op](ttnn_input, dim=dim, scalar=scalar, correction=False))
+        expected = TORCH_WELFORD[op](scalar * torch_input, dim=dim, correction=0)
+        assert_numeric_metrics(
+            expected.reshape(result.shape),
+            result,
+            pcc_threshold=0.999,
+            rtol=0.02,
+            atol=0.3,
+            frobenius_threshold=0.02,
+            check_pcc=(dim is not None),
+        )
+
+    with device.cache_entries_counter.measure():
+        run(SCALARS[0])
+    baseline = device.cache_entries_counter.total
+
+    with device.cache_entries_counter.measure():
+        for scalar in SCALARS[1:]:
+            run(scalar)
+
+    assert device.cache_entries_counter.total == baseline, (
+        f"{len(SCALARS)} scalar values cost {device.cache_entries_counter.total} cache entries; "
+        f"one scalar costs {baseline}. A scalar value is still reaching the Welford program hash."
+    )
+
+
+@pytest.mark.parametrize("op", ["std", "var"])
+@pytest.mark.parametrize("dim", [-1, -2, None])
+def test_welford_cache_reuse_across_correction(device, isolate_program_cache, op, dim):
+    """Both Bessel correction settings share one cache entry, and each result is correct.
+
+    correction picks the divisor (N vs N-1), which the kernels now read at runtime, so it must not
+    fork the program. Reduction length is 64, comfortably above the 2-element minimum.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn((1, 1, 64, 64), dtype=torch.float32)
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def run(correction):
+        result = ttnn.to_torch(TTNN_WELFORD[op](ttnn_input, dim=dim, correction=correction))
+        expected = TORCH_WELFORD[op](torch_input, dim=dim, correction=1 if correction else 0)
+        assert_numeric_metrics(
+            expected.reshape(result.shape),
+            result,
+            pcc_threshold=0.999,
+            rtol=0.02,
+            atol=0.3,
+            frobenius_threshold=0.02,
+            check_pcc=(dim is not None),
+        )
+
+    with device.cache_entries_counter.measure():
+        run(False)
+    baseline = device.cache_entries_counter.total
+
+    with device.cache_entries_counter.measure():
+        run(True)
+
+    assert device.cache_entries_counter.total == baseline, (
+        f"both correction settings cost {device.cache_entries_counter.total} cache entries; "
+        f"one costs {baseline}. correction is still reaching the Welford program hash."
+    )

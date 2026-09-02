@@ -91,13 +91,12 @@ void validate_rm_preconditions(
 }
 
 tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_reader_ct_args(
-    const RmPlan& plan, uint32_t scaler_bits, uint32_t num_h_slices, uint32_t slice_Ht) {
+    const RmPlan& plan, uint32_t num_h_slices, uint32_t slice_Ht) {
     // Both reduce dims get the same set. Only the reader's REDUCE_COL (H) branch reads H_logical and
     // the H-axis-split geometry (num_h_slices / slice_Ht), but a compile-time arg is free on the
     // path that ignores it, and the name has to exist in every build of the source: name lookup in
     // the discarded `if constexpr` branch happens regardless of the condition.
     return {
-        {"scaler_bits", scaler_bits},
         {"W_logical", plan.W_logical},
         {"elem_bytes", plan.src_datum_size},
         {"padding_identity_bits", plan.padding_identity_bits},
@@ -128,13 +127,12 @@ tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_writer_ct_args(
 }
 
 tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_compute_ct_args(
-    const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits, bool fp32_sfpu_reduce) {
+    const RmPlan& plan, uint32_t Ht_arg, bool fp32_sfpu_reduce) {
     return {
         {"Ht", Ht_arg},
         {"Wt", plan.Wt},
         // NC (kept literal-1 per the existing RM compute contract; not hoisted into the plan)
         {"NC", 1u},
-        {"post_mul_scaler_bits", post_mul_scaler_bits},
         {"wt_tiles_per_chunk", plan.wt_tiles_per_chunk},
         {"ht_tiles_per_chunk", plan.ht_tiles_per_chunk},
         // enable_fp32_sfpu: route Float32 through the SFPU (full fp32) instead of the FPU (tf32)

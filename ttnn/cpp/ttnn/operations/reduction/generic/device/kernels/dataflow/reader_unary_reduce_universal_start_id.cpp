@@ -13,7 +13,7 @@
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
     uint32_t start_id = get_arg(args::start_id);
-    constexpr auto scaler_bits = get_arg(args::scaler_bits);
+    const uint32_t scaler_bits = get_arg(args::scaler_bits);
 
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);

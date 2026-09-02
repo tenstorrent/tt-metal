@@ -67,22 +67,31 @@ inline bool use_sfpu_reduce_path(
            (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN);
 }
 
-// True when a non-unity scalar must be a post-reduce multiply instead of via the scaler CB: MAX/MIN,
-// the Int32 SFPU path, and the accurate fp32 SFPU path all ignore the scaler CB.
-inline bool requires_post_mul(
-    tt::tt_metal::ReduceOpMath math_op, tt::tt_metal::DataType dtype, float scaler, bool use_sfpu_reduce = false) {
+// How the scalar reaches the reduction. Structural, so it belongs in the program hash; the value
+// itself does not.
+enum class ScalerMode : uint8_t { None, ScalerTile, PostMul };
+
+// PostMul whenever the scaler CB cannot apply the value exactly: REDUCE_SCALAR (HW) applies the
+// tile once per reduced dimension and squares it, GMPOOL keeps only the exponent for MAX/MIN,
+// and the Int32 / accurate-fp32 SFPU folds bypass the CB.
+inline ScalerMode derive_scaler_mode(
+    tt::tt_metal::ReduceOpMath math_op,
+    tt::tt_metal::DataType dtype,
+    tt::tt_metal::ReduceOpDim dim,
+    bool use_sfpu_reduce = false) {
     using tt::tt_metal::ReduceOpMath;
-    if (scaler == 1.0f) {
-        return false;
+    if (dim == tt::tt_metal::ReduceOpDim::HW) {
+        return ScalerMode::PostMul;
     }
     if (math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN) {
-        return true;
+        return ScalerMode::PostMul;
     }
     if (math_op == ReduceOpMath::SUM && dtype == tt::tt_metal::DataType::INT32) {
-        return true;
+        return ScalerMode::PostMul;
     }
-    return use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 &&
-           (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::AVG);
+    const bool sfpu_fp32_scalar = use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 &&
+                                  (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::AVG);
+    return sfpu_fp32_scalar ? ScalerMode::PostMul : ScalerMode::ScalerTile;
 }
 
 // All RM-path locals derived from the input shape, tile geometry, and math op.
@@ -132,7 +141,7 @@ void validate_rm_preconditions(
 // compile-time arg costs nothing on the path that ignores it, and emitting it unconditionally is
 // what lets the kernel reference the name from either branch.
 tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_reader_ct_args(
-    const RmPlan& plan, uint32_t scaler_bits, uint32_t num_h_slices = 1, uint32_t slice_Ht = 0);
+    const RmPlan& plan, uint32_t num_h_slices = 1, uint32_t slice_Ht = 0);
 
 // Build the named compile-time args for the RM writer (names match writer_reduce_rm_scalar.cpp).
 // As above, both dims get the full set even though Wt / W_logical / wt_tiles_per_chunk and the
@@ -147,7 +156,7 @@ tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_writer_ct_args(
 // keeps NC pinned at 1. `fp32_sfpu_reduce` (the enable_fp32_sfpu arg) routes Float32 through the
 // SFPU for full-fp32 accumulation instead of the tf32 FPU path.
 tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_compute_ct_args(
-    const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits, bool fp32_sfpu_reduce);
+    const RmPlan& plan, uint32_t Ht_arg, bool fp32_sfpu_reduce);
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     const ttnn::Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);

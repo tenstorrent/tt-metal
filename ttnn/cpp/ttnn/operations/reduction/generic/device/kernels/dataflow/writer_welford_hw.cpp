@@ -115,7 +115,7 @@ void kernel_main() {
     constexpr std::uint32_t W = get_arg(args::W);
     constexpr std::uint32_t tile_width = get_arg(args::tile_width);
     constexpr std::uint32_t H = get_arg(args::H);
-    constexpr bool correction = get_arg(args::correction) != 0;
+    const bool correction = get_arg(args::correction) != 0;
     constexpr std::uint32_t reduce_batch_size = get_arg(args::reduce_batch_size);
     constexpr bool combined_is_bf16 = get_arg(args::combined_is_bf16) != 0;
     static_assert(tile_width == welford_block_size);
@@ -237,11 +237,11 @@ void kernel_main() {
 
         constexpr float inv_num_partials = 1.0f / static_cast<float>(num_partials);
         float final_var;
-        if constexpr (correction) {
+        if (correction) {
             constexpr std::uint32_t sample_count = num_partials * H;
             // variance_sum / num_partials is the population variance. Folding the sample
             // count correction into it cancels num_partials from the divisor.
-            constexpr float correction_scale = static_cast<float>(H) / static_cast<float>(sample_count - 1);
+            const float correction_scale = static_cast<float>(H) / static_cast<float>(sample_count - 1);
             final_var = combined.variance_sum * correction_scale;
         } else {
             final_var = combined.variance_sum * inv_num_partials;

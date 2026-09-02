@@ -25,6 +25,15 @@ struct WelfordReduceDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
+
+        // CustomProgramSpecFactoryConcept cache-hit hook. compute_program_hash excludes `scalar`
+        // and `correction`, so their values are not pinned by the cache key and must be re-applied
+        // here as common runtime args.
+        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
     using program_factory_t = std::variant<WelfordReduceProgramFactory>;
@@ -33,6 +42,11 @@ struct WelfordReduceDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static void validate_on_program_cache_miss(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    // `scalar` and `correction` are excluded: they reach the kernels as runtime args, so every
+    // value shares one program (#54180).
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static spec_return_value_t compute_output_specs(

@@ -19,6 +19,55 @@
 
 namespace ttnn::prim {
 
+namespace {
+
+// compute_g2 exists only when the work split leaves a second core group. override_runtime_arguments
+// cannot see the Program, and naming a kernel it lacks is fatal, so it recomputes the decision here;
+// create_program_artifacts asserts the two agree.
+bool reduce_h_has_second_core_group(
+    const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a, const tt::tt_metal::MeshTensor& output) {
+    using namespace tt::tt_metal;
+    if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+        output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        // Workers are pinned to the shard grid, which is a single group.
+        return false;
+    }
+
+    const bool rm_path = attrs.row_major_h_dense_path;
+    const auto& shape = a.padded_shape();
+    const uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+    const uint32_t NC = shape[1] * shape[0];
+    const uint32_t Wt = tt::div_up(shape[3], tile_width);
+
+    uint32_t num_h_slices = 1;
+    if (rm_path) {
+        const RmPlan plan = make_rm_plan(
+            shape,
+            a.logical_shape(),
+            tile_height,
+            tile_width,
+            datatype_to_dataformat_converter(a.dtype()),
+            datatype_to_dataformat_converter(output.dtype()),
+            attrs.math_op,
+            ReduceOpDim::H);
+        num_h_slices = std::min(std::max(attrs.num_h_slices, 1u), plan.Ht_rm);
+    }
+
+    // Must use the same overload as create_program_artifacts: the grid-size CoreCoord form, not a
+    // CoreRange built from it (a size is not an inclusive end coordinate).
+    const uint32_t num_cols = NC * num_h_slices * Wt;
+    CoreRangeSet group_2;
+    if (attrs.sub_core_grids.has_value()) {
+        group_2 = std::get<3>(split_work_to_cores(*attrs.sub_core_grids, num_cols));
+    } else {
+        group_2 = std::get<3>(split_work_to_cores(a.mutable_device().compute_with_storage_grid_size(), num_cols));
+    }
+    return !group_2.ranges().empty();
+}
+
+}  // namespace
+
 ttnn::device_operation::ProgramArtifacts
 ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
@@ -93,10 +142,9 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
 
     uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
 
-    // For min/max with non-unity scalar, the GMPOOL hardware path only respects the scaler's
-    // exponent, so the device reduces with scaler=1.0 and the user scalar is applied after the
-    // reduction via SFPU mul_unary_tile inside the compute kernel.
-    const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
+    // PostMul applies the scalar after the reduction, in the compute kernel; derive_scaler_mode
+    // says which paths need it.
+    const bool use_post_mul = operation_attributes.scaler_mode == ScalerMode::PostMul;
 
     // Int32 max/min/sum use the SFPU reduce path; fp32 SUM only for the accurate mean opt-in.
     const bool is_sfpu_reduce =
@@ -257,9 +305,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             .data_format_metadata = dst_cb_data_format,
         });
     }
-    uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scaler);
     // Packed fp32 scalar passed to the compute kernel for mul_unary_tile post-reduction scaling.
-    uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
     if (use_fpu_negate) {
         // The reduce_h_neg kernel pushes ntiles tiles per inner-loop iteration
@@ -374,7 +420,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
 
     if (rm_path) {
         reader_source = "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reader_unary_reduce_rm.cpp";
-        reader_ct_args = build_rm_reader_ct_args(plan, scaler_bits, num_h_slices, slice_Ht);
+        reader_ct_args = build_rm_reader_ct_args(plan, num_h_slices, slice_Ht);
         reader_rta_names = {"rt_count", "rt_start"};
         reader_dfb_bindings = {
             DFBBinding{
@@ -405,7 +451,6 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded.cpp";
         reader_ct_args = {
-            {"scaler_bits", scaler_bits},
             {"enable_fp32_sfpu", fp32_sfpu_reduce ? 1u : 0u},
         };
         reader_rta_names = {"num_tiles", "Wt", "Ht", "batch", "row_size_bytes", "batch_size_bytes"};
@@ -446,7 +491,6 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             {"Ht", Ht},
             {"Wt", Wt},
             {"HtWt", HtWt},
-            {"scaler_bits", scaler_bits},
             {"use_welford", 0u},
             {"enable_fp32_sfpu", fp32_sfpu_reduce ? 1u : 0u},
         };
@@ -476,7 +520,8 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         .dfb_bindings = std::move(reader_dfb_bindings),
         .tensor_bindings = std::move(reader_tensor_bindings),
         .compile_time_args = std::move(reader_ct_args),
-        .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
+        .runtime_arg_schema =
+            {.runtime_arg_names = std::move(reader_rta_names), .common_runtime_arg_names = {"scaler_bits"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     });
 
@@ -608,7 +653,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         if (rm_path) {
             // RM kernel takes per-core counts via runtime args, so both groups share compile args.
             // The compute kernel's H loop bound is per-slice: slice_Ht == plan.Ht_rm when unsplit.
-            ct_args = build_rm_compute_ct_args(plan, slice_Ht, post_mul_scaler_bits, fp32_sfpu_reduce);
+            ct_args = build_rm_compute_ct_args(plan, slice_Ht, fp32_sfpu_reduce);
             rta_names = {"num_output_tiles_local", "output_tiles_seen"};
             dfb_bindings = {
                 DFBBinding{
@@ -656,7 +701,6 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
                 {"Wt", group_compute_Wt},
                 {"NC", group_compute_NC},
                 // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
-                {"post_mul_scaler_bits", post_mul_scaler_bits},
                 // enable_fp32_sfpu: route Float32 through the SFPU
                 {"enable_fp32_sfpu", fp32_sfpu_reduce ? 1u : 0u},
             };
@@ -711,13 +755,18 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
                  .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
             .dfb_bindings = std::move(dfb_bindings),
             .compile_time_args = std::move(ct_args),
-            .runtime_arg_schema = {.runtime_arg_names = std::move(rta_names)},
+            .runtime_arg_schema =
+                {.runtime_arg_names = std::move(rta_names), .common_runtime_arg_names = {"post_mul_scaler_bits"}},
             .hw_config = compute_hw,
         };
     };
 
     spec.kernels.push_back(make_compute(COMPUTE_G1, compute_Wt, compute_NC));
     const bool has_core_group_2 = !core_group_2.ranges().empty();
+    TT_FATAL(
+        has_core_group_2 == reduce_h_has_second_core_group(operation_attributes, a, output),
+        "Reduce H second-core-group predicate disagrees with the work split; the cache-hit override "
+        "would name a compute kernel the program does not have");
     if (has_core_group_2) {
         uint32_t compute_Wt_group_2 = use_width_sharding ? (num_cols_per_core_group_2 / NC) : num_cols_per_core_group_2;
         uint32_t compute_NC_group_2 = use_width_sharding ? NC : 1;
@@ -863,19 +912,60 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         }
     }
 
+    reader_run_args.common_runtime_arg_values = {{"scaler_bits", std::bit_cast<uint32_t>(operation_attributes.scaler)}};
     run_args.kernel_run_args.push_back(std::move(reader_run_args));
     run_args.kernel_run_args.push_back(std::move(writer_run_args));
-    if (rm_path) {
-        run_args.kernel_run_args.push_back(std::move(compute_g1_run_args));
-        if (has_core_group_2) {
-            run_args.kernel_run_args.push_back(std::move(compute_g2_run_args));
-        }
+
+    const KernelRunArgs::CommonRuntimeArgValues post_mul_args{
+        {"post_mul_scaler_bits", std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler)}};
+    compute_g1_run_args.common_runtime_arg_values = post_mul_args;
+    run_args.kernel_run_args.push_back(std::move(compute_g1_run_args));
+    if (has_core_group_2) {
+        compute_g2_run_args.common_runtime_arg_values = post_mul_args;
+        run_args.kernel_run_args.push_back(std::move(compute_g2_run_args));
     }
 
     run_args.tensor_args.emplace(INPUT_TENSOR, TensorArgument{a});
     run_args.tensor_args.emplace(OUTPUT_TENSOR, TensorArgument{output});
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+tt::tt_metal::experimental::ProgramRunArgs
+ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::override_runtime_arguments(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    using namespace tt::tt_metal::experimental;
+    const auto& a = tensor_args.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
+
+    // Names must match create_program_artifacts.
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName COMPUTE_G1{"compute_g1"};
+    const KernelSpecName COMPUTE_G2{"compute_g2"};
+    const TensorParamName INPUT_TENSOR{"input"};
+    const TensorParamName OUTPUT_TENSOR{"output"};
+
+    // compute_program_hash excludes both scalar values, so calls differing only in the scalar share
+    // this program and must re-apply them here. Every other arg is shape-derived and in the hash.
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(KernelRunArgs{
+        .kernel = READER,
+        .common_runtime_arg_values = {{"scaler_bits", std::bit_cast<uint32_t>(operation_attributes.scaler)}}});
+
+    const KernelRunArgs::CommonRuntimeArgValues post_mul_args{
+        {"post_mul_scaler_bits", std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler)}};
+    params.kernel_run_args.push_back(KernelRunArgs{.kernel = COMPUTE_G1, .common_runtime_arg_values = post_mul_args});
+    if (reduce_h_has_second_core_group(operation_attributes, a, output)) {
+        params.kernel_run_args.push_back(
+            KernelRunArgs{.kernel = COMPUTE_G2, .common_runtime_arg_values = post_mul_args});
+    }
+
+    params.tensor_args.emplace(INPUT_TENSOR, TensorArgument{a});
+    params.tensor_args.emplace(OUTPUT_TENSOR, TensorArgument{output});
+    return params;
 }
 
 }  // namespace ttnn::prim
