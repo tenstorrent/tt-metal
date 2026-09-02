@@ -48,13 +48,19 @@ the tighter per-module gates (SCA at 0.999) bind before the encoder's 0.997 does
 | [2](#candidate-2--fused-msda) | fused `multi_scale_deformable_attn` | kernel | **−191.6 ms kernel (−28.1%)** | M | med | **landed — [04](perf_reports/04-fused-msda.md)** |
 | [3](#candidate-3--tile-padding-waste) | fold the offset normalizer into the Linear | kernel | **−32.7 ms kernel** | S | low | **landed — [05](perf_reports/05-offset-normalizer-folded.md)** |
 | [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | — | — | — | **moot — deleted by [04](perf_reports/04-fused-msda.md)** |
-| [5](#candidate-5--data-movement-vs-compute) | shape/order changes on the layout churn — **5a–5f** | kernel | **−176.3 ms (−38.6%)**, 456.5 → 280.2 ms | S–M | low | **landed — all six, reports [06](perf_reports/06-sca-key-permute-deleted.md)–[10](perf_reports/10-value-head-split-unpadded.md)** |
+| [5](#candidate-5--data-movement-vs-compute) | classify the layout churn, then delete it by shape and order | kernel | **−176.3 ms (−38.6%)**, 456.5 → 280.2 ms | — | — | **closed — all six landed, [result](#result--candidate-5-is-closed)** |
+| [5a](#5a-delete-the-key-permute) | delete the dead SCA `key` permute | kernel | **−18.1 ms (−4.0%)** | XS | none | **landed — [06](perf_reports/06-sca-key-permute-deleted.md)** |
+| [5b](#5b-do-the-sampling-location-math-in-row_major) | sampling-location math in ROW_MAJOR; `2/[W,H]` and `2·ref−1` folded | kernel | **−82.2 ms (−18.8%)**; PCC **improved**; cleared the 200×200 OOM | M | low | **landed — [07](perf_reports/07-sampling-grid-in-row-major.md)** |
+| [5c](#5c-untilize-attn-once-not-per-level) | prepare `attn` once per call, not per level | kernel | **−44.9 ms (−12.6%)** | S | low | **landed — [08](perf_reports/08-attn-prepared-once-per-call.md)** |
+| [5d](#5d-split-value-into-heads-in-row_major) | `value` head split without the tile padding | kernel | **−6.6 ms (−2.3%)** — benchmarked at 0.84× before writing | M | med | **landed — [10](perf_reports/10-value-head-split-unpadded.md)** |
+| [5e](#5e-permute-grid-once-slice-after) | build the grid head-major with a TILE transpose | kernel | **−24.5 ms (−7.9%)** — deletes all five per-level grid permutes | S | low | **landed — [09](perf_reports/09-head-major-sampling-grid.md)** |
+| [5f](#5f-the-per-level-guards-are-free--dont-book-them) | the per-level dtype guards | kernel | **0 ms** — zero `Typecast` rows in the capture | XS | none | **verified-zero — no code change** |
 | [6](#candidate-6--permutereshape-by-reformulation) | **[6a](#6a-hoist-the-sca-camera-permute-out-of-the-layer-loop)** only: hoist the SCA camera permute out of the layer loop | kernel | **19.3 ms/layer**, ~96 ms/frame — runs 6× on identical data | S | low | **re-scoped after 5 — the weight reorder is [dead](#why-the-weight-reorder-is-dead); the rest is [11](#candidate-11--absorb-msda-layout-prep)'s** |
 | [7](#candidate-7--l1-vs-dram) | place operands in L1 instead of DRAM | kernel | unknown; expected small | S | low | todo — likely small |
 | [8](#candidate-8--fuse-binaryng) | fuse `BinaryNg` into its producers | kernel | **2.9 ms (1.0%)** at stage 10, was 48.2 | — | — | **closed — [5b](#5b-do-the-sampling-location-math-in-row_major) deleted the cost instead of fusing it** |
 | [9](#candidate-9--trace-capture) | trace capture the encoder | gap | ≤9 ms/layer | M | low | parked behind 1b/1e |
-| [10](#candidate-10--msdaoperation-itself) | `MSDAOperation` device time | kernel | **167.8 ms** (36.7% of layer) | ? | ? | todo — upstream |
-| [11](#candidate-11--absorb-msda-layout-prep) | absorb MSDA permute/reshape into the op | kernel | **~103 ms** per-level layout prep | L | med | todo — after 6 |
+| [10](#candidate-10--msdaoperation-itself) | `MSDAOperation` device time | kernel | **167.9 ms — 59.9% of the layer** at stage 10 | ? | ? | todo — upstream, the largest item left |
+| [11](#candidate-11--absorb-msda-layout-prep) | absorb MSDA permute/reshape into the op | kernel | **~40 ms** at stage 10 ([inventory](#the-inventory-at-stage-10)); was ~103 ms of per-level prep | L | med | todo — after 6a; no longer gated on 6 |
 | [12](#candidate-12--one-fused-call-for-all-levels) | multi-level fused op: 4 SCA launches → 1 | kernel | 4× launch + 4× per-level prep | L | med | todo — upstream, with 10 |
 | [13](#candidate-13--dtype-and-math-fidelity) | bfloat8_b weights, bfloat16 activations | kernel | unmeasured; **spends accuracy** | S | med | todo — needs an accuracy budget |
 
