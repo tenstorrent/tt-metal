@@ -35,8 +35,6 @@ class DeviceTelemetryRow:
     asic_temp: str = triage_field("ASIC Temp")
     board_temp: str = triage_field("Board Temp")
     eth_live: str = triage_field("ETH Live")
-    ddr_status: str = triage_field("DDR Status")
-    ddr_speed: str = triage_field("DDR Speed")
     uptime: str = triage_field("ARC Uptime")
 
 
@@ -48,8 +46,6 @@ def get_device_telemetry(device: Device) -> DeviceTelemetryRow:
         asic_temp=read_tag(device_id, "ASIC_TEMPERATURE"),
         board_temp=read_tag(device_id, "BOARD_TEMPERATURE"),
         eth_live=read_tag(device_id, "ETH_LIVE_STATUS"),
-        ddr_status=read_tag(device_id, "DDR_STATUS"),
-        ddr_speed=read_tag(device_id, "DDR_SPEED"),
         uptime=read_tag(device_id, "TIMER_HEARTBEAT"),
     )
 
