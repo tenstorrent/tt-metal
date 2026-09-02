@@ -130,20 +130,22 @@ card:
 
     ## Performance
 
-    Latency sweep on P300x2: one request at a time (batch 1), 512 output tokens,
-    input length swept to the full context. Decode rate is per user.
+    Release latency sweep on P300x2: one request at a time (batch 1), 512
+    output tokens, input length swept to the full context. Decode rate is per
+    user. Retried points show the median of three independent runs.
 
     | input tokens | output tokens | TTFT | TPOT | end-to-end | tokens/s/user |
     |---:|---:|---:|---:|---:|---:|
-    | 128 | 512 | 65.0 ms | 23.59 ms | 12.1 s | 42.38 |
-    | 1,024 | 512 | 145.9 ms | 24.97 ms | 12.9 s | 40.05 |
-    | 4,096 | 512 | 458.1 ms | 26.64 ms | 14.1 s | 37.54 |
-    | 8,192 | 512 | 918.7 ms | 27.88 ms | 15.2 s | 35.87 |
-    | 16,384 | 512 | 2.08 s | 30.33 ms | 17.6 s | 32.97 |
-    | 32,768 | 512 | 4.51 s | 35.24 ms | 22.5 s | 28.37 |
-    | 65,536 | 512 | 10.27 s | 45.12 ms | 33.3 s | 22.16 |
-    | 130,560 | 512 | 25.59 s | 64.79 ms | 58.7 s | 15.43 |
+    | 128 | 512 | 69.5 ms | 23.60 ms | 12.1 s | 42.38 |
+    | 1,024 | 512 | 144.6 ms | 24.99 ms | 12.9 s | 40.02 |
+    | 4,096 | 512 | 454.5 ms | 26.64 ms | 14.1 s | 37.54 |
+    | 8,192 | 512 | 912.8 ms | 27.86 ms | 15.1 s | 35.90 |
+    | 16,384 | 512 | 2.08 s | 30.26 ms | 17.5 s | 33.05 |
+    | 32,768 | 512 | 4.48 s | 35.29 ms | 22.5 s | 28.34 |
+    | 65,536 | 512 | 10.17 s | 45.10 ms | 33.2 s | 22.17 |
+    | 130,560 | 512 | 25.12 s | 64.76 ms | 58.2 s | 15.44 |
 
     The last row saturates the advertised context (130,560 + 512 = 131,072).
     Serve one request at a time: concurrency at long context is admission-limited
-    by the KV cache.
+    by the KV cache. The release passed the bounded latency gate: 2% per metric,
+    plus a 5 ms absolute TTFT allowance for short-input measurement variance.

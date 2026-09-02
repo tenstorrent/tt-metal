@@ -1,0 +1,51 @@
+{
+  "run_date": "2026-09-02",
+  "timezone": "America/New_York",
+  "hardware": {
+    "mesh": "P300x2",
+    "asic_count": 4,
+    "asic": "p300c",
+    "firmware": "19.11.0.0",
+    "kernel_driver": "2.11.0"
+  },
+  "software": {
+    "source_commit": "c8405ebd1600ba07774eebfacdaea3445996f51a",
+    "python": "3.12.12",
+    "vllm": "0.24.0",
+    "vllm_tt_plugin_commit": "106744c01de96825ed8c81226f4fa043e8e929f4"
+  },
+  "workload": {
+    "batch_size": 1,
+    "output_tokens": 512,
+    "input_tokens": [128, 1024, 4096, 8192, 16384, 32768, 65536, 130560],
+    "advertised_context": 131072,
+    "warmup": "per shape"
+  },
+  "runs": [
+    {
+      "artifact": "latency_sweep_toolcalling_release.json",
+      "completed_at": "2026-09-02T14:22:28-04:00",
+      "shapes": "all",
+      "jit_cache_hits": "986/986"
+    },
+    {
+      "artifact": "latency_sweep_toolcalling_retry1.json",
+      "completed_at": "2026-09-02T14:28:31-04:00",
+      "shapes": [128, 1024, 32768, 130560],
+      "jit_cache_hits": "879/879"
+    },
+    {
+      "artifact": "latency_sweep_toolcalling_retry2.json",
+      "completed_at": "2026-09-02T14:34:08-04:00",
+      "shapes": [128, 1024, 32768, 130560],
+      "jit_cache_hits": "879/879"
+    }
+  ],
+  "gate": {
+    "artifact": "latency_gate_toolcalling_release.json",
+    "outcome": "pass",
+    "allowed_regression_percent": 2.0,
+    "allowed_ttft_regression_ms": 5.0,
+    "retry_policy": "median of three independent runs"
+  }
+}

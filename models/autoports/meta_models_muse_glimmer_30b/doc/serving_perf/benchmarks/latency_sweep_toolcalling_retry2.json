@@ -1,0 +1,56 @@
+{
+  "batch_size": 1,
+  "osl": 512,
+  "hf_advertised_context": 131072,
+  "itl_note": "itl_ms_derived_uniform == tpot_ms; per-step sampling would disable the free-running device loop",
+  "rows": [
+    {
+      "isl": 128,
+      "osl": 512,
+      "tokens_produced": 512,
+      "ttft_ms": 67.97708600061014,
+      "e2el_ms": 12119.439720991068,
+      "tpot_ms": 23.584075606634947,
+      "itl_ms_derived_uniform": 23.584075606634947,
+      "tokens_per_second_per_user": 42.40149228993602,
+      "decode_tokens_per_second": 42.40149228993603,
+      "first_token_id": 24
+    },
+    {
+      "isl": 1024,
+      "osl": 512,
+      "tokens_produced": 512,
+      "ttft_ms": 145.21510098711587,
+      "e2el_ms": 12907.123966986546,
+      "tpot_ms": 24.97438134246464,
+      "itl_ms_derived_uniform": 24.97438134246464,
+      "tokens_per_second_per_user": 40.041031899343665,
+      "decode_tokens_per_second": 40.04103189934367,
+      "first_token_id": 24
+    },
+    {
+      "isl": 32768,
+      "osl": 512,
+      "tokens_produced": 512,
+      "ttft_ms": 4487.714729009895,
+      "e2el_ms": 22521.281010005623,
+      "tpot_ms": 35.29073636202686,
+      "itl_ms_derived_uniform": 35.29073636202686,
+      "tokens_per_second_per_user": 28.33604801389207,
+      "decode_tokens_per_second": 28.336048013892068,
+      "first_token_id": 198
+    },
+    {
+      "isl": 130560,
+      "osl": 512,
+      "tokens_produced": 512,
+      "ttft_ms": 25123.322163010016,
+      "e2el_ms": 58217.849731998285,
+      "tpot_ms": 64.76424181798096,
+      "itl_ms_derived_uniform": 64.76424181798096,
+      "tokens_per_second_per_user": 15.440619266577484,
+      "decode_tokens_per_second": 15.440619266577485,
+      "first_token_id": 198
+    }
+  ]
+}

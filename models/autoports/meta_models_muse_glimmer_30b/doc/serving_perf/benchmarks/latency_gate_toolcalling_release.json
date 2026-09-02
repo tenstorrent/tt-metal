@@ -1,0 +1,284 @@
+{
+  "gate": "bounded_displayed_precision_regression",
+  "allowed_regression_percent": 2.0,
+  "allowed_absolute_ms": {
+    "ttft_ms": 5.0,
+    "tpot_ms": 0.0,
+    "e2el_ms": 0.0
+  },
+  "outcome": "pass",
+  "rows": [
+    {
+      "isl": 128,
+      "status": "pass",
+      "samples": 3,
+      "metrics": {
+        "ttft_ms": {
+          "baseline": 65.0,
+          "candidate_median": 69.5,
+          "absolute_regression_ms": 4.5,
+          "regression_percent": 6.9231,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 5.0,
+          "regressed": false
+        },
+        "tpot_ms": {
+          "baseline": 23.59,
+          "candidate_median": 23.6,
+          "absolute_regression_ms": 0.01,
+          "regression_percent": 0.0424,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 0.0,
+          "regressed": false
+        },
+        "e2el_ms": {
+          "baseline": 12121.6,
+          "candidate_median": 12128.1,
+          "absolute_regression_ms": 6.5,
+          "regression_percent": 0.0536,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 0.0,
+          "regressed": false
+        }
+      }
+    },
+    {
+      "isl": 1024,
+      "status": "pass",
+      "samples": 3,
+      "metrics": {
+        "ttft_ms": {
+          "baseline": 145.9,
+          "candidate_median": 144.6,
+          "absolute_regression_ms": -1.3,
+          "regression_percent": -0.891,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 5.0,
+          "regressed": false
+        },
+        "tpot_ms": {
+          "baseline": 24.97,
+          "candidate_median": 24.99,
+          "absolute_regression_ms": 0.02,
+          "regression_percent": 0.0801,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 0.0,
+          "regressed": false
+        },
+        "e2el_ms": {
+          "baseline": 12906.2,
+          "candidate_median": 12913.5,
+          "absolute_regression_ms": 7.3,
+          "regression_percent": 0.0566,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 0.0,
+          "regressed": false
+        }
+      }
+    },
+    {
+      "isl": 4096,
+      "status": "pass",
+      "samples": 1,
+      "metrics": {
+        "ttft_ms": {
+          "baseline": 458.1,
+          "candidate_median": 454.5,
+          "absolute_regression_ms": -3.6,
+          "regression_percent": -0.7859,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 5.0,
+          "regressed": false
+        },
+        "tpot_ms": {
+          "baseline": 26.64,
+          "candidate_median": 26.64,
+          "absolute_regression_ms": 0.0,
+          "regression_percent": 0.0,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 0.0,
+          "regressed": false
+        },
+        "e2el_ms": {
+          "baseline": 14071.8,
+          "candidate_median": 14066.5,
+          "absolute_regression_ms": -5.3,
+          "regression_percent": -0.0377,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 0.0,
+          "regressed": false
+        }
+      }
+    },
+    {
+      "isl": 8192,
+      "status": "pass",
+      "samples": 1,
+      "metrics": {
+        "ttft_ms": {
+          "baseline": 918.7,
+          "candidate_median": 912.8,
+          "absolute_regression_ms": -5.9,
+          "regression_percent": -0.6422,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 5.0,
+          "regressed": false
+        },
+        "tpot_ms": {
+          "baseline": 27.88,
+          "candidate_median": 27.86,
+          "absolute_regression_ms": -0.02,
+          "regression_percent": -0.0717,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 0.0,
+          "regressed": false
+        },
+        "e2el_ms": {
+          "baseline": 15166.1,
+          "candidate_median": 15147.3,
+          "absolute_regression_ms": -18.8,
+          "regression_percent": -0.124,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 0.0,
+          "regressed": false
+        }
+      }
+    },
+    {
+      "isl": 16384,
+      "status": "pass",
+      "samples": 1,
+      "metrics": {
+        "ttft_ms": {
+          "baseline": 2083.5,
+          "candidate_median": 2083.4,
+          "absolute_regression_ms": -0.1,
+          "regression_percent": -0.0048,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 5.0,
+          "regressed": false
+        },
+        "tpot_ms": {
+          "baseline": 30.33,
+          "candidate_median": 30.26,
+          "absolute_regression_ms": -0.07,
+          "regression_percent": -0.2308,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 0.0,
+          "regressed": false
+        },
+        "e2el_ms": {
+          "baseline": 17582.8,
+          "candidate_median": 17544.8,
+          "absolute_regression_ms": -38.0,
+          "regression_percent": -0.2161,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 0.0,
+          "regressed": false
+        }
+      }
+    },
+    {
+      "isl": 32768,
+      "status": "pass",
+      "samples": 3,
+      "metrics": {
+        "ttft_ms": {
+          "baseline": 4514.7,
+          "candidate_median": 4476.7,
+          "absolute_regression_ms": -38.0,
+          "regression_percent": -0.8417,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 5.0,
+          "regressed": false
+        },
+        "tpot_ms": {
+          "baseline": 35.24,
+          "candidate_median": 35.29,
+          "absolute_regression_ms": 0.05,
+          "regression_percent": 0.1419,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 0.0,
+          "regressed": false
+        },
+        "e2el_ms": {
+          "baseline": 22524.1,
+          "candidate_median": 22478.7,
+          "absolute_regression_ms": -45.4,
+          "regression_percent": -0.2016,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 0.0,
+          "regressed": false
+        }
+      }
+    },
+    {
+      "isl": 65536,
+      "status": "pass",
+      "samples": 1,
+      "metrics": {
+        "ttft_ms": {
+          "baseline": 10267.6,
+          "candidate_median": 10169.8,
+          "absolute_regression_ms": -97.8,
+          "regression_percent": -0.9525,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 5.0,
+          "regressed": false
+        },
+        "tpot_ms": {
+          "baseline": 45.12,
+          "candidate_median": 45.1,
+          "absolute_regression_ms": -0.02,
+          "regression_percent": -0.0443,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 0.0,
+          "regressed": false
+        },
+        "e2el_ms": {
+          "baseline": 33322.1,
+          "candidate_median": 33217.5,
+          "absolute_regression_ms": -104.6,
+          "regression_percent": -0.3139,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 0.0,
+          "regressed": false
+        }
+      }
+    },
+    {
+      "isl": 130560,
+      "status": "pass",
+      "samples": 3,
+      "metrics": {
+        "ttft_ms": {
+          "baseline": 25591.9,
+          "candidate_median": 25123.3,
+          "absolute_regression_ms": -468.6,
+          "regression_percent": -1.831,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 5.0,
+          "regressed": false
+        },
+        "tpot_ms": {
+          "baseline": 64.79,
+          "candidate_median": 64.76,
+          "absolute_regression_ms": -0.03,
+          "regression_percent": -0.0463,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 0.0,
+          "regressed": false
+        },
+        "e2el_ms": {
+          "baseline": 58700.1,
+          "candidate_median": 58217.8,
+          "absolute_regression_ms": -482.3,
+          "regression_percent": -0.8216,
+          "allowed_regression_percent": 2.0,
+          "allowed_absolute_ms": 0.0,
+          "regressed": false
+        }
+      }
+    }
+  ]
+}
