@@ -47,6 +47,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp
     api/tt-metalium/experimental/fabric/physical_descriptor_builder.hpp
     api/tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp
+    api/tt-metalium/experimental/fabric/physical_node_id.hpp
     api/tt-metalium/experimental/fabric/physical_system_descriptor.hpp
     api/tt-metalium/experimental/fabric/pipeline_builder.hpp
     api/tt-metalium/experimental/fabric/routing_table_generator.hpp
