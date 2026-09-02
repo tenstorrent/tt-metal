@@ -323,6 +323,8 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
                                      !operation_attributes.fused_activation.has_value();
     const bool selected_fits = plan.use_welford ? two_pass_fits : tile_fits;
     const bool large_tensor_kernel_allowed = !row_major_affine || input_is_row_major;
+    // These empirical limits keep the largest validated streaming configurations within L1. The tile-size ratio
+    // scales them down when FP32 destination accumulation doubles the intermediate tile footprint.
     const std::uint32_t with_weights_max = 56 * bfloat16_tile_size / intermediate_tile_size;
     const std::uint32_t without_weights_max = 112 * bfloat16_tile_size / intermediate_tile_size;
     if (large_tensor_kernel_allowed) {
