@@ -52,6 +52,7 @@ runCommand "sfpi-${version}"
 
     buildInputs = [
       ncurses
+      isl_0_23
       mpfr
       libmpc
       xz
