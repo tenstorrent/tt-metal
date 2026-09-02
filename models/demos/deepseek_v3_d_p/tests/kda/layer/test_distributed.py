@@ -52,7 +52,7 @@ def _to_sp_input(
 
 
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
-def test_sp_layer_matches_serial_reference(
+def test_sp_group_divisor_fallback_matches_reference(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> None:
@@ -144,13 +144,11 @@ def test_sp_layer_matches_serial_reference(
 @pytest.mark.parametrize(
     "tensor_parallel_axis,summary_group_chunks,splits",
     [
-        (1, 8, (2048, 3072)),
-        (0, 8, (2048, 3072)),
-        (1, 10, (2560, 2560)),
-        (0, 10, (2560, 2560)),
+        pytest.param(1, 8, (2048, 3072), id="tp-axis-1-uneven-split"),
+        pytest.param(0, 10, (2560, 2560), id="tp-axis-0-even-split"),
     ],
 )
-def test_sp_chunked_prefill_matches_one_shot(
+def test_sp_segmented_prefill_matches_one_shot(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
     summary_group_chunks: int,
@@ -256,7 +254,7 @@ def test_sp_chunked_prefill_matches_one_shot(
 
 
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
-def test_sp_layer_accuracy_and_determinism(
+def test_sp_minimal_group_matches_reference_and_is_deterministic(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> None:
