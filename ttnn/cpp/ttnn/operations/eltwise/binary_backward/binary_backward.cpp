@@ -5,6 +5,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
 #include <numbers>
+#include <cstdint>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -342,9 +343,17 @@ std::vector<Tensor> ldexp_bw(
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad;
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
+
+    // The 2^b is the right operand of the multiply that reads it, so it needs no
+    // dispatch of its own. The scaling by ln2 stays a multiply: as an SFPU
+    // activation on bfloat16 the constant is rounded into the operand and the
+    // answer moves.
+    const std::array two_to_the = {EltwiseUnaryWithParam{UnaryOpType::RPOW, 2.0f}};
     Tensor tpow_o =
-        ttnn::multiply(grad_tensor, ttnn::rpow(other, 2.0f, output_memory_config), std::nullopt, output_memory_config);
+        ttnn::multiply(grad_tensor, other, std::nullopt, output_memory_config, std::nullopt, {}, {}, two_to_the);
     grad.emplace_back(tpow_o);
     Tensor result = ttnn::multiply(
         input_a,
@@ -366,21 +375,31 @@ std::vector<Tensor> logaddexp_bw(
         "BFLOAT8_B/BFLOAT4_B dtypes are not supported !!");
 
     std::vector<Tensor> grad;
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+
+    // The exp is the subtract's post-activation and the reciprocal is the right
+    // operand of the multiply that reads it, so neither needs a dispatch. The
+    // add of 1 stays a binary op: as an SFPU activation on bfloat16 the constant
+    // is rounded into the operand and the answer moves.
+    const std::array to_exp = {EltwiseUnaryWithParam{UnaryOpType::EXP, 0.0f}};
+    const std::array reciprocal_it = {EltwiseUnaryWithParam{UnaryOpType::RECIP}};
+
     Tensor opexp = ttnn::add(
-        ttnn::exp(ttnn::subtract(other, input_a, std::nullopt, output_mem_config), false, output_mem_config),
+        ttnn::subtract(other, input_a, std::nullopt, output_mem_config, std::nullopt, to_exp),
         1,
         std::nullopt,
         output_mem_config);
     Tensor grad_a =
-        ttnn::multiply(grad_tensor, ttnn::reciprocal(opexp, output_mem_config), std::nullopt, output_mem_config);
+        ttnn::multiply(grad_tensor, opexp, std::nullopt, output_mem_config, std::nullopt, {}, {}, reciprocal_it);
     grad.emplace_back(grad_a);
     opexp = ttnn::add(
-        ttnn::exp(ttnn::subtract(input_a, other, std::nullopt, output_mem_config), false, output_mem_config),
+        ttnn::subtract(input_a, other, std::nullopt, output_mem_config, std::nullopt, to_exp),
         1,
         std::nullopt,
         output_mem_config);
     Tensor grad_b =
-        ttnn::multiply(grad_tensor, ttnn::reciprocal(opexp, output_mem_config), std::nullopt, output_mem_config);
+        ttnn::multiply(grad_tensor, opexp, std::nullopt, output_mem_config, std::nullopt, {}, {}, reciprocal_it);
     grad.emplace_back(grad_b);
     return grad;
 }
@@ -396,22 +415,31 @@ std::vector<Tensor> logaddexp2_bw(
         "BFLOAT8_B/BFLOAT4_B dtypes are not supported !!");
 
     std::vector<Tensor> grad;
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
+
+    // 2 to the difference is the subtract's post-activation. The add of 1 and
+    // the reciprocal stay where they were: as SFPU activations on bfloat16 they
+    // round the intermediate a second time, which moves the answer.
+    const std::array to_two_to_the = {EltwiseUnaryWithParam{UnaryOpType::RPOW, 2.0f}};
+
     Tensor oppow = ttnn::add(
-        ttnn::rpow(ttnn::subtract(other, input_a, std::nullopt, output_memory_config), 2, output_memory_config),
+        ttnn::subtract(other, input_a, std::nullopt, output_memory_config, std::nullopt, to_two_to_the),
         1,
         std::nullopt,
         output_memory_config);
+    const std::array reciprocal_it = {EltwiseUnaryWithParam{UnaryOpType::RECIP}};
     Tensor grad_a =
-        ttnn::multiply(grad_tensor, ttnn::reciprocal(oppow, output_memory_config), std::nullopt, output_memory_config);
+        ttnn::multiply(grad_tensor, oppow, std::nullopt, output_memory_config, std::nullopt, {}, {}, reciprocal_it);
     grad.emplace_back(grad_a);
     oppow = ttnn::add(
-        ttnn::rpow(ttnn::subtract(input_a, other, std::nullopt, output_memory_config), 2, output_memory_config),
+        ttnn::subtract(input_a, other, std::nullopt, output_memory_config, std::nullopt, to_two_to_the),
         1,
         std::nullopt,
         output_memory_config);
     Tensor grad_b =
-        ttnn::multiply(grad_tensor, ttnn::reciprocal(oppow, output_memory_config), std::nullopt, output_memory_config);
+        ttnn::multiply(grad_tensor, oppow, std::nullopt, output_memory_config, std::nullopt, {}, {}, reciprocal_it);
     grad.emplace_back(grad_b);
     return grad;
 }
@@ -526,19 +554,19 @@ std::vector<std::optional<Tensor>> concat_bw(
         input_grad, other_grad, input_tensor_a_arg, other, {are_required_outputs[0], are_required_outputs[1]});
 
     if (are_required_outputs[0]) {
-        ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-        ttsl::SmallVector<uint32_t> end_index = {
+        ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
+        ttsl::SmallVector<std::uint32_t> end_index = {
             input_tensor_a_arg.logical_shape()[0],
             input_tensor_a_arg.logical_shape()[1],
             input_tensor_a_arg.logical_shape()[2],
             input_tensor_a_arg.logical_shape()[3]};
-        ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        ttsl::SmallVector<std::uint32_t> step = {1, 1, 1, 1};
         ttnn::slice(grad_tensor_arg, start_index, end_index, step, std::nullopt, input_grad);
         grad_tensor[0] = input_grad;
     }
 
     if (are_required_outputs[1]) {
-        ttsl::SmallVector<uint32_t> start_index_2 = {0, 0, 0, 0};
+        ttsl::SmallVector<std::uint32_t> start_index_2 = {0, 0, 0, 0};
         if (dim == 0) {
             start_index_2 = {input_tensor_a_arg.logical_shape()[0], 0, 0, 0};
         } else if (dim == 1) {
@@ -548,12 +576,12 @@ std::vector<std::optional<Tensor>> concat_bw(
         } else if (dim == 3) {
             start_index_2 = {0, 0, 0, input_tensor_a_arg.logical_shape()[3]};
         }
-        ttsl::SmallVector<uint32_t> end_index_2 = {
+        ttsl::SmallVector<std::uint32_t> end_index_2 = {
             grad_tensor_arg.logical_shape()[0],
             grad_tensor_arg.logical_shape()[1],
             grad_tensor_arg.logical_shape()[2],
             grad_tensor_arg.logical_shape()[3]};
-        ttsl::SmallVector<uint32_t> step_2 = {1, 1, 1, 1};
+        ttsl::SmallVector<std::uint32_t> step_2 = {1, 1, 1, 1};
         ttnn::slice(grad_tensor_arg, start_index_2, end_index_2, step_2, std::nullopt, other_grad);
         grad_tensor[1] = other_grad;
     }
