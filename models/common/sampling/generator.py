@@ -133,6 +133,7 @@ class SamplingGenerator:
             max_batch_size=seed_batch_size,
             salt_duplicate_seeds=getattr(args, "salt_duplicate_seeds", True),
         )
+        self._slot_state_requires_authoritative_reload = False
 
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
@@ -182,6 +183,46 @@ class SamplingGenerator:
         if not self._penalties_active:
             return
         self.tt_penalties.reset_output_tokens(tokens, slots=slots)
+
+    def apply_slot_remap(self, remap) -> None:
+        """Move host RNG state and invalidate device state that cannot be permuted safely.
+
+        Sampling parameter and penalty buffers can be sharded across mesh rows, so a
+        scheduler remap is not necessarily a rank-local device gather. The next device
+        sampling step must rebuild those buffers from authoritative host state instead
+        of silently using rows that still belong to the old layout.
+        """
+        remap = [int(slot) for slot in torch.as_tensor(remap).reshape(-1).tolist()]
+        expected_size = self.seed_manager.max_batch_size
+        if len(remap) != expected_size:
+            raise ValueError(f"Sampling slot remap has {len(remap)} entries; expected {expected_size}")
+        if any(slot < 0 or slot >= expected_size for slot in remap):
+            raise ValueError(f"Sampling slot remap must stay within [0, {expected_size}), got {remap}")
+
+        self.seed_manager.apply_slot_remap(remap)
+        if any(source != destination for destination, source in enumerate(remap)):
+            self._slot_state_requires_authoritative_reload = True
+
+    def validate_decode_state_commands(
+        self,
+        *,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
+    ) -> None:
+        if self._slot_state_requires_authoritative_reload and not (reload_sampling_params and reset_sampling_state):
+            raise ValueError(
+                "A non-identity slot remap invalidated device sampling parameters and penalty history; "
+                "the next device sampling step requires reload_sampling_params=True and reset_sampling_state=True"
+            )
+
+    def commit_decode_state_commands(
+        self,
+        *,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
+    ) -> None:
+        if reload_sampling_params and reset_sampling_state:
+            self._slot_state_requires_authoritative_reload = False
 
     # ---------------------------------------------------------------------
     # Prefill / decode state helpers
@@ -233,6 +274,11 @@ class SamplingGenerator:
         Does NOT call ``seed_manager.get_new_values()`` — callers manage seed
         advancement separately since generators call it at different points.
         """
+        self.validate_decode_state_commands(
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
+        )
+
         if reload_sampling_params:
             chunks_per_model = len(sampling_params_chunks)
             max_batch_size = self.tt_sampling.max_batch_size
@@ -260,6 +306,11 @@ class SamplingGenerator:
         if reset_sampling_state:
             self.reset_prompt_tokens(prompt_tokens, slots=sampling_state_slots)
             self.reset_output_state(output_tokens, slots=sampling_state_slots)
+
+        self.commit_decode_state_commands(
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
+        )
 
     # ---------------------------------------------------------------------
     # Sampling helpers

@@ -1633,7 +1633,7 @@ class Generator(WarmupForwardMixin):
         remapped_params = {
             name: [values[source] for source in shadow_remap] for name, values in self._slot_sampling_params.items()
         }
-        seed_manager.apply_slot_remap(seed_remap)
+        sampling_module.apply_slot_remap(seed_remap)
         self._slot_sampling_params.update(remapped_params)
 
     def sample_decode_on_device(
@@ -1655,6 +1655,10 @@ class Generator(WarmupForwardMixin):
 
         # Keep separated sampling independently usable.
         self._apply_sampling_slot_remap(slot_remap)
+        sampling_module.validate_decode_state_commands(
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
+        )
 
         active_seed_slots = None
         if start_pos is not None:
@@ -1667,6 +1671,8 @@ class Generator(WarmupForwardMixin):
             seed_manager.deactivate_slots_except(active_seed_slots)
 
         formatted_sampling_params = sampling_params
+        if reload_sampling_params and sampling_params is None:
+            raise ValueError("Galaxy sampling parameter reload requires sampling_params")
         if sampling_params is not None and (reload_sampling_params or reset_sampling_state):
             formatted_sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
             if active_seed_slots is not None:
@@ -1684,6 +1690,10 @@ class Generator(WarmupForwardMixin):
         if reset_sampling_state:
             sampling_module.reset_prompt_tokens(prompt_tokens)
             sampling_module.reset_output_state(output_tokens)
+        sampling_module.commit_decode_state_commands(
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
+        )
 
         if formatted_sampling_params is not None and (active_seed_slots is None or active_seed_slots):
             seed_values = getattr(formatted_sampling_params, "seed", None)

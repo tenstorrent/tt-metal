@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import torch
 
-from models.common.sampling.generator import SamplingGenerator, SeedManager
+from models.common.sampling.generator import SamplingGenerator, SamplingParams, SeedManager
 from models.common.warmup.warmup_utils import WarmupForwardMixin
 from models.tt_transformers.tt.common import Mode
 
@@ -17,11 +17,20 @@ from models.tt_transformers.tt.common import Mode
 def _fake_sampling_generator():
     calls = []
     fake = SimpleNamespace(
-        tt_sampling=SimpleNamespace(max_batch_size=4),
+        tt_sampling=SimpleNamespace(max_batch_size=32),
+        seed_manager=SimpleNamespace(
+            max_batch_size=32,
+            apply_slot_remap=lambda remap: calls.append(("remap", list(remap))),
+        ),
+        _slot_state_requires_authoritative_reload=False,
         reset_sampling_params=lambda params: calls.append(("params", params)),
         reset_prompt_tokens=lambda tokens, slots=None: calls.append(("prompt", tokens, slots)),
         reset_output_state=lambda tokens, slots=None: calls.append(("output", tokens, slots)),
     )
+    fake.validate_decode_state_commands = lambda **kwargs: SamplingGenerator.validate_decode_state_commands(
+        fake, **kwargs
+    )
+    fake.commit_decode_state_commands = lambda **kwargs: SamplingGenerator.commit_decode_state_commands(fake, **kwargs)
     return fake, calls
 
 
@@ -54,6 +63,48 @@ def test_sampling_state_reset_can_preserve_unlisted_slots():
     )
 
     assert calls == [("prompt", "prompt", [1, 3]), ("output", None, [1, 3])]
+
+
+def test_non_identity_slot_remap_requires_authoritative_device_state_reload(expect_error):
+    fake, calls = _fake_sampling_generator()
+    remap = [1, 0, *range(2, 32)]
+
+    SamplingGenerator.apply_slot_remap(fake, remap)
+
+    assert calls == [("remap", remap)]
+    assert fake._slot_state_requires_authoritative_reload
+    for reload_sampling_params, reset_sampling_state in ((False, False), (True, False), (False, True)):
+        with expect_error(ValueError, "requires reload_sampling_params=True and reset_sampling_state=True"):
+            SamplingGenerator.apply_decode_state(
+                fake,
+                [object()],
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
+            )
+
+    params = SamplingParams(temperature=1.0, top_k=1, top_p=1.0)
+    SamplingGenerator.apply_decode_state(
+        fake,
+        [params],
+        reload_sampling_params=True,
+        reset_sampling_state=True,
+        prompt_tokens="prompt",
+        output_tokens="output",
+    )
+
+    assert calls[1][0] == "params"
+    assert calls[2:] == [("prompt", "prompt", None), ("output", "output", None)]
+    assert not fake._slot_state_requires_authoritative_reload
+
+
+def test_identity_slot_remap_keeps_device_sampling_state_valid():
+    fake, calls = _fake_sampling_generator()
+    remap = list(range(32))
+
+    SamplingGenerator.apply_slot_remap(fake, remap)
+
+    assert calls == [("remap", remap)]
+    assert not fake._slot_state_requires_authoritative_reload
 
 
 def test_output_penalty_reset_masks_only_selected_slots(monkeypatch):
@@ -248,11 +299,11 @@ def test_shared_generator_rebases_and_pads_lane_sampling_remaps():
     calls = [[], []]
     models = []
     for lane in range(2):
-        seed_manager = SimpleNamespace(
-            max_batch_size=4,
+        sampling = SimpleNamespace(
+            seed_manager=SimpleNamespace(max_batch_size=4),
             apply_slot_remap=lambda remap, lane=lane: calls[lane].append(torch.as_tensor(remap).tolist()),
         )
-        models.append(SimpleNamespace(sampling=SimpleNamespace(seed_manager=seed_manager)))
+        models.append(SimpleNamespace(sampling=sampling))
     fake = SimpleNamespace(data_parallel=2, model=models)
 
     Generator._apply_sampling_slot_remap(fake, torch.tensor([1, 0, 3, 2]))
@@ -263,12 +314,12 @@ def test_shared_generator_rebases_and_pads_lane_sampling_remaps():
 def test_shared_generator_rejects_cross_lane_sampling_remap(expect_error):
     from models.tt_transformers.tt.generator import Generator
 
-    seed_manager = SimpleNamespace(max_batch_size=2, apply_slot_remap=lambda remap: None)
+    sampling = SimpleNamespace(seed_manager=SimpleNamespace(max_batch_size=2), apply_slot_remap=lambda remap: None)
     fake = SimpleNamespace(
         data_parallel=2,
         model=[
-            SimpleNamespace(sampling=SimpleNamespace(seed_manager=seed_manager)),
-            SimpleNamespace(sampling=SimpleNamespace(seed_manager=seed_manager)),
+            SimpleNamespace(sampling=sampling),
+            SimpleNamespace(sampling=sampling),
         ],
     )
 
@@ -447,12 +498,19 @@ def test_galaxy_reset_only_formats_seed_slots(monkeypatch):
     )
     sampling = SimpleNamespace(
         seed_manager=seed_manager,
+        _slot_state_requires_authoritative_reload=False,
         reset_sampling_params=lambda params: (_ for _ in ()).throw(
             AssertionError("reset-only must not upload sampling parameters")
         ),
         reset_prompt_tokens=lambda tokens: None,
         reset_output_state=lambda tokens: None,
         sample=lambda **kwargs: "tokens",
+    )
+    sampling.validate_decode_state_commands = lambda **kwargs: SamplingGenerator.validate_decode_state_commands(
+        sampling, **kwargs
+    )
+    sampling.commit_decode_state_commands = lambda **kwargs: SamplingGenerator.commit_decode_state_commands(
+        sampling, **kwargs
     )
     fake = SimpleNamespace(
         trace_inputs_decode={True: None},
@@ -520,10 +578,8 @@ def test_galaxy_slot_remap_moves_parameter_shadow_with_seed_state():
     fake = SimpleNamespace(
         model=SimpleNamespace(
             sampling=SimpleNamespace(
-                seed_manager=SimpleNamespace(
-                    max_batch_size=4,
-                    apply_slot_remap=lambda remap: seed_remaps.append(remap),
-                )
+                seed_manager=SimpleNamespace(max_batch_size=4),
+                apply_slot_remap=lambda remap: seed_remaps.append(remap),
             )
         ),
         model_args=SimpleNamespace(max_batch_size=4),

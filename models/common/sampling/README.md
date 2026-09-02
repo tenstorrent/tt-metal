@@ -134,18 +134,24 @@ There are two distinct ways to implement this incompletely:
 1. Sending `slot_remap` only on device-sampling decodes leaves model-owned
    recurrent/conv/RoPE state in the old slot when host sampling changes the
    layout.
-2. Sending it on every decode but consuming it only inside the active device
-   sampling call leaves dormant seed/RNG/penalty state in the old slot during
-   host sampling. A later switch back to device sampling then resumes the wrong
-   request's state.
+2. Sending it on every decode but neither remapping nor invalidating dormant
+   sampler state leaves seed/RNG/parameter/penalty state in the old slot during
+   host sampling. A later switch back to device sampling can then resume the
+   wrong request's state.
 
 Every slot-owning subsystem must therefore consume each supplied remap exactly
 once on the accepted version-1 decode that carries it. State read by the
-forward is remapped before that read. A dormant sampler may consume it after
+forward is remapped before that read. A dormant sampler consumes it after
 successful decode/readback, which preserves retry safety because slot remaps
-are non-idempotent. An
-authoritative rebuild may replace the remap for that subsystem; inactivity may
-not. Version-0 adapters retain their historical remap behavior unchanged.
+are non-idempotent. Its slot-addressable host RNG state is remapped immediately.
+The sharded device parameter and penalty buffers are instead marked invalid:
+their next activation must command both `reload_sampling_params` and
+`reset_sampling_state`, rebuilding them from authoritative host state before
+they are read. The plugin issues both commands on every layout or sampling-mode
+transition, and the sampling generator rejects a direct caller that attempts a
+partial or absent rebuild. This authoritative rebuild replaces a physical
+remap for those buffers; inactivity alone does not silently accept stale state.
+Version-0 adapters retain their historical remap behavior unchanged.
 
 For a merged lane-DP call the remap uses global lane-major slots, while each
 model replica's seed manager owns a rank-local padded array. The shared
@@ -212,10 +218,11 @@ A model wrapper may opt in only if all of the following hold:
 - All four reload commands are honored independently, without model-local
   heuristics escalating page-table-only refresh into a full reload.
 - Slot remap applies before the forward to every persistent slot-indexed state
-  that the forward reads, in both sampling modes. Dormant sampler state is also
-  remapped exactly once after a successful host-sampling decode. For device
-  sampling, parameter upload, penalty/RNG reset, and seed advancement follow
-  in that order, with one seed advance per sampled token.
+  that the forward reads, in both sampling modes. After a successful
+  host-sampling decode, dormant RNG state is remapped and device sampler state
+  is invalidated exactly once. Before device sampling reads that state, an
+  authoritative parameter upload and penalty reset rebuild it. Seed advancement
+  follows, once per sampled token.
 - Persistent buffers remain valid through deferred readback and until an
   explicit reload replaces them.
 

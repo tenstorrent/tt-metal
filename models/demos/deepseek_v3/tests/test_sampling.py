@@ -99,6 +99,12 @@ class _FakeSamplingGenerator:
         self.seed_manager = _FakeSeedManager(padded_batch_size * sampling_dp)
         self.decode_state_calls = []
 
+    def apply_slot_remap(self, remap):
+        self.seed_manager.apply_slot_remap(remap)
+
+    def validate_decode_state_commands(self, **kwargs):
+        pass
+
     def apply_decode_state(self, sampling_param_chunks, **kwargs):
         self.decode_state_calls.append((sampling_param_chunks, kwargs))
 
@@ -539,6 +545,9 @@ def test_deepseek_sampling_applies_remap_before_update_and_advance():
     events = []
     sampling_params = SamplingParams(temperature=0.6, top_k=32, top_p=0.95, seed=1234)
     generator = SimpleNamespace(
+        sampling_generator=SimpleNamespace(
+            validate_decode_state_commands=lambda **kwargs: events.append(("validate", kwargs))
+        ),
         _apply_sampling_slot_remap=lambda remap: events.append(("remap", remap)),
         _validate_and_initialize_sampling=lambda *args, **kwargs: events.append(("update", kwargs)),
         _sample_tokens_device=lambda *args, **kwargs: events.append(("advance", kwargs)) or "tokens",
@@ -555,7 +564,7 @@ def test_deepseek_sampling_applies_remap_before_update_and_advance():
     )
 
     assert result == "tokens"
-    assert [event[0] for event in events] == ["remap", "update", "advance"]
+    assert [event[0] for event in events] == ["remap", "update", "validate", "advance"]
 
 
 def test_deepseek_host_sampling_applies_dormant_remap_after_success(monkeypatch):

@@ -2166,7 +2166,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 )
             rank_remap = torch.arange(sm_bs, dtype=torch.long)
             rank_remap[:lane_stride] = lane_remap
-            sampling_module.seed_manager.apply_slot_remap(rank_remap)
+            sampling_module.apply_slot_remap(rank_remap)
 
     def sample_decode_on_device(
         self,

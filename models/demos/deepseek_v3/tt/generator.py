@@ -1169,7 +1169,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         sampling_generator = getattr(self, "sampling_generator", None)
         if slot_remap is None or sampling_generator is None:
             return
-        sampling_generator.seed_manager.apply_slot_remap(self._sampling_device_slot_remap(slot_remap))
+        sampling_generator.apply_slot_remap(self._sampling_device_slot_remap(slot_remap))
 
     def _sampling_device_seed_slots(self, seeds: list[int | None], batch_size: int) -> list[int | None]:
         seed_slot_count = self.sampling_generator.seed_manager.max_batch_size
@@ -1288,6 +1288,11 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
         elif reload_sampling_params or reset_sampling_state:
             raise ValueError("DeepSeek sampling updates require sampling_params")
+        if self.sampling_generator is not None:
+            self.sampling_generator.validate_decode_state_commands(
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
+            )
         return self._sample_tokens_device(
             tt_logits, enable_trace=enable_trace, user_slots=user_slots, skip_precompile=True
         )
