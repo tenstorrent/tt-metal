@@ -147,6 +147,41 @@ ALWI void sfpu_normalize_bcast_col(uint32_t dst_data_idx, uint32_t dst_mean_col_
 
 // clang-format off
 /**
+ * Apply `(data - mean) * inv_std` to two in-place data tiles while reusing
+ * each column-vector statistics broadcast. All operands and outputs are FP32.
+ * DST must be acquired, and `sfpu_bcast_col_init()` must have been called.
+ *
+ * Return value: None
+ *
+ * | Argument             | Description                                            | Type     | Valid Range                                           | Required |
+ * |----------------------|--------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | dst_data_idx         | First data tile and in-place output                    | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | dst_second_data_idx  | Second data tile and in-place output                   | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | dst_mean_col_idx     | Mean tile; column 0 is broadcast                       | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | dst_inv_std_col_idx  | Inverse-standard-deviation tile; column 0 is broadcast | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void sfpu_normalize_bcast_col_two_tiles(
+    uint32_t dst_data_idx, uint32_t dst_second_data_idx, uint32_t dst_mean_col_idx, uint32_t dst_inv_std_col_idx) {
+    MATH(
+        (::ckernel::_sfpu_binary_check_<DST_SYNC_MODE>(
+             dst_data_idx, dst_second_data_idx, dst_data_idx, VectorMode::None),
+         ::ckernel::_sfpu_binary_check_<DST_SYNC_MODE>(
+             dst_mean_col_idx, dst_inv_std_col_idx, dst_mean_col_idx, VectorMode::None),
+         SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
+             DST_SYNC_MODE,
+             DST_ACCUM_MODE,
+             _calculate_sfpu_normalize_bcast_col_two_tiles_,
+             dst_data_idx,
+             dst_second_data_idx,
+             dst_data_idx,
+             VectorMode::None,
+             dst_mean_col_idx,
+             dst_inv_std_col_idx)));
+}
+
+// clang-format off
+/**
  * Apply `(data + residual - mean) * inv_std` in one SFPU traversal,
  * broadcasting column 0 of each statistics tile. All operands and the in-place
  * output are FP32. DST must be acquired, and `sfpu_bcast_col_init()` must have

@@ -760,9 +760,10 @@ void kernel_main() {
                         reconfig_data_format_srca(dfb_ex_welford, dfb_ex2pe_fp32);
                         copy_init(dfb_ex2pe_fp32);
                         copy_tile(dfb_ex2pe_fp32, 0, inv_std_col_dst);
-                        sfpu_normalize_bcast_col(data_dst, mean_col_dst, inv_std_col_dst);
                         if (has_second_tile) {
-                            sfpu_normalize_bcast_col(residual_dst, mean_col_dst, inv_std_col_dst);
+                            sfpu_normalize_bcast_col_two_tiles(data_dst, residual_dst, mean_col_dst, inv_std_col_dst);
+                        } else {
+                            sfpu_normalize_bcast_col(data_dst, mean_col_dst, inv_std_col_dst);
                         }
                         tile_regs_commit();
                         tile_regs_wait();

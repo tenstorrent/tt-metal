@@ -458,6 +458,91 @@ inline void _calculate_sfpu_normalize_bcast_col_full_tile_(
     }
 }
 
+inline void _process_col_normalize_two_tiles_row_band_(
+    std::uint32_t mean_col0_addr,
+    std::uint32_t inv_std_col0_addr,
+    std::uint32_t left_face_addr,
+    std::uint32_t right_face_addr,
+    std::uint32_t first_data_tile_offset,
+    std::uint32_t second_data_tile_offset)
+{
+    constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
+    const std::uint32_t slot0      = left_face_addr;
+    const std::uint32_t slot1      = left_face_addr + ODD_COLS_OFFSET;
+    const std::uint32_t slot2      = right_face_addr;
+    const std::uint32_t slot3      = right_face_addr + ODD_COLS_OFFSET;
+
+    TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_7, mean_col0_addr);
+    lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
+    _broadcast_stage3_with_data_prefetch_(
+        first_data_tile_offset + slot0, first_data_tile_offset + slot1, first_data_tile_offset + slot2, first_data_tile_offset + slot3);
+    TTI_SFPMOV(0, LREG_BCAST, p_sfpu::LREG7, 1 /* SFPMOV_MOD1_NEGATE */);
+    TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA0, 0);
+    TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA1, 0);
+    TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA2, 0);
+    TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA3, 0);
+
+    TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_7, inv_std_col0_addr);
+    lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
+    _broadcast_stage3_preserve_data_();
+    TTI_SFPMUL(LREG_DATA0, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA0, 0);
+    TTI_SFPMUL(LREG_DATA1, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA1, 0);
+    TTI_SFPMUL(LREG_DATA2, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA2, 0);
+    TTI_SFPMUL(LREG_DATA3, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA3, 0);
+    TT_SFPSTORE(LREG_DATA0, IM, ADDR_MOD_7, first_data_tile_offset + slot0);
+    TT_SFPSTORE(LREG_DATA1, IM, ADDR_MOD_7, first_data_tile_offset + slot1);
+    TT_SFPSTORE(LREG_DATA2, IM, ADDR_MOD_7, first_data_tile_offset + slot2);
+    TT_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_7, first_data_tile_offset + slot3);
+
+    TT_SFPLOAD(LREG_DATA0, IM, ADDR_MOD_7, second_data_tile_offset + slot0);
+    TT_SFPLOAD(LREG_DATA1, IM, ADDR_MOD_7, second_data_tile_offset + slot1);
+    TT_SFPLOAD(LREG_DATA2, IM, ADDR_MOD_7, second_data_tile_offset + slot2);
+    TT_SFPLOAD(LREG_DATA3, IM, ADDR_MOD_7, second_data_tile_offset + slot3);
+    TTI_SFPADD(LREG_DATA0, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA0, 0);
+    TTI_SFPADD(LREG_DATA1, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA1, 0);
+    TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA2, 0);
+    TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, p_sfpu::LREG7, LREG_DATA3, 0);
+    TTI_SFPMUL(LREG_DATA0, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA0, 0);
+    TTI_SFPMUL(LREG_DATA1, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA1, 0);
+    TTI_SFPMUL(LREG_DATA2, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA2, 0);
+    TTI_SFPMUL(LREG_DATA3, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA3, 0);
+    TT_SFPSTORE(LREG_DATA0, IM, ADDR_MOD_7, second_data_tile_offset + slot0);
+    TT_SFPSTORE(LREG_DATA1, IM, ADDR_MOD_7, second_data_tile_offset + slot1);
+    TT_SFPSTORE(LREG_DATA2, IM, ADDR_MOD_7, second_data_tile_offset + slot2);
+    TT_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_7, second_data_tile_offset + slot3);
+}
+
+inline void _calculate_sfpu_normalize_bcast_col_two_tiles_(
+    std::uint32_t dst_index_data, std::uint32_t dst_index_second_data, std::uint32_t, std::uint32_t dst_index_mean, std::uint32_t dst_index_inv_std)
+{
+    const std::uint32_t first_data_base  = dst_index_data * DEST_TILE_SIZE_RAW;
+    const std::uint32_t second_data_base = dst_index_second_data * DEST_TILE_SIZE_RAW;
+    const std::uint32_t mean_base        = dst_index_mean * DEST_TILE_SIZE_RAW;
+    const std::uint32_t inv_std_base     = dst_index_inv_std * DEST_TILE_SIZE_RAW;
+    for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; ++band)
+    {
+        const std::uint32_t band_off = band * ROW_BAND_STRIDE;
+        _process_col_normalize_two_tiles_row_band_(
+            mean_base + FACE0_BASE + band_off,
+            inv_std_base + FACE0_BASE + band_off,
+            FACE0_BASE + band_off,
+            FACE1_BASE + band_off,
+            first_data_base,
+            second_data_base);
+    }
+    for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; ++band)
+    {
+        const std::uint32_t band_off = band * ROW_BAND_STRIDE;
+        _process_col_normalize_two_tiles_row_band_(
+            mean_base + FACE2_BASE + band_off,
+            inv_std_base + FACE2_BASE + band_off,
+            FACE2_BASE + band_off,
+            FACE3_BASE + band_off,
+            first_data_base,
+            second_data_base);
+    }
+}
+
 inline void _process_col_residual_normalize_row_band_(
     std::uint32_t mean_col0_addr,
     std::uint32_t inv_std_col0_addr,
