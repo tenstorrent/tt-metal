@@ -34,9 +34,8 @@ bool is_replicated_across_complete_mesh(const Tensor& tensor) {
            });
 }
 
-// Largest linearized index of q's devices along the given mesh axis (0 on a single device). Single source
-// for the worst-case window check (max_chunk_start) and the host-side chunk_start deduction, so a future
-// change to the coord/linearization semantics can't desync the deduced base from the validated window.
+// Largest linearized index of q's devices along the given mesh axis (0 on a single device). Used by the
+// host-side chunk_start deduction.
 uint32_t max_linearized_rank(const Tensor& q, std::optional<uint32_t> axis) {
     uint32_t max_rank = 0;
     if (q.device_storage().get_coords().size() > 1) {
@@ -45,22 +44,6 @@ uint32_t max_linearized_rank(const Tensor& q, std::optional<uint32_t> axis) {
         }
     }
     return max_rank;
-}
-
-// Fullest device's chunk_start (= its causal-window end - Sq). Used by the worst-case window check.
-//   * block-cyclic: the devices collectively cover the whole global chunk [chunk_start, +sp*chunk_local),
-//     so the fullest window reaches chunk_start + sp*chunk_local no matter how SP×TP slices it. (For the
-//     SP-only case Sq == chunk_local, so this equals the old chunk_start + (sp-1)*chunk_local.)
-//   * contiguous (incl. a size-1 SP axis, stored as no block-cyclic): each device's row 0 sits at
-//     chunk_start + rank*Sq, where rank is the SP rank PLUS the TP sub-shard rank. The two are
-//     mutually-exclusive-nonzero here (a TP sub-shard needs block_cyclic_sp_axis with sp==1, which forces
-//     SP rank 0; no sub-shard -> TP rank 0), mirroring device_causal_geometry's no-block-cyclic branch.
-uint32_t max_chunk_start(const operation_attributes_t& attrs, const Tensor& q, uint32_t Sq) {
-    if (attrs.block_cyclic.has_value()) {
-        return attrs.chunk_start_idx + attrs.block_cyclic->sp * attrs.block_cyclic->chunk_local - Sq;
-    }
-    const uint32_t tp_rank = attrs.tp_axis().has_value() ? max_linearized_rank(q, attrs.tp_axis()) : 0u;
-    return attrs.chunk_start_idx + (max_linearized_rank(q, attrs.sp_axis()) + tp_rank) * Sq;
 }
 
 // Miss-only checks: hash-pinned (placement, non-indexed k batch shape) so they can't differ on a hit. The
@@ -134,37 +117,33 @@ void validate_runtime_values(const operation_attributes_t& attrs, const tensor_a
 }
 
 // Runs on miss AND hit (chunk_start is hash-excluded). All chunk_start checks in one place: base alignment
-// and the fullest device's window against T and (when set) kv_len.
+// and the chunk's start against T and (when set) kv_len.
+//
+// The causal window MAY end past the valid prefix, and past T: a chunked prefill runs a fixed chunk
+// size, so a sequence's last chunk pads its query window past what the cache holds, and those pad rows
+// have no keys to attend. Requiring it to fit forced callers to pass the padded window as kv_len rather
+// than the prefix they populated. Nothing downstream needs it -- the banded schedule spans T either way,
+// WorkUnitSpan::k_tiles() yields 0 past kv_len, and valid_prefix_tiles() saturates. What must still hold
+// is that the chunk STARTS inside the prefix, else nothing is scored at all.
 void validate_chunk_start(const operation_attributes_t& attrs, const tensor_args_t& t) {
-    const uint32_t Sq = t.q.logical_shape()[2];
     const uint32_t T = t.k.logical_shape()[2];
     TT_FATAL(
         attrs.chunk_start_idx % tt::constants::TILE_WIDTH == 0,
         "chunk_start_idx {} must be tile-aligned",
         attrs.chunk_start_idx);
-    const uint32_t max_cs = max_chunk_start(attrs, t.q, Sq);
     TT_FATAL(
-        max_cs + Sq <= T,
-        "fullest-device chunk window [{}, {}+{}) exceeds T={} (base={}, per-rank stride Sq={})",
-        max_cs,
-        max_cs,
-        Sq,
-        T,
+        attrs.chunk_start_idx < T,
+        "chunk_start_idx {} starts at or past T={} (the allocated k length): nothing would be scored",
         attrs.chunk_start_idx,
-        Sq);
-    // Causal window must also stay inside the valid prefix.
+        T);
     if (attrs.kv_len.has_value()) {
         const uint32_t kv_len = attrs.kv_len.value();
         TT_FATAL(
-            max_cs + Sq <= kv_len,
-            "fullest-device causal window [{}, {}+{}) exceeds kv_len={} (cannot attend past the valid keys; "
-            "base={}, per-rank stride Sq={})",
-            max_cs,
-            max_cs,
-            Sq,
-            kv_len,
+            attrs.chunk_start_idx < kv_len,
+            "chunk_start_idx {} starts at or past kv_len={} (the valid key prefix): nothing would be scored. "
+            "The causal window may END past kv_len (pad query rows), but the chunk must BEGIN inside it",
             attrs.chunk_start_idx,
-            Sq);
+            kv_len);
     }
 }
 // Block-cyclic layout (sp derived from block_cyclic_sp_axis, global chunk = sp*block_cyclic_chunk_local):
