@@ -427,23 +427,29 @@ def _assert_combined_schema(dfs: list[pd.DataFrame], label: str):
 
 
 def _run_id() -> str:
-    """The ROW_KEY component that identifies one CI run, re-runs included.
+    """The ROW_KEY component that identifies one published Parquet file.
 
-    "Re-run all/failed jobs" keeps ``GITHUB_RUN_ID`` and bumps
-    ``GITHUB_RUN_ATTEMPT``. Without the attempt, a re-run republishes a second,
-    different measurement under the same (test_name, commit_sha, arch, run_id) —
-    a colliding ROW_KEY. Attempt 1 stays bare so every row already archived keeps
-    the identity it was published with; every shard of one attempt still shares
-    one run_id, which is what the data team means by "one run".
+    **One file is one run.** The warehouse loader
+    (``data_airflow`` ``dags/pipelines/llk_perf_run``) uses RUN_ID as its replay
+    key: it deletes every row already carrying the incoming file's RUN_ID, then
+    inserts the file. Two files that share a run_id therefore do not merge — the
+    second silently erases the first.
 
-    Off CI there is no run id. The run tag is unique per invocation, so two local
-    runs of the same commit no longer collide the way the old constant "local" did.
+    A CI workflow publishes one file per shard, so run_id must identify the
+    shard, not the workflow. The run tag already does exactly that
+    (``<workflow run id>-<arch>-<shard index>``), and it keeps the workflow's own
+    id as its first component, so a night's files stay groupable. ``commit_sha``
+    groups them with no string work at all.
+
+    "Re-run all/failed jobs" keeps the run tag and bumps ``GITHUB_RUN_ATTEMPT``,
+    so from attempt 2 on the attempt is appended. Attempt 1 stays bare, so rows
+    already archived keep the identity they were published with.
+
+    Off CI the tag is a timestamped local one, which keeps successive runs apart.
     """
-    run = os.environ.get("GITHUB_RUN_ID", "").strip()
-    if not run:
-        return TestConfig.perf_run_tag()
     attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1").strip() or "1"
-    return run if attempt == "1" else f"{run}-{attempt}"
+    tag = TestConfig.perf_run_tag()
+    return tag if attempt == "1" else f"{tag}-{attempt}"
 
 
 def _ci_provenance() -> dict:
