@@ -493,7 +493,7 @@ ttnn::device_operation::ProgramArtifacts MorehMatmulOperation::MultiCoreProgramF
         return KernelSpec{
             .unique_id = id,
             .source = compute_kernel_file,
-            .compiler_options = {.defines = compute_defines},
+            .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings = compute_dfb_bindings,
             .compile_time_args = compute_args,
             // output_stride[8]

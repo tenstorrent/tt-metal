@@ -94,6 +94,39 @@ def run_cpu_reference(config, weights, hidden_states, seq_len, cache_dir, cache_
     return ref_output, ref_kvpe, ref_index
 
 
+def run_cpu_reference_ragged(config, weights, hidden_states, seq_len, bounds, cache_dir, cache_tag):
+    """Chunk-loop sparse-MLA CPU truth for a RAGGED chunk schedule. Disk-cached.
+
+    ``bounds`` is a list of (actual_start, actual_end) covering the POPULATED prefix [0, bounds[-1][1]),
+    which is shorter than ``seq_len`` when the schedule is ragged. A chunk may carry
+    FEWER real tokens than the device's fixed chunk width. Each call passes only that chunk's real rows,
+    so the reference never sees the device's pad tail -- which is the point: the device output is sliced
+    to the same real rows before comparing, and anything the pad rows did must not have changed them.
+
+    Returns (ref_output [1, seq, dim], ref_kvpe [1, seq, kv_lora_rank + rope],
+    ref_index [1, seq, index_head_dim]).
+    """
+    shape_key = "-".join(f"{a}:{b}" for a, b in bounds[:2]) + f"-x{len(bounds)}"
+    cache_path = Path(cache_dir) / f"ragged_{cache_tag}_seq{seq_len}_{shape_key}.pt"
+    if cache_path.exists():
+        logger.info(f"Loading cached ragged CPU reference from {cache_path}")
+        cached = torch.load(cache_path, weights_only=True)
+        if "ref_index" in cached:
+            return cached["ref_output"], cached["ref_kvpe"], cached["ref_index"]
+        logger.info(f"Cached ragged reference at {cache_path} predates the index cache; recomputing")
+
+    ref = SparseMLAReference(config, weights, seq_len=seq_len)
+    outs = [ref.forward(hidden_states[:, a:b], actual_start=a) for a, b in bounds]
+    ref_output = torch.cat(outs, dim=1)
+    ref_kvpe = ref.kvpe_cache.squeeze(1)
+    ref_index = ref.index_cache
+
+    Path(cache_dir).mkdir(parents=True, exist_ok=True)
+    torch.save({"ref_output": ref_output, "ref_kvpe": ref_kvpe, "ref_index": ref_index}, cache_path)
+    logger.info(f"Saved ragged CPU reference to {cache_path}")
+    return ref_output, ref_kvpe, ref_index
+
+
 def run_cpu_reference_chunked(config, weights, hidden_states, seq_len, chunk, cache_dir, cache_tag):
     """Chunk-loop sparse-MLA CPU truth (decode branch via actual_start). Disk-cached.
 
