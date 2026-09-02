@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: Apache-2.0
 """
 SDPA-decode program-config sweep — generalized CLI tool (Blackhole P150).
