@@ -21,17 +21,17 @@
     toc.setAttribute('aria-label', 'Page contents');
 
     var ul = document.createElement('ul');
+    var items = [];
 
     headings.forEach(function (h) {
-      if (!h.id) {
-        h.id = slugify(h.textContent);
-      }
+      var id = anchorId(h);
+      if (!id) return; /* nothing to link to; skip rather than invent an anchor */
 
       /* Percent-encode the id before it reaches an href. The value is already
        * a same-page fragment because of the leading '#', so no scheme can be
        * introduced; encoding additionally guarantees the whole href stays
        * within the URL fragment grammar whatever Sphinx put in the id. */
-      var fragment = '#' + encodeURIComponent(h.id);
+      var fragment = '#' + encodeURIComponent(id);
 
       var li = document.createElement('li');
       li.className = h.tagName === 'H3' ? 'toc-h3' : 'toc-h2';
@@ -53,20 +53,40 @@
 
       li.appendChild(a);
       ul.appendChild(li);
+      items.push({ heading: h, link: a });
     });
+
+    if (!items.length) return;
 
     toc.appendChild(ul);
     document.body.appendChild(toc);
 
-    setupScrollSpy(headings, ul);
+    setupScrollSpy(items);
   }
 
-  /* Reduce heading text to the [a-z0-9-] slug charset used for generated ids. */
-  function slugify(text) {
-    return text.trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '');
+  /* Sphinx puts the anchor on the enclosing <section>, not on the heading, and
+   * dedupes repeated titles there ("parameters", then "id1"). So read the id
+   * that already exists instead of deriving one from the heading text: a
+   * derived id would collide with the section's own id, and two sections with
+   * the same title would derive the same value and produce two TOC entries
+   * pointing at the first one. Older Sphinx used <div class="section" id>. */
+  function anchorId(h) {
+    if (h.id) return h.id;
+
+    var node = h.parentNode;
+    while (node && node.nodeType === 1) {
+      if (node.tagName === 'SECTION' || node.classList.contains('section')) {
+        if (node.id) return node.id;
+      }
+      node = node.parentNode;
+    }
+
+    /* Sphinx's own permalink already points at the right anchor. */
+    var headerlink = h.querySelector('a.headerlink');
+    var href = headerlink && headerlink.getAttribute('href');
+    if (href && href.charAt(0) === '#') return decodeURIComponent(href.slice(1));
+
+    return '';
   }
 
   function setActive(activeLink) {
@@ -78,8 +98,7 @@
     activeLink.classList.add('active');
   }
 
-  function setupScrollSpy(headings, ul) {
-    var links = ul.querySelectorAll('a');
+  function setupScrollSpy(items) {
     var navbarHeight = parseInt(
       getComputedStyle(document.documentElement)
         .getPropertyValue('--tt-navbar-height') || '72', 10
@@ -88,10 +107,11 @@
     var observer = new IntersectionObserver(function (entries) {
       entries.forEach(function (entry) {
         if (entry.isIntersecting) {
-          /* Must match the encoding used when the href was built above. */
-          var fragment = '#' + encodeURIComponent(entry.target.id);
-          links.forEach(function (a) {
-            a.classList.toggle('active', a.getAttribute('href') === fragment);
+          /* Match on the heading node itself: two sections may legitimately
+           * share a title, so the label is not a key and the id lives on the
+           * section rather than on the element being observed. */
+          items.forEach(function (item) {
+            item.link.classList.toggle('active', item.heading === entry.target);
           });
         }
       });
@@ -100,12 +120,10 @@
       threshold: 0
     });
 
-    headings.forEach(function (h) {
-      observer.observe(h);
+    items.forEach(function (item) {
+      observer.observe(item.heading);
     });
 
-    if (links.length > 0) {
-      links[0].classList.add('active');
-    }
+    items[0].link.classList.add('active');
   }
 })();

@@ -39,3 +39,15 @@ Returns field in the form the ttnn pages emit
    :param a: the input tensor.
    :type a: ttnn.Tensor
    :returns: *ttnn.Tensor* -- the output tensor.
+
+Usage
+-----
+
+Repeated on purpose: two sections share this title, so Sphinx has to dedupe
+the second anchor. The right-hand TOC reads those anchors, and a TOC that
+derived them from the heading text instead would send both entries here.
+
+Usage
+-----
+
+The second one. Its anchor is not ``usage``.

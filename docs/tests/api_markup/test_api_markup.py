@@ -103,6 +103,64 @@ def test_stylesheet_still_matches_the_markup(page, selector):
     )
 
 
+def _anchor_id(heading) -> str:
+    """Resolve a heading to the anchor docs-toc.js will link it to.
+
+    Mirrors the lookup order in ``docs-toc.js``: the heading's own id, then the
+    id of the enclosing section, then the target of Sphinx's own permalink.
+    """
+    if heading.get("id"):
+        return heading.get("id")
+    for parent in heading.iterancestors():
+        is_section = parent.tag == "section" or "section" in (parent.get("class") or "").split()
+        if is_section and parent.get("id"):
+            return parent.get("id")
+    link = heading.cssselect("a.headerlink")
+    if link and (link[0].get("href") or "").startswith("#"):
+        return link[0].get("href")[1:]
+    return ""
+
+
+def test_every_heading_resolves_to_a_unique_anchor(page):
+    """The right-hand TOC is only navigable while this holds.
+
+    Sphinx puts the anchor on the enclosing ``<section>``, never on the ``h2``
+    itself, and dedupes repeated titles there (``usage``, then ``id1``). If a
+    heading had no resolvable anchor the entry would be dead, and if two
+    resolved to the same value the second entry would jump to the first
+    section — which is what deriving the id from the heading text produced.
+
+    This locks the HTML side of the contract only. It cannot exercise the
+    script, which would need a JS runtime in the docs test environment.
+    """
+    roots = page.cssselect("[role=main]") or page.cssselect(".rst-content")
+    headings = [h for h in page.cssselect("h2, h3") if any(h is root or root in h.iterancestors() for root in roots)]
+    assert headings, "fixture built no headings, so this test would prove nothing"
+
+    #: The RTD theme renders the permalink as a Font Awesome glyph (U+F0C1);
+    #: plain Sphinx uses a pilcrow. Neither belongs in a failure message.
+    PERMALINK_GLYPHS = "\uf0c1\u00b6"
+
+    def label(h) -> str:
+        text = " ".join("".join(h.itertext()).split())
+        return text.strip(PERMALINK_GLYPHS + " ")
+
+    dead = [label(h) for h in headings if not _anchor_id(h)]
+    assert not dead, f"headings with no anchor to link to: {dead}"
+
+    by_anchor: dict[str, list[str]] = {}
+    for h in headings:
+        by_anchor.setdefault(_anchor_id(h), []).append(label(h))
+    collisions = {a: names for a, names in by_anchor.items() if len(names) > 1}
+    assert not collisions, f"several headings share one anchor, so the TOC cannot reach them all: {collisions}"
+
+    repeated = {n for names in by_anchor.values() for n in names}
+    assert len(repeated) < len(headings), (
+        "the fixture no longer contains two sections with the same title, so "
+        "the deduped-anchor path is not covered any more"
+    )
+
+
 def _hiding_selectors() -> list[str]:
     rules = tinycss2.parse_stylesheet(STYLESHEET.read_text(), skip_whitespace=True, skip_comments=True)
     out = []
