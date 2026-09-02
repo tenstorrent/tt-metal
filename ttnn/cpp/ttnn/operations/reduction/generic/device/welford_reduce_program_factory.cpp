@@ -357,7 +357,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {"Ht", Ht},
             {"Wt", Wt},
             {"HtWt", HtWt},
-            {"scaler_bits", 0u},
             {"use_welford", 1u},
             {"enable_fp32_sfpu", 0u},
         };
