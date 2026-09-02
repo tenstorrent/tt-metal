@@ -446,6 +446,14 @@ def _is_partial_shard(spec):
     return _rows_of(spec["shape"]) < _shard_row_capacity(mem)
 
 
+def _is_quasar(mesh_device):
+    """True when the device under test is the Gen2 (Quasar) architecture."""
+    try:
+        return mesh_device.arch() == ttnn._ttnn.device.Arch.QUASAR
+    except Exception:
+        return False
+
+
 def build_tensor(spec, mesh_device, case, op_name, key):
     """Materialize one captured input tensor. Returns (ttnn tensor, torch source)."""
     data = _torch_data(spec, case, op_name, key)
@@ -453,26 +461,25 @@ def build_tensor(spec, mesh_device, case, op_name, key):
         return ttnn.from_torch(data, dtype=DTYPE[spec["dtype"]], layout=LAYOUT[spec["layout"]]), data
 
     memory_config = build_memory_config(spec.get("mem"), mesh_device) or ttnn.DRAM_MEMORY_CONFIG
-    partial = _is_partial_shard(spec)
-    # Build (and tilize) on host, then upload. Passing device=mesh_device together with layout=TILE and
-    # a mesh_mapper makes from_torch run the row-major->tile conversion ON-DEVICE via the mainline tilize
-    # op, which is unsupported on Quasar (legacy CreateKernel path has no Gen2 branch, so it asserts:
-    # "DataMovementKernel is not supported on Quasar"). Omitting device= tilizes on the host CPU; the
-    # separate to_device then just uploads the already-tiled tensor (the pattern the quasar op tests use).
+    # Build (and tilize) on host, then upload interleaved-to-DRAM, then place into the target config.
+    # Two Quasar-emulator hazards drive this shape:
+    #  1. Passing device=mesh_device + layout=TILE + a mesh_mapper to from_torch runs the
+    #     row-major->tile conversion ON-DEVICE via the mainline tilize op, which is unsupported on Quasar
+    #     (legacy CreateKernel path, no Gen2 branch -> "DataMovementKernel is not supported on Quasar").
+    #     Omitting device= tilizes on the host CPU instead.
+    #  2. Producing a sharded input on device uses interleaved->sharded / reshard, also mainline-legacy
+    #     and unsupported on Quasar. On Quasar we route that conversion through the ported
+    #     experimental.quasar.to_memory_config fork; on WH/BH we keep the original mainline path.
+    to_memory_config = ttnn.experimental.quasar.to_memory_config if _is_quasar(mesh_device) else ttnn.to_memory_config
     tt = ttnn.from_torch(
         data,
         dtype=DTYPE[spec["dtype"]],
         layout=LAYOUT[spec["layout"]],
         mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
     )
-    tt = ttnn.to_device(
-        tt,
-        mesh_device,
-        # a partially filled shard is reached in two steps, see _is_partial_shard
-        memory_config=ttnn.DRAM_MEMORY_CONFIG if partial else memory_config,
-    )
-    if partial:
-        tt = ttnn.to_memory_config(tt, memory_config)
+    tt = ttnn.to_device(tt, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if memory_config != ttnn.DRAM_MEMORY_CONFIG:
+        tt = to_memory_config(tt, memory_config)
     return tt, data
 
 
