@@ -357,9 +357,26 @@ class Gemma4Attention:
                     free = [i for i in range(len(pool)) if i not in used]
                     if free:
                         slot = free[0]
-                    else:  # evict oldest
+                    else:
+                        # Evict oldest — but spill its tail into the legacy
+                        # stash first: dropping it would make the evicted
+                        # request's next chunk attend without its previous
+                        # window (silently wrong). The spilled clone carries
+                        # the G8 trace-clobber risk only for that request,
+                        # only while chunked concurrency exceeds the pool.
                         oldest_key = next(iter(pool_map))
                         slot = pool_map.pop(oldest_key)
+                        okb, ovb = pool[slot]
+                        spill = (
+                            ttnn.clone(okb, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                            ttnn.clone(ovb, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                        )
+                        tails = getattr(self, "_sliding_tails_by_key", None)
+                        if tails is None:
+                            tails = {}
+                            self._sliding_tails_by_key = tails
+                        self._dealloc_tail(tails.pop(oldest_key, None))
+                        tails[oldest_key] = spill
                 pool_map[req_key] = slot
                 kb, vb = pool[slot]
                 ttnn.copy(k, kb)
