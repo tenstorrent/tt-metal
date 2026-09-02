@@ -47,6 +47,10 @@ constexpr uint32_t kSlotWords = kernel_profiler::spsc_span_slot_words(kNumRisc);
 constexpr uint32_t kSlotBytes = kSlotWords * 4u;
 constexpr uint32_t kWireCtrl = kernel_profiler::SPSC_SPAN_WIRE_CTRL_WORDS;
 constexpr uint32_t kPayloadCapWords = kSlotWords - kPrefix - kWireCtrl;
+// The lane walk has no room gate: a frame of five full rings and their pads always fits the slot.
+static_assert(
+    kNumRisc * (kRingWords + kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS - 1u) <= kPayloadCapWords,
+    "a full span no longer fits a slot");
 constexpr uint32_t kPageWords = kernel_profiler::SPSC_SPAN_PAGE_WORDS;
 constexpr uint32_t kPageBytes = kPageWords * 4u;
 // Reads take the NoC the writes do not: NOC_INDEX carries egress, the other NoC carries gathers.
@@ -115,11 +119,13 @@ static_assert(
 // Control-vector wave: read cores [lo, hi)'s tails into CV staging, then wait until `expect`
 // responses have landed since `rd0`. Counted, not barriered: gather responses in flight also bump
 // the counter, which can only hand a scan stale-but-valid tails (they are monotonic).
-__attribute__((always_inline)) inline void cv_wave(
-    const uint64_t* core_noc, uint32_t lo, uint32_t hi, uint32_t rd0, uint32_t expect) {
+__attribute__((always_inline)) inline void cv_issue(const uint64_t* core_noc, uint32_t lo, uint32_t hi) {
     for (uint32_t i = lo; i < hi; i++) {
         noc_async_read<kCvReadBytes>(core_noc[i] + kCvReadSrcOff, kCvBase + i * kCvReadBytes, kCvReadBytes, kReadNoc);
     }
+}
+
+__attribute__((always_inline)) inline void cv_wait(uint32_t rd0, uint32_t expect) {
     while (NOC_STATUS_READ_REG(kReadNoc, NIU_MST_RD_RESP_RECEIVED) - rd0 < expect) {
     }
     invalidate_l1_cache();
@@ -144,14 +150,97 @@ __attribute__((always_inline)) inline uint32_t page_round(uint32_t bytes) {
     return (bytes + kPageBytes - 1u) & ~(kPageBytes - 1u);
 }
 
+// Per-core NoC address of the profiler control block, computed once: get_noc_addr's coordinate
+// arithmetic would otherwise run at every issue site of a sweep that is instruction-stream bound.
+static uint64_t core_noc[kMaxCores];
+// Per-slot frame geometry, written at gather issue and consumed a whole batch later by the ship.
+// Stored rather than recomputed so the two phases cannot diverge.
+static uint8_t slot_core[kNStage];
+static uint32_t slot_bytes[kNStage];  // wire bytes per staged frame, prefix included
+
+// Stage one core's frame: write the prefix and control words locally, then
+// gather-read each live run straight to its packed wire offset. The pads bring each
+// destination to its ring phase, so read src == dst (mod 16 B) holds for every
+// piece, including a wrap split, whose continuation is congruent because the ring
+// capacity is a multiple of the alignment.
+__attribute__((noinline)) uint32_t
+issue_core(volatile tt_l1_ptr uint32_t* coords, uint32_t cv_src, uint32_t c, uint32_t sl) {
+    const uint32_t slot = kStageBase + sl * kSlotBytes;
+    const uint32_t xy = coords[c];
+    const tt_l1_ptr uint32_t* __restrict tails =
+        reinterpret_cast<const tt_l1_ptr uint32_t*>(kCvBase + c * kCvReadBytes);
+    volatile tt_l1_ptr uint32_t* __restrict cv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
+    // The head advance is staged here, hidden behind the NIU's acceptance of the same
+    // lane's gather read; after the batch barrier only the posted head write remains on
+    // the release path. Safe because nothing reads the scratch between issue and that
+    // barrier.
+    volatile tt_l1_ptr uint32_t* __restrict heads = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(head_scratch(c));
+    uint32_t off = kPrefix + kWireCtrl;
+    uint32_t peak = 0;
+    uint32_t reads = 0;
+    ncrisc_noc_read_set_state<DM_DEDICATED_NOC, false, false>(kReadNoc, read_cmd_buf, core_noc[c]);
+    // The per-lane walk stays a loop, unlike the scan: lane r's bookkeeping hides
+    // behind lane r-1's NIU acceptance, and unrolling front-loaded it against every
+    // issue and measurably regressed.
+    for (uint32_t r = 0; r < kNumRisc; r++) {
+        const uint32_t tail = tails[r];
+        const uint32_t head = heads[r];
+        const uint32_t take = tail - head;
+        const uint32_t start = head;
+        heads[r] = head + take;
+        if (take > peak) {
+            peak = take;
+        }
+        cv[kernel_profiler::SPSC_WIRE_HEAD_0 + r] = start;
+        cv[kernel_profiler::SPSC_WIRE_TAIL_0 + r] = tail;
+        if (take == 0) {
+            continue;
+        }
+        const bool img = kernel_profiler::spsc_span_wrap_image(start, take, kRingWords);
+        off += kernel_profiler::spsc_span_pack_pad(img ? 0u : start, off);
+        const uint32_t ring_src = cv_src + (kCtrlWords + r * kRingWords) * 4u;
+        const uint32_t hm = start & (kRingWords - 1u);
+        if (img) {
+            // A near-full wrapping run ships as its whole ring image in one read
+            // (the decoder linearises by head with the same predicate). Never coalesce
+            // adjacent ring images into one read: it starves the producer's L1 port,
+            // up to ~70x the stall floor at five rings per read.
+            ncrisc_noc_read_with_state<DM_DEDICATED_NOC, false, false>(
+                kReadNoc, read_cmd_buf, ring_src, slot + off * 4u, kRingWords * 4u);
+            off += kRingWords;
+            reads++;
+        } else if (hm + take > kRingWords) {
+            // A small wrapping run ships as the two-piece split, byte-exact: at
+            // sustained rates the image's dead remainder is most of the ring, and
+            // there the drain, not the sweep, is the binding resource.
+            const uint32_t first = kRingWords - hm;
+            ncrisc_noc_read_with_state<DM_DEDICATED_NOC, false, false>(
+                kReadNoc, read_cmd_buf, ring_src + hm * 4u, slot + off * 4u, first * 4u);
+            ncrisc_noc_read_with_state<DM_DEDICATED_NOC, false, false>(
+                kReadNoc, read_cmd_buf, ring_src, slot + (off + first) * 4u, (take - first) * 4u);
+            off += take;
+            reads += 2;
+        } else {
+            ncrisc_noc_read_with_state<DM_DEDICATED_NOC, false, false>(
+                kReadNoc, read_cmd_buf, ring_src + hm * 4u, slot + off * 4u, take * 4u);
+            off += take;
+            reads++;
+        }
+    }
+    cv[kernel_profiler::SPSC_WIRE_XY] = xy;
+    // pfx[0] is constant and staged once at init; only the payload word varies.
+    volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
+    pfx[1] = off - kPrefix;
+    slot_bytes[sl] = off * 4u;
+    slot_core[sl] = static_cast<uint8_t>(c);
+    noc_reads_num_issued[kReadNoc] += reads;
+    return peak;
+}
+
 void kernel_main() {
     const uint32_t num_cores = get_arg_val<uint32_t>(0);
     const uint32_t cv_src = get_arg_val<uint32_t>(1);  // profiler_msg_t base on every worker
     volatile tt_l1_ptr uint32_t* coords = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(2));
-    // Per-core NoC address of the profiler control block, computed once: get_noc_addr's coordinate
-    // arithmetic would otherwise run at every issue site of a sweep that is instruction-stream
-    // bound.
-    static uint64_t core_noc[kMaxCores];
     for (uint32_t i = 0; i < num_cores; i++) {
         const uint32_t xy = coords[i];
         core_noc[i] = get_noc_addr(xy & 0xFFFFu, xy >> 16, cv_src);
@@ -192,17 +281,15 @@ void kernel_main() {
     static uint32_t tails_seen[kMaxCores];
     static uint8_t hot[kMaxCores];        // shipped real words last scan; hot + empty scan = publish lag
     static uint8_t ship_list[kMaxCores];  // this sweep's ship set, dense core indices
-    // Per-slot frame geometry, written at gather issue and consumed a whole batch later by the
-    // ship. Stored rather than recomputed so the two phases cannot diverge.
-    static uint8_t slot_core[kNStage];
-    static uint32_t slot_bytes[kNStage];  // wire bytes per staged frame, prefix included
     for (uint32_t i = 0; i < num_cores; i++) {
         hot[i] = 0;
     }
     // Seed the heads from the tails as they stand now: everything published before this launch
     // predates the capture. The scratch is the only copy of the heads: the scan reads it, the
     // issue advances it, and the posted head write ships it.
-    cv_wave(core_noc, 0, num_cores, NOC_STATUS_READ_REG(kReadNoc, NIU_MST_RD_RESP_RECEIVED), num_cores);
+    const uint32_t rd_seed = NOC_STATUS_READ_REG(kReadNoc, NIU_MST_RD_RESP_RECEIVED);
+    cv_issue(core_noc, 0, num_cores);
+    cv_wait(rd_seed, num_cores);
     for (uint32_t c = 0; c < num_cores; c++) {
         const tt_l1_ptr uint32_t* tails = reinterpret_cast<const tt_l1_ptr uint32_t*>(kCvBase + c * kCvReadBytes);
         volatile tt_l1_ptr uint32_t* heads = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(head_scratch(c));
@@ -223,6 +310,10 @@ void kernel_main() {
     // defer only after kBatchArmSweeps consecutive growing sweeps, flush after kFlushQuietSweeps
     // dead ones.
     bool grid_busy = false;
+    // Saturation shortcut: once a sweep shipped every core with real words above the ship threshold,
+    // the scan is pure overhead and the first batch's tails age through it, so the whole grid ships
+    // in list order off the per-batch refreshes until a core comes back empty or under the threshold.
+    bool all_live = false;
     uint32_t grow_streak = 0;
     uint32_t quiet_streak = 0;
     constexpr uint32_t kBatchArmSweeps = 3;
@@ -250,16 +341,15 @@ void kernel_main() {
         if (count == 0) {
             return;
         }
+        // Frames occupy whole pages on the wire, dead tail bytes included, so the FIFO write pointer
+        // and the spool offset advance in lockstep and the drain needs no frame geometry at all.
+        uint32_t len[kGenSlots];
+        uint32_t bytes = 0;
+        for (uint32_t f = 0; f < count; f++) {
+            len[f] = page_round(slot_bytes[start + f]);
+            bytes += len[f];
+        }
         if constexpr (kSpool) {
-            // Whole page-rounded frames, dead tail bytes included: the spool offset then advances
-            // in lockstep with the FIFO write pointer, so the spool is a byte-exact image of the
-            // wire and the drain needs no frame geometry at all.
-            uint32_t len[kGenSlots];
-            uint32_t bytes = 0;
-            for (uint32_t f = 0; f < count; f++) {
-                len[f] = page_round(slot_bytes[start + f]);
-                bytes += len[f];
-            }
             // Full spool: pump until there is room. This wait, not a drop, is the spool's
             // back-pressure -- frames stay safe in staging, the sweep slows, producers stall.
             // It holds through quiesce; only the kill switch breaks it.
@@ -288,30 +378,25 @@ void kernel_main() {
                 pump.append(fsrc, piece);
             }
             pump.rebalance();
-            return;
-        }
-        // Direct push: reserve host FIFO credit, then write the frames straight to the host.
-        uint32_t npages = 0;
-        for (uint32_t f = 0; f < count; f++) {
-            npages += page_round(slot_bytes[start + f]) / kPageBytes;
-        }
-        asm volatile("fence" ::: "memory");
-        if (!reserve_pages(sender, npages, stop)) {
-            killed = true;
-            return;
-        }
-        const uint32_t fifo_size = sender.downstream_fifo_curr_size;
-        uint32_t wr = sender.write_ptr;
-        for (uint32_t f = 0; f < count; f++) {
-            const uint32_t bytes = slot_bytes[start + f];
-            push_fifo(sender, kStageBase + (start + f) * kSlotBytes, wr, bytes);
-            wr += page_round(bytes);
-            if (wr >= fifo_size) {
-                wr -= fifo_size;
+        } else {
+            // Direct push: reserve host FIFO credit, then write the frames straight to the host.
+            asm volatile("fence" ::: "memory");
+            if (!reserve_pages(sender, bytes / kPageBytes, stop)) {
+                killed = true;
+                return;
             }
+            const uint32_t fifo_size = sender.downstream_fifo_curr_size;
+            uint32_t wr = sender.write_ptr;
+            for (uint32_t f = 0; f < count; f++) {
+                push_fifo(sender, kStageBase + (start + f) * kSlotBytes, wr, slot_bytes[start + f]);
+                wr += len[f];
+                if (wr >= fifo_size) {
+                    wr -= fifo_size;
+                }
+            }
+            socket_push_pages(sender, bytes / kPageBytes);
+            notify_bytes_sent(sender);
         }
-        socket_push_pages(sender, npages);
-        notify_bytes_sent(sender);
     };
 
     // Main loop. On stop=1, keep sweeping until one whole sweep moves nothing, so markers still in
@@ -347,109 +432,7 @@ void kernel_main() {
         uint32_t pend_n = 0;
         bool have_pend = false;
         uint32_t n_ship = 0;
-
-        const uint32_t cv_chunk = num_cores < kGenSlots * 2u ? num_cores : kGenSlots * 2u;
-        const uint32_t rd0 = NOC_STATUS_READ_REG(kReadNoc, NIU_MST_RD_RESP_RECEIVED);
-        // Responses can arrive out of order, so a counted response may belong to a
-        // later core -- a chunk core then scans last sweep's tails, which are stale but
-        // valid (tails are monotonic): it under-ships and catches up next visit.
-        // Only the first chunk's CVs are read here; the rest of the grid's are issued
-        // at the refill pause, mid-sweep, so the late scan sees tails fresh enough to
-        // catch a core that started producing in this very sweep.
-        cv_wave(core_noc, 0, cv_chunk, rd0, cv_chunk);
-        uint32_t scan_lo = 0;
-        uint32_t scan_hi = cv_chunk;
-        // Stage one core's frame: write the prefix and control words locally, then
-        // gather-read each live run straight to its packed wire offset. The pads bring each
-        // destination to its ring phase, so read src == dst (mod 16 B) holds for every
-        // piece, including a wrap split, whose continuation is congruent because the ring
-        // capacity is a multiple of the alignment.
-        auto issue_core = [&](uint32_t c, uint32_t sl) {
-            const uint32_t slot = kStageBase + sl * kSlotBytes;
-            const uint32_t xy = coords[c];
-            const tt_l1_ptr uint32_t* __restrict tails =
-                reinterpret_cast<const tt_l1_ptr uint32_t*>(kCvBase + c * kCvReadBytes);
-            volatile tt_l1_ptr uint32_t* __restrict cv =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
-            // The head advance is staged here, hidden behind the NIU's acceptance of the same
-            // lane's gather read; after the batch barrier only the posted head write remains on
-            // the release path. Safe because nothing reads the scratch between issue and that
-            // barrier.
-            volatile tt_l1_ptr uint32_t* __restrict heads =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(head_scratch(c));
-            uint32_t live = 0;
-            uint32_t off = kPrefix + kWireCtrl;
-            ncrisc_noc_read_set_state<DM_DEDICATED_NOC, false, false>(kReadNoc, read_cmd_buf, core_noc[c]);
-            // The per-lane walk stays a loop, unlike the scan: lane r's bookkeeping hides
-            // behind lane r-1's NIU acceptance, and unrolling front-loaded it against every
-            // issue and measurably regressed.
-            for (uint32_t r = 0; r < kNumRisc; r++) {
-                const uint32_t tail = tails[r];
-                const uint32_t head = heads[r];
-                uint32_t run = tail - head;
-                if (run > kRingWords) {
-                    run = kRingWords;
-                }
-                const uint32_t start = tail - run;
-                // Frames cap at the slot's payload capacity in whole lanes only: a
-                // published tail is a packet boundary but an arbitrary word count is not,
-                // and clamping mid-run split packets across frames and corrupted the lane
-                // stream.
-                uint32_t take = run;
-                uint32_t pad = 0;
-                const bool img = kernel_profiler::spsc_span_wrap_image(start, take, kRingWords);
-                if (take != 0) {
-                    pad = kernel_profiler::spsc_span_pack_pad(img ? 0u : start, off);
-                    const uint32_t used = off - (kPrefix + kWireCtrl);
-                    const uint32_t room = kPayloadCapWords > used + pad ? kPayloadCapWords - used - pad : 0;
-                    // A ring-image ship occupies the whole ring in the slot, not its extent.
-                    const uint32_t need = img ? kRingWords : take;
-                    if (need > room) {
-                        take = 0;
-                        pad = 0;
-                    }
-                }
-                heads[r] = head + take;
-                live += take;
-                cv[kernel_profiler::SPSC_WIRE_HEAD_0 + r] = start;
-                cv[kernel_profiler::SPSC_WIRE_TAIL_0 + r] = start + take;
-                if (take == 0) {
-                    continue;
-                }
-                off += pad;
-                const uint32_t ring_src = cv_src + (kCtrlWords + r * kRingWords) * 4u;
-                const uint32_t hm = start & (kRingWords - 1u);
-                if (img) {
-                    // A near-full wrapping run ships as its whole ring image in one read
-                    // (the decoder linearises by head with the same predicate). Never coalesce
-                    // adjacent ring images into one read: it starves the producer's L1 port,
-                    // up to ~70x the stall floor at five rings per read.
-                    ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, false>(
-                        kReadNoc, read_cmd_buf, ring_src, slot + off * 4u, kRingWords * 4u);
-                    off += kRingWords;
-                } else if (hm + take > kRingWords) {
-                    // A small wrapping run ships as the two-piece split, byte-exact: at
-                    // sustained rates the image's dead remainder is most of the ring, and
-                    // there the drain, not the sweep, is the binding resource.
-                    const uint32_t first = kRingWords - hm;
-                    ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, false>(
-                        kReadNoc, read_cmd_buf, ring_src + hm * 4u, slot + off * 4u, first * 4u);
-                    ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, false>(
-                        kReadNoc, read_cmd_buf, ring_src, slot + (off + first) * 4u, (take - first) * 4u);
-                    off += take;
-                } else {
-                    ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, false>(
-                        kReadNoc, read_cmd_buf, ring_src + hm * 4u, slot + off * 4u, take * 4u);
-                    off += take;
-                }
-            }
-            cv[kernel_profiler::SPSC_WIRE_XY] = xy;
-            // pfx[0] is constant and staged once at init; only the payload word varies.
-            volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
-            pfx[1] = off - kPrefix;
-            slot_bytes[sl] = off * 4u;
-            slot_core[sl] = static_cast<uint8_t>(c);
-        };
+        uint32_t min_peak = ~0u;
 
         // Heads go out the moment the batch's read barrier passes, not with the frame
         // emit: the payload is resident in staging once the reads land, so the producer's
@@ -469,9 +452,49 @@ void kernel_main() {
             gen_shipped[g] = true;
         };
 
-        uint32_t cur = 0;
-        while (true) {
-            for (uint32_t c = scan_lo; c < scan_hi; c++) {
+        // Staging reuse: generation g's previous frame must be out of staging before its slots
+        // refill. gen_shipped persists across sweeps, so a sweep's last ship is never waited on
+        // inside its own sweep.
+        auto retire_gen = [&](uint32_t g) {
+            if (gen_shipped[g]) {
+                // Bare waits: both predicates complete on this device alone (the DMA
+                // engine's writes to GDDR, the NIU's sent counter), so no consumer
+                // state can hang them. Host-gated waits keep their bounds.
+                if constexpr (kSpool) {
+                    // This generation's ship writes only: stream completion is FIFO,
+                    // so outstanding <= later-issues means this generation retired.
+                    const uint32_t since = pump.dma_issued - gen_dma_mark[g];
+                    const uint32_t cap = since > kDmaOutstandingMax ? kDmaOutstandingMax : since;
+                    while (experimental::dma_get_writes_outstanding(kDmaShip) > cap) {
+                    }
+                } else {
+                    // Sent-only is legal here because the staging slots' next writer is
+                    // this core's own NIU read responses.
+                    while (!ncrisc_noc_nonposted_writes_sent(NOC_INDEX)) {
+                    }
+                }
+                gen_shipped[g] = false;
+            }
+        };
+
+        if (all_live) {
+            n_ship = num_cores;
+            if constexpr (kLaneShipWords != 0) {
+                sweep_grew = true;
+            }
+        } else {
+            const uint32_t rd0 = NOC_STATUS_READ_REG(kReadNoc, NIU_MST_RD_RESP_RECEIVED);
+            // Every core's tails are read up front. Responses can arrive out of order, so a counted
+            // response may belong to a later core -- that core then scans last sweep's tails, which
+            // are stale but valid (tails are monotonic): it under-ships and catches up next visit.
+            cv_issue(core_noc, 0, num_cores);
+            // The previous sweep's last ship is still retiring out of the generation this sweep's
+            // first batch refills. Its wait rides under the tail reads' round trip here, not between
+            // those tails landing and the first batch's issue: the batch whose tails age the most is
+            // the batch whose producers stall.
+            retire_gen(gen);
+            cv_wait(rd0, num_cores);
+            for (uint32_t c = 0; c < num_cores; c++) {
                 const tt_l1_ptr uint32_t* __restrict tails =
                     reinterpret_cast<const tt_l1_ptr uint32_t*>(kCvBase + c * kCvReadBytes);
                 const tt_l1_ptr uint32_t* __restrict mine =
@@ -484,34 +507,34 @@ void kernel_main() {
                 const uint32_t d2 = tails[2] - mine[2];
                 const uint32_t d3 = tails[3] - mine[3];
                 const uint32_t d4 = tails[4] - mine[4];
-                const uint32_t c0 = d0 > kRingWords ? kRingWords : d0;  // overflow is counted at issue
-                const uint32_t c1 = d1 > kRingWords ? kRingWords : d1;
-                const uint32_t c2 = d2 > kRingWords ? kRingWords : d2;
-                const uint32_t c3 = d3 > kRingWords ? kRingWords : d3;
-                const uint32_t c4 = d4 > kRingWords ? kRingWords : d4;
-                const uint32_t live = c0 + c1 + c2 + c3 + c4;
+                // No clamp: a producer blocks 506 words past the head it sees, and the mirror is
+                // never behind that head, so no lane's diff can exceed the ring.
+                const uint32_t live = d0 | d1 | d2 | d3 | d4;
                 uint32_t grew = 0;
+                uint32_t peak = 0;
+                // With the ship gate open every live core ships, so nothing downstream reads the
+                // peak or the growth.
                 if constexpr (kLaneShipWords != 0) {
                     const uint32_t tsum = tails[0] + tails[1] + tails[2] + tails[3] + tails[4];
                     grew = tsum - tails_seen[c];
                     tails_seen[c] = tsum;
                     sweep_grew |= grew != 0;
-                }
-                uint32_t peak = c0;
-                if (c1 > peak) {
-                    peak = c1;
-                }
-                if (c2 > peak) {
-                    peak = c2;
-                }
-                if (c3 > peak) {
-                    peak = c3;
-                }
-                if (c4 > peak) {
-                    peak = c4;
-                }
-                if (peak > sweep_peak) {
-                    sweep_peak = peak;
+                    peak = d0;
+                    if (d1 > peak) {
+                        peak = d1;
+                    }
+                    if (d2 > peak) {
+                        peak = d2;
+                    }
+                    if (d3 > peak) {
+                        peak = d3;
+                    }
+                    if (d4 > peak) {
+                        peak = d4;
+                    }
+                    if (peak > sweep_peak) {
+                        sweep_peak = peak;
+                    }
                 }
                 if (live == 0) {
                     // A hot core scanning empty is almost always the producer's 64-word batched
@@ -539,104 +562,84 @@ void kernel_main() {
                 hot[c] = 1;
                 ship_list[n_ship++] = static_cast<uint8_t>(c);
             }
-            scan_lo = scan_hi;
+        }
 
-            while (cur < n_ship) {
-                // Refill the ship list before it runs dry: the per-batch tail refresh below
-                // only covers cores already on the list, so a batch issued right after a
-                // dry-out scan would consume tails a whole sweep stale.
-                if (scan_hi < num_cores && n_ship - cur <= kGenSlots) {
-                    break;
+        uint32_t cur = 0;
+        while (cur < n_ship) {
+            retire_gen(gen);
+            uint32_t n = 0;
+            uint32_t slots = 0;
+            while (slots < kGenSlots && cur < n_ship) {
+                const uint32_t pk = issue_core(coords, cv_src, ship_list[cur], gen * kGenSlots + slots);
+                if (pk < min_peak) {
+                    min_peak = pk;
                 }
+                cur++;
+                n++;
+                slots++;
+            }
+            // Refresh the next batch's tails in the same flight: on the sweep-start
+            // snapshot alone the last cores would be served a sweep stale, and the
+            // scan-order-last core took all the stalls. This generation's read barrier
+            // covers these reads too. A full list's last batch refreshes the next sweep's first
+            // batch instead, so a saturated sweep opens on the issue with no wave of its own.
+            uint32_t nn = n_ship - cur;
+            uint32_t ri = cur;
+            if (nn > kGenSlots) {
+                nn = kGenSlots;
+            } else if (nn == 0 && n_ship == num_cores) {
+                nn = num_cores < kGenSlots ? num_cores : kGenSlots;
+                ri = 0;
+            }
+            for (uint32_t i = 0; i < nn; i++) {
+                const uint32_t c = ship_list[ri + i];
+                ncrisc_noc_read_set_state<DM_DEDICATED_NOC, false, false>(kReadNoc, read_cmd_buf, core_noc[c]);
+                ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, false>(
+                    kReadNoc, read_cmd_buf, cv_src + kCvReadSrcOff, kCvBase + c * kCvReadBytes, kCvReadBytes);
+            }
 
-                // This generation's previous ship must be out of staging before its slots
-                // refill. gen_shipped persists across sweeps, so a sweep's last ship is never
-                // waited on inside its own sweep -- this is the wait that catches it if the
-                // pace gap has not already drained it.
-                if (gen_shipped[gen]) {
-                    // Bare waits: both predicates complete on this device alone (the DMA
-                    // engine's writes to GDDR, the NIU's sent counter), so no consumer
-                    // state can hang them. Host-gated waits keep their bounds.
-                    if constexpr (kSpool) {
-                        // This generation's ship writes only: stream completion is FIFO,
-                        // so outstanding <= later-issues means this generation retired.
-                        const uint32_t since = pump.dma_issued - gen_dma_mark[gen];
-                        const uint32_t cap = since > kDmaOutstandingMax ? kDmaOutstandingMax : since;
-                        while (experimental::dma_get_writes_outstanding(kDmaShip) > cap) {
-                        }
-                    } else {
-                        // Sent-only is legal here because the staging slots' next writer is
-                        // this core's own NIU read responses.
-                        while (!ncrisc_noc_nonposted_writes_sent(NOC_INDEX)) {
-                        }
-                    }
-                    gen_shipped[gen] = false;
+            // The overlap: the previous batch ships on the egress side while this batch's
+            // gather reads fly on the read NoC.
+            if (have_pend) {
+                ship_frames(pend_n, prev_gen(gen));
+            }
+            if constexpr (kSpool) {
+                if (pump.level >= 3u) {
+                    pump.pass();
                 }
+            }
 
-                uint32_t n = 0;
-                uint32_t slots = 0;
-                while (slots < kGenSlots && cur < n_ship) {
-                    issue_core(ship_list[cur], gen * kGenSlots + slots);
-                    cur++;
-                    n++;
-                    slots++;
-                }
-                // Refresh the next batch's tails in the same flight: on the sweep-start
-                // snapshot alone the last cores would be served a sweep stale, and the
-                // scan-order-last core took all the stalls. This generation's read barrier
-                // covers these reads too.
-                const uint32_t nn = (n_ship - cur) < kGenSlots ? (n_ship - cur) : kGenSlots;
-                for (uint32_t i = 0; i < nn; i++) {
-                    const uint32_t c = ship_list[cur + i];
-                    ncrisc_noc_read_set_state<DM_DEDICATED_NOC, false, false>(kReadNoc, read_cmd_buf, core_noc[c]);
-                    ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, false>(
-                        kReadNoc, read_cmd_buf, cv_src + kCvReadSrcOff, kCvBase + c * kCvReadBytes, kCvReadBytes);
-                }
-
-                // The overlap: the previous batch ships on the egress side while this batch's
-                // gather reads fly on the read NoC.
-                if (have_pend) {
-                    ship_frames(pend_n, prev_gen(gen));
-                }
+            // Read barrier before the heads go out. The spin doubles as the pump's slot
+            // -- cycles the core burns anyway -- but only at full pressure: below it
+            // the pump's GDDR reads contend with the ship DMA and the landing gathers.
+            while (!ncrisc_noc_reads_flushed(kReadNoc)) {
                 if constexpr (kSpool) {
+                    // Level 3 means occupancy is over the 5/8 line, so nonempty holds.
                     if (pump.level >= 3u) {
                         pump.pass();
                     }
                 }
-
-                // Read barrier before the heads go out. The spin doubles as the pump's slot
-                // -- cycles the core burns anyway -- but only at full pressure: below it
-                // the pump's GDDR reads contend with the ship DMA and the landing gathers.
-                while (!ncrisc_noc_reads_flushed(kReadNoc)) {
-                    if constexpr (kSpool) {
-                        // Level 3 means occupancy is over the 5/8 line, so nonempty holds.
-                        if (pump.level >= 3u) {
-                            pump.pass();
-                        }
-                    }
-                }
-                invalidate_l1_cache();
-                advance_heads(n, gen);
-
-                pend_n = n;
-                have_pend = true;
-                gen = gen + 1u == kNGens ? 0u : gen + 1u;
             }
-            if (cur >= n_ship && scan_hi >= num_cores) {
-                if (have_pend) {
-                    ship_frames(pend_n, prev_gen(gen));
-                    have_pend = false;
-                }
-                break;
-            }
-            // The rest of the grid's CV reads issue HERE, mid-sweep, not at sweep start:
-            // the late scan runs mid-sweep either way, and sweep-start data maximizes the
-            // staleness of exactly the cores scanned last. Read now, their tails can show a
-            // core that started producing during this sweep, cutting the join blind window by
-            // most of a sweep. Same reads, later timing.
-            cv_wave(core_noc, scan_hi, num_cores, rd0, num_cores);
-            scan_hi = num_cores;
+            invalidate_l1_cache();
+            advance_heads(n, gen);
+
+            pend_n = n;
+            have_pend = true;
+            gen = gen + 1u == kNGens ? 0u : gen + 1u;
         }
+        if (have_pend) {
+            ship_frames(pend_n, prev_gen(gen));
+            have_pend = false;
+        }
+        // Enter only when the scan would have shipped every core anyway: all on the list, none empty,
+        // none under the ship threshold. A core dropping below either leaves the mode.
+        const bool next = n_ship == num_cores && min_peak != 0 && min_peak >= kLaneShipWords;
+        if (next && !all_live) {
+            for (uint32_t c = 0; c < num_cores; c++) {
+                ship_list[c] = static_cast<uint8_t>(c);
+            }
+        }
+        all_live = next;
 
         // Every issued batch has passed its read barrier by here, so each core's scratch is exactly
         // the head it was last relieved to.
@@ -684,7 +687,7 @@ void kernel_main() {
             const uint64_t until = get_timestamp() + gap;
             while (get_timestamp() < until) {
                 if constexpr (kSpool) {
-                    pump.pass();  // idle time is drain time
+                    pump.pass_cold();  // idle time is drain time
                 }
             }
         }
@@ -694,7 +697,7 @@ void kernel_main() {
     // pass; bounded, so a consumer that stopped acking strands bytes instead of wedging teardown.
     if constexpr (kSpool) {
         while (!pump.drained()) {
-            pump.pass();
+            pump.pass_cold();
             // Notify per pass, not per sweep: with a host FIFO smaller than the backlog, the
             // acks that free credit only come after the host has seen the bytes.
             pump.notify();
