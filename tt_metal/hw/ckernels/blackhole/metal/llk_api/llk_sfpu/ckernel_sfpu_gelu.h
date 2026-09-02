@@ -430,8 +430,51 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -13.375
 
-    // For x >= 3.1719, output saturates to 1 (verified saturation threshold)
-    v_if(x >= 3.1719f) { result = 1.0f; }
+    // For x >= 3.1719, GELU'(x) rounds to exactly 1 in BF16, so BF16 can saturate
+    // here. FP32 cannot: GELU'(3.1719) = 1.00751, and GELU' does not reach 1.0f
+    // until x ~= 5.911, so saturating at 3.1719 truncates the hump by 7.5e-3
+    // (~63,000 fp32 eps) and puts a step discontinuity in a smooth function --
+    // which lands directly in the gradient, since gelu_bw computes
+    // grad_out * GELU'(input).
+    //
+    // The reflection GELU'(x) + GELU'(-x) = 1 lets the existing negative-tail
+    // machinery serve the positive tail: GELU'(x) = 1 - [(-x)*phi(x) * mills(x)].
+    // Measured against the exact GELU' in fp32, that form is 142 eps at 3.1719 and
+    // under 3 eps from x=4 on, versus the polynomial's 5,350 eps already at 3.3 --
+    // so 3.1719 is also where the two cross, and stays the right boundary.
+    v_if(x >= 3.1719f) {
+        if constexpr (is_fp32_dest_acc_en) {
+            // Mirror of the negative branch's 13.375 cutoff. Past it the
+            // correction is below one fp32 ulp of 1.0 anyway, and computing it
+            // would be actively unsafe: x*x overflows to inf for x >= 1.85e19,
+            // making t = -inf and feeding inf to the helper's round-to-int step.
+            result = 1.0f;
+            v_if(x < 13.375f) {
+                constexpr float INV_SQRT_2PI = 0.3989422804014327f;  // 1/sqrt(2*pi)
+
+                sfpi::vFloat x2 = x * x;
+                sfpi::vFloat t = x2 * (-0.5f);  // t = -x^2/2
+
+                // Reuse the fused (-x) * exp(t) helper: same underflow
+                // protection, and -x < 0 here, which is the sign it is
+                // written for.
+                sfpi::vFloat neg_x_exp = x_times_exp_negative_tail(-x, t);
+
+                if constexpr (APPROXIMATION_MODE) {
+                    result = 1.0f - neg_x_exp * INV_SQRT_2PI;
+                } else {
+                    // Mills ratio correction, matching the negative branch below.
+                    sfpi::vFloat inv_x2 = sfpu_reciprocal_iter<2>(x2);  // 1/x^2
+                    sfpi::vFloat inv_x4 = inv_x2 * inv_x2;              // 1/x^4
+                    sfpi::vFloat correction = 1.0f - inv_x2 + inv_x4;
+                    result = 1.0f - neg_x_exp * INV_SQRT_2PI * correction;
+                }
+            }
+            v_endif;
+        } else {
+            result = 1.0f;
+        }
+    }
     // Core region [-3, 3.1719]: GELU'(x) = 0.5 + x * h(x²)
     // Odd-function decomposition: GELU'(x) + GELU'(-x) = 1, so GELU'(x) - 0.5
     // is odd and can be written as x * h(x²). Degree-8 in u=x² (~12 ops vs ~32).
