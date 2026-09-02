@@ -24,6 +24,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include <enchantum/enchantum.hpp>
@@ -78,6 +79,105 @@ void report_result(const string& target_name, string_view op, const string& cmd,
     } else if (!result) {
         TT_THROW("Failed to open {} failure log file {}", op, log_file);
     }
+}
+
+// Opt-in precompiled headers for TRISC kernel targets (TT_METAL_JIT_PCH=1).
+//
+// trisck.cc re-parses a fixed prelude (see trisc_pch.h) in every TRISC target.
+// That prelude accounts for roughly half of a TRISC target's compile time and is
+// identical across kernels, so precompiling it about halves the compile step.
+//
+// Two GCC constraints shape the implementation:
+//  - A PCH is silently ignored once the first token has been seen, so it must be
+//    force-included ahead of the per-kernel named-ct-arg header.
+//  - GCC validates every command-line macro against the state recorded in the
+//    PCH, whether or not the PCH references that macro. One PCH is therefore
+//    needed per distinct define set, and any define whose value is unique per
+//    kernel must be kept off the command line entirely (see FULL_KERNEL_NAME in
+//    export_target_recipe).
+bool jit_pch_enabled() {
+    static const bool enabled = [] {
+        const char* v = std::getenv("TT_METAL_JIT_PCH");
+        return v != nullptr && *v != '\0' && *v != '0';
+    }();
+    return enabled;
+}
+
+// Path of the umbrella header, relative to the tt-metal root.
+constexpr std::string_view PCH_UMBRELLA_REL = "tt_metal/hw/firmware/src/tt-1xx/trisc_pch.h";
+
+// Returns the header path to force-include for this compile recipe, building the
+// PCH on first use. Returns empty if a PCH is unavailable, in which case the
+// caller simply compiles without one.
+//
+// `defines` must already have any -include pairs stripped, and must otherwise
+// match the compile exactly, or GCC will reject the result.
+std::string ensure_pch(
+    const std::string& gpp,
+    const std::string& root,
+    const std::string& out_root,
+    const std::string& target_name,
+    const std::string& opt_level,
+    const std::string& cflags,
+    const std::string& includes,
+    const std::vector<std::string>& defines) {
+    tt::StableHasher hasher;
+    hasher.update(target_name);
+    hasher.update(opt_level);
+    hasher.update(cflags);
+    hasher.update(includes);
+    for (const auto& define : defines) {
+        hasher.update(define);
+    }
+    const uint64_t key = hasher.digest();
+
+    const fs::path dir = fs::path(out_root) / "pch" / target_name / fmt::format("{:016x}", key);
+    const fs::path header = dir / "trisc_pch.h";
+
+    // One PCH per key, built once per process. The lock is held across the build
+    // so concurrent compiles wait rather than racing on the same output; with a
+    // handful of keys this serializes only a few hundred milliseconds.
+    static std::mutex mutex;
+    static std::unordered_map<uint64_t, bool> built;
+    std::lock_guard lock(mutex);
+    if (auto it = built.find(key); it != built.end()) {
+        return it->second ? header.string() : std::string{};
+    }
+
+    bool ok = false;
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    fs::copy_file(fs::path(root) / PCH_UMBRELLA_REL, header, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        log_warning(
+            tt::LogBuildKernels, "PCH: could not stage {}: {}; compiling without it", header.string(), ec.message());
+    } else {
+        std::vector<std::string> args = tt::jit_build::utils::tokenize_flags(gpp);
+        args.push_back("-" + opt_level);
+        for (auto& tok : tt::jit_build::utils::tokenize_flags(cflags)) {
+            args.push_back(std::move(tok));
+        }
+        for (auto& tok : tt::jit_build::utils::tokenize_flags(includes)) {
+            args.push_back(std::move(tok));
+        }
+        args.insert(args.end(), defines.begin(), defines.end());
+        args.push_back("-x");
+        args.push_back("c++-header");
+        args.push_back(header.string());
+        args.push_back("-o");
+        args.push_back(header.string() + ".gch");
+
+        const std::string log = header.string() + ".gch.log";
+        ok = tt::jit_build::utils::exec_command(args, dir.string(), log);
+        if (ok) {
+            log_info(tt::LogBuildKernels, "PCH: built {} for {}", header.string() + ".gch", target_name);
+        } else {
+            log_warning(
+                tt::LogBuildKernels, "PCH: build failed for {} (log: {}); compiling without it", target_name, log);
+        }
+    }
+    built.emplace(key, ok);
+    return ok ? header.string() : std::string{};
 }
 
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
@@ -671,12 +771,41 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     const std::string obj_temp_path = out_dir + this->temp_objs_[src_index];
     const std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
 
+    std::vector<std::string> defines = recipe.defines;
+    if (jit_pch_enabled() && fs::path(this->srcs_[src_index]).filename() == "trisck.cc") {
+        // The PCH is built from the same recipe minus any force-included headers:
+        // those are per-kernel, and a PCH that consumed them could not be shared.
+        std::vector<std::string> pch_defines;
+        pch_defines.reserve(defines.size());
+        for (size_t i = 0; i < defines.size(); ++i) {
+            if (defines[i] == "-include") {
+                ++i;  // skip the header argument that follows
+                continue;
+            }
+            pch_defines.push_back(defines[i]);
+        }
+        const std::string pch_header = ensure_pch(
+            env_.gpp_,
+            env_.get_root_path(),
+            env_.get_out_root_path(),
+            target_name_,
+            recipe.compiler_opt_level,
+            cflags,
+            recipe.includes,
+            pch_defines);
+        if (!pch_header.empty()) {
+            // Must precede every other -include so no token is seen first.
+            defines.insert(defines.begin(), pch_header);
+            defines.insert(defines.begin(), "-include");
+        }
+    }
+
     std::vector<std::string> args = tt::jit_build::utils::build_gpp_argv(
         env_.gpp_,
         recipe.compiler_opt_level,
         cflags,
         recipe.includes,
-        recipe.defines,
+        defines,
         this->srcs_[src_index],
         tt::jit_build::utils::GppAction::Compile,
         obj_temp_path,
@@ -1004,7 +1133,18 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
         // FULL_KERNEL_NAME: consumed by the LLK sanitizer (CTSTR(FULL_KERNEL_NAME)). Emitted
         // shell-free as one verbatim argv element with literal quotes (the unified/remote-JIT
         // path does no shell expansion).
-        defines.push_back(fmt::format(R"(-DFULL_KERNEL_NAME="{}")", settings->get_full_kernel_name()));
+        //
+        // Its value is unique per kernel, and GCC validates every command-line macro against the
+        // state recorded in a precompiled header even when the PCH never references it. Leaving it
+        // on the command line therefore reduces a shared PCH to a per-kernel one. When the LLK
+        // sanitizer is disabled, sanitizer/output.h supplies a "<unknown>" fallback, so under
+        // TT_METAL_JIT_PCH it can be omitted; with the sanitizer enabled correctness wins and the
+        // define stays (costing PCH reuse).
+        const bool llk_sanitizer_enabled = std::any_of(
+            defines.begin(), defines.end(), [](const std::string& d) { return d.rfind("-DLLK_SAN_ENABLE", 0) == 0; });
+        if (!jit_pch_enabled() || llk_sanitizer_enabled) {
+            defines.push_back(fmt::format(R"(-DFULL_KERNEL_NAME="{}")", settings->get_full_kernel_name()));
+        }
         settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
             if (!values.empty()) {
                 defines.push_back(fmt::format("-DKERNEL_COMPILE_TIME_ARGS={}", fmt::join(values, ",")));
