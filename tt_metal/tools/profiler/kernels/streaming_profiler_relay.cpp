@@ -396,9 +396,6 @@ __attribute__((always_inline)) inline bool host_released(volatile tt_l1_ptr uint
     return *stop == kernel_profiler::kRelayStopRelease;
 }
 
-__attribute__((always_inline)) inline uint32_t core_xy(uint64_t noc_addr) {
-    return static_cast<uint32_t>(noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
-}
 
 __attribute__((always_inline)) inline uint32_t record(uint32_t c) { return kCoreRecords + c * kRecordBytes; }
 
@@ -418,17 +415,17 @@ __attribute__((always_inline)) inline uint32_t heads(uint32_t c) { return record
 
 // Counted, not barriered: in-flight gather responses also bump the counter, which can only hand the scan
 // stale-but-valid tails (tails are monotonic).
-__attribute__((always_inline)) inline void cv_issue(const uint64_t* core_noc, uint32_t c) {
+__attribute__((always_inline)) inline void cv_issue(const uint32_t* core_coord, uint32_t c) {
     while (!noc_cmd_buf_ready(kReadNoc, kCvCmdBuf)) {
     }
-    NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_TARG_ADDR_COORDINATE, core_xy(core_noc[c]));
+    NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_TARG_ADDR_COORDINATE, core_coord[c]);
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_RET_ADDR_LO, record(c));
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 }
 
-__attribute__((always_inline)) inline void cv_issue(const uint64_t* core_noc, uint32_t lo, uint32_t hi) {
+__attribute__((always_inline)) inline void cv_issue(const uint32_t* core_coord, uint32_t lo, uint32_t hi) {
     for (uint32_t i = lo; i < hi; i++) {
-        cv_issue(core_noc, i);
+        cv_issue(core_coord, i);
     }
 }
 
@@ -440,9 +437,9 @@ __attribute__((always_inline)) inline void cv_wait(uint32_t rd0, uint32_t expect
 
 // Posted (the barriers protect staging, which a head write never touches) and on the read NoC, where it does
 // not queue behind frame data and the PCIe tile's acceptance jitter.
-__attribute__((always_inline)) inline void post_heads(const uint64_t* core_noc, uint32_t c) {
+__attribute__((always_inline)) inline void post_heads(const uint32_t* core_coord, uint32_t c) {
     noc_wwrite_with_state<DM_DEDICATED_NOC, kHeadCmdBuf, CQ_NOC_SNdl, CQ_NOC_SEND, CQ_NOC_WAIT, true, true>(
-        kReadNoc, heads(c), core_xy(core_noc[c]), 0);
+        kReadNoc, heads(c), core_coord[c], 0);
 }
 
 // A frame occupies whole socket pages on the wire.
@@ -458,7 +455,8 @@ __attribute__((always_inline)) inline uint32_t frame_bytes(uint32_t slot) {
 
 // Computed once: get_noc_addr's coordinate arithmetic would otherwise run at every issue of an
 // instruction-bound sweep.
-static uint64_t core_noc[kMaxCores];
+// NOC_TARG_ADDR_COORDINATE field of each worker's profiler block, ready to write.
+static uint32_t core_coord[kMaxCores];
 static uint32_t ring_base;  // lane 0's ring on every worker: the control block plus its control words
 
 // Gather-read each live run straight to its packed wire offset; the pads keep read src == dst (mod 16 B) for
@@ -480,7 +478,7 @@ __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n,
         uint32_t peak = 0;
         while (!noc_cmd_buf_ready(kReadNoc, read_cmd_buf)) {
         }
-        NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, core_xy(core_noc[c]));
+        NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, core_coord[c]);
         // Unrolled: the three induction pointers and the split +2048 stride were 5 of the lane's 29 instructions.
         // All three read shapes stay inline: at the knee most runs wrap (P ~ take/512), so none of them is rare.
 #pragma GCC unroll 5
@@ -591,7 +589,7 @@ __attribute__((always_inline)) static inline void zero_stage_prefixes() {
 __attribute__((always_inline)) static inline void seed_heads(
     uint32_t num_cores, volatile tt_l1_ptr uint32_t* coords, uint32_t* tails_seen) {
     const uint32_t rd_seed = NOC_STATUS_READ_REG(kReadNoc, NIU_MST_RD_RESP_RECEIVED);
-    cv_issue(core_noc, 0, num_cores);
+    cv_issue(core_coord, 0, num_cores);
     cv_wait(rd_seed, num_cores);
     for (uint32_t c = 0; c < num_cores; c++) {
         volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(record(c));
@@ -659,7 +657,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* coords = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(2));
     for (uint32_t i = 0; i < num_cores; i++) {
         const uint32_t xy = coords[i];
-        core_noc[i] = get_noc_addr(xy & 0xFFFFu, xy >> 16, cv_src);
+        const uint64_t noc_addr = get_noc_addr(xy & 0xFFFFu, xy >> 16, cv_src);
+        core_coord[i] = static_cast<uint32_t>(noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
     }
     // The NoC counter mirrors persist across launches on this never-reset core; a previous run's unacked
     // writes would wedge the first barrier.
@@ -795,7 +794,7 @@ void kernel_main() {
         // free. A lambda on purpose: written inline, issue_batch picks up a spill per core.
         auto advance_heads = [&](uint32_t n, const uint8_t* cores) __attribute__((always_inline)) {
             for (uint32_t i = 0; i < n; i++) {
-                post_heads(core_noc, cores[i]);
+                post_heads(core_coord, cores[i]);
                 relieved++;
             }
         };
@@ -829,7 +828,7 @@ void kernel_main() {
             const uint32_t rd0 = NOC_STATUS_READ_REG(kReadNoc, NIU_MST_RD_RESP_RECEIVED);
             // Responses can arrive out of order; a core counted early scans last sweep's tails (stale but valid),
             // under-ships, and catches up next visit.
-            cv_issue(core_noc, 0, num_cores);
+            cv_issue(core_coord, 0, num_cores);
             // The previous sweep's last ship retires under the tail reads' round trip, not between the tails landing
             // and the first issue: the batch whose tails age most is the batch whose producers stall.
             retire_gen(gen);
@@ -918,7 +917,7 @@ void kernel_main() {
                     ri = 0;
                 }
                 for (uint32_t i = 0; i < nn; i++) {
-                    cv_issue(core_noc, ship_list[ri + i]);
+                    cv_issue(core_coord, ship_list[ri + i]);
                 }
             }
 
@@ -970,7 +969,7 @@ void kernel_main() {
         // Every issued batch has passed its read barrier, so each scratch is exactly the head it was relieved to.
         if ((sweeps & (kHeadRefreshSweeps - 1u)) == 0) {
             for (uint32_t c = 0; c < num_cores; c++) {
-                post_heads(core_noc, c);
+                post_heads(core_coord, c);
             }
         }
         // Busy sweeps below the first band skip the post-sweep pump: a capture that fits the spool gets pure gather.
