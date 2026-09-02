@@ -6445,7 +6445,6 @@ def _ceiling_armed(target, rep: dict) -> tuple:
     return True, ""
 
 
-@mcp.tool()
 def _stage_of_op(op, profile) -> str:
     """Which stage this op costs the most in, read from the capture, or "" when it cannot say.
 
@@ -6460,9 +6459,12 @@ def _stage_of_op(op, profile) -> str:
     because that is the stage where fixing it pays. Ties and unattributable ops return "", and the
     caller behaves exactly as it did before the field existed.
 
-    Matching prefers the fuller signature the target carries (op code plus shape) and falls back to
-    the code alone, so a target named by shape is not lost. Stage names come from the capture's own
-    marks -- never a name this tool typed.
+    Matched on the WHOLE name, never on a prefix. The target carries a bare op code, so a prefix test
+    buys nothing and costs correctness: real op codes nest -- MorehSoftmaxOp is a prefix of
+    MorehSoftmaxOpParallelizationStrategy -- and a prefix match would pool two different ops and
+    hand back whichever stage the other one is heaviest in. A target that ever carries code plus
+    shape still matches its own entry exactly. Stage names come from the capture's own marks --
+    never a name this tool typed.
     """
     try:
         want = str(op or "").strip()
@@ -6477,7 +6479,7 @@ def _stage_of_op(op, profile) -> str:
                         continue
                     shape = str((o or {}).get("shape") or "").strip()
                     full = ("%s %s" % (code, shape)).strip()
-                    if want in (code, full) or want.startswith(full) or want.startswith(code):
+                    if want == code or want == full:
                         by_stage[str(stage)] = by_stage.get(str(stage), 0.0) + float((o or {}).get("device_ms") or 0.0)
         if not by_stage:
             return ""
@@ -6508,6 +6510,7 @@ def _stage_gap_share(profile) -> dict:
     return out
 
 
+@mcp.tool()
 def termination_check() -> dict:
     """THE BINDING STOP GATE and SOLE authority on 'optimize more or not' — you may declare DONE ONLY
     when this returns can_stop=true. It decides PURELY from its own deterministic measurement (the
