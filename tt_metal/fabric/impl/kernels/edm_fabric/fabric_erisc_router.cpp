@@ -761,17 +761,13 @@ FORCE_INLINE void forward_to_local_destination(
 // ============================================================================
 // 2D action-map routing — admit/forward dispatch
 // ============================================================================
-// Each LIVE slot tests the action bit for fwd_dirs<MY_DIR>()[slot] directly. pack_fwd_key was
-// the dense 4-bit key for the old 32-arm switch; the linear scan does not need it, and packing
-// on N/S was four ALU ops that then retested ACTION_EAST/WEST. LOCAL_DELIVER stays outside the
-// scan. Admission must succeed for every selected LIVE output before any copy is committed;
-// each selected output then receives an identical packet image, local delivery last.
+// Test each action bit directly against fwd_dirs<MY_DIR>()'s LIVE slots. Admission must succeed for
+// every selected output before any copy is committed; each receives an identical packet image, with
+// local delivery last.
 //
-// Dispatch is a linear scan over compile-time LIVE slots rather than a 32-arm switch: GCC jump
-// tables for this ELF land in ERISC_APP_KERNEL_DATA at 0xEBE0 (ETH L1, ~8-cycle lw then jr).
-// Slots this router cannot realize (Z on Wormhole, DOR-cleared N/S on intramesh E/W, missing
-// opposite-Y) are if-constexpr gone. Extra action bits outside LIVE are ignored; there is no
-// refuse path for them (that would hang the slot with no SW retry).
+// A compile-time linear scan avoids GCC jump tables in ERISC_APP_KERNEL_DATA (ETH L1, ~8-cycle load
+// then jump). Unrealizable slots are removed with if constexpr. Extra action bits outside LIVE are
+// ignored because refusing them would hang the slot without a software retry path.
 //
 // 2D action-map transit consumes no hop program, so no header update runs here.
 
@@ -1787,20 +1783,13 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
     tt::tt_fabric::routing_l1_info_t routing_table = *routing_table_l1;
 
-    // This router's logical coordinates. These used to be .bss globals, which meant decode_action()
-    // paid an address materialization plus an uncached L1 load for each of them on every packet --
-    // ENABLE_RISC_CPU_DATA_CACHE is false on this build, so nothing amortises that across iterations.
-    // As by-value locals whose address is never taken they can stay in registers for the whole main
-    // loop. Threaded down to the single hot-path reader rather than re-read there.
+    // Keep hot routing coordinates in address-untaken scalars so they remain in registers across the
+    // main loop; the RISC data cache is disabled for this build.
     const uint8_t my_mesh_coord_y = routing_table.my_mesh_coord_y;
     const uint8_t my_mesh_coord_x = routing_table.my_mesh_coord_x;
 
-    // Same idea, but this one has to be a by-value local rather than a global. routing_table is a
-    // stack copy of the L1 struct and its address is taken (it is passed by const&), so the cache
-    // invalidate at the top of every receiver step forces the compiler to reload any field read
-    // through it. A scalar whose address is never taken is not reachable through that clobber, so
-    // it can stay in a register across the whole main loop. Passed by value from here down to the
-    // intermesh-exit compare, which is the only hot-path reader.
+    // Copy the mesh id as well: routing_table is passed by reference and invalidated during receiver
+    // steps, while this scalar can remain in a register for the intermesh-exit comparison.
     const uint16_t my_mesh_id = routing_table.my_mesh_id;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way

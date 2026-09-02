@@ -634,15 +634,11 @@ AxisRouteTopology derive_line_axis_topology(const MeshGraph& mesh_graph, MeshId 
 // the ordinary ring where the axis closes, else the plain line. Never fails to produce one, so every
 // caller can rely on a non-null answer for a 2D mesh.
 //
-// Precedence matters: derive_express_ring_topology() answers for the mesh's chord axis only, so the
-// orthogonal axis falls through to ring-or-line even on an express mesh -- which is exactly how
-// x_rings_ behaves today.
+// Express topology takes precedence only on the chord axis; the orthogonal axis derives independently
+// as an ordinary ring or line.
 AxisRouteTopology derive_axis_topology(const MeshGraph& mesh_graph, MeshId mesh_id, int axis) {
-    // Express chords are declared on dimension 0 only -- derive_express_ring_topology() fatals on
-    // any other dimension -- so there is nothing to try for axis 1, and attempting it anyway would
-    // surface a dimension-0 configuration error while the caller is asking about an unrelated axis.
-    // This guard matters because derivation is now attempted for every mesh and every axis; it used
-    // to run only for meshes that had already passed the express gate.
+    // Express chords are supported only on axis 0. Probing axis 1 would validate an unrelated
+    // dimension-0 declaration before deriving its ring-or-line topology.
     if (axis == 0) {
         if (auto express = derive_express_ring_topology(mesh_graph, mesh_id);
             express.has_value() && express->axis_dim == axis) {
