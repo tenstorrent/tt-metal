@@ -14,6 +14,11 @@ on:
         required: false
         default: true
         type: boolean
+      upload-to-warehouse:
+        description: "Upload the run's Parquet to the perf warehouse over SFTP"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   checks: write
@@ -187,3 +192,53 @@ jobs:
             ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-*-run.xml
           include_passed: true
           annotate_only: true
+
+  upload-perf-data:
+    name: "Upload perf data to the warehouse"
+    needs: [llk-perf-exec]
+    # always(): a shard that failed still produced Parquets worth keeping.
+    if: ${{ always() && inputs.upload-to-warehouse }}
+    runs-on: ubuntu-latest
+    # The warehouse has not authorised our key yet, so a refused login must not
+    # turn the nightly red. Remove this line once the login works.
+    continue-on-error: true
+    steps:
+      - name: Download this run's perf data
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: perf-data-*
+          path: perf-data
+      - name: Collect the run Parquets
+        run: |
+          mkdir -p upload
+          # One Parquet per shard, already named <run_id>-<arch>-<job_index>,
+          # so a flat copy cannot collide.
+          find perf-data -name '*.parquet' -exec cp {} upload/ \;
+          ls -l upload
+          if [ -z "$(ls -A upload)" ]; then
+            echo "::error::no run Parquet in the perf-data artifacts"
+            exit 1
+          fi
+      - name: Upload over SFTP
+        working-directory: upload
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SFTP_LLK_PERF_KEY }}
+          # Neither of these is a credential, so they stay readable in the diff.
+          # Move them to secrets or vars if infra prefers.
+          SFTP_HOST: "s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com"
+          SFTP_USER: "llk-perf-run"
+        run: |
+          if [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "::error::secret SFTP_LLK_PERF_KEY is not set in this repository"
+            exit 1
+          fi
+          printf '%s\n' "$SSH_PRIVATE_KEY" > id_key
+          chmod go-rwx id_key
+          # The fingerprint the server must have installed for $SFTP_USER. A
+          # fingerprint is public; the key file itself is never printed.
+          ssh-keygen -lf id_key
+          { for f in *.parquet; do echo "put $f"; done; echo "ls -hal"; } > batchfile
+          # -v names the offered key and the server's answer. BatchMode=yes
+          # fails at once instead of waiting for a password.
+          sftp -v -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            -i id_key -b batchfile "$SFTP_USER@$SFTP_HOST"
