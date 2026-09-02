@@ -4177,6 +4177,64 @@ void kernel_main() {
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
+TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentPrUsageExampleJITSmoke) {
+    // Kernel shape from the PR description: always-present `normal`, optional `bias` via
+    // get_token_if_present + std::optional. Compiles the same source with and without `bias` bound.
+    constexpr const char* kSource = R"(
+#include <optional>
+void kernel_main() {
+    DataflowBuffer dfb_normal(dfb::normal);
+
+    constexpr const DFBBindingToken* bias_token = dfb::get_token_if_present<"bias">();
+    std::optional<DataflowBuffer> dfb_bias;
+#pragma GCC diagnostic push
+// This is needed to avoid compiler warning the address will not/ always be null.
+#pragma GCC diagnostic ignored "-Waddress"
+    if constexpr (bias_token != nullptr) {
+        dfb_bias.emplace(*bias_token);
+    }
+
+    dfb_normal.push_back(1);
+    if constexpr (bias_token != nullptr) {
+        dfb_bias->push_back(1);
+    }
+#pragma GCC diagnostic pop
+}
+)";
+
+    auto compile_variant = [&](bool with_bias) {
+        NodeCoord node{0, 0};
+
+        auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+        dm_kernel.source = KernelSpec::SourceCode{kSource};
+        auto compute_kernel = MakeMinimalGen1ComputeKernel("compute_kernel");
+
+        auto normal = MakeMinimalDFB("normal");
+        normal.data_format_metadata = tt::DataFormat::Float16_b;
+        dm_kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"normal"}, "normal"));
+        compute_kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"normal"}, "normal"));
+
+        ProgramSpec spec;
+        spec.name = with_bias ? "pr_usage_bias_present" : "pr_usage_bias_absent";
+        spec.dataflow_buffers = {normal};
+        if (with_bias) {
+            auto bias = MakeMinimalDFB("bias");
+            bias.data_format_metadata = tt::DataFormat::Float16_b;
+            spec.dataflow_buffers.push_back(bias);
+            dm_kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"bias"}, "bias"));
+            compute_kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"bias"}, "bias"));
+        }
+        spec.kernels = {dm_kernel, compute_kernel};
+        spec.work_units = {MakeMinimalWorkUnit("work_unit", node, {"dm_kernel", "compute_kernel"})};
+
+        Program program = MakeProgramFromSpec(*mesh_device_, spec);
+        EXPECT_NO_THROW(program.impl().compile(mesh_device_.get())) << "with_bias=" << with_bias;
+    };
+
+    compile_variant(/*with_bias=*/false);
+    compile_variant(/*with_bias=*/true);
+}
+
 TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstructsScratchpadJITSmoke) {
     NodeCoord node{0, 0};
 
