@@ -577,12 +577,12 @@ void run_source_inject_test(BaseFabricFixture* fixture) {
     // sender and its non-target checker because two independent programs cannot share one unit-mesh CQ.
     for (auto& record : programs) {
         if (record.physical_id != candidate->source_physical_id) {
-            fixture->RunProgramNonblocking(record.device, record.program);
+            fixture->RunProgramNonblocking(record.device, std::move(record.program));
         }
     }
     for (auto& record : programs) {
         if (record.physical_id == candidate->source_physical_id) {
-            fixture->RunProgramNonblocking(record.device, record.program);
+            fixture->RunProgramNonblocking(record.device, std::move(record.program));
             break;
         }
     }
@@ -630,7 +630,7 @@ void run_source_inject_test(BaseFabricFixture* fixture) {
         tt_metal::MetalContext::instance().get_cluster().l1_barrier(record.physical_id);
     }
     for (auto& record : programs) {
-        fixture->WaitForSingleProgramDone(record.device, record.program);
+        fixture->WaitForSingleProgramDone(record.device);
     }
 
     EXPECT_FALSE(host_timed_out) << "Timed out waiting for sender completion and target validation";
