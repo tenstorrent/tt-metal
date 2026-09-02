@@ -791,9 +791,11 @@ class ChunkedPrefillPageTableGuardMixin:
         """True if any layer has a cross-chunk ``_sliding_prefill_tail`` stash."""
         for layer in getattr(self.model[model_id], "layers", []):
             attn = getattr(layer, "self_attn", None)
-            if attn is not None and any(
-                v is not None for v in (getattr(attn, "_sliding_tails_by_key", None) or {}).values()
-            ):
+            if attn is None:
+                continue
+            if getattr(attn, "_tail_pool_map", None):
+                return True  # pooled tails live in the boot pool, not the fallback dict
+            if any(v is not None for v in (getattr(attn, "_sliding_tails_by_key", None) or {}).values()):
                 return True
         return False
 
@@ -827,11 +829,14 @@ class ChunkedPrefillPageTableGuardMixin:
         req_key = None
         if page_table is not None and torch.is_tensor(page_table) and page_table.numel() > 0:
             pt2d = page_table if page_table.dim() > 1 else page_table.unsqueeze(0)
-            if int(pt2d[0, 0]) > 0:
-                # First block id 0 = vLLM null block / warmup mock tables —
+            if int(pt2d[0].max()) > 0:
+                # All-zero row = vLLM null block / B=1 warmup mock tables —
                 # never a real request; keep key None so trace-unsafe pool
-                # copies cannot run during warmup capture.
-                req_key = int(pt2d[0, 0])
+                # copies cannot run during warmup capture. Key on the first
+                # block id +1: under bounded the remapped sliding table's
+                # slot 0 legitimately starts at block id 0, and a falsy key
+                # would silently bypass the pool for that request.
+                req_key = int(pt2d[0, 0]) + 1
         for model in self.model:
             for layer in getattr(model, "layers", []):
                 cfg = getattr(getattr(layer, "self_attn", None), "config", None)

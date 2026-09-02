@@ -1854,8 +1854,11 @@ class Gemma4Model:
         (must not be deallocated) and its consumer untilizes a TILE return.
         """
         batched = bool(getattr(self, "_g4_batched_prefill_consumption", False))
-        if batched:
-            self._g4_retire_scavenge()
+        # Scavenge unconditionally: the retired list only ever holds batched
+        # logits (host-consumed), but the LAST batch's entry must not survive
+        # into the next replay via a batched-only gate (single-user prefill or
+        # decode may be the next call).
+        self._g4_retire_scavenge()
         get_last_token = (last_token_idx // 32) * 32
         sliced = ttnn.slice(
             hidden_states,

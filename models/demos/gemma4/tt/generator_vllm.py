@@ -1328,6 +1328,14 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         return out
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # Free tensors retired by the last batched-prefill consumption BEFORE
+        # this step's trace replay (the retired list is host-consumed already;
+        # leaving the final entry alive across the replay violates the
+        # trace-safety contract in process_logits_after_prefill_trace).
+        for m in self.model:
+            scavenge = getattr(m, "_g4_retire_scavenge", None)
+            if scavenge is not None:
+                scavenge()
         page_tables_per_layer = self._build_per_layer_page_tables(page_tables_per_layer, kwargs.get("page_table"))
         page_tables_per_layer = self._pad_sliding_page_tables_for_bounded(
             page_tables_per_layer, kwargs.get("kv_cache"), authoritative=True
@@ -1831,6 +1839,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             for k in keys:
                 if k is not None and k in slot_map:
                     slot_map[k] = slot_map.pop(k)  # move to end = most recent
+            # Remember the last true running set: eviction must prefer keys
+            # absent from it — LRU order alone can front a LIVE request that
+            # simply was not scheduled in recent decode steps.
+            self._g4_last_authoritative_keys = {k for k in keys if k is not None}
         used = set(slot_map.values())
         slots = []
         for k in keys:
@@ -1847,7 +1859,11 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                     # the map full; the scheduler caps concurrency at
                     # ``max_slots``, so the oldest entry is necessarily a
                     # departed request. Evict it rather than colliding on 0.
-                    victim = next(iter(slot_map))
+                    last_auth = getattr(self, "_g4_last_authoritative_keys", None)
+                    victim = next(
+                        (vk for vk in slot_map if last_auth is not None and vk not in last_auth),
+                        next(iter(slot_map)),
+                    )
                     slot = slot_map.pop(victim)
                     logger.warning(
                         "Gemma4 bounded: ring slot map full (max_slots={}); recycling "

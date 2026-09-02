@@ -449,6 +449,8 @@ class Gemma4Attention:
                     except Exception:
                         pass
             tails.clear()
+            if pool_map is not None:
+                pool_map.clear()  # pool buffers persist (boot-owned); mappings must not
             self.config.sliding_prefill_tail_persistent = None
             return
         for key in list(tails.keys()):
