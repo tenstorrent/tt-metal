@@ -536,7 +536,7 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std
     return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
 }
 
-AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config, std::optional<uint64_t> address) {
+AnyBuffer AnyBuffer::create(const tt::tt_metal::BufferConfig& config, std::optional<uint64_t> address) {
     // TODO #20966: Remove single device support and branches + dynamic_cast
     auto* mesh_device = dynamic_cast<MeshDevice*>(config.device);
     if (!mesh_device) {
