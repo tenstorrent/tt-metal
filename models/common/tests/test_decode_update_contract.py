@@ -354,6 +354,34 @@ def test_all_known_shared_generator_callers_supply_every_decode_update_command()
             assert required <= {keyword.arg for keyword in call.keywords}, (source_path, call.lineno)
 
 
+def test_shared_generator_preserves_explicit_commands_after_mainline_seed_fix():
+    source_path = Path("models/tt_transformers/tt/generator.py")
+    source_text = source_path.read_text()
+    tree = ast.parse(source_text)
+    generator = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Generator")
+    decode = next(
+        node for node in generator.body if isinstance(node, ast.FunctionDef) and node.name == "decode_forward"
+    )
+    trace_decode = next(
+        node
+        for node in generator.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_decode_forward_trace_text"
+    )
+
+    required = {"reload_inputs", "reload_page_table", "reload_sampling_params", "reset_sampling_state"}
+    assert required <= {arg.arg for arg in decode.args.kwonlyargs}
+    assert {"reload_inputs", "reload_page_table"} <= {arg.arg for arg in trace_decode.args.kwonlyargs}
+
+    decode_source = ast.get_source_segment(source_text, decode)
+    trace_source = ast.get_source_segment(source_text, trace_decode)
+    assert decode_source is not None
+    assert trace_source is not None
+    assert "reset_batch" not in decode_source
+    assert "_prev_on_device_sampling" not in decode_source
+    assert "_tt_vllm_always_refresh_decode_trace_inputs" not in trace_source
+    assert "torch.equal" not in trace_source
+
+
 def test_gemma4_override_uses_only_explicit_decode_update_commands():
     source_path = Path("models/demos/gemma4/tt/generator.py")
     tree = ast.parse(source_path.read_text())

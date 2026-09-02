@@ -1192,6 +1192,7 @@ class ChunkedPrefillPageTableGuardMixin:
         *,
         reload_sampling_params: bool,
         reset_sampling_state: bool,
+        reload_inputs: bool | None = None,
         skip_precompile: bool = False,
     ):
         """Eager ``tt_out_tok`` inject for padded decode feedback (#51186).
@@ -1253,6 +1254,7 @@ class ChunkedPrefillPageTableGuardMixin:
                 enable_trace=enable_trace,
                 reload_sampling_params=reload_sampling_params,
                 reset_sampling_state=reset_sampling_state,
+                reload_inputs=reload_inputs,
                 skip_precompile=skip_precompile,
             )
             if host_commit:
@@ -1319,6 +1321,7 @@ class ChunkedPrefillPageTableGuardMixin:
         on_device_sampling = (sampling_params is not None) or defer_device_sampling
         if not enable_trace and not reload_inputs:
             raise ValueError("Non-traced decode rebuilds all forward inputs and requires reload_inputs=True")
+        self._decode_reload_inputs = reload_inputs
 
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
@@ -1361,6 +1364,7 @@ class ChunkedPrefillPageTableGuardMixin:
                 enable_trace=enable_trace,
                 reload_sampling_params=reload_sampling_params,
                 reset_sampling_state=reset_sampling_state,
+                reload_inputs=reload_inputs,
                 skip_precompile=skip_trace_precompile,
             )
         if read_from_device:
@@ -1435,6 +1439,10 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": False,
+        # Gemma4ModelArgs exposes no get_attn_sdpa_program_config, so Generator
+        # cannot derive the resume offset alignment and must be told it. Same pin
+        # align_num_cached_tokens_to_sdpa applies locally.
+        "resumed_prefill_token_alignment": SDPA_CHUNK_ALIGN,
     }
 
     def __init__(self, *args, **kwargs):

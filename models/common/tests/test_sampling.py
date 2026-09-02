@@ -18,9 +18,10 @@ from models.common.sampling import (
     format_sampling_params,
     scatter_sampling_params_to_slots,
 )
-from models.common.sampling.generator import _mark_trace_buffers_corruptible
+from models.common.sampling._utils import topk_would_route_to_large_indices
+from models.common.sampling.generator import _hash_request_seed_to_device_seed, _mark_trace_buffers_corruptible
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_blackhole
 
 
 def test_sampling_trace_buffer_reuse_is_bucket_only(monkeypatch):
@@ -322,6 +323,138 @@ def test_format_sampling_params_uses_device_argmax_sentinel_for_greedy_rows():
     assert params.temperature[0] == 1.0
     assert params.top_k[0] == 1
     assert params.top_p[0] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Seeded decode reproducibility under async scheduling (#51981).
+# Host-only: the generator is built with __new__ and driven with stub modules.
+# ---------------------------------------------------------------------------
+SEED_TEST_BATCH = 32  # format_sampling_params requires a multiple of 32
+
+
+class _RecordingSeedManager(SeedManager):
+    """SeedManager that records each step's device seed vector instead of pushing it."""
+
+    def __init__(self, max_batch_size=SEED_TEST_BATCH):
+        super().__init__(SimpleNamespace(_sampling_dp=1), max_batch_size=max_batch_size)
+        self.pushed = []
+
+    def write_device_seed_values(self, seed_values):
+        self.pushed.append(list(seed_values))
+
+
+class _StubSamplingModule:
+    def __init__(self, max_batch_size=SEED_TEST_BATCH):
+        self.seed_manager = _RecordingSeedManager(max_batch_size)
+        self.tt_sampling = SimpleNamespace(max_batch_size=max_batch_size)
+
+    def apply_decode_state(self, sampling_params_chunks, **kwargs):
+        pass
+
+    def sample(self, logits=None, **kwargs):
+        return logits
+
+
+def _make_stub_generator(max_batch_size=SEED_TEST_BATCH):
+    from models.tt_transformers.tt.generator import Generator
+
+    generator = Generator.__new__(Generator)
+    generator.data_parallel = 1
+    sampling = _StubSamplingModule(max_batch_size)
+    generator.model = [SimpleNamespace(sampling=sampling, sampling_dp=1)]
+    return generator, sampling
+
+
+def _decode_sampling_step(generator, seeds, positions, reload_inputs, max_batch_size=SEED_TEST_BATCH):
+    """Run one device-sampling decode step; return the per-slot device seeds pushed."""
+    seeds = list(seeds) + [None] * (max_batch_size - len(seeds))
+    positions = list(positions) + [-1] * (max_batch_size - len(positions))
+    params = SamplingParams(
+        temperature=[1.0] * max_batch_size,
+        top_k=[32] * max_batch_size,
+        top_p=[1.0] * max_batch_size,
+        seed=seeds,
+    )
+    generator.sample_decode_on_device(
+        [None],
+        sampling_params=params,
+        start_pos=[torch.tensor(positions, dtype=torch.int32)],
+        reload_sampling_params=True,
+        reset_sampling_state=False,
+        reload_inputs=reload_inputs,
+    )
+    return generator.model[0].sampling.seed_manager.pushed[-1]
+
+
+def _expected_seed_stream(request_seed, first_position, num_steps):
+    """Device seeds for `num_steps` consecutive tokens starting at `first_position`."""
+    positions = range(first_position, first_position + num_steps)
+    return [_hash_request_seed_to_device_seed(request_seed, pos + 1) for pos in positions]
+
+
+def test_seed_stream_is_independent_of_host_position_lag():
+    """The counter must self-advance from the last authoritative anchor; re-anchoring
+    to a lagging host position replays device seeds (#51981)."""
+    generator, sampling = _make_stub_generator()
+
+    pushed = [_decode_sampling_step(generator, [7], [100], reload_inputs=True)[0]]
+    # Device is at 101, 102, 103; the host reports the previous position and
+    # stalls entirely when a readback is late.
+    for lagging_host_pos in (100, 101, 101):
+        pushed.append(_decode_sampling_step(generator, [7], [lagging_host_pos], reload_inputs=False)[0])
+
+    assert pushed == _expected_seed_stream(7, 100, 4)
+    assert len(set(pushed)) == 4  # no replayed seed
+    assert sampling.seed_manager.seed_counters[0] == 105  # anchored at 101, one per token
+
+
+def test_seed_stream_matches_across_different_host_lags():
+    """Same seed and true positions, but one run has async overlap engaged (host
+    lags) and the other does not. Equal streams is what `seed=` promises."""
+    lagged, _ = _make_stub_generator()
+    exact, _ = _make_stub_generator()
+
+    lagged_stream = [_decode_sampling_step(lagged, [7], [100], reload_inputs=True)[0]]
+    exact_stream = [_decode_sampling_step(exact, [7], [100], reload_inputs=True)[0]]
+    for true_pos in (101, 102, 103):
+        lagged_stream.append(_decode_sampling_step(lagged, [7], [true_pos - 1], reload_inputs=False)[0])
+        exact_stream.append(_decode_sampling_step(exact, [7], [true_pos], reload_inputs=False)[0])
+
+    assert lagged_stream == exact_stream
+
+
+def test_seed_counters_realign_when_host_inputs_are_authoritative():
+    """A batch reset re-anchors every active slot: vLLM may have evicted and
+    re-admitted the request elsewhere, so the resident counter is untrustworthy."""
+    generator, sampling = _make_stub_generator()
+
+    _decode_sampling_step(generator, [7], [100], reload_inputs=True)
+    sampling.seed_manager.seed_counters[0] = 0  # state moved behind our back
+    pushed = _decode_sampling_step(generator, [7], [200], reload_inputs=True)
+
+    assert pushed[0] == _hash_request_seed_to_device_seed(7, 201)
+
+
+def test_newly_seeded_slot_is_aligned_even_on_a_non_authoritative_step():
+    """A freshly admitted slot's position comes from its prefill, so it is
+    authoritative even when the rest of the batch's host inputs are stale;
+    otherwise its reset-to-zero counter starts the stream at the wrong offset."""
+    generator, _ = _make_stub_generator()
+
+    _decode_sampling_step(generator, [7], [100], reload_inputs=True)
+    # Slot 1 admitted mid-flight at position 5; slot 0 keeps decoding with a lag.
+    pushed = _decode_sampling_step(generator, [7, 11], [100, 5], reload_inputs=False)
+
+    assert pushed[0] == _hash_request_seed_to_device_seed(7, 102)  # unmoved, self-advanced
+    assert pushed[1] == _hash_request_seed_to_device_seed(11, 6)  # anchored to its prefill position
+
+
+def test_reset_seed_from_slots_if_needed_reports_the_slots_it_reset():
+    seed_manager = _make_host_only_seed_manager()
+    seed_manager.reset_seed_from_slots([42, 43, None, None], [0, 1, 2, 3])
+
+    assert seed_manager.reset_seed_from_slots_if_needed([42, 43, None, None], [0, 1, 2, 3]) == []
+    assert seed_manager.reset_seed_from_slots_if_needed([42, 99, None, None], [0, 1, 2, 3]) == [1]
 
 
 def test_scatter_sampling_params_to_slots_moves_params_to_their_slot_row():
@@ -1148,12 +1281,12 @@ def test_ttsampling_duplicate_request_seeds_sample_diverse_tokens(mesh_device):
         ((1, 1, 32, 1 << 20), 96, False),
     ],
 )
-def test_topk_route_mirror_parity(mesh_device, shape, k, expected):
-    """The _utils.py routing-predicate mirror must track the MERGED topk.cpp
-    predicate (#53464: k_multiple=16, max_width=1<<19, no MoE-gate arm), not
-    any in-flight revision of it. Each cell distinguishes a merged constant
-    from a known stale value, so any re-drift flips at least one assertion."""
-    from models.common.sampling._utils import topk_would_route_to_large_indices
+def test_topk_authoritative_route_decision(mesh_device, shape, k, expected):
+    """Exercise the C++ route policy used by both top-k and sampling.
+
+    The cells pin important merged-policy boundaries (#53464: k_multiple=16,
+    max_width=1<<19, no MoE-gate arm) without duplicating that policy in Python.
+    """
 
     x = ttnn.from_torch(
         torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device
@@ -1162,5 +1295,325 @@ def test_topk_route_mirror_parity(mesh_device, shape, k, expected):
     # so every cell's expectation collapses to False there (still asserted --
     # this doubles as off-BH never-routes coverage).
     expected_here = expected and ttnn.device.is_blackhole(mesh_device)
-    assert topk_would_route_to_large_indices(x, k, mesh_device) is expected_here
+    assert topk_would_route_to_large_indices(x, k) is expected_here
     ttnn.deallocate(x)
+
+
+@pytest.mark.parametrize(
+    "vocab_size",
+    [
+        # Blackhole routes ttnn.topk onto topk_large_indices for this width (one full-row
+        # call, no vocab split); other archs cover the split/stock path with the same
+        # guarantee. Production Llama3 vocab.
+        pytest.param(128256, id="v128256"),
+    ],
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_ttsampling_greedy_tied_max_picks_lowest_index(vocab_size, mesh_device):
+    """Greedy rows must resolve an exact-value tie at the maximum to the LOWEST global index.
+
+    This is the determinism contract that _adjust_values_for_tiebreak provides: among the
+    GATHERED candidates, the lowest-global-index tied maximum wins. The tie plateau here
+    (4 tokens) fits inside every per-shard top-k, so the lowest tied index is always
+    gathered and the sampled token must be TIE_START exactly, for every user, on every
+    path (routed full-row BH, chunked stock split, WH).
+
+    A plateau WIDER than a shard's k additionally requires the top-k itself to keep the
+    lowest indices (stable=True gather completeness) -- see the KNOWN LIMITATION note in
+    _adjust_values_for_tiebreak.
+    """
+    batch_size = 32
+    TIE_START = 777  # deliberately not 0: index 0 could win by zero-initialized accident
+    TIE_LEN = 4
+
+    sampler = TTSampling(
+        args=SimpleNamespace(
+            vocab_size=vocab_size,
+            padded_vocab_size=vocab_size,
+            max_batch_size=batch_size,
+            max_top_k=32,
+            cluster_shape=(1, 1),
+        ),
+        mesh_device=mesh_device,
+        tt_ccl=None,
+        k=torch.ones(batch_size),  # greedy: top-1
+        p=torch.zeros(batch_size),
+        temp=torch.ones(batch_size),
+    )
+    assert not sampler.force_argmax_sampling
+
+    torch.manual_seed(7)
+    # Tail strictly below the tie plateau (all values in [-2, -1)); plateau tied at 0.0.
+    logits_host = torch.rand(1, 1, batch_size, vocab_size) - 2.0
+    logits_host[..., TIE_START : TIE_START + TIE_LEN] = 0.0
+    logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+
+    tokens_tt, _log_probs = sampler(logits_tt)
+    tokens = ttnn.to_torch(tokens_tt).flatten()[:batch_size].long()
+
+    mismatched = [(u, int(tokens[u])) for u in range(batch_size) if int(tokens[u]) != TIE_START]
+    assert not mismatched, (
+        f"{len(mismatched)}/{batch_size} greedy users did not pick the lowest tied index "
+        f"{TIE_START}: {mismatched[:8]}"
+    )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="topk_large_indices routing is Blackhole-only")
+@pytest.mark.parametrize(
+    "vocab_size",
+    [
+        # Production Llama3 vocab: non-pow2 and over the stock op's 64K single-call cap,
+        # so the relaxed full-row call routes to the topk_large_indices composite.
+        pytest.param(128256, id="v128256_routed_full_row"),
+        # Non-pow2 mid-size vocab (GPT-2 padded family): fits a stock call width-wise but
+        # is structurally ineligible for the multi-core bitonic, so the full row routes too.
+        pytest.param(50304, id="v50304_routed_full_row"),
+    ],
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_ttsampling_routed_full_row_topk_end_to_end(vocab_size, mesh_device):
+    """End-to-end TTSampling over the ROUTED full-row ttnn.topk path (Blackhole only).
+
+    With sub_core_grid_topk=None at a routing-eligible width, TTSampling replaces the
+    single-device vocab split with one full-row ttnn.topk that takes the Blackhole
+    topk_large_indices composite. Greedy (top-1) users must still sample a row maximum
+    of the bf16 logits, and every token must be a valid global vocab position -- i.e.
+    the routed indices are global, not per-chunk.
+    """
+
+    torch.manual_seed(42)
+    batch_size = 32
+
+    sampler = TTSampling(
+        args=SimpleNamespace(
+            vocab_size=vocab_size,
+            padded_vocab_size=vocab_size,
+            max_batch_size=batch_size,
+            max_top_k=32,
+            cluster_shape=(1, 1),
+        ),
+        mesh_device=mesh_device,
+        tt_ccl=None,
+        k=torch.ones(batch_size),  # top-1
+        p=torch.zeros(batch_size),
+        temp=torch.ones(batch_size),
+    )
+    assert sampler.multi_step_reduction
+    assert sampler.sub_core_grid_topk is None
+    assert not sampler.force_argmax_sampling
+
+    logits_host = torch.randn(1, 1, batch_size, vocab_size)
+    logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    # The exact gate the forward pass evaluates: this parametrization must route.
+    assert topk_would_route_to_large_indices(
+        logits_tt, sampler._num_vocab_splits * sampler.max_top_k
+    ), "test premise broken: this cell no longer routes -- update the parametrization"
+
+    logits_bf16 = ttnn.to_torch(logits_tt).float().reshape(batch_size, vocab_size)
+
+    tokens_tt, _log_probs = sampler(logits_tt)
+    tokens = ttnn.to_torch(tokens_tt).flatten()[:batch_size].long()
+
+    row_max = logits_bf16.max(dim=-1).values
+    failures = []
+    for user in range(batch_size):
+        token = int(tokens[user])
+        if not 0 <= token < vocab_size:
+            failures.append(f"  user {user}: token {token} outside [0, {vocab_size})")
+            continue
+        value = logits_bf16[user, token].item()
+        if value < row_max[user].item():
+            failures.append(
+                f"  user {user}: token {token} has logit {value:.6f}, but the row maximum is "
+                f"{row_max[user].item():.6f} at index {int(logits_bf16[user].argmax())}"
+            )
+
+    header = f"{len(failures)}/{batch_size} users did not sample the row maximum (vocab_size={vocab_size})"
+    assert not failures, header + ":\n" + "\n".join(failures)
+
+
+def _routed_single_device_args(mesh_device, vocab_size, max_top_k=32, max_batch_size=32):
+    """_single_device_sampling_args with the top-k sub-grid released.
+
+    TTSampling only relaxes its call shape when sub_core_grid_topk is None, so this is the
+    one knob that separates the routed full-row path from the chunked split. Everything else
+    (including sub_core_grids, which only places programs) stays identical to the chunked
+    helper, so a routed-vs-chunked comparison varies exactly one thing.
+    """
+    args = _single_device_sampling_args(mesh_device, vocab_size, max_top_k, max_batch_size)
+    args.sub_core_grid_topk = None
+    return args
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="topk_large_indices routing is Blackhole-only")
+@pytest.mark.parametrize("vocab_size", [pytest.param(128256, id="v128256")])
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_ttsampling_routed_full_row_random_sampling_stays_in_top_k(vocab_size, mesh_device):
+    """The ROUTED path must respect per-user top-k for RANDOM users (k > 1), not just greedy ones.
+
+    Every other routed-path test runs k=1, where the routed and chunked candidate sets are
+    provably equivalent (both contain the global maximum), so they cannot observe the thing
+    this path actually changes: the candidate row is now the global top-(num_splits*k) instead
+    of the union of the per-chunk top-ks. ttnn.sampling sorts and masks that row itself, so a
+    k=32 draw must still land inside the true global top-32.
+
+    Asserted against the k-th largest VALUE rather than the top-k index set: bfloat16 rounding
+    creates ties at the boundary, so a token outside torch's top-k indices can still be a
+    legitimate draw if its value ties the k-th largest.
+    """
+    torch.manual_seed(1234)
+    batch_size = 32
+    top_k = 32
+
+    sampler = TTSampling(
+        args=_routed_single_device_args(mesh_device, vocab_size, max_top_k=top_k),
+        mesh_device=mesh_device,
+        tt_ccl=None,
+        k=torch.full((batch_size,), top_k),  # random sampling, not greedy
+        p=torch.ones(batch_size),  # no nucleus filtering
+        temp=torch.ones(batch_size),
+    )
+    assert sampler.multi_step_reduction
+    assert sampler.sub_core_grid_topk is None
+    assert not sampler.force_argmax_sampling, "this test must exercise the sampling path, not argmax"
+
+    logits_host = torch.randn(1, 1, batch_size, vocab_size)
+    logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    assert topk_would_route_to_large_indices(
+        logits_tt, sampler._num_vocab_splits * sampler.max_top_k
+    ), "test premise broken: this cell no longer routes -- update the parametrization"
+
+    logits_bf16 = ttnn.to_torch(logits_tt).float().reshape(batch_size, vocab_size)
+    tokens = ttnn.to_torch(sampler(logits_tt)[0]).flatten()[:batch_size].long()
+
+    # Value of the k-th largest entry per row: any legitimate top-k draw is >= this.
+    kth_value = logits_bf16.topk(top_k, dim=-1).values[:, -1]
+    failures = []
+    for user in range(batch_size):
+        token = int(tokens[user])
+        if not 0 <= token < vocab_size:
+            failures.append(f"  user {user}: token {token} outside [0, {vocab_size})")
+            continue
+        value = logits_bf16[user, token].item()
+        if value < kth_value[user].item():
+            failures.append(
+                f"  user {user}: token {token} has logit {value:.6f}, below the top-{top_k} "
+                f"cutoff {kth_value[user].item():.6f} -- drawn from outside the candidate set"
+            )
+    assert not failures, f"{len(failures)}/{batch_size} random users drew outside top-{top_k}:\n" + "\n".join(failures)
+
+    # A k=32 draw with per-user seeds must not collapse to one token for the whole batch;
+    # that would mean the candidate row or the RNG stream degenerated.
+    assert len(set(tokens.tolist())) > 1, f"all {batch_size} random users drew the same token {int(tokens[0])}"
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="topk_large_indices routing is Blackhole-only")
+@pytest.mark.parametrize(
+    "vocab_size",
+    [pytest.param(128256, id="v128256"), pytest.param(50304, id="v50304")],
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_ttsampling_routed_full_row_matches_chunked_path(vocab_size, mesh_device):
+    """The routed full-row top-k must produce the SAME tokens as the chunked split it replaces.
+
+    The other routed tests assert only that the sampled token is a row maximum -- an invariant
+    the chunked path already satisfied before de-chunking, so they cannot catch the two paths
+    diverging. This runs both on identical logits with only sub_core_grid_topk differing
+    (None -> routed full row, set -> chunked split) and requires bit-identical tokens.
+
+    Greedy (k=1) on purpose: it makes the comparison deterministic without depending on the two
+    samplers drawing identical RNG streams. bfloat16 rounding of randn produces ties at the
+    maximum for some rows, so this also pins that _adjust_values_for_tiebreak resolves a tie to
+    the same global index on both paths.
+    """
+    torch.manual_seed(7)
+    batch_size = 32
+
+    def sample(args):
+        sampler = TTSampling(
+            args=args,
+            mesh_device=mesh_device,
+            tt_ccl=None,
+            k=torch.ones(batch_size),  # greedy: deterministic, no RNG dependence
+            p=torch.zeros(batch_size),
+            temp=torch.ones(batch_size),
+        )
+        assert sampler.multi_step_reduction
+        assert not sampler.force_argmax_sampling
+        logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+        routes = sampler.sub_core_grid_topk is None and topk_would_route_to_large_indices(
+            logits_tt, sampler._num_vocab_splits * sampler.max_top_k
+        )
+        tokens = ttnn.to_torch(sampler(logits_tt)[0]).flatten()[:batch_size].long().tolist()
+        return tokens, routes
+
+    logits_host = torch.randn(1, 1, batch_size, vocab_size)
+
+    routed_tokens, routed = sample(_routed_single_device_args(mesh_device, vocab_size))
+    chunked_tokens, chunked_routes = sample(_single_device_sampling_args(mesh_device, vocab_size))
+
+    assert routed, "test premise broken: the sub_core_grid_topk=None arm did not take the routed path"
+    assert not chunked_routes, "test premise broken: the sub-grid arm must stay on the chunked path"
+
+    mismatched = [
+        (user, routed_tokens[user], chunked_tokens[user])
+        for user in range(batch_size)
+        if routed_tokens[user] != chunked_tokens[user]
+    ]
+    assert not mismatched, (
+        f"{len(mismatched)}/{batch_size} users got a different token from the routed full-row "
+        f"top-k than from the chunked split (vocab_size={vocab_size}); "
+        f"(user, routed, chunked): {mismatched[:8]}"
+    )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="topk_large_indices routing is Blackhole-only")
+@pytest.mark.parametrize("vocab_size", [pytest.param(128256, id="v128256")])
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_ttsampling_routed_full_row_resolves_tie_plateau_wider_than_shard_k(vocab_size, mesh_device):
+    """A tie plateau WIDER than one shard's top-k still resolves to the lowest global index.
+
+    This is the case test_ttsampling_greedy_tied_max_picks_lowest_index documents but does not
+    cover: its 4-token plateau fits inside every per-chunk top-k, so both paths gather all of it.
+    With TIE_LEN=48 > max_top_k=32 the chunked path's first chunk must drop 16 of the tied maxima
+    through the unstable top-k network, and the lowest tied index can be among the dropped ones --
+    the KNOWN LIMITATION on _adjust_values_for_tiebreak.
+
+    The routed full row takes top-(num_splits * max_top_k) = 64 in ONE call, so all 48 tied
+    maxima reach the gathered candidate set and the lowest-index tie-break is exact. That is the
+    concrete determinism win of de-chunking, so it is asserted on the routed path only.
+    """
+    batch_size = 32
+    TIE_START = 777  # deliberately not 0: index 0 could win by zero-initialized accident
+    TIE_LEN = 48  # > max_top_k (32), <= num_vocab_splits * max_top_k (64)
+
+    sampler = TTSampling(
+        args=_routed_single_device_args(mesh_device, vocab_size),
+        mesh_device=mesh_device,
+        tt_ccl=None,
+        k=torch.ones(batch_size),  # greedy: top-1
+        p=torch.zeros(batch_size),
+        temp=torch.ones(batch_size),
+    )
+    assert sampler.multi_step_reduction
+    assert sampler.sub_core_grid_topk is None
+    assert not sampler.force_argmax_sampling
+    assert TIE_LEN > sampler.max_top_k, "plateau must exceed one shard's k or this adds no coverage"
+    assert TIE_LEN <= sampler._num_vocab_splits * sampler.max_top_k, "plateau must fit the routed candidate row"
+
+    torch.manual_seed(7)
+    # Tail strictly below the plateau (all values in [-2, -1)); the plateau is tied at exactly 0.0.
+    logits_host = torch.rand(1, 1, batch_size, vocab_size) - 2.0
+    logits_host[..., TIE_START : TIE_START + TIE_LEN] = 0.0
+    logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    assert topk_would_route_to_large_indices(
+        logits_tt, sampler._num_vocab_splits * sampler.max_top_k
+    ), "test premise broken: this cell no longer routes -- update the parametrization"
+
+    tokens = ttnn.to_torch(sampler(logits_tt)[0]).flatten()[:batch_size].long()
+
+    mismatched = [(u, int(tokens[u])) for u in range(batch_size) if int(tokens[u]) != TIE_START]
+    assert not mismatched, (
+        f"{len(mismatched)}/{batch_size} greedy users did not pick the lowest index {TIE_START} of a "
+        f"{TIE_LEN}-wide tie plateau: {mismatched[:8]}"
+    )
