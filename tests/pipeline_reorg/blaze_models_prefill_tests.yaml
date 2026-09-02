@@ -721,22 +721,35 @@
 
 # ===== Mistral-Small-4-119B ============================================================================
 
-- name: "Mistral-Small-4-119B MLA accuracy 5k, 25k"
+# Also carries the llama4 query-temperature tests. Mistral's query scale is the reason this model
+# needs bespoke MLA handling at all, and its direct tests were gated by nothing -- the only "llama4"
+# string in either pipeline yaml was a comment. Folded in here rather than given their own stage so
+# they cost no second runner acquisition: the mesh is already open for the MLA rows.
+# The tests/torch/ file is host-only, and that directory has no CI home for any model. It is three
+# fast tests against an already-warm interpreter, so it rides along instead of staying ungated.
+- name: "Mistral-Small-4-119B MLA accuracy 5k, 25k + llama4 query scale"
   cmd: |
     export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
     export MISTRAL4_MLA_REF_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/mla_ref
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral_small4_mla -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py -k "llama4" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/torch/test_mistral_small_4_mla_reference.py -vvv --tb=short
     '
   test_type: mistral4_mla
   test_tags: [mistral4, mla]
   test_group: module
   skus:
     bh_sc1:
-      # 2.6 min on run 33425317777, covering both the 5k and 25k rows; 7 is ~2.7x.
-      timeout: 7
+      # 4.9 min measured on CI run 33558247799 for all three pytest invocations; 10 is ~2.0x.
+      # Was briefly 18, sized from 12.0 min measured on a galaxy box -- the same work runs ~2.4x
+      # slower there than on CI, so local numbers oversize CI timeouts badly. Size from CI runs.
+      # `set -e` above is load-bearing: without it only the LAST pytest's status reaches the runner,
+      # so a failure in either of the first two would report as a pass.
+      timeout: 10
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
@@ -818,9 +831,10 @@
   test_group: module
   skus:
     bh_sc1:
-      # 3.9 min on run 33425317777, the first run this leg completed on CI; 12 is ~3x. Full-model
-      # PCC gated per stage on npcc, heavier than the 5.4 min smoke row it replaces.
-      timeout: 12
+      # 9.1 min on CI run 33558247799; 14 is ~1.5x. The previous 12 came from 3.9 min on run
+      # 33425317777 and had eroded to 1.32x margin as the leg's cost grew. Full-model PCC gated per
+      # stage on npcc, heavier than the 5.4 min smoke row it replaces.
+      timeout: 14
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
@@ -850,9 +864,10 @@
   test_group: module
   skus:
     bh_sc1:
-      # 10.9 min on run 33425317777 at L36/full55k (18 chunks x 35 layers, each a host readback);
-      # 20 is ~1.8x.
-      timeout: 20
+      # 17.1 min on CI run 33558247799 at L36/full55k (18 chunks x 35 layers, each a host readback);
+      # 26 is ~1.5x. The previous 20 came from 10.9 min on run 33425317777 and had eroded to 1.17x
+      # margin as the leg's cost grew -- not enough on shared hardware.
+      timeout: 26
   owner_id: U08GEEEEC75 # ssalice
   team: models
   sp_config: sc1
