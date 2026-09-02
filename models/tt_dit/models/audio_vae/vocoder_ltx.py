@@ -430,8 +430,9 @@ class Vocoder(Module):
         t_pad = 0
         if sharded:
             factor = self.parallel_config.factor
-            tile_h = 32
-            align = tile_h * factor
+            # `factor` alone, not `32 * factor`: partitioning happens in ROW_MAJOR, which needs no
+            # tile-aligned split offset. See audio_ops.py's `_partition_t` header.
+            align = factor
             rem = x_BTC_torch.shape[1] % align
             if rem != 0:
                 t_pad = align - rem
@@ -450,9 +451,7 @@ class Vocoder(Module):
 
         if sharded and not pre_unsharded:
             # Channel-TP path: original ordering, conv_pre consumes a T-shard and gathers C itself.
-            x_dev = ttnn.to_layout(x_dev, ttnn.TILE_LAYOUT)
-            x_dev = _partition_t(x_dev, self.parallel_config)
-            x_dev = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
+            x_dev = _partition_t(x_dev, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
 
         # Channel-TP: split C up front so conv_pre's gather reconstructs full C_in (gathering a
         # channel-replicated tensor would duplicate it). conv_post stays full, so no trailing gather.
@@ -481,9 +480,7 @@ class Vocoder(Module):
         x_dev = self.conv_pre(x_dev)
 
         if sharded and pre_unsharded:
-            x_dev = ttnn.to_layout(x_dev, ttnn.TILE_LAYOUT)
-            x_dev = _partition_t(x_dev, self.parallel_config)
-            x_dev = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
+            x_dev = _partition_t(x_dev, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
 
         for i in range(self.num_upsamples):
             x_dev = _set_tail(x_dev, cumrate, "zeros")  # ups gathers T to full and zero-pads internally
