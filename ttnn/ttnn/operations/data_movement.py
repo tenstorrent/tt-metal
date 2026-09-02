@@ -398,37 +398,7 @@ def _golden_function(buffer, shape, dtype, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.from_buffer, golden_function=_golden_function)
 
 
-def _golden_function(input, stride_h, stride_w, *args, padding=(0, 0), collapse_output=False, **kwargs):
-    import torch
-
-    N, H, W, C = input.shape
-
-    if padding is not None:
-        if len(padding) == 2:
-            pad_top = pad_bottom = padding[0]
-            pad_left = pad_right = padding[1]
-            pad_c_front = pad_c_back = 0
-        elif len(padding) == 4:
-            pad_top, pad_bottom, pad_left, pad_right = padding
-            pad_c_front = pad_c_back = 0
-        else:
-            pad_top, pad_bottom, pad_left, pad_right, pad_c_front, pad_c_back = padding
-        if pad_top or pad_bottom or pad_left or pad_right or pad_c_front or pad_c_back:
-            input = torch.nn.functional.pad(
-                input, (pad_c_front, pad_c_back, pad_left, pad_right, pad_top, pad_bottom), value=0.0
-            )
-            N, H, W, C = input.shape
-
-    reshaped = input.reshape(N, H // stride_h, stride_h, W // stride_w, stride_w, C)
-    transposed = reshaped.permute(0, 1, 3, 2, 4, 5)
-    output_tensor = transposed.reshape(N, H // stride_h, W // stride_w, C * stride_h * stride_w)
-
-    if collapse_output:
-        output_tensor = output_tensor.reshape(1, 1, N * (H // stride_h) * (W // stride_w), C * stride_h * stride_w)
-    return output_tensor
-
-
-ttnn.attach_golden_function(ttnn.fold, golden_function=_golden_function)
+# `fold` is nuked on this branch; its golden function went with the op.
 
 
 def _golden_function(input_tensor, *args, **kwargs):
