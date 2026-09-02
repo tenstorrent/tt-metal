@@ -420,13 +420,12 @@ class TestConfig:
 
     @staticmethod
     def perf_run_tag() -> str:
-        """Directory name for this run's reports. Unique per invocation.
+        """Name for this run's reports: the directory, the Parquet, and its run_id.
 
-        Purely a filesystem concern: it never reaches the published table. The
-        Parquet's ``run_id`` cannot serve here because every shard of one CI
-        workflow shares it by design (it is a ROW_KEY column, and the data team's
-        notion of "one run" spans all shards) — naming directories after it would
-        make two shards collide the moment their artefacts are unzipped together.
+        Unique per invocation, which is the one property all three need. The
+        published ``run_id`` is now this tag (see ``_run_id``), because the
+        warehouse loader replays by RUN_ID and publishes one file per shard, so
+        a run_id shared between shards would make each file erase the last.
 
         Seeded into the environment on first use so xdist workers and the
         controller agree; the pytest plugin sets it before workers spawn.

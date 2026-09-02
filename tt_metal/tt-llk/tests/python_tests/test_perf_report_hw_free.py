@@ -441,8 +441,7 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     assert (run_dir / "perf_x" / "perf_x.csv").exists()
     # ...reachable through the stable `latest` path...
     assert (root / "perf_data" / "latest" / "perf_x" / "perf_x.csv").exists()
-    # ...and a run-level Parquet batch alongside it.
-    # Named from the run tag, not run_id: run_id is shared by every shard.
+    # ...and a run-level Parquet batch alongside it, named from the run tag.
     parquet = run_dir / "testrun-wormhole-0.parquet"
     assert parquet.exists()
     table = pq.read_table(parquet)
@@ -452,6 +451,9 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     assert set(df["arch"]) == {"wormhole"}
     assert set(df["commit_sha"]) == {"testsha"}
     assert set(df["pipeline"]) == {"nightly"}
+    # run_id identifies this file, not the workflow: GITHUB_RUN_ID is "testrun",
+    # but four other shards of that workflow publish their own files.
+    assert set(df["run_id"]) == {"testrun-wormhole-0"}
 
 
 def test_combine_perf_reports_raises_on_unknown_parquet_columns(tmp_path, monkeypatch):
@@ -600,31 +602,51 @@ def test_run_tag_is_stable_within_a_process(tmp_path, monkeypatch):
     assert TestConfig.perf_run_tag() == TestConfig.perf_run_tag()
 
 
-def test_ci_run_id_still_wins_for_provenance(monkeypatch):
-    # All shards of one workflow must share run_id: it is a ROW_KEY column and
-    # the data team's notion of a run spans shards.
+def test_run_id_identifies_the_file_not_the_workflow(monkeypatch):
+    # Every shard of one workflow shares GITHUB_RUN_ID, and each publishes its
+    # own Parquet. The warehouse replays by RUN_ID -- it deletes the rows already
+    # carrying the incoming file's RUN_ID -- so a run_id of "999" would make each
+    # of the ten files erase the one loaded before it. The tag is per shard.
     monkeypatch.setenv("GITHUB_RUN_ID", "999")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
     monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-3")
 
-    assert _ci_provenance()["run_id"] == "999"
+    assert _ci_provenance()["run_id"] == "999-wormhole-3"
+
+
+def test_shards_of_one_workflow_get_different_run_ids(monkeypatch):
+    # The failure this guards against is silent: same run_id, two good files,
+    # one surviving load.
+    monkeypatch.setenv("GITHUB_RUN_ID", "999")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+
+    monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-3")
+    wormhole_3 = _ci_provenance()["run_id"]
+    monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-4")
+    wormhole_4 = _ci_provenance()["run_id"]
+    monkeypatch.setenv("PERF_RUN_TAG", "999-blackhole-3")
+    blackhole_3 = _ci_provenance()["run_id"]
+
+    assert len({wormhole_3, wormhole_4, blackhole_3}) == 3
+    # ...and all three still name the workflow they came from.
+    assert all(r.startswith("999-") for r in (wormhole_3, wormhole_4, blackhole_3))
 
 
 def test_rerun_of_a_workflow_publishes_under_its_own_run_id(monkeypatch):
-    # "Re-run all/failed jobs" keeps GITHUB_RUN_ID and bumps GITHUB_RUN_ATTEMPT.
-    # Attempt 2 is a second, different measurement: sharing attempt 1's ROW_KEY
-    # (test_name, commit_sha, arch, run_id) would collide with rows already
-    # published.
+    # "Re-run all/failed jobs" keeps GITHUB_RUN_ID *and* PERF_RUN_TAG (the
+    # workflow builds the tag without the attempt) and bumps GITHUB_RUN_ATTEMPT.
+    # Attempt 2 is a second, different measurement of the same shard, so it must
+    # not replay over attempt 1's rows.
     monkeypatch.setenv("GITHUB_RUN_ID", "999")
     monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-3")
 
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
-    assert _ci_provenance()["run_id"] == "999-2"
+    assert _ci_provenance()["run_id"] == "999-wormhole-3-2"
 
     # Attempt 1 stays bare, so rows already archived keep the identity they were
     # published with.
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
-    assert _ci_provenance()["run_id"] == "999"
+    assert _ci_provenance()["run_id"] == "999-wormhole-3"
 
 
 def test_prune_keeps_the_current_run_however_old_it_looks(tmp_path):
