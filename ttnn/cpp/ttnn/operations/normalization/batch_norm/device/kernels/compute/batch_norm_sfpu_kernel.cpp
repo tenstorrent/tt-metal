@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
@@ -60,11 +61,13 @@ ALWI uint32_t batchnorm_bcast_tiles(
     dfb_batch_var_obj.wait_front(onetile);
 
     tile_regs_acquire();
-    copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_batch_var);
+    reconfig_data_format_srca(last_srca_dfb, dfb_batch_var);
+    copy_init(dfb_batch_var);
     last_srca_dfb = dfb_batch_var;
     copy_tile(dfb_batch_var, index, index * 2);
     add_binary_tile_init();
-    copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_eps);
+    reconfig_data_format_srca(last_srca_dfb, dfb_eps);
+    copy_init(dfb_eps);
     last_srca_dfb = dfb_eps;
     copy_tile(dfb_eps, index, index * 2 + 1);
     add_binary_tile(index * 2, index * 2 + 1, index * 2);
@@ -93,17 +96,20 @@ ALWI uint32_t batchnorm_bcast_tiles(
 
         // (input - batch_mean) * den
         tile_regs_acquire();
-        copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_other);
+        reconfig_data_format_srca(last_srca_dfb, dfb_other);
+        copy_init(dfb_other);
         last_srca_dfb = dfb_other;
         copy_tile(dfb_other, index, index * 2);
         sub_binary_tile_init();
-        copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_bcast);
+        reconfig_data_format_srca(last_srca_dfb, dfb_bcast);
+        copy_init(dfb_bcast);
         last_srca_dfb = dfb_bcast;
         copy_tile(dfb_bcast, index, index * 2 + 1);
         sub_binary_tile(index * 2, index * 2 + 1, index * 2);
 
         mul_binary_tile_init();
-        copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_den);
+        reconfig_data_format_srca(last_srca_dfb, dfb_den);
+        copy_init(dfb_den);
         last_srca_dfb = dfb_den;
         copy_tile(dfb_den, index, index * 2 + 1);
         mul_binary_tile(index * 2, index * 2 + 1, index * 2);
@@ -121,11 +127,13 @@ ALWI uint32_t batchnorm_bcast_tiles(
             dfb_scaled_output_obj.reserve_back(onetile);
 
             tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_affine_or_out);
+            reconfig_data_format_srca(last_srca_dfb, dfb_affine_or_out);
+            copy_init(dfb_affine_or_out);
             last_srca_dfb = dfb_affine_or_out;
             copy_tile(dfb_affine_or_out, index, index * 2);
             mul_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_weight);
+            reconfig_data_format_srca(last_srca_dfb, dfb_weight);
+            copy_init(dfb_weight);
             last_srca_dfb = dfb_weight;
             copy_tile(dfb_weight, index, index * 2 + 1);
             mul_binary_tile(index * 2, index * 2 + 1, index * 2);
@@ -144,11 +152,13 @@ ALWI uint32_t batchnorm_bcast_tiles(
             dfb_output_0_obj.reserve_back(onetile);
 
             tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_tmp_1);
+            reconfig_data_format_srca(last_srca_dfb, dfb_tmp_1);
+            copy_init(dfb_tmp_1);
             last_srca_dfb = dfb_tmp_1;
             copy_tile(dfb_tmp_1, index, index * 2);
             add_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_bias);
+            reconfig_data_format_srca(last_srca_dfb, dfb_bias);
+            copy_init(dfb_bias);
             last_srca_dfb = dfb_bias;
             copy_tile(dfb_bias, index, index * 2 + 1);
             add_binary_tile(index * 2, index * 2 + 1, index * 2);
@@ -168,7 +178,8 @@ ALWI uint32_t batchnorm_bcast_tiles(
             dfb_output_final_obj.reserve_back(onetile);
 
             tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb_output_0);
+            reconfig_data_format_srca(last_srca_dfb, dfb_output_0);
+            copy_init(dfb_output_0);
             last_srca_dfb = dfb_output_0;
             copy_tile(dfb_output_0, index, index * 2);
             typecast_tile_init<TcInFmt, TcOutFmt>();
@@ -227,7 +238,8 @@ void kernel_main() {
     constexpr auto dfb_bcast = dfb::batch_mean;
     constexpr auto dfb_other = dfb::input;
 
-    unary_op_init_common(dfb_other, dfb::out);
+    compute_kernel_hw_startup(dfb_other, dfb::out);
+    copy_init(dfb_other);
     uint32_t last_srca_dfb = dfb_other;
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;

@@ -70,6 +70,7 @@ def test_quasar_schema_is_not_wh_bh_schema():
     assert "face_c_dim" in qsr_only
     assert "unpacker_engine_sel" in qsr_only
     assert "implied_math_format" in qsr_only
+    assert "vector_mode" in qsr_only
     assert "enable_2x_format" in qsr_only
     assert "enable_direct_indexing" in qsr_only
     assert stat_column("L1_TO_L1[FPU]", MEAN) in qsr_only
@@ -184,4 +185,25 @@ def test_convert_drops_sfpu_isolate_text_size_on_quasar(tmp_path):
     assert "TEXT_SIZE(SFPU_ISOLATE)" not in names
     assert "enable_2x_format" in names
     assert "implied_math_format" in names
+    assert names == [c.name for c in QSR_SCHEMA]
+
+
+def test_convert_keeps_quasar_sfpu_where_vector_mode(tmp_path):
+    # vector_mode is a Quasar where-SFPU axis; it must survive CSV -> Parquet.
+    df = pd.DataFrame(
+        {
+            "marker": ["INIT"],
+            "vector_mode": ["VectorMode.RC"],
+            "implied_math_format": ["ImpliedMathFormat.Yes"],
+            "unpacker_engine_sel": ["UnpackerEngine.UnpA"],
+            "tile_cnt": [3],
+        }
+    )
+    p = _write_csv(tmp_path, "perf_sfpu_where_quasar.csv", df)
+
+    diag = convert_csvs_to_parquet([p], tmp_path / "out.parquet", **_QSR_PROV)
+
+    assert diag["unknown_columns"] == {}
+    names = pq.read_table(tmp_path / "out.parquet").schema.names
+    assert "vector_mode" in names
     assert names == [c.name for c in QSR_SCHEMA]
