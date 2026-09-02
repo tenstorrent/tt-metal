@@ -802,6 +802,7 @@ class TtPrefillRuntime:
         mtp_overhang: Optional[ttnn.Tensor] = None,
         mtp_seed_token: Optional[int] = None,
         on_mtp_complete=None,
+        is_last_chunk: bool = False,
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user `slot_id`'s slice of the engine-owned `kv_caches`.
 
@@ -862,6 +863,10 @@ class TtPrefillRuntime:
                 whenever config.mtp_levels is set, and rejected on any other rank. Deallocated here.
             mtp_seed_token: optional t_P for the last chunk (saves one 32-row LM head call).
             on_mtp_complete: tap fired once with (MTPPredictorOutput, generated_tokens).
+            is_last_chunk: GLM-5.2 MTP — this chunk ends the request, so the prompt has no ids past
+                `actual_end` and the MTP windows that read there must be filled by generating them on
+                device (lm_head + embedding). Only the producer knows this; it rides the 4th
+                PrefillMetadata word (prefill_runner.CHUNK_METADATA_SIZE_BYTES). Ignored with MTP off.
         """
         # Not gated on self.compiled: compile() warms up by calling prefill_chunk() once before
         # marking the runtime compiled. The model must exist, though.
@@ -973,6 +978,7 @@ class TtPrefillRuntime:
             # union across its socket, so it must not hand it to a transformer that has none.
             mtp_union=mtp_union if self.mtp_predictor is not None else None,
             mtp_seed_token=mtp_seed_token,
+            is_last_chunk=is_last_chunk,
             on_mtp_complete=on_mtp_complete,
             input_is_embedded=mtp_owns_input,
         )

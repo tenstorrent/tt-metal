@@ -1094,7 +1094,7 @@ def main() -> None:
     slot_traces, slot_lengths, pools_by_trace = producer._resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
-    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int) -> float:
+    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, is_last: bool) -> float:
         pool = pools_by_trace[slot_traces[slot_id]]
         chunk_bytes = producer._chunk_to_host_array(pool[actual_start : actual_start + producer.CHUNK_SIZE])
         assert (
@@ -1103,7 +1103,7 @@ def main() -> None:
         logger.info(f"[migration_driver] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
         push_start = time.perf_counter()
         service.forward_to_tensor_bytes(
-            chunk_bytes, metadata=producer._pack_metadata(slot_id, actual_start, actual_end)
+            chunk_bytes, metadata=producer._pack_metadata(slot_id, actual_start, actual_end, is_last)
         )
         return (time.perf_counter() - push_start) * 1000.0
 

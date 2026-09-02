@@ -90,8 +90,8 @@ _apply_manifest_env()
 SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
 METADATA_SIZE_BYTES = 12
 
-# LayerAck D2H FIFO. Records are METADATA_SIZE_BYTES (12 B) each; 4 KB is a PCIe-aligned
-# one-page buffer with generous headroom for in-flight records.
+# LayerAck D2H FIFO. Records are CHUNK_METADATA_SIZE_BYTES (12 B, 16 with MTP) each; 4 KB is a
+# PCIe-aligned one-page buffer with generous headroom for in-flight records.
 LAYER_ACK_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_LAYER_ACK_FIFO_BYTES", 4 * 1024))
 
 # End-of-stream sentinel: the producer/scheduler closes the request stream with one final push whose
@@ -155,6 +155,16 @@ MTP_OVERHANG = mtp_overhang(MTP_LEVELS)
 builds its rows to this number and the socket op splits them back off on receive."""
 TOKEN_ID_BYTES = 4
 """uint32 token ids. Converts MTP_OVERHANG (ids) to the socket op's overhang_size_bytes."""
+CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
+"""PrefillMetadata carried with each chunk. With MTP a 4th word, `is_last`, says this chunk completes
+the request: past `actual_end` the prompt HAS no more ids, so the MTP windows must be filled by
+generating them on device (lm_head + embedding) rather than by reading the stream. Only the producer
+knows that boundary -- `actual_end == actual_start + CHUNK_SIZE` is ambiguous, and GLM 5.2's 56320 =
+11 x 5120 is exactly the ambiguous case. Gated on MTP_LEVELS, which the producer must already agree
+on (it sizes the H2D row), so every non-MTP run stays byte-identical on the wire.
+
+Used by all three metadata-carrying services -- H2D in, D2D between ranks, and the D2H layer-ack,
+whose record IS this chunk's metadata tensor (see prefill_chunk's `record_dev`)."""
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
@@ -278,6 +288,20 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers):
 # ---------------------------------------------------------------------------
 
 
+def _decode_metadata(metadata_device: ttnn.Tensor) -> dict:
+    """This chunk's PrefillMetadata off the device tensor the socket op filled. `is_last` is present
+    only when MTP is on (CHUNK_METADATA_SIZE_BYTES); it is False otherwise so callers need no branch."""
+    import torch
+
+    m = ttnn.to_torch(ttnn.get_device_tensors(metadata_device)[0]).view(torch.int32).flatten()
+    return {
+        "slot_id": int(m[0]),
+        "actual_start": int(m[1]),
+        "actual_end": int(m[2]),
+        "is_last": bool(MTP_LEVELS and int(m[3]) == 1),
+    }
+
+
 def _is_shutdown_sentinel(meta: dict) -> bool:
     """True for the all -1 end-of-stream sentinel (see SHUTDOWN_METADATA_WORD); false for every real
     chunk, whose slot_id and KV positions are non-negative and in range."""
@@ -290,7 +314,7 @@ def _is_shutdown_sentinel(meta: dict) -> bool:
 
 def _socket_next(h2d_service, overhang: int = 0) -> tuple:
     """Block on the next producer push and hand back what it carried: (tt_ids, tt_overhang_or_None,
-    {slot_id, actual_start, actual_end}, tt_metadata). Used only by the unbounded request loop
+    meta, tt_metadata) -- see _decode_metadata. Used only by the unbounded request loop
     (rank 0 input). The device metadata tensor is returned rather than discarded so it can be
     propagated into the model's per-layer ack send.
 
@@ -300,18 +324,15 @@ def _socket_next(h2d_service, overhang: int = 0) -> tuple:
     level k's window reads past this chip's trunk shard. With ``overhang == 0`` the op emits no
     second tensor at all and this is exactly the pre-MTP call.
     """
-    import torch
-
     outs = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        h2d_service, metadata_size_bytes=METADATA_SIZE_BYTES, overhang_size_bytes=overhang * TOKEN_ID_BYTES
+        h2d_service, metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES, overhang_size_bytes=overhang * TOKEN_ID_BYTES
     )
     if overhang:
         tt_ids, tt_overhang, tt_metadata = outs
     else:
         tt_overhang = None
         tt_ids, tt_metadata = outs
-    m = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
-    meta = {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
+    meta = _decode_metadata(tt_metadata)
     return tt_ids, tt_overhang, meta, tt_metadata
 
 
@@ -337,7 +358,7 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, d2d_row
             fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
             sender_worker_cores=SYNC_WORKER_CORES,
             receiver_worker_cores=SYNC_WORKER_CORES,
-            metadata_size_bytes=METADATA_SIZE_BYTES,
+            metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES,
             share_fabric_links=True,
             # The service asserts L1-only (d2d_stream_service.cpp:260).
             socket_buffer_type=ttnn.BufferType.L1,
@@ -366,14 +387,11 @@ def _d2d_recv(inbound) -> tuple:
     """Drain the next chunk that landed in the inbound receiver backing into a fresh device tensor and
     decode the inline metadata. The returned tensor already has the embedding-output sharding, so it
     feeds runtime.prefill with no reshard. Pairs with the upstream rank's _d2d_send."""
-    import torch
-
     t0 = time.perf_counter()
     act, metadata_device = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        inbound, metadata_size_bytes=METADATA_SIZE_BYTES
+        inbound, metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES
     )
-    m = ttnn.to_torch(ttnn.get_device_tensors(metadata_device)[0]).view(torch.int32).flatten()
-    meta = {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
+    meta = _decode_metadata(metadata_device)
     logger.info(
         f"[pp] RECV-d2d [{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']} "
         f"[xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms"
@@ -394,7 +412,9 @@ def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict, *, deall
     import torch
 
     words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
-    # The outbound op ships metadata as a replicated device tensor (3 uint32 words), not a Python list.
+    if MTP_LEVELS:
+        words.append(int(meta["is_last"]))
+    # The outbound op ships metadata as a replicated device tensor (uint32 words), not a Python list.
     md_tensor = ttnn.from_torch(
         torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
         dtype=ttnn.uint32,
@@ -466,8 +486,11 @@ def _compute_and_send(
     t_start = time.time()
     logger.info(
         f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} "
-        f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
+        f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']}) last={meta['is_last']}"
     )
+    # MTP-only kwargs, passed only when MTP is on: the other adapters' runtimes do not declare them,
+    # and with MTP off they carry nothing (no overhang tensor, and every chunk's is_last is False).
+    mtp_kwargs = {"mtp_overhang": overhang, "is_last_chunk": meta["is_last"]} if MTP_LEVELS else {}
     out = runtime.prefill_chunk(
         inp,
         kv_caches,
@@ -477,7 +500,7 @@ def _compute_and_send(
         request_id=c,
         d2h_service=d2h_service,
         record_dev=record_dev,
-        mtp_overhang=overhang,
+        **mtp_kwargs,
     )
     if SYNC_PER_CHUNK:
         # Block on device completion so the delta is this rank's forward alone, not the downstream-start
@@ -793,7 +816,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 global_spec=global_spec,
                 mapper_config=H2D_MAPPER_CONFIG,
                 worker_cores=SYNC_WORKER_CORES,
-                metadata_size_bytes=METADATA_SIZE_BYTES,
+                metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES,
             )
             path = service.export_descriptor(name)
             logger.info(
@@ -1145,7 +1168,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 global_spec=None,
                 fifo_size_bytes=LAYER_ACK_FIFO_SIZE_BYTES,
                 worker_cores=SYNC_WORKER_CORES,
-                metadata_size_bytes=METADATA_SIZE_BYTES,
+                metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES,
             )
             layer_ack_service = ttnn.LayerAckService(
                 d2h_service,

@@ -464,6 +464,7 @@ class TtPrefillTransformer(LightweightModule):
         mtp_seed_token: Optional[int] = None,
         on_mtp_complete: Optional[Callable] = None,
         input_is_embedded: bool = False,
+        is_last_chunk: bool = False,
     ):
         """
         Forward pass: [embed] -> [block x N] -> [norm -> lm_head -> sample].
@@ -511,6 +512,9 @@ class TtPrefillTransformer(LightweightModule):
             mtp_seed_token: optional t_P for the last chunk, saving one 32-row LM head call. Only pass
                         it when it was produced greedily — see _mtp_next_token_fn. Host path only:
                         the device path never runs the LM head (see `MTPDeviceEmbedSource`).
+            is_last_chunk: this chunk ends the request, so the K positions its MTP windows read
+                        past `actual_end` have no ids in the prompt. Only the producer knows that
+                        boundary; see CHUNK_METADATA_SIZE_BYTES.
             on_mtp_complete: tap fired once with (MTPPredictorOutput, generated_tokens). A tap rather
                         than an extra return value, so the trunk's return arity is unchanged whether or
                         not MTP ran — the same reason on_layer_complete is a callback.
@@ -713,6 +717,7 @@ class TtPrefillTransformer(LightweightModule):
                 zero_position_0=(actual_start == 0),
                 seed_token=mtp_seed_token,
                 union=mtp_union,
+                is_last_chunk=is_last_chunk,
                 cache_user_id=cache_user_id,
                 actual_start=actual_start,
                 actual_end=actual_end,
@@ -857,6 +862,7 @@ class TtPrefillTransformer(LightweightModule):
         zero_position_0: bool,
         seed_token: Optional[int] = None,
         union=None,
+        is_last_chunk: bool = False,
         **fwd_kwargs,
     ):
         """Run the K MTP levels off ``h^0``. Returns ``(MTPPredictorOutput, generated_tokens)``.
@@ -875,6 +881,8 @@ class TtPrefillTransformer(LightweightModule):
             actual_isl: this chunk's real-token count -- both the LM-head row and where the last
                 chunk's generation slots start.
             zero_position_0: True only on the chunk containing absolute position 0.
+            is_last_chunk: True only on the chunk that ends the request, where the prompt has no ids
+                past ``actual_end``. Carried here for the levels to use; see #53533.
             seed_token: ``t_P`` if the caller already has it. Optional; omitting it costs one 32-row
                 LM head call and removes any coupling to the trunk's sampling temperature.
             fwd_kwargs: passed to every level's block. The KV-cache slot is NOT among them -- the
