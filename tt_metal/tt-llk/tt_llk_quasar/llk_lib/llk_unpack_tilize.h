@@ -127,11 +127,9 @@ inline void _llk_unpack_tilize_(const std::uint32_t l1_tile_idx)
     // UNP_DEST shares UNP_A's hardware path, so use UNP_A for counter instructions
     constexpr std::uint32_t CNT_SEL = (UNP_SEL == p_unpacr::UNP_DEST) ? p_unpacr::UNP_A : UNP_SEL;
 
-    constexpr std::uint32_t STALL_UNP_RES = (CNT_SEL == p_unpacr::UNP_A) ? p_stall::UNPACK0 : p_stall::UNPACK1;
-    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, STALL_UNP_RES);
-
     const std::uint32_t src_addr_offset_datums =
-        l1_tile_idx * (TILE_C_DIM / FACE_C_DIM); // should be tensor_shape.num_faces_c_dim, but it is not available here yet
+        l1_tile_idx *
+        (TILE_C_DIM / FACE_C_DIM); // should be tensor_shape.num_faces_c_dim, but it is not available here yet, this will work only for 32x32 tiles
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_TILIZE_SRC_ADDR_OFFSET_RMW, src_addr_offset_datums);
