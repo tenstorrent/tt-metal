@@ -497,22 +497,36 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 
     // Establish the zero-flag state up front so the execute path's guard never has to write it.
     //
-    // REDUCE_ROW MAX is the only reduce path with a mov phase: reduce_row_perform_transpose moves the
-    // pooled row through SrcB (MOVD2B/TRNSPSRCB) and adds it back with ELWADD, and those readers need
-    // PRESERVE or a datum whose low byte is zero is flushed mid-reduction (see that function). It runs
-    // once per face row, so asserting PRESERVE there and restoring DEFAULT after it alternated the
-    // value and defeated the skip-if-set guard: 4 pipe-draining cfg writes per 32x32 tile, measured at
-    // ~40 of the kernel's 98 cycles/tile on Blackhole p300a. Setting it here instead makes the steady
-    // state free -- but it is the fast path, NOT the guarantee: _llk_math_reduce_ re-asserts it per
-    // tile (#46511's execute-path rule) so an intervening reconfig cannot corrupt the reduction. It is
-    // still worth setting here: it keeps the per-tile assert a not-taken branch. GMPOOL/GAPOOL are not
-    // among the flag's readers (see the reader list in cmath_common.h), so the pool phase is
-    // unaffected. _llk_math_reduce_uninit_ returns the flag to DEFAULT, so the value is paired with
-    // this init rather than leaked to whatever op runs next.
+    // This change moves WHERE each path's flag value is written, not WHICH value it gets. Every path
+    // keeps exactly the value main gave it, so no reduce result changes:
     //
-    // Every other reduce path is pool-only and takes the operand-driven DEFAULT, mirroring
-    // _llk_math_matmul_init_ / _llk_math_eltwise_binary_init_. A preceding copy_init that left PRESERVE
-    // would otherwise leak "keep" into the pool GMPOOL.
+    //   REDUCE_ROW MAX -> PRESERVE, because main asserted PRESERVE around reduce_row_perform_transpose.
+    //     That function moves the pooled row through SrcB (MOVD2B/TRNSPSRCB) and adds it back with
+    //     ELWADD, and ELWADD is a flag reader. Main asserted it on entry and restored DEFAULT on exit,
+    //     once per face row, so the value alternated and defeated the skip-if-set guard in
+    //     _configure_src_zero_flag_: 4 pipe-draining cfg writes per 32x32 tile, ~40 of the kernel's 98
+    //     cycles/tile on Blackhole p300a. Asserting it here instead makes the steady state free. The
+    //     one behavioural difference from main is that the POOL phase now also runs under PRESERVE;
+    //     that is safe because GMPOOL/GAPOOL are not among the flag's readers (see the reader list in
+    //     cmath_common.h).
+    //
+    //   Everything else -> the operand-driven DEFAULT, mirroring _llk_math_matmul_init_ /
+    //     _llk_math_eltwise_binary_init_, because that is what main gave them. A preceding copy_init
+    //     that left PRESERVE would otherwise leak "keep" into the pool GMPOOL.
+    //
+    // NOTE: REDUCE_ROW MAX is NOT the only path with a mov phase -- REDUCE_SCALAR has one too (MOVD2B +
+    // TRNSPSRCB + 4x MOVB2A in _llk_math_reduce_, and MOVB2A is also a flag reader). It is deliberately
+    // left at DEFAULT here because main ran its mov phase at DEFAULT and this change is not the place
+    // to alter that. Whether it *should* be PRESERVE is an open question and is not currently decidable
+    // from a test: on Blackhole the flag has no observable effect on the float formats reduce supports,
+    // measured both ways -- see the MEASURED STATUS note in
+    // tests/python_tests/test_reduce_zero_flag_clobber.py. Do not "fix" scalar on the strength of the
+    // reader list alone; it needs the HW definition or a ttnn-level repro first.
+    //
+    // Setting the value here is the fast path, NOT the guarantee: _llk_math_reduce_ re-asserts it per
+    // tile (#46511's execute-path rule) so an intervening reconfig cannot corrupt the reduction. Doing
+    // it here keeps that per-tile assert a not-taken branch. _llk_math_reduce_uninit_ returns the flag
+    // to DEFAULT, so the value is paired with this init rather than leaked to whatever op runs next.
     if constexpr (dim == ReduceDim::REDUCE_ROW && type == PoolType::MAX)
     {
         math::_configure_preserve_zero_flag_state_();

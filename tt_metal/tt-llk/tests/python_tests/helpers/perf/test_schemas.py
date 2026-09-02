@@ -443,7 +443,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_pack_untilize": "perf_pack_untilize"},
     },
     "perf_reduce": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -455,6 +455,7 @@ PERF_TEST_SCHEMAS = {
             "formats.sfpu_dst",
             "loop_factor",
             "marker",
+            "math_fidelity",
             "mathop",
             "reduce_pool_type",
             "tile_cnt",

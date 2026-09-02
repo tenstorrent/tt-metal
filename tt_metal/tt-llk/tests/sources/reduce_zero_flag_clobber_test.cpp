@@ -5,16 +5,26 @@
 // Regression guard for the Src zero-substitution flag (ALU_ACC_CTRL_Zero_Flag_disabled_src) across a
 // REDUCE_ROW MAX.
 //
-// That reduce is the only reduce path with a mov phase: reduce_row_perform_transpose moves the pooled
-// row DEST -> SrcB (MOVD2B/TRNSPSRCB) and adds it back with ELWADD. Those readers need the flag SET
-// (PRESERVE / no zero substitution) or a datum whose low byte is zero is flushed to 0 mid-reduction --
-// this is what made layernorm drift when the flag was unpack-owned (#46511, tt-llk #960/#966).
+// That reduce's mov phase is reduce_row_perform_transpose: it moves the pooled row DEST -> SrcB
+// (MOVD2B/TRNSPSRCB) and adds it back with ELWADD. ELWADD is a flag reader, and the documented hazard
+// is that with the flag CLEAR a datum whose low byte is zero is flushed to 0 mid-reduction -- what made
+// layernorm drift when the flag was unpack-owned (#46511, tt-llk #960/#966). (REDUCE_ROW MAX is not the
+// only reduce path with a mov phase; REDUCE_SCALAR has one too, via MOVD2B + 4x MOVB2A. This kernel
+// covers the row-MAX path only, which is the path the flag hoist changed.)
 //
 // #46511 built the tracker so that "the op-need is (re)asserted in the EXECUTE path so it survives an
 // llk_math_hw_configure that runs after the op init". This kernel exercises exactly that: it clobbers
-// the flag AFTER _llk_math_reduce_init_ the way a real tt-metal compute kernel would, then reduces. If
-// _llk_math_reduce_ re-asserts PRESERVE per tile, the result matches golden; if PRESERVE is only
-// established at init, the clobber wins and the reduction is silently wrong.
+// the flag AFTER _llk_math_reduce_init_ the way a real tt-metal compute kernel would, then reduces.
+//
+// WHAT THIS DOES AND DOES NOT PROVE. It pins the state machine: the clobber is verified to land (the
+// kernel reads the flag back from the config register and skips the reduce if the pollution did not
+// take), and the reduce still matches golden. It does NOT fail if the execute-path re-assert is
+// removed -- the whole 70-case matrix was measured passing both ways on Blackhole p300a, raw
+// forced-flush mode included. On this path the flag turns out to have no observable effect for the
+// float formats REDUCE_ROW MAX supports, so the hazard is currently unfalsifiable here and no
+// arrangement of this kernel can make it bite. See the MEASURED STATUS note in
+// python_tests/test_reduce_zero_flag_clobber.py for the full evidence and for the two things that
+// would make it observable (integer operands; a ttnn-level layernorm repro).
 //
 // ZERO_FLAG_CLOBBER selects the pollution (see the ZERO_FLAG_CLOBBER docstring in
 // python_tests/helpers/test_variant_parameters.py); ZERO_FLAG_CLOBBER_PER_TILE repeats it before every

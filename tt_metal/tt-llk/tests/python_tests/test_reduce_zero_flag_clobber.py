@@ -3,8 +3,10 @@
 
 """Regression guard: a REDUCE_ROW MAX must survive a Src zero-substitution flag clobber.
 
-REDUCE_ROW MAX is the only reduce path with a mov phase. reduce_row_perform_transpose moves the
-pooled row DEST -> SrcB (MOVD2B/TRNSPSRCB) and adds it back with ELWADD, and those readers need
+REDUCE_ROW MAX is the reduce path the flag hoist changed, and reduce_row_perform_transpose is its
+mov phase: it moves the pooled row DEST -> SrcB (MOVD2B/TRNSPSRCB) and adds it back with ELWADD.
+(It is not the only reduce path with a mov phase -- REDUCE_SCALAR moves via MOVD2B + 4x MOVB2A --
+but scalar's flag value is unchanged by that hoist, so it is not under test here.) Those readers need
 ALU_ACC_CTRL_Zero_Flag_disabled_src SET (PRESERVE / no zero substitution): with it clear, a datum
 whose low byte is zero is flushed to 0 mid-reduction. That is the failure #46511 describes as
 "bf16 values with a zero low byte got flushed mid-sum and layernorm drifted off".
