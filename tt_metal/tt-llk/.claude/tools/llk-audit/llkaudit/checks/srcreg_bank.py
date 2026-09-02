@@ -52,7 +52,12 @@ class SrcRegBank(Check):
         "preceding STALLWAIT and does NOT model control flow: a stall inside an "
         "`if`/`if constexpr` branch is credited to a move outside it (so a move whose "
         "only stall is conditional can read as gated), and conversely a move inside a "
-        "loop is judged on the stall preceding the loop body in source order. It reads "
+        "loop is judged on the stall preceding the loop body in source order. Only the "
+        "FIRST offending move per function is emitted, so a second, DIFFERENT defect "
+        "later in the same function is not listed until the first is fixed. Bank-flip "
+        "re-arm (DEST2SRC_DRAIN_REARMED) is detected textually, by a CLR_A/B/AB/SRC "
+        "token on an intervening macro; a flip encoded in a numeric operand, or issued "
+        "inside a MOP/replay between the stall and the move, is NOT seen. It reads "
         "the SAME function only: a gate that lives in the caller, or a "
         "move programmed into a MOP/replay whose stall sits elsewhere, lands as the "
         "DEST2SRC_WAIT_UNSEEN recall candidate, not a verdict — and a MOP-resident "
@@ -137,18 +142,22 @@ class SrcRegBank(Check):
         out: list[Finding] = []
         for fn in fb.functions:
             last_stall = None
+            flipped_since_stall = False
             for f in fb.facts_in(fn, ("macro",)):
                 name = f.get("name", "")
+                text = f.get("text", "")
                 if any(t in name.upper() for t in registry.STALL_MACRO_SUBSTR):
                     last_stall = f
+                    flipped_since_stall = False
                     continue
                 if not registry.is_dest_to_src_move(name):
+                    # A Src bank flip after the stall re-arms the hazard the drain
+                    # settled. Non-flipping ops (incl. the moves themselves) do not.
+                    if registry.is_bank_flip_macro(text):
+                        flipped_since_stall = True
                     continue
 
                 if last_stall is None:
-                    # The gate may legitimately live in the CALLER, or the move may
-                    # be programmed into a MOP/replay whose stall sits elsewhere —
-                    # so this is a RECALL candidate, never a flag.
                     hint, detail = (
                         "DEST2SRC_WAIT_UNSEEN",
                         f"{name} with no STALLWAIT before it in this function — "
@@ -157,21 +166,35 @@ class SrcRegBank(Check):
                     )
                 else:
                     cond = registry.stallwait_wait_operand(last_stall.get("text", ""))
-                    has_vld = registry.condition_drains_unit(
+                    need = registry.required_vld_token(name)
+                    has_need = bool(need) and registry.condition_drains_unit(
+                        cond, (need,)
+                    )
+                    has_any_vld = registry.condition_drains_unit(
                         cond, registry.SRC_BANK_VLD_TOKENS
                     )
                     has_math = registry.condition_drains_unit(
                         cond, registry.MATH_FPU_TOKENS
                     )
-                    if has_math:
-                        continue  # correctly gated
-                    if has_vld:
+                    if not has_any_vld:
+                        hint, detail = (
+                            "DEST2SRC_WAIT_UNRELATED",
+                            f"{name} preceded by a STALLWAIT that gates on neither "
+                            "the target bank nor the FPU pipe — confirm what orders "
+                            "this move",
+                        )
+                    elif not has_need:
+                        # Gated on the OTHER Src register: proves nothing about the
+                        # bank this move writes.
+                        hint, detail = (
+                            "DEST2SRC_WRONG_SRC_GATE",
+                            f"{name} writes {'SrcA' if need == 'SRCA_VLD' else 'SrcB'} "
+                            f"but its STALLWAIT gates on the other register's "
+                            f"bank-valid condition, not {need} — the wait says nothing "
+                            "about the bank being written",
+                        )
+                    elif not has_math:
                         if fb.arch == "quasar":
-                            # The pre-flip-pointer mechanism is grounded on the WH/BH
-                            # bank model. Quasar has its own unpack->dest semaphores,
-                            # HW AutoTTSync and a third SrcS lane, so the same mask
-                            # shape is NOT a confirmed defect there — surface it to be
-                            # grounded, never assert it by cross-arch analogy.
                             hint, detail = (
                                 "DEST2SRC_NO_MATH_DRAIN_UNCONFIRMED",
                                 f"{name} is gated on the Src bank-valid condition "
@@ -189,13 +212,16 @@ class SrcRegBank(Check):
                                 "move writes a bank the unpacker still owns — silent "
                                 "wrong values, never a hang",
                             )
-                    else:
+                    elif flipped_since_stall:
                         hint, detail = (
-                            "DEST2SRC_WAIT_UNRELATED",
-                            f"{name} preceded by a STALLWAIT that gates on neither "
-                            "the target bank nor the FPU pipe — confirm what orders "
-                            "this move",
+                            "DEST2SRC_DRAIN_REARMED",
+                            f"{name} is correctly gated, but a Src bank flip was "
+                            "issued between that STALLWAIT and this move — the drain "
+                            "proved the FPU pipe empty at the stall, and the flip "
+                            "re-armed exactly the in-flight-epilogue race it settled",
                         )
+                    else:
+                        continue  # correctly gated
 
                 out.append(
                     Finding(
@@ -205,7 +231,7 @@ class SrcRegBank(Check):
                         kind="dvalid:DEST_TO_SRC",
                         hint=hint,
                         detail=detail,
-                        evidence=[self._ev(f, f.get("text", "") or name)]
+                        evidence=[self._ev(f, text or name)]
                         + (
                             [self._ev(last_stall, last_stall.get("text", ""))]
                             if last_stall is not None

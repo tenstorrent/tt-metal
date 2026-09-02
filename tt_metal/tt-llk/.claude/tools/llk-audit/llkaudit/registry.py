@@ -790,6 +790,31 @@ def publication_waits_own_bank(text: str) -> bool:
     return len(a) >= 6 and a[5] == "1"
 
 
+def required_vld_token(name: str):
+    """The bank-valid condition a Dest->Src move must be gated on: MOVD2A writes
+    SrcA and needs SRCA_VLD; MOVD2B writes SrcB and needs SRCB_VLD. A stall naming
+    only the OTHER register proves nothing about the bank being written."""
+    up = name.upper()
+    if "MOVD2A" in up:
+        return "SRCA_VLD"
+    if "MOVD2B" in up:
+        return "SRCB_VLD"
+    return None
+
+
+# A Src bank flip re-arms the hazard the MATH drain was taken to settle: the drain
+# proves the FPU pipe was empty AT THE STALL, so a flipping op issued after it
+# re-introduces exactly the in-flight-epilogue race. SETRWC with CLR_A/CLR_B/CLR_AB
+# and a matrix op with clr_src both flip; CLR_NONE does not (and is the common case
+# in-tree, so it must not be mistaken for one). Non-flipping FPU ops - including the
+# MOVD2A/MOVD2B of the same burst - do NOT re-arm it.
+_CLR_FLIP_RE = re.compile(r"\bCLR_(?:A|B|AB|SRC)\b")
+
+
+def is_bank_flip_macro(text: str) -> bool:
+    return bool(_CLR_FLIP_RE.search(text))
+
+
 def is_dest_to_src_move(name: str) -> bool:
     """True for an ISSUED Dest->Src move macro (TTI_MOVD2A / TT_MOVD2B / ...).
 
