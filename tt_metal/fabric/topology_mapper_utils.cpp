@@ -3648,18 +3648,23 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
             TopologyMappingSolverEngine::Auto,
             unique_shapes_);
         if (!placement.success) {
-            // Mirror the single-solve path (map_multi_mesh_to_physical): the minimal-host cap is
-            // best-effort — if the capped encoding is UNSAT, drop the hard cap (the SOFT minimize
-            // bias stays on) and re-encode a fresh session instead of reporting exhaustion, so an
-            // infeasible cap never turns a solvable enumeration into "no solutions" (split-host
-            // meshes partition hosts into more same-rank groups than the chip-count k_min allows).
-            // excluded_ carries every already-returned placement into the new encoding, so the
-            // relaxed session cannot re-emit them.
-            if (!host_cap_relaxed_ && inter_mesh_constraints_.max_same_rank_groups_used() > 0) {
-                log_info(
+            // Mirror the single-solve path (map_multi_mesh_to_physical): the minimal-host cap is best-effort --
+            // if the capped encoding is UNSAT drop the hard cap (the SOFT minimize bias stays on) and re-encode a
+            // fresh session, so an infeasible cap never turns a solvable enumeration into "no solutions"
+            // (split-host meshes partition hosts into more same-rank groups than the chip-count k_min allows).
+            //
+            // Relax ONLY when NO capped solution has been emitted (emitted_ == 0). Once the enumeration has
+            // returned even one cap-compliant placement, the cap is feasible for this instance, so genuine
+            // exhaustion means "no more capped solutions" -- NOT license to start emitting over-cap placements.
+            // Relaxing here after emitted_ > 0 would mix cap-compliant and over-cap solutions in one enumeration
+            // and diverge from map_multi_mesh_to_physical_n (which pulls from this same next()). Keeping the cap
+            // and reporting exhaustion matches the single-solve precedent and the batch path.
+            if (!host_cap_relaxed_ && emitted_ == 0 && inter_mesh_constraints_.max_same_rank_groups_used() > 0) {
+                log_warning(
                     tt::LogFabric,
-                    "Multi-solution enumeration: hard host-group cap (k={}) infeasible for this instance ({}); "
-                    "retrying without it (soft minimize stays on)",
+                    "Multi-solution enumeration: hard host-group cap (k={}) infeasible for this instance with zero "
+                    "capped solutions ({}); DOWNGRADING to an uncapped solve (soft minimize stays on) -- returned "
+                    "placements may occupy more than k host groups",
                     inter_mesh_constraints_.max_same_rank_groups_used(),
                     placement.error_message);
                 inter_mesh_constraints_.set_max_same_rank_groups_used(0);
