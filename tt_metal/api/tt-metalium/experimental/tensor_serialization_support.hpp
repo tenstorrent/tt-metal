@@ -25,16 +25,20 @@ namespace tt::tt_metal {
 TensorLayout restore_tensor_layout_from_serialized(
     DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
 
+// Fields rather than parameters so callers name them: the last three are adjacent bools, and
+// designated initializers make a transposition a compile error instead of a silent one. None are
+// defaulted, since a caller that omits an experimental flag silently downgrades an opt-in.
+struct PrepopulatedShardSpecs {
+    TensorMemoryLayout memory_layout;
+    BufferType buffer_type;
+    std::optional<ShardSpec> shard_spec;
+    std::optional<NdShardSpec> nd_shard_spec;
+    bool created_with_nd_shard_spec;
+    bool per_core_allocation;
+    bool range_lockstep_allocation;
+};
+
 // NOLINTNEXTLINE(readability-redundant-declaration)
-// The experimental allocation flags are required rather than defaulted: this rebuilds a
-// MemoryConfig from named fields, and a caller that omits them silently downgrades an opt-in.
-MemoryConfig create_memory_config_with_prepopulated_shard_specs(
-    TensorMemoryLayout memory_layout,
-    BufferType buffer_type,
-    std::optional<ShardSpec> shard_spec,
-    std::optional<NdShardSpec> nd_shard_spec,
-    bool created_with_nd_shard_spec,
-    bool per_core_allocation,
-    bool range_lockstep_allocation);
+MemoryConfig create_memory_config_with_prepopulated_shard_specs(PrepopulatedShardSpecs specs);
 
 }  // namespace tt::tt_metal

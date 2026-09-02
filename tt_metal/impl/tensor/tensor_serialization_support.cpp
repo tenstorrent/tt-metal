@@ -13,21 +13,18 @@ TensorLayout restore_tensor_layout_from_serialized(
     return TensorLayout(dtype, page_config, memory_config, alignment);
 }
 
-MemoryConfig create_memory_config_with_prepopulated_shard_specs(
-    TensorMemoryLayout memory_layout,
-    BufferType buffer_type,
-    std::optional<ShardSpec> shard_spec,
-    std::optional<NdShardSpec> nd_shard_spec,
-    bool created_with_nd_shard_spec,
-    bool per_core_allocation,
-    bool range_lockstep_allocation) {
+MemoryConfig create_memory_config_with_prepopulated_shard_specs(PrepopulatedShardSpecs specs) {
     MemoryConfig config(
-        memory_layout, buffer_type, std::move(shard_spec), std::move(nd_shard_spec), created_with_nd_shard_spec);
+        specs.memory_layout,
+        specs.buffer_type,
+        std::move(specs.shard_spec),
+        std::move(specs.nd_shard_spec),
+        specs.created_with_nd_shard_spec);
     // Through the setters, so their mode and mutual-exclusion guards still run on the rebuilt config.
-    if (per_core_allocation) {
+    if (specs.per_core_allocation) {
         experimental::per_core_allocation::set_per_core_allocation(config, true);
     }
-    if (range_lockstep_allocation) {
+    if (specs.range_lockstep_allocation) {
         experimental::range_lockstep_allocation::set_range_lockstep_allocation(config, true);
     }
     return config;
