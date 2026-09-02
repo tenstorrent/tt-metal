@@ -2002,8 +2002,19 @@ def profile_model() -> dict:
             for o in (rep.get("open_ops") or [])
         ]
         _persist_throughput(rep, prof)  # fresh static target for the RUN_REPORT roofline table (non-stale)
-    except Exception:
-        pass
+    except Exception as _exc:  # noqa: BLE001 -- a roofline that cannot be built must not fail the profile
+        # SAY WHICH STEP DID NOT HAPPEN. Swallowed whole, this hid a missing throughput snapshot for a
+        # full day: the report then rendered its floor-only roofline with no band and no fidelity
+        # ladder, which reads as a different report rather than a broken one. The profile is still
+        # returned -- the device numbers in it are real and the run can proceed on them -- but the
+        # operator is told that the roofline inputs are the part that is missing, and why.
+        print(
+            "  [perf-mcp] roofline inputs NOT persisted (%s: %s) -- the report will fall back to its "
+            "floor-only form with no bandwidth band and no fidelity ladder. The device numbers in this "
+            "profile are unaffected." % (type(_exc).__name__, str(_exc)[:160]),
+            file=sys.stderr,
+            flush=True,
+        )
     # OBJECTIVE termination signal: you are NOT done while residual_gap is material and open_ops remain.
     return {
         "ok": True,

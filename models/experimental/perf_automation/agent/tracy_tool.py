@@ -799,6 +799,10 @@ def tracy_tool(
     # PER-STAGE SLICES from the marks measure_adapter emits around each stage under a capture. Purely
     # additive: an unmarked capture yields no windows, no stage_buckets, and every consumer keeps the
     # whole-profile figure it already had.
+    # READ THE LOG ONCE. Two consumers need this -- the warning below when there is no split, and the
+    # field carried on the profile -- and reading it twice parses the same multi-thousand-line log
+    # again for an answer that cannot have changed.
+    _why = _capture_truncated_reason(profiles_dir)
     stage_buckets = _per_stage_buckets(raw_dest, profiles_dir, available_cores, arch)
     if not stage_buckets:
         # NAME THE CAUSE THAT ACTUALLY HAPPENED. This blamed the import unconditionally, and the
@@ -806,7 +810,6 @@ def tracy_tool(
         # and records nothing further -- so marks emitted after that point are emitted (tracy's own
         # logger prints every one) into a capture that has already closed. Reading the log turns a
         # misleading hint into the reason, which is the difference between a one-line fix and a day.
-        _why = _capture_truncated_reason(profiles_dir)
         print(
             "  [tracy] no stage signposts in the capture -- the roofline falls back to whole-profile "
             "figures (one math-fidelity peak shared by every stack). %s"
@@ -840,6 +843,13 @@ def tracy_tool(
         # The per-stage split when the capture carried marks; absent otherwise, and absence must read
         # as "no split available" rather than as an empty one.
         "stage_buckets": stage_buckets,
+        # THE CAPTURE'S OWN HONESTY, carried with the numbers rather than left in a log nobody reads.
+        # Tracy stops instrumenting after 32K source locations, saves what it has, and every later
+        # record is lost -- roughly a third of the rows on a full-model forward. The run still exits 0
+        # and still produces a CSV, so a truncated capture is indistinguishable from a complete one
+        # downstream, and its op breakdown was rendered as if it described the whole run. Recorded
+        # here, where the log is still in reach; None when the capture ran to completion.
+        "capture_truncated": _why,
         "per_token_ms": pt_ms,
         "tokens_per_sec_per_user": tput["tokens_per_sec_per_user"],
         "tokens_per_sec": tput["tokens_per_sec"],

@@ -2922,7 +2922,16 @@ def _roofline_lines(
         # input by inventing a property of the model.
         _ab = throughput.get("active_bytes") if isinstance(throughput, dict) else None
         if not _ab:
-            out.append("  (rate ceiling — n/a: no weight-bytes input for this pipeline)")
+            # NAME THE MISSING STEP, NOT JUST THE MISSING VALUE. Without the weight bytes this table
+            # silently becomes its floor-only form -- no band, no per-stage rows, no fidelity ladder --
+            # which reads as a different KIND of report rather than a report missing an input. The
+            # snapshot that carries those bytes is written by profile_model; when that step could not
+            # run it now says so on stderr, and this line points at it so the two can be connected.
+            out.append(
+                "  (rate ceiling — n/a: no weight-bytes input for this pipeline — the roofline inputs "
+                "were never persisted for this run, so there is no bandwidth band, no per-stage row and "
+                "no fidelity ladder. See '[perf-mcp] roofline inputs NOT persisted' in the run log.)"
+            )
         else:
             out.append("  (rate ceiling — n/a: no single unit of work for this pipeline)")
     out.append("")
@@ -2968,6 +2977,17 @@ def _baseline_bucket_lines(baseline_profile: dict | None, report_csv: str = "") 
     # is visible from the order, and the profile total is the first row's denominator -- so it was
     # three facts the table already carries, in a line as wide as the table itself.
     out = ["Op breakdown"]
+    # A TABLE BUILT FROM A TRUNCATED CAPTURE MUST SAY SO. Tracy stops instrumenting after 32K source
+    # locations and saves what it has, losing roughly a third of the rows on a full-model forward --
+    # and the run still exits 0 with a CSV, so nothing downstream could tell. These counts and totals
+    # were rendered as if they described the whole run. The profile now carries the reason; printing
+    # it here means the reader learns it beside the numbers it qualifies, not in a log.
+    _trunc = (prof or {}).get("capture_truncated") if isinstance(prof, dict) else None
+    if _trunc:
+        out.append(
+            "  INCOMPLETE: the profiler stopped recording partway through this capture (%s), so these "
+            "counts and totals describe only the part it kept." % _trunc
+        )
     hdr = f"{'op class':<15} {'device_ms':>10} {'%':>6} {'count':>7} {'bound':>6}  dominant op (shape)"
     out.append(hdr)
     # Ruled to the same width as every other section in this report, rather than a length derived
