@@ -461,7 +461,9 @@ def _ci_provenance() -> dict:
         "arch": os.environ.get("CHIP_ARCH", "unknown"),
         "run_id": _run_id(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "pipeline": "PR" if event == "pull_request" else "nightly",
+        # Lowercase, to match the warehouse's RUNS.PIPELINE values ("nightly",
+        # "pr", ...). A mixed-case "PR" would split every filter on that column.
+        "pipeline": "pr" if event == "pull_request" else "nightly",
         "pr_number": os.environ.get("PR_NUMBER") or None,
     }
 
