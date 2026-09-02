@@ -1180,3 +1180,71 @@ def test_where_program_cache_different_broadcast_shapes(device, variant):
 
     assert_equal(expected1, result1)
     assert_equal(expected2, result2)
+
+
+# Issue 54235: compute_program_hash coarsens each input tensor to its padded VOLUME, so two calls
+# whose leading dims differ but multiply to the same product share one cache entry.  The per-core
+# reader strides depend on the individual dims (n_stride = Ht*Wt*C*(N>1), c_stride = Ht*Wt*(C>1)),
+# so the cached program must have them re-derived on every hit, not left frozen at the first miss.
+# These tests need a SHARED program cache across the two calls, which is why both calls live in one
+# test body.  Whichever call runs first was always correct; it is the second that regressed.
+
+
+@pytest.mark.parametrize(
+    "pred_shape_1, pred_shape_2",
+    [
+        ((4, 1, 32, 32), (1, 4, 32, 32)),  # N/C swap, equal volume
+        ((2, 2, 1, 32, 32), (2, 1, 2, 32, 32)),  # 5D: D/N/C permutation
+        ((2, 2, 1, 32, 32), (1, 2, 2, 32, 32)),
+    ],
+)
+def test_where_program_cache_same_volume_different_leading_dims(device, pred_shape_1, pred_shape_2):
+    """Predicates that hash identically (same padded volume, same H/W) but need different strides."""
+    torch.manual_seed(42)
+    # The true/false tensors are the broadcast target: same shape for both calls, so the ONLY
+    # difference between the two dispatches is the predicate's dim factorization.
+    out_shape = [max(a, b) for a, b in zip(pred_shape_1, pred_shape_2)]
+
+    results = []
+    for pred_shape in (pred_shape_1, pred_shape_2):
+        pred = torch.randint(0, 2, pred_shape).to(torch.bfloat16)
+        true_t = torch.randn(out_shape, dtype=torch.bfloat16)
+        false_t = torch.randn(out_shape, dtype=torch.bfloat16)
+        expected = torch.where(pred.bool(), true_t, false_t)
+
+        pred_tt = ttnn.from_torch(pred, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        true_tt = ttnn.from_torch(true_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        false_tt = ttnn.from_torch(false_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        result = ttnn.to_torch(ttnn.where(pred_tt, true_tt, false_tt))
+        results.append((result, expected))
+
+    for result, expected in results:
+        assert_equal(expected, result)
+
+
+def test_where_program_cache_same_input_volume_different_output_volume(device):
+    """
+    Equal per-tensor input volumes and equal H/W hash identically, but the OUTPUT shape is the
+    per-dim broadcast maximum of the three inputs and is absent from the key entirely -- so the
+    work-split (per-core tile counts and start ids) differs between these two dispatches.
+    """
+    torch.manual_seed(42)
+    # Both calls: predicate volume 4096, true volume 4096, false volume 1024, H=W=32.
+    # Call 1 broadcasts out to [4,4,32,32]; call 2 stays [4,1,32,32].
+    cases = [
+        ((4, 1, 32, 32), (1, 4, 32, 32), (1, 1, 32, 32)),
+        ((4, 1, 32, 32), (4, 1, 32, 32), (1, 1, 32, 32)),
+    ]
+
+    for pred_shape, true_shape, false_shape in cases:
+        pred = torch.randint(0, 2, pred_shape).to(torch.bfloat16)
+        true_t = torch.randn(true_shape, dtype=torch.bfloat16)
+        false_t = torch.randn(false_shape, dtype=torch.bfloat16)
+        expected = torch.where(pred.bool(), true_t, false_t)
+
+        pred_tt = ttnn.from_torch(pred, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        true_tt = ttnn.from_torch(true_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        false_tt = ttnn.from_torch(false_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        result = ttnn.to_torch(ttnn.where(pred_tt, true_tt, false_tt))
+
+        assert_equal(expected, result)
