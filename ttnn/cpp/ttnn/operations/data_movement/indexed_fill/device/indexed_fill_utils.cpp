@@ -291,7 +291,7 @@ tt::tt_metal::MemoryConfig resolve_output_memory_config(
     // indexed_fill preserves the output shape, so an ND-sharded output config already
     // carries the authoritative shard distribution. Re-deriving a legacy shard_spec here
     // is unnecessary and would rewrite an ND-origin config onto the legacy shard-spec path.
-    if (output_mem_config.created_with_nd_shard_spec()) {
+    if (output_mem_config.created_with_nd_shard_spec() && output_mem_config.nd_shard_spec().has_value()) {
         return output_mem_config;
     }
 
