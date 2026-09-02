@@ -7256,3 +7256,82 @@ carries no accuracy penalty. Override with TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ=N 
 The prior "100 Hz is the operating point / rate buys accuracy to ~100 Hz" text is SUPERSEDED: that
 was the old-design phase-lottery era, and its forward/return-asymmetry story is retracted above. The
 default is no longer an accuracy-driven choice; it is set to match the control loop it observes.
+
+---
+
+## Continuous-sync overhead across the fabric test surface (100 Hz and 1 kHz)
+
+Four arms, so the profiler drain cannot contaminate the sync number:
+A = stock (no profiler) · B = profiler on, `SYNC_HZ=0` · C = +100 Hz · D = +1 kHz.
+**Sync cost is C-B and D-B.** 5 configs x 4 arms x 2 reps, arms alternated within each rep,
+`tt-smi -r` + FORCE_AICLK 1350 every run, detached with per-run logs and CSVs.
+
+### Method change forced by the data: golden geomean does NOT work off the beaten path
+The three new configs ran clean but produced **rows=0 / geomean 1.000000** -- the golden table only
+holds entries for the original MeshMulticast tuples, so any new shape has nothing to compare
+against and silently reports "1.0". Using it would have manufactured a null result.
+Switched to **`bandwidth_summary_results_blackhole.csv` -> `avg_bandwidth_gigabytes_per_s` per row,
+compared ARM-TO-ARM** (per-row ratio vs arm B, geomean over rows). Golden-independent, and strictly
+better for this question: within-run `bw_std_dev` is 0.0008-0.005 GB/s (~0.05%), so the metric
+resolves far below the effects being measured.
+
+### Results (n=2 per arm; rep1 and n=2 agree to <0.05 pt everywhere)
+
+| config | shape | C-B 100 Hz | D-B 1 kHz | A-B (drain) | rows |
+|--------|-------|-----------|-----------|-------------|------|
+| fabric_1grp   | Mesh mcast, 2+4 KB, links 1-4   | **-0.31%** | **-0.38%** | +0.10% | 24 |
+| ov_mesh_uni   | Mesh **unicast**, 2 KB, links 1,4 | -0.32% | -0.22% | +0.39% | 4 |
+| ov_neighbor   | neighbor_exchange, 2+4 KB        | -0.88% | -1.02% | -0.11% | 4 |
+| ov_linear_uni | **Linear (1D)** unicast, 512+4096 B | **-2.55%** | **-2.58%** | +0.04% | 4 |
+| ov_bigpkt     | Mesh mcast **7616 B**, links 1-2  | +0.68% | +0.64% | (A skipped) | 2 |
+| **POOLED**    | 36 rows                           | **-0.63%** | **-0.68%** | | 36 |
+
+Lossless in every sync arm (0 partial / 0 dropped / 0 stray). Rounds/link scaled as configured
+(e.g. fabric_1grp 373 at 100 Hz, 3687 at 1 kHz). **Zero UMD DeviceTimeoutErrors in all 55 runs**
+this sweep -- the earlier 2-in-40 did not recur.
+
+### Answer to the question asked
+**Continuous sync costs well under 1% on every shape except one, and 100 Hz vs 1 kHz is
+indistinguishable.** Pooled: -0.63% at 100 Hz, -0.68% at 1 kHz -- a 10x rate increase costs
+0.05 pt, inside run-to-run noise. Large packets (7616 B) show **no cost at all** (+0.6%, i.e. sync
+arms measured marginally faster than the no-sync arm -- noise, but certainly not a penalty), which
+also confirms the old num_links=4 cliff and the large-packet drain regression are both gone.
+A-B is +0.04..+0.39% across configs: the profiler drain is free at these sizes, so it is not
+contaminating the sync numbers.
+
+### The one shape that costs: Linear/512 B, -2.5% -- and it is NOT the sync traffic
+`ov_linear_uni` costs ~8x the mesh shapes, and the cost is **rate-independent**: -2.55% at 100 Hz
+vs -2.58% at 1 kHz. A cost that ignores a 10x change in round rate is not the rounds.
+
+**Discriminator run (n=3, arm S = hook compiled, 100 Hz, but doorbells answered on the OLD
+prescaler grid):**
+
+    C fast doorbell (shipped):  -2.03% vs B
+    S slow doorbell (grid):     -3.11% vs B
+
+**This REFUTES the per-iteration-doorbell hypothesis** (mine). Had the per-iteration check been the
+cost, S -- which checks far less often -- would have moved toward B. It went the other way: the
+grid is 1.1 pt WORSE, which is the phase lottery returning (grid doorbells reinstate ~200 us of
+blocked-router time per round). So the shipped per-iteration doorbell is not merely acceptable
+here, it is actively cheaper than the alternative.
+
+What remains, UNTESTED: the cost tracks the hook's mere PRESENCE in the router translation unit
+(arm B compiles no hook at all, since `SYNC_HZ=0` removes the JIT define), which would be
+rate-independent and would bite hardest exactly where the router loop is the bottleneck -- small
+packets on a 1D topology. Testing it needs an arm with the hook COMPILED but never enabled, which
+is not a knob today (the gate is all-or-nothing). Recorded as the next step; NOT asserted.
+
+Caveats: degraded-MMIO box, so absolutes are boot-local and only arm-to-arm comparisons are
+trustworthy; `ov_linear_uni` is the noisiest config (C measured -2.55% in the main sweep and
+-2.03% in the discriminator batch, ~0.5 pt of run-to-run spread), so treat its magnitude as
+"about 2-3%", not a precise figure.
+
+### Skipped, with reasons
+- 8192 B packets: `TT_FATAL pattern.size <= max_payload_size` -- needs `max_packet_size` in
+  `fabric_setup` (7616 config fixed this way and runs).
+- CCL / ttnn tests (`unit_tests_ttnn_ccl*`, `test_ccl_multi_cq_multi_device`) and the fabric gtests
+  (`fabric_unit_tests`, `fabric_smoke_tests`, `bench_unicast`): they emit no per-row bandwidth CSV,
+  so overhead there would have to come from wall-clock timing -- a much coarser metric needing many
+  more reps. Deliberately deferred rather than run at low confidence.
+- Single-device / no-eth tests: not sync-relevant (no device<->device links to sync), skipped by
+  construction.
