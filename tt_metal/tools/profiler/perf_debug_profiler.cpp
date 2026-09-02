@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cctype>
 #include <cstdlib>
+#include <vector>
 #include <cstring>  // std::memcpy for the fabric-sync config re-arm
 #include <fstream>
 #include <iterator>
@@ -2214,6 +2215,7 @@ struct PerfDebugProfiler::FabricSyncState {
         uint64_t ref_last = 0;
         double rate = 1.0;  // d(resp)/d(init), from ROUND deltas
         std::deque<std::pair<uint64_t, int64_t>> series;  // (mid_ref, offset) for the rate fit
+        std::deque<uint32_t> rtt_series;                  // the anchor sample's (wire) rtt, per round
         // stats
         uint64_t rounds_solved = 0, rounds_partial = 0, rounds_dropped = 0;
         uint64_t trips_total = 0;
@@ -2709,8 +2711,12 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
                         e.draws[k].corr_r = corr_r_now;
                     }
                     e.series.emplace_back(sol.mid_ref, sol.offset);
+                    e.rtt_series.push_back(static_cast<uint32_t>(sol.rtt_min));
                     if (e.series.size() > 256) {
                         e.series.pop_front();
+                    }
+                    if (e.rtt_series.size() > 256) {
+                        e.rtt_series.pop_front();
                     }
                     // rate from ROUND deltas, least squares, once the baseline is long enough
                     if (e.series.size() >= 8 && (e.series.back().first - e.series.front().first) > (1ull << 30)) {
@@ -3697,6 +3703,67 @@ void PerfDebugProfiler::stop_fabric_sync() {
                 2 * rtt0_mean,
                 mr);
         } catch (const std::exception&) {
+        }
+        // SAMPLING SCATTER: per-round offset residual about a linear fit of the trailing series,
+        // and its correlation with the anchor sample's rtt. This decides the noise lever: a strong
+        // correlation says gate/redo samples with slow rtt (contention is the noise); no correlation
+        // says a cross-round robust filter (or nothing -- if the RMS is already ~round noise).
+        if (e.series.size() >= 16) {
+            const uint64_t x0 = e.series.front().first;
+            const int64_t y0 = e.series.front().second;
+            double sx = 0, sy = 0, sxx = 0, sxy = 0;
+            const double n = static_cast<double>(e.series.size());
+            for (const auto& [m, o] : e.series) {
+                const double x = static_cast<double>(m - x0);
+                const double y = static_cast<double>(o - y0);
+                sx += x;
+                sy += y;
+                sxx += x * x;
+                sxy += x * y;
+            }
+            const double den = n * sxx - sx * sx;
+            const double slope = den > 0 ? (n * sxy - sx * sy) / den : 0.0;
+            const double icept = (sy - slope * sx) / n;
+            double rss = 0;
+            std::vector<double> resid;
+            resid.reserve(e.series.size());
+            for (const auto& [m, o] : e.series) {
+                const double r2 = (static_cast<double>(o - y0)) - (icept + slope * static_cast<double>(m - x0));
+                resid.push_back(r2);
+                rss += r2 * r2;
+            }
+            const double rms = std::sqrt(rss / n);
+            double corr = 0.0;
+            const size_t np = std::min(resid.size(), e.rtt_series.size());
+            if (np >= 16) {
+                double ma = 0, mb = 0;
+                for (size_t i = resid.size() - np, j = e.rtt_series.size() - np, k = 0; k < np; k++) {
+                    ma += std::abs(resid[i + k]);
+                    mb += static_cast<double>(e.rtt_series[j + k]);
+                }
+                ma /= static_cast<double>(np);
+                mb /= static_cast<double>(np);
+                double cab = 0, caa = 0, cbb = 0;
+                for (size_t i = resid.size() - np, j = e.rtt_series.size() - np, k = 0; k < np; k++) {
+                    const double a = std::abs(resid[i + k]) - ma;
+                    const double bb = static_cast<double>(e.rtt_series[j + k]) - mb;
+                    cab += a * bb;
+                    caa += a * a;
+                    cbb += bb * bb;
+                }
+                corr = (caa > 0 && cbb > 0) ? cab / std::sqrt(caa * cbb) : 0.0;
+            }
+            const double f = root_freq_ghz_ > 0.0 ? root_freq_ghz_ : 1.35;
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] FSYNC SCATTER {}->{}: n={} fit-RMS {:.1f} cy ({:.1f} ns), "
+                "corr(|resid|, anchor rtt) = {:+.2f}",
+                e.init.chip,
+                e.resp.chip,
+                e.series.size(),
+                rms,
+                rms / f,
+                corr);
         }
         // LINK HEALTH on both ends, from the base-FW eth mailbox (the same reads as
         // print_aerisc_training_status, which llrt does not export). Motivated by the slow-doorbell

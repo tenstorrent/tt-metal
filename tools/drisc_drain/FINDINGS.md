@@ -7173,3 +7173,41 @@ subtracted per-round and move closure NOT AT ALL -- the exact inverse of falsifi
 ### Incidents
 - UMD DeviceTimeoutError killed 1 run again (ts_ring rep2) -- second occurrence in ~40 runs, both
   on this box whose MMIO remains degraded. Flagged, not attributed; both times the repeat ran clean.
+
+---
+
+## Sampling noise, quantified: 3.6-4.4 ns RMS per round, no exploitable structure -- thread CLOSED
+
+Per the plan: quantify before optimizing, then pick between an RTT-gated adaptive sample and a
+cross-round robust filter based on whether scatter correlates with the anchor sample's rtt.
+
+New permanent diagnostic: `FSYNC SCATTER` at teardown -- per-round offset residual about a linear
+fit of the trailing 256-round series, plus Pearson corr(|residual|, anchor-sample wire rtt).
+(Caveat by construction: the fit spans 2.56 s at 100 Hz, so the RMS includes any nonlinearity of
+the offset wander over that window -- it is an UPPER bound on per-round noise.)
+
+Measured, one run, all four links (closure that run: -0.3 ns mean; lossless; geomean 1.0118):
+
+    0<->1: fit-RMS 3.6 ns, corr = -0.41      1<->2: fit-RMS 4.0 ns, corr = -0.35
+    0<->3: fit-RMS 4.4 ns, corr = -0.30      2<->3: fit-RMS 4.4 ns, corr = -0.24
+
+### Neither lever is supported
+- **RTT gate: ruled out by direction.** The gate's premise is that a slow anchor sample predicts a
+  bad offset (contention noise). The correlation is weakly NEGATIVE on every link -- and that is
+  the two-stamp fix working as designed: a sample that suffered a long turnaround had that
+  turnaround measured and subtracted, so rtt no longer predicts offset error. Post-fix, there is
+  nothing for a gate to reject.
+- **Cross-round robust filter: nothing to feed on.** At 3.6-4.4 ns RMS (<= the ~7 ns back-to-back
+  round noise measured in the original design work, and an upper bound at that), there is no tail
+  worth filtering; and the one consumer it would protect -- the cross-round rate estimate -- is a
+  reported statistic only (compose deliberately discards it: shared slope, own origin).
+
+### Where device<->device accuracy now stands, end to end
+- bias: eps 23.5 ns/link -> ~1 ns (two-stamp subtraction; topology-independent; falsified twice)
+- per-round scatter: 3.6-4.4 ns RMS (upper bound), no rtt structure
+- run-to-run closure repeatability: +-0.6-1.0 ns over 3 runs per topology
+- closure means: cancelling -0.9 ns, ring +5.3 ns, this run -0.3 ns
+
+The remaining error terms are at or below the physical round noise, and no measured structure
+points at a next lever. Declared done at this level; anything further should start from a NEW
+measurement showing structure, not from a candidate fix.
