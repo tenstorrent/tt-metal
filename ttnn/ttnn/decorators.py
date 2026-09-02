@@ -717,13 +717,15 @@ class FastOperation:
             cq_id = function_kwargs.pop("cq_id")
 
         recording = ttnn.graph.is_python_io_recording_enabled()
-        if recording:
-            ttnn.graph.track_function_start(self.python_fully_qualified_name)
-            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
-            input_tensors = get_all_tensors((function_args, function_kwargs))
-            set_tensor_id(input_tensors)
-
+        started = False
         try:
+            if recording:
+                ttnn.graph.track_function_start(self.python_fully_qualified_name)
+                started = True
+                ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+                input_tensors = get_all_tensors((function_args, function_kwargs))
+                set_tensor_id(input_tensors)
+
             if cq_id is None:
                 result = self.function(*function_args, **function_kwargs)
             else:
@@ -745,7 +747,7 @@ class FastOperation:
                 )
             raise
         finally:
-            if recording:
+            if started:
                 ttnn.graph.track_function_end()
 
         if recording:
