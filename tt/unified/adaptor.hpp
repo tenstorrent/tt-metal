@@ -226,5 +226,30 @@ inline uint32_t dfb_entry_bytes(uint32_t dfb) { return buffer(dfb).get_entry_siz
 // one dataflow buffer for the core, which is what makes checking it on one thread enough.
 inline uint32_t dfb_num_entries(uint32_t dfb) { return buffer(dfb).get_total_num_entries(); }
 
+// The TILE GEOMETRY the compute kernel was BUILT for, per buffer, in elements.
+//
+// This is the host's `tile_format_metadata` as it actually reached the device: the JIT emits
+// it into chlkc_descriptors.h as constexpr tables, so it is the one authority on what the
+// unpacker will do. Recomposed rather than read directly -- a tile is a grid of faces, and
+// only the face counts and the face row extent are tabulated:
+//
+//     rows = face_r_dim * num_faces_r_dim        32x32 -> 16 * 2 = 32,   1x32 -> 1 * 1 = 1
+//     cols = num_faces_c_dim * FACE_C_DIM        32x32 ->  2 * 16 = 32,  1x32 -> 2 * 16 = 32
+//
+// UNPACK and MATH only. The tables sit under `#if !defined(UCK_CHLKC_PACK)` in the generated
+// header, with a parallel pack_* set for the packer, so this is not readable from the pack
+// thread and not from a data-movement one at all.
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD && !defined(UCK_CHLKC_PACK)
+#define TT_U_HAVE_DFB_TILE_GEOMETRY 1
+
+inline constexpr uint32_t dfb_tile_rows(uint32_t dfb) {
+    return static_cast<uint32_t>(unpack_tile_face_r_dim[dfb]) * static_cast<uint32_t>(unpack_num_faces_r_dim[dfb]);
+}
+
+inline constexpr uint32_t dfb_tile_cols(uint32_t dfb) {
+    return static_cast<uint32_t>(unpack_num_faces_c_dim[dfb]) * static_cast<uint32_t>(ckernel::FACE_C_DIM);
+}
+#endif
+
 }  // namespace unified
 }  // namespace tt
