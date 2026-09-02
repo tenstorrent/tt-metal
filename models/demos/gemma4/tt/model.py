@@ -15,7 +15,6 @@ Supports both prefill and decode modes with paged attention.
 Compatible with tt_transformers Generator interface.
 """
 
-
 import os
 
 import torch
@@ -24,7 +23,9 @@ from tracy import signpost
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
+from models.common.tensor_utils import get_rot_transformation_mat
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
+from models.demos.gemma4.tt.attention.global_kv_cache import pack_global_rope_device
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
@@ -349,6 +350,16 @@ class Gemma4Model:
         self._rope_prefill_pinned = False
         self._rope_prefill_positions = None
         self._rope_prefill_gathered = {}
+        self._packed_global_rope_trans_mat = None
+        if mesh_config is not None and mesh_config.prefill.sp > 1:
+            self._packed_global_rope_trans_mat = ttnn.from_torch(
+                get_rot_transformation_mat(),
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
         # When True the caller refreshes the ring metadata itself, outside any trace.
         self._ring_metadata_external = False
         self.max_seq_len = max_seq_len
@@ -551,9 +562,14 @@ class Gemma4Model:
                 bounded_sliding_kv_cache=bounded_sliding_kv_cache,
                 ring_prefill_chunk_size=prefill_chunk_size,
             )
-            # Create KV cache for non-shared layers only
-            # Shared layers will use their source layer's KV cache
-            if create_kv_cache and i not in self.kv_shared_layer_map:
+            # Create a paged cache for paths that consume one. CP global prefill
+            # owns a single packed 640-wide ring cache instead; allocating the
+            # legacy K and V tensors as well would duplicate its dominant footprint.
+            if (
+                create_kv_cache
+                and i not in self.kv_shared_layer_map
+                and not (layer.self_attn.weights.is_global and layer.self_attn.ring_kv_cache is not None)
+            ):
                 from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
 
                 attn_cfg = Gemma4AttentionConfig(hf_config, i)
@@ -1087,6 +1103,12 @@ class Gemma4Model:
                 self.ccl_manager.set_ring_metadata(slot_idx=user_id or 0, kv_actual_global=int(chunk_start_idx))
 
         self._rope_prefill_gathered = prefill_rope_presliced
+        packed_global_rope = None
+        if not is_decode and "full_attention" in prefill_rope_presliced:
+            packed_global_rope = (
+                *pack_global_rope_device(*prefill_rope_presliced["full_attention"]),
+                self._packed_global_rope_trans_mat,
+            )
 
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
@@ -1179,6 +1201,17 @@ class Gemma4Model:
                     "hot_pt": packed.get("hot_pt"),
                 }
 
+            if (
+                not is_decode
+                and self.hf_config.layer_types[i] == "full_attention"
+                and packed_global_rope is None
+                and self._packed_global_rope_trans_mat is not None
+            ):
+                packed_global_rope = (
+                    *pack_global_rope_device(*layer_rope),
+                    self._packed_global_rope_trans_mat,
+                )
+
             hidden_states = layer(
                 hidden_states,
                 rope_mats=layer_rope,
@@ -1200,6 +1233,7 @@ class Gemma4Model:
                 packed=layer_packed,
                 chunk_start_idx=chunk_start_idx,
                 chunk_page_table=chunk_page_table,
+                packed_global_rope=(packed_global_rope if self.hf_config.layer_types[i] == "full_attention" else None),
             )
 
             # For KV source layers during prefill, capture the K/V from the attention

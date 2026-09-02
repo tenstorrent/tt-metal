@@ -21,7 +21,7 @@ from .kv_cache import init_kv_cache
 from .decode import decode_forward, packed_decode_forward
 from .operations import build_cp_prefill_mask
 from .prefill import flush_deferred_bounded_fills, prefill_forward
-from .ring_prefill import init_ring_kv_cache
+from .ring_prefill import init_packed_ring_kv_cache, init_ring_kv_cache
 
 
 class Gemma4AttentionConfig:
@@ -136,15 +136,25 @@ class Gemma4Attention:
         # every cross-chunk read silently fell back to the mask path.
         if cp_degree(mesh_config) > 1 and ring_prefill_chunk_size:
             num_local_kv_heads = 1 if self.weights.kv_replicated else config.num_key_value_heads // mesh_config.tp
-            self.ring_kv_cache = init_ring_kv_cache(
-                mesh_device=mesh_device,
-                mesh_config=mesh_config,
-                num_local_kv_heads=num_local_kv_heads,
-                head_dim=config.head_dim,
-                max_seq_len=max_seq_len,
-                num_layers=1,
-                num_users=max_batch_size,
-            )
+            if self.weights.is_global:
+                self.ring_kv_cache = init_packed_ring_kv_cache(
+                    mesh_device=mesh_device,
+                    mesh_config=mesh_config,
+                    num_local_kv_heads=num_local_kv_heads,
+                    max_seq_len=max_seq_len,
+                    num_layers=1,
+                    num_users=max_batch_size,
+                )
+            else:
+                self.ring_kv_cache = init_ring_kv_cache(
+                    mesh_device=mesh_device,
+                    mesh_config=mesh_config,
+                    num_local_kv_heads=num_local_kv_heads,
+                    head_dim=config.head_dim,
+                    max_seq_len=max_seq_len,
+                    num_layers=1,
+                    num_users=max_batch_size,
+                )
             self.ring_max_seq_len = max_seq_len
 
         # Fallback CP mask cache for callers that pass no ccl_manager; the shared
@@ -177,6 +187,7 @@ class Gemma4Attention:
         packed=None,
         chunk_start_idx=None,
         chunk_page_table=None,
+        packed_global_rope=None,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -282,6 +293,7 @@ class Gemma4Attention:
                 cp_attn_mask=self._cp_attn_mask(hidden_states.shape[-2]),
                 ring_kv_cache=self.ring_kv_cache,
                 ring_max_seq_len=self.ring_max_seq_len,
+                packed_global_rope=packed_global_rope,
             )
             # prefill_forward consumed (deallocated) the incoming tail; stash the
             # new one for the next chunk.
