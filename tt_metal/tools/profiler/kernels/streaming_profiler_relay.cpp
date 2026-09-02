@@ -476,27 +476,28 @@ __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n,
             if (take == 0) {
                 continue;
             }
-            const bool img = kernel_profiler::spsc_span_wrap_image(start, take, kRingWords);
-            off += kernel_profiler::spsc_span_pack_pad(img ? 0u : start, off);
             const uint32_t ring_src = rb + r * (kRingWords * 4u);
             const uint32_t hm = start & (kRingWords - 1u);
-            if (img) {
+            if (hm + take <= kRingWords) {
+                off += kernel_profiler::spsc_span_pack_pad(start, off);
+                ncrisc_noc_read_with_state<DM_DEDICATED_NOC, false, false>(
+                    kReadNoc, read_cmd_buf, ring_src + hm * 4u, slot + off * 4u, take * 4u);
+                off += take;
+            } else if (kernel_profiler::spsc_span_wrap_image(start, take, kRingWords)) {
                 // A near-full wrapping run ships as its whole ring image in one read (the decoder linearises by head).
                 // Coalescing adjacent images into one read starves the producer's L1 port ~70x.
+                off += kernel_profiler::spsc_span_pack_pad(0u, off);
                 ncrisc_noc_read_with_state<DM_DEDICATED_NOC, false, false>(
                     kReadNoc, read_cmd_buf, ring_src, slot + off * 4u, kRingWords * 4u);
                 off += kRingWords;
-            } else if (hm + take > kRingWords) {
+            } else {
                 // A small wrapping run ships as two byte-exact pieces: its dead remainder would be most of the ring.
+                off += kernel_profiler::spsc_span_pack_pad(start, off);
                 const uint32_t first = kRingWords - hm;
                 ncrisc_noc_read_with_state<DM_DEDICATED_NOC, false, false>(
                     kReadNoc, read_cmd_buf, ring_src + hm * 4u, slot + off * 4u, first * 4u);
                 ncrisc_noc_read_with_state<DM_DEDICATED_NOC, false, false>(
                     kReadNoc, read_cmd_buf, ring_src, slot + (off + first) * 4u, (take - first) * 4u);
-                off += take;
-            } else {
-                ncrisc_noc_read_with_state<DM_DEDICATED_NOC, false, false>(
-                    kReadNoc, read_cmd_buf, ring_src + hm * 4u, slot + off * 4u, take * 4u);
                 off += take;
             }
         }
