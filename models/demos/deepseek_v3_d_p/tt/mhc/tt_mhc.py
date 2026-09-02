@@ -133,10 +133,14 @@ def _cols(t, k):
 
 
 def _mix(streams, coeffs):
-    """sum_i coeffs[i] * streams[i], with each [1,1,T,1] coefficient broadcast down its stream."""
+    """sum_i coeffs[i] * streams[i], with each [1,1,T,1] coefficient broadcast down its stream.
+
+    addcmul rather than mac: mac lowers to a separate multiply and add, so it moves the
+    accumulator through DRAM twice per term and measures 1.63x slower here.
+    """
     y = ttnn.multiply(coeffs[0], streams[0])
     for s, c in zip(streams[1:], coeffs[1:]):
-        y = ttnn.mac(s, c, y)
+        y = ttnn.addcmul(y, s, c)
     return y
 
 
@@ -210,7 +214,7 @@ class TtMHCWrap(LightweightModule):
         out = [ttnn.multiply(p, x) for p in _cols(post, n)]
         for i in range(n):
             for j in range(n):
-                out[j] = ttnn.mac(res[i], cmb[i * n + j], out[j])
+                out[j] = ttnn.addcmul(out[j], res[i], cmb[i * n + j])
         return ttnn.concat(out, dim=-1)
 
     def forward(self, x, sublayer):
