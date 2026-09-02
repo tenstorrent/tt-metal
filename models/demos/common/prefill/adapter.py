@@ -275,6 +275,7 @@ class PrefillModelAdapter(ABC):
 DEFAULT_MODEL = "kimi_k2_7"
 
 ADAPTER_PATHS = {
+    "gemma4_31b": "models.demos.gemma4.tt.runners.adapters.gemma4:Gemma4PrefillAdapter",
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
     # DeepSeek-V3.2-Exp: DSA, still test-only (config + sparse-MLA reference parity; serving not wired).
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",

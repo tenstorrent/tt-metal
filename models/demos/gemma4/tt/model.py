@@ -363,6 +363,7 @@ class Gemma4Model:
             )
         # When True the caller refreshes the ring metadata itself, outside any trace.
         self._ring_metadata_external = False
+        self._prefill_trace_controller = None
         self.max_seq_len = max_seq_len
         self.hidden_size_per_layer_input = getattr(hf_config, "hidden_size_per_layer_input", 0) or 0
         # Host restage every step only when PLI must be recomputed from the token.
@@ -896,6 +897,10 @@ class Gemma4Model:
             sin = sin[:, :, start_pos : start_pos + seq_len, :]
         return (cos, sin)
 
+    def set_prefill_trace_controller(self, controller):
+        """Attach the segmented trace controller used for per-layer migration acks."""
+        self._prefill_trace_controller = controller
+
     def set_prefill_rope_positions(self, position_idx):
         """Point traced prefill RoPE at this chunk's absolute positions.
 
@@ -958,6 +963,7 @@ class Gemma4Model:
         chunk_page_table=None,
         valid_seq_lens=None,
         keep_sharded_for_sampling=False,
+        on_layer_complete=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -1255,6 +1261,13 @@ class Gemma4Model:
                     packed_sliding_rope if self.hf_config.layer_types[i] == "sliding_attention" else None
                 ),
             )
+
+            if not is_decode and on_layer_complete is not None:
+                if self._prefill_trace_controller is not None:
+                    self._prefill_trace_controller.layer_ack(i)
+                else:
+                    ttnn.synchronize_device(self.mesh_device)
+                    on_layer_complete(i)
 
             # For KV source layers during prefill, capture the K/V from the attention
             # The K/V are kept alive on device (not deallocated) when keep_kv=True
@@ -2049,6 +2062,7 @@ class Gemma4Model:
         pli_device_tensors=None,
         page_tables_per_layer=None,
         valid_seq_lens=None,
+        on_layer_complete=None,
         **kwargs,
     ):
         """Prefill forward — Generator-compatible signature.
@@ -2098,6 +2112,7 @@ class Gemma4Model:
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
             valid_seq_lens=valid_seq_lens,
+            on_layer_complete=on_layer_complete,
         )
 
     def process_output_prefill(self, tt_out, last_token_idx):
