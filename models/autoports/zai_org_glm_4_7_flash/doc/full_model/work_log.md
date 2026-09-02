@@ -36,8 +36,16 @@ the LM-head matmul geometry at vocab 154880, M = 1 tile.
 | wide-1D mcast, 64 cores | CB clash | 683 us |
 | **default (no program config)** | **15310 us** | **14928 us** |
 
-The default matmul config is a **17x** regression at this N, so the explicit
-program config is mandatory, not a tuning nicety. 110 cores / `in0_block_w=4`
+The default matmul config is a large regression at this N, so the explicit
+program config is mandatory rather than a tuning nicety.
+
+(FM-019 re-ran this probe with a committed JSON writer, and the default-config
+row does not reproduce at 15310 us: `head_probe.json` measures **2486 us** bf8
+and **2213 us** bf4 with a DRAM output, against 882 / 631 us for the explicit
+110-core `in0_block_w=4` config, i.e. 2.8x rather than 17x. The 15310 figure
+was taken during bring-up with an L1 output, which is a different measurement;
+the committed artifact is the one the report now quotes. The conclusion is
+unchanged and the margin is still decisive.) 110 cores / `in0_block_w=4`
 kept; bf8 kept over bf4 for LM-head accuracy (bf4 is a datatype-sweep
 candidate, recorded, not taken here).
 
@@ -119,11 +127,11 @@ Bisected by rebuilding the 2-layer probe at two cache sizes:
         4096         24.9         15.5
        16384         28.1         15.5
        65536         73.7         15.6
-      202752        209.5         16.0
+      202752        210.5         16.9
    ```
 
    **Verified**: the TILE-table lookup scales with table height; a ROW_MAJOR
-   table is flat. 94 lookups/step x 209.5 us = 19.7 ms/token, more than the
+   table is flat. 94 lookups/step x 210.5 us = 19.7 ms/token, more than the
    whole decoder stack.
 
 Fix (two independent parts, both value-preserving):
@@ -135,7 +143,7 @@ Fix (two independent parts, both value-preserving):
 * the hoisted lookup reads model-owned **ROW_MAJOR** copies of the same tables
   (+103 MiB) instead of the prefill TILE tables.
 
-2 x 16 us instead of 94 x 209.5 us. Reduced-probe decode 2.573 -> 1.762 ms;
+2 x 17 us instead of 94 x 210.5 us. Reduced-probe decode 2.573 -> 1.762 ms;
 the generated token sequence is bit-identical before and after, and
 `test_shared_rope_matches_per_layer_lookup` asserts the two tables return
 equal values.
@@ -310,7 +318,7 @@ implementation.
 | `preds[:16]: [278, 77, 944, 312, 64, 501, 502, 503, ...]` in `logs/watcher_full_model.log` - an 11-step +1 token-id ramp, which reads like stale token feedback | that log | controlled: `tests/dev_full_model.py capacity` builds its prompt as `list(range(500, 500 + seq))`, i.e. raw token ids that happen to be an arithmetic ramp and decode to gibberish. Ids 501-511 decode to exactly `prompt[1:12]`, so the model is copying the prompt (induction), not repeating itself. Counter-controls: the coherent 256-token chat completion, the six coherent suite completions with adjacent duplication 0.000, teacher-forced top-5 1.000 over 100 positions, and `test_split_sampling_trace_feedback`. The synthetic prompt is a debug convenience, not evidence. |
 | `generate()` measures a slightly *faster* ms/token than the isolated `decode_step_traced + read_decode_tokens` microbenchmark, although the loop does strictly more work | `perf.json`, `decode_position_scaling.json` | explained, and the direction is conservative because the README headline quotes the slower microbenchmark. It is decode position, not dispatch: `bench()` runs three 65-replay windows back to back, so the token-out window sits ~200 positions further into the cache than `generate`'s decode window, and `decode_position_scaling.json` shows the traced step growing with `cur_pos`. That accounts for roughly half the gap; the rest is inside the run-to-run spread. An earlier entry here blamed "the tighter dispatch pattern", which was self-contradictory: the tighter pattern is the slower number. |
 | a repeated prefill of the same prompt looked systematically SLOWER than the first one after construction (218.0 then 4x 339.9 ms at prompt 128, 5388.3 then ~6469 ms at prompt 3000) | `compile_cost.json`, `compile_cost_warm.json` | **retracted in FM-015: measurement error, not a device effect.** `prefill_forward_last_logits_device` returns a *device* tensor and `ttnn.deallocate` does not block, so `timed_prefill` stopped its clock while the device was still draining: the first call returned early and every later call was device-bound behind it. With `ttnn.synchronize_device` bracketing the timer the ordering is the expected one at both prompt lengths (cold 7817.2 then 4x ~6475.2 ms at prompt 3000; 313.9 then 4x 313.8 ms at prompt 128), repeats are stable to 0.0-0.1%, and `first_minus_repeat_mean_ms` becomes a usable compile measurement (+1342.0 ms cold vs +3.8 ms warm at prompt 3000). Every prefill number reported before FM-015 was host enqueue time; the README table is rebuilt from the synchronized run. |
-| prefill throughput 383-433 tokens/s at short prompts, 90.6 tokens/s at the full context | `perf.json`, `doc/full_model/tracy/prefill_perf_report.*` | disclosed, not fixed here. The two sparse expert matmuls are 48.4% of the reduced-profile prefill window (no bandwidth figure is claimed for them: `tt-perf-report` omits DRAM utilisation for sparse rows); the prefill sparse geometry was tuned for 1024-token chunks in the optimized-decoder stage and the flat prefill projections deliberately keep default configs below 10 M-tiles. That is optimized-full-model (stage 07) work; see README "Limitations". |
+| prefill throughput 383-433 tokens/s at short prompts, 90.6 tokens/s at the full context | `perf.json`, `doc/full_model/tracy/prefill_perf_report.*` | disclosed, not fixed here. The two sparse expert matmuls are 48.3% of the reduced-profile prefill window (no bandwidth figure is claimed for them: `tt-perf-report` omits DRAM utilisation for sparse rows); the prefill sparse geometry was tuned for 1024-token chunks in the optimized-decoder stage and the flat prefill projections deliberately keep default configs below 10 M-tiles. That is optimized-full-model (stage 07) work; see README "Limitations". |
 
 ## FM-011: stage review round 1 (`more-work-needed`) and the fixes
 
@@ -510,7 +518,7 @@ decode reads the cache regardless, so no 40-minute prefill is needed):
 
 (Those are the round-2-era numbers, quoted as they were read at the time. The
 committed `decode_position_scaling.json` was re-measured in FM-015 and reads
-1.82 -> 6.67 ms traced across the same ladder; the shape of the curve, which is
+1.81 -> 6.66 ms traced across the same ladder; the shape of the curve, which is
 what mattered here, is unchanged.)
 
 Decode at the last valid position is fine and scales smoothly (2-layer probe;
@@ -698,7 +706,7 @@ Results that moved:
 | full-context periodic continuation | 9/9 | 9/9 |
 | full-context prefill | 90.7 tok/s | 90.7 tok/s (2236.4 s) |
 | decode at position 202751, 47 layers | 136.3 ms/token | 136.3 ms/token |
-| 2-layer decode ladder, 128 -> 202751 | 1.81 -> 6.64 ms | 1.82 -> 6.67 ms |
+| 2-layer decode ladder, 128 -> 202751 | 1.81 -> 6.64 ms | 1.81 -> 6.66 ms |
 | main suite / batch 32 / perf / profile | 46 / 5 / 2 / 2 passed | 46 / 5 / 2 / 2 passed |
 | full-context suite | 2 passed | 3 passed (the traced-loop guard test is new) |
 
@@ -776,10 +784,11 @@ the bug.
 *Post-capture program compilation.* With that fixed, the tracker's next verdict
 was **16 unsafe buffers per trace** (32 across the model and sampling traces),
 one per program newly cached during a prefill, spanning six op types, and the
-program-cache counter corroborates it exactly: the committed run records 599
-entries against 583 at capture, a difference of 16. (The absolute counts moved
-with later sweeps as more programs were warmed at construction; the difference
-is the invariant.) (An earlier run of the probe, before the whole-tile terminal slice
+program-cache counter corroborates it exactly. The committed run records
+599 entries against 583 at capture, a difference of 16. (The absolute counts
+moved with later sweeps as more programs were warmed at construction; the
+difference is the invariant, and `tests/check_report_numbers.py` now checks
+this pair against the artifact.) (An earlier run of the probe, before the whole-tile terminal slice
 landed, read 18 per trace over more op types; the committed
 `trace_alloc.json` is the 16/32/6 run and is what this log now quotes.) A newly cached program keeps a device buffer for the
 process lifetime, so compiling one while a trace is live leaves a permanently
@@ -803,7 +812,7 @@ the full context), so the fix is to re-capture instead:
   cache row, and mid-request the only row it may write is the one the next
   decode step is about to overwrite anyway.
 
-Cost: **175 ms** measured on the 47-layer model, once per new prefill shape,
+Cost: **~178 ms** measured on the 47-layer model, once per new prefill shape,
 against the >1.3 s the compile that triggered it already cost. It is timed
 separately in `perf.json` (`first_use_shape_trace_recapture_ms`) and excluded
 from both TTFT and the decode rate, because it is setup for that shape.
@@ -834,13 +843,13 @@ boundary. Two separate causes, both now measured rather than argued:
 * the rest is **prompt content**. MoE prefill routes to different experts for
   different text, and the two probes used different prompts. The perf test now
   measures both texts at the same shape: its own prompt prefills in 333.3 ms
-  and `measure_cold_compile.py`'s in **313.6 ms**, which is
-  `compile_cost.json`'s number to the decimal. So the residual gap is workload,
+  and `measure_cold_compile.py`'s in **313.9 ms**, which is
+  `compile_cost.json`'s number to the decimal in the same sweep. So the residual gap is workload,
   not measurement, and it is 6.3% at prompt 128.
 
 `perf.json` now carries `ttft_breakdown_ms`: prefill alone between device
 syncs, the untraced prefill sampler, the token readback, and the unattributed
-remainder, which comes out under 1 ms at both prompt lengths.
+remainder, which comes out within 1.2 ms at both prompt lengths.
 
 **P2: the `source_manifest` claim was broader than the mechanism.** The README
 said every generated JSON carries one; four did not. `accuracy.json`,
@@ -910,7 +919,7 @@ before the clock starts instead of inside it; the work did not get faster, the
 measurement got honest, and the reset is reported at 28.3 ms. The readiness
 TTFT at prompt 154 rose because that runner issues exactly one request in a
 fresh process, so it pays this length's first-use cost; `first_use_ttft.json`
-puts a number on it (175.0 ms, essentially all recapture) and on the steady
+puts a number on it (~178 ms, essentially all recapture) and on the steady
 state behind it (583.4 ms). The recapture is placed immediately after the
 prefill, which is the conservative choice: it can only make a first-request
 TTFT larger, never smaller.
@@ -927,7 +936,7 @@ was written, documented in the README and asserted in
 to `warmup_prefill` did not land, and I did not check. So the claim "a prompt
 inside one chunk needs no first-use compile" was false, and the stage's own
 artifacts said so: `first_use_ttft.json` recorded `trace_recaptures: 1` and a
-175 ms penalty at prompt 154, which is a single-chunk prompt, and
+~178 ms penalty at prompt 154, which is a single-chunk prompt, and
 `test_first_use_prompt_shape_recaptures_traces_and_stays_correct` *asserted*
 `recaptures >= 1` at 173, also single-chunk. A capability contract asserting a
 property the code does not deliver is worse than not claiming it.
@@ -936,7 +945,7 @@ The call is in now, and the evidence is an assertion rather than prose.
 `test_single_chunk_prompt_shape_does_not_recapture` reads
 `num_program_cache_entries()` across a prompt whose length is not a bucket and
 requires it not to move; `test_first_use_multi_chunk_shape_recaptures_and_stays_correct`
-keeps the honest half (17 new programs at 4300, one recapture, identical tokens
+keeps the honest half (18 new programs at 4300, one recapture, identical tokens
 on the second request). Measured on the full model in a fresh process:
 
 | prompt | new programs | recaptures | first request | second request | penalty |
@@ -1051,8 +1060,8 @@ both ends. Every step exited 0, all three watcher runs reported 0 faults.
 |---|---|---|
 | TTFT, prompt 128 warmed | 334.0 ms | 334.5 ms (382.7 tok/s) |
 | **readiness TTFT, prompt 154** | 763.6 ms | **591.0 ms** (the first-use penalty is gone) |
-| first-use penalty at prompt 154 | 175.0 ms | **0.0 ms** (583.4 ms first and second request) |
-| first-use penalty at prompt 4300 (multi-chunk) | not measured | 182.5 ms, one recapture, 17 new programs |
+| first-use penalty at prompt 154 | ~178 ms | **0.0 ms** (583.4 ms first and second request) |
+| first-use penalty at prompt 4300 (multi-chunk) | not measured | 182.5 ms, one recapture, 18 new programs |
 | traced model-only decode | 21.752 ms/token | 21.760 ms/token (45.96 t/s/u) |
 | traced token-out decode | 23.014 ms/token | 23.017 ms/token (43.45 t/s/u) |
 | sampler / token readback | 1.123 / 0.139 ms | 1.123 / 0.134 ms |
@@ -1155,7 +1164,7 @@ so no two slots share a position, and asserts that.
 Nine of them, including "175 ms" for a recapture the artifacts measure at ~178,
 "583.9 / 583.8" for a pair the artifact records as 583.4 / 583.4, and
 "469 against 453" program-cache entries in FM-016 and FM-017 for a counter the
-committed `trace_alloc.json` records as 587 against 571 (the round-5 sweep
+committed `trace_alloc.json` records as 599 against 583 (the round-5 sweep
 re-ran the probe after `warmup_terminal_shapes` started compiling ~124 more
 programs; only the 16/32/6 figures survived that). All regenerated from the
 committed artifacts below. FM-011b also named `54960f76eda`, a commit amended
@@ -1211,6 +1220,122 @@ is 71.5 s cold and 4.5 s warm, against 71.4 / 4.5 before, because the
 all-positions walk reuses the same LM-head and norm programs as the whole-tile
 family and only adds a handful of slice shapes.
 
+## FM-019: stage review round 7 (`more-work-needed`) and the fixes
+
+Round 7 re-derived the round-6 P1 fix independently (the recapture signature is
+a `Resetting sampling trace` line *followed by two more `ttnn.split` pairs*, and
+`run_prefill_check.log`, `run_teacher_forcing.log`, `run_autoregressive.log`
+and `qualitative_suite.log` each have exactly one reset with nothing after it),
+confirmed the tile-aligned walk by hand, and returned one P1 plus four P2s.
+
+**P1: `decode_forward`'s lazy trace capture wrote the cache.**
+`decode_forward(enable_trace=True)` captures the traces itself when none exist,
+and it was the only capture site that neither passed `warm_inactive=True` nor
+reset afterwards. So the warm pass decoded token 0 at position 0 for every slot
+and `paged_update_cache` wrote a row for each, silently replacing the first
+prompt token's KV entry in every prefilled slot.
+
+That path matters more than its obscurity suggests. `build_generator(capture_trace=True)`
+forces a generator-owned cache through `_ensure_owned_state`, so an adapter
+that wants to pass its *own* cache has to use `capture_trace=False`,
+`bind_decode_state`, `prefill_forward`, `decode_forward` - exactly the sequence
+this stage advertises for vLLM, and exactly the one that hit it. No test
+reached the branch: the module fixture always has a captured trace, so
+`test_low_level_prefill_decode_api` never took it.
+
+One-line fix (`warm_inactive=True`), and
+`test_lazy_trace_capture_in_decode_forward_preserves_the_prompt` reproduces the
+state by releasing both traces between the prefill and the first step and
+requiring the tokens to match a run whose traces were already captured.
+
+**P2: the sampler's device footprint was understated by 21%.** FM-018 answered
+round 6's concern by naming five sampler ops and calling their sum, 861.4
+us/step, "the whole device footprint". Differencing the two committed profiler
+windows op-by-op gives **1042.3 us/step** (2751.9 minus 1709.6), and the 181 us
+difference is in the summary's own `top_ops`: `SliceDeviceOperation` +55.8 us
+over four extra calls (the 4-chunk `ttnn.split`), a `CopyDeviceOperation` 40.4
+us present only in the token-out window (19.8 MB at ~490 GB/s, i.e. the logged
+`migrating L1 input (9912320 B) to DRAM`), plus `BinaryNg` +36.4, `Typecast`
++31.8 and small deltas. 1042.3 us is also the figure consistent with the
+1.123 ms wall clock; 861.4 left 262 us unexplained. The README now reports the
+window delta and lists the support/fallback ops separately.
+
+The same finding reopened the L1-versus-DRAM logits decision: the L1 arm
+demonstrably pays that 40.4 us Copy, while the old one-sample A/B recorded the
+DRAM arm's sampler as only 11 us cheaper. `probe/logits_memory_ab_probe.py` is
+now committed and runs both arms with 64 repeats each, recording per-arm
+spreads, and it asserts the two arms produce identical tokens, which is what
+the choice actually rests on.
+
+**P2: four provenance sentences contradicted the log they cite.** The untracked
+list has 14 entries, not 13 (`logs/sweep_run.log`, which `tee` creates before
+the opening block); no *new* untracked file appeared, because the two lists are
+identical; `logs/pytest_prefill_padding.log` was declared older than the sweep
+although the sweep now writes it; and `doc/context_contract.json` was edited
+after the sweep even though the sweep's own contract check reads it. The
+narrative is regenerated from the log, and the two steps that read the
+documents (the contract check and the new figure check) now run last and are
+re-run after the documentation pass, which the README says plainly.
+
+**P2: eighteen more stale figures, one introduced by the round-6 fix pass.**
+Fixed, but the durable part is `tests/check_report_numbers.py`: 49 load-bearing
+values are pulled out of the committed JSON artifacts, formatted the way the
+documents quote them, and required to be present verbatim. It found three
+mismatches on its first run, including two of the ones round 7 reported, and it
+runs in the sweep. Fixing figures by hand is what produced six rounds of this
+finding; a check that fails is the only thing that stops it.
+
+**P2: load-bearing probe figures had no artifact.** `15310 us` (LM head on the
+default program config), `628 us` (bf4 LM head) and the RoPE table-lookup
+scaling that justifies the shared `RopeSetup` existed only as prose:
+`full_model_head_probe.py` and `decode_cache_scaling_probe.py` printed and
+wrote nothing, and neither was in the sweep. Both now emit a stamped JSON
+(`head_probe.json`, `cache_scaling.json`), the cache-scaling probe gained a
+RoPE table-lookup arm at 4096 and 202752 rows, and all three probes run in the
+sweep.
+
+**Also from the review.** `generate(..., top_k=20)` used to run greedy in
+silence; the swallowed-kwarg guard now covers the sampling keys on all three
+public entry points. The no-host-fallback tripwires cover `Tensor.cpu` and
+`ttnn.get_device_tensors`, which `$tt-enable-tracing` names and which do not go
+through `to_torch`. The sweep hashes the sweep script, the shared readiness
+harness and the contract checker as well as the stage's own source, and the
+nine steps that had no exit-code echo (the three `tt-perf-report` runs, the
+`gzip` calls, and an emptiness check on the Tracy CSV path) have one. A test
+docstring described the fixed-size device slice that FM-018 rejected.
+
+**The sweep.** `tests/run_evidence_sweep.sh` against `6c15f60ad1f`, clean stage
+tree, 28 steps, every one `=0` except `reportnums`, which is the point: the new
+figure check failed with 15 named mismatches and the report was regenerated from
+them. `logs/sweep_run.log` has the exit codes, `faults=0` on all three watcher
+runs, and `logs/check_report_numbers.log` the final clean pass.
+
+| | FM-018 | FM-019 |
+|---|---|---|
+| `decode_forward` lazy capture | wrote a cache row per slot | inactive warm pass, covered by a test |
+| sampler device footprint | quoted as 861.4 us/step | **1042.3 us/step** (37.9%), the measured window delta |
+| L1 vs DRAM logits | 1 sample per arm, 34 ms apart | 64 repeats per arm with spreads, identical tokens |
+| report figures checked against artifacts | 0 | **49**, in the sweep |
+| LM head, default program config | "15310 us" (prose only) | **2491 us** (`head_probe.json`), 2.9x the explicit config |
+| TTFT, prompt 128 warmed | 334.4 ms | 334.4 ms (382.8 tok/s) |
+| readiness TTFT, prompt 154 | 590.7 ms | 590.8 ms |
+| traced model-only / token-out decode | 21.760 / 23.014 ms/token | 21.760 / 23.010 ms/token (45.96 / 43.46 t/s/u) |
+| end to end, prompt 128 + 128 tokens | 3.242 s | 3.242 s (39.48 tok/s) |
+| resident DRAM | 23.022 GiB | 23.022 GiB (byte-identical, sixth sweep) |
+| prefill / teacher-forced top-1, top-5, top-100 | 0.880, 0.850 / 1.000 / 1.000 | unchanged |
+| first-use penalty, prompt 154 / 4300 | 0.1 ms / 183.7 ms | -0.3 ms / 183.3 ms (18 programs) |
+| full context: prompt, continuation, prefill, decode | 202733, 9/9, 90.6 tok/s, 136.3 ms/token | identical |
+| main / padding / combined / perf / batch / profile / full context | 43 / 13 / 56 / 2 / 10 / 2 / 3 | **45 / 13 / 58 / 2 / 10 / 2 / 3** |
+| unsafe buffers at replay, shipped paths | 0 | 0 |
+
+Two numbers that had never been measured properly moved a lot. The LM head's
+default-program-config penalty is 2.9x, not the 17x this report claimed for six
+rounds, because the original figure was taken with a different output memory
+config during bring-up. And the L1-versus-DRAM logits decision now has 64
+repeats per arm: L1 is 2.907 ms token-out against DRAM's 2.957, spreads 0.048
+and 0.027, so L1 is ahead by about its own spread. Identical tokens either way,
+which is what the choice rests on.
+
 ## FM-011b: checkpoint
 
 Repo: `tt-metal`, branch `ttmodelmanager/glm47-flash-probe`, no push.
@@ -1231,6 +1356,9 @@ Repo: `tt-metal`, branch `ttmodelmanager/glm47-flash-probe`, no push.
 | `c10e2d72d13` | records the SHA above |
 | `acc2b26b83d` | round-6 source fixes (FM-018): the tile-aligned host-logits walk and its warmup, host-side row trim, `generate` leaving other slots inactive, the mixed-depth recapture control, the `user_id=` guard, the sweep's own log |
 | `0f2ac8679bf` | the FM-018 evidence sweep and the report rebuilt from it |
+| `2e194d44cf2` | records the SHA above |
+| `6c15f60ad1f` | round-7 source fixes (FM-019): the lazy-capture warm pass, the swallowed sampling kwargs, wider tripwires, three probes with artifacts, and `tests/check_report_numbers.py` |
+| `FULLMODEL_R7_EV` | the FM-019 evidence sweep and the report rebuilt from it |
 | (this commit) | records the SHA above |
 
 The source and the evidence are deliberately in separate commits: the sweep ran

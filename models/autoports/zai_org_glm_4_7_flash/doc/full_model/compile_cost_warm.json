@@ -2,7 +2,7 @@
   "source_manifest": {
     "tt/provenance.py": "3b162e8ac0fe0674",
     "tt/model.py": "984d9a9d8199f57f",
-    "tt/generator.py": "bce7b6debe2aa98e",
+    "tt/generator.py": "ecba72e1e945a51a",
     "tt/optimized_decoder.py": "b2abc9f36278b32f",
     "tt/fused_decoder.py": "0dbbe26e401a1716",
     "tt/functional_decoder.py": "d04c7d1958a8fe74",
@@ -12,36 +12,36 @@
   "build": {
     "prefill_programs_warmed_s": 4.5,
     "decode_+_sampling_traces_captured_s": 0.3,
-    "build_total_s": 176.54
+    "build_total_s": 182.23
   },
   "prefill": {
     "prompt_128": {
       "physical_len": 128,
       "warmed_at_build": true,
-      "first_call_ms": 313.7,
+      "first_call_ms": 313.9,
       "repeat_calls_ms": [
-        313.5,
         313.7,
-        314.0,
+        313.5,
+        313.8,
         313.8
       ],
-      "repeat_mean_ms": 313.8,
+      "repeat_mean_ms": 313.7,
       "repeat_spread_pct": 0.1,
-      "first_minus_repeat_mean_ms": -0.1
+      "first_minus_repeat_mean_ms": 0.1
     },
     "prompt_3000": {
       "physical_len": 3072,
       "warmed_at_build": false,
-      "first_call_ms": 6481.0,
+      "first_call_ms": 6480.4,
       "repeat_calls_ms": [
-        6477.4,
-        6477.6,
-        6477.4,
-        6478.0
+        6477.2,
+        6476.9,
+        6476.9,
+        6477.1
       ],
-      "repeat_mean_ms": 6477.6,
+      "repeat_mean_ms": 6477.0,
       "repeat_spread_pct": 0.0,
-      "first_minus_repeat_mean_ms": 3.5
+      "first_minus_repeat_mean_ms": 3.4
     }
   }
 }

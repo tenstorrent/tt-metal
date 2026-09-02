@@ -2,7 +2,7 @@
   "source_manifest": {
     "tt/provenance.py": "3b162e8ac0fe0674",
     "tt/model.py": "984d9a9d8199f57f",
-    "tt/generator.py": "bce7b6debe2aa98e",
+    "tt/generator.py": "ecba72e1e945a51a",
     "tt/optimized_decoder.py": "b2abc9f36278b32f",
     "tt/fused_decoder.py": "0dbbe26e401a1716",
     "tt/functional_decoder.py": "d04c7d1958a8fe74",
@@ -16,17 +16,17 @@
     "sampling": "greedy split sampling (k=1, p=0, temp=1) on device"
   },
   "setup_s": {
-    "build_total_s": 177.79
+    "build_total_s": 182.8
   },
   "ttft_ms": {
     "definition": "time to first token: prefill plus the untraced prefill sampler plus the one-word token readback. The request-boundary cache reset is drained before the clock starts and is reported separately as request_boundary_reset_ms; ttft_breakdown_ms attributes the rest.",
     "prompt_128_warmed": 334.4,
     "prompt_128_physical": 128,
-    "prompt_3000_first_call": 6936.5,
-    "prompt_3000_second_call": 6932.2,
+    "prompt_3000_first_call": 6935.0,
+    "prompt_3000_second_call": 6931.8,
     "prompt_3000_physical": 3072,
     "request_boundary_reset_ms": 28.3,
-    "first_use_shape_trace_recapture_ms": 177.0,
+    "first_use_shape_trace_recapture_ms": 176.6,
     "first_use_shape_trace_recapture_fired": true
   },
   "ttft_breakdown_ms": [
@@ -34,28 +34,28 @@
       "prompt_len": 128,
       "physical_len": 128,
       "prefill_only_ms": 333.1,
-      "untraced_prefill_sampler_ms": 1.8,
+      "untraced_prefill_sampler_ms": 1.6,
       "first_token_readback_ms": 0.13,
-      "first_token_path_ms": 333.9,
-      "unattributed_ms": -1.2
+      "first_token_path_ms": 334.3,
+      "unattributed_ms": -0.6
     },
     {
       "prompt_len": 3000,
       "physical_len": 3072,
-      "prefill_only_ms": 6929.8,
-      "untraced_prefill_sampler_ms": 2.1,
+      "prefill_only_ms": 6930.4,
+      "untraced_prefill_sampler_ms": 2.0,
       "first_token_readback_ms": 0.16,
-      "first_token_path_ms": 6931.6,
-      "unattributed_ms": -0.5
+      "first_token_path_ms": 6931.0,
+      "unattributed_ms": -1.5
     },
     {
       "prompt_len": 128,
       "physical_len": 128,
       "prefill_only_ms": 313.9,
-      "untraced_prefill_sampler_ms": 1.8,
-      "first_token_readback_ms": 0.15,
-      "first_token_path_ms": 315.2,
-      "unattributed_ms": -0.6,
+      "untraced_prefill_sampler_ms": 1.7,
+      "first_token_readback_ms": 0.13,
+      "first_token_path_ms": 315.3,
+      "unattributed_ms": -0.4,
       "prompt_text": "the one measure_cold_compile.py uses"
     }
   ],
@@ -65,18 +65,18 @@
   },
   "decode_ms_per_token": {
     "traced_model_only_no_sampling": 21.76,
-    "traced_model_plus_sampling": 22.883,
-    "token_out_incl_readback": 23.014,
-    "generate_loop_measured": 22.668
+    "traced_model_plus_sampling": 22.881,
+    "token_out_incl_readback": 23.01,
+    "generate_loop_measured": 22.674
   },
   "decode_tokens_per_s_per_user": {
     "traced_model_only_no_sampling": 45.96,
-    "token_out_incl_readback": 43.45,
-    "generate_loop_measured": 44.11
+    "token_out_incl_readback": 43.46,
+    "generate_loop_measured": 44.1
   },
   "end_to_end": {
     "prompt_128_generate_128_s": 3.242,
-    "tokens_per_s": 39.49
+    "tokens_per_s": 39.48
   },
   "layer_stack_lower_bound": {
     "source": "doc/optimized_decoder/README.md traced per-layer decode, ctx 1024, batch 1, wall",
@@ -84,8 +84,8 @@
     "dense_layers": 1,
     "ms_per_token": 23.033,
     "full_model_only_costs_ms": -1.273,
-    "sampling_ms": 1.123,
-    "token_readback_ms": 0.131
+    "sampling_ms": 1.122,
+    "token_readback_ms": 0.129
   },
   "host_work_counters_over_the_measured_generate": {
     "model_trace_replays": 127,
