@@ -76,7 +76,7 @@ constexpr uint32_t kDoneAddr = get_named_compile_time_arg_val("done_addr");
 constexpr uint32_t kStopAddr = get_named_compile_time_arg_val("stop_addr");
 constexpr uint32_t kSocketConfigAddr = get_named_compile_time_arg_val("socket_config_addr");
 constexpr uint32_t kMaxCores = get_named_compile_time_arg_val("max_cores");
-static_assert(kMaxCores <= 256, "ship_list and hot index cores as bytes");
+static_assert(kMaxCores <= 256, "the core lists index cores as bytes");
 // Static VC for PCIe pushes, spread across relays by the host.
 constexpr uint32_t kWriteVc = get_named_compile_time_arg_val("write_vc");
 // Per lane, not per span: the producer that blocks is always one lane.
@@ -493,7 +493,6 @@ constexpr bool image_rule_matches() {
 }
 static_assert(image_rule_matches(), "the inline image test drifted from spsc_span_wrap_image");
 
-
 // Gather-read each live run straight to its packed wire offset; the pads keep read src == dst (mod 16 B) for
 // every piece, wrap continuations included. Returns the smallest per-core peak lane take.
 __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n, uint32_t slot, uint32_t rb) {
@@ -677,6 +676,111 @@ static FORCE_INLINE void finish(
     experimental::drisc_set_noc2axi_mode_all();
 }
 
+// Every core is on exactly one list. The ship list persists across sweeps and is gathered in order off the
+// per-batch tail refreshes; the probe list is read once per sweep, and a core that comes back live joins the
+// sweep in progress. A gathered core whose peak comes back under the sweep's demote bound moves to the probes.
+// tails_seen is the sum of a core's tails at its last read; tails are monotonic, so its delta is one interval's
+// production.
+static uint8_t ship_list[kMaxCores];
+static uint8_t probe_list[kMaxCores];
+static uint8_t demote_pos[kMaxCores];  // ship-list positions demoted this sweep, ascending
+static uint32_t tails_seen[kMaxCores];
+static uint32_t n_list;
+static uint32_t n_probe;
+static uint32_t n_demote;
+static uint32_t sweep_peak;
+static bool sweep_grew;
+
+// Out of line: these run at most once per sweep, and inline they cost the batch loop registers. A core's peak is
+// recomputed from the heads and tails its frame header already holds.
+__attribute__((noinline)) static void note_demotions(uint32_t slot, uint32_t n, uint32_t cur, uint32_t demote_below) {
+    for (uint32_t i = 0; i < n; i++, slot += kSlotBytes) {
+        const tt_l1_ptr uint32_t* frame = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot);
+        uint32_t peak = 0;
+        for (uint32_t r = 0; r < kNumRisc; r++) {
+            const uint32_t take = frame[kPrefix + kernel_profiler::SPSC_WIRE_TAIL_0 + r] -
+                                  frame[kPrefix + kernel_profiler::SPSC_WIRE_HEAD_0 + r];
+            if (take > peak) {
+                peak = take;
+            }
+        }
+        if (peak < demote_below) {
+            demote_pos[n_demote++] = static_cast<uint8_t>(cur + i);
+        }
+    }
+}
+
+// The probes' tails have landed; every live, undeferred probe joins the ship list.
+__attribute__((noinline)) static void promote_probes(bool defer_ok) {
+    for (uint32_t k = 0; k < n_probe;) {
+        const uint32_t c = probe_list[k];
+        const tt_l1_ptr uint32_t* __restrict tails = reinterpret_cast<const tt_l1_ptr uint32_t*>(record(c));
+        const tt_l1_ptr uint32_t* __restrict mine = tails + kHeadWord;
+        // Unrolled into registers: an indexed-array loop spills, and each spilled word is an L1 round trip per
+        // core per sweep.
+        const uint32_t d0 = tails[0] - mine[0];
+        const uint32_t d1 = tails[1] - mine[1];
+        const uint32_t d2 = tails[2] - mine[2];
+        const uint32_t d3 = tails[3] - mine[3];
+        const uint32_t d4 = tails[4] - mine[4];
+        // No clamp: a producer blocks 506 words past the head it sees, and the mirror is never behind that head.
+        const uint32_t live = d0 | d1 | d2 | d3 | d4;
+        uint32_t grew = 0;
+        uint32_t peak = 0;
+        // With the ship gate open every live core ships; peak and growth are unused.
+        if constexpr (kLaneShipWords != 0) {
+            const uint32_t tsum = tails[0] + tails[1] + tails[2] + tails[3] + tails[4];
+            grew = tsum - tails_seen[c];
+            tails_seen[c] = tsum;
+            sweep_grew |= grew != 0;
+            peak = d0;
+            if (d1 > peak) {
+                peak = d1;
+            }
+            if (d2 > peak) {
+                peak = d2;
+            }
+            if (d3 > peak) {
+                peak = d3;
+            }
+            if (d4 > peak) {
+                peak = d4;
+            }
+            if (peak > sweep_peak) {
+                sweep_peak = peak;
+            }
+        }
+        // Deferral must survive one more interval of production, so `grew` (last interval's words) must be under
+        // the threshold too; that bounds a deferred core at ~2x threshold.
+        const bool defer = defer_ok && peak < kLaneShipWords && grew < kLaneShipWords && peak < kLaneTrigger;
+        if (live != 0 && !defer) {
+            ship_list[n_list++] = static_cast<uint8_t>(c);
+            probe_list[k] = probe_list[--n_probe];
+        } else {
+            k++;
+        }
+    }
+}
+
+// Descending, so each swap-remove leaves the earlier positions valid. The last batch's refresh may have covered
+// cores that just moved, so the next sweep's first batch is read again.
+__attribute__((noinline)) static void demote() {
+    do {
+        const uint32_t pos = demote_pos[--n_demote];
+        const uint32_t c = ship_list[pos];
+        ship_list[pos] = ship_list[--n_list];
+        probe_list[n_probe++] = static_cast<uint8_t>(c);
+        if constexpr (kLaneShipWords != 0) {
+            const tt_l1_ptr uint32_t* tails = reinterpret_cast<const tt_l1_ptr uint32_t*>(record(c));
+            tails_seen[c] = tails[0] + tails[1] + tails[2] + tails[3] + tails[4];
+        }
+    } while (n_demote != 0);
+    const uint32_t nn = n_list < kGenSlots ? n_list : kGenSlots;
+    for (uint32_t i = 0; i < nn; i++) {
+        cv_issue(ship_list[i]);
+    }
+}
+
 // A staged slot is its frame's wire image, so a frame is one write or one DMA; the trailing page fill is
 // never written, the host reads past it. Returns true when the kill switch broke a wait.
 static FORCE_INLINE bool emit_slots(
@@ -752,13 +856,11 @@ void kernel_main() {
 
     zero_stage_prefixes();
 
-    // Statics persist across launches, so everything the loop trusts is re-initialised. tails_seen is the sum of
-    // a core's tails at its last scan; tails are monotonic, so its delta is one interval's production.
-    static uint32_t tails_seen[kMaxCores];
-    static uint8_t hot[kMaxCores];        // shipped real words last scan; hot + empty scan = publish lag
-    static uint8_t ship_list[kMaxCores];  // this sweep's ship set, dense core indices
+    // Statics persist across launches, so everything the loop trusts is re-initialised.
+    n_list = 0;
+    n_probe = num_cores;
     for (uint32_t i = 0; i < num_cores; i++) {
-        hot[i] = 0;
+        probe_list[i] = static_cast<uint8_t>(i);
     }
     seed_heads(num_cores, coords, tails_seen);
 
@@ -769,13 +871,12 @@ void kernel_main() {
     // dead ones: occupancy alone cannot tell pre-burst trickle from a light workload's steady lanes, and a
     // pre-loaded ring tips over during the detection latency.
     bool grid_busy = false;
-    // Once a sweep shipped every core above the threshold the scan is pure overhead, so the grid ships in list
-    // order off the per-batch refreshes until a core comes back empty or under threshold.
-    bool all_live = false;
     uint32_t grow_streak = 0;
     uint32_t quiet_streak = 0;
     constexpr uint32_t kBatchArmSweeps = 3;
     constexpr uint32_t kFlushQuietSweeps = 8;
+    // An empty core always leaves the ship list; under armed deferral so does one below the ship threshold.
+    constexpr uint32_t kDeferBelow = kLaneShipWords > 1 ? kLaneShipWords : 1u;
     // Persists across sweeps so a sweep's final ship drains under the pace gap, not on its own critical path.
     uint32_t gen_shipped = 0;  // bit g: generation g's last frame may still be leaving staging
     static_assert(kNGens <= 32, "gen_shipped is a bit mask");
@@ -801,16 +902,16 @@ void kernel_main() {
         *hb = sweeps;
         const uint32_t relieved_at_sweep_start = relieved;
 
-        uint32_t sweep_peak = 0;
-        bool sweep_grew = false;
-        // Gather generation G on the read NoC while G^1 ships; tail reads issue up front and the rest of the grid is
-        // scanned just in time as the ship list runs low. No lambda here: a by-reference capture costs sweep time
-        // at the saturation boundary.
+        sweep_peak = 0;
+        sweep_grew = false;
+        n_demote = 0;
+        // Gather generation G on the read NoC while G^1 ships. No lambda here: a by-reference capture costs sweep
+        // time at the saturation boundary.
         uint32_t gen = 0;
         uint32_t pend_n = 0;  // frames staged for gen pend_gen and not yet shipped; 0 = none pending
         uint32_t pend_gen = 0;
-        uint32_t n_ship = 0;
-        uint32_t min_peak = ~0u;
+        const bool defer_ok = grid_busy && stop_seen_at == 0;
+        const uint32_t demote_below = defer_ok ? kDeferBelow : 1u;
 
         // Heads go out at the read barrier, not the frame emit: once the reads land the producer's ring slots are
         // free. A lambda on purpose: written inline, issue_batch picks up a spill per core.
@@ -841,152 +942,99 @@ void kernel_main() {
             }
         };
 
-        if (all_live) {
-            n_ship = num_cores;
-            if constexpr (kLaneShipWords != 0) {
-                sweep_grew = true;
-            }
-        } else {
-            const uint32_t rd0 = NOC_STATUS_READ_REG(kReadNoc, NIU_MST_RD_RESP_RECEIVED);
-            // Responses can arrive out of order; a core counted early scans last sweep's tails (stale but valid),
-            // under-ships, and catches up next visit.
-            cv_issue(0, num_cores);
-            // The previous sweep's last ship retires under the tail reads' round trip, not between the tails landing
-            // and the first issue: the batch whose tails age most is the batch whose producers stall.
-            retire_gen(gen);
-            cv_wait(rd0, num_cores);
-            for (uint32_t c = 0; c < num_cores; c++) {
-                const tt_l1_ptr uint32_t* __restrict tails = reinterpret_cast<const tt_l1_ptr uint32_t*>(record(c));
-                const tt_l1_ptr uint32_t* __restrict mine = tails + kHeadWord;
-                // Unrolled into registers: an indexed-array loop spills, and each spilled word is an L1 round trip per
-                // core per sweep.
-                const uint32_t d0 = tails[0] - mine[0];
-                const uint32_t d1 = tails[1] - mine[1];
-                const uint32_t d2 = tails[2] - mine[2];
-                const uint32_t d3 = tails[3] - mine[3];
-                const uint32_t d4 = tails[4] - mine[4];
-                // No clamp: a producer blocks 506 words past the head it sees, and the mirror is never behind that
-                // head.
-                const uint32_t live = d0 | d1 | d2 | d3 | d4;
-                uint32_t grew = 0;
-                uint32_t peak = 0;
-                // With the ship gate open every live core ships; peak and growth are unused.
-                if constexpr (kLaneShipWords != 0) {
-                    const uint32_t tsum = tails[0] + tails[1] + tails[2] + tails[3] + tails[4];
-                    grew = tsum - tails_seen[c];
-                    tails_seen[c] = tsum;
-                    sweep_grew |= grew != 0;
-                    peak = d0;
-                    if (d1 > peak) {
-                        peak = d1;
-                    }
-                    if (d2 > peak) {
-                        peak = d2;
-                    }
-                    if (d3 > peak) {
-                        peak = d3;
-                    }
-                    if (d4 > peak) {
-                        peak = d4;
-                    }
-                    if (peak > sweep_peak) {
-                        sweep_peak = peak;
-                    }
-                }
-                if (live != 0) {
-                    // Deferral must survive one more interval of production, so `grew` (last interval's words) must
-                    // be under the threshold too; that bounds a deferred core at ~2x threshold.
-                    if (grid_busy && stop_seen_at == 0 && peak < kLaneShipWords && grew < kLaneShipWords &&
-                        peak < kLaneTrigger) {
-                        continue;
-                    }
-                    hot[c] = 1;
-                    ship_list[n_ship++] = static_cast<uint8_t>(c);
-                } else if (hot[c] != 0) {
-                    // A hot core scanning empty is almost always the producer's 64-word batched tail publish, not
-                    // idleness; skipping it would double its service interval. One-shot: an idle core wastes one
-                    // empty frame.
-                    hot[c] = 0;
-                    ship_list[n_ship++] = static_cast<uint8_t>(c);
-                }
+        // The probes fly with the first batch's gathers and land under its barrier.
+        bool probe_pending = n_probe != 0;
+        uint32_t rd0 = 0;
+        if (probe_pending) {
+            rd0 = NOC_STATUS_READ_REG(kReadNoc, NIU_MST_RD_RESP_RECEIVED);
+            for (uint32_t i = 0; i < n_probe; i++) {
+                cv_issue(probe_list[i]);
             }
         }
+        if constexpr (kLaneShipWords != 0) {
+            sweep_grew = n_list != 0;
+        }
 
-        // One ship site: the last batch leaves through the same code, on the pass that finds nothing to issue.
+        // One ship site: the last batch leaves through the same code, on the pass that finds nothing to issue. The
+        // outer loop runs only for probes: they landed under the first batch's barrier (an empty list waits for
+        // them here), and the cores they promote are gathered by a second pass over the appended tail.
         uint32_t cur = 0;
         uint32_t n = 0;
         const uint8_t* batch = ship_list;
         while (true) {
-            const bool more = cur < n_ship;
-            if (more) {
-                retire_gen(gen);
-                n = (n_ship - cur) < kGenSlots ? (n_ship - cur) : kGenSlots;
-                batch = &ship_list[cur];
-                const uint32_t pk = issue_batch(batch, n, kGenBase[gen], ring_base);
-                if (pk < min_peak) {
-                    min_peak = pk;
+            const uint32_t n_end = n_list;
+            while (true) {
+                const bool more = cur < n_end;
+                if (more) {
+                    retire_gen(gen);
+                    n = (n_end - cur) < kGenSlots ? (n_end - cur) : kGenSlots;
+                    batch = &ship_list[cur];
+                    const uint32_t pk = issue_batch(batch, n, kGenBase[gen], ring_base);
+                    if (pk < demote_below) {
+                        note_demotions(kGenBase[gen], n, cur, demote_below);
+                    }
+                    cur += n;
+                    // Refresh the next batch's tails in the same flight (this generation's read barrier covers them);
+                    // the last batch refreshes the next sweep's first, so a sweep opens on the issue with no wave.
+                    uint32_t nn = n_end - cur;
+                    uint32_t ri = cur;
+                    if (nn > kGenSlots) {
+                        nn = kGenSlots;
+                    } else if (nn == 0) {
+                        nn = n_end < kGenSlots ? n_end : kGenSlots;
+                        ri = 0;
+                    }
+                    for (uint32_t i = 0; i < nn; i++) {
+                        cv_issue(ship_list[ri + i]);
+                    }
                 }
-                cur += n;
-                // Refresh the next batch's tails in the same flight (this generation's read barrier covers them); a
-                // full list's last batch refreshes the next sweep's first, so a saturated sweep opens on the issue with
-                // no wave.
-                uint32_t nn = n_ship - cur;
-                uint32_t ri = cur;
-                if (nn > kGenSlots) {
-                    nn = kGenSlots;
-                } else if (nn == 0 && n_ship == num_cores) {
-                    nn = num_cores < kGenSlots ? num_cores : kGenSlots;
-                    ri = 0;
-                }
-                for (uint32_t i = 0; i < nn; i++) {
-                    cv_issue(ship_list[ri + i]);
-                }
-            }
 
-            if (pend_n != 0) {
-                killed |= emit_slots(pump, sender, stop, kGenBase[pend_gen], pend_n);
-                if constexpr (kSpool) {
-                    gen_dma_mark[pend_gen] = pump.dma_issued;
+                if (pend_n != 0) {
+                    killed |= emit_slots(pump, sender, stop, kGenBase[pend_gen], pend_n);
+                    if constexpr (kSpool) {
+                        gen_dma_mark[pend_gen] = pump.dma_issued;
+                    }
+                    gen_shipped |= 1u << pend_gen;
+                    pend_n = 0;
                 }
-                gen_shipped |= 1u << pend_gen;
-                pend_n = 0;
-            }
-            if (!more) {
-                break;
-            }
-            if constexpr (kSpool) {
-                if (pump.level >= SpoolPump::kLevelInline) {
-                    pump.pass();
+                if (!more) {
+                    break;
                 }
-            }
-
-            // Hardware-counted read barrier: every read carries transaction id 0, so the NIU's per-id outstanding count
-            // is the barrier. The spin doubles as the pump's slot only at full pressure, where the pump's GDDR reads no
-            // longer contend with the gathers.
-            while (NOC_STATUS_READ_REG(kReadNoc, NIU_MST_REQS_OUTSTANDING_ID(0)) != 0) {
                 if constexpr (kSpool) {
-                    // Inline level means occupancy is over the 5/8 line, so nonempty holds.
                     if (pump.level >= SpoolPump::kLevelInline) {
                         pump.pass();
                     }
                 }
-            }
-            invalidate_l1_cache();
-            advance_heads(n, batch);
 
-            pend_n = n;
-            pend_gen = gen;
-            gen = gen + 1u == kNGens ? 0u : gen + 1u;
-        }
-        // Enter only when the scan would have shipped every core anyway; a core dropping below either bound leaves
-        // the mode.
-        const bool next = n_ship == num_cores && min_peak != 0 && min_peak >= kLaneShipWords;
-        if (next && !all_live) {
-            for (uint32_t c = 0; c < num_cores; c++) {
-                ship_list[c] = static_cast<uint8_t>(c);
+                // Hardware-counted read barrier: every read carries transaction id 0, so the NIU's per-id outstanding
+                // count is the barrier. The spin doubles as the pump's slot only at full pressure, where the pump's
+                // GDDR reads no longer contend with the gathers.
+                while (NOC_STATUS_READ_REG(kReadNoc, NIU_MST_REQS_OUTSTANDING_ID(0)) != 0) {
+                    if constexpr (kSpool) {
+                        // Inline level means occupancy is over the 5/8 line, so nonempty holds.
+                        if (pump.level >= SpoolPump::kLevelInline) {
+                            pump.pass();
+                        }
+                    }
+                }
+                invalidate_l1_cache();
+                advance_heads(n, batch);
+
+                pend_n = n;
+                pend_gen = gen;
+                gen = gen + 1u == kNGens ? 0u : gen + 1u;
             }
+            if (!probe_pending) {
+                break;
+            }
+            probe_pending = false;
+            retire_gen(gen);
+            cv_wait(rd0, n_probe);
+            promote_probes(defer_ok);
         }
-        all_live = next;
+        if (n_demote != 0) {
+            demote();
+        }
 
         // Busy sweeps below the first band skip the post-sweep pump: a capture that fits the spool gets pure gather.
         if constexpr (kSpool) {
