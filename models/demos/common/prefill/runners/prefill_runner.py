@@ -1226,7 +1226,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
         _mtp_ref_pcc = _tmp_pcc if _tmp_pcc.enabled() else None  # TEMP(#53533)
         if _mtp_ref_pcc is not None:  # TEMP(#53533)
-            _mtp_ref_pcc.install(runtime)  # TEMP(#53533)
+            _mtp_ref_pcc.install(  # TEMP(#53533)
+                runtime, hf_config, os.environ.get("PREFILL_HF_MODEL", ADAPTER.hf_model_default)
+            )  # TEMP(#53533)
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 

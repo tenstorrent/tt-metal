@@ -42,6 +42,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 from loguru import logger
@@ -95,8 +96,12 @@ class _EmbedSourceTap:
         return getattr(self._inner, name)
 
 
-def install(runtime) -> None:
-    """Patch the runtime so chunk 0's MTP inputs and per-level hidden states are captured."""
+def install(runtime, hf_config=None, model_dir: str = "") -> None:
+    """Patch the runtime so chunk 0's MTP inputs, hidden states AND device KV are captured.
+
+    ``hf_config``/``model_dir`` are only carried into the dump, so a run that dies before
+    :func:`report` finishes can still be compared offline (``python -m ...._temp_runner_mtp_pcc``).
+    """
     predictor = getattr(getattr(runtime, "model", None), "mtp_predictor", None)
     if predictor is None:
         logger.warning(f"[{ENV_FLAG}] no mtp_predictor on this rank; capture not installed")
@@ -109,8 +114,9 @@ def install(runtime) -> None:
 
     def chunk_tap(input_tensor, kv_caches, slot_id, actual_start, actual_end, *a, **kw):
         if "chunk" not in _CAP:
-            # Recorded before the call: the predictor tap below runs inside it.
+            # Recorded before the call: the predictor tap below runs inside it, and it needs both.
             _CAP["chunk"] = {"slot_id": int(slot_id), "start": int(actual_start), "end": int(actual_end)}
+            _CAP["kv_caches"] = kv_caches
         return orig_chunk(input_tensor, kv_caches, slot_id, actual_start, actual_end, *a, **kw)
 
     def forward_tap(source, hidden, *a, **kw):
@@ -126,11 +132,54 @@ def install(runtime) -> None:
                 f"[{ENV_FLAG}] captured chunk 0: h0={tuple(_CAP['h0'].shape)} "
                 f"embeds={len(_CAP['embeds'])} normed={len(_CAP['normed'])}"
             )
+            # Read the device KV and dump HERE, inside chunk 0, rather than after the request loop.
+            # Chunk 0 owns rows [0, chunk) of the MTP slots and never rewrites them, so this is
+            # already exact -- and everything after the loop races the harness, which SIGINTs the
+            # runner as soon as the producer exits and SIGKILLs 120 s later, well inside the CPU
+            # reference's runtime. A SIGKILL inside a device call wedges an eth core, so the one
+            # device-side step is done while the process is quiet and the dump is on disk before
+            # any of that can start.
+            _capture_device_kv(runtime, hf_config, model_dir)
         return out
 
     runtime.prefill_chunk = chunk_tap
     predictor.forward = forward_tap
     logger.info(f"[{ENV_FLAG}] capture installed (chunk 0 only); PCC report runs after the request loop")
+
+
+def _capture_device_kv(runtime, hf_config, model_dir: str) -> None:
+    """Read chunk 0's MTP KV slots off the device into ``_CAP`` and, if asked, dump the whole capture.
+
+    Never raises: this runs inside the request loop, and losing the bring-up measurement must not
+    cost the serving run.
+    """
+    try:
+        predictor = runtime.model.mtp_predictor
+        chunk = _CAP["chunk"]
+        _CAP["predictor"] = {
+            "num_levels": predictor.num_levels,
+            "index_share": predictor.index_share,
+            "chain_from": predictor.chain_from,
+            "first_cache_slot": predictor.first_cache_slot,
+            "mtp_layer_idx": predictor.mtp_config.mtp_layer_idx,
+        }
+        _CAP["dev_kv"] = _read_mtp_kv(
+            runtime,
+            _CAP["kv_caches"],
+            slot=chunk["slot_id"],
+            num_levels=predictor.num_levels,
+            first_slot=predictor.first_cache_slot,
+            chunk_rows=int(_CAP["h0"].shape[-2]),
+        )
+        logger.info(f"[{ENV_FLAG}] device MTP KV read back: {tuple(_CAP['dev_kv'].shape)}")
+        dump = os.environ.get("PREFILL_MTP_REF_PCC_DUMP")
+        if dump:
+            payload = {k: _CAP[k] for k in ("h0", "embeds", "normed", "dev_kv", "chunk", "predictor")}
+            payload["hf_config"], payload["model_dir"] = hf_config, model_dir
+            torch.save(payload, dump)
+            logger.info(f"[{ENV_FLAG}] capture + device KV saved to {dump}")
+    except Exception as exc:
+        logger.exception(f"[{ENV_FLAG}] device KV capture failed: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -219,54 +268,43 @@ def _read_mtp_kv(runtime, kv_caches, *, slot: int, num_levels: int, first_slot: 
 
 
 def report(runtime, kv_caches, hf_config, model_dir: str) -> None:
-    """Compose the CPU reference for chunk 0 and log per-level MTP PCC. Never raises."""
+    """Compose the CPU reference for chunk 0 and log per-level MTP PCC. Never raises.
+
+    Pure host torch: the device readback already happened inside chunk 0 (:func:`_capture_device_kv`),
+    so a kill landing in here costs the log line, not an eth core -- and the dump it left behind
+    reproduces this exact comparison offline (``python -m ...._temp_runner_mtp_pcc <dump>``).
+    """
     try:
-        _report(runtime, kv_caches, hf_config, model_dir)
+        compare(_CAP, hf_config, model_dir)
     except Exception as exc:  # bring-up scaffolding must not take the runner down
         logger.exception(f"[{ENV_FLAG}] MTP reference PCC failed: {exc}")
 
 
-def _report(runtime, kv_caches, hf_config, model_dir: str) -> None:
+def compare(cap: dict, hf_config, model_dir: str) -> None:
     from models.demos.deepseek_v3_d_p.reference.glm_5_2.mtp import glm_mtp_predictor_reference
     from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import load_mtp_state_dict
     from tests.ttnn.utils_for_testing import comp_pcc
 
-    if "h0" not in _CAP:
+    if "h0" not in cap:
         logger.warning(f"[{ENV_FLAG}] nothing captured (no MTP chunk ran on this rank); skipping")
         return
-    predictor = runtime.model.mtp_predictor
+    assert "dev_kv" in cap, "the device KV readback did not run; nothing to compare against"
+    predictor = SimpleNamespace(**cap["predictor"])
     K = predictor.num_levels
 
-    h0 = _CAP["h0"].squeeze(0)  # [1, seq, hidden]
-    embeds = [e.squeeze(0) for e in _CAP["embeds"]]
-    normed = [t.squeeze(0) for t in _CAP["normed"]]
+    h0 = cap["h0"].squeeze(0)  # [1, seq, hidden]
+    embeds = [e.squeeze(0) for e in cap["embeds"]]
+    normed = [t.squeeze(0) for t in cap["normed"]]
     assert len(embeds) == K and len(normed) == K, f"captured {len(embeds)} embeds / {len(normed)} hiddens for K={K}"
     seq_len = int(h0.shape[1])
-    chunk = _CAP["chunk"]
+    chunk = cap["chunk"]
     logger.info(
         f"[{ENV_FLAG}] chunk 0: slot={chunk['slot_id']} positions=[{chunk['start']}, {chunk['end']}) "
         f"seq_len={seq_len} K={K} index_share={predictor.index_share} chain_from={predictor.chain_from}"
     )
 
-    # Device work FIRST, and nothing device-side after it. The e2e harness SIGINTs the runner once the
-    # producer exits and SIGKILLs 120 s later; a SIGKILL landing inside a device call wedges an eth core
-    # (needs tt-smi -glx_reset_auto). Everything below this readback is pure host torch, so a kill there
-    # is harmless. The optional dump makes the comparison re-runnable offline if the process does die.
-    dev_kv = _read_mtp_kv(
-        runtime,
-        kv_caches,
-        slot=chunk["slot_id"],
-        num_levels=K,
-        first_slot=predictor.first_cache_slot,
-        chunk_rows=seq_len,
-    )
-    logger.info(f"[{ENV_FLAG}] device MTP KV read back: {tuple(dev_kv.shape)}")
-    dump = os.environ.get("PREFILL_MTP_REF_PCC_DUMP")
-    if dump:
-        torch.save({"h0": h0, "embeds": embeds, "normed": normed, "dev_kv": dev_kv, "chunk": chunk}, dump)
-        logger.info(f"[{ENV_FLAG}] capture + device KV saved to {dump}")
-
-    layer_idx = predictor.mtp_config.mtp_layer_idx
+    dev_kv = cap["dev_kv"]
+    layer_idx = predictor.mtp_layer_idx
     logger.info(f"[{ENV_FLAG}] loading layer-{layer_idx} host weights from {model_dir} (~10 s measured)")
     mla_weights, attn_norm_w, ffn_norm_w, moe_weights = _load_layer_weights(
         hf_config, model_dir, layer_idx, hf_config.n_routed_experts
@@ -309,3 +347,30 @@ def _report(runtime, kv_caches, hf_config, model_dir: str) -> None:
         _, pe_pcc = comp_pcc(ref_slot[..., kv_lora:].float(), dev_slot[..., kv_lora:].float())
         lines.append(f"  L{k + 1} (KV slot {predictor.first_cache_slot + k}): kv={kv_pcc:.6f} pe={pe_pcc:.6f}")
     logger.info(f"[{ENV_FLAG}] MTP KV vs composed CPU reference, chunk 0, teacher-forced:\n" + "\n".join(lines))
+
+
+def main(argv=None) -> None:
+    """Re-run the comparison from a ``PREFILL_MTP_REF_PCC_DUMP`` file, with no device.
+
+        python -m models.demos.deepseek_v3_d_p.tt.mtp_prefill._temp_runner_mtp_pcc <dump> [model_dir]
+
+    The dump is written inside chunk 0, so it survives whatever happens to the serving run
+    afterwards -- and the CPU reference (K levels x a 256-expert MoE block) is slow enough that
+    running it outside the runner's process is usually the right call anyway.
+    """
+    import sys
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    assert argv, main.__doc__
+    cap = torch.load(argv[0], weights_only=False)
+    model_dir = argv[1] if len(argv) > 1 else cap.get("model_dir") or os.environ["PREFILL_HF_MODEL"]
+    hf_config = cap.get("hf_config")
+    if hf_config is None:
+        from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2 import GLM52Adapter
+
+        hf_config = GLM52Adapter().load_hf_config()
+    compare(cap, hf_config, model_dir)
+
+
+if __name__ == "__main__":
+    main()
