@@ -21,6 +21,23 @@ from models.demos.gemma4.utils.general_utils import get_cache_file_name
 PV_HOT_BLOCKS = 2
 
 
+def paged_fill_cache(cache, input_tensor, page_table, **kwargs):
+    """Fill a paged cache after explicitly matching its storage dtype.
+
+    Paged-cache kernels copy encoded tile bytes; they do not perform a numeric
+    conversion. Older kernels accepted mismatched BF16 inputs and BFP8 caches,
+    making the model appear to work while writing the wrong representation.
+    """
+    fill_tensor = input_tensor
+    if input_tensor.dtype != cache.dtype:
+        fill_tensor = ttnn.typecast(input_tensor, cache.dtype)
+    try:
+        return ttnn.experimental.paged_fill_cache(cache, fill_tensor, page_table, **kwargs)
+    finally:
+        if fill_tensor is not input_tensor:
+            fill_tensor.deallocate(True)
+
+
 def init_kv_cache(
     mesh_device,
     config,

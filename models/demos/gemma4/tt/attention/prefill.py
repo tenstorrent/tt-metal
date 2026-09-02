@@ -16,6 +16,7 @@ import ttnn
 from models.demos.gemma4.tt.ccl import ccl_cp_allgather, cp_degree
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
+from .kv_cache import paged_fill_cache
 from .operations import (
     PREFILL_SDPA_MAX_SEQ,
     apply_allreduce,
@@ -262,7 +263,7 @@ def flush_deferred_bounded_fills(layers):
         try:
             k_merged = _merge_bounded_boundary_fill(k_fill, pending["valid_seq_len"], pending["modulo"])
             v_merged = _merge_bounded_boundary_fill(v_fill, pending["valid_seq_len"], pending["modulo"])
-            ttnn.experimental.paged_fill_cache(
+            paged_fill_cache(
                 pending["k_cache"],
                 k_merged,
                 pending["page_table"],
@@ -270,7 +271,7 @@ def flush_deferred_bounded_fills(layers):
                 block_size=pending["block_size"],
                 **pending["paged_modulo_kwargs"],
             )
-            ttnn.experimental.paged_fill_cache(
+            paged_fill_cache(
                 pending["v_cache"],
                 v_merged,
                 pending["page_table"],
@@ -476,7 +477,7 @@ def _prefill_forward_single(
                     valid_dev = _resolve_valid_seq_len_tensor(config, valid_seq_len, tt_k.shape[-2], k_cache.device())
                     if valid_dev is not None:
                         fill_kwargs["valid_seq_len_tensor"] = valid_dev
-                    ttnn.experimental.paged_fill_cache(
+                    paged_fill_cache(
                         k_cache,
                         k_fill,
                         fill_page_table,
@@ -485,7 +486,7 @@ def _prefill_forward_single(
                         **paged_modulo_kwargs,
                         **fill_kwargs,
                     )
-                    ttnn.experimental.paged_fill_cache(
+                    paged_fill_cache(
                         v_cache,
                         v_fill,
                         fill_page_table,
@@ -521,7 +522,7 @@ def _prefill_forward_single(
                             [0, 0, 0, 0],
                             [tt_v.shape[0], tt_v.shape[1], tile_end, tt_v.shape[3]],
                         )
-                ttnn.experimental.paged_fill_cache(
+                paged_fill_cache(
                     k_cache,
                     k_fill,
                     fill_page_table,
@@ -529,7 +530,7 @@ def _prefill_forward_single(
                     block_size=eff_bs,
                     **paged_modulo_kwargs,
                 )
-                ttnn.experimental.paged_fill_cache(
+                paged_fill_cache(
                     v_cache,
                     v_fill,
                     fill_page_table,
@@ -1081,7 +1082,7 @@ def prefill_forward(
                 else:
                     k_user_sliced = k_user[:, :, :page_len, :] if page_len < seq_len_per_user else k_user
                     v_user_sliced = v_user[:, :, :page_len, :] if page_len < seq_len_per_user else v_user
-                ttnn.experimental.paged_fill_cache(
+                paged_fill_cache(
                     k_cache,
                     k_user_sliced,
                     page_table,
@@ -1089,7 +1090,7 @@ def prefill_forward(
                     block_size=eff_bs,
                     **paged_modulo_kwargs,
                 )
-                ttnn.experimental.paged_fill_cache(
+                paged_fill_cache(
                     v_cache,
                     v_user_sliced,
                     page_table,
