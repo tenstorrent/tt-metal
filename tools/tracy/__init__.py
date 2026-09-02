@@ -8,6 +8,7 @@ import signal
 import os
 import io
 import csv
+import re
 import shutil
 import subprocess
 import tempfile
@@ -41,6 +42,7 @@ import tracy.tracy_state
 
 DEFAULT_CHILD_CALLS = ["CompileProgram", "HWCommandQueue_write_buffer"]
 TTNN_SESSION_ID_MESSAGE_PREFIX = "TTNN_SESSION_ID:"
+PROFILE_LOG_SESSION_ID_PATTERN = re.compile(r"(?:^|,\s*)SESSION_ID:\s*([^,\r\n]+)")
 
 
 def extract_ttnn_session_ids(messages_file):
@@ -59,12 +61,24 @@ def extract_ttnn_session_ids(messages_file):
 
 
 def annotate_profile_log_session_id(profile_log, session_id):
-    """Append SESSION_ID to the device-log preamble without changing its CSV rows."""
+    """Append SESSION_ID to the device-log preamble, or verify an existing value.
+
+    Returns ``True`` when the preamble was changed and ``False`` when it already
+    contained the requested ID. A different existing ID is an error: silently
+    retaining it would pair this performance report with the wrong memory report.
+    """
     profile_log = os.fspath(profile_log)
     with open(profile_log, "r", newline="") as source:
         preamble = source.readline()
-        if "SESSION_ID:" in preamble:
-            return
+        match = PROFILE_LOG_SESSION_ID_PATTERN.search(preamble)
+        if match:
+            existing_session_id = match.group(1).strip()
+            if existing_session_id != session_id:
+                raise ValueError(
+                    f"{profile_log} already contains SESSION_ID: {existing_session_id}, "
+                    f"but Tracy contains TTNN_SESSION_ID: {session_id}"
+                )
+            return False
 
         with tempfile.NamedTemporaryFile(
             "w", newline="", dir=os.path.dirname(profile_log) or ".", delete=False
@@ -75,6 +89,7 @@ def annotate_profile_log_session_id(profile_log, session_id):
 
     os.chmod(temporary_path, os.stat(profile_log).st_mode)
     os.replace(temporary_path, profile_log)
+    return True
 
 
 def annotate_profile_log_from_tracy_messages(messages_file, profile_log):
@@ -91,8 +106,11 @@ def annotate_profile_log_from_tracy_messages(messages_file, profile_log):
         return None
 
     session_id = next(iter(session_ids))
-    annotate_profile_log_session_id(profile_log, session_id)
-    logger.info(f"Added SESSION_ID: {session_id} to {profile_log}")
+    changed = annotate_profile_log_session_id(profile_log, session_id)
+    if changed:
+        logger.info(f"Added SESSION_ID: {session_id} to {profile_log}")
+    else:
+        logger.info(f"Verified existing SESSION_ID: {session_id} in {profile_log}")
     return session_id
 
 

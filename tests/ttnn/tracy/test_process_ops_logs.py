@@ -248,11 +248,7 @@ def test_build_sub_device_id_lookup_skips_preamble_with_session_id(tmp_path):
 
 def test_extract_ttnn_session_ids_from_tracy_message_export(tmp_path):
     messages = tmp_path / "tracy_ops_data.csv"
-    messages.write_text(
-        "unrelated message;100\n"
-        "TTNN_SESSION_ID: abc123;101\n"
-        "TTNN_SESSION_ID: abc123;102\n"
-    )
+    messages.write_text("unrelated message;100\n" "TTNN_SESSION_ID: abc123;101\n" "TTNN_SESSION_ID: abc123;102\n")
 
     assert extract_ttnn_session_ids(messages) == {"abc123"}
 
@@ -262,9 +258,7 @@ def test_annotate_profile_log_from_unique_tracy_session_id(tmp_path):
     messages.write_text("TTNN_SESSION_ID: abc123;101\n")
     profile_log = tmp_path / "profile_log_device.csv"
     profile_log.write_text(
-        "ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64\n"
-        "PCIe slot,core_x\n"
-        "0,1\n"
+        "ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64\n" "PCIe slot,core_x\n" "0,1\n"
     )
 
     assert annotate_profile_log_from_tracy_messages(messages, profile_log) == "abc123"
@@ -273,6 +267,33 @@ def test_annotate_profile_log_from_unique_tracy_session_id(tmp_path):
         "PCIe slot,core_x\n"
         "0,1\n"
     )
+
+
+def test_annotate_profile_log_accepts_matching_existing_session_id(tmp_path):
+    messages = tmp_path / "tracy_ops_data.csv"
+    messages.write_text("TTNN_SESSION_ID: abc123;101\n")
+    profile_log = tmp_path / "profile_log_device.csv"
+    original = (
+        "ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64, SESSION_ID: abc123\n" "PCIe slot,core_x\n"
+    )
+    profile_log.write_text(original)
+
+    assert annotate_profile_log_from_tracy_messages(messages, profile_log) == "abc123"
+    assert profile_log.read_text() == original
+
+
+def test_annotate_profile_log_rejects_mismatched_existing_session_id(tmp_path, expect_error):
+    messages = tmp_path / "tracy_ops_data.csv"
+    messages.write_text("TTNN_SESSION_ID: new-session;101\n")
+    profile_log = tmp_path / "profile_log_device.csv"
+    original = (
+        "ARCH: wormhole_b0, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64, SESSION_ID: old-session\n" "PCIe slot,core_x\n"
+    )
+    profile_log.write_text(original)
+
+    with expect_error(ValueError, "old-session.*new-session"):
+        annotate_profile_log_from_tracy_messages(messages, profile_log)
+    assert profile_log.read_text() == original
 
 
 @pytest.mark.parametrize(
