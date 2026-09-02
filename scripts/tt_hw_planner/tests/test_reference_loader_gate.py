@@ -457,6 +457,25 @@ def test_a_native_checkpoint_is_checked_by_value_since_its_names_differ(tmp_path
 
 
 @requires_torch
+def test_one_key_matching_by_name_does_not_wave_the_rest_through(tmp_path) -> None:
+    """The realistic native config: SOME keys collide with the reference's names, some do not.
+
+    `rope_theta` is spelled the same either side, `norm_eps` is not. Checking by value only when
+    nothing matched by name would let that one collision stand in as a clean bill of health and
+    report `matches` over a wrong epsilon -- worse than reporting nothing, because it reassures.
+    """
+    (tmp_path / _NATIVE_CONFIG_FILE).write_text(
+        json.dumps({"dim": 32, "n_layers": 2, "vocab_size": 64, "rope_theta": 10000.0, "norm_eps": 1e-05})
+    )
+    (tmp_path / "weights.safetensors").write_bytes(b"")
+
+    assert config_fidelity(str(tmp_path), _llama(rms_norm_eps=1e-05))["status"] == "matches"
+    wrong = config_fidelity(str(tmp_path), _llama(rms_norm_eps=1e-03))
+    assert wrong["status"] == "absent", wrong
+    assert "norm_eps" in wrong["mismatched"], wrong
+
+
+@requires_torch
 def test_a_checkpoint_with_no_readable_config_is_unverified(tmp_path) -> None:
     assert config_fidelity(str(tmp_path), _llama())["status"] == "unverified"
 

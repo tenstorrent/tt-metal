@@ -412,11 +412,13 @@ def config_fidelity(model_id: str, ref) -> dict:
         return {"status": "unverified", "reason": "checkpoint ships no readable config"}
     cfg = getattr(ref, "config", None)
     mismatched = {}
+    unmatched = {}
     compared = 0
     for key, want in declared.items():
         got = getattr(cfg, key, None)
         if not isinstance(got, (int, float)) or isinstance(got, bool):
-            continue  # the reference does not carry this one; absence is not a contradiction
+            unmatched[key] = want  # not carried under THIS name; checked by value below
+            continue
         compared += 1
         if not math.isclose(float(got), float(want), rel_tol=_CONSTANT_REL_TOL):
             mismatched[key] = {"declared": want, "reference": got}
@@ -432,33 +434,42 @@ def config_fidelity(model_id: str, ref) -> dict:
                 + ") -- shapes and weights are unaffected, so this is invisible to every other check"
             ),
         }
-    # Nothing lined up by name, which is the native-checkpoint case rather than a clean bill of
-    # health. Fall back to asking whether the declared values are present at all.
-    if not compared:
-        carried = _reference_numbers(ref)
-        # Whole numbers are excluded: a declared 2 or 4096 collides with any unrelated 2 or 4096 in
-        # the model, so its presence would prove nothing. Fractional constants are the eps-shaped
-        # ones, and are specific enough that turning up at all is meaningful.
-        scanned = {k: v for k, v in declared.items() if isinstance(v, float) and not float(v).is_integer()}
-        absent = {k: v for k, v in scanned.items() if v not in carried}
-        if absent:
-            return {
-                "status": "absent",
-                "mismatched": absent,
-                "reason": (
-                    "constants the checkpoint declares appear nowhere in the reference ("
-                    + ", ".join(f"{k}={v}" for k, v in absent.items())
-                    + ") -- advisory, since a value can be legitimately unused at inference"
-                ),
-            }
-        if scanned:
-            return {
-                "status": "present",
-                "compared": len(scanned),
-                "reason": f"{len(scanned)} declared constants appear in the reference, matched by value not name",
-            }
-        return {"status": "unverified", "reason": "no declared constant could be matched by name or value"}
-    return {"status": "matches", "compared": compared, "reason": f"{compared} declared constants agree"}
+    # Every key the reference did not carry under that name is still checked, by value. This runs
+    # ALONGSIDE the comparison above rather than only when it finds nothing: a native config mixes
+    # names that happen to collide with the reference's (`rope_theta`) and names that do not
+    # (`norm_eps`), so treating one match as a clean bill of health would wave the rest through --
+    # and report `matches` over a wrong epsilon, which is worse than reporting nothing at all.
+    # Whole numbers are excluded: a declared 2 or 4096 collides with any unrelated 2 or 4096 in the
+    # model, so its presence would prove nothing. Fractional constants are the eps-shaped ones, and
+    # are specific enough that turning up at all is meaningful.
+    scanned = {k: v for k, v in unmatched.items() if isinstance(v, float) and not float(v).is_integer()}
+    carried = _reference_numbers(ref) if scanned else set()
+    absent = {k: v for k, v in scanned.items() if v not in carried}
+    if absent:
+        return {
+            "status": "absent",
+            "mismatched": absent,
+            "compared": compared,
+            "reason": (
+                "constants the checkpoint declares appear nowhere in the reference ("
+                + ", ".join(f"{k}={v}" for k, v in absent.items())
+                + ") -- advisory, since a value can be legitimately unused at inference"
+            ),
+        }
+    if compared:
+        return {
+            "status": "matches",
+            "compared": compared,
+            "scanned": len(scanned),
+            "reason": f"{compared} declared constants agree, {len(scanned)} more found by value",
+        }
+    if scanned:
+        return {
+            "status": "present",
+            "compared": len(scanned),
+            "reason": f"{len(scanned)} declared constants appear in the reference, matched by value not name",
+        }
+    return {"status": "unverified", "reason": "no declared constant could be matched by name or value"}
 
 
 def _first_tensor(out):
