@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <thread>
@@ -78,10 +79,7 @@ uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rt
     // There are 2 DRAM buffers per risc when debug dump is enabled.
     // The size of each buffer returned by get_profiler_dram_bank_size_per_risc_bytes is half to maintain the same
     // total profiler size.
-    if (debug_dump_enabled) {
-        return per_buffer_size * 2;
-    }
-    return per_buffer_size;
+    return debug_dump_enabled ? per_buffer_size * 2 : per_buffer_size;
 }
 
 ProfilerStateManager::ProfilerStateManager(MetalEnvImpl& env) : env_(env), do_sync_on_close(true) {}
