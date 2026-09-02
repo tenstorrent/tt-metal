@@ -673,13 +673,13 @@ def close_ring_joint_sdpa_runtime(runtime: RingJointSDPARuntime, *, clear_progra
             ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-def nd_sharded_dram_memory_config(device, head_dim):
+def nd_sharded_dram_memory_config(device, head_dim, shard_height=NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
     num_dram_banks = device.dram_grid_size().x
     core_ranges = [
         ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
     ]
     nd_shard_spec = ttnn.NdShardSpec(
-        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim],
+        shard_shape=[1, 1, shard_height, head_dim],
         grid=ttnn.CoreRangeSet(core_ranges),
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,

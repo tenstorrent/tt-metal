@@ -25,11 +25,9 @@ RING = 4
 
 
 def ring_parent_shape():
-    """The system mesh shape, as a (rows, cols) tuple. Raises if it cannot host the ring-of-4 carve."""
+    """Return the system mesh shape; callers decide whether it can host the ring-of-4 carve."""
     shape = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
-    rows, cols = shape[0], shape[1]
-    assert cols >= RING, f"ring-of-4 needs a system mesh with axis-1 >= {RING}; got {rows}x{cols}"
-    return rows, cols
+    return shape[0], shape[1]
 
 
 SP_AXIS = 1  # the length-4 axis of the (1, 4) submesh
