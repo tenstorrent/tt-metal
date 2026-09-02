@@ -51,7 +51,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
 )
 from helpers.tile_constants import calculate_tile_size_bytes
-from helpers.tile_shape import construct_tile_shape
+from helpers.tile_shape import TileShape, construct_tile_shape
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
@@ -431,7 +431,12 @@ def test_matmul(
 
     input_A_shape = construct_tile_shape(input_A_tile_dimensions)
     input_B_shape = construct_tile_shape(input_B_tile_dimensions)
-    output_shape = construct_tile_shape(output_tile_dimensions)
+    output_shape = TileShape(
+        face_r_dim=input_A_shape.face_r_dim,
+        face_c_dim=input_B_shape.face_c_dim,
+        num_faces_r_dim=input_A_shape.num_faces_r_dim,
+        num_faces_c_dim=input_B_shape.num_faces_c_dim,
+    )
     enable_2x_format = format.register_format_hint in (
         DataFormat.MxFp4_2x_A,
         DataFormat.MxFp4_2x_B,
