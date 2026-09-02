@@ -51,8 +51,10 @@ def _fused_msda_level(value_level, sampling_grids, attn_all, level, H, W, shape)
     value_l = ttnn.to_layout(value_l, layout=ttnn.ROW_MAJOR_LAYOUT)
     value_l = ttnn.reshape(value_l, (bs * num_heads, H, W, head_dim))
 
-    grid = sampling_grids[:, :, :, level]  # (bs, Q, num_heads, P, 2)
-    grid = ttnn.permute(grid, (0, 2, 1, 3, 4))
+    # Already head-major, so a level is a slice plus a view: (bs, num_heads, Q, P, 2) keeps the
+    # trailing 2 that the op's grid shape wants, and regrouping rows at constant row width is
+    # the one ROW_MAJOR reshape that is actually free.
+    grid = sampling_grids[:, :, :, level]  # (bs, num_heads, Q, P, 2)
     grid = ttnn.reshape(grid, (bs * num_heads, num_queries * num_points, 1, 2))
 
     # Already (N, Q, L, P) and ROW_MAJOR — the head-major transpose and the untilize are hoisted
@@ -85,9 +87,9 @@ def multi_scale_deformable_attn_ttnn(
         value_spatial_shapes (torch.Tensor): Spatial shape of
             each feature map, has shape (num_levels, 2),
             last dimension 2 represent (h, w)
-        sampling_grids (ttnn.Tensor): Sampling points already normalized to [-1, 1] and in
-            ROW_MAJOR, has shape
-            (bs, num_queries, num_heads, num_levels, num_points, 2),
+        sampling_grids (ttnn.Tensor): Sampling points already normalized to [-1, 1], head-major
+            and in ROW_MAJOR, has shape
+            (bs, num_heads, num_queries, num_levels, num_points, 2),
             the last dimension 2 represent (x, y).
         attention_weights (ttnn.Tensor): The weight of sampling points used
             when calculate the attention, has shape
@@ -99,7 +101,7 @@ def multi_scale_deformable_attn_ttnn(
         ttnn.Tensor: Attended features with shape (bs, num_queries, embed_dims)
     """
     bs, _, num_heads, head_dim = value.shape
-    _, num_queries, num_heads, num_levels, num_points, _ = sampling_grids.shape
+    _, num_heads, num_queries, num_levels, num_points, _ = sampling_grids.shape
 
     if ENABLE_LOGGING:
         logger.info("MSDA Start")
@@ -238,27 +240,25 @@ class TTMSDeformableAttention:
         return folded
 
     def _grid_bias(self, reference_points, depth_levels):
-        """`2·ref - 1`, laid out in the `sampling_offsets` Linear's channel order.
+        """`2·ref - 1`, laid out to add onto the head-major sampling offsets.
 
-        The other half of the grid fold in :meth:`_folded_sampling_offsets`. The Linear emits
-        channels ordered (head, level, point, xy) with the points grouped as
-        `(num_points // depth_levels, depth_levels)`, and the reference point broadcasts over
-        everything but the innermost `(depth_levels, 2)` block — so the bias is that flat block
-        repeated once per (head, level, point-group).
-
-        ROW_MAJOR throughout: the repeat writes the channel axis contiguously, which is what makes
-        the caller's split back into `(heads, levels, points, 2)` a view instead of a re-layout.
+        The other half of the grid fold in :meth:`_folded_sampling_offsets`. The offsets reach the
+        add as `(bs, num_heads, Q, num_levels*num_points*2)` with the channels of one head ordered
+        (level, point, xy) and the points grouped as `(num_points // depth_levels, depth_levels)`.
+        The reference point broadcasts over heads and over everything but the innermost
+        `(depth_levels, 2)` block, so the bias is that flat block repeated once per
+        (level, point-group) and left with a length-1 head axis to broadcast over.
         """
         bs, num_queries = reference_points.shape[0], reference_points.shape[1]
         block = depth_levels * 2
-        groups = self.num_heads * self.num_levels * (self.num_points // depth_levels)
+        groups = self.num_levels * (self.num_points // depth_levels)
 
         ref = ttnn.to_layout(reference_points, ttnn.ROW_MAJOR_LAYOUT)
         ref = ttnn.reshape(ref, (bs, num_queries, 1, block))
         ref = ttnn.mul(ref, 2.0)
         ref = ttnn.sub(ref, 1.0)
         ref = ttnn.repeat(ref, ttnn.Shape((1, 1, groups, 1)))
-        return ttnn.reshape(ref, (bs, num_queries, groups * block))
+        return ttnn.reshape(ref, (bs, 1, num_queries, groups * block))
 
     def forward(
         self,
@@ -341,13 +341,20 @@ class TTMSDeformableAttention:
         # Generate sampling offsets, already normalized and grid-rescaled by the folded Linear.
         #
         # The Linear emits (bs, Q, num_heads*num_levels*num_points*2) — 256 channels, a shape that
-        # tiles cleanly. Everything downstream of it is elementwise or a view, so the tensor stays
-        # in that shape and goes to ROW_MAJOR here: the split into (heads, levels, points, 2) is
-        # then a trailing-axis view, and the extent-2 coordinate axis never lands in a tiled
-        # dimension where it would pad 2 -> 32.
+        # tiles cleanly, and the arithmetic that follows is elementwise, so the extent-2 coordinate
+        # axis never has to become a tiled dimension that pads 2 -> 32.
+        #
+        # The head-major move happens here, while the tensor is still tiled: a TILE transpose swaps
+        # whole tiles, where the equivalent ROW_MAJOR permute costs an order of magnitude more at
+        # these shapes. Doing it now is what leaves the fused op's per-level grid a slice and a
+        # view instead of a permute.
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
         offsets_weight, offsets_bias = self._folded_sampling_offsets(spatial_shapes)
         sampling_offsets = ttnn.linear(query, offsets_weight, bias=offsets_bias)
+        sampling_offsets = ttnn.reshape(
+            sampling_offsets, (bs, num_queries, self.num_heads, self.num_levels * self.num_points * 2)
+        )
+        sampling_offsets = ttnn.transpose(sampling_offsets, 1, 2)
         sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.ROW_MAJOR_LAYOUT)
 
         if ENABLE_LOGGING:
@@ -377,7 +384,7 @@ class TTMSDeformableAttention:
             # and the Linear already carries `2 / [W, H]`, so no rescale follows.
             sampling_grids = ttnn.add(sampling_offsets, self._grid_bias(reference_points, D))
             sampling_grids = ttnn.reshape(
-                sampling_grids, (bs, num_queries, self.num_heads, self.num_levels, self.num_points, 2)
+                sampling_grids, (bs, self.num_heads, num_queries, self.num_levels, self.num_points, 2)
             )
         else:
             raise ValueError(f"Reference points must have 2 dimensions, got {reference_points.shape[-1]}")

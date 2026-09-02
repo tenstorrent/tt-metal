@@ -706,7 +706,7 @@ each names the row it is priced from, so a miss is diagnosable.
 | [5a](#5a-delete-the-key-permute) | delete the dead `key` permute | [sca:349-350](../tt/tt_spatial_cross_attention.py#L349-L350) | **landed: −18.1 ms (−4.0%) — [06](perf_reports/06-sca-key-permute-deleted.md)** | XS | **none** |
 | [5b](#5b-do-the-sampling-location-math-in-row_major) | sampling-location math in ROW_MAJOR | [msda:110-117](../tt/tt_ms_deformable_attention.py#L110-L117), [313-357](../tt/tt_ms_deformable_attention.py#L313-L357) | **landed: −82.2 ms (−18.8%) — [07](perf_reports/07-sampling-grid-in-row-major.md)** | M | low |
 | [5c](#5c-untilize-attn-once-not-per-level) | untilize `attn` once, slice in ROW_MAJOR | [msda:322-332](../tt/tt_ms_deformable_attention.py#L322-L332), [58-61](../tt/tt_ms_deformable_attention.py#L58-L61) | **landed: −44.9 ms (−12.6%) — [08](perf_reports/08-attn-prepared-once-per-call.md)** | S | low |
-| [5e](#5e-permute-grid-once-slice-after) | permute `grid` once above the loop | [msda:54-56](../tt/tt_ms_deformable_attention.py#L54-L56) | **−13 ms (−2.8%)** | S | low |
+| [5e](#5e-permute-grid-once-slice-after) | build the grid head-major in TILE | [msda:54-56](../tt/tt_ms_deformable_attention.py#L54-L56) | **landed: −24.5 ms (−7.9%) — [09](perf_reports/09-head-major-sampling-grid.md)** | S | low |
 | [5d](#5d-split-value-into-heads-in-row_major) | head-split `value` in ROW_MAJOR | [msda:296-305](../tt/tt_ms_deformable_attention.py#L296-L305), [50-52](../tt/tt_ms_deformable_attention.py#L50-L52) | **−10…−20 ms**, uncertain | M | med |
 | [5f](#5f-the-per-level-guards-are-free-dont-book-them) | per-level `to_layout` / `typecast` guards | [msda:61-68](../tt/tt_ms_deformable_attention.py#L61-L68) | **0 ms** — measured | XS | none |
 
@@ -880,6 +880,20 @@ way. The win comes only from moving the head split out of TILE.
 measures badly, the answer is 11, not a cleverer reshape.
 
 #### 5e. Permute `grid` once, slice after
+
+**Landed as something else** — [stage 09](perf_reports/09-head-major-sampling-grid.md), −24.5 ms,
+PCC unchanged. The entry's own proposal was worth ~4 ms and its premise was wrong twice; read the
+report for both corrections. What landed instead builds the grid **head-major with a TILE
+transpose**, which deletes all five per-level permutes rather than hoisting them.
+
+**The rule that came out of it, and that the rest of this document should be read against:** do axis
+moves in TILE (a transpose swaps tiles, ~0.4 ms); do only elementwise work and constant-row-width
+regrouping in ROW_MAJOR. **A ROW_MAJOR reshape is free only when the last dimension is unchanged** —
+stage 07's "free view" was 7.09 ms and stage 08's was 2.59 ms. Every "reshape is a view in ROW_MAJOR"
+claim elsewhere in this file is suspect on those grounds, including the one in
+[candidate 6](#candidate-6--permutereshape-by-reformulation).
+
+Original entry:
 
 **25.2 ms, and four launches where one would do.**
 [`_fused_msda_level`](../tt/tt_ms_deformable_attention.py#L54-L56) slices the level out of

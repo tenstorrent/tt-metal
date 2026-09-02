@@ -51,6 +51,7 @@ today. The signposted region therefore carries host dispatch, and both columns a
 | 6 | [dead SCA `key` permute deleted](perf_reports/06-sca-key-permute-deleted.md) | 438.4 ms | 14.4 ms | — | **−18.1 ms kernel** ‡ | 126 |
 | 7 | [sampling grid built in ROW_MAJOR](perf_reports/07-sampling-grid-in-row-major.md) | 356.2 ms | 17.7 ms | — | **−82.2 ms kernel** ‡ | 131 |
 | 8 | [`attn` prepared once per call, not per level](perf_reports/08-attn-prepared-once-per-call.md) | 311.3 ms | 24.2 ms | — | **−44.9 ms kernel** ‡ | 113 |
+| 9 | [head-major sampling grid](perf_reports/09-head-major-sampling-grid.md) | 286.8 ms | 20.9 ms | — | **−24.5 ms kernel** ‡ | 112 |
 
 `kernel` = summed `DEVICE KERNEL DURATION`. `gap` = summed `OP TO OP LATENCY`, i.e. device idle
 between ops waiting on host dispatch. `wall` = kernel + gap, per layer.
