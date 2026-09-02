@@ -634,55 +634,103 @@ def _packed_seq_kv_enabled():
     return os.environ.get("GEMMA4_PACKED_VERIFY_SEQ_KV", "1").lower() not in ("0", "false", "no", "off")
 
 
+def _packed_fused_kv_enabled():
+    """One ``paged_fused_update_cache`` per position instead of separate K then V.
+    Default on; ``GEMMA4_PACKED_FUSED_KV=0`` restores two ``paged_update_cache`` ops."""
+    return os.environ.get("GEMMA4_PACKED_FUSED_KV", "1").lower() not in ("0", "false", "no", "off")
+
+
+_PACKED_KV_MEM_CACHE: dict = {}
+
+
+def _packed_kv_user_mem(q_sharded_mem):
+    """HEIGHT_SHARDED batch=1 layouts for packed KV writes.
+
+    Fused K+V update forbids overlapping L1 grids, so V sits on core (1,0)
+    while K stays on (0,0). Separate K/V updates can share the K layout.
+    """
+    shard_shape = tuple(q_sharded_mem.shard_spec.shape)
+    cached = _PACKED_KV_MEM_CACHE.get(shard_shape)
+    if cached is not None:
+        return cached
+    k_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    v_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
+    k_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(k_grid, list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    v_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(v_grid, list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    _PACKED_KV_MEM_CACHE[shard_shape] = (k_mem, v_mem)
+    return k_mem, v_mem
+
+
 def _write_packed_kv_sequential(tt_k, tt_v, kv_cache, page_table, pos_cache, q_sharded_mem, head_dim, nkv_local, P):
     """Race-safe write of P consecutive positions that share one paged block.
 
-    Same serialization as decode ``sequential_kv_write``: one ``paged_update_cache``
-    per position so concurrent RMWs of the same block tile cannot drop writes.
+    Same serialization as decode ``sequential_kv_write``: one cache-update per
+    position so concurrent RMWs of the same block tile cannot drop writes.
     ``tt_k``/``tt_v`` are prefill-split ``[1, nkv, n_seq, hd]`` (n_seq may be
     tile-padded past P).
     """
     k_cache_w, v_cache_w = kv_cache
     eff_bs = effective_block_size(k_cache_w, head_dim, nkv_local)
+    cache_bs = int(k_cache_w.padded_shape[2])
+    cache_nkv = int(k_cache_w.padded_shape[1])
+    # Fused K+V update has no block_size / num_kv_heads override; only use it
+    # when the cache view already matches this layer.
+    use_fused = _packed_fused_kv_enabled() and eff_bs == cache_bs and nkv_local == cache_nkv
     tt_k_bp = ttnn.permute(tt_k, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
     tt_v_bp = ttnn.permute(tt_v, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
     k_src, v_src = tt_k_bp, tt_v_bp
     if tt_k_bp.shape[1] != P:
         k_src = ttnn.slice(tt_k_bp, [0, 0, 0, 0], [1, P, nkv_local, head_dim])
         v_src = ttnn.slice(tt_v_bp, [0, 0, 0, 0], [1, P, nkv_local, head_dim])
-    shard_shape = list(q_sharded_mem.shard_spec.shape)
-    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-    single_user_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(one_core, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
-    )
+    k_mem, v_mem = _packed_kv_user_mem(q_sharded_mem)
+    if not use_fused:
+        v_mem = k_mem
     nkv, hd = nkv_local, head_dim
+    # All P page-table rows are replicas of the same user; slice once.
+    pt_b = ttnn.slice(page_table, [0, 0], [1, page_table.shape[1]])
     for p in range(P):
         kb = ttnn.slice(k_src, [0, p, 0, 0], [1, p + 1, nkv, hd])
         vb = ttnn.slice(v_src, [0, p, 0, 0], [1, p + 1, nkv, hd])
-        kb = ttnn.to_memory_config(kb, single_user_mem)
-        vb = ttnn.to_memory_config(vb, single_user_mem)
+        kb = ttnn.to_memory_config(kb, k_mem)
+        vb = ttnn.to_memory_config(vb, v_mem)
         pos_b = ttnn.slice(pos_cache, [p], [p + 1])
-        pt_b = ttnn.slice(page_table, [p, 0], [p + 1, page_table.shape[1]])
-        ttnn.experimental.paged_update_cache(
-            k_cache_w,
-            kb,
-            update_idxs_tensor=pos_b,
-            page_table=pt_b,
-            block_size=eff_bs,
-            num_kv_heads=nkv_local,
-        )
-        ttnn.experimental.paged_update_cache(
-            v_cache_w,
-            vb,
-            update_idxs_tensor=pos_b,
-            page_table=pt_b,
-            block_size=eff_bs,
-            num_kv_heads=nkv_local,
-        )
-        for t in (kb, vb, pos_b, pt_b):
+        if use_fused:
+            ttnn.experimental.paged_fused_update_cache(
+                k_cache_w,
+                kb,
+                v_cache_w,
+                vb,
+                update_idxs_tensor=pos_b,
+                page_table=pt_b,
+            )
+        else:
+            ttnn.experimental.paged_update_cache(
+                k_cache_w,
+                kb,
+                update_idxs_tensor=pos_b,
+                page_table=pt_b,
+                block_size=eff_bs,
+                num_kv_heads=nkv_local,
+            )
+            ttnn.experimental.paged_update_cache(
+                v_cache_w,
+                vb,
+                update_idxs_tensor=pos_b,
+                page_table=pt_b,
+                block_size=eff_bs,
+                num_kv_heads=nkv_local,
+            )
+        for t in (kb, vb, pos_b):
             t.deallocate(True)
+    pt_b.deallocate(True)
     if k_src is not tt_k_bp:
         k_src.deallocate(True)
         v_src.deallocate(True)
