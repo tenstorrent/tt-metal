@@ -3,6 +3,7 @@
 
 #include <cstdint>
 
+#include "tt-metalium/constants.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
@@ -13,8 +14,8 @@
 inline void fill_constant_tiles(
     DataflowBuffer& eye, DataflowBuffer& tril, DataflowBuffer& ones, DataflowBuffer& block_masks) {
     constexpr uint32_t fp32_one_bits = __builtin_bit_cast(uint32_t, 1.0F);
-    constexpr uint32_t face_width = 16;
-    constexpr uint32_t face_elements = face_width * face_width;
+    constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
+    constexpr uint32_t face_elements = tt::constants::FACE_HW;
     constexpr uint32_t row_bytes = face_width * sizeof(uint32_t);
     constexpr uint32_t face_bytes = face_elements * sizeof(uint32_t);
 
