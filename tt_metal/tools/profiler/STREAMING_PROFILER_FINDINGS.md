@@ -1,3 +1,147 @@
+<!--
+SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+SPDX-License-Identifier: Apache-2.0
+-->
+
+# Streaming profiler — findings and benchmarks
+
+This is §6 of [`STREAMING_PROFILER.md`](STREAMING_PROFILER.md), kept as its own file only because the
+pre-commit large-file check caps a single file at 500 KB. Section numbers are unchanged (6.1, 6.2, 6.3) so
+references of the form §6.x in the main document point here.
+
+*Formerly `tools/drisc_drain/FINDINGS.md` (§6.3 onward) and `tools/drisc_drain/DIRECT_PUSH_PLAN.md`
+(§6.2).* Every numbered section (`§N`, `§N+1`, …) is reproduced in full with its date and box; nothing is
+summarised. The original file's title and licence block were folded in; the text is otherwise as written,
+including the claims later sections retract. It is an audit log, not a summary: later sections retract earlier
+ones in place and the reasoning behind each retraction is kept on purpose. When a claim matters, read the
+newest section that touches it.
+
+## 6.1 How to read this, and the name mapping
+
+The record was written against the earlier designs (§3) and their knobs, and it uses their names. It is
+**not** rewritten below; use this table.
+
+| historical name (as written in §6) | current |
+|---|---|
+| `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PERF_DEBUG_PROFILER=1` (both were required) | `TT_METAL_STREAMING_PROFILER=1` alone — setting `TT_METAL_DEVICE_PROFILER` as well is now a `TT_FATAL` (§1.1) |
+| `TT_METAL_DRISC_PROFILER` | unchanged (streaming producers only, caller-supplied drainer) |
+| `TT_METAL_PERF_DEBUG_OPS_CSV`, `_STALL_CSV` | `TT_METAL_STREAMING_PROFILER_OPS_CSV`, `_STALL_CSV` (and the new `_ZONE_CSV`) |
+| `TT_METAL_PERF_DEBUG_RING_RECS` (host record ring, in records) | `TT_METAL_STREAMING_PROFILER_RING_MB` (host frame ring, in MiB — frames are mirrored verbatim and decoded per consumer, so there is no shared record ring to size) |
+| `TT_METAL_PERF_DEBUG_FIFO_MB` | `TT_METAL_STREAMING_PROFILER_FIFO_MB` |
+| `TT_METAL_PERF_DEBUG_DECODE_THREADS` | `TT_METAL_STREAMING_PROFILER_DECODE_THREADS` |
+| `TT_METAL_PERF_DEBUG_WRITER_TIMEOUT_S` | `TT_METAL_STREAMING_PROFILER_WRITER_TIMEOUT_S` |
+| ship threshold (compile arg 39), `TT_METAL_PERF_DEBUG_CV_FIRST` | `TT_METAL_STREAMING_PROFILER_SHIP_MIN_PCT` (per lane); CV-first is the only path |
+| `TT_METAL_PERF_DEBUG_ROLE_SPLIT`, `TT_METAL_PERF_DEBUG_FILLERS`, `kNSockets`, `kNFillers`, `kRole` | gone — there is one kind of DRISC, the relay; its count is `TT_METAL_STREAMING_PROFILER_NRELAYS` |
+| `TT_METAL_PERF_DEBUG_ROLE_RING_MB`, `_ROLE_RING_BANKS`, `_DMA_MOVER`, the DRAM frame ring, `ring-room waits`, `mv_tail`, `max batch` | gone with the movers; the only device-side buffer is the per-relay GDDR spool, `TT_METAL_STREAMING_PROFILER_DRAM_MB` (0 = direct push) |
+| `TT_METAL_PERF_DEBUG_RAW_ONLY`, HIGH-production raw mode (§N+72) | not in the relay; `SPSC_SPAN_RAW_FLAG` remains in the wire format |
+| `TT_METAL_PERF_DEBUG_DRISC_ZONES`, `_DRISC_ZONE_DETAIL`, `_DRISC_ZONE_IDLE`, `_DRISC_ZONE_HOLD_US`, `_DRISC_ZONE_FRAMES`, `_NOC_FOOTPRINT`, `_SYNC_EVENT`, `_SYNC_EVENT_GAP_MS`, `_CLK_SYNC_ROLES`, `_PER_CORE_FREQ` | drainer self-instrumentation and clock-validation knobs of the fillers/movers kernel; removed with it. What they validated — the per-core anchor and the shared frequency (§N+46–§N+49) — is now unconditional |
+| `TT_METAL_PERF_DEBUG_SYNC_EVENT` (the DRISC rendezvous fiducial of §N+48) | **not** `TT_METAL_DEVICE_PROFILER_SYNC_EVENTS`, which is the CB/semaphore sync-event instrumentation for the critical-path tool (§1.2) |
+| `TT_METAL_PERF_DEBUG_NO_DECODE`, `_SHIP_REPEAT`, `_ABLATE`, `_ABLATE_SPIN`, `_NOC`, `_NOC_MIRROR`, `_NO_STATIC_TLB`, `_NO_NOC_INIT`, `_MAX_PAGES`, `_FILL_PCT`, `_GAP_MAX`, `_FULL_GRID`, `_RESERVE_COLUMN`, `_DRISC_BANK`, `_POSTED_PUSH`, `_FULL_MESH`, `_READ_ONLY`, `WRITER_DIE_AFTER`, `TT_METAL_CQ_POLL_YIELD` | experiment knobs of the superseded kernels and hosts; removed |
+| `test_perf_debug_zones` (`programming_examples/profiler/test_perf_debug_zones`) | `test_streaming_profiler_zones` (`tt_metal/programming_examples/profiler/test_streaming_profiler_zones/`) |
+| `perf_debug_profiler.{hpp,cpp}`, `PerfDebugProfiler`, `PerfDebugTracyHandler`, `drisc_profiler_drain.cpp`, `drisc_drain_common.hpp`, `drisc_drain_frame.h` | see the file table in §3 |
+| `unit_tests_api --gtest_filter="*DRISC*"`, `DramKernelDRISCScatterFixture`, `drisc_{rdrbench,adaptive_drain,niu_mode,service_workers}.cpp`, `drisc_{d2h_egress,drain_to_host}.cpp`, `profiler_zone_producer{,_compute}.cpp` | the experiment gtests and kernels were deleted in 2026-09; the numbers they produced (§6.3 up to §N) stand as history and the commands no longer run |
+| `[[degraded_state_is_mmio_latency]]`, `[[drisc_knee_not_comparable_across_dispatch]]`, `x280_vm_freeze_churn`, `drisc_pcie_hang_two_states` | cross-references to the author's working notes outside this repo; the substance of each is in §3.2 and §N+2/§N+13/§N+37 |
+
+Two reading rules the record itself insists on: **quote a knee only with the dispatch mode and the
+ACK-WRITE probe value** (healthy ~175 ns static, degraded ~2,300 ns — §N+36, §N+37), and **classify a
+failure by card state, never by exit code** (§N+19–§N+21, §3.2).
+
+## 6.2 Direct host push: fillers own D2H sockets, movers deleted (plan, 2026-08-25)
+
+*Formerly `tools/drisc_drain/DIRECT_PUSH_PLAN.md`.* The plan that turned the fillers+movers design into the
+direct-push filler — the immediate ancestor of the relay in §2. Its measurements are §N+71 and §N+72.
+
+Status: IMPLEMENTED (`wip/direct-push`), then made faster than the ring design it replaced by
+gather-READ packing -- the filler reads each live run straight to its packed wire offset in staging and
+ships a frame as ONE PCIe write. See FINDINGS §N+71 for the measurements.
+
+### What changes
+
+Today every marker crosses DRAM twice:
+
+    worker L1 -> [filler] -> DRAM ring -> [mover] -> staging -> host
+
+Direct push removes the ring and the mover entirely:
+
+    worker L1 -> [filler] -> staging -> host
+
+Each filler owns a D2H socket. Decode-thread count stays a host-side knob: N sockets
+can be serviced by 1..N threads, because the receiver's assignment already strides
+(`for (i = t; i < streams; i += nthreads)`). In practice 1-2 threads round-robin over
+the sockets.
+
+### Why it is possible on Blackhole
+
+The socket's host FIFO is a plain `mmap` pinned through the IOMMU
+(`D2HSocket::init_host_buffer`), reached by a full 64-bit NoC/PCIe address. There is
+no window budget and no channel-size cap on this path -- those belong to the Wormhole
+hugepage fallback (`init_host_buffer_hugepage`), which BH never takes. So socket count
+and FIFO size are both free parameters, and the comment in streaming_profiler.hpp
+about `SOCKET_WIN_BASE` / 16 windows / "2 is the ceiling" does not describe BH.
+
+That matters because the DRAM ring exists precisely to provide elasticity the WH host
+FIFO could not: "the whole reason to stage in DRAM is that this number is not capped by
+the TLB window budget the way the 12 MiB host FIFO is". On BH the FIFO can simply be
+made large, so the spike absorption moves from device DRAM to host RAM -- one hop closer
+to the consumer.
+
+### Wins
+
+- Deletes a DRAM write and a DRAM read per byte.
+- Frees the 2 mover DRISCs to be fillers: 6 fillers, ~17 worker cores each instead of 26.
+  Revisit drops ~1.5x for free, which is the budget everything else spends.
+- Removes the ring-full back-pressure path (filler blocked on ring room) outright.
+- The GDDR-DMA ring-placement dilemma disappears: with no ring there is nothing to place,
+  so neither side has to give up its local channel.
+- Decode-thread count becomes a configuration choice rather than a consequence of the
+  mover count.
+
+### Work
+
+| item | size | notes |
+|---|---|---|
+| Direct push | medium | move the 8 socket call sites from the mover into the filler; `stage_run` targets `pcie_xy_enc` instead of a DRAM bank; ring-room wait becomes socket credit wait |
+| 6 fillers / N sockets | medium | `kNFillers` 4 -> 6; drop `kNFillers % kNSockets == 0` (it exists only because "mover m drains fillers m, m+kNSockets") |
+| Size the host FIFO | small | deliberate choice, not the inherited 12 MiB; this is where burst absorption now lives |
+| Trim the frame header | small | make the head/tail array width arch-specific (24 is Quasar's); used fields land in the first ~11 words, ship 16 instead of 64 -> ~192 B/frame, no repacking |
+| Re-derive the lane trigger | measurement | the single knob controlling frame fullness, wasted worker reads, and PCIe write size |
+
+### Delete
+
+Mover kernel, its GDDR DMA read path, the peer handshake, DRAM ring allocation, and the
+ring-room back-pressure path.
+
+### Order, and why it matters
+
+1. Direct push + 6 fillers  (revisit 26 -> ~17 cores per filler)
+2. Header trim              (independent)
+3. Re-derive the lane trigger
+
+Step 3 must be last. Frame fullness and producer headroom are the same budget: at
+trigger=128 a lane keeps 384 words of headroom, at 376 it keeps 136. That headroom can
+only be spent once revisit has bought it back -- otherwise it reintroduces the stalls the
+eager trigger was chosen to remove ("the eager trigger took six of eight devices to ZERO
+stalls").
+
+Note the trade also changes shape: today an under-full frame costs DRAM ring space; after,
+it costs host FIFO space and a smaller PCIe write. The old measurement does not transfer.
+
+### Risks to size first
+
+- **Six DRAM cores doing host-facing writes.** streaming_profiler.hpp records that
+  "exactly two DRAM cores measure safe to host a drainer (row y == 0)". Establish whether
+  that constrains PCIe-facing work or only the mover's former role -- it caps socket count
+  if the former.
+- **Runway.** Today: 64 MiB ring behind a 12 MiB FIFO, ~115 busy sweeps of slack. After:
+  whatever the FIFO is sized to. Choose it deliberately.
+- **Credit handling moves into the filler**, which also sweeps worker cores; a filler
+  blocked on socket credit is not sweeping, so credit stalls now cost revisit directly.
+
+## 6.3 The record (`FINDINGS.md`, 2026-07 → 2026-08-26)
+
+The status banner below was the file's own; its "read §N+21 first" still applies to the hang
+investigation, and §N+71/§N+72 are the newest measurements of the design §2 descends from.
+
 > **STATUS BANNER (2026-08-07). READ §N+21 FIRST.**
 > This file is an audit log, not a summary. It contains claims that were later **retracted** —
 > deliberately kept, because the reasoning that killed them is the most useful content here.
@@ -55,13 +199,6 @@
 > more than one drainer. Also in §N+26: WEDGE / MMIO-timeout / NocHangError are ONE state, so cascades
 > must be **scored per event, not per run** — per-run scoring turned a p~0.001 effect into "noise".
 
-<!--
-SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-SPDX-License-Identifier: Apache-2.0
--->
-
-# DRISC profiler drainer — measurements
-
 Can a Blackhole DRAM-core RISC (DRISC) host the device-side profiler drainer: pull markers out of
 worker-core L1 over the NoC, and push them to the host?
 
@@ -70,6 +207,13 @@ worker grid (12x10 — the arch max is 140, this die has 2 harvested Tensix colu
 bank 0's free subchannel unless stated otherwise.
 
 ## Running it
+
+> **The harness this section runs was removed (2026-09).** The `*DRISC*` gtests in
+> `tests/tt_metal/tt_metal/api/test_dram_kernels.cpp` and the `test_kernels/misc/drisc_*` /
+> `profiler_zone_producer*` kernels were deleted when the streaming profiler landed, so the commands in this
+> section and in "End to end: a DRISC services REAL producers" no longer run. The measurements they produced
+> are kept as the record of how the design was arrived at; the current smoke test is
+> `test_streaming_profiler_zones` (§1.7).
 
 ```
 cmake -B build -DTT_METAL_BUILD_TESTS=ON
@@ -649,7 +793,7 @@ pacing results above already measured.
    tail mid-drain. Note `TT_METAL_NO_RT_PROFILER` is read **nowhere** in the tree and never disabled
    anything.
 
-Run it with:
+Run it with (harness since removed — see the note under "Running it"):
 
 ```
 TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_DRISC_PROFILER=1 \
