@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | commit | [`a32ddae6c62`](https://github.com/tenstorrent/tt-metal/commit/a32ddae6c62363ba9ad45844a8d08e8655d564b4) |
-| candidate | [5b](../perf_optimization_candidates.md#5b-do-the-sampling-location-math-in-row_major) |
+| candidate | [5b](../perf_optimization_candidates.md#5b-sampling-location-math-in-row_major) |
 | config | `nuscenes_base`, 100×100, N150 |
 | profile | **356.2 ms kernel**, 131 ops (**+5**), CSV `generated/profiler/reports/2026_09_01_23_33_36/` |
 | delta | **−82.2 ms kernel (−18.8%)** vs [stage 06](06-sca-key-permute-deleted.md)'s 438.4 ms; **−324.6 ms (−47.7%)** cumulative from stage 03 |

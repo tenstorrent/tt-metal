@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | commit | [`7820f325bd8`](https://github.com/tenstorrent/tt-metal/commit/7820f325bd86cbca8dfcbe27cf460204c8d9773c) |
-| candidate | [5d](../perf_optimization_candidates.md#5d-split-value-into-heads-in-row_major) |
+| candidate | [5d](../perf_optimization_candidates.md#5d-value-head-split-without-the-padding) |
 | config | `nuscenes_base`, 100×100, N150 |
 | profile | **280.2 ms kernel**, 106 ops (−6), CSV `generated/profiler/reports/2026_09_02_11_49_26/` |
 | delta | **−6.6 ms kernel (−2.3%)** vs [stage 09](09-head-major-sampling-grid.md)'s 286.8 ms; **−400.6 ms (−58.8%)** cumulative from stage 03 |

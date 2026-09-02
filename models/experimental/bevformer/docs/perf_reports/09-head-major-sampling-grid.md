@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | commit | [`e6b4ce53fe1`](https://github.com/tenstorrent/tt-metal/commit/e6b4ce53fe163df02964a3655d55222a0a3ed5e0) |
-| candidate | [5e](../perf_optimization_candidates.md#5e-permute-grid-once-slice-after) |
+| candidate | [5e](../perf_optimization_candidates.md#5e-head-major-grid-with-a-tile-transpose) |
 | config | `nuscenes_base`, 100×100, N150 |
 | profile | **286.8 ms kernel**, 112 ops (−1), CSV `generated/profiler/reports/2026_09_02_11_34_14/` |
 | delta | **−24.5 ms kernel (−7.9%)** vs [stage 08](08-attn-prepared-once-per-call.md)'s 311.3 ms; **−394.0 ms (−57.8%)** cumulative from stage 03 |
@@ -73,7 +73,7 @@ Two secondary wins fell out:
 
 Five permutes deleted — four SCA levels and TSA's one — and the two new TILE transposes cost 0.8 ms
 between them. **The remaining 19.9 ms of Permute is essentially one op**: the 19.3 ms `value` head
-permute, which is [5d](../perf_optimization_candidates.md#5d-split-value-into-heads-in-row_major) and
+permute, which is [5d](../perf_optimization_candidates.md#5d-value-head-split-without-the-padding) and
 [candidate 6](../perf_optimization_candidates.md#why-the-weight-reorder-is-dead)'s known
 irreducible-by-weight-reorder case.
 

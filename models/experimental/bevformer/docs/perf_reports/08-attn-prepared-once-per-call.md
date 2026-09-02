@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | commit | [`c649b46fee2`](https://github.com/tenstorrent/tt-metal/commit/c649b46fee237ebc5b17e838b80354aa2c337144) |
-| candidate | [5c](../perf_optimization_candidates.md#5c-untilize-attn-once-not-per-level) |
+| candidate | [5c](../perf_optimization_candidates.md#5c-prepare-attn-once-not-per-level) |
 | config | `nuscenes_base`, 100×100, N150 |
 | profile | **311.3 ms kernel**, 113 ops (−18), CSV `generated/profiler/reports/2026_09_01_23_48_22/` |
 | delta | **−44.9 ms kernel (−12.6%)** vs [stage 07](07-sampling-grid-in-row-major.md)'s 356.2 ms; **−369.5 ms (−54.3%)** cumulative from stage 03 |
@@ -76,6 +76,6 @@ permute at the ROW_MAJOR rate; keeping it in TILE was worth the difference.
 
 **`MSDAOperation` is 54.0% of the layer** and has not moved in absolute terms since stage 04
 (167.8 → 168.1 ms). The two largest remaining model-side items are the `value` permute pair
-([5d](../perf_optimization_candidates.md#5d-split-value-into-heads-in-row_major) /
+([5d](../perf_optimization_candidates.md#5d-value-head-split-without-the-padding) /
 [6](../perf_optimization_candidates.md#candidate-6--permutereshape-by-reformulation), 43.4 ms of
 Permute) and the reshapes around them — neither as clean as 5a–5c were.
