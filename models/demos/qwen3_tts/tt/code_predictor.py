@@ -286,6 +286,7 @@ class CodePredictor(LightweightModule):
 
         # N150-only: DRAM-sharded QKV / o_proj + fused-SDPA program config +
         # sharded nlp_create / nlp_concat so the DS QKV output can split in place.
+        _n150_qkv_cores = None
         if self._n150:
             _local_hidden = self.num_heads * HD
             _fused_qkv = (self.num_heads + 2 * self.num_kv_heads) * HD
@@ -347,6 +348,7 @@ class CodePredictor(LightweightModule):
             self._qkv_split_q_memcfg = _hs(_q_grid, HD)
             self._concat_in_memcfg = _hs(_concat_grid, HD)
             self._concat_out_memcfg = _ws(_concat_grid, HD)
+            _n150_qkv_cores = _rows_q * _cols_q
 
             # KV-group-interleaved row perm so the sharded nlp_create kernel can
             # split the DRAM-sharded QKV output without an intermediate copy.
@@ -362,37 +364,9 @@ class CodePredictor(LightweightModule):
             _perm_t = torch.tensor(_row_perm, dtype=torch.long)
             assert _perm_t.numel() == _fused_qkv
 
-        # === N300 fast-path configs (sharded RMSNorm + sharded NLP head ops) ===
+        # === N300 fast-path configs (sharded NLP head ops + KVGI QKV) ===
         if self._n300_cp_opt:
-            from models.demos.qwen3_tts.tt.decoder_layer import _build_sharded_rmsnorm_configs
-
             _M = 32  # CP is always <= 1 tile in M: decode seq=1 and prefill seq=2.
-            _dim_tiles = H // 32
-
-            # Post-attention norm: emit straight into the gate/up matmul's in0 layout so
-            # the MLP's to_memory_config disappears. _build_sharded_rmsnorm_configs lays
-            # out num_cores as cols=min(grid.x, n), rows=n/cols, which matches
-            # width_sharded_l1_memcfg(1, K_tiles, cols_gu, rows_gu) for the same count.
-            _ln_mlp_cores = _rows_gu * _cols_gu
-            assert _dim_tiles % _ln_mlp_cores == 0, (
-                f"CP hidden tiles={_dim_tiles} must divide the gate/up in0 grid "
-                f"({_ln_mlp_cores} cores) to fuse the post-norm shard layout"
-            )
-            _mlp_ln_in_memcfg, self._n300_ln_mlp_progcfg = _build_sharded_rmsnorm_configs(
-                device, H, _ln_mlp_cores, m=_M
-            )
-            assert _mlp_ln_in_memcfg == self._cp_gate_up_in0_memcfg, (
-                "post-norm shard layout must equal the gate/up in0 layout; got "
-                f"{_mlp_ln_in_memcfg} vs {self._cp_gate_up_in0_memcfg}"
-            )
-            self._n300_ln_mlp_memcfg = self._cp_gate_up_in0_memcfg
-
-            # Input norm: output goes back to L1_INTERLEAVED so the QKV matmul keeps its
-            # default wide grid. The sharded norm itself is the win.
-            _ln_attn_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if _dim_tiles % c == 0)
-            self._n300_ln_attn_memcfg, self._n300_ln_attn_progcfg = _build_sharded_rmsnorm_configs(
-                device, H, _ln_attn_cores, m=_M
-            )
 
             # Sharded nlp_create_qkv_heads / nlp_concat_heads. Head counts are per-chip.
             _num_q_per_kv = self.num_heads // self.num_kv_heads
@@ -457,6 +431,44 @@ class CodePredictor(LightweightModule):
                     mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1),
                 )
                 ttnn.deallocate(lw.pop("wqkv"))
+
+        # Sharded hidden RMSNorms on N150 and N300. Default LN parallelises over
+        # M; CP M is one tile so it lands on 1 core (~25 us). Width-shard
+        # instead. Post-norm emits gate/up in0 so the MLP I2S disappears.
+        # Input norm follows the QKV consumer: DRAM-sharded QKV (N150) keeps
+        # the 4-core in0 spec; interleaved QKV (N300) uses the widest grid
+        # that divides H, then S2I. Other SKUs keep the 1-core interleaved LN.
+        self._use_sharded_ln = self._n150 or self._n300_cp_opt
+        if self._use_sharded_ln:
+            from models.demos.qwen3_tts.tt.decoder_layer import _build_sharded_rmsnorm_configs
+
+            _M = 32
+            _dim_tiles = H // 32
+            _ln_mlp_cores = _rows_gu * _cols_gu
+            assert _dim_tiles % _ln_mlp_cores == 0, (
+                f"CP hidden tiles={_dim_tiles} must divide the gate/up in0 grid "
+                f"({_ln_mlp_cores} cores) to fuse the post-norm shard layout"
+            )
+            _ln_mlp_memcfg, self._ln_mlp_progcfg = _build_sharded_rmsnorm_configs(device, H, _ln_mlp_cores, m=_M)
+            assert _ln_mlp_memcfg == self._cp_gate_up_in0_memcfg, (
+                "post-norm shard layout must equal the gate/up in0 layout; got "
+                f"{_ln_mlp_memcfg} vs {self._cp_gate_up_in0_memcfg}"
+            )
+            self._ln_mlp_memcfg = self._cp_gate_up_in0_memcfg
+
+            if _n150_qkv_cores is not None:
+                _ln_attn_cores = _n150_qkv_cores
+            else:
+                _ln_attn_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if _dim_tiles % c == 0)
+            _ln_attn_memcfg, self._ln_attn_progcfg = _build_sharded_rmsnorm_configs(device, H, _ln_attn_cores, m=_M)
+            if self._n150:
+                assert _ln_attn_memcfg == self._cp_qkv_in0_memcfg, (
+                    "input-norm shard layout must equal the QKV in0 layout; got "
+                    f"{_ln_attn_memcfg} vs {self._cp_qkv_in0_memcfg}"
+                )
+                self._ln_attn_memcfg = self._cp_qkv_in0_memcfg
+            else:
+                self._ln_attn_memcfg = _ln_attn_memcfg
 
         # DRAM-sharded MLP weights on every SKU. QKV / o_proj DS weights are N150-only.
         for li, lw in enumerate(self.layers_w):
@@ -553,22 +565,30 @@ class CodePredictor(LightweightModule):
         # so a single m=32 set of shard configs covers them.
         fast = self._n300_cp_opt and int(h_tt.shape[-2]) <= 32
 
-        if fast:
-            # Sharded RMSNorm: [1,1,32,H] is one tile row, and the default kernel
-            # parallelises over rows — so the whole norm lands on 1 core (25 us measured).
-            # Width-sharding it over 32 cores drops it to 10 us.
-            h_ln_in = ttnn.to_memory_config(h_tt, self._n300_ln_attn_memcfg)
-            x_s = ttnn.rms_norm(
+        # Width-sharded RMSNorm on N150 and N300. Skip I2S when the previous
+        # layer already wrote this shard spec. N150 keeps the sharded output
+        # for DRAM-sharded QKV; N300 S2I because QKV is interleaved.
+        if self._use_sharded_ln:
+            if h_tt.memory_config() != self._ln_attn_memcfg:
+                h_ln_in = ttnn.to_memory_config(h_tt, self._ln_attn_memcfg)
+                _own_h_ln = True
+            else:
+                h_ln_in = h_tt
+                _own_h_ln = False
+            x = ttnn.rms_norm(
                 h_ln_in,
                 epsilon=self.rms_norm_eps,
                 weight=lw["input_ln_w"],
                 compute_kernel_config=self.kcfg,
-                program_config=self._n300_ln_attn_progcfg,
-                memory_config=self._n300_ln_attn_memcfg,
+                program_config=self._ln_attn_progcfg,
+                memory_config=self._ln_attn_memcfg,
             )
-            ttnn.deallocate(h_ln_in)
-            x = ttnn.to_memory_config(x_s, ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(x_s)
+            if _own_h_ln:
+                ttnn.deallocate(h_ln_in)
+            if not self._n150:
+                x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(x)
+                x = x_il
         else:
             x = ttnn.rms_norm(h_tt, epsilon=self.rms_norm_eps, weight=lw["input_ln_w"], compute_kernel_config=self.kcfg)
 
@@ -610,12 +630,14 @@ class CodePredictor(LightweightModule):
                 memory_config=self._qkv_split_q_memcfg,
             )
             ttnn.deallocate(xqkv_for_split)
+            # q_norm / k_norm reject HEIGHT_SHARDED (layernorm_device_operation).
+            # V skips that path — fill_cache / update_cache accept the HS
+            # output and SDPA reads V back from the interleaved cache.
             q = ttnn.to_memory_config(q_s, ttnn.L1_MEMORY_CONFIG)
             k = ttnn.to_memory_config(k_s, ttnn.L1_MEMORY_CONFIG)
-            v = ttnn.to_memory_config(v_s, ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(q_s)
             ttnn.deallocate(k_s)
-            ttnn.deallocate(v_s)
+            v = v_s
         elif fast:
             xqkv = ttnn.matmul(
                 x,
@@ -637,10 +659,9 @@ class CodePredictor(LightweightModule):
             ttnn.deallocate(xqkv_s)
             q = ttnn.to_memory_config(q_s, ttnn.L1_MEMORY_CONFIG)
             k = ttnn.to_memory_config(k_s, ttnn.L1_MEMORY_CONFIG)
-            v = ttnn.to_memory_config(v_s, ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(q_s)
             ttnn.deallocate(k_s)
-            ttnn.deallocate(v_s)
+            v = v_s
         else:
             xqkv = ttnn.matmul(x, lw["wqkv"], dtype=self.act_dtype, compute_kernel_config=self.kcfg)
             ttnn.deallocate(x)
@@ -681,9 +702,7 @@ class CodePredictor(LightweightModule):
             k_b = ttnn.typecast(k, dtype=ttnn.bfloat16)
             ttnn.deallocate(k)
             k = k_b
-        # apply_rope_qk takes the decode-mode kernel at seq==1 — bit-identical output, but
-        # the prefill kernel costs ~2 us per head where decode costs 3.4 us for all of
-        # them. See rope.apply_rope_qk.
+        # RoPE kernel is bf16-only; cast Q/K if still in fp32.
         q_r, k_r = apply_rope_qk(
             q,
             k,
@@ -736,6 +755,12 @@ class CodePredictor(LightweightModule):
                 v_f = ttnn.typecast(v, dtype=self.act_dtype)
                 ttnn.deallocate(v)
                 v = v_f
+            if v.is_sharded():
+                # SDPA / fp32 BMM require interleaved V. Cache path reads V
+                # back from DRAM so it can skip this hop.
+                v_il = ttnn.to_memory_config(v, ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(v)
+                v = v_il
             k_for_attn = k
             v_for_attn = v
             k_cache_alias = False
@@ -758,7 +783,7 @@ class CodePredictor(LightweightModule):
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_kcfg,
                 program_config=self.sdpa_program_config,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=self._concat_in_memcfg,
             )
             ttnn.deallocate(q)
             if not k_cache_alias:
@@ -784,6 +809,10 @@ class CodePredictor(LightweightModule):
                 memory_config=self._cp_wo_out_memcfg,
             )
             ttnn.deallocate(attn_wo)
+            # Slice/unshard into the post-LN / gate-up in0 spec so the residual
+            # add writes that layout and the MLP I2S disappears. Talker does the
+            # same for a padded DRAM-sharded o_proj (S2I then slice; slice-from-
+            # sharded is not free).
             if self._cp_wo_n_padded != self.hidden_size:
                 o_il = ttnn.to_memory_config(o_s, ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(o_s)
@@ -791,11 +820,11 @@ class CodePredictor(LightweightModule):
                     o_il,
                     [0, 0, 0, 0],
                     [o_il.shape[0], o_il.shape[1], o_il.shape[2], self.hidden_size],
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    memory_config=self._ln_mlp_memcfg,
                 )
                 ttnn.deallocate(o_il)
             else:
-                o = ttnn.to_memory_config(o_s, ttnn.L1_MEMORY_CONFIG)
+                o = ttnn.to_memory_config(o_s, self._ln_mlp_memcfg)
                 ttnn.deallocate(o_s)
         else:
             # SDPA runs in fp32 — QK-norm amplifies K by ~68x; bf16 max=65504 and
@@ -898,25 +927,25 @@ class CodePredictor(LightweightModule):
             o = self._all_reduce(o, fast)
 
         # Residual + post-norm. residual = caller's h_tt — DO NOT deallocate.
-        h_post = ttnn.add(residual, o, dtype=self.act_dtype)
-        ttnn.deallocate(o)
-
-        residual2 = h_post  # we own h_post → free after MLP residual.
-        if fast:
-            # Sharded post-norm emitting directly in the gate/up in0 layout, so the MLP's
-            # own to_memory_config drops out: a 1-core 25 us norm plus a reshard become
-            # one 9 us norm.
-            h_ln2_in = ttnn.to_memory_config(h_post, self._n300_ln_mlp_memcfg)
+        # On N150 / N300 the add writes the post-LN / gate-up in0 spec so both
+        # the I2S into post-LN and the I2S into MLP disappear. BinaryNg output
+        # layout is independent of the addends (same as Talker decoder_layer).
+        if self._use_sharded_ln:
+            h_post = ttnn.add(residual, o, dtype=self.act_dtype, memory_config=self._ln_mlp_memcfg)
+            ttnn.deallocate(o)
+            residual2 = h_post
             h2 = ttnn.rms_norm(
-                h_ln2_in,
+                h_post,
                 epsilon=self.rms_norm_eps,
                 weight=lw["post_ln_w"],
                 compute_kernel_config=self.kcfg,
-                program_config=self._n300_ln_mlp_progcfg,
-                memory_config=self._n300_ln_mlp_memcfg,
+                program_config=self._ln_mlp_progcfg,
+                memory_config=self._ln_mlp_memcfg,
             )
-            ttnn.deallocate(h_ln2_in)
         else:
+            h_post = ttnn.add(residual, o, dtype=self.act_dtype)
+            ttnn.deallocate(o)
+            residual2 = h_post
             h2 = ttnn.rms_norm(
                 h_post, epsilon=self.rms_norm_eps, weight=lw["post_ln_w"], compute_kernel_config=self.kcfg
             )
@@ -977,7 +1006,10 @@ class CodePredictor(LightweightModule):
             ttnn.deallocate(mlp_o_sharded)
         if self.tp_size > 1:
             mlp_o = self._all_reduce(mlp_o, fast)
-        out = ttnn.add(residual2, mlp_o, dtype=self.act_dtype)
+        # Next layer's input LN skips I2S when this add already wrote its spec.
+        # forward_single_step S2Is once before the interleaved final norm.
+        _out_memcfg = self._ln_attn_memcfg if self._use_sharded_ln else ttnn.L1_MEMORY_CONFIG
+        out = ttnn.add(residual2, mlp_o, dtype=self.act_dtype, memory_config=_out_memcfg)
         ttnn.deallocate(residual2)
         ttnn.deallocate(mlp_o)
         return out, updated_kv
@@ -1017,6 +1049,13 @@ class CodePredictor(LightweightModule):
         if mode == "decode" or int(inputs_embeds.shape[-2]) == 1:
             cos, sin, _own_rope = shard_decode_rope_tables(cos, sin, self.head_dim)
 
+        # Fused SDPA rejects fp32. Convert once per step (Talker does the same);
+        # prepare_fused_sdpa_mask is then a no-op inside each layer.
+        _own_decode_mask = _own_prefill_mask = False
+        if self._n150:
+            decode_attn_mask, _own_decode_mask = prepare_fused_sdpa_mask(decode_attn_mask)
+            cp_prefill_mask, _own_prefill_mask = prepare_fused_sdpa_mask(cp_prefill_mask)
+
         updated_kvs = [] if kv_caches is not None else None
         for li, lw in enumerate(self.layers_w):
             layer_kv = kv_caches[li] if kv_caches is not None else None
@@ -1040,12 +1079,23 @@ class CodePredictor(LightweightModule):
             if updated_kvs is not None:
                 updated_kvs.append(updated_kv)
 
+        # Layers return the input-LN shard spec; final RMSNorm is interleaved.
+        if h.is_sharded():
+            h_il = ttnn.to_memory_config(h, ttnn.L1_MEMORY_CONFIG)
+            if own_h:
+                ttnn.deallocate(h)
+            h = h_il
+            own_h = True
         h_norm = ttnn.rms_norm(h, epsilon=self.rms_norm_eps, weight=self.final_norm_w, compute_kernel_config=self.kcfg)
         if own_h:
             ttnn.deallocate(h)
         if _own_rope:
             ttnn.deallocate(cos)
             ttnn.deallocate(sin)
+        if _own_decode_mask:
+            ttnn.deallocate(decode_attn_mask)
+        if _own_prefill_mask:
+            ttnn.deallocate(cp_prefill_mask)
 
         if return_hidden_state:
             return h_norm, updated_kvs
