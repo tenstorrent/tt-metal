@@ -59,11 +59,12 @@ PACK_RISC = "TRISC_2"
 KERNEL_ZONES = ("BRISC-KERNEL", "NCRISC-KERNEL", "TRISC-KERNEL")
 DM_KERNEL_ZONES = ("BRISC-KERNEL", "NCRISC-KERNEL")
 
-# DeviceRecordEvent ids -> marker names, kept in sync with the EV_* constants in the compute
-# kernel (kernels/compute_copy_with_nops.cpp). recordEvent is lighter than DeviceTimestampedData
-# (event id only, no data payload = less L1 buffer pressure, so less op2op perturbation). The event
-# id is the low 16 bits of the marker's timer id, and events carry no payload (data == 0); we
-# backfill the name so the name-keyed metric walks below work unchanged.
+# Lean-marker event ids -> marker names, kept in sync with the EV_* constants in the compute
+# kernel (kernels/compute_copy_with_nops.cpp). STALE ENCODING: this module still decodes the
+# DRAM-era DeviceRecordEvent shape (event id in the low 16 bits of the timer id, data == 0), but
+# the kernel now emits these as DeviceTimestampedData("OP2OP-EVENT", <EV_* id>) with the id as
+# PAYLOAD -- update the TS_EVENT recovery below to read the data column when reviving this
+# benchmark on the streaming wire.
 EVENT_NAMES = {
     12: "TILE_IDX",  # lean-mode first-math (tile 0)
     13: "FINISH_LAST_PUSH",  # pack finish
