@@ -3,6 +3,19 @@
 Reproduce with `models/demos/deepseek_v3_d_p/tests/perf/pp4/` (see its README for prerequisites --
 the weight caches and checkpoint are not in the repo).
 
+> **Status: reference branch, not a proposed PR.** This branch exists so the PP=4 result can be
+> reproduced and argued with. The harness under `models/demos/deepseek_v3_d_p/tests/perf/pp4/` was
+> put together to get these numbers -- it has not been through review or consolidation, and it is
+> not CI-integrated. Treat it as working material: what eventually goes up for merge, and in what
+> shape, is still an open question. The topology config (mesh-graph descriptors + rank bindings) is
+> the part most likely to survive as-is; the shell drivers are the part most likely to change.
+>
+> Note also that on a current base Mistral4 **cannot run traced** through `prefill_runner`
+> (llama4 query-scale buffer vs on-device chunk metadata) -- tracked as
+> [tt-metal#55126](https://github.com/tenstorrent/tt-metal/issues/55126). The numbers here were
+> measured traced on a base that predates that feature; eager is not a substitute, since
+> single-rank eager is host-dispatch bound and inflates PP=4's advantage ~4x.
+
 **Measured 2026-08-31 on `bh-glx-110-a04u02` (32-chip Blackhole galaxy), branch
 `kmabee/mistral4-prefill-full-rebased.aug27` @ `779a4af546b`.**
 

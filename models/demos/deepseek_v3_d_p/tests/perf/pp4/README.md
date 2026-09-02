@@ -1,5 +1,18 @@
 # Mistral Small 4 — PP=4 x (8,1) vs single-rank prefill perf harness
 
+> **Status: reference branch, not a proposed PR.** This branch exists so the PP=4 result can be
+> reproduced and argued with. The harness under `models/demos/deepseek_v3_d_p/tests/perf/pp4/` was
+> put together to get these numbers -- it has not been through review or consolidation, and it is
+> not CI-integrated. Treat it as working material: what eventually goes up for merge, and in what
+> shape, is still an open question. The topology config (mesh-graph descriptors + rank bindings) is
+> the part most likely to survive as-is; the shell drivers are the part most likely to change.
+>
+> Note also that on a current base Mistral4 **cannot run traced** through `prefill_runner`
+> (llama4 query-scale buffer vs on-device chunk metadata) -- tracked as
+> [tt-metal#55126](https://github.com/tenstorrent/tt-metal/issues/55126). The numbers here were
+> measured traced on a base that predates that feature; eager is not a substitute, since
+> single-rank eager is host-dispatch bound and inflates PP=4's advantage ~4x.
+
 Measures the same 36-layer model two ways **through the same runner and producer**, so topology is the
 only variable:
 
