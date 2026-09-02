@@ -44,6 +44,8 @@ protected:
             GTEST_SKIP() << "PrefetcherPipe is not supported on Quasar yet";
         }
     }
+
+    bool is_fast_dispatch() const { return MetalContext::instance().rtoptions().get_fast_dispatch(); }
 };
 
 namespace {
@@ -449,6 +451,9 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_BackToBackRelaunch) {
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevicePersistence) {
+    if (!is_fast_dispatch()) {
+        GTEST_SKIP() << "Sub device managers are unsupported with slow dispatch";
+    }
     // Programs may only span one sub-device. Put the sender on SD0 and the receiver on SD1,
     // Attach each program to only its role cores, and share one PrefetcherPipe across both.
     auto mesh_device = devices_[0];
@@ -482,6 +487,9 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevicePersistence) {
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_ABC_ReceiverRelaunch) {
+    if (!is_fast_dispatch()) {
+        GTEST_SKIP() << "Sub device managers are unsupported with slow dispatch";
+    }
     // A on SD0 pushes, B on SD1 pops and finishes, then C on SD1 pops a second push from A.
     // Confirms SD1 can relaunch a new consumer program against the same PrefetcherPipe.
     auto mesh_device = devices_[0];
@@ -511,6 +519,9 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_ABC_ReceiverRelaunch
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_BasicPushPop_1to1) {
+    if (!is_fast_dispatch()) {
+        GTEST_SKIP() << "Sub device managers are unsupported with slow dispatch";
+    }
     auto mesh_device = devices_[0];
     const CoreCoord sender_core(0, 0);
     const CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
@@ -537,6 +548,9 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_BasicPushPop_1to1) {
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_WriteBroadcast_1to4) {
+    if (!is_fast_dispatch()) {
+        GTEST_SKIP() << "Sub device managers are unsupported with slow dispatch";
+    }
     auto mesh_device = devices_[0];
     const CoreCoord sender_core(0, 0);
     const CoreRangeSet receiver_cores(CoreRange({1, 0}, {4, 0}));
@@ -563,6 +577,9 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_WriteBroadcast_1to4) {
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_WriteStrided_1to4) {
+    if (!is_fast_dispatch()) {
+        GTEST_SKIP() << "Sub device managers are unsupported with slow dispatch";
+    }
     auto mesh_device = devices_[0];
     const CoreCoord sender_core(0, 0);
     const CoreRangeSet receiver_cores(CoreRange({1, 0}, {4, 0}));
@@ -1003,6 +1020,9 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_CrossProgram_DifferentEntr
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerNonDividingE2) {
+    if (!is_fast_dispatch()) {
+        GTEST_SKIP() << "Sub device managers are unsupported with slow dispatch";
+    }
     // Live-peer E1→E2 prefetch with a non-dividing E2:
     //   A (SD0): push E1 → set_entry_size(E2) without draining → signal → wait go → push E2
     //   B (SD1): Attach(E1), pop E1 → set_receiver_entry_size(E2), finish
