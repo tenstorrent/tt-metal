@@ -159,12 +159,16 @@ gaps follow, all of them cheap to close:
    the namespaces and cause renaming for no gain. All three are enforceable by the `clang-tidy`
    configuration already in the repository, as Section 4 shows.
 
-   Apply the capitalization rule to new code only. iceoryx wrote the convention quoted in
-   Section 2 and then disabled `readability-identifier-naming` in its own configuration, with
-   the note "Temporarily disabled because massive API changes". Given the 71 to 17 split in the
-   public headers, switching the check on across this repository would produce the same
-   outcome. `clang-tidy` can be limited to changed lines, which gets the rule enforced without
-   a repository-wide rename.
+   Apply the capitalization rule to new code only. iceoryx encoded the convention quoted in
+   Section 2 as `clang-tidy` options, then commented out all of them except the two member
+   prefix rules and switched the check off, noting "Temporarily disabled because massive API
+   changes"
+   ([.clang-tidy:46-47](https://github.com/eclipse-iceoryx/iceoryx/blob/08bf71b0384fc6092b8f910f90a5f2832d5612ea/.clang-tidy#L46-L47),
+   with the disabled options left in place at
+   [lines 196 to 209](https://github.com/eclipse-iceoryx/iceoryx/blob/08bf71b0384fc6092b8f910f90a5f2832d5612ea/.clang-tidy#L196-L209)
+   as a record of intent). Given the 71 to 17 split in the public headers here, enabling the
+   check across the repository would reach the same result. Limiting `clang-tidy` to changed
+   lines enforces the rule on new code without a repository-wide rename.
 
 ### Note on CG-021
 
@@ -186,6 +190,7 @@ marking in the architecture metadata, where the other projects keep it.
 - [Eclipse S-CORE C++ policies](https://github.com/eclipse-score/score_cpp_policies) and its
   [C++ style comparison discussion](https://github.com/orgs/eclipse-score/discussions/657)
 - [Eclipse iceoryx naming conventions](https://github.com/eclipse-iceoryx/iceoryx/blob/main/CONTRIBUTING.md)
+  and its [clang-tidy configuration](https://github.com/eclipse-iceoryx/iceoryx/blob/08bf71b0384fc6092b8f910f90a5f2832d5612ea/.clang-tidy)
 - [C++ Core Guidelines SF.7](https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md)
   (do not write `using namespace` at global scope in a header file)
 - [AUTOSAR CP General Specification of Basic Software Modules R24-11](https://www.autosar.org/fileadmin/standards/R24-11/CP/AUTOSAR_CP_SWS_BSWGeneral.pdf)
