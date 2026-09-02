@@ -294,7 +294,9 @@ def test_indexed_fill_nd_sharded_output_preserves_nd_shard_spec(device, dim):
         nd_shard_spec=nd_shard_spec,
         buffer_type=ttnn.BufferType.L1,
     )
-    assert spec_a.memory_config.nd_shard_spec is not None
+    assert (
+        spec_a.memory_config.nd_shard_spec is not None
+    ), f"input_a spec lost its ND shard spec at construction: {spec_a.memory_config}"
 
     batch_id = torch.randint(0, shape_a[dim], (1, 1, 1, b))
     batch_id_ttnn = ttnn.Tensor(batch_id, ttnn.uint32).to(
@@ -309,8 +311,17 @@ def test_indexed_fill_nd_sharded_output_preserves_nd_shard_spec(device, dim):
     output_tensor = ttnn.indexed_fill(batch_id_ttnn, input_tensor_a, input_tensor_b, dim=dim)
 
     output_mem_config = output_tensor.memory_config()
-    assert output_mem_config.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED
-    assert output_mem_config.nd_shard_spec == input_tensor_a.memory_config().nd_shard_spec
+    input_mem_config = input_tensor_a.memory_config()
+    assert output_mem_config.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED, (
+        f"dim={dim}: output memory layout is {output_mem_config.memory_layout}, "
+        f"expected ND_SHARDED; full output config: {output_mem_config}"
+    )
+    assert output_mem_config.nd_shard_spec == input_mem_config.nd_shard_spec, (
+        f"dim={dim}: output ND shard spec was rebuilt.\n"
+        f"  expected (input_a): {input_mem_config.nd_shard_spec}\n"
+        f"  actual   (output) : {output_mem_config.nd_shard_spec}\n"
+        f"  full output config: {output_mem_config}"
+    )
     logger.info(f"Indexed Fill (ND_SHARDED, dim={dim}) Output Memory Config: {output_mem_config}")
 
     golden = golden_indexed_fill(torch_a, torch_b, batch_id, dim=dim)
