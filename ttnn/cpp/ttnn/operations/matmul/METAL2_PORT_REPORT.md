@@ -4,15 +4,15 @@
 
 **`PORTED`** — `MatmulMultiCoreProgramFactory` converted from `ProgramDescriptorFactoryConcept` to
 Metal 2.0 `ProgramSpecFactoryConcept`. The op's other seven factories are untouched and stay on
-their legacy concepts; each needs its own audit and port pass (see `METAL2_PORTING_PLAN.md`).
+their legacy concepts; each needs its own audit and port pass. Two of them are already `no` on the
+readiness sheet — see the audit's Result section for which and why.
 
-**Verification is build-only, by the invoker's decision.** This workspace has no attached device
-(`/dev/tenstorrent` absent, `lspci` reports no Tenstorrent card, `tt-smi -ls` says "No Tenstorrent
-devices detected", and `ird list` is blocked inside the container), so the confirmed test set was
-not run. What *was* verified, and the exact commands to finish it, are in
-[Verification status](#verification-status) below. **The three converted kernel sources have never
-been JIT-compiled** — kernels compile at runtime, from disk, on a device — so they are the least
-verified part of this port.
+**Verified on device.** The port session itself had no card attached and could only build; a device
+(Blackhole p150b, 12x10 compute-with-storage grid) became available afterwards, and the gtest set
+plus a pytest subset were run on it, green, with Watcher on. The three converted kernel sources
+JIT-compile and run, the spec passes the Metal 2.0 validator, and numerics match on both the
+cache-miss and cache-hit paths. What ran and what is still uncovered are in
+[Verification status](#verification-status) below.
 
 ## Provenance
 
@@ -88,10 +88,20 @@ documents for the gather_in0 factory at its lines 66-72 ("has no Python binding,
 `matmul_select_program_factory` would raise a TypeError"), which is why the file carries an
 `_UNSUPPORTED_FACTORY` guard.
 
+**No in-repo test hits it, so CI stays green.** Every consumer of
+`models/experimental/ops/descriptors/matmul.py` in the tree — the five
+`tests/ttnn/unit_tests/operations/fused/parallel_sequential/` files — passes
+`MatmulMultiCoreReuseProgramConfig`, which still selects a pybound factory, and `program_config` is a
+required keyword argument so none of them can fall through to the MultiCore config. The breakage is
+therefore latent: it reaches a caller who passes `MatmulMultiCoreProgramConfig` explicitly or lands on
+`create_simple_matmul_program_config`'s fallback, and they get a bare `TypeError` with none of the
+explanatory guard the gather_in0 case has.
+
 Suggested resolution (not the porter's to make): extend that `_UNSUPPORTED_FACTORY` mechanism to
-cover ported factories, or give the framework a Metal 2.0 path. Note this is the surface that
-`METAL2_PORTING_PLAN.md` raised as decision **D3** and gated Port 4 on; it arrives one port early,
-because the MultiCore factory is also reachable from that framework.
+cover ported factories, or give the framework a Metal 2.0 path. Worth deciding now rather than per
+port: every Metal 2.0 port of a factory this descriptor framework can select will hit the same wall,
+and this factory is reachable from it, so the question arrives earlier in the bulk-port sequence than
+the factory list alone would suggest.
 
 ### 2. Dropped a pybind-hook-only factory parameter
 
@@ -199,6 +209,17 @@ specs. This is a **zero-behavior-change** addition: the legacy `ComputeConfigDes
 (`program_spec.cpp:1050-1052`), so no config-dependent gating is needed and no dtype can make the
 entry itself illegal.
 
+**Both halves of that are now confirmed on device.** The JIT artifacts for the fp32 runs of
+`MatmulSmoke.MultiCoreExplicit` carry `DST_ACCUM_MODE = true` alongside
+`unpack_src_format = {0,0,0,...}` — DataFormat 0 is `Float32` — which is exactly the
+consumer/Float32/32-bit-Dest triple the required-entry rule fires on, so the brief's advice would
+have `TT_FATAL`'d. And `unpack_dst_format` comes out `{4,4,4,...}` (`Tf32`, the 19-bit SrcA/B
+representation) rather than Float32, which is what `UnpackToDestMode::Default` produces — so the
+lowered per-buffer vector is the legacy one and the addition is behavior-neutral in fact, not just in
+argument. (`ComputeKernel::config_hash`, `tt_metal/impl/kernels/kernel.cpp:531-533`, also folds an
+all-`Default` vector to the same descriptor as an empty one, so the kernel binary cache key is
+unchanged too.)
+
 The recipe's own text is right and the audit misapplied it — the recipe says "**The trigger is the
 DFB's format, not the op's tensor dtypes**". What the audit missed is that here the DFB's format
 *is derived from* a tensor dtype, so the trigger is a property of the call, not of the op. Suggested
@@ -224,6 +245,10 @@ and `build_metal.sh --help` exposes no flag for that option and no generic cmake
 passthrough. Reaching it would mean hand-targeting cmake, which the recipe forbids. So a porter on a
 device-less box has no sanctioned way to run anything, even though the capability exists. Either
 `build_metal.sh` should grow the flag or `workspace_setup.md` should say emule is out of reach.
+
+This did not end up blocking *this* port — a card became available before review and the tests were
+run on real hardware ([Verification status](#verification-status)) — but the gap is unchanged for the
+next porter who starts on a device-less box.
 
 ---
 
@@ -281,6 +306,25 @@ device-less box has no sanctioned way to run anything, even though the capabilit
 ## Friction
 
 ### Gaps
+
+- **"Ensure the Metal 2.0 host-side legality checks are enabled" is unnecessary work on this
+  concept, and one file answers the question the section says you cannot answer from the outside.**
+  The recipe has the porter patch `skip_validation = false` into every function
+  `grep -n 'bool skip_validation' tt_metal/impl/metal2_host_api/*.cpp` names (nine, here), add
+  `METAL2_CHECKS_FORCED` markers, rebuild, and prove them in a test log — on the stated reasoning
+  that TTNN sets the flag and "you cannot tell from the outside." For a
+  `ProgramSpecFactoryConcept` port you can: `ttnn/api/ttnn/mesh_device_operation_adapter.hpp:924`
+  and `:928` call `MakeMeshWorkloadFromSpecs` and `SetProgramRunArgs` with **no** `skip_validation`
+  argument, so both default to `false` and the cache-miss build path always validates. The adapter
+  says so in a comment at `:917-919`. Only the cache-*hit* re-check is gated, at `:952`, on
+  `ttnn::CONFIG.get<"validate_program_args">()` — default `false`, `ttnn/api/ttnn/config.hpp:31`,
+  with the comment "The cache-miss build path always validates. Off by default; CI turns it on."
+  So the forcing buys nothing a porter needs and costs an out-of-scope `tt_metal/impl/` patch that
+  the self-audit then has to check for. Concrete doc fix: replace the section with (a) read the
+  adapter for your target concept and record which calls pass the flag, and (b) for the hit path,
+  set `ttnn.CONFIG.validate_program_args = True` in the test run rather than patching Metal. The
+  scaffolding was applied and proven present in the built library during the port, then reverted; it
+  never influenced a result, because no test ran while it was in place.
 
 - **The TT_FATAL census command is asymmetric and always reports a difference.** As written,
   ```bash
@@ -423,23 +467,37 @@ None of these were changed; all are pre-existing behavior the port reproduces.
 
 ### Test coverage notes
 
-- **No test deterministically pins the two-compute-`KernelSpec` path on every architecture.**
-  `MatmulSmoke.MultiCoreExplicit`'s `{2080, 64, 64}` case exists to force a non-empty
-  `core_group_2`, and its own comment records the caveat: "a 130-core grid, e.g. Blackhole 13x10,
-  divides evenly." On such a grid the `COMPUTE_G2` spec and its work unit are never built, so the
-  preserved-multiplicity shape — the part of this port most likely to break — goes unexercised.
-  A case whose output-tile count is coprime with every supported grid would close this.
+- **No test deterministically pins the two-compute-`KernelSpec` path on every architecture, though it
+  did run on the board used here.** `MatmulSmoke.MultiCoreExplicit`'s `{2080, 64, 64}` case exists to
+  force a non-empty `core_group_2`, and its own comment records the caveat: "a 130-core grid, e.g.
+  Blackhole 13x10, divides evenly." The caveat did not bite on the p150b, because the grid the
+  factory splits over is `compute_with_storage_grid_size` = **12x10 = 120**, not the 130-core worker
+  extent: 130 output tiles % 120 = 10, so `core_group_2` was non-empty. Both of the test's cases
+  split, in fact — 256 % 120 = 16 for `{512, 512, 512}` — and the JIT artifacts show the resulting
+  `Nt` pairs (3/2 and 2/1). The gap is still real, because whether the path is covered is a property
+  of the grid rather than of the test: a shape whose output-tile count is coprime with every
+  supported grid would make it deterministic.
 - **`TestGenericOpMatmul` is now a regression test for the fork decision**, not just for
   `generic_op`: it is the only thing that would notice if a future port converted matmul's legacy
   reader or `bmm.cpp` in place. Worth a comment there, which is outside this port's writeable
-  surface.
+  surface. **It is skipped on P150** (`tests/ttnn/unit_tests/gtests/test_generic_op.cpp:439-441`, a
+  pre-existing board guard unrelated to this port), so on a Blackhole p150 box the fork decision has
+  no live check — it needs a Wormhole run.
+- **This factory is unreachable from Python, so the pytest suites add no coverage for it.**
+  `MatmulMultiCoreProgramConfig` has no nanobind registration (`dir(ttnn)` has no such name), and
+  auto-selection treats this factory as the fallback of last resort, so no pytest can pin it. The
+  three `MatmulSmoke` cases are the op's entire coverage of this factory. That is worth knowing
+  before anyone reads a green Python run as evidence about this port.
 
 ### Verification status
 
-**Done in this workspace:**
+**Static — done during the port:**
 
-- Clean build through `./build_metal.sh --build-tests` (three times: cold, then after each edit
-  round). No errors and no warnings naming any ported file.
+- Clean build through `./build_metal.sh --build-tests`. **Re-run on the port commit at review time**
+  (exit 0, no errors, no warning naming any ported file) — that re-run is the standing evidence,
+  because the workspace's `build_Release` tree was last written twelve days before the port commit
+  and so does not record the port session's own builds. Anyone re-checking should rebuild rather
+  than inspect the build tree or the installed `.so`.
 - Full anti-pattern self-audit, each sweep reported as *hits / files scanned* over the port's
   converted/created set (**5** files: the factory `.cpp`/`.hpp`, the two kernel forks, the
   in-place writer):
@@ -468,7 +526,7 @@ None of these were changed; all are pre-existing behavior the port reproduces.
 
     No dropped field: the factory resolves five knobs and set four; the fifth, `packer_l1_acc`, has
     no Metal 2.0 counterpart (it was explicitly discarded in the legacy factory too).
-- Test-set collection confirmed without a device: **1182** tests in the three
+- Test-set collection confirmed (device-less, during the port): **1182** tests in the three
   `unit_tests/operations/matmul/` files, **2702** in `nightly/unit_tests/operations/matmul/` (one
   file, `test_rs_matmul_1d_gather_in0.py`, errors at collection with "No chips detected in the
   cluster" — a device artifact, unrelated to the port), **26** in the `tt_eager` legacy sweep,
@@ -476,50 +534,72 @@ None of these were changed; all are pre-existing behavior the port reproduces.
   `MatmulSmoke.{MultiCoreExplicit,MultiCoreUnaligned,MultiCorePostProcessedBias}` plus
   `TestGenericOpMatmul` all present in `unit_tests_ttnn`.
 
-**Not done, and needs a device:**
+**On device — done at review time.** Board: **Blackhole p150b**; `compute_with_storage_grid_size` =
+**12x10 = 120**, which is what `split_work_to_cores` divides over (the device's worker extent is
+13x10 = 130 cores, so don't read the larger number off a Watcher log and use it here — the two give
+different work splits). `TT_METAL_WATCHER=10` for every run.
 
-- Every runtime check: the spec validator, the JIT compile of the three converted kernel sources,
-  numerics, and program-cache behavior.
-- The `METAL2_CHECKS_FORCED` proof. The forcing *is* in place and *is* in the built binary —
-  `skip_validation = false` was set as the first statement of all nine sites named by
-  `grep -n 'bool skip_validation' tt_metal/impl/metal2_host_api/*.cpp`, with a one-shot
-  `log_warning` marker in each of the two files, and
-  `strings build_Release/lib/libtt_metal.so | grep METAL2_CHECKS_FORCED` finds it. But grepping a
-  *test log* for two markers requires running a test.
+| run | result |
+|---|---|
+| `unit_tests_ttnn --gtest_filter='MatmulSmoke.*:*GenericOpMatmul*'` | **22 passed, 1 skipped** (the skip is `TestGenericOpMatmul`, board-guarded off on P150) |
+| `--gtest_filter='MatmulSmoke.*' --gtest_repeat=3 --gtest_shuffle` | **66 passed** (22 x 3) — order randomized per iteration, so allocation addresses move while program-cache entries persist |
+| `pytest test_matmul_program_cache.py test_matmul_batch_mismatch.py test_custom_grids.py` | **38 passed** |
+| `generated/watcher/watcher.log` | **0** errors / assertions across all runs |
 
-**The forcing scaffolding is deliberately left uncommitted in the working tree**, so the
-already-built binary can be used the moment a device appears. It must never be committed; the
-committed diff contains no `tt_metal/` file (verified). To drop it:
+What that establishes, in the order the port's risks rank:
+
+- **The three converted kernel sources JIT-compile and run.** `bmm_metal2` and
+  `reader_bmm_8bank_output_tiles_partitioned_metal2` appear in the JIT cache with their generated
+  `kernel_args_generated.h` / `kernel_bindings_generated.h`; the DFB slots come out `dfb::in0{0}`,
+  `in1{1}`, `out{2}` (framework-assigned, replacing legacy `c_0`/`c_1`/`c_16`).
+- **The preserved-multiplicity shape ran.** `bmm_metal2` produced six build variants, and each of
+  `MultiCoreExplicit`'s two shapes produced a *pair* differing only in the per-group CTA — `Kt{16}`
+  with `Nt{3}` and `Nt{2}` (256 output tiles over 120 cores: 16 cores get 3, 104 get 2), `Kt{2}` with
+  `Nt{2}` and `Nt{1}` (130 tiles: 10 cores get 2, 110 get 1). Two same-source compute `KernelSpec`s
+  in two `WorkUnitSpec`s over disjoint node sets, all three DFBs bound in the same roles by both,
+  accepted by the validator's per-node census and numerically correct.
+- **The `unpack_modes` addition is required and behavior-neutral**, both shown from the same
+  artifacts — see handoff point 4.
+- **The spec validator ran on every cache miss.** Not because of the forcing scaffolding (which is
+  not in the tree and was never needed here) but because the adapter calls
+  `MakeMeshWorkloadFromSpecs` and `SetProgramRunArgs` without a `skip_validation` argument, so both
+  default to on — see the first Friction/Gaps entry.
+- **The cache-hit path re-patches the tensor bindings correctly.** The shuffled repeat run is what
+  covers this: same program-cache entries, different allocation order, correct numerics all three
+  times.
+
+**Still not covered** (none of it blocking, all of it cheap for whoever has the hardware):
+
+- `TestGenericOpMatmul` — skipped on P150, so the fork decision of handoff point 3 has no live check
+  on this board. Needs a Wormhole run. Low risk by construction: the two legacy kernels are
+  byte-identical apart from the pointer comment, so they cannot have regressed; but the test is the
+  check, and it did not run.
+- The cache-hit **argument re-validation**. `UpdateTensorArgs` was called with
+  `skip_validation = true` because `ttnn.CONFIG.validate_program_args` defaults false, so only the
+  numerics were checked on that path, not the arg-shape re-check. Set
+  `ttnn.CONFIG.validate_program_args = True` to close it.
+- The broad Python suites: `test_matmul.py`, `tests/ttnn/nightly/unit_tests/operations/matmul/`, the
+  `tt_eager` sweep, and `-k cross_op_compilation`. Note these exercise the op's *other* seven
+  factories — this factory is unpinnable from Python (see Test coverage notes) — so they are a
+  general no-regression check, not coverage of the port.
 
 ```bash
-git checkout -- tt_metal/impl/metal2_host_api/program_run_args.cpp tt_metal/impl/metal2_host_api/program_spec.cpp
+# Reproduce, from the checkout root:
+export TT_METAL_HOME=$(pwd)
+source python_env/bin/activate       # required: PYTHONPATH=$(pwd) alone resolves `ttnn` to a
+export PYTHONPATH=$(pwd)             # namespace package with no `ttnn.device`, and conftest fails
+export TT_METAL_WATCHER=10           # Watcher on for every run; unset is the only way off
+
+./build/test/ttnn/unit_tests_ttnn --gtest_filter='MatmulSmoke.*:*GenericOpMatmul*'
+./build/test/ttnn/unit_tests_ttnn --gtest_filter='MatmulSmoke.*' --gtest_repeat=3 --gtest_shuffle
+python -m pytest tests/ttnn/unit_tests/operations/matmul/test_matmul_program_cache.py \
+                tests/ttnn/unit_tests/operations/matmul/test_matmul_batch_mismatch.py \
+                tests/ttnn/unit_tests/operations/matmul/test_custom_grids.py -q
+grep -icE 'Watcher detected|error|fatal|0xdeadc0de' generated/watcher/watcher.log   # expect 0
 ```
 
-**Commands to finish verification** (from the checkout root, venv active):
-
-```bash
-export TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd)
-source python_env/bin/activate
-export TT_METAL_WATCHER=10          # Watcher on for every run; unset is the only way off
-
-# 1. gtests first -- the three cases that pin this factory, plus the generic-op binder
-#    of the two kernels this port forked.
-./build/test/ttnn/unit_tests_ttnn \
-  --gtest_filter='MatmulSmoke.*:*GenericOpMatmul*' 2>&1 | tee /tmp/mm_gtest.log
-grep -c METAL2_CHECKS_FORCED /tmp/mm_gtest.log   # expect >= 2 before trusting any green
-
-# 2. pytests
-pytest tests/ttnn/unit_tests/operations/matmul/test_matmul.py \
-       tests/ttnn/unit_tests/operations/matmul/test_matmul_program_cache.py \
-       tests/ttnn/unit_tests/operations/matmul/test_matmul_batch_mismatch.py -x
-pytest tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py \
-       -k cross_op_compilation -x
-pytest tests/ttnn/nightly/unit_tests/operations/matmul/ -x
-pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_matmul.py -x
-```
-
-The three sharpest cases are `MatmulSmoke.MultiCoreExplicit` (fp32 + `fp32_dest_acc_en`, which is
-what exercises the `unpack_modes` requirement of handoff point 4, and whose `{2080,64,64}` shape is
-what may exercise the second compute `KernelSpec`), `MatmulSmoke.MultiCoreUnaligned` (the
-`in0_last_ktile_w` padding path in the reader fork), and `TestGenericOpMatmul` (proves the fork
-decision of handoff point 3 kept the legacy binder working).
+The three sharpest cases are `MatmulSmoke.MultiCoreExplicit` (fp32 + `fp32_dest_acc_en`, which
+exercises the `unpack_modes` requirement of handoff point 4, and whose two shapes both exercised the
+second compute `KernelSpec` on a 120-core grid), `MatmulSmoke.MultiCoreUnaligned` (the
+`in0_last_ktile_w` padding path in the reader fork), and `TestGenericOpMatmul` (would prove the fork
+decision of handoff point 3 kept the legacy binder working — needs a non-P150 board).
