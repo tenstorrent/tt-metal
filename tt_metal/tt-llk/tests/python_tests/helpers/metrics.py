@@ -470,37 +470,3 @@ def _print_stability(zone_metrics: list[dict]) -> None:
             lines.append(f"  {label:<40} {mean_val:>11.2f}% {std_val:>11.2f}%")
 
     logger.info("\n".join(lines))
-
-
-def print_metrics(df_or_computed) -> None:
-    """
-    Log performance metrics, grouped by zone.
-    If multiple runs, also logs mean/std stability summary per zone.
-
-    Accepts either:
-    - A raw counter DataFrame (computes metrics automatically)
-    - A list of dicts from compute_metrics()
-    """
-    if isinstance(df_or_computed, pd.DataFrame):
-        computed = compute_metrics(df_or_computed)
-    else:
-        computed = df_or_computed
-
-    if not computed:
-        logger.info("No metrics to display.")
-        return
-
-    logger.info("\n{}\nPERFORMANCE METRICS\n{}", "=" * 70, "=" * 70)
-
-    zones = sorted(set(m["zone"] for m in computed))
-
-    for zone in zones:
-        zone_metrics = [m for m in computed if m["zone"] == zone]
-
-        logger.info("\n{}\nZONE: {}\n{}", "═" * 70, zone, "═" * 70)
-
-        # Print detailed metrics for the last run (most representative, after warmup)
-        _print_detail(zone_metrics[-1])
-
-        # Print stability summary if multiple runs
-        _print_stability(zone_metrics)

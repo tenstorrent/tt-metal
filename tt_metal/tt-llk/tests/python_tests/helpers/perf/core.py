@@ -16,12 +16,12 @@ import pandas as pd
 import pytest
 
 from ..chip_architecture import ChipArchitecture
-from ..counters import print_counters, read_counters
+from ..counters import read_counters
 from ..device import BootMode
 from ..format_config import FormatConfig
 from ..llk_params import DestAccumulation, L1Accumulation, PerfRunType
 from ..logger import logger
-from ..metrics import compute_metrics, export_counters, export_metrics, print_metrics
+from ..metrics import compute_metrics, export_counters, export_metrics
 from ..profiler import Profiler, ProfilerData
 from ..stimuli_config import StimuliConfig
 from ..test_config import BuildMode, ProfilerBuild, TestConfig
@@ -1000,10 +1000,6 @@ class PerfConfig(TestConfig):
                         if counter_results is not None and not counter_results.empty:
                             counter_results["run_index"] = run_index
                             variant_counter_results.append(counter_results)
-                            if TestConfig.DUMP_RAW_COUNTERS:
-                                print_counters(counter_results)
-                            if TestConfig.DUMP_RAW_METRICS:
-                                print_metrics(counter_results)
                     except Exception as e:
                         logger.warning("Error reading counters: {}", e)
 
@@ -1033,8 +1029,6 @@ class PerfConfig(TestConfig):
                 )
 
                 computed = compute_metrics(all_counters)
-                if TestConfig.DUMP_RAW_METRICS:
-                    print_metrics(all_counters)
 
                 # Export efficiency metrics (percentages only) to the main CSV
                 csv_df = export_metrics(
@@ -1047,7 +1041,7 @@ class PerfConfig(TestConfig):
 
                 # Export raw counter values to the separate counters CSV
                 if (
-                    TestConfig.DUMP_CSV_COUNTERS
+                    TestConfig.DUMP_PERF_COUNTERS
                     and PerfConfig.COUNTER_REPORT is not None
                 ):
                     counter_csv_df = export_counters(
