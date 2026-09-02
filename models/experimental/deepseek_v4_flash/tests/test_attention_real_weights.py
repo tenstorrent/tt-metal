@@ -263,7 +263,11 @@ def _weight_cache(layer_idx: int):
     """Per-layer attention :class:`WeightCache` for the ttnn weights, or ``None``."""
     if not _CACHE_DIR:
         return None
-    return WeightCache(os.path.join(_CACHE_DIR, "ttnn")).sub(f"layers.{layer_idx}").sub("self_attn")
+    return (
+        WeightCache(os.path.join(_CACHE_DIR, os.path.basename(_DEFAULT_MODEL_DIR)))
+        .sub(f"layers.{layer_idx}")
+        .sub("self_attn")
+    )
 
 
 def _generate_reference(out_path: Path, layer_idx: int, batch: int, seq_len: int) -> bool:
