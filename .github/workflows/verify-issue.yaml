@@ -139,6 +139,33 @@ jobs:
         with:
           fetch-depth: 0 # Gate B walks history on the files the report blames
 
+      # TEMPORARY — DELETE WITH THE PUSH TRIGGER.
+      # This pool sits behind an egress proxy that 403s at least astral.sh, and
+      # the Anthropic org IP-allowlists so GitHub-hosted pools are not an
+      # option either. Enumerate what is actually reachable once, rather than
+      # discovering it one failed run at a time.
+      - name: Probe egress reachability
+        continue-on-error: true
+        run: |
+          set +e
+          echo "HTTP_PROXY=${HTTP_PROXY:-<unset>}  HTTPS_PROXY=${HTTPS_PROXY:-<unset>}"
+          echo "NO_PROXY=${NO_PROXY:-<unset>}"
+          echo "tooling present: node=$(command -v node || echo no) npm=$(command -v npm || echo no)" \
+               "uv=$(command -v uv || echo no) pip3=$(command -v pip3 || echo no)"
+          printf '%-40s %s\n' HOST STATUS
+          for url in \
+            https://pypi.org/simple/ \
+            https://files.pythonhosted.org/ \
+            https://registry.npmjs.org/ \
+            https://astral.sh/uv/install.sh \
+            https://claude.ai/install.sh \
+            https://api.anthropic.com/v1/models \
+            https://github.com/ ; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url")
+            printf '%-40s %s\n' "$(echo "$url" | cut -d/ -f3)" "$code"
+          done
+          exit 0
+
       # uv rather than `python3 -m venv`: this pool's image ships no
       # python3-venv, so the stdlib path fails on the missing ensurepip. uv
       # bootstraps its own and needs no root. actions/setup-python is avoided
