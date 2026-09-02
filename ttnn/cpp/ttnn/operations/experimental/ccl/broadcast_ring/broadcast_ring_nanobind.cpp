@@ -53,7 +53,9 @@ void bind_broadcast_ring(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("topology").noconvert() = ttnn::ccl::Topology::Ring,
         nb::arg("subdevice_id") = nb::none(),
-        nb::arg("chunk_size_tiles") = 0);
+        nb::arg("chunk_size_tiles") = 0,
+        nb::arg("broadcast_offset_tiles") = 0,
+        nb::arg("broadcast_num_tiles") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

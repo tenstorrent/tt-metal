@@ -98,6 +98,13 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
     // Staging CB: depth >= 2-3 chunks so receive(k+1) overlaps forward(k). Page = input aligned page.
     const uint32_t page_size = input_tensor.buffer()->aligned_page_size();
     const uint32_t input_num_pages = input_tensor.buffer()->num_pages();
+    // Broadcast only [bcast_offset, bcast_offset+bcast_count) of the sender's shard (0 num = whole shard);
+    // the rest of the output is untouched. Cuts data moved when the caller needs a sub-range.
+    const uint32_t bcast_offset = operation_attributes.broadcast_offset_tiles;
+    const uint32_t bcast_count =
+        operation_attributes.broadcast_num_tiles > 0
+            ? std::min(operation_attributes.broadcast_num_tiles, input_num_pages - bcast_offset)
+            : input_num_pages;
     // Chunk size: the requested chunk_size_tiles if set, else the largest chunk whose triple-buffered CB
     // fits kChunkL1Budget, capped at kMaxChunkPages. Larger chunks amortize the per-chunk sem round-trip
     // (a tiny one-packet chunk is ~3x slower); the cap bounds L1 use. Kernel clamps to the tile count.
@@ -107,9 +114,9 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
     const uint32_t budget_chunk = std::max<uint32_t>(1, kChunkL1Budget / (kCbDepthChunks * page_size));
     const uint32_t auto_chunk_pages = std::min(budget_chunk, kMaxChunkPages);
     const uint32_t chunk_num_pages = std::min(
-        input_num_pages,
+        bcast_count,
         operation_attributes.chunk_size_tiles > 0 ? operation_attributes.chunk_size_tiles : auto_chunk_pages);
-    const uint32_t num_chunks = (input_num_pages + chunk_num_pages - 1) / chunk_num_pages;
+    const uint32_t num_chunks = (bcast_count + chunk_num_pages - 1) / chunk_num_pages;
     const uint32_t cb_depth_pages = kCbDepthChunks * chunk_num_pages;
 
     const uint32_t cb_id = tt::CB::c_in0;
@@ -163,15 +170,17 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
     const auto src_fabric_node_id = mesh_device->get_fabric_node_id(coord);
     const auto fwd_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
     const auto bwd_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
-    const uint32_t tiles_per_link =
-        (input_num_pages + operation_attributes.num_links - 1) / operation_attributes.num_links;
+    // Split the broadcast sub-range [bcast_offset, +bcast_count) across links; each link's tiles are
+    // absolute shard tile ids (bcast_offset + local).
+    const uint32_t tiles_per_link = (bcast_count + operation_attributes.num_links - 1) / operation_attributes.num_links;
     for (uint32_t link = 0; link < operation_attributes.num_links; ++link) {
         const CoreCoord core = worker_cores[link];
         // Downstream same-index worker core: its noc coords (target of both directions' completion atomic-inc;
         // the same logical core on every device, so the coords are shared and only the route differs).
         const CoreCoord ds_core_noc = mesh_device->worker_core_from_logical_core(core);
-        const uint32_t tile_start = std::min(link * tiles_per_link, input_num_pages);
-        const uint32_t tile_count = std::min(tiles_per_link, input_num_pages - tile_start);
+        const uint32_t local_start = std::min(link * tiles_per_link, bcast_count);
+        const uint32_t tile_start = bcast_offset + local_start;
+        const uint32_t tile_count = std::min(tiles_per_link, bcast_count - local_start);
         std::vector<uint32_t> rt = {
             input_tensor.buffer()->address(),
             output_tensor.buffer()->address(),

@@ -25,7 +25,11 @@ struct BroadcastRingParams {
     MemoryConfig output_mem_config;
     tt::tt_fabric::Topology topology{};
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
-    uint32_t chunk_size_tiles = 0;  // tiles per relay chunk; 0 = auto (one fabric packet). Tuning knob.
+    uint32_t chunk_size_tiles = 0;  // tiles per relay chunk; 0 = auto. Tuning knob.
+    // Broadcast only [broadcast_offset_tiles, +broadcast_num_tiles) of the sender's shard; the rest of the
+    // output is left untouched. 0 num = whole shard. Cuts data moved when the caller needs a sub-range.
+    uint32_t broadcast_offset_tiles = 0;
+    uint32_t broadcast_num_tiles = 0;
 
     BroadcastRingParams(
         uint32_t sender_ring_index_,
@@ -35,7 +39,9 @@ struct BroadcastRingParams {
         const MemoryConfig& output_mem_config_,
         tt::tt_fabric::Topology topology_,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id_,
-        uint32_t chunk_size_tiles_ = 0) :
+        uint32_t chunk_size_tiles_ = 0,
+        uint32_t broadcast_offset_tiles_ = 0,
+        uint32_t broadcast_num_tiles_ = 0) :
         sender_ring_index(sender_ring_index_),
         cluster_axis(cluster_axis_),
         num_links(num_links_),
@@ -43,7 +49,9 @@ struct BroadcastRingParams {
         output_mem_config(output_mem_config_),
         topology(topology_),
         sub_device_id(sub_device_id_),
-        chunk_size_tiles(chunk_size_tiles_) {}
+        chunk_size_tiles(chunk_size_tiles_),
+        broadcast_offset_tiles(broadcast_offset_tiles_),
+        broadcast_num_tiles(broadcast_num_tiles_) {}
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "sender_ring_index",
@@ -53,7 +61,9 @@ struct BroadcastRingParams {
         "output_mem_config",
         "topology",
         "sub_device_id",
-        "chunk_size_tiles");
+        "chunk_size_tiles",
+        "broadcast_offset_tiles",
+        "broadcast_num_tiles");
     auto attribute_values() const {
         return std::make_tuple(
             sender_ring_index,
@@ -63,7 +73,9 @@ struct BroadcastRingParams {
             output_mem_config,
             topology,
             sub_device_id,
-            chunk_size_tiles);
+            chunk_size_tiles,
+            broadcast_offset_tiles,
+            broadcast_num_tiles);
     }
 };
 

@@ -50,16 +50,29 @@ OWNER = 5  # sender index along the ring (cluster) axis
 # comparison (overhead-bound at 1 tile). chunk_size 0 = auto (one fabric packet); the 1024-tile rows sweep
 # the chunk size to find the pipeline-overlap vs per-chunk-overhead sweet spot.
 @pytest.mark.parametrize(
-    ("tiles_per_shard", "chunk_size_tiles"),
+    # (tiles_per_shard, chunk_size_tiles, bcast_offset_tiles, bcast_num_tiles): last two 0/0 = whole shard;
+    # a nonzero pair broadcasts only that sub-range (pre-slice) — correctness must hold within it.
+    ("tiles_per_shard", "chunk_size_tiles", "bcast_offset_tiles", "bcast_num_tiles"),
     [
-        pytest.param(1, 0, id="1tile"),
-        pytest.param(1024, 0, id="1024tiles_chunkauto"),
-        pytest.param(1024, 8, id="1024tiles_chunk8"),
-        pytest.param(1024, 32, id="1024tiles_chunk32"),
-        pytest.param(1024, 128, id="1024tiles_chunk128"),
+        pytest.param(1, 0, 0, 0, id="1tile"),
+        pytest.param(1024, 0, 0, 0, id="1024tiles_chunkauto"),
+        pytest.param(1024, 8, 0, 0, id="1024tiles_chunk8"),
+        pytest.param(1024, 32, 0, 0, id="1024tiles_chunk32"),
+        pytest.param(1024, 128, 0, 0, id="1024tiles_chunk128"),
+        pytest.param(1024, 0, 300, 400, id="1024tiles_subrange"),  # pre-slice: broadcast tiles [300, 700)
     ],
 )
-def test_broadcast_ring(mesh_device, sp_axis, tp_axis, device_params, topology, tiles_per_shard, chunk_size_tiles):
+def test_broadcast_ring(
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    device_params,
+    topology,
+    tiles_per_shard,
+    chunk_size_tiles,
+    bcast_offset_tiles,
+    bcast_num_tiles,
+):
     rows, cols = tuple(mesh_device.shape)
     tp_factor, sp_factor = rows, cols
     N = tiles_per_shard
@@ -92,12 +105,18 @@ def test_broadcast_ring(mesh_device, sp_axis, tp_axis, device_params, topology, 
     )
     tt_in = ttnn.to_layout(rm, ttnn.TILE_LAYOUT)
 
+    # Sample a tile inside the broadcast range (offset 0 for a whole-shard broadcast).
+    sample_tile = bcast_offset_tiles
+
     def readback(t):
         out = ttnn.to_torch(
             ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT),
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
         )
-        return [[round(out[0, 0, r * T, c * N * T].item()) for c in range(sp_factor)] for r in range(tp_factor)]
+        return [
+            [round(out[0, 0, r * T, (c * N + sample_tile) * T].item()) for c in range(sp_factor)]
+            for r in range(tp_factor)
+        ]
 
     from models.tt_dit.parallel.manager import CCLManager  # local import to keep collection light
 
@@ -105,7 +124,13 @@ def test_broadcast_ring(mesh_device, sp_axis, tp_axis, device_params, topology, 
 
     def run_bcast():
         return ttnn.experimental.broadcast_ring(
-            tt_in, sender_ring_index=OWNER, cluster_axis=sp_axis, topology=topology, chunk_size_tiles=chunk_size_tiles
+            tt_in,
+            sender_ring_index=OWNER,
+            cluster_axis=sp_axis,
+            topology=topology,
+            chunk_size_tiles=chunk_size_tiles,
+            broadcast_offset_tiles=bcast_offset_tiles,
+            broadcast_num_tiles=bcast_num_tiles,
         )
 
     def run_ag():
@@ -127,7 +152,9 @@ def test_broadcast_ring(mesh_device, sp_axis, tp_axis, device_params, topology, 
         ttnn.to_layout(gathered, ttnn.ROW_MAJOR_LAYOUT),
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    matches_ag = all(round(g[0, 0, r * T, OWNER * N * T].item()) == r * 10 + OWNER for r in range(tp_factor))
+    matches_ag = all(
+        round(g[0, 0, r * T, (OWNER * N + sample_tile) * T].item()) == r * 10 + OWNER for r in range(tp_factor)
+    )
 
     # --- steady-state timing (ops are warm; first call above already JIT-compiled + built the program) ---
     # Each op's warm loop is bracketed by a named signpost so, under `python -m tracy -r -p`, the device-op
@@ -161,3 +188,77 @@ def test_broadcast_ring(mesh_device, sp_axis, tp_axis, device_params, topology, 
     )
     assert per_line, "broadcast_ring did not deliver each tp row's own ring-shard to all ring devices"
     assert matches_ag, "broadcast_ring result disagrees with all_gather+slice"
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "device_params", "topology"),
+    [pytest.param((4, 8), 1, 0, ring_params, ttnn.Topology.Ring, id="bh_4x8_ring")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    ("n_per_shard", "rng_lo", "rng_hi"),
+    [
+        pytest.param(4, 10, 14, id="straddle_2_3"),
+        pytest.param(8, 14, 18, id="straddle_1_2_small"),
+        pytest.param(6, 10, 16, id="straddle_1_2"),
+    ],
+)
+def test_broadcast_ring_straddle(mesh_device, sp_axis, tp_axis, device_params, topology, n_per_shard, rng_lo, rng_hi):
+    rows, cols = tuple(mesh_device.shape)
+    tp_factor, sp_factor = rows, cols
+    N = n_per_shard
+    owner_lo, owner_hi = rng_lo // N, (rng_hi - 1) // N
+    assert owner_lo != owner_hi and owner_hi < sp_factor
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    wsd_id = ttnn.SubDeviceId(0)
+    mgr = mesh_device.create_sub_device_manager([ttnn.SubDevice([crs])], 0)
+    mesh_device.load_sub_device_manager(mgr)
+    mesh_device.set_sub_device_stall_group([wsd_id])
+
+    host = torch.zeros(1, 1, tp_factor * T, sp_factor * N * T, dtype=torch.float32)
+    for r in range(tp_factor):
+        for c in range(sp_factor):
+            host[0, 0, r * T : (r + 1) * T, c * N * T : (c + 1) * N * T] = r * 10 + c
+    shard_dims = [None, None]
+    shard_dims[tp_axis] = 2
+    shard_dims[sp_axis] = 3
+    rm = ttnn.from_torch(
+        host.to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+    tt_in = ttnn.to_layout(rm, ttnn.TILE_LAYOUT)
+
+    def sample(t, st):
+        out = ttnn.to_torch(
+            ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        )
+        return [[round(out[0, 0, r * T, (c * N + st) * T].item()) for c in range(sp_factor)] for r in range(tp_factor)]
+
+    ok = True
+    for owner in range(owner_lo, owner_hi + 1):
+        lo = max(rng_lo, owner * N) - owner * N
+        hi = min(rng_hi, (owner + 1) * N) - owner * N
+        full = ttnn.experimental.broadcast_ring(
+            tt_in,
+            sender_ring_index=owner,
+            cluster_axis=sp_axis,
+            broadcast_offset_tiles=lo,
+            broadcast_num_tiles=hi - lo,
+            topology=topology,
+            subdevice_id=wsd_id,
+            num_links=2,
+        )
+        ttnn.synchronize_device(mesh_device, sub_device_ids=[wsd_id])
+        for st in range(lo, hi):
+            grid_out = sample(full, st)
+            good = all(grid_out[r][c] == r * 10 + owner for r in range(tp_factor) for c in range(sp_factor))
+            if not good:
+                ok = False
+                logger.info(f"[straddle] owner={owner} tile={st}: {grid_out}")
+    assert ok, "straddle sub-range broadcast delivered wrong data"
