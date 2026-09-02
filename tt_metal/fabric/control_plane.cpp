@@ -1968,7 +1968,7 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
     uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
     TT_ASSERT(num_chips <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
     // Both axes must be addressable and their packed action maps must fit the L1 slot. FabricContext
-    // separately enforces the packet-header bound Y + X <= 67.
+    // separately enforces the packet-header action-map bound.
     TT_ASSERT(
         Routing2DCodec::shape_fits_route_table(mesh_shape[0], mesh_shape[1]),
         "Mesh {} shape {}x{} cannot use the 2D route table: axes must be <= {} and the packed action maps must "
@@ -1977,7 +1977,7 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
         mesh_shape[0],
         mesh_shape[1],
         Routing2DCodec::MAX_AXIS_SIZE,
-        Routing2DCodec::ROUTE_TABLE_BYTES);
+        Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES);
 
     // Every 2D mesh embeds the destination-major action-map route table.
     {

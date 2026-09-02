@@ -284,7 +284,7 @@ std::vector<RoutingDirection> mcast_root_output_directions(
     const auto x_size = static_cast<std::uint32_t>(x_topo.axis_len);
 
     // Runs the worker's encoder over a table laid out exactly as the device sees it.
-    std::vector<std::uint8_t> route_table_2d(Routing2DCodec::ROUTE_TABLE_BYTES, 0);
+    std::vector<std::uint8_t> route_table_2d(Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES, 0);
     if (!embed_mcast_reverse_trees(
             mesh_graph, mesh_id, y_topo, x_topo, root_y, root_x, route_table_2d.data(), failure)) {
         return {};
@@ -392,7 +392,7 @@ bool embed_mcast_reverse_trees(
                 x_size,
                 Routing2DCodec::vectors_region_bytes(y_size, x_size),
                 Routing2DCodec::mcast_tree_region_bytes(y_size, x_size),
-                Routing2DCodec::ROUTE_TABLE_BYTES);
+                Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES);
         }
         return false;
     }

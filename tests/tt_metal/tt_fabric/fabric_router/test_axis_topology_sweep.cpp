@@ -183,13 +183,10 @@ TEST(AxisTopologySweep, MinimumCoverage) {
     RecordProperty("derivations_failed", r.derivations_failed);
 }
 
-// Every mesh shape that a descriptor declares must be representable by the 2D route table, or the
-// control plane's validation would reject it at startup. Shapes that exceed the packet header's
-// route buffer are reported rather than asserted: that is a separate bound (issue #32237) and the
-// host fatals with a clear message, so it is a known limit, not a defect.
+// Every declared mesh shape must fit both the hybrid 2D route table and the packet action map.
 TEST(AxisTopologySweep, EveryDeclaredShapeFitsThe2DRouteTable) {
+    constexpr uint32_t kMaximumActionMapBytes = 64 + 4;
     int checked = 0;
-    std::vector<std::string> over_header_bound;
 
     for (const auto& path : all_descriptors()) {
         std::unique_ptr<MeshGraph> mesh_graph;
@@ -207,20 +204,14 @@ TEST(AxisTopologySweep, EveryDeclaredShapeFitsThe2DRouteTable) {
             EXPECT_TRUE(Routing2DCodec::shape_fits_route_table(y, x))
                 << path.filename().string() << " mesh " << *mesh_id << " shape " << y << "x" << x
                 << " cannot be packed into the destination-major 2D route table";
-
-            constexpr uint32_t kMaxRouteBytes = 67;  // see fabric_edm_packet_header.hpp
-            if (y + x > kMaxRouteBytes) {
-                over_header_bound.push_back(
-                    path.filename().string() + " (" + std::to_string(y) + "x" + std::to_string(x) + ")");
-            }
+            EXPECT_TRUE(Routing2DCodec::hybrid_region_fits(y, x))
+                << path.filename().string() << " mesh " << *mesh_id << " shape " << y << "x" << x
+                << " cannot fit action maps and multicast trees in the 2D route-table slot";
+            EXPECT_LE(y + x, kMaximumActionMapBytes) << path.filename().string() << " mesh " << *mesh_id << " shape "
+                                                     << y << "x" << x << " exceeds the packet action-map buffer";
         }
     }
     EXPECT_GT(checked, 0) << "no mesh shapes were checked";
-
-    // Informational: these need issue #32237 before they could run 2D fabric.
-    for (const auto& s : over_header_bound) {
-        RecordProperty("exceeds_header_route_buffer", s);
-    }
 }
 
 }  // namespace tt::tt_fabric::axis_topology_sweep_tests
