@@ -94,7 +94,16 @@ overstating by 174 ms.
 **Use `DEVICE KERNEL DURATION` for stage-to-stage comparison.** A trustworthy wall number needs a
 harness with enough timed iterations to amortize region entry; that does not exist in the tree yet.
 
-Cumulative kernel, all measured in the same window: **681.1 → 489.5 → 456.8 ms, −32.9%.**
+Cumulative kernel, all measured in the same window: **681.1 → 489.5 → 456.8 ms, −32.9%**, then
+candidate 5's six sub-items **456.5 → 280.2 ms, −38.6%** (rows 6–10, all measured 2026-09-01/02 in
+one session). **681.1 → 280.2 ms overall, −58.9%.**
+
+Stages 6–10 took the layer from data-movement-bound to compute-bound. Classified from the stage-10
+CSV, data movement is **90.8 ms** against **178.8 ms** of compute — a ratio of **0.51**, where
+stage 05 measured 1.00. Compute barely moved (220.7 → 178.8 ms, and ~46 ms of stage 05's "compute"
+was elementwise arithmetic on tile padding); essentially all 176 ms came off the layout side.
+`MSDAOperation` is 167.9 ms of the 178.8 ms of compute — **59.9% of the layer**, unmoved since
+stage 04, and the only item of its size left. It is an op-level question, not a model-level one.
 
 Stage 1 traded +27 ms of kernel for a host-gap collapse — the one place the gap column was moving
 by so much that noise could not explain it. Stages 4 and 5 then took **−224.3 ms of kernel**

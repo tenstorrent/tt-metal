@@ -48,7 +48,7 @@ the tighter per-module gates (SCA at 0.999) bind before the encoder's 0.997 does
 | [2](#candidate-2--fused-msda) | fused `multi_scale_deformable_attn` | kernel | **−191.6 ms kernel (−28.1%)** | M | med | **landed — [04](perf_reports/04-fused-msda.md)** |
 | [3](#candidate-3--tile-padding-waste) | fold the offset normalizer into the Linear | kernel | **−32.7 ms kernel** | S | low | **landed — [05](perf_reports/05-offset-normalizer-folded.md)** |
 | [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | — | — | — | **moot — deleted by [04](perf_reports/04-fused-msda.md)** |
-| [5](#candidate-5--data-movement-vs-compute) | shape/order changes on the layout churn — **5a–5f** | kernel | **~157 ms (−34%)** across six changes; 46.6 of 48.2 ms `BinaryNg` is padding | S–M | low | **analysis done — [5a](#5a-delete-the-key-permute) is −19.3 ms for a deletion; take it first** |
+| [5](#candidate-5--data-movement-vs-compute) | shape/order changes on the layout churn — **5a–5f** | kernel | **−176.3 ms (−38.6%)**, 456.5 → 280.2 ms | S–M | low | **landed — all six, reports [06](perf_reports/06-sca-key-permute-deleted.md)–[10](perf_reports/10-value-head-split-unpadded.md)** |
 | [6](#candidate-6--permutereshape-by-reformulation) | drop permute/reshape by reformulation or weight reorder | kernel | **139.8 ms** reshape+permute | M | med | todo |
 | [7](#candidate-7--l1-vs-dram) | place operands in L1 instead of DRAM | kernel | unknown; expected small | S | low | todo — likely small |
 | [8](#candidate-8--fuse-binaryng) | fuse `BinaryNg` into its producers | kernel | **48.2 ms** (10.6%) | M | med | todo |
@@ -918,39 +918,84 @@ the grid in ROW_MAJOR and changes what this permute costs. Doing 5e first means 
 
 #### 5f. The per-level guards are free — don't book them
 
+**Verified, no code change** — re-checked against the stage-10 CSV (`2026_09_02_11_49_26`):
+**zero `Typecast` rows in the layer and zero in the whole capture.**
+
 [Candidate 6](#free-hoists-in-the-same-function-worth-taking-either-way) lists the three per-level
 `typecast` guards at [msda:63-68](../tt/tt_ms_deformable_attention.py#L63-L68) alongside the
-`to_layout` hoist. **The CSV contains no `Typecast` rows at all** — everything is already bfloat16,
-so the guards never fire and cost exactly zero. Keep them as guards; do not count their removal as a
-win. The `to_layout` in the same block is a different matter and is [5c](#5c-untilize-attn-once-not-per-level).
+`to_layout` hoist. Everything is already bfloat16, so the guards never fire and cost exactly zero.
+They stay: they are the only thing standing between a future dtype change
+([candidate 13](#candidate-13--dtype-and-math-fidelity)) and a `TT_FATAL` from inside the device op.
+Do not count their removal as a win. The `to_layout` in the same block was a different matter and
+is [5c](#5c-untilize-attn-once-not-per-level), landed.
 
-### Work items
+### Result — candidate 5 is closed
 
-- [ ] **5a first**, on its own commit. It is a deletion, its number is exact, and it needs no PCC
-      argument beyond "nothing read the tensor."
-- [ ] **5b next**, and land the `* 2 - 1` fold in the same change — the expression is being rewritten
-      anyway, and folding it separately means touching the same six lines twice. Report PCC per
-      change against the [gates](#candidates); the fold is exact, so expect 0.999611 unchanged.
-- [ ] **5c**, independent of 5b. Cheapest 35 ms on the list.
-- [ ] **5e after 5b.**
-- [ ] **5d only after** a standalone ROW_MAJOR-permute microbenchmark at `(6, 30144, 8, 32)`.
-      If it loses, record it in [DEAD_ENDS](perf_reports/DEAD_ENDS.md) with the number and hand the
-      operand to [11](#candidate-11--absorb-msda-layout-prep).
-- [ ] Re-profile after each and re-derive the corrected ratio (real compute ~175 ms as the
-      denominator, not 220.7). If 5a–5c land as estimated the layer is ~310 ms and
-      `MSDAOperation` is **~54%** of it — at which point everything model-side is finished and
-      [10](#candidate-10--msdaoperation-itself) / [12](#candidate-12--one-fused-call-for-all-levels)
-      are the only items left that matter.
-- [ ] Fix or subtract the harness's per-layer `build_rebatch_plan` (rows 459–465, 6.8 ms) before
-      quoting any of these percentages as encoder-path numbers.
+All six landed or resolved, one commit and one report each.
+
+| item | predicted | measured | report |
+|---|---:|---:|---|
+| 5a `key` permute deleted | −19.3 | **−18.1** | [06](perf_reports/06-sca-key-permute-deleted.md) |
+| 5b sampling grid in ROW_MAJOR | −90 | **−82.2** | [07](perf_reports/07-sampling-grid-in-row-major.md) |
+| 5c `attn` prepared once | −35 | **−44.9** | [08](perf_reports/08-attn-prepared-once-per-call.md) |
+| 5e head-major grid in TILE | −13 | **−24.5** | [09](perf_reports/09-head-major-sampling-grid.md) |
+| 5d `value` head split unpadded | −10…−20 | **−6.6** | [10](perf_reports/10-value-head-split-unpadded.md) |
+| 5f per-level guards | 0 | **0** (verified) | — |
+
+**456.5 → 280.2 ms, −176.3 ms, −38.6%.** Ops 127 → 106. PCC 0.999611 → **0.999651** — it improved,
+because 5b removed two bf16 rounding steps per coordinate. `tests/pcc` went 32 passed / 1 failed to
+**33 passed**: 5b cleared the 200×200 DRAM OOM.
+
+The ratio this entry was created to track, recomputed at stage 10:
+
+| class | kernel | vs stage 05 |
+|---|---:|---:|
+| data movement | **90.8 ms** | 220.8 ms |
+| compute | **178.8 ms** | 220.7 ms (of which ~46 was padding) |
+| Scatter | 10.5 ms | 15.3 ms |
+| **ratio** | **0.51** | 1.00 as measured, 1.51 corrected |
+
+Compute barely moved — 178.8 against the ~175 ms this entry predicted was the real figure once
+padded `BinaryNg` was reclassified. **Every one of the 176 ms came off the data-movement side**, and
+`MSDAOperation` alone is now 167.9 ms of the 178.8 ms of compute, i.e. **59.9% of the layer**.
+
+### What this entry got wrong, and what it taught
+
+Recorded because three of the five estimates were wrong in ways that were systematic, not random:
+
+1. **"Op count" was the wrong frame.** This entry opened asking for fewer op launches. 5b *added*
+   five ops and took 82 ms off; 5d removed six and took 6.6 ms. What is paid for is **padded bytes
+   touched**, not launches.
+2. **"A ROW_MAJOR reshape is a free view" is false in ttnn** unless the last dimension is unchanged.
+   Stage 07 shipped a 7.09 ms "view" and stage 08 a 2.59 ms one. Stage 09's rule replaces it: **do
+   axis moves in TILE (a transpose swaps tiles, ~0.4 ms), and in ROW_MAJOR do only elementwise work
+   and constant-row-width row regrouping.** 5d is the exception that proves the rule's scope — a
+   ROW_MAJOR permute won there only because reaching the TILE-transposable shape needed a 4×-padded
+   re-layout of 92 MB.
+3. **The one entry flagged "may lose" was the one that needed measuring, and measuring worked.** 5d
+   was benchmarked as two whole chains on device before a line was written: 0.84× and bit-identical,
+   predicting −5.6 ms against −6.6 measured. The entry's own guess had been −10…−20.
 
 ### What this entry no longer needs
 
 The optional `noc.csv` pass. It was there to decide whether the data-movement groups are
 bandwidth-bound or launch-heavy, so that [11](#candidate-11--absorb-msda-layout-prep) could be
-scoped. It is not needed for 5a–5e: those groups are neither — they are **padding**, and the fix is
-to stop running ops on `32 × 32` tiles that hold 8 real values. Keep the noc pass for 5d, where the
-question is genuinely bandwidth, and for 11.
+scoped. It was not needed for 5a–5e: those groups were neither — they were **padding**. It is still
+the right tool for what remains, which is genuinely bandwidth: the 33.8 ms of `Permute` and the
+13.1 ms of `Untilize` on the `value` operand, all of it [11](#candidate-11--absorb-msda-layout-prep)'s.
+
+### Follow-ups this entry created
+
+- **[1b](#1b-bound-max_len-statically) is reopened on the memory argument.** It was rejected on cost
+  *and* on the DRAM ceiling; [stage 07](perf_reports/07-sampling-grid-in-row-major.md) removed the
+  allocation that was the ceiling (bisected: fails at 5a, passes at 5b). The +129 ms cost argument
+  stands on its own and has not been re-priced against a 280 ms layer.
+- **[Candidate 6](#candidate-6--permutereshape-by-reformulation) needs re-scoping.** 5b/5c/5e/5d
+  took its 139.8 ms down to 33.8 ms of `Permute` + 28.0 ms of `Reshape`, and its remaining sites are
+  the two permutes no weight reorder can reach. Its "reshape is a view in ROW_MAJOR" reasoning is
+  also wrong per point 2 above.
+- **The harness's per-layer `build_rebatch_plan`** (6.8 ms at stage 05) is still in every number
+  here; the encoder hoists it. Fix or subtract it before quoting these as encoder-path figures.
 
 ## Candidate 6 — permute/reshape by reformulation
 
@@ -1075,7 +1120,13 @@ Do not hold any other candidate behind this one.
 
 ## Candidate 8 — fuse `BinaryNg`
 
-**48.2 ms, 17 instances, 10.6% of the layer** after [stage 05](perf_reports/05-offset-normalizer-folded.md)
+**Largely moot — `BinaryNg` is 2.9 ms at stage 10, 1.0% of the layer.** Candidate 5 deleted the cost
+rather than fusing it: the 48.2 ms was arithmetic on tile padding, and
+[5b](#5b-do-the-sampling-location-math-in-row_major) folded the `* 2 - 1` this entry wanted folded.
+What is left is the residual add and the per-level accumulate, both under 1 ms. Do not start this
+entry expecting 48 ms.
+
+The original scoping, for the record: **48.2 ms, 17 instances, 10.6% of the layer** after [stage 05](perf_reports/05-offset-normalizer-folded.md)
 removed the two divides. What remains is add / mul / sub, not the tile-padded `div` candidate 3
 already killed.
 
@@ -1371,17 +1422,14 @@ is not correctness-preserving.
    static `rebatch_len` that costs neither +129 ms nor accuracy, and it is what makes 9 answerable.
    Its own gap payoff is ≤2.1 ms — rank it on the trace-capturability, not the milliseconds.
 9. **1f** — refactor only, and only as a by-product of 1e. Never worth doing on its own.
-10. **5** — **the classification is done and it produced six changes worth ~157 ms.** Take them in
-    order: [5a](#5a-delete-the-key-permute) (−19.3 ms, a deletion),
-    [5b](#5b-do-the-sampling-location-math-in-row_major) (−90 ms, includes candidate 8's `* 2 - 1`
-    fold), [5c](#5c-untilize-attn-once-not-per-level) (−35 ms),
-    [5e](#5e-permute-grid-once-slice-after) (−13 ms), then
-    [5d](#5d-split-value-into-heads-in-row_major) only behind a microbenchmark. This now outranks 6:
-    none of it needs a weight reorder, and it changes what 6 and 11 are left holding.
-11. **6** — drop permute/reshape by emitting tensors in the consumer's layout (weight reorder /
-    reformulation). 139.8 ms on the table, but **5b/5c/5e overlap it** — re-scope 6 after they land;
-    what survives is the `value` head permute and the output pack. Sequence before 11 so a new
-    kernel is not written for a shuffle a storage change would delete.
+10. ~~**5**~~ — **landed, all six sub-items: −176.3 ms (−38.6%), 456.5 → 280.2 ms.** PCC improved to
+    0.999651 and `tests/pcc` went to 33 passed. See
+    [the result table](#result--candidate-5-is-closed) and the three things it got wrong.
+11. **6** — **needs re-scoping before it is worth starting.** Its 139.8 ms is now 33.8 ms of
+    `Permute` + 28.0 ms of `Reshape`, and the permutes that remain are the two
+    [no weight reorder can reach](#what-a-weight-reorder-cannot-reach) — so most of what is left is
+    [11](#candidate-11--absorb-msda-layout-prep)'s, not 6's. Its ROW_MAJOR-view reasoning is also
+    wrong; see [stage 09's rule](perf_reports/09-head-major-sampling-grid.md).
 12. **8** — fuse the remaining 48.2 ms of `BinaryNg` into producers, starting with the inventory
     and the `* 2 - 1` fold. Independent of 6; can run in parallel once 5 has named the sites.
 13. **7** — L1 vs DRAM. Expected small; do not block anything on it. Reject-with-numbers or keep
