@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
+#include <iterator>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -379,6 +380,90 @@ void MappingConstraints<TargetNode, GlobalNode>::add_preferred_constraint(
             preferred_mappings_[target_node] = intersect_sets(preferred_mappings_[target_node], singleton);
         }
     }
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool MappingConstraints<TargetNode, GlobalNode>::merge(const MappingConstraints& other) {
+    const bool this_has_same_rank = !same_rank_target_groups_.empty() || !same_rank_global_groups_.empty();
+    const bool other_has_same_rank =
+        !other.same_rank_target_groups_.empty() || !other.same_rank_global_groups_.empty();
+    if (this_has_same_rank && other_has_same_rank &&
+        (same_rank_target_groups_ != other.same_rank_target_groups_ ||
+         same_rank_global_groups_ != other.same_rank_global_groups_)) {
+        const std::string message =
+            "MappingConstraints::merge: both sides define same-rank groups and the partitions differ; "
+            "the solver binds one partition, so there is no merged form";
+        if (quiet_mode_) {
+            log_debug(tt::LogFabric, "{}", message);
+        } else {
+            log_info(tt::LogFabric, "{}", message);
+        }
+        return false;
+    }
+
+    // Build into a copy so a merge that fails validation leaves this object untouched.
+    MappingConstraints merged = *this;
+
+    for (const auto& [target, globals] : other.valid_mappings_) {
+        auto it = merged.valid_mappings_.find(target);
+        if (it == merged.valid_mappings_.end()) {
+            merged.valid_mappings_.emplace(target, globals);
+        } else {
+            it->second = intersect_sets(it->second, globals);
+        }
+    }
+
+    for (const auto& [target, globals] : other.preferred_mappings_) {
+        auto& existing = merged.preferred_mappings_[target];
+        // Empty means "no preference recorded yet", the same reading add_preferred_constraint uses.
+        existing = existing.empty() ? globals : intersect_sets(existing, globals);
+    }
+
+    merged.forbidden_pairs_.insert(other.forbidden_pairs_.begin(), other.forbidden_pairs_.end());
+
+    merged.cardinality_constraints_.insert(
+        merged.cardinality_constraints_.end(),
+        other.cardinality_constraints_.begin(),
+        other.cardinality_constraints_.end());
+
+    // A reservation restricts which targets may use a global, so absent means unrestricted and present
+    // on both sides means the restrictions compound.
+    for (const auto& [global, targets] : other.reserved_global_nodes_) {
+        auto it = merged.reserved_global_nodes_.find(global);
+        if (it == merged.reserved_global_nodes_.end()) {
+            merged.reserved_global_nodes_.emplace(global, targets);
+        } else {
+            std::set<TargetNode> both;
+            std::set_intersection(
+                it->second.begin(),
+                it->second.end(),
+                targets.begin(),
+                targets.end(),
+                std::inserter(both, both.begin()));
+            it->second = std::move(both);
+        }
+    }
+
+    if (other_has_same_rank) {
+        merged.same_rank_target_groups_ = other.same_rank_target_groups_;
+        merged.same_rank_global_groups_ = other.same_rank_global_groups_;
+    }
+
+    merged.minimize_same_rank_groups_used_ =
+        minimize_same_rank_groups_used_ || other.minimize_same_rank_groups_used_;
+    // 0 means no cap, so the tighter of the two is the smaller of the non-zero values.
+    if (max_same_rank_groups_used_ == 0) {
+        merged.max_same_rank_groups_used_ = other.max_same_rank_groups_used_;
+    } else if (other.max_same_rank_groups_used_ != 0) {
+        merged.max_same_rank_groups_used_ = std::min(max_same_rank_groups_used_, other.max_same_rank_groups_used_);
+    }
+
+    if (!merged.validate()) {
+        return false;
+    }
+
+    *this = std::move(merged);
+    return true;
 }
 
 template <typename TargetNode, typename GlobalNode>

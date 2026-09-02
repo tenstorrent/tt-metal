@@ -339,6 +339,52 @@ public:
         const std::set<TargetNode>& target_nodes, const std::set<GlobalNode>& global_nodes, size_t min_count = 1);
 
     /**
+     * @brief Fold another constraint set into this one
+     *
+     * The result is what you would get by applying every constraint in @p other to this object, so each
+     * component combines the way its own add_* method does:
+     *   - required (valid mappings): intersected per target. A target constrained on only one side keeps
+     *     that side's set, since an absent target means "unconstrained", not "nothing allowed".
+     *   - preferred: intersected per target, matching add_preferred_constraint -- including its rule that
+     *     an entry which is currently empty counts as unset and takes the other side's set wholesale.
+     *   - forbidden pairs: unioned.
+     *   - cardinality constraints: appended. Each is an independent at-least-N requirement, so they
+     *     accumulate rather than combine into one.
+     *   - same-rank groups: adopted from @p other when this object has none. Two different non-empty
+     *     partitions are rejected, because the solver binds the mapping to a single partition and there
+     *     is no defensible way to pick one.
+     *   - minimize-groups-used: logical OR. max-groups-used: the tighter of the two, treating 0 as no cap.
+     *
+     * All or nothing: if the merged set does not validate, this object is left exactly as it was.
+     *
+     * @param other Constraints to fold in; not modified
+     * @return true on success; false if the merge would be unsatisfiable or the same-rank partitions conflict
+     */
+    bool merge(const MappingConstraints& other);
+
+    // TODO: merge is the first of a family of constraint manipulations worth having. The anchored
+    // PGD->PSD solves in physical_grouping_descriptor_matching.cpp already work around the absence of
+    // the rest of it, so each of these has a caller waiting:
+    //
+    //  - snapshot() / restore(): a backtracking search anchors a solve, recurses, then undoes the anchor.
+    //    Doing that today means copying the whole object per node. A trail of the deltas would make
+    //    push/pop cost what actually changed instead of the size of the entire constraint set.
+    //  - remove_forbidden_constraint(): the direct inverse of the add. Without it, "stop forbidding these
+    //    chips" means rebuilding from scratch, which is exactly why the loops above copy rather than undo.
+    //  - project(target_subset): keep only the constraints mentioning a subset of targets, so a per-mesh
+    //    solve can be carved out of a whole-problem object rather than rebuilt for each mesh.
+    //  - remap_targets(): renumber target ids. An anchor (occupied chips, adjacency to a placed region) is
+    //    the same for every candidate grouping, but each grouping numbers its own nodes, so today the
+    //    global half of the anchor is reusable and the target half is not.
+    //  - operator== / hash(): let a caller memoize a solve on its constraint set, so a search that returns
+    //    to an equivalent context reuses the verdict instead of re-encoding and re-solving it.
+    //  - subsumes(): "is this at least as tight as that?". That is what turns a single UNSAT result into a
+    //    reusable nogood instead of a fact about one exact context.
+    //  - cardinality literal accounting: callers find out they exceeded the encoder's literal budget only
+    //    once they are inside the encoder. Exposing the count up front would let them pick a cheaper
+    //    encoding rather than build one that gets rejected.
+
+    /**
      * @brief Get valid mappings for a specific target node
      *
      * @param target The target node

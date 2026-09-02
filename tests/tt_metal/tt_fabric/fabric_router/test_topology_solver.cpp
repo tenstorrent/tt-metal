@@ -6186,4 +6186,136 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// MappingConstraints::merge
+// ---------------------------------------------------------------------------
+
+TEST_F(TopologySolverTest, MergeIntersectsRequiredAndKeepsOneSidedTargets) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+    ASSERT_TRUE(base.add_required_constraint(1u, std::set<TestGlobalNode>{10, 11, 12}));
+    ASSERT_TRUE(base.add_required_constraint(2u, std::set<TestGlobalNode>{20, 21}));
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    ASSERT_TRUE(other.add_required_constraint(1u, std::set<TestGlobalNode>{11, 12, 13}));
+    ASSERT_TRUE(other.add_required_constraint(3u, std::set<TestGlobalNode>{30}));
+
+    ASSERT_TRUE(base.merge(other));
+
+    // Present on both sides: intersected.
+    EXPECT_EQ(base.get_valid_mappings(1u), (std::set<TestGlobalNode>{11, 12}));
+    // Present on one side only: that side's set survives, because an absent target is unconstrained
+    // rather than forbidden.
+    EXPECT_EQ(base.get_valid_mappings(2u), (std::set<TestGlobalNode>{20, 21}));
+    EXPECT_EQ(base.get_valid_mappings(3u), (std::set<TestGlobalNode>{30}));
+}
+
+TEST_F(TopologySolverTest, MergeIntersectsPreferred) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+    base.add_preferred_constraint(1u, std::set<TestGlobalNode>{10, 11, 12});
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    other.add_preferred_constraint(1u, std::set<TestGlobalNode>{11, 12, 13});
+    other.add_preferred_constraint(2u, std::set<TestGlobalNode>{20});
+
+    ASSERT_TRUE(base.merge(other));
+
+    EXPECT_EQ(base.get_preferred_mappings(1u), (std::set<TestGlobalNode>{11, 12}));
+    EXPECT_EQ(base.get_preferred_mappings(2u), (std::set<TestGlobalNode>{20}));
+}
+
+TEST_F(TopologySolverTest, MergeUnionsForbiddenPairs) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+    ASSERT_TRUE(base.add_forbidden_constraint(1u, TestGlobalNode{10}));
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    ASSERT_TRUE(other.add_forbidden_constraint(1u, TestGlobalNode{11}));
+    ASSERT_TRUE(other.add_forbidden_constraint(2u, TestGlobalNode{20}));
+
+    ASSERT_TRUE(base.merge(other));
+
+    const auto& forbidden = base.get_forbidden_pairs();
+    EXPECT_EQ(forbidden.size(), 3u);
+    EXPECT_TRUE(forbidden.count({1u, TestGlobalNode{10}}) == 1);
+    EXPECT_TRUE(forbidden.count({1u, TestGlobalNode{11}}) == 1);
+    EXPECT_TRUE(forbidden.count({2u, TestGlobalNode{20}}) == 1);
+}
+
+TEST_F(TopologySolverTest, MergeAppendsCardinalityConstraints) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+    ASSERT_TRUE(base.add_cardinality_constraint(std::set<TestTargetNode>{1u}, std::set<TestGlobalNode>{10, 11}, 1));
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    ASSERT_TRUE(other.add_cardinality_constraint(std::set<TestTargetNode>{2u}, std::set<TestGlobalNode>{20, 21}, 1));
+
+    ASSERT_TRUE(base.merge(other));
+
+    // Each cardinality constraint is an independent at-least-N requirement, so they accumulate.
+    EXPECT_EQ(base.get_cardinality_constraints().size(), 2u);
+}
+
+TEST_F(TopologySolverTest, MergeAdoptsSameRankGroupsWhenAbsent) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    const std::vector<std::set<TestTargetNode>> target_groups{{1u, 2u}};
+    const std::vector<std::set<TestGlobalNode>> global_groups{{10, 11}, {20, 21}};
+    ASSERT_TRUE(other.set_same_rank_groups_constraint(target_groups, global_groups));
+
+    ASSERT_TRUE(base.merge(other));
+
+    EXPECT_EQ(base.get_same_rank_target_groups(), target_groups);
+    EXPECT_EQ(base.get_same_rank_global_groups(), global_groups);
+}
+
+TEST_F(TopologySolverTest, MergeRejectsConflictingSameRankPartitions) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+    ASSERT_TRUE(base.set_same_rank_groups_constraint({{1u, 2u}}, {{10, 11}, {20, 21}}));
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    ASSERT_TRUE(other.set_same_rank_groups_constraint({{1u, 2u}}, {{30, 31}, {40, 41}}));
+
+    // The solver binds the mapping to one partition, so two different partitions have no merged form.
+    EXPECT_FALSE(base.merge(other));
+    // Rejected merges leave the object exactly as it was.
+    EXPECT_EQ(base.get_same_rank_global_groups(), (std::vector<std::set<TestGlobalNode>>{{10, 11}, {20, 21}}));
+}
+
+TEST_F(TopologySolverTest, MergeRejectsUnsatisfiableCombinationAndLeavesObjectUnchanged) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+    ASSERT_TRUE(base.add_required_constraint(1u, std::set<TestGlobalNode>{10, 11}));
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    ASSERT_TRUE(other.add_required_constraint(1u, std::set<TestGlobalNode>{20, 21}));
+
+    // Disjoint required sets leave target 1 with nowhere to go.
+    EXPECT_FALSE(base.merge(other));
+    EXPECT_EQ(base.get_valid_mappings(1u), (std::set<TestGlobalNode>{10, 11}));
+}
+
+TEST_F(TopologySolverTest, MergeCombinesSameRankGroupBudgets) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+    base.set_minimize_same_rank_groups_used(false);
+    base.set_max_same_rank_groups_used(4);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    other.set_minimize_same_rank_groups_used(true);
+    other.set_max_same_rank_groups_used(2);
+
+    ASSERT_TRUE(base.merge(other));
+
+    EXPECT_TRUE(base.minimize_same_rank_groups_used());
+    EXPECT_EQ(base.max_same_rank_groups_used(), 2u);
+}
+
+TEST_F(TopologySolverTest, MergeTreatsZeroGroupCapAsNoCap) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> base;
+    base.set_max_same_rank_groups_used(0);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> other;
+    other.set_max_same_rank_groups_used(3);
+
+    ASSERT_TRUE(base.merge(other));
+    EXPECT_EQ(base.max_same_rank_groups_used(), 3u);
+}
+
 }  // namespace tt::tt_fabric

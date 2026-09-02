@@ -906,6 +906,9 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 
     for (const auto& [mesh_name, groupings] : valid_groupings_map.at("MESH")) {
         // find_all_in_psd returns PSD placements (ASIC footprint + grouping with mesh_node_to_asic_position).
+        // TODO(plan 3 §8(a)): this per-shape loop is replaced by a single adjacency-guided DFS call over all
+        // shapes at once. Solving one shape at a time is what discards the cross-shape edges. Duplicated in the
+        // other builder overload.
         std::vector<std::string> find_all_errors;
         const auto placements = physical_grouping_descriptor.find_all_in_psd(
             groupings, physical_system_descriptor, flat_graph, &find_all_errors);
@@ -957,6 +960,12 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // galaxy is the same 4×8 tile), the grouping descriptor's placements
     // already cover the entire system. We can skip the solver entirely and
     // return the pre-built graph right away.
+    //
+    // TODO(plan 3 §8(a)): delete this fast path. "Single mesh shape" means one MGD mesh descriptor name, which
+    // can still resolve to several PGD variants, and what is returned here is Phase B's coverage-maximizing
+    // tiling. A single-shape MGD that needs a particular tile boundary therefore fails with no search left to
+    // recover, so the premise "one shape means nothing to search" does not hold. Route every MGD through the
+    // adjacency-guided DFS instead. Note this block is duplicated in the other builder overload.
     // -------------------------------------------------------------------------
     const auto& mesh_shape_entries = valid_groupings_map.at("MESH");
     if (mesh_shape_entries.size() == 1) {
@@ -1730,6 +1739,9 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 
     for (const auto& [mesh_name, groupings] : valid_groupings_map.at("MESH")) {
         // find_all_in_psd returns PSD placements (ASIC footprint + grouping with mesh_node_to_asic_position).
+        // TODO(plan 3 §8(a)): this per-shape loop is replaced by a single adjacency-guided DFS call over all
+        // shapes at once. Solving one shape at a time is what discards the cross-shape edges. Duplicated in the
+        // other builder overload.
         std::vector<std::string> find_all_errors;
         const auto placements = physical_grouping_descriptor.find_all_in_psd(
             groupings, physical_system_descriptor, flat_graph, &find_all_errors);
@@ -1781,6 +1793,12 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // galaxy is the same 4×8 tile), the grouping descriptor's placements
     // already cover the entire system. We can skip the solver entirely and
     // return the pre-built graph right away.
+    //
+    // TODO(plan 3 §8(a)): delete this fast path. "Single mesh shape" means one MGD mesh descriptor name, which
+    // can still resolve to several PGD variants, and what is returned here is Phase B's coverage-maximizing
+    // tiling. A single-shape MGD that needs a particular tile boundary therefore fails with no search left to
+    // recover, so the premise "one shape means nothing to search" does not hold. Route every MGD through the
+    // adjacency-guided DFS instead. Note this block is duplicated in the other builder overload.
     // -------------------------------------------------------------------------
     const auto& mesh_shape_entries = valid_groupings_map.at("MESH");
     if (mesh_shape_entries.size() == 1) {
