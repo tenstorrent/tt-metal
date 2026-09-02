@@ -572,7 +572,7 @@ builder fills ASICDescriptor          discovery fills ASICDescriptor
 - Empty / unset id is all zeros; `make_*` never returns it.
 - Golden vector: one fixed cluster_id/tray/loc → exact `cluster_id[]` bytes + tray + loc.
 - **Stability (the load-bearing one):** build one graph from FSD and one from a live-style descriptor with UMD-like `umd_unique_id`s; adjacency maps keyed by `PhysicalNodeId` are equal. `TopologyMapper` (or the solver on those maps) assigns the same `FabricNodeId` per position.
-- **Mock + FSD (the other load-bearing one):** descriptor with `cluster_id: bh-glx-110-c01u02` packs the same id as the FSD builder. Filename-only (no field) must **not** equal that id. After the UMD field is filled, SC36 rank 15 packs `bh-glx-110-d10u20`, not the `120` in the filename.
+- **Mock + FSD (the other load-bearing one):** a descriptor whose `cluster_id` equals the FSD hostname packs the same id as the FSD builder. Filename-only (no field) must **not** equal that id. Assert this on a fixture you control, not on a shipped asset: the captures carry whatever id their machine reported, which for several BH superclusters is not today's FSD name (`PLAN_umd_cluster_descriptor_hostname.md` §7).
 - Builder unit test: QuietBox / a tiny in-memory FSD, two ASICs, ids equal `make_physical_node_id` of their FSD hostnames, not `1` and `2`.
 - Discovery: graph key ≠ `umd_unique_id` on silicon when UMD ids are large; `get_asic_id(cluster_id, tray, loc)` returns the packed id.
 
@@ -584,7 +584,7 @@ Existing mapper tests that assert one specific mapping may need a re-baseline (i
 
 ### 8.1 Problem
 
-`PhysicalNodeId.cluster_id[]` is the **exact** OS / FSD hostname (`bh-glx-110-c01u02`). Hall stays. FSD builder already has that string. Silicon `gethostname()` is that string.
+`PhysicalNodeId.cluster_id[]` is the id of the accelerator group, packed verbatim -- no hall stripping, no other normalisation. On silicon that is `gethostname()` (`bh-glx-110-c01u02`); the FSD builder packs `hosts[].hostname`.
 
 Mock discovery does **not**. A UMD cluster descriptor YAML has no field naming its host. `get_local_discovery_hostname()` (`physical_system_discovery.cpp` ~60) returns the **filename basename** of `TT_METAL_MOCK_CLUSTER_DESC_PATH`:
 
@@ -616,7 +616,7 @@ The UMD field is `cluster_id` — *a unique string identifying a group of TT acc
 Full design: [`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md) (file keeps its old name; the field is `cluster_id`).
 
 ```yaml
-cluster_id: bh-glx-110-c01u02    # today: exact FSD / OS name — hall included
+cluster_id: bh-glx-110-c01u02    # the id the capture carries; often, not always, the FSD name
 arch:
   ...
 ```
@@ -630,7 +630,7 @@ get_local_discovery_hostname(desc):
     return get_host_name()
 ```
 
-`node_id_from_asic_descriptor` then packs that string. FSD builder and mock PSD produce the same `PhysicalNodeId`.
+`node_id_from_asic_descriptor` then packs that string. FSD builder and mock PSD produce the same `PhysicalNodeId` for any machine whose descriptor `cluster_id` and FSD hostname agree; the field replaces filename parsing but does not by itself force that agreement, and several shipped BH supercluster assets do not have it (see `PLAN_umd_cluster_descriptor_hostname.md` §7).
 
 **Backward compatible:** the field is optional. Old YAMLs still load (`nullopt`). Old UMD ignores an unknown `cluster_id:` key. Metal falls back to the basename when the field is absent — ClosetBox and existing tests stay green. Do not rename files. Do not edit FSD textprotos.
 

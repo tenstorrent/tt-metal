@@ -21,7 +21,7 @@ A cluster descriptor is one host's chips. It has **no field naming that host**. 
 | SC36 filename token | hall **wrong** | file `bh-glx-120-d10u20` vs FSD `bh-glx-110-d10u20` |
 | Container / VM `gethostname()` | runtime-generated, unrelated to the machine | `7f3a91c2b4de`, `pod-fabric-worker-3` |
 
-If mock and FSD pack different `cluster_id[]` bytes, `PhysicalNodeId` graphs disagree and the solver sees two topologies. Parsing a name out of the filename cannot work (SC20 omits hall, SC36 disagrees). Do **not** parse `bh-glx-c01u02` at runtime.
+If mock and FSD pack different `cluster_id[]` bytes, `PhysicalNodeId` graphs disagree and the solver sees two topologies. Parsing a name out of the filename cannot work (SC20 omits hall, SC36 disagrees). Do **not** parse `bh-glx-c01u02` at runtime. Reading the id off the descriptor is what replaces that parsing; whether a given asset's id also matches its FSD is a question about that asset, not about the mechanism (§7).
 
 The container / VM row is the second half of the problem. Even on live silicon, `gethostname()` is only the right answer when the process runs on bare metal. In a container it returns the container id; in a VM it returns whatever the guest was named. Both are stable strings that are *not* the identity of the accelerator group, so a hostname-only design breaks exactly where we are heading.
 
@@ -236,7 +236,7 @@ get_local_discovery_hostname(cluster_desc):
     return get_host_name()              // silicon, descriptor not yet stamped (should not happen after UMD)
 ```
 
-`PhysicalNodeId` packs `canonical_cluster_id_for_node_id` of that string. Mock + FSD then use `bh-glx-110-c01u02` on both sides with **no** aisle-token alias.
+`PhysicalNodeId` packs `canonical_cluster_id_for_node_id` of that string, with **no** aisle-token alias. Mock and FSD agree wherever the descriptor's `cluster_id` and the FSD hostname are the same string, which is a property of each asset rather than something the field enforces (§7).
 
 Metal may rename that function to `get_local_cluster_id()` in the metal PR — the string it returns is now an accelerator-group id, and every metal-side `hostname` identifier is on the §11 list. That rename is cosmetic and does not gate anything.
 
@@ -271,7 +271,7 @@ The variable is `TT_METAL_CLUSTER_ID` and not `TT_CLUSTER_ID` because it is meta
 
 Do not rename files. Do not edit FSD textprotos.
 
-**Value to write** — exact OS / FSD hostname of that machine, hall included (the current value scheme, §0):
+**Value to write** — the id the captured machine reports for itself. Where that machine has an FSD, its `hosts[].hostname` is the best source, hall included (the current value scheme, §0). Note that the assets as shipped do not all follow that rule: see the caveat under the fill script below.
 
 | Descriptor family | How to pick the value |
 |-------------------|----------------------|
@@ -287,7 +287,9 @@ Do not rename files. Do not edit FSD textprotos.
 2. In the sibling `*_factory_system_descriptor.textproto`, find the unique `Host` with `aisle` / `rack` / `shelf_u` equal to that token.
 3. Write that host's `hostname` field into the YAML as `cluster_id`.
 
-That join is how we **populate** the field. After the field exists, metal never runs the join. Filename hall mismatches (SC36 file `bh-glx-120-d10u20` vs FSD `bh-glx-110-d10u20`) do not matter: the YAML field is the FSD string.
+That join is how we **populate** the field. After the field exists, metal never runs the join.
+
+**The shipped assets do not all carry the FSD string.** In many descriptors `cluster_id` is the filename token instead -- `bh-glx-d03u02` where the FSD calls that machine `bh-glx-110-d03u02`, and `bh-glx-120-d05u20` where the FSD says `bh-glx-110-d09u20`. Do not treat that as a defect to repair: these captures are regression assets, they record the id the machine reported when it was captured, and they are not obliged to track whatever the FSD says today. It does mean the mock/FSD agreement this section once claimed is a property of individual assets rather than a guarantee of the field. What the field does guarantee is that a mock run keys on a string the capture carries about itself, the same kind of string UMD stamps on live silicon, rather than on an asset filename that exists only in the mock path.
 
 After a file has the field, metal never joins on the filename. The aisle-token alias is only for YAMLs that still lack the field.
 
