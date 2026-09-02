@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import struct
+import time
 
 import torch
 
@@ -55,22 +57,76 @@ def test_common_prefill_runtime_traced(mesh_device, tmp_path):
 
     runtime.prefill_chunk(socket_shaped_tokens(0), caches, slot_id=0, actual_start=0, actual_end=8192)
     runtime.prefill_chunk(socket_shaped_tokens(1), caches, slot_id=1, actual_start=0, actual_end=8192)
-    runtime.prefill_chunk(socket_shaped_tokens(2), caches, slot_id=0, actual_start=8192, actual_end=16384)
+    baseline_input = socket_shaped_tokens(2)
+    baseline_start = time.perf_counter()
+    runtime.prefill_chunk(baseline_input, caches, slot_id=0, actual_start=8192, actual_end=16384)
+    baseline_ms = (time.perf_counter() - baseline_start) * 1000
+    print(f"Gemma 4 traced baseline replay: {baseline_ms:.1f} ms")
 
     if serialize_migration_table:
         table_path = runtime.build_kv_chunk_table(caches, path=str(tmp_path / "gemma4_kv.pb"))
         assert os.path.getsize(table_path) > 0
     runtime.release_trace()
 
-    class AckCounter:
-        count = 0
-
-        def inject(self, delta):
-            self.count += delta
-
-    acknowledgements = AckCounter()
-    runtime.set_layer_ack_channel(acknowledgements)
+    d2h_service = ttnn.D2HStreamService(
+        mesh_device,
+        global_spec=None,
+        fifo_size_bytes=4 * 1024,
+        worker_cores=ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+        metadata_size_bytes=12,
+    )
+    runtime.set_d2h_ack_service(d2h_service)
     runtime.capture_trace(caches)
-    runtime.prefill_chunk(socket_shaped_tokens(3), caches, slot_id=1, actual_start=8192, actual_end=16384)
-    assert acknowledgements.count == 60
+    assert runtime._trace_controller.num_segments == 1
+
+    # Capture executes one warm pass. Drain its records before checking the real request.
+    for _ in range(runtime.warmup_ack_count()):
+        assert struct.unpack("<III", d2h_service.read_metadata()) == (0, 0, 8192)
+
+    metadata_msg = runtime._make_metadata_msg((1, 8192, 16384))
+    d2h_input = socket_shaped_tokens(3)
+    from ttnn._experimental.layer_completion import LayerCompletionRouter
+
+    ring_name = f"/tt_gemma4_d2h_test_ring_{os.getpid()}"
+    channel_name = f"/tt_gemma4_d2h_test_channel_{os.getpid()}"
+    router = LayerCompletionRouter(
+        rank=0,
+        world_size=1,
+        master_rank=0,
+        ring_shm_name=ring_name,
+        scheduler_channel_shm_name=channel_name,
+    )
+    ack_service = ttnn.LayerAckService(
+        d2h_service,
+        ring_name,
+        source_rank=0,
+        num_layers=60,
+        first_layer_idx=0,
+        local_layers=60,
+    )
+    ack_service.start()
+    replay_start = time.perf_counter()
+    runtime.prefill_chunk(
+        d2h_input,
+        caches,
+        slot_id=1,
+        actual_start=8192,
+        actual_end=16384,
+        d2h_service=d2h_service,
+        metadata_msg=metadata_msg,
+    )
+    replay_ms = (time.perf_counter() - replay_start) * 1000
+    deadline = time.monotonic() + 10
+    while router.processed < 60 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert router.processed == 60
+    print(f"Gemma 4 traced D2H replay: {replay_ms:.1f} ms")
+    persisted = ttnn.to_torch(ttnn.get_device_tensors(runtime.trace_metadata_msg)[0]).flatten().tolist()
+    assert persisted == [1, 8192, 16384]
+    ack_service.stop()
+    router.stop()
+    del ack_service
+    del router
+    metadata_msg.deallocate(True)
     runtime.release_trace()
+    del d2h_service

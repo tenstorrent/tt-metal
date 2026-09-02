@@ -964,6 +964,8 @@ class Gemma4Model:
         valid_seq_lens=None,
         keep_sharded_for_sampling=False,
         on_layer_complete=None,
+        d2h_service=None,
+        metadata_msg=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -1262,7 +1264,13 @@ class Gemma4Model:
                 ),
             )
 
-            if not is_decode and on_layer_complete is not None:
+            if not is_decode and d2h_service is not None:
+                if metadata_msg is None:
+                    raise ValueError("metadata_msg is required for D2H layer acknowledgements")
+                # This device op follows the layer KV writes on the same CQ. Its record reaches
+                # the host only after those writes complete, and remains capture-safe in one trace.
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
+            elif not is_decode and on_layer_complete is not None:
                 if self._prefill_trace_controller is not None:
                     self._prefill_trace_controller.layer_ack(i)
                 else:
@@ -2063,6 +2071,8 @@ class Gemma4Model:
         page_tables_per_layer=None,
         valid_seq_lens=None,
         on_layer_complete=None,
+        d2h_service=None,
+        metadata_msg=None,
         **kwargs,
     ):
         """Prefill forward — Generator-compatible signature.
@@ -2113,6 +2123,8 @@ class Gemma4Model:
             chunk_page_table=chunk_page_table,
             valid_seq_lens=valid_seq_lens,
             on_layer_complete=on_layer_complete,
+            d2h_service=d2h_service,
+            metadata_msg=metadata_msg,
         )
 
     def process_output_prefill(self, tt_out, last_token_idx):

@@ -61,6 +61,8 @@ class TtPrefillRuntime:
         self._on_layer_complete = None
         self._layer_completion_sink = None
         self._trace_request_id = 0
+        self._trace_d2h_service = None
+        self._trace_metadata_msg = None
         if not (
             config.is_first_rank and config.is_last_rank and config.first_layer_idx == 0 and config.mesh_shape == (8, 4)
         ):
@@ -110,6 +112,7 @@ class TtPrefillRuntime:
         )
         self.model.set_prefill_rope_positions(self.device_positions)
         self._trace_input = self.make_chunk_input([0] * self.config.chunk_size)
+        self._trace_metadata_msg = self._make_metadata_msg((0, 0, self.config.chunk_size))
 
     def make_chunk_input(self, token_ids: list[int]):
         """Create the same CP-major local shape produced by H2DStreamService."""
@@ -143,6 +146,21 @@ class TtPrefillRuntime:
             )
         return input_tensor
 
+    def _make_metadata_msg(self, values):
+        """Allocate the fixed-address metadata record read by traced D2H acknowledgements."""
+        return ttnn.from_torch(
+            torch.tensor(values, dtype=torch.int64).reshape(1, 1, 1, 3),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    @property
+    def trace_metadata_msg(self):
+        return self._trace_metadata_msg
+
     def _stage_metadata(self, slot_id: int, actual_start: int):
         positions = torch.arange(actual_start, actual_start + self.config.chunk_size, dtype=torch.int32).reshape(1, -1)
         ttnn.copy_host_to_device_tensor(
@@ -160,7 +178,7 @@ class TtPrefillRuntime:
         for semaphore in self.model.ccl_manager.ring_attention_ccl_semaphore_handles:
             ttnn.reset_global_semaphore_value(semaphore, 0)
 
-    def _forward(self, input_tensor, chunk_start: int):
+    def _forward(self, input_tensor, chunk_start: int, *, d2h_service=None, metadata_msg=None):
         with _lm_head_deferred(self.model):
             embeds, _, _, _ = self.model.transform_and_embed_prefill_inputs_device(input_tensor, None, None, None)
             return self.model.ttnn_prefill_forward(
@@ -170,6 +188,8 @@ class TtPrefillRuntime:
                 get_last_token=-1,
                 user_id=0,
                 on_layer_complete=self._on_layer_complete,
+                d2h_service=d2h_service,
+                metadata_msg=metadata_msg,
             )
 
     def compile(self, kv_caches):
@@ -194,8 +214,25 @@ class TtPrefillRuntime:
             controller.set_layer_ack_callback(self._on_layer_complete)
         self.model.set_prefill_trace_controller(controller)
         self._stage_metadata(0, 0)
+        if self._trace_d2h_service is not None:
+            # The D2H op is wired after the ordinary compile pass. Warm its programs before
+            # capture; trace capture cannot absorb a program-cache miss. This emits one real
+            # record per layer, which the runner drains via warmup_ack_count().
+            warm_output = self._forward(
+                self._trace_input,
+                0,
+                d2h_service=self._trace_d2h_service,
+                metadata_msg=self._trace_metadata_msg,
+            )
+            ttnn.synchronize_device(self.mesh_device)
+            warm_output.deallocate(True)
         controller.begin_capture()
-        self._trace_output = self._forward(self._trace_input, 0)
+        self._trace_output = self._forward(
+            self._trace_input,
+            0,
+            d2h_service=self._trace_d2h_service,
+            metadata_msg=self._trace_metadata_msg if self._trace_d2h_service is not None else None,
+        )
         controller.end_capture()
         ttnn.synchronize_device(self.mesh_device)
         self._trace_controller = controller
@@ -217,9 +254,6 @@ class TtPrefillRuntime:
         metadata_msg=None,
         **_kwargs,
     ):
-        del metadata_msg
-        if d2h_service is not None:
-            raise NotImplementedError("Gemma 4 D2H layer acks are not wired; use the host ack channel")
         kv = self._resolve_kv(kv_caches)
         if not 0 <= slot_id < kv.num_users:
             raise ValueError(f"slot_id {slot_id} outside [0, {kv.num_users})")
@@ -235,11 +269,19 @@ class TtPrefillRuntime:
             if not self._trace_captured:
                 raise RuntimeError("capture_trace must run before the first traced request")
             self._trace_request_id = request_id
+            if d2h_service is not None and d2h_service is not self._trace_d2h_service:
+                raise ValueError("traced D2H service must be registered with set_d2h_ack_service before capture")
+            if self._trace_d2h_service is not None:
+                if metadata_msg is None:
+                    raise ValueError("metadata_msg is required for traced D2H layer acknowledgements")
+                ttnn.copy(metadata_msg, self._trace_metadata_msg)
             ttnn.copy(source, self._trace_input)
             self._trace_controller.replay()
             ttnn.deallocate(input_tensor)
             return None
-        output = self._forward(source, actual_start)
+        if d2h_service is not None and metadata_msg is None:
+            raise ValueError("metadata_msg is required for D2H layer acknowledgements")
+        output = self._forward(source, actual_start, d2h_service=d2h_service, metadata_msg=metadata_msg)
         ttnn.deallocate(input_tensor)
         if output is not None:
             output.deallocate(True)
@@ -248,13 +290,34 @@ class TtPrefillRuntime:
     def set_layer_ack_channel(self, channel):
         if not self.compiled:
             raise RuntimeError("compile must finish before layer-ack wiring")
+        if self._trace_d2h_service is not None:
+            raise RuntimeError("D2H and host layer acknowledgements are mutually exclusive")
         self._on_layer_complete = lambda _layer_idx: channel.inject(1)
 
     def set_layer_completion_sink(self, sink):
         if not self.compiled:
             raise RuntimeError("compile must finish before completion wiring")
+        if self._trace_d2h_service is not None:
+            raise RuntimeError("D2H and host layer acknowledgements are mutually exclusive")
         self._layer_completion_sink = sink
         self._on_layer_complete = lambda layer_idx: sink(layer_idx, self._trace_request_id)
+
+    def set_d2h_ack_service(self, d2h_service):
+        """Bind a traceable device-side layer-ack service before trace capture."""
+        if not self.config.use_trace:
+            raise RuntimeError("eager prefill passes d2h_service per call")
+        if not self.compiled:
+            raise RuntimeError("compile must finish before D2H acknowledgement wiring")
+        if self._trace_captured:
+            raise RuntimeError("D2H service must be registered before trace capture")
+        if self._on_layer_complete is not None:
+            raise RuntimeError("D2H and host layer acknowledgements are mutually exclusive")
+        self._trace_d2h_service = d2h_service
+
+    def warmup_ack_count(self):
+        if not self.config.use_trace or self._trace_d2h_service is None:
+            return 0
+        return self.config.num_layers
 
     def kv_migration_base_address(self, kv_caches):
         first = self._resolve_kv(kv_caches)[0]
