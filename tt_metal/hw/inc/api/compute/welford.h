@@ -219,9 +219,10 @@ ALWI void two_pass_stats_finalize_to_face(
 /**
  * @brief Finalises one group's local statistics and combines its lane populations into the raw face layout.
  * @tparam dual_m2 If true, combines the two M2 accumulators before finalisation.
- * @param mean_dst_idx Index of the mean tile; variance is stored in the following tile.
+ * @param mean_dst_idx Index of three consecutive DST tiles: mean, variance, and internal scratch.
  * @param group_id Group slot within the raw face layout.
  * @param reciprocal_bits Bit representation of the FP32 reciprocal local population count.
+ * @note The tile at `mean_dst_idx + 2` is temporary storage and is clobbered.
  */
 template <bool dual_m2 = true>
 ALWI void two_pass_stats_finalize_and_combine_to_face(
