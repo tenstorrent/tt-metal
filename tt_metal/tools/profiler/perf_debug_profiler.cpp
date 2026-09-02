@@ -170,6 +170,23 @@ const std::vector<uint32_t>& role_filler_banks() {
     return v;
 }
 
+// TT_METAL_PERF_DEBUG_NFILLERS: force the filler count, 1..kMaxFillers. Returns 0 when unset, and boot_device
+// then takes min(kMaxFillers, DRAM views); a forced value above the view count is clamped there, not here.
+uint32_t n_fillers_env(uint32_t max_fillers) {
+    const char* s = std::getenv("TT_METAL_PERF_DEBUG_NFILLERS");
+    if (s == nullptr || *s == '\0') {
+        return 0u;
+    }
+    char* end = nullptr;
+    const unsigned long n = std::strtoul(s, &end, 10);
+    TT_FATAL(
+        end != s && *end == '\0' && n >= 1 && n <= max_fillers,
+        "TT_METAL_PERF_DEBUG_NFILLERS='{}' is not an integer in [1, {}]",
+        s,
+        max_fillers);
+    return static_cast<uint32_t>(n);
+}
+
 // TT_METAL_PERF_DEBUG_NSTAGE: cap on staging slots. A DRISC's L1 fits 7; a Tensix's fits ~130, which would
 // make the two drainers incomparable, so the Tensix path clamps to the DRISC count by default.
 uint32_t nstage_cap(uint32_t computed) {
@@ -687,7 +704,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
                         role});
                 }
             }
-            for (uint32_t sk = 0; sk < kNSockets; sk++) {
+            for (uint32_t sk = 0; sk < ctx.n_drisc; sk++) {
                 if (ctx.sockets[sk] != nullptr) {
                     TT_FATAL(sk == rd.sockets.size(), "sockets must form a contiguous prefix");
                     rd.sockets.push_back(std::move(ctx.sockets[sk]));
@@ -1029,18 +1046,84 @@ bool PerfDebugProfiler::boot_device(
     // LaunchProgram, every LaunchProgram carries a dram_barrier over every DRAM channel, and the second
     // one therefore barriered across drainer 0's already-stream-mode core. Picking the cores up front
     // costs a cheap repeat of the bank selection and removes the ordering entirely.
+    //
+    // HOW MANY FILLERS: one per DRAM view up to kMaxFillers, so a harvested part (UMD harvests at most one of
+    // Blackhole's 8 channels -> 7 views) runs 7 fillers over the same grid instead of refusing to run.
+    // TT_METAL_PERF_DEBUG_NFILLERS forces fewer (or more, up to the view count). Sockets follow fillers 1:1.
     const uint32_t nbanks = static_cast<uint32_t>(soc.get_num_dram_views());
-    if (nbanks < kNFillers) {
+    if (nbanks == 0) {
         log_warning(
             tt::LogMetal,
-            "[perf-debug profiler] needs {} DRAM views (one filler each) but this part has {} -- the "
-            "streaming profiler is OFF for this device.",
-            kNFillers,
-            nbanks);
+            "[perf-debug profiler] Device {}: no DRAM views to host a filler -- the streaming profiler is OFF "
+            "for this device.",
+            device_id);
+        disarm_producers(mesh_device, device_id);
         return false;
     }
-    const auto& banks = role_filler_banks();
-    TT_FATAL(banks.size() >= kNFillers, "perf-debug needs {} filler banks (got {})", kNFillers, banks.size());
+    {
+        const uint32_t view_cap = std::min<uint32_t>(kMaxFillers, nbanks);
+        const uint32_t requested = n_fillers_env(kMaxFillers);
+        if (requested == 0) {
+            ctx.n_drisc = view_cap;
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] Device {}: {} fillers = min({} max, {} DRAM views); override with "
+                "TT_METAL_PERF_DEBUG_NFILLERS",
+                device_id,
+                ctx.n_drisc,
+                kMaxFillers,
+                nbanks);
+        } else if (requested > view_cap) {
+            ctx.n_drisc = view_cap;
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] Device {}: TT_METAL_PERF_DEBUG_NFILLERS={} exceeds this part's {} DRAM "
+                "views (one filler each); CLAMPED to {} fillers",
+                device_id,
+                requested,
+                nbanks,
+                ctx.n_drisc);
+        } else {
+            ctx.n_drisc = requested;
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] Device {}: {} fillers, forced by TT_METAL_PERF_DEBUG_NFILLERS (part has {} "
+                "DRAM views, max {})",
+                device_id,
+                ctx.n_drisc,
+                nbanks,
+                kMaxFillers);
+        }
+    }
+    // Bank roster: the first n_drisc usable entries. The default roster lists all 8 views with the fragile
+    // ones last, so views this part does not have (id >= nbanks -- view 7 on a 7-view part) are dropped
+    // from it before the prefix is taken. An explicit TT_METAL_PERF_DEBUG_FILLER_BANKS must name only real
+    // views and at least n_drisc of them; extra trailing entries are ignored.
+    std::vector<uint32_t> banks;
+    {
+        const bool banks_forced = [] {
+            const char* s = std::getenv("TT_METAL_PERF_DEBUG_FILLER_BANKS");
+            return s != nullptr && *s != '\0';
+        }();
+        for (const uint32_t b : role_filler_banks()) {
+            TT_FATAL(
+                !banks_forced || b < nbanks,
+                "TT_METAL_PERF_DEBUG_FILLER_BANKS names DRAM view {} but this part has views 0..{}",
+                b,
+                nbanks - 1);
+            if (b < nbanks) {
+                banks.push_back(b);
+            }
+        }
+        TT_FATAL(
+            banks.size() >= ctx.n_drisc,
+            "perf-debug needs {} filler banks but only {} usable DRAM views are listed{} (part has {} views)",
+            ctx.n_drisc,
+            banks.size(),
+            banks_forced ? " in TT_METAL_PERF_DEBUG_FILLER_BANKS" : " in the default roster",
+            nbanks);
+        banks.resize(ctx.n_drisc);
+    }
 
     // ---- DRISC SELF-PROFILING: give each drainer a LANE BLOCK of its own ----------------------------------
     //
@@ -1121,11 +1204,12 @@ bool PerfDebugProfiler::boot_device(
     // (every core assigned once, no rounding gap) whatever the weights are.
     const std::vector<uint32_t>& weights_env = filler_weights();
     TT_FATAL(
-        weights_env.empty() || weights_env.size() >= kNFillers,
-        "TT_METAL_PERF_DEBUG_FILLER_WEIGHTS needs {} entries",
-        kNFillers);
-    std::vector<uint64_t> wcum(kNFillers + 1, 0);
-    for (uint32_t i = 0; i < kNFillers; i++) {
+        weights_env.empty() || weights_env.size() >= ctx.n_drisc,
+        "TT_METAL_PERF_DEBUG_FILLER_WEIGHTS needs {} entries (one per filler), got {}",
+        ctx.n_drisc,
+        weights_env.size());
+    std::vector<uint64_t> wcum(ctx.n_drisc + 1, 0);
+    for (uint32_t i = 0; i < ctx.n_drisc; i++) {
         const uint32_t w = weights_env.empty() ? 1u : weights_env[i];
         TT_FATAL(w != 0, "filler weight {} must be non-zero", i);
         wcum[i + 1] = wcum[i] + w;
@@ -1175,9 +1259,9 @@ bool PerfDebugProfiler::boot_device(
     }
     for (uint32_t d = 0; d < ctx.n_drisc; d++) {
         const uint32_t sl = slice_map.empty() ? d : slice_map[d];
-        TT_FATAL(sl < kNFillers, "slice {} out of range for {} fillers", sl, kNFillers);
-        uint32_t lo = static_cast<uint32_t>((num_cores * wcum[sl]) / wcum[kNFillers]);
-        uint32_t hi = static_cast<uint32_t>((num_cores * wcum[sl + 1]) / wcum[kNFillers]);
+        TT_FATAL(sl < ctx.n_drisc, "slice {} out of range for {} fillers", sl, ctx.n_drisc);
+        uint32_t lo = static_cast<uint32_t>((num_cores * wcum[sl]) / wcum[ctx.n_drisc]);
+        uint32_t hi = static_cast<uint32_t>((num_cores * wcum[sl + 1]) / wcum[ctx.n_drisc]);
         if (n_left != 0 && xs_n[xs_grp[d]] != 0) {
             const uint32_t g = xs_grp[d];
             const uint32_t base = g == 0u ? 0u : n_left;
