@@ -157,11 +157,7 @@ void tilize_in(
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
 inline void tilize_single_block(DataflowBuffer& in_cb) {
     in_cb.wait_front(in_block_w);
-#ifndef ARCH_QUASAR  // Quasar has no fast tilize; these helpers are only reached on the split_reader/
-                     // activation_reuse path, which the resnet conv factories force OFF. Guard the
-                     // raw fast_tilize_* names out so the template body parses on Quasar (dead there).
     fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
-#endif
     in_cb.pop_front(in_block_w);
 }
 
@@ -202,9 +198,7 @@ inline void tilize_in_reuse_split_reader(
     uint32_t act_cb_start_address,
     uint32_t act_cb_second_reader_start_address) {
     out_cb.reserve_back(out_cb_tiles);
-#ifndef ARCH_QUASAR  // Quasar has no fast tilize (split_reader/activation_reuse path, off for resnet)
     fast_tilize_init_with_dt(in1_cb_id, in_block_w, out_cb_id);
-#endif
 
     uint32_t in1_cb_addr = act_cb_start_address;
     uint32_t in2_cb_addr = act_cb_second_reader_start_address;
@@ -260,9 +254,7 @@ inline void tilize_in_reuse_split_reader(
     PACK((out_cb.evil_set_write_ptr(out_cb_addr_init)));
 #endif
     out_cb.push_back(out_cb_tiles);
-#ifndef ARCH_QUASAR  // Quasar has no fast tilize (split_reader/activation_reuse path, off for resnet)
     fast_tilize_uninit(in2_cb_id, out_cb_id, in_block_w);
-#endif
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
@@ -603,7 +595,6 @@ void kernel_main() {
                         uint32_t in1_index = in1_index_subblock_offset;
                         // prints for (i0,i1) but MMMVOK does NOT, the MATH 0x19 is in that subblock's matmul_block.
                         // Gated to the first height block (bsp1 faulted there, ~3 MMPACKs in).
-                        DPRINT("matmul i0={} i1={}\n", in0_subblock_i, in1_subblock_i);
                         for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
                             matmul_block(
                                 mm_in0_cb_id,

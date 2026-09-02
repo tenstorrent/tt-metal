@@ -126,7 +126,21 @@ inline void _llk_unpack_tilize_(const std::uint32_t l1_tile_idx)
     // Set Source counter to L1 base + offset
     // UNP_DEST shares UNP_A's hardware path, so use UNP_A for counter instructions
     constexpr std::uint32_t CNT_SEL = (UNP_SEL == p_unpacr::UNP_DEST) ? p_unpacr::UNP_A : UNP_SEL;
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, CNT_SEL, l1_tile_idx);
+
+    constexpr std::uint32_t STALL_UNP_RES = (CNT_SEL == p_unpacr::UNP_A) ? p_stall::UNPACK0 : p_stall::UNPACK1;
+    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, STALL_UNP_RES);
+
+    const std::uint32_t src_addr_offset_datums =
+        l1_tile_idx * (TILE_C_DIM / FACE_C_DIM); // should be tensor_shape.num_faces_c_dim, but it is not available here yet
+    if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
+    {
+        cfg_rmw(THCON_UNPACKER0_REG0_TILIZE_SRC_ADDR_OFFSET_RMW, src_addr_offset_datums);
+    }
+    else
+    {
+        cfg_rmw(THCON_UNPACKER1_REG0_TILIZE_SRC_ADDR_OFFSET_RMW, src_addr_offset_datums);
+    }
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, CNT_SEL, 0);
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, CNT_SEL, 0);
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, CNT_SEL, 0); // Clear face counter (block path leaves it non-zero)
 
