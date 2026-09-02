@@ -49,9 +49,9 @@ the tighter per-module gates (SCA at 0.999) bind before the encoder's 0.997 does
 | [3](#candidate-3--tile-padding-waste) | fold the offset normalizer into the Linear | kernel | **−32.7 ms kernel** | S | low | **landed — [05](perf_reports/05-offset-normalizer-folded.md)** |
 | [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | — | — | — | **moot — deleted by [04](perf_reports/04-fused-msda.md)** |
 | [5](#candidate-5--data-movement-vs-compute) | shape/order changes on the layout churn — **5a–5f** | kernel | **−176.3 ms (−38.6%)**, 456.5 → 280.2 ms | S–M | low | **landed — all six, reports [06](perf_reports/06-sca-key-permute-deleted.md)–[10](perf_reports/10-value-head-split-unpadded.md)** |
-| [6](#candidate-6--permutereshape-by-reformulation) | drop permute/reshape by reformulation or weight reorder | kernel | **139.8 ms** reshape+permute | M | med | todo |
+| [6](#candidate-6--permutereshape-by-reformulation) | **[6a](#6a-hoist-the-sca-camera-permute-out-of-the-layer-loop)** only: hoist the SCA camera permute out of the layer loop | kernel | **19.3 ms/layer**, ~96 ms/frame — runs 6× on identical data | S | low | **re-scoped after 5 — the weight reorder is [dead](#why-the-weight-reorder-is-dead); the rest is [11](#candidate-11--absorb-msda-layout-prep)'s** |
 | [7](#candidate-7--l1-vs-dram) | place operands in L1 instead of DRAM | kernel | unknown; expected small | S | low | todo — likely small |
-| [8](#candidate-8--fuse-binaryng) | fuse `BinaryNg` into its producers | kernel | **48.2 ms** (10.6%) | M | med | todo |
+| [8](#candidate-8--fuse-binaryng) | fuse `BinaryNg` into its producers | kernel | **2.9 ms (1.0%)** at stage 10, was 48.2 | — | — | **closed — [5b](#5b-do-the-sampling-location-math-in-row_major) deleted the cost instead of fusing it** |
 | [9](#candidate-9--trace-capture) | trace capture the encoder | gap | ≤9 ms/layer | M | low | parked behind 1b/1e |
 | [10](#candidate-10--msdaoperation-itself) | `MSDAOperation` device time | kernel | **167.8 ms** (36.7% of layer) | ? | ? | todo — upstream |
 | [11](#candidate-11--absorb-msda-layout-prep) | absorb MSDA permute/reshape into the op | kernel | **~103 ms** per-level layout prep | L | med | todo — after 6 |
@@ -708,7 +708,7 @@ each names the row it is priced from, so a miss is diagnosable.
 | [5c](#5c-untilize-attn-once-not-per-level) | untilize `attn` once, slice in ROW_MAJOR | [msda:322-332](../tt/tt_ms_deformable_attention.py#L322-L332), [58-61](../tt/tt_ms_deformable_attention.py#L58-L61) | **landed: −44.9 ms (−12.6%) — [08](perf_reports/08-attn-prepared-once-per-call.md)** | S | low |
 | [5e](#5e-permute-grid-once-slice-after) | build the grid head-major in TILE | [msda:54-56](../tt/tt_ms_deformable_attention.py#L54-L56) | **landed: −24.5 ms (−7.9%) — [09](perf_reports/09-head-major-sampling-grid.md)** | S | low |
 | [5d](#5d-split-value-into-heads-in-row_major) | head-split `value` in ROW_MAJOR | [msda:296-305](../tt/tt_ms_deformable_attention.py#L296-L305), [50-52](../tt/tt_ms_deformable_attention.py#L50-L52) | **landed: −6.6 ms (−2.3%) — [10](perf_reports/10-value-head-split-unpadded.md)** | M | med |
-| [5f](#5f-the-per-level-guards-are-free-dont-book-them) | per-level `to_layout` / `typecast` guards | [msda:61-68](../tt/tt_ms_deformable_attention.py#L61-L68) | **0 ms** — measured | XS | none |
+| [5f](#5f-the-per-level-guards-are-free--dont-book-them) | per-level `to_layout` / `typecast` guards | [msda:61-68](../tt/tt_ms_deformable_attention.py#L61-L68) | **0 ms** — measured | XS | none |
 
 Total, excluding 5d's uncertain half and 5f: **~157 ms, −34% of the layer.** That is larger than
 [candidate 6](#candidate-6--permutereshape-by-reformulation)'s whole 139.8 ms scope, needs no weight
@@ -851,7 +851,8 @@ create the padded `(L, P)` tail) and the per-level `to_layout` at
 for a comparable ROW_MAJOR permute), four small slices. Op count: −14 per SCA call.
 
 This is the same "hoist the per-level `to_layout`" observation
-[candidate 6](#free-hoists-in-the-same-function-worth-taking-either-way) makes in one line. It is
+[candidate 6](#candidate-6--permutereshape-by-reformulation) made in one line before it was
+re-scoped. It is
 worth 35 ms, not a footnote, and it does not need 6's weight reorder.
 
 #### 5d. Split `value` into heads in ROW_MAJOR
@@ -883,7 +884,7 @@ way. The win comes only from moving the head split out of TILE.
 
 **Expected: −10…−20 ms (−2…−4%), or a regression.** Microbenchmark the ROW_MAJOR permute at
 `(6, 30144, 8, 32)` before writing any of it. Also note this is exactly the operand
-[candidate 6](#what-a-weight-reorder-cannot-reach) proves no weight reorder can reach and
+[candidate 6](#why-the-weight-reorder-is-dead) proves no weight reorder can reach and
 [candidate 11](#candidate-11--absorb-msda-layout-prep) route 1 would delete properly — so if 5d
 measures badly, the answer is 11, not a cleverer reshape.
 
@@ -921,7 +922,7 @@ the grid in ROW_MAJOR and changes what this permute costs. Doing 5e first means 
 **Verified, no code change** — re-checked against the stage-10 CSV (`2026_09_02_11_49_26`):
 **zero `Typecast` rows in the layer and zero in the whole capture.**
 
-[Candidate 6](#free-hoists-in-the-same-function-worth-taking-either-way) lists the three per-level
+[Candidate 6](#candidate-6--permutereshape-by-reformulation) listed the three per-level
 `typecast` guards at [msda:63-68](../tt/tt_ms_deformable_attention.py#L63-L68) alongside the
 `to_layout` hoist. Everything is already bfloat16, so the guards never fire and cost exactly zero.
 They stay: they are the only thing standing between a future dtype change
@@ -990,98 +991,119 @@ the right tool for what remains, which is genuinely bandwidth: the 33.8 ms of `P
   *and* on the DRAM ceiling; [stage 07](perf_reports/07-sampling-grid-in-row-major.md) removed the
   allocation that was the ceiling (bisected: fails at 5a, passes at 5b). The +129 ms cost argument
   stands on its own and has not been re-priced against a 280 ms layer.
-- **[Candidate 6](#candidate-6--permutereshape-by-reformulation) needs re-scoping.** 5b/5c/5e/5d
-  took its 139.8 ms down to 33.8 ms of `Permute` + 28.0 ms of `Reshape`, and its remaining sites are
-  the two permutes no weight reorder can reach. Its "reshape is a view in ROW_MAJOR" reasoning is
-  also wrong per point 2 above.
+- **[Candidate 6](#candidate-6--permutereshape-by-reformulation) has been re-scoped, and
+  [8](#candidate-8--fuse-binaryng) closed.** 5b/5c/5e/5d took 6's 139.8 ms down to 61.8 ms and killed
+  its premise: a channel reorder cannot move a channel past a row axis, which is what every
+  surviving shuffle does. What is left is one item — **[6a](#6a-hoist-the-sca-camera-permute-out-of-the-layer-loop)**,
+  a 19.3 ms/layer permute on a layer-invariant tensor — and ~40 ms that is
+  [11](#candidate-11--absorb-msda-layout-prep)'s. 8 is 2.9 ms and closed; its 48.2 ms was the padding
+  5b deleted, not arithmetic to fuse.
 - **The harness's per-layer `build_rebatch_plan`** (6.8 ms at stage 05) is still in every number
   here; the encoder hoists it. Fix or subtract it before quoting these as encoder-path figures.
 
 ## Candidate 6 — permute/reshape by reformulation
 
-**139.8 ms** is ReshapeView (77.1) + Permute (62.7) at stage 05 — 30.6% of the layer, and the
-largest model-side item once [candidate 10](#candidate-10--msdaoperation-itself) is set aside as
-upstream. Some of those reshapes are views. In ROW_MAJOR a trailing split of `H*W` into `(H, W)`
-is free ([`_fused_msda_level`](../tt/tt_ms_deformable_attention.py#L48-L52) already relies on
-that). The rest are real: they change which axis is tiled, or they move `num_heads` between
-positions 1 and 2.
+**Re-scoped after [candidate 5](#candidate-5--data-movement-vs-compute) landed, and it comes down to
+one item.** The entry's premise — that a static reorder of the Linears' output channels could delete
+the shuffles — is **dead**, checked against the stage-10 profile (`2026_09_02_11_49_26`) rather than
+argued. What is left is a hoist and a pile of work that belongs to
+[11](#candidate-11--absorb-msda-layout-prep).
 
-The question is whether the tensors can be **born** in the layout the consumer wants, so the
-shuffle never runs. Same arithmetic, different storage order.
+Permute + ReshapeView was 139.8 ms at stage 05 and is **61.8 ms at stage 10** (33.8 + 28.0), 22.0%
+of a 280.2 ms layer. Candidate 5 took the rest: [5b](#5b-do-the-sampling-location-math-in-row_major),
+[5c](#5c-untilize-attn-once-not-per-level) and [5e](#5e-permute-grid-once-slice-after) deleted the
+per-level permutes and the padded reshapes, and [5d](#5d-split-value-into-heads-in-row_major) took
+the `value` head split as far as reordering can.
 
-### Sites
+### Why the weight reorder is dead
 
-The expensive shuffles sit on the fused-op boundary. Native BEVFormer layout is
-`(bs, Q_or_K, num_heads, …)`; the op wants `num_heads` fused into the batch (`N = bs * num_heads`)
-and `Q` in a different position:
+The reorder this entry proposed permutes a Linear's **output channels**. Every shuffle that survives
+moves the **row axis** instead:
 
-| tensor | born as | op contract | today's shuffle |
-|---|---|---|---|
-| `value` | `(bs, H*W, heads, D)` after the Linear | `(N, H, W, D)` | permute `(0, 2, 1, 3)` → RM → reshape |
-| `grid` | `(bs, Q, heads, L, P, 2)` | `(N, Q*P, 1, 2)` per level | slice L → permute `(0, 2, 1, 3, 4)` → reshape |
-| `attn` | `(bs, Q, heads, L, P)` after softmax | `(N, Q, P)` per level | slice L → permute `(0, 2, 1, 3)` → reshape → RM |
-| output | `(N, Q, D)` | `(bs, Q, embed)` into `output_proj` | reshape → TILE → permute `(0, 2, 1, 3)` → reshape |
+- `value` and `grid` both need `num_heads` in front of the row axis (`N = bs*heads`). A channel
+  permutation cannot move a channel past a row — that is a transpose, and no static weight transform
+  expresses it. [5e](#5e-permute-grid-once-slice-after) solved it for `grid` by doing the transpose
+  in TILE, which is a *scheduling* change, not a storage one; `value` cannot follow, because
+  reaching a TILE-transposable shape costs a 4×-padded re-layout of 92 MB
+  ([stage 10](perf_reports/10-value-head-split-unpadded.md)).
+- The remaining reshapes change **row width** — `256 → 32`, `32 → 2`, `16 → 4` — because the fused
+  op's operands are 2 and `head_dim` wide while the Linears emit 256-wide rows. Row width is set by
+  the op contract, not by channel order.
 
-Three Linears produce `value`, `sampling_offsets`, and `attention_weights`. Their weights already
-go through [`preprocess_linear_weight`](../tt/model_preprocessing.py) (a transpose + upload). An
-extra static permutation of the *output* channels — grouping by head rather than by query — is
-the same class of transform as the offset-normalizer fold in
-[candidate 3](#candidate-3--tile-padding-waste): done once, exact, no runtime op.
+So the class of transform that worked for [candidate 3](#candidate-3--tile-padding-waste) (the
+offset-normalizer fold) does not apply to anything left here.
 
-A reshape of a Linear's output that only splits a trailing multiple (`embed → (heads, D)`,
-`heads*L*P → (heads, L, P)`) is a view in the right layout and is not the cost. The cost is the
-**axis move** that follows it. If the Linear emits head-major, that axis move is gone.
+### The inventory at stage 10
 
-### What a weight reorder cannot reach
+`Permute`, 33.8 ms over 7 instances:
 
-**The untilize on `value` is forced by the op, not by BEVFormer's storage order.** `value` comes out
-of `value_proj`, a matmul, so it is TILE; the fused op enforces ROW_MAJOR with `TT_FATAL`
-([tt_ms_deformable_attention.py:43-44](../tt/tt_ms_deformable_attention.py#L43-L44)). The
-`to_layout` at [L51](../tt/tt_ms_deformable_attention.py#L51) therefore survives every reorder this
-candidate can make — no weight permutation makes a matmul emit ROW_MAJOR — and `value` is the ~92 MB
-tensor in [candidate 7](#candidate-7--l1-vs-dram)'s size table.
+| row | ms | what | owner |
+|--:|---:|---|---|
+| 437 | **19.26** | SCA camera permute, `[num_cams, L, bs, E] → [bs, num_cams, L, E]`, TILE | **[6a](#6a-hoist-the-sca-camera-permute-out-of-the-layer-loop)** |
+| 442 | **13.16** | `value` head permute, `(bs, HW, heads, 32) → (bs, heads, HW, 32)`, ROW_MAJOR | [11](#candidate-11--absorb-msda-layout-prep) route 1 |
+| 394 | 0.71 | the same permute at TSA | [11](#candidate-11--absorb-msda-layout-prep) route 1 |
+| 489–491, 493 | 0.71 | four permutes **inside `ttnn.scatter_add`** — one call in our code | not model-side |
 
-So scope 6 to the permute at [L50](../tt/tt_ms_deformable_attention.py#L50), not the untilize behind
-it. Killing that untilize needs the op to accept TILE input, which is
-[candidate 11](#candidate-11--absorb-msda-layout-prep) route 1 — and this is the strongest argument
-for route 1, stronger than the one 11 currently makes for itself.
+`ReshapeView`, 28.0 ms over 17 instances:
 
-### Free hoists in the same function, worth taking either way
+| row | ms | what | owner |
+|--:|---:|---|---|
+| 440 | **7.42** | `value` `(bs, HW, 256) → (bs, HW*heads, 32)`, TILE | [11](#candidate-11--absorb-msda-layout-prep) route 1 |
+| 457 | **7.37** | `grid` `(bs, heads, Q, 32) → (…, L, P, 2)`, row width 32 → 2 | [11](#candidate-11--absorb-msda-layout-prep) (grid contract) |
+| 464 | 2.60 | `attn` `(N, Q, L*P) → (N, Q, L, P)`, row width 16 → 4 | [11](#candidate-11--absorb-msda-layout-prep) (attn contract) |
+| 444 | 1.77 | `sampling_offsets` `(bs, Q, 256) → (bs, Q, heads, 32)`, TILE | **necessary** — it is what makes 5e's TILE transpose possible |
+| 408 | 1.63 | TSA's counterpart of row 457 | [11](#candidate-11--absorb-msda-layout-prep) |
+| 484, 416 | 1.54, 1.04 | SCA and TSA output pack, `(N, Q, D) → (bs, Q, embed)` | [11](#candidate-11--absorb-msda-layout-prep) |
+| 448 | 1.04 | `attention_weights → (bs, Q, heads, L*P)`, TILE, so softmax reduces over `L*P` | **necessary** |
+| 12 more | ~3.6 | rebatch plan and small TSA reshapes, none above 1.2 ms | — |
 
-Not reformulation, just work sitting inside the level loop that has no reason to be there
-([`_fused_msda_level`](../tt/tt_ms_deformable_attention.py#L36-L70)):
+**Read the owner column.** Of the 61.8 ms: **19.3 ms is 6a**, ~35 ms is the fused op's operand
+contract and therefore [11](#candidate-11--absorb-msda-layout-prep)'s, ~2.8 ms is genuinely
+necessary shaping, and 0.7 ms is inside `scatter_add`. There is no third category left for this
+entry to work on.
 
-- `attn`'s `to_layout(ROW_MAJOR)` runs **per level** ([L61](../tt/tt_ms_deformable_attention.py#L61))
-  while `sampling_grids`' identical conversion is already hoisted above the loop
-  ([L117](../tt/tt_ms_deformable_attention.py#L117)). Same asymmetry for the three `typecast` guards
-  at [L63-68](../tt/tt_ms_deformable_attention.py#L63-L68).
-- `grid` and `attn` are **sliced, then permuted**, per level. Permuting the full tensor once and
-  slicing after is the same data through a quarter of the launches.
+### 6a. Hoist the SCA camera permute out of the layer loop
 
-Same bytes, fewer launches. Whether that shows up depends on whether these groups are launch-bound
-or bandwidth-bound — [candidate 5](#candidate-5--data-movement-vs-compute)'s optional noc pass is
-what tells you, and this is a cheap place to test that classification before betting 11 on it.
+**The largest model-side item left in the layer, and it is not a reformulation — it is a hoist.**
+
+`TTSpatialCrossAttention.forward` permutes `value` from `[num_cams, L, bs, embed_dims]` to
+`[bs, num_cams, L, embed_dims]` at [sca:348-352](../tt/tt_spatial_cross_attention.py#L348-L352):
+profiler row 437, **19.26 ms**, the single most expensive non-`MSDAOperation` op in the layer.
+
+**`value` does not change across encoder layers.** It is an argument to
+`TTBEVFormerEncoder.forward` and is passed into every layer unmodified
+([tt_encoder.py:505-516](../tt/tt_encoder.py#L505-L516) — `value=value` inside the loop, never
+reassigned). So the permute runs **six times per frame on identical data**, and five of those are
+waste. Per frame that is **~96 ms**; amortized over the six layers, ~16 ms of the 19.26.
+
+This is exactly [1c](#1c-hoist-index-computation-above-the-layer-loop): frame-invariant work sitting
+inside the layer loop. Same fix, same shape — permute once in the encoder above the loop and hand
+the laid-out tensor down. `value_proj` has per-layer weights so the matmul stays per layer; only the
+camera permute moves.
+
+- [ ] Permute in `TTBEVFormerEncoder.forward` above the layer loop and pass `value` already as
+      `[bs, num_cams, L, embed_dims]`. Keep the reshape at
+      [sca:352](../tt/tt_spatial_cross_attention.py#L352) — it is free, it has no profiler row.
+- [ ] `key` no longer exists on this path ([5a](#5a-delete-the-key-permute) deleted its use), so only
+      `value` moves, and the `L = key.shape[1]` read at
+      [sca:336](../tt/tt_spatial_cross_attention.py#L336) has to come off `value` instead.
+- [ ] **This will measure as ~0 on the layer harness**, which runs one layer and so pays the permute
+      once either way — the same trap [PERF.md](PERF.md#the-gap-column-is-not-reliable) records for
+      [1c](#1c-hoist-index-computation-above-the-layer-loop) / stage 2. Measure it on
+      `test_encoder_perf.py` end-to-end wall clock, and say in the report that the layer number is
+      structurally blind to it.
+- [ ] Decide whether the permute belongs in the encoder at all, or whether whatever builds `value`
+      upstream should emit `[bs, num_cams, L, embed_dims]` directly. That deletes it rather than
+      hoisting it, and it is the only genuine *reformulation* left in this entry.
 
 ### What this is not
 
-This is not [candidate 11](#candidate-11--absorb-msda-layout-prep). 6 asks whether the shuffle can be
-deleted by changing how weights and activations are stored. 11 asks what to do with the shuffle
-that remains after that — fold it into a specialized kernel or into the fused op. Sequence 6
-first. Writing a new reshape op for a permute that a weight reorder would have deleted is the
-same mistake as ranking candidate 4 ahead of 2.
-
-Work items:
-
-- [ ] For each site above, write the output-channel permutation of the Linear that makes the
-      native layout match the next consumer. `value_proj` and `output_proj` are the two that
-      close a permute pair (heads forward, then heads back); `attention_weights` is one-way into
-      the op. Confirm the softmax dim still lands on `L*P` after the reorder — if it does not,
-      the reorder is not free.
-- [ ] Check which of today's `ttnn.reshape` calls are already views (ROW_MAJOR, no padded-shape
-      change on a tiled dim). Those are not in the 139.8 ms and must not be counted as a win
-      when they disappear.
-- [ ] Microbenchmark the remaining real permutes at the SCA shapes after the reorder. Whatever
-      is left is the input to 11.
+This is not [candidate 11](#candidate-11--absorb-msda-layout-prep), and after 6a there is nothing
+between them: 11 owns every remaining row in the tables above. Its route 1 — the fused op accepting
+TILE input and native layouts — would delete the 13.16 ms `value` permute, the 8.91 ms untilize
+behind it, and the 7.42 + 7.37 + 2.60 ms of contract reshapes together, **~40 ms**, where reordering
+reached 6.6 ms. This entry's original argument for sequencing 6 before 11 no longer holds: take 6a,
+then go to 11.
 
 ## Candidate 7 — L1 vs DRAM
 
@@ -1120,64 +1142,53 @@ Do not hold any other candidate behind this one.
 
 ## Candidate 8 — fuse `BinaryNg`
 
-**Largely moot — `BinaryNg` is 2.9 ms at stage 10, 1.0% of the layer.** Candidate 5 deleted the cost
-rather than fusing it: the 48.2 ms was arithmetic on tile padding, and
-[5b](#5b-do-the-sampling-location-math-in-row_major) folded the `* 2 - 1` this entry wanted folded.
-What is left is the residual add and the per-level accumulate, both under 1 ms. Do not start this
-entry expecting 48 ms.
+**Closed. Not worth doing.** `BinaryNg` is **2.9 ms at stage 10, 1.0% of the layer**, down from
+48.2 ms — and [candidate 5](#candidate-5--data-movement-vs-compute) got there by *deleting* the cost,
+not by fusing it. The 48.2 ms was never arithmetic: 46.6 of it was elementwise work on tensors
+tile-padded 128×, and [5b](#5b-do-the-sampling-location-math-in-row_major) moved that work onto
+unpadded shapes and folded away the `* 2 - 1` this entry had queued as its next item.
 
-The original scoping, for the record: **48.2 ms, 17 instances, 10.6% of the layer** after [stage 05](perf_reports/05-offset-normalizer-folded.md)
-removed the two divides. What remains is add / mul / sub, not the tile-padded `div` candidate 3
-already killed.
+### The inventory this entry asked for
 
-Known sites in the MSDA / attention path, none of them profiled in isolation:
+Its open work item was "inventory the 17 remaining `BinaryNg` rows from the CSV." Done, from the
+stage-10 CSV (`2026_09_02_11_49_26`) — and it is what closes the entry:
 
-| site | ops | fuses into |
-|---|---|---|
-| `query + query_pos` | 1 add, TSA and SCA | the first Linear that consumes `query` — but three Linears read the sum, so this is a hoist, not an epilogue, and it is already hoisted |
-| `sampling_grids = loc * 2 - 1` | mul + sub | the preceding `ref + offsets` add: `2*(ref+off) - 1` is one scale-and-shift, or a static fold into the folded `sampling_offsets` weight (it already has the `1/[W,H]` scale) |
-| `sampling_locations = ref + offsets` | 1 add | see the row above |
-| per-level `ttnn.add` of fused-op outputs | 3 adds at SCA (4 levels) | an accumulate-into-output on the fused op, or a small add-tree kernel |
-| residual `output + identity` | 1 add | epilogue of `output_proj` |
+| rows | ms | what | fusable into |
+|---|---:|---|---|
+| 456, 472, 476, 480 | 1.51 | SCA: grid add, then **3 per-level accumulates** of the fused-op outputs | accumulate-into-output on the op — [12](#candidate-12--one-fused-call-for-all-levels) |
+| 452, 453, 403, 404 | 0.57 | `2·ref - 1` in [`_grid_bias`](../tt/tt_ms_deformable_attention.py#L188-L215), SCA and TSA | precompute per forward on the [rebatch plan](../tt/tt_spatial_cross_attention.py#L49-L64) |
+| 389, 418, 420, 426, 486, 498, 507 | 0.58 | `query + query_pos` and the residual adds, TSA / SCA / FFN | epilogue of the preceding `output_proj` / FFN matmul |
+| 407 | 0.20 | TSA grid add | — |
+| 496 | 0.07 | `slots / count`, the camera average | — |
 
-That is not yet 17. The rest live outside this file — SCA key/value path, encoder, FFN — and
-have to come from the CSV, not from reading the attention module.
+**The largest single instance in the layer is 0.53 ms.** No row here supports a change: the biggest
+group is 1.51 ms, most of it the per-level accumulate, and that is an *op contract* ask rather than
+a fusion the model can do — [12](#candidate-12--one-fused-call-for-all-levels) already owns it, since
+one multi-level call has nothing to accumulate.
 
-### How to look for fusion
+The `2·ref - 1` group is the only thing an hour could remove: at SCA the reference points are
+frame-invariant and already live on the rebatch plan, so the mul/sub could be computed once per
+forward instead of once per layer. **~0.4 ms.** Take it as a by-product if
+[1e](#1e-an-empirical-high-water-mark-for-max_len) / [1f](#1f-derive-max_len-where-the-mask-is-produced)
+rewrite the plan anyway; do not open a change for it.
 
-Walk producer → consumer pairs, not op names:
+### What is worth keeping from this entry
 
-1. Take every `BinaryNgDeviceOperation` row. If one operand is the previous op's output and the
-   other is a broadcast / scalar / residual, it is a fusion candidate.
-2. If the producer is a `Matmul` / `Linear`, the binary is an epilogue (bias-style add, residual
-   add after `output_proj`). ttnn already fuses bias; residual is the one that is still a
-   separate launch.
-3. If the producer is another `BinaryNg`, it is a tree (`mul` then `sub` on `sampling_grids` is
-   the current example). One kernel, or fold the constants away entirely.
-4. Do not fuse across a layout change. A `BinaryNg` that sits between an Untilize and a Tilize
-   is not an epilogue — the layout ops are the cost, and
-   [candidate 5](#candidate-5--data-movement-vs-compute) / [6](#candidate-6--permutereshape-by-reformulation)
-   own those, not this entry.
-5. Check whether the binary is already a candidate for deletion by a weight fold, the way
-   candidate 3 deleted the `div`. `* 2 - 1` on the sampling grid is the obvious next fold: the
-   offset Linear already carries a static per-channel scale.
+The method, not the target. It generalizes, and it is what found the padding:
 
-Work items:
+1. Take every `BinaryNg` row. If one operand is the previous op's output and the other is a
+   broadcast, scalar or residual, it is a fusion candidate.
+2. If the producer is a `Matmul` / `Linear`, the binary is an epilogue. ttnn already fuses bias;
+   a residual add is still a separate launch.
+3. If the producer is another `BinaryNg`, it is a tree — one kernel, or fold the constants away
+   entirely.
+4. **Do not fuse across a layout change.** A binary between an untilize and a tilize is not an
+   epilogue; the layout ops are the cost.
+5. **Check the padded shape before believing the cost is arithmetic.** This is the one the entry
+   originally missed: a 15 ms `add` on `(…, 4, 2)` is not an expensive add, it is a `32 × 32` tile
+   holding 8 real values. Read `INPUT_0_*_PAD` before proposing a kernel.
 
-- [ ] Inventory the 17 remaining `BinaryNg` rows from the stage-05 CSV: producer, both operands,
-      shape, and whether a layout op sits between producer and binary. That list is the scope;
-      do not fuse blindly from the table above.
-- [ ] The `* 2 - 1` fold has moved to [5b](#5b-do-the-sampling-location-math-in-row_major), which
-      rewrites the same expression and prices it there. **46.6 of the 48.2 ms is padding**, not
-      arithmetic ([candidate 5](#first-correction-the-11-ratio-understates-the-problem)) — so most of
-      this entry is 5b's, and what is left for 8 is the residual add and the per-level accumulate.
-      Original item, for the record: price the `* 2 - 1` fold into the already-folded
-      `sampling_offsets` weight. Exact
-      (`2·(x + off) - 1` vs `(2x - 1)` after the add) and it removes two binaries plus,
-      possibly, their tile-padding waste if the extent-2 coordinate axis is still one of the
-      tiled dims.
-- [ ] Residual-into-`output_proj` and per-level accumulate are the next two; sequence them after
-      the inventory, not before.
+Point 5 is worth 46 ms of hindsight and applies to every elementwise row in this model.
 
 ## Candidate 9 — trace capture
 
@@ -1264,7 +1275,7 @@ sample-weight-reduce tail.
 
 Two routes, in the order they should be tried:
 
-Route 1 is worth more than this entry originally argued: [candidate 6](#what-a-weight-reorder-cannot-reach)
+Route 1 is worth more than this entry originally argued: [candidate 6](#why-the-weight-reorder-is-dead)
 establishes that the untilize of the ~92 MB `value` tensor **cannot** be deleted by any weight
 reorder, because a matmul emits TILE and the op demands ROW_MAJOR. Accepting TILE input is the only
 thing that removes it. And [candidate 12](#candidate-12--one-fused-call-for-all-levels) wants a
@@ -1425,23 +1436,29 @@ is not correctness-preserving.
 10. ~~**5**~~ — **landed, all six sub-items: −176.3 ms (−38.6%), 456.5 → 280.2 ms.** PCC improved to
     0.999651 and `tests/pcc` went to 33 passed. See
     [the result table](#result--candidate-5-is-closed) and the three things it got wrong.
-11. **6** — **needs re-scoping before it is worth starting.** Its 139.8 ms is now 33.8 ms of
-    `Permute` + 28.0 ms of `Reshape`, and the permutes that remain are the two
-    [no weight reorder can reach](#what-a-weight-reorder-cannot-reach) — so most of what is left is
-    [11](#candidate-11--absorb-msda-layout-prep)'s, not 6's. Its ROW_MAJOR-view reasoning is also
-    wrong; see [stage 09's rule](perf_reports/09-head-major-sampling-grid.md).
-12. **8** — fuse the remaining 48.2 ms of `BinaryNg` into producers, starting with the inventory
-    and the `* 2 - 1` fold. Independent of 6; can run in parallel once 5 has named the sites.
+11. **[6a](#6a-hoist-the-sca-camera-permute-out-of-the-layer-loop)** — **re-scoped to one item, and
+    it is the next thing to do.** The SCA camera permute is 19.3 ms per layer on a tensor that does
+    not change between layers, so five of six executions per frame are waste (~96 ms/frame). A
+    [1c](#1c-hoist-index-computation-above-the-layer-loop)-class hoist, effort S, and it must be
+    measured on the **encoder** harness — the layer harness is structurally blind to it. The rest of
+    candidate 6 is closed: the weight reorder is [dead](#why-the-weight-reorder-is-dead) and every
+    remaining row belongs to [11](#candidate-11--absorb-msda-layout-prep).
+12. ~~**8**~~ — **closed, 2.9 ms.** [5b](#5b-do-the-sampling-location-math-in-row_major) deleted the
+    48.2 ms rather than fusing it; the largest surviving instance is 0.53 ms and the biggest group
+    (the per-level accumulate, 1.5 ms) is [12](#candidate-12--one-fused-call-for-all-levels)'s. Keep
+    [the method](#what-is-worth-keeping-from-this-entry), drop the target.
 13. **7** — L1 vs DRAM. Expected small; do not block anything on it. Reject-with-numbers or keep
     the operands that actually fit.
 14. **10 + 12** — **167.8 ms, 36.7% of the layer**, and four launches where one would do. One
     microbenchmark answers both: per-sample cost against bare `grid_sample`, and 4 single-level
     calls against one call over the same points. Independent of 5–8, and the answer likely belongs
     upstream rather than in this model.
-15. **11** — absorb whatever shuffle 6 could not delete into the fused op or a specialized
-    MSDA-reshape kernel. After 6, and after 5's optional noc pass has said whether that shuffle
-    is launch-bound or bandwidth-bound. Its route 1 also carries 6's forced untilize and 12's level
-    contract — one upstream conversation, three asks.
+15. **11** — **now the largest model-side item, and no longer gated on 6.** It owns ~40 ms directly:
+    the 13.2 ms `value` head permute, the 8.9 ms untilize behind it, and 17.4 ms of row-width
+    reshapes that exist only because the op's operands are 2 and `head_dim` wide
+    ([the inventory](#the-inventory-at-stage-10)). Route 1 also carries 12's level contract — one
+    upstream conversation, two asks. Rank it directly after 6a; 5 already answered what 6 was
+    supposed to leave it, and 5's noc pass is only needed to choose between routes 1 and 2.
 16. **13** — dtype. Independent of everything above and cheap to try, but it is the first lossy
     change on the list, so it is ranked last on purpose: land the correctness-preserving work first
     and spend the 0.0026 of encoder [PCC headroom](#candidates) knowingly. Note one third of the

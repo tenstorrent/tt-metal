@@ -76,7 +76,7 @@ of 92 MB, and no TILE transpose is cheap enough to pay for that.
 The 33.8 ms of `Permute` is now essentially two ops: the ~19 ms SCA camera permute in
 [`tt_spatial_cross_attention.py`](../../tt/tt_spatial_cross_attention.py#L348-L352) and this ~14 ms
 head permute. Neither is reachable by a weight reorder —
-[candidate 6](../perf_optimization_candidates.md#what-a-weight-reorder-cannot-reach) established
+[candidate 6](../perf_optimization_candidates.md#why-the-weight-reorder-is-dead) established
 that for the head permute, and the camera permute reorders an input the encoder hands over.
 
 **So candidate 5 is finished on this operand and

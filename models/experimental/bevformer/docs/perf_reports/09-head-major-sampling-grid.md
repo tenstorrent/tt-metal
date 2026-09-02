@@ -76,7 +76,7 @@ Two secondary wins fell out:
 Five permutes deleted — four SCA levels and TSA's one — and the two new TILE transposes cost 0.8 ms
 between them. **The remaining 19.9 ms of Permute is essentially one op**: the 19.3 ms `value`
 head permute, which is [5d](../perf_optimization_candidates.md#5d-split-value-into-heads-in-row_major)
-and [candidate 6](../perf_optimization_candidates.md#what-a-weight-reorder-cannot-reach)'s known
+and [candidate 6](../perf_optimization_candidates.md#why-the-weight-reorder-is-dead)'s known
 irreducible-by-weight-reorder case.
 
 ## Layer profile now
