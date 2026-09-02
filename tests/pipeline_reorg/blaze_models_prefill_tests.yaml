@@ -738,10 +738,11 @@
   test_group: module
   skus:
     bh_sc4:
-      # 15 in the merged config; raised here for the issue #55047 spread study only. A cold weight
-      # cache stretches the load phase past 15 min on its own (observed 1.0-13.6 s/it per expert
-      # shard on one allocation), which kills the job before any chunk is measured.
-      timeout: 34
+      # Well above the merged budget, and deliberately so on this branch. Leg wall time is dominated
+      # by the expert-weight load, not by the measured chunks: a cold cache has been seen at 1.0-13.6
+      # s/it per shard, which puts an otherwise healthy leg past 40 min and gets it killed with every
+      # chunk already measured.
+      timeout: 50
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   sp_config: sc4
