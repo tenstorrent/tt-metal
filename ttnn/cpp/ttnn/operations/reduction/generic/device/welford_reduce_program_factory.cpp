@@ -87,7 +87,12 @@ WelfordReducePlan WelfordReduceDeviceOperation::WelfordReduceProgramFactory::sel
     }
 
     const std::uint32_t replay_tiles = plan.reduce_w ? plan.Wt : plan.Ht;
-    const std::uint32_t replay_min_tiles = plan.work_group_1 > 1 || plan.work_group_2 > 1 ? 8 : 24;
+    // Calibrated crossovers: replay amortises its second-pass reads earlier when a core
+    // processes multiple outputs than when it processes a single output.
+    constexpr std::uint32_t multi_output_replay_min_tiles = 8;
+    constexpr std::uint32_t single_output_replay_min_tiles = 24;
+    const std::uint32_t replay_min_tiles =
+        plan.work_group_1 > 1 || plan.work_group_2 > 1 ? multi_output_replay_min_tiles : single_output_replay_min_tiles;
     std::uint64_t footprint =
         static_cast<std::uint64_t>(replay_tiles) * plan.input_tile_size + 2 * plan.output_tile_size;
     footprint += plan.reduce_w ? tile_size(plan.scratch_format) : 0;
