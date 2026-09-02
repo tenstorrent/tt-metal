@@ -480,8 +480,13 @@ uint32_t D2HSocket::required_config_buffer_size() {
 }
 
 D2HSocket::~D2HSocket() noexcept {
+    // An owning service holds the mesh by shared_ptr, so a socket can outlive close(): the mesh
+    // object is alive but its command queues are gone, its service cores are already released and
+    // the host FIFO window is unmapped. Each device-side step then costs a full barrier timeout and
+    // a failed L1 release, per socket, so gate them on the mesh actually being open.
+    const bool device_live = mesh_device_ != nullptr && mesh_device_->is_initialized();
     try {
-        if (!exported_) {
+        if (!exported_ && device_live) {
             barrier(1000);
         }
     } catch (const std::exception& e) {
@@ -489,7 +494,7 @@ D2HSocket::~D2HSocket() noexcept {
     } catch (...) {
         log_warning(LogMetal, "D2HSocket destructor: barrier failed with unknown exception");
     }
-    if (svc_config_l1_addr_.has_value()) {
+    if (svc_config_l1_addr_.has_value() && device_live) {
         try {
             config_buffer_.reset();
             auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
