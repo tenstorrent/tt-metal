@@ -8,6 +8,7 @@
 #include "api/dataflow/noc.h"
 #include "api/debug/assert.h"
 #include "api/dataflow/semaphore_binding_token.h"
+#include "tools/profiler/synchronization_event_profiler.hpp"
 
 /**
  * @brief Semaphore synchronization primitive for programmable cores.
@@ -103,6 +104,7 @@ public:
      * @param value The value to increment the semaphore by.
      */
     __attribute__((always_inline)) void up(uint32_t value) {
+        SYNC_SIGNAL("SYNC-SEM-SET", l1_offset_);
         if constexpr (SCOPE == SemScope::DM_LOCAL_CACHED) {
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
             __atomic_add_fetch(reinterpret_cast<uint32_t*>(l1_offset_), value, __ATOMIC_SEQ_CST);
@@ -168,14 +170,18 @@ public:
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
             auto* word = reinterpret_cast<uint32_t*>(l1_offset_);  // cached alias
             uint32_t observed = __atomic_load_n(word, __ATOMIC_RELAXED);
-            do {
-                WAYPOINT("NSDW");
-                while (observed < value) {
-                    observed = __atomic_load_n(word, __ATOMIC_RELAXED);
-                }
-                WAYPOINT("NSDD");
-            } while (!__atomic_compare_exchange_n(
-                word, &observed, observed - value, /*weak=*/false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
+            {
+                SYNC_WAIT("SYNC-SEM-WAIT", l1_offset_);
+                do {
+                    WAYPOINT("NSDW");
+                    while (observed < value) {
+                        observed = __atomic_load_n(word, __ATOMIC_RELAXED);
+                    }
+                    WAYPOINT("NSDD");
+                } while (!__atomic_compare_exchange_n(
+                    word, &observed, observed - value, /*weak=*/false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
+            }
+            SYNC_SIGNAL("SYNC-SEM-SET", l1_offset_);
 #else
             ASSERT(false);  // the host census never bakes CACHED for this platform
 #endif
@@ -197,9 +203,12 @@ public:
             for (;;) {
                 // Wait until the semaphore has enough credit(s)
                 WAYPOINT("NSDW");
-                do {
-                    invalidate_l1_cache();
-                } while ((*sem_addr) < value);
+                {
+                    SYNC_WAIT("SYNC-SEM-WAIT", l1_offset_);
+                    do {
+                        invalidate_l1_cache();
+                    } while ((*sem_addr) < value);
+                }
                 if (lock_cas(/*cmp4=*/0, /*swap4=*/1) != 0) {
                     continue;  // another consumer holds the lock, wait for it to release
                 }
@@ -208,6 +217,7 @@ public:
                 const bool ok = (*sem_addr) >= value;
                 if (ok) {
                     WAYPOINT("NSDD");
+                    SYNC_SIGNAL("SYNC-SEM-SET", l1_offset_);
                     // Atomic subtract: the NoC only has atomic ADD (INCR_GET), so add the two's complement.
                     noc_semaphore_inc(sem_noc, (uint32_t)(0u - value));
                     noc_async_atomic_barrier();
@@ -220,20 +230,28 @@ public:
             }
 #elif !defined(COMPILE_FOR_TRISC)
             // Gen1 single-consumer path: spin, then atomic subtract.
-            do {
-                invalidate_l1_cache();
-            } while ((*sem_addr) < value);
+            {
+                SYNC_WAIT("SYNC-SEM-WAIT", l1_offset_);
+                do {
+                    invalidate_l1_cache();
+                } while ((*sem_addr) < value);
+            }
             WAYPOINT("NSDD");
+            SYNC_SIGNAL("SYNC-SEM-SET", l1_offset_);
             noc_semaphore_inc(::get_noc_addr(l1_offset_), (uint32_t)(0u - value));
             noc_async_atomic_barrier();
 #else
             ASSERT(false);  // compute kernels cannot bind semaphores.
 #endif
         } else {  // LOCAL_NONATOMIC
-            do {
-                invalidate_l1_cache();
-            } while ((*sem_addr) < value);
+            {
+                SYNC_WAIT("SYNC-SEM-WAIT", l1_offset_);
+                do {
+                    invalidate_l1_cache();
+                } while ((*sem_addr) < value);
+            }
             WAYPOINT("NSDD");
+            SYNC_SIGNAL("SYNC-SEM-SET", l1_offset_);
             *sem_addr -= value;
         }
     }

@@ -12,6 +12,7 @@
 #include "stream_io_map.h"
 #include "llk_assert.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tools/profiler/synchronization_event_profiler.hpp"
 
 using namespace ckernel;
 
@@ -32,12 +33,18 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
     uint16_t tiles_received = get_local_cb_interface(output).tiles_received;
 
     std::int32_t free_tiles;
-    do {
-        std::uint16_t tiles_acked = (std::uint16_t)reg_read((std::uint32_t)tiles_acked_ptr);
-        // Perform 16-bit subtractions because inputs are 16 bits and may wrap due to overflow.
-        std::uint16_t free_tiles_wrap = get_local_cb_interface(output).fifo_num_pages - (tiles_received - tiles_acked);
-        free_tiles = (std::int32_t)free_tiles_wrap;
-    } while (free_tiles < num_tiles);
+    // The PACK thread blocked on a FULL CB -- the back-pressure direction. Same reasoning as
+    // llk_wait_tiles: this is the common bottom of cb_api.h and the DataflowBuffer API.
+    {
+        SYNC_WAIT("SYNC-CB-RESERVE", operand);
+        do {
+            std::uint16_t tiles_acked = (std::uint16_t)reg_read((std::uint32_t)tiles_acked_ptr);
+            // Perform 16-bit subtractions because inputs are 16 bits and may wrap due to overflow.
+            std::uint16_t free_tiles_wrap =
+                get_local_cb_interface(output).fifo_num_pages - (tiles_received - tiles_acked);
+            free_tiles = (std::int32_t)free_tiles_wrap;
+        } while (free_tiles < num_tiles);
+    }
 }
 
 inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num_tiles, const std::int32_t num_words) {
@@ -70,6 +77,7 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
 // Push N tiles to stream buffer (increment write pointer)
 template <bool push_blocks = false, bool brisc_pack = false>
 inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
+    SYNC_SIGNAL("SYNC-CB-PUSH", operand);
     std::uint32_t output = operand;
 
     auto& cb = get_local_cb_interface(output);
