@@ -273,58 +273,6 @@ class PerfReport:
         frame[mask].to_csv(TestConfig.PERF_DATA_DIR / filename, index=False)
 
 
-def dump_scatter(testname: str, report: PerfReport):
-    # FIXME: was broken by the new pandas implementation (https://github.com/tenstorrent/tt-llk/issues/857)
-
-    # generate a scatter plot using plotly.graph_objects (no pandas required)
-
-    if not report.sweep_names or not report.stat_names:
-        # This is possible on CI when the whole split of the test is skipped
-        return
-
-    dir = create_benchmark_dir(testname)
-    output_path = dir / f"{testname}.html"
-
-    # x: sweep values, y: stat values per (run_type × stat). Names look like mean(L1_TO_L1).
-    fig = go.Figure()
-
-    mean_columns = [
-        (name, i) for i, name in enumerate(report.stat_names) if name.startswith("mean")
-    ]
-
-    hover = [
-        ", ".join(f"{name}={val}" for name, val in zip(report.sweep_names, sweep))
-        for sweep in report.sweep_values
-    ]
-
-    # For each stat column (run type), plot all points
-    for stat_name, stat_idx in mean_columns:
-        y_vals = [stat[stat_idx] for stat in report.stat_values]
-
-        fig.add_trace(
-            go.Scatter(
-                x=list(range(len(report.sweep_values))),
-                y=y_vals,
-                mode="markers+lines",
-                name=stat_name,
-                text=hover,
-                hoverinfo="text+y",
-            )
-        )
-
-    # X-axis label
-    xaxis_title = "Sweep index (see hover for values)"
-
-    fig.update_layout(
-        title=f"Performance Scatter Plot: {testname}",
-        xaxis_title=xaxis_title,
-        yaxis_title="Cycles / Tile",
-        legend_title="Run Type / Stat",
-    )
-
-    fig.write_html(str(output_path))
-
-
 def get_unique_base_names(input_dir: Path):
     """
     Extract unique base filenames from files matching *.gw*.csv pattern.
