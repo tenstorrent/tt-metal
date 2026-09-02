@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import time
 from pathlib import Path
 
 import torch
@@ -1045,6 +1046,14 @@ class ChunkedPrefillPageTableGuardMixin:
             chunk_starts = [s for s in chunk_starts if s < last_abs]
             chunk_starts.append(last_abs)
 
+            # G4_CHUNK_PROFILE=1: per-chunk host wall timing (prepare vs
+            # forward-submit). Submission is async, so 'fwd' includes device
+            # backpressure once the pipeline fills — a flat fwd series means
+            # device-bound at that rate; a prep-heavy series means host work
+            # between submissions is the tax.
+            _profile_chunks = os.environ.get("G4_CHUNK_PROFILE", "0") == "1"
+            _t_prev = time.perf_counter() if _profile_chunks else 0.0
+
             for chunk_start in chunk_starts:
                 chunk_end = chunk_start + chunk_size
                 chunk_start_relative = chunk_start - num_cached_tokens
@@ -1073,6 +1082,7 @@ class ChunkedPrefillPageTableGuardMixin:
                             needed_blocks,
                             block_size,
                         )
+                _t_gap = (time.perf_counter() - _t_prev) if _profile_chunks else 0.0
                 chunk_inputs = self.model[model_id].prepare_inputs_prefill(
                     chunk_tokens,
                     start_pos=chunk_start,
@@ -1082,6 +1092,7 @@ class ChunkedPrefillPageTableGuardMixin:
                     user_id=CHUNK_USER_ID,
                     **kwargs,
                 )
+                _t_prep = (time.perf_counter() - _t_prev - _t_gap) if _profile_chunks else 0.0
                 (
                     chunk_prefill_input,
                     chunk_rot_mats_global_prefill,
@@ -1107,6 +1118,17 @@ class ChunkedPrefillPageTableGuardMixin:
                     batch_size=batch_size,
                     **kwargs,
                 )
+                if _profile_chunks:
+                    _t_now = time.perf_counter()
+                    logger.info(
+                        "[g4-chunkprof] chunk_start={} gap={:.1f}ms prep={:.1f}ms fwd={:.1f}ms total={:.1f}ms",
+                        chunk_start,
+                        _t_gap * 1e3,
+                        _t_prep * 1e3,
+                        (_t_now - _t_prev - _t_gap - _t_prep) * 1e3,
+                        (_t_now - _t_prev) * 1e3,
+                    )
+                    _t_prev = _t_now
                 if is_last_chunk:
                     return tt_logits
                 del tt_logits
