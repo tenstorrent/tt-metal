@@ -18,9 +18,9 @@
 
 using namespace overlay;
 
-constexpr uint32_t kSweepSizes[] = {16384, 32768, 49152, 65536, 98304, 131072};
+constexpr uint32_t kSweepSizes[] = {128, 256, 512, 1024, 2048, 4096, 8129, 16384, 32768, 65536, 131072};
 constexpr uint32_t kNumSweepSizes = sizeof(kSweepSizes) / sizeof(kSweepSizes[0]);
-constexpr uint32_t kRepeats = 5;
+constexpr uint32_t kRepeats = 10;
 constexpr uint32_t kNumIdmaEngines = 8;
 constexpr uint32_t kResultWordsPerSample = 4;
 
@@ -37,6 +37,7 @@ FORCE_INLINE uint32_t rdcycle() {
 FORCE_INLINE void setup_idma() {
     reset_cmdbuf_0();
     idma_setup_as_copy_cmdbuf_0(false);
+    // setup_vcs_cmdbuf_0(false);
     setup_ongoing_cmdbuf_0(
         /*src_addr_inc_en=*/false,
         /*dest_addr_inc_en=*/false,
@@ -51,10 +52,9 @@ FORCE_INLINE void setup_idma() {
 }
 
 FORCE_INLINE uint32_t issue_idma(uint32_t src_addr, uint32_t dst_addr, uint32_t total_bytes) {
-    const uint32_t t0 = rdcycle();
     const uint32_t chunk_bytes = total_bytes / kNumIdmaEngines;
     uint32_t offset = 0;
-
+    const uint32_t t0 = rdcycle();
     for (uint32_t engine = 0; engine < kNumIdmaEngines; ++engine) {
         set_src_cmdbuf_0(src_addr + offset);
         set_dest_cmdbuf_0(dst_addr + offset);
