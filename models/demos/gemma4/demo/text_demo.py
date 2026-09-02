@@ -520,7 +520,10 @@ def run_batch_generation(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 enable_trace=enable_decode_trace,
-                reset_batch=(iteration == 0),
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
             )
             if isinstance(decode_out, tuple):
                 logits = decode_out[0]
@@ -716,6 +719,10 @@ def _run_generation_via_generator(
             page_table=page_table,
             kv_cache=tt_kv_cache,
             sampling_params=device_sampling_params,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         if device_sampling_params is not None:
             out_tok = decode_out.long().view(batch_size, 1)

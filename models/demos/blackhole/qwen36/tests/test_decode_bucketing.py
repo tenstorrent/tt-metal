@@ -66,6 +66,47 @@ def test_bucket_selection():
     logger.info("PASSED: bucket selection picks smallest pow2 >= num_active and never drops active rows")
 
 
+def test_positional_slot_remap_moves_gdn_state_and_keeps_full_width(monkeypatch):
+    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
+    from models.tt_transformers.tt.generator import Generator
+
+    remaps = []
+    forwarded = []
+    model = SimpleNamespace(
+        num_devices=2,
+        args=SimpleNamespace(max_batch_size=4),
+        sampling=None,
+        _remap_gdn_slots=remaps.append,
+    )
+    wrapper = SimpleNamespace(model=[model])
+    monkeypatch.setenv("TT_DECODE_BUCKETING", "1")
+    monkeypatch.setattr(
+        Generator,
+        "decode_forward",
+        lambda self, *args, **kwargs: forwarded.append((args, kwargs)) or "output",
+    )
+    tokens, positions = _padded_decode_batch(1, 4)
+    slot_remap = [0, 1, 2, 3]
+
+    result = Qwen36ForCausalLM.decode_forward(
+        wrapper,
+        tokens,
+        positions,
+        None,
+        None,
+        True,
+        True,
+        None,
+        None,
+        None,
+        slot_remap,
+    )
+
+    assert result == "output"
+    assert remaps == [slot_remap]
+    assert forwarded[0][0][0].shape[0] == 4
+
+
 def test_unsupported_device_sampling_fails_at_startup(expect_error):
     from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
 

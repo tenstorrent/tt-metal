@@ -162,6 +162,8 @@ def input_processor_for_qwen_text(ctx, inputs):
 
 # @INPUT_REGISTRY.register_input_processor(input_processor_for_llama_text)
 class LlamaForCausalLM(Generator):
+    decode_input_update_contract = 1
+
     # Class-level capabilities
     model_capabilities = {
         "supports_async_decode": True,
@@ -214,6 +216,8 @@ class LlamaForCausalLM(Generator):
 
 # @INPUT_REGISTRY.register_input_processor(input_processor_for_qwen_text)
 class QwenForCausalLM(Generator):
+    decode_input_update_contract = 1
+
     # Class-level capabilities
     model_capabilities = {
         "supports_sample_on_device": True,

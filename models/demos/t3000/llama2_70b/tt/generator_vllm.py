@@ -16,6 +16,8 @@ from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGen
 
 
 class TtLlamaForCausalLM(TtLlamaModelForGeneration):
+    decode_input_update_contract = 1
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -70,6 +72,24 @@ class TtLlamaForCausalLM(TtLlamaModelForGeneration):
 
     def prefill_forward(self, tokens: torch.Tensor, page_table, kv_cache, prompt_lens):
         return super().prefill_forward(tokens, 0, page_table, kv_cache, prompt_lens)
+
+    def decode_forward(
+        self,
+        *args,
+        reload_inputs: bool,
+        reload_page_table: bool,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
+        slot_remap=None,
+        **kwargs,
+    ):
+        if not reload_inputs or reload_page_table or reload_sampling_params or reset_sampling_state:
+            raise ValueError("T3000 Llama requires a full host-input reload and has no " "device sampling state")
+        # This host-only adapter has no persistent model state keyed by vLLM's
+        # condensed batch slots. Contract v1 still delivers the layout remap on
+        # every decode so stateful adapters can consume it; accepting and
+        # ignoring it here is therefore intentional.
+        return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)

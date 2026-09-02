@@ -379,6 +379,8 @@ def _decode_sampling_step(generator, seeds, positions, reload_inputs, max_batch_
         [None],
         sampling_params=params,
         start_pos=[torch.tensor(positions, dtype=torch.int32)],
+        reload_sampling_params=True,
+        reset_sampling_state=False,
         reload_inputs=reload_inputs,
     )
     return generator.model[0].sampling.seed_manager.pushed[-1]
