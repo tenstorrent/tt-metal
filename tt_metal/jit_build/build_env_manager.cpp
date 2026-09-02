@@ -13,15 +13,19 @@
 #include <memory>
 #include <string>
 
+#include <cstdlib>
 #include <tt_stl/assert.hpp>
 #include "common/stable_hash.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
+#include "jit_build/jit_build_utils.hpp"
 #include "jit_build/precompiled.hpp"
 #include "jit_build/jit_device_config.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/rtoptions.hpp"
+#include "llrt/tt_cluster.hpp"
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 
