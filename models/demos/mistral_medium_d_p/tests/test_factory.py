@@ -27,16 +27,19 @@ _CONFIG_JSON = os.path.join(os.path.dirname(__file__), "..", "configs", "Mistral
 
 # Mesh shapes this model is tested on. (8,4) is the hardware target (SP=8 x TP=4).
 #
-# Only the QuietBox rung is wired up today - the ladder is being rebuilt one rung at a time as
-# hardware becomes reachable, so shapes are added back deliberately rather than kept on spec:
+# The ladder is being rebuilt one rung at a time as hardware becomes reachable, so shapes are added
+# back deliberately rather than kept on spec:
 #   (4,1)  4 chips  - SP=4 ring at Galaxy per-device shapes, via the TP-slice rig
 #                     (MeshConfig.is_tp_slice: tp=4 for shapes, 1 device on the TP axis).  <- QuietBox
 #                     Sequence halves with SP (chunk_global = sp * chunk_local), so per-device
 #                     work matches SP=8 exactly - which is the whole point of the rung.
-#   (8,4)  32 chips - the full SP=8 x TP=4 target.                                         <- Galaxy
+#   (8,4)  32 chips - the full SP=8 x TP=4 target. Declared explicitly (with linear_fabric=True,
+#                     the plain-mesh BH Galaxy has no wrap-around links) by test_dense_mlp_vs_ref;
+#                     auto-skips wherever 32 chips don't fit.                              <- Galaxy
 #
-# Not yet re-added: the LoudBox SP=8 rung ((8,1), needs a custom mesh-graph descriptor), and the
-# column/row-parallel QKV + o_proj tests that exercise the real TP axis and its CCLs.
+# Not yet re-added: the LoudBox SP=8 rung ((8,1), needs a custom mesh-graph descriptor), the
+# column/row-parallel QKV + o_proj tests that exercise the real TP axis and its CCLs, and the
+# attention block on (8,4).
 MESH_SHAPES = [(4, 1)]
 
 

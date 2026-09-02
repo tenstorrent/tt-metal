@@ -16,20 +16,56 @@ Parallelism (TP=8 on the mesh cols):
     over the full hidden dim, which a TP **reduce-scatter** both completes and lands as ``emb/tp`` —
     the sharded residual's layout. No trailing all-gather: that belongs in front of the next norm.
 
-gate and up are stored FUSED as one ``[hidden, 2*I_local]`` weight so the two column-parallel
-matmuls become one; the halves are split on device before the activation.
+gate and up are kept as TWO separate column-parallel matmuls. At the M=640 prefill target these are
+weight-bandwidth-bound (the ~187 MB/chip bfp8 weight stream dominates), so splitting costs almost no
+extra matmul time, while a fused ``[hidden, 2*I_local]`` weight would pay two DRAM-round-trip
+``ttnn.slice`` ops (~105 us at s=5k) to separate its output halves.
 """
 
-import torch
+import math
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.mistral_medium_d_p.config import MeshConfig
 from models.demos.mistral_medium_d_p.utils.general_utils import get_cache_file_name
 from models.demos.mistral_medium_d_p.utils.substate import substate
 
+# (in0_block_w, out_subblock_h, out_subblock_w) per exact per-chip (M, K, N), from
+# tests/perf/sweep_mlp_matmul_tune.py; unswept shapes fall back to ttnn's auto config.
+_SWEPT_PROGRAM_CONFIGS = {
+    (640, 12288, 7168): (24, 2, 1),  # w1/w3 (gate, up), TP=4
+    (640, 7168, 12288): (16, 1, 8),  # w2 (down), TP=4
+}
+
+
+def _swept_program_config(mesh_device, m, k, n):
+    """The swept 2D-mcast program config for this exact per-chip matmul shape, or None (auto)."""
+    swept = _SWEPT_PROGRAM_CONFIGS.get((m, k, n))
+    if swept is None:
+        return None
+    in0_block_w, sub_h, sub_w = swept
+    grid = mesh_device.compute_with_storage_grid_size()
+    per_core_m = math.ceil(m / ttnn.TILE_SIZE / grid.y)
+    per_core_n = math.ceil(n / ttnn.TILE_SIZE / grid.x)
+    # A different worker grid than the swept 12x10 changes the per-core blocks; only apply the
+    # tuned subblocks where they still tile them exactly.
+    if per_core_m % sub_h or per_core_n % sub_w:
+        return None
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=sub_h,
+        out_subblock_w=sub_w,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+
 
 class MLP:
-    """Dense SwiGLU FFN (column-parallel gate/up, row-parallel down + TP all-reduce)."""
+    """Dense SwiGLU FFN: two column-parallel gate/up matmuls, row-parallel down + TP reduce-scatter."""
 
     def __init__(
         self,
@@ -52,6 +88,7 @@ class MLP:
         self.ccl = ccl_manager
         self.hidden_size = hf_config.hidden_size
         self.intermediate_size = hf_config.intermediate_size
+        self.local_intermediate = self.intermediate_size // self.mesh_config.tp
 
         if state_dict:
             for name in ("gate_proj", "up_proj", "down_proj"):
@@ -59,38 +96,23 @@ class MLP:
                 assert "weight" in sub, f"MLP state_dict is missing {name}.weight"
                 assert "bias" not in sub, f"{name} carries a bias, but MistralMLP is bias-free"
             # HF stores nn.Linear as [out, in]; ttnn.linear wants [in, out].
-            gate = substate(state_dict, "gate_proj")["weight"].transpose(-1, -2)  # [H, I]
-            up = substate(state_dict, "up_proj")["weight"].transpose(-1, -2)  # [H, I]
-            down = substate(state_dict, "down_proj")["weight"].transpose(-1, -2)  # [I, H]
-
-            # Interleave per TP shard so device i holds [gate_i | up_i] contiguously; a plain
-            # cat([gate, up], -1) would give device i the wrong halves once column_parallel splits it.
-            tp = self.mesh_config.tp
-            w13 = (
-                torch.cat(
-                    [
-                        torch.cat([torch.chunk(gate, tp, dim=-1)[i], torch.chunk(up, tp, dim=-1)[i]], dim=-1)
-                        for i in range(tp)
-                    ],
-                    dim=-1,
-                )
-                .unsqueeze(0)
-                .unsqueeze(0)
-            )
-            down = down.unsqueeze(0).unsqueeze(0)
+            gate = substate(state_dict, "gate_proj")["weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+            up = substate(state_dict, "up_proj")["weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+            down = substate(state_dict, "down_proj")["weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
         else:
-            w13 = None
-            down = None
+            gate = up = down = None
 
-        self.w13 = ttnn.as_tensor(
-            w13,
+        column_parallel = dict(
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=weight_dtype,
             mesh_mapper=self.mesh_config.column_parallel(mesh_device),
-            cache_file_name=get_cache_file_name(tensor_cache_path, "w_gate_up_fused"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        self.w1 = ttnn.as_tensor(
+            gate, cache_file_name=get_cache_file_name(tensor_cache_path, "w_gate"), **column_parallel
+        )
+        self.w3 = ttnn.as_tensor(up, cache_file_name=get_cache_file_name(tensor_cache_path, "w_up"), **column_parallel)
         self.w2 = ttnn.as_tensor(
             down,
             device=mesh_device,
@@ -100,7 +122,18 @@ class MLP:
             cache_file_name=get_cache_file_name(tensor_cache_path, "w_down"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.local_intermediate = self.intermediate_size // self.mesh_config.tp
+
+        # The fidelity the swept program configs were measured with; None (auto) off-BH.
+        self.mm_compute_kernel_config = (
+            ttnn.types.BlackholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            if is_blackhole()
+            else None
+        )
 
     def __call__(self, x):
         """Forward.
@@ -115,20 +148,37 @@ class MLP:
         """
         activation_dtype = ttnn.bfloat8_b if x.shape[-2] > 32 * 1024 else ttnn.bfloat16
         i_local = self.local_intermediate
+        s_local = x.shape[-2]
 
-        w13_out = ttnn.linear(x, self.w13, dtype=activation_dtype)  # [1, 1, S, 2*I_local]
-        b, c, s = w13_out.shape[0], w13_out.shape[1], w13_out.shape[2]
-        gate = ttnn.slice(w13_out, [0, 0, 0, 0], [b, c, s, i_local], [1, 1, 1, 1])
-        up = ttnn.slice(w13_out, [0, 0, 0, i_local], [b, c, s, 2 * i_local], [1, 1, 1, 1])
-        w13_out.deallocate(True)
+        gate_up_program_config = _swept_program_config(self.mesh_device, s_local, self.hidden_size, i_local)
+        gate = ttnn.linear(
+            x,
+            self.w1,
+            dtype=activation_dtype,
+            program_config=gate_up_program_config,
+            compute_kernel_config=self.mm_compute_kernel_config,
+        )
+        up = ttnn.linear(
+            x,
+            self.w3,
+            dtype=activation_dtype,
+            program_config=gate_up_program_config,
+            compute_kernel_config=self.mm_compute_kernel_config,
+        )
 
-        # silu(gate) * up, with the activation fused into the multiply (the repo's idiom, e.g.
+        # The activation is fused into the multiply (the repo's idiom, e.g.
         # llama3_70b_galaxy/tt/llama_mlp.py) so this is one device op rather than two.
         gated = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], dtype=activation_dtype)
         gate.deallocate(True)
         up.deallocate(True)
 
-        out = ttnn.linear(gated, self.w2, dtype=activation_dtype)  # partial sum over hidden
+        out = ttnn.linear(
+            gated,
+            self.w2,
+            dtype=activation_dtype,
+            program_config=_swept_program_config(self.mesh_device, s_local, i_local, self.hidden_size),
+            compute_kernel_config=self.mm_compute_kernel_config,
+        )  # partial sum over hidden
         gated.deallocate(True)
 
         if self.mesh_config.tp > 1:
