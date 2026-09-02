@@ -8,7 +8,10 @@
 #include <optional>
 #include <string_view>
 
+#include "device/compressor_state_select.hpp"
+#include "tt-metalium/experimental/fabric/fabric.hpp"
 #include "tt-metalium/mesh_device.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/point_to_point/point_to_point.hpp"
 
@@ -57,6 +60,15 @@ ttnn::Tensor shift_state(
     const ttnn::Tensor& initial_state,
     uint32_t cluster_axis,
     ::ttnn::ccl::Topology topology) {
+    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+        auto gathered_state = ttnn::all_gather(
+            local_state,
+            /*dim=*/2,
+            cluster_axis,
+            local_state.memory_config());
+        return ttnn::prim::compressor_state_select(gathered_state, initial_state, cluster_axis);
+    }
+
     auto output = ttnn::clone(
         initial_state,
         /*dtype=*/std::nullopt,
