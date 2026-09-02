@@ -126,8 +126,7 @@ void deassert_trisc() {
         trisc_print->aux.lock = 0;
         uint32_t wpos = trisc_print->aux.wpos;
         if (wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC && wpos != DEBUG_PRINT_SERVER_STARTING_MAGIC) {
-            trisc_print->aux.wpos = 0;
-            trisc_print->aux.rpos = 0;
+            trisc_print->aux.wpos = DEBUG_PRINT_SERVER_STARTING_MAGIC;
         }
     }
 #endif
