@@ -1346,16 +1346,10 @@ h2.tt-api-section-heading {
   margin: 0 !important;
 }
 
-/* Hide raw docutils table (replaced by api_style.js list) — gated on the custom
-   shell that loads api_style.js so plain builds keep native API tables. */
-body:has(.tt-top-nav) .rst-content dl.cpp.function table.docutils,
-body:has(.tt-top-nav) .rst-content dl.py.function table.docutils,
-body:has(.tt-top-nav) .rst-content dl.py.class table.docutils {
-  display: none !important;
-}
-
-/* Hide field-list via CSS too (JS also removes from DOM) */
-body:has(.tt-top-nav) .rst-content dl.py > dd > dl.field-list {
+/* Hide raw C++ docutils table (replaced by api_style.js list) — gated on the custom
+   shell that loads api_style.js so plain builds keep native API tables.
+   Python dl.py tables are intentional docstring content and must remain visible. */
+body:has(.tt-top-nav) .rst-content dl.cpp.function table.docutils {
   display: none !important;
 }
 
