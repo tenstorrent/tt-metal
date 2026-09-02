@@ -65,6 +65,11 @@ void kernel_main() {
     constexpr uint32_t num_tree_reduction_rounds = get_compile_time_arg_val(30);
     constexpr uint32_t original_block_size = get_compile_time_arg_val(31);
     constexpr bool has_block_padding = original_block_size > 0 && original_block_size < 32;
+    // Speculative multi-position mode: Tg candidates per batch row (Sq_chunk_t == PNHt == Tg),
+    // each row-tile carrying its own causal bound from this row's group of Tg entries in the
+    // [B*Tg] cur_pos vector (group base = cur_batch*Tg). 0 = off.
+    constexpr uint32_t spec_multi_pos_T = get_compile_time_arg_val(32);
+    constexpr bool spec_multi_pos = spec_multi_pos_T > 0;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -140,6 +145,10 @@ void kernel_main() {
     constexpr uint32_t cur_pos_base = St * 32 - 1;
     uint32_t cur_pos = cur_pos_base;  // default to non-causal, which we do attention on the entire kv cache. In this
                                       // case we set cur_pos to the last position
+    // Spec mode: smallest of THIS batch row's Tg candidate bounds. Any chunk whose last
+    // covered position is past it needs the per-row-tile mask (see the mask predicate in the
+    // chunk loop).
+    uint32_t spec_pos_min = 0;
     if constexpr (is_causal) {
         // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
         if (cur_pos_arg != UINT32_MAX) {
@@ -147,7 +156,16 @@ void kernel_main() {
         } else {
             // Read cur_pos from CB using mailbox-based synchronization (issue #27979).
             CircularBuffer(cb_cur_pos).wait_front(1);
-            cur_pos = read_tile_value(cb_cur_pos, 0, cur_batch / q_heads_parallel_factor);
+            if constexpr (spec_multi_pos) {
+                // cur_pos holds B*Tg bounds; this batch row owns the group starting at
+                // cur_batch*Tg. Within a group positions are ascending: entry 0 is the
+                // smallest bound (mask predicate), entry Tg-1 the largest (KV scan range).
+                const uint32_t spec_pos_base = cur_batch * spec_multi_pos_T;
+                spec_pos_min = read_tile_value(cb_cur_pos, 0, spec_pos_base);
+                cur_pos = read_tile_value(cb_cur_pos, 0, spec_pos_base + spec_multi_pos_T - 1);
+            } else {
+                cur_pos = read_tile_value(cb_cur_pos, 0, cur_batch / q_heads_parallel_factor);
+            }
             CircularBuffer(cb_cur_pos).pop_front(1);
         }
         if (cur_pos == UINT32_MAX) {
@@ -248,7 +266,13 @@ void kernel_main() {
 #ifdef DYNAMIC_CHUNK_SIZE
     const uint32_t qk_subblock_h_dynamic = 1;
     const uint32_t qk_subblock_w_dynamic = Sk_chunk_t_dynamic;  // Guaranteed < DST
-    const uint32_t qk_in0_num_subblocks_dynamic = 1;
+    // matmul_blocks() wants in0_num_subblocks == M / subblock_h; with subblock_h fixed at 1
+    // that is Sq_chunk_t, not a literal 1. The literal was correct for every configuration
+    // that reaches the dynamic-chunk path today (all of which have Sq_chunk_t == 1, so this
+    // is byte-for-byte identical for them), but it silently produced only the first row-tile
+    // of QK for Sq_chunk_t > 1 — which is exactly what spec multi-position mode needs
+    // (Sq_chunk_t == PNHt == T).
+    const uint32_t qk_in0_num_subblocks_dynamic = Sq_chunk_t;
     const uint32_t qk_in1_num_subblocks_dynamic = 1;
     const uint32_t out_in0_block_w_dynamic = Sk_chunk_t_dynamic;
     const uint32_t out_num_blocks_dynamic = 1;
@@ -341,11 +365,29 @@ void kernel_main() {
             reconfig_data_format(cb_k_in, cb_q_in);
             pack_reconfig_data_format(cb_qk_im);
 
+            // Spec mode mask predicate, evaluated by EVERY core for EVERY chunk it owns: a
+            // chunk needs the per-row-tile mask iff its last covered position is past this
+            // batch row's smallest candidate bound. Since a group's Tg bounds span <= Tg-1
+            // consecutive positions and a chunk is >= 32 positions wide, at most two chunks in
+            // the group's scan qualify — but the reversed chunk distribution can put them on
+            // two different cores, so this cannot be reduced to "the reducer core's last
+            // chunk" the way the legacy single-bound mask is. The writer generates one mask
+            // block per chunk that satisfies the identical predicate, in the same ascending
+            // chunk order.
+            const bool spec_chunk_needs_mask =
+                spec_multi_pos && (k_chunk * k_chunk_size_dynamic + k_chunk_size_dynamic - 1) > spec_pos_min;
+
             // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
 #ifdef DYNAMIC_CHUNK_SIZE
-                bool add_causal_mask_fusion = is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk;
-                bool add_sliding_window_mask_fusion = k_chunk == window_start_chunk && window_start_unaligned > 0;
-                bool add_mask_fusion = add_causal_mask_fusion || use_attention_mask || add_sliding_window_mask_fusion;
+            // Spec mode never fuses the causal mask into the matmul: the fused path
+            // wait_front()s the mask without popping it, which can only serve one masked
+            // chunk. The non-fused add below pops, so several masked chunks can flow
+            // through the single-buffered mask CB. At <= 2 masked chunks per core per
+            // call the extra eltwise add is noise.
+            bool add_causal_mask_fusion =
+                !spec_multi_pos && is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk;
+            bool add_sliding_window_mask_fusion = k_chunk == window_start_chunk && window_start_unaligned > 0;
+            bool add_mask_fusion = add_causal_mask_fusion || use_attention_mask || add_sliding_window_mask_fusion;
 #else
                 bool add_mask_fusion = false;
                 bool add_sliding_window_mask_fusion = false;
@@ -386,7 +428,14 @@ void kernel_main() {
                 }
 
                 if (!add_mask_fusion) {
-                    if constexpr (is_causal) {
+                    if constexpr (spec_multi_pos) {
+                        // One mask block per qualifying chunk, popped after use so the next
+                        // masked chunk's block can be produced into the same CB.
+                        if (spec_chunk_needs_mask) {
+                            reconfig_data_format(cb_qk_im, cb_mask_in);
+                            add_block_inplace<true>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+                        }
+                    } else if constexpr (is_causal) {
                         // For decode, we only apply mask at the last chunk for causal mode
                         if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
                             reconfig_data_format(cb_qk_im, cb_mask_in);

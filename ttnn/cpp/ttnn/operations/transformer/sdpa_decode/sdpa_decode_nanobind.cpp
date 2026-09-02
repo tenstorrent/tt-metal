@@ -103,7 +103,16 @@ void bind_sdpa_decode(nb::module_& mod) {
         // SlidingWindowSpec); without it, positions past the bounded capacity collapse
         // onto physical block 0 and silently corrupt the cache. Must be a multiple of
         // (effective) block_size and >= sliding_window_size. Paged-mode only.
-        nb::arg("cache_position_modulo") = nb::none());
+        nb::arg("cache_position_modulo") = nb::none(),
+        // spec_multi_pos_tiles = Tg (0 = off) folds Tg speculative-decode candidates that
+        // share one KV cache onto a single batch row, so that row's KV is read from DRAM
+        // once instead of Tg times. Q is [1, B, Tg*32, DH] (batch b's row-tile j is
+        // candidate b*Tg + j, its valid q-heads in rows j*32..), page_table has B rows, and
+        // cur_pos_tensor holds B*Tg positions, ascending within each group of Tg; candidate
+        // b*Tg+j attends to [0, cur_pos[b*Tg+j]] inclusive. Output is [1, B, Tg*32, DH] —
+        // byte-identical to the legacy B*Tg-row output [1, B*Tg, 32, DH]. Requires causal +
+        // paged + num_kv_heads==1, unsharded bf16 TILE Q, no sliding window, no MLA.
+        nb::arg("spec_multi_pos_tiles") = 0u);
 
     ttnn::bind_function<"flash_multi_latent_attention_decode", "ttnn.transformer.">(
         mod,

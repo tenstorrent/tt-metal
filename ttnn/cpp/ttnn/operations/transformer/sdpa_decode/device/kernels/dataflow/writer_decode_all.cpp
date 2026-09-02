@@ -47,8 +47,13 @@ void kernel_main() {
     constexpr uint32_t num_tree_reduction_rounds = get_compile_time_arg_val(26);
     constexpr uint32_t original_block_size = get_compile_time_arg_val(27);
     constexpr bool has_block_padding = original_block_size > 0 && original_block_size < 32;
+    // Speculative multi-position mode: Tg candidates on each batch row, PNHt == Tg, one causal
+    // bound per row-tile taken from this row's group of Tg entries in the [B*Tg] cur_pos
+    // vector (group base = cur_batch*Tg). 0 = off.
+    constexpr uint32_t spec_multi_pos_T = get_compile_time_arg_val(28);
+    constexpr bool spec_multi_pos = spec_multi_pos_T > 0;
 
-    constexpr auto out_args = TensorAccessorArgs<28>();
+    constexpr auto out_args = TensorAccessorArgs<29>();
 
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
@@ -118,6 +123,10 @@ void kernel_main() {
     constexpr uint32_t cur_pos_base = St * 32 - 1;
     uint32_t cur_pos = cur_pos_base;  // default to non-causal, which we do attention on the entire kv cache. In this
                                       // case we set cur_pos to the last position
+    // Spec mode: a private copy of THIS batch row's group of Tg bounds, taken before the CB is
+    // popped, so the per-row-tile mask bounds stay readable for the rest of the kernel.
+    constexpr uint32_t spec_pos_n = spec_multi_pos ? spec_multi_pos_T : 1;
+    uint32_t spec_pos[spec_pos_n];
     // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
     if constexpr (is_causal) {
         if (cur_pos_arg != UINT32_MAX) {
@@ -127,7 +136,18 @@ void kernel_main() {
             cb_index.wait_front(1);
             uint32_t index_cb_ptr = cb_index.get_read_ptr();
             volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
-            cur_pos = index_ptr[(uint32_t)(cur_batch / q_heads_parallel_factor)];
+            if constexpr (spec_multi_pos) {
+                // cur_pos holds B*Tg bounds; this batch row owns the group starting at
+                // cur_batch*Tg. Row-tile j of the group takes bound spec_pos[j].
+                const uint32_t spec_pos_base = cur_batch * spec_multi_pos_T;
+                for (uint32_t j = 0; j < spec_multi_pos_T; ++j) {
+                    spec_pos[j] = index_ptr[spec_pos_base + j];
+                }
+                // Positions are ascending within a group, so its last entry sets the KV scan range.
+                cur_pos = spec_pos[spec_multi_pos_T - 1];
+            } else {
+                cur_pos = index_ptr[(uint32_t)(cur_batch / q_heads_parallel_factor)];
+            }
             cb_index.pop_front(1);
         }
 
@@ -228,7 +248,25 @@ void kernel_main() {
     }
 
     // generate and send mask to compute if causal (only if we have local data to process)
-    if constexpr (is_causal) {
+    if constexpr (spec_multi_pos) {
+        // Spec mode: this row's Tg candidate bounds span <= Tg-1 consecutive positions while a
+        // chunk is >= 32 positions wide, so at most the top two chunks of the group's scan
+        // carry any masking. A chunk needs a mask iff its LAST covered position is past the
+        // group's smallest bound; every other chunk is fully visible to all of the group's
+        // candidates. The predicate is per-chunk (not "the last chunk of the reducer core"),
+        // because with the reversed chunk distribution the two masked chunks can land on two
+        // different cores. The compute kernel evaluates the identical predicate and pops one
+        // block per masked chunk, so pushes and pops stay in lockstep through the
+        // single-buffered mask CB.
+        const uint32_t spec_pos_min = spec_pos[0];
+        for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
+            const uint32_t chunk_start_pos = k_chunk * k_chunk_size_dynamic;
+            const uint32_t chunk_last_pos = chunk_start_pos + k_chunk_size_dynamic - 1;
+            if (chunk_last_pos > spec_pos_min) {
+                generate_mask_spec_multi_pos<cb_mask_in, PNHt>(Sk_chunk_t_dynamic, chunk_start_pos, spec_pos);
+            }
+        }
+    } else if constexpr (is_causal) {
         // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
         generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
     }

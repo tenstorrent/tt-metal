@@ -21,6 +21,8 @@ namespace ttnn::prim {
 void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     bool use_mla = operation_attributes.use_mla.value_or(false);
+    const uint32_t spec_T = operation_attributes.spec_multi_pos_tiles;
+    const bool spec_multi_pos = spec_T > 0;
 
     if (use_mla) {
         TT_FATAL(
@@ -77,6 +79,60 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             "Head dimension of V must be less than or equal to head dim of Q, got {} and {}",
             operation_attributes.head_dim_v.value(),
             q_shape[3]);
+    }
+
+    if (spec_multi_pos) {
+        // Speculative multi-position mode: spec_T candidates folded onto EACH batch row, so
+        // every row scans its KV cache once instead of spec_T times. With B batch rows the
+        // call carries B*spec_T candidates; batch b owns cur_pos entries
+        // [b*spec_T, (b+1)*spec_T). Everything below is what the kernel path assumes; a
+        // violation would silently produce wrong attention bounds rather than fail, so all
+        // of it is checked up front.
+        TT_FATAL(operation_attributes.is_causal, "spec_multi_pos_tiles requires is_causal");
+        TT_FATAL(operation_attributes.paged_attention, "spec_multi_pos_tiles requires paged attention");
+        TT_FATAL(tensor_args.page_table_tensor.has_value(), "spec_multi_pos_tiles requires a page_table tensor");
+        TT_FATAL(!use_mla, "spec_multi_pos_tiles is not supported with multi-latent attention");
+        TT_FATAL(
+            !operation_attributes.sliding_window_size.has_value() ||
+                operation_attributes.sliding_window_size.value() == 0,
+            "spec_multi_pos_tiles is not supported with sliding_window_size");
+        TT_FATAL(
+            !tensor_args.attn_mask.has_value(), "spec_multi_pos_tiles is not supported with an explicit attn_mask");
+        TT_FATAL(
+            !input_tensors.at(0).is_sharded(),
+            "spec_multi_pos_tiles requires an unsharded (DRAM interleaved) Q tensor");
+        TT_FATAL(
+            input_tensors.at(0).dtype() == DataType::BFLOAT16,
+            "spec_multi_pos_tiles requires a BFLOAT16 Q tensor, got {}",
+            input_tensors.at(0).dtype());
+        TT_FATAL(
+            input_tensors.at(0).layout() == Layout::TILE,
+            "spec_multi_pos_tiles requires a TILE layout Q tensor, got {}",
+            input_tensors.at(0).layout());
+        TT_FATAL(k_shape[1] == 1, "spec_multi_pos_tiles requires num_kv_heads == 1, got {}", k_shape[1]);
+        TT_FATAL(
+            q_shape[2] == spec_T * tt::constants::TILE_HEIGHT,
+            "spec_multi_pos_tiles={}: Q must have {} padded rows per batch (one 32-row tile per candidate), got {}",
+            spec_T,
+            spec_T * tt::constants::TILE_HEIGHT,
+            q_shape[2]);
+        const auto& spec_page_table = tensor_args.page_table_tensor.value();
+        TT_FATAL(!spec_page_table.is_sharded(), "spec_multi_pos_tiles requires an unsharded page_table tensor");
+        // B comes from the page table in paged mode (see the program factory), so the Q batch
+        // dim must agree with it: one page-table row per group of spec_T candidates.
+        TT_FATAL(
+            spec_page_table.padded_shape()[0] == q_shape[1],
+            "spec_multi_pos_tiles: page_table must have one row per Q batch group, got {} rows for Q batch {}",
+            spec_page_table.padded_shape()[0],
+            q_shape[1]);
+        TT_FATAL(tensor_args.cur_pos_tensor.has_value(), "spec_multi_pos_tiles requires a cur_pos tensor");
+        // use_half_tile is is_causal && num_q_heads <= 16 && bf16; num_q_heads is T*32 > 16
+        // here so it is already false, but the kernel path (full-tile masks, full-tile Q
+        // row-tiles) depends on it, so make the dependency explicit.
+        TT_FATAL(
+            q_shape_unpadded[2] > 16,
+            "spec_multi_pos_tiles requires full 32x32 tiles (use_half_tile must be false), but Q has {} logical heads",
+            q_shape_unpadded[2]);
     }
 
     // Input 0 must be sharded by height or DRAM interleaved. All other inputs must be in DRAM.
@@ -212,11 +268,24 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             const auto cur_pos_shape = cur_pos_tensor.padded_shape();
 
             if (!cur_pos_tensor.is_sharded()) {
-                TT_FATAL(
-                    cur_pos_shape[-1] == B,
-                    "cur_pos must have batch size equal to Q, got {} and {}",
-                    cur_pos_shape[0],
-                    B);
+                if (spec_multi_pos) {
+                    // Spec mode collapses spec_T candidates onto each batch row, so cur_pos
+                    // carries B*spec_T entries: batch b's group is [b*spec_T, (b+1)*spec_T).
+                    TT_FATAL(
+                        cur_pos_shape[-1] == B * spec_T,
+                        "spec_multi_pos_tiles={}: cur_pos must have {} entries (B={} groups of {}), got {}",
+                        spec_T,
+                        B * spec_T,
+                        B,
+                        spec_T,
+                        cur_pos_shape[-1]);
+                } else {
+                    TT_FATAL(
+                        cur_pos_shape[-1] == B,
+                        "cur_pos must have batch size equal to Q, got {} and {}",
+                        cur_pos_shape[0],
+                        B);
+                }
             }
         }
 
@@ -527,7 +596,8 @@ Tensor sdpa_decode(
     std::optional<bool> use_mla,
     std::optional<uint32_t> head_dim_v,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
-    std::optional<uint32_t> cache_position_modulo) {
+    std::optional<uint32_t> cache_position_modulo,
+    uint32_t spec_multi_pos_tiles) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
@@ -545,6 +615,7 @@ Tensor sdpa_decode(
         .paged_cache_geometry =
             paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         .cache_position_modulo = cache_position_modulo,
+        .spec_multi_pos_tiles = spec_multi_pos_tiles,
     };
 
     auto tensor_args = OperationType::tensor_args_t{
