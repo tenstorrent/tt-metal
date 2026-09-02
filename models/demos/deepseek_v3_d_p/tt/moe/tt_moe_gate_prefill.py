@@ -1054,7 +1054,7 @@ class TtMoEGatePrefill(LightweightModule):
             topk_groups=self.config.n_limited_groups,
             n_activated_experts=self.config.n_activated_experts,
             route_scale=self.config.route_scale,
-            stable_sort=True,
+            stable_sort=False,  # A/B triage for the bh_sc1 55k@5k KV-PCC failure - revert before merge
             epsilon=1e-20,
             score_func=self.config.score_func,
             padding_config=padding_config,
