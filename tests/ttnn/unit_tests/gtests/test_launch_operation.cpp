@@ -485,7 +485,7 @@ struct PerCoordProdAllFactoryWithOverride : PerCoordProdAllFactory {
         const Op::operation_attributes_t& attrs,
         const Op::tensor_args_t& tensor_args,
         Op::tensor_return_value_t& tensor_return_value,
-        const ttnn::MeshCoordinateRange& range) {
+        const ttnn::MeshCoordinateRange& /*range*/) {
         ++override_calls;
         return Op::ProdAllProgramFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value).run_params;
     }
