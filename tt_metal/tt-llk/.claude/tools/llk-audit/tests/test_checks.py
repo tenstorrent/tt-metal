@@ -1172,6 +1172,39 @@ def test_srcreg_dest_to_src_unrelated_stall():
     assert len(out) == 1 and out[0].hint == "DEST2SRC_WAIT_UNRELATED", out
 
 
+@case
+def test_srcreg_dest_to_src_quasar_is_unconfirmed_not_flagged():
+    # Quasar's 4-operand STALLWAIT splits the wait condition across operands 2..4.
+    # The mask shape matches the WH/BH defect, but Quasar's bank model is not
+    # confirmed to need the drain -> surface as UNCONFIRMED, never as the flag.
+    F = "tt_llk_quasar/common/inc/cmath_common.h"
+    facts = [
+        fn("move_d2a_fixed_face", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2A", "TTI_MOVD2A(0, 0, addrmod, 0, 0)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("quasar", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1, out
+    assert out[0].hint == "DEST2SRC_NO_MATH_DRAIN_UNCONFIRMED", out
+    # The identical shape on Wormhole IS the flag.
+    out_wh = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out_wh) == 1 and out_wh[0].hint == "DEST2SRC_NO_MATH_DRAIN", out_wh
+
+
 # --- mailbox-sync (lite) --------------------------------------------------
 
 
