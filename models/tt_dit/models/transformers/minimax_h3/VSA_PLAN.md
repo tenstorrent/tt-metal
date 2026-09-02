@@ -170,6 +170,24 @@ softmax machinery +7.6 ms. Per-block irreducibles: 1024 cyc matmul (HiFi2) + ~1.
 (SFPU, pack-thread) -> 60% needs exp/math overlap plus fixed-cost amortization; remaining levers
 after v5: leader-as-worker (+13% peak basis), conditional rescale, pack trims.
 
+### Session 2 journal (v6-v12), 15s-median ms topk/model @ util
+| ver | change | result |
+|-----|--------|--------|
+| v6 | pipelined worker pulls (trid rings, batched kacks/progress) | flat 19.2/19.1 -- pulls were overlapped; fixed 2 latent deadlocks (cross-pass credit leak, lazy-post starvation) |
+| v7 | leader DRAM fetch pipeline (per-block trids, 4 deep) | flat -- fetch latency was overlapped too |
+| v8a | multicast log publish w/ seq words (no barriers/semaphores), READY handshake | 18.1/18.6 @21-22%; protocol floor 8.1->5.6 ms |
+| v8b | multicast K/V push into worker slots (REVERTED) | 25/27 ms: slot recycling gated on COMPUTE freeing slots kills the leader's run-ahead; pull-model copy-out is what decouples delivery from compute |
+| v9 | fused max+corr acquire + paired-QK (REVERTED fusion) | +1.4 ms -- broke the lag-1 exp overlap; lesson: the 3-thread schedule punishes naive fusion. Also: reduce seed copies are FACE-TRANSPOSED (sdpa_reduce_copy init); a corr operand needs a PLAIN copy |
+| v10 | lazy window emission: close windows w/o draining, per-half trid groups, non-blocking landed checks, in-order lazy kacks, post_limit-bounded progress | delivery floor 16.7->10.7 (topk) / 9.5->7.1 (model); depth 14 |
+| v11 | group-major compute: buffer window visits, phase-major chunks, batched max/corr acquires, one s1/s2/s3 per chunk, chunk-deferred PV w/ stashed credits | 18.0/17.0 @21.9-23.2%; max 707->380, corr+rescale 1268->545 cyc/visit; PV-sync wait grew (chunk exp backlog) |
+| v12 | blocked packs (rescale O width-4, full probs batches) | 17.9/16.8 @22.0-23.5% (best) |
+
+Measured hard floors (per worker, 15s topk median, probe 9 MATH timers + probes 1/3/5/7):
+- SFPU exp (lossless, pack-thread): ~6.5 ms -- sets util ceiling ~60% ALONE if everything else hides under it
+- PACK thread total (exp + ~30 packs/visit): ~10 ms
+- delivery: 10.7 ms = leader serialization 5.6 (1.55 us/arrival: gate+kreq+8 accessor read issues+mcast publish) + leader L1 egress ~5 (8 workers x 32KB/block through one core's two NoC ports)
+- next levers: split the block stream across the leader's two RISCs (halves the 5.6), batched publishes/kreqs, IAGF addressing; compute is within ~2x of its lossless SFPU floor
+
 ## Decisions log
 - **2026-08-31 machine setup**: 4x8 BH galaxy runs bare-metal (no docker): build_metal.sh with
   clang-20, create_venv.sh, pinned diffusers (abc5e9bf71) for the torch reference. Requires
