@@ -157,6 +157,9 @@ jobs:
           if [[ "$run_blackhole" == "true" ]]; then
             l2_nightly_skus+=("bh_p100" "bh_p150b_civ2" "bh_p150b_civ2_viommu" "sim_bh_p150" "bh_p300" "bh_quietbox_2" "bh_galaxy")
           fi
+          # Quasar has no silicon SKU; always include the simulator so experimental/quasar
+          # pytest legs in ttsim_unit_tests.yaml are scheduled on L2.
+          l2_nightly_skus+=("sim_quasar")
           l2_nightly_skus_str=$(IFS=,; echo "${l2_nightly_skus[*]}")
           echo "l2-nightly-skus=$l2_nightly_skus_str" >> $GITHUB_OUTPUT
 
@@ -176,7 +179,9 @@ jobs:
     needs: [build-artifact, generate-arch-matrix]
     if: |
       needs.generate-arch-matrix.outputs.l2-nightly-skus != '' && (
-        github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',compute_fused,')
+        github.event_name == 'schedule' ||
+        contains(format(',{0},', inputs.additional_test_categories), ',compute_fused,') ||
+        contains(format(',{0},', inputs.additional_test_categories), ',experimental,')
       )
     secrets: inherit
     uses: ./.github/workflows/ttsim-unit-tests-impl.yaml
@@ -186,7 +191,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
       additional_test_categories: >-
-        ${{ github.event_name == 'schedule' && 'compute_fused'
+        ${{ github.event_name == 'schedule' && 'compute_fused,experimental'
         || inputs.additional_test_categories }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 

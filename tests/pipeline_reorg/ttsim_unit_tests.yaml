@@ -13,7 +13,7 @@
 #     category appears in the comma-separated list; on schedule the filter is
 #     bypassed and every entry runs.
 
-# Entries use sim_<arch> SKUs (sim_wh_n150, sim_bh_p150) and run under
+# Entries use sim_<arch> SKUs (sim_wh_n150, sim_bh_p150, sim_quasar) and run under
 # the ttsim simulator on ubuntu-latest; the impl invokes setup-ttsim.
 # See .github/actions/setup-ttsim/action.yml.
 
@@ -30,3 +30,23 @@
 #   owner_id: U076Z1JJUQZ # Edwin Lee
 #   team: ttsim
 #   category: compute_fused
+
+# Quasar experimental ops on craq-sim. Point at the quasar subdirectory only — do not
+# glob the rest of experimental/ (WH/BH silicon suites already cover that).
+# Force the V1 NOC path: libttsim_qsr.so does not model V2 cmd-buf custom-0 registers
+# (#54794). Remove the grep/sed once a ttsim release models them.
+- name: ttnn nightly experimental quasar tests (craq-sim)
+  cmd: |
+    hdr=tt_metal/hw/inc/internal/tt-2xx/quasar/noc_nonblocking_api.h
+    grep -q 'defined(NOC_API_V1)' "$hdr"
+    sed -i '1i#define NOC_API_V1' "$hdr"
+    export ARCH_NAME=quasar CHIP_ARCH=quasar TT_SIMULATOR_LOCALHOST=1
+    pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_resnet_add.py \
+           tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py \
+           -xv --timeout=600
+  skus:
+    sim_quasar:
+      timeout: 60
+  owner_id: U080FKG7KEU # Utku Aydonat
+  team: ttsim
+  category: experimental

@@ -130,7 +130,8 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
+        ARCH_NAME: ${{ contains(matrix.test-group.sku, 'quasar') && 'quasar' || contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
+        CHIP_ARCH: ${{ contains(matrix.test-group.sku, 'quasar') && 'quasar' || contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole' }}
         LOGURU_LEVEL: INFO
       volumes:
         - ${{ github.workspace }}/docker-job:/work
