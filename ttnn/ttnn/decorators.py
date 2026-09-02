@@ -718,11 +718,14 @@ class FastOperation:
 
         recording = ttnn.graph.is_python_io_recording_enabled()
         started = False
+        python_io_record = None
         try:
             if recording:
                 ttnn.graph.track_function_start(self.python_fully_qualified_name)
                 started = True
-                ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+                python_io_record = ttnn.graph.record_python_operation(
+                    self.python_fully_qualified_name, function_args, function_kwargs
+                )
                 input_tensors = get_all_tensors((function_args, function_kwargs))
                 set_tensor_id(input_tensors)
 
@@ -733,18 +736,12 @@ class FastOperation:
                     result = self.function(*function_args, **function_kwargs)
         except TypeError as e:
             enhanced_msg = self._enhance_type_error_message(str(e), function_args, function_kwargs)
-            if recording:
-                ttnn.graph.record_python_operation_error(
-                    self.python_fully_qualified_name, "TypeError", enhanced_msg or str(e)
-                )
+            ttnn.graph.record_python_operation_error(python_io_record, "TypeError", enhanced_msg or str(e))
             if enhanced_msg:
                 raise TypeError(enhanced_msg) from e
             raise
         except Exception as exception:
-            if recording:
-                ttnn.graph.record_python_operation_error(
-                    self.python_fully_qualified_name, type(exception).__name__, str(exception)
-                )
+            ttnn.graph.record_python_operation_error(python_io_record, type(exception).__name__, str(exception))
             raise
         finally:
             if started:
@@ -1015,8 +1012,11 @@ class Operation:
                         self.python_fully_qualified_name, decorated_function
                     )
 
+                python_io_record = None
                 if ttnn.graph.is_python_io_recording_enabled():
-                    ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+                    python_io_record = ttnn.graph.record_python_operation(
+                        self.python_fully_qualified_name, function_args, function_kwargs
+                    )
 
                 if ttnn.CONFIG.enable_logging or ttnn.CONFIG.enable_comparison_mode:
                     input_tensors = get_all_tensors((function_args, function_kwargs))
@@ -1083,12 +1083,8 @@ class Operation:
                 finally:
                     captured_graph = ttnn.graph.end_graph_capture()
                     # Failure path: the success block below is skipped, so persist here instead.
-                    if (
-                        operation_error is not None
-                        and ttnn.graph.is_graph_capture_active()
-                        and ttnn.graph.is_python_io_recording_enabled()
-                    ):
-                        ttnn.graph.record_python_operation_error(self.python_fully_qualified_name, *operation_error)
+                    if operation_error is not None and ttnn.graph.is_graph_capture_active():
+                        ttnn.graph.record_python_operation_error(python_io_record, *operation_error)
                         ttnn.graph.store_captured_graph(captured_graph)
 
                 if ttnn.graph.is_graph_capture_active() and ttnn.graph.is_python_io_recording_enabled():

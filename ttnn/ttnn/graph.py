@@ -135,8 +135,8 @@ def track_function_start(function_name):
     A top-level operation first unwinds whatever scopes the capture still holds open.  An
     operation that raised from a call site with no scope guard never emitted its
     ``function_end``, and leaving its scope open would record this operation — and every one
-    after it — as a child of an operation that is already dead, hiding them from the report
-    (issue #28836).  Nothing can legitimately be open at this point: the decorators close
+    after it — as a child of an operation that is already dead, hiding them from the report.
+    Nothing can legitimately be open at this point: the decorators close
     their scope in a ``finally``, so a depth of zero means no operation is in flight.
 
     Args:
@@ -497,14 +497,18 @@ def record_python_operation(name, function_args, function_kwargs):
             record["python_stack_trace"] = []
 
     _python_io_data.append(record)
+    return record
 
 
-def record_python_operation_error(name, error_type, error_message):
-    """Attach the exception raised by an operation to its ``_python_io_data`` entry."""
-    for record in reversed(_python_io_data):
-        if record["name"] == name and "error" not in record:
-            record["error"] = {"type": error_type, "message": error_message}
-            return
+def record_python_operation_error(record, error_type, error_message):
+    """Attach the exception to the python_io record created for this call.
+
+    ``record`` is the object returned by :func:`record_python_operation`. If
+    that call never completed, pass ``None``; do not search older records by name.
+    """
+    if record is None or "error" in record:
+        return
+    record["error"] = {"type": error_type, "message": error_message}
 
 
 def store_output_tensor_ids(output_tensor_ids):

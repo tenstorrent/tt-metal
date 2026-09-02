@@ -3958,6 +3958,22 @@ class TestRecordPythonOperation:
         entry = g._python_io_data[0]
         assert entry["arguments"] == {}
 
+    def test_error_attaches_only_to_the_returned_record(self):
+        import ttnn.graph as g
+
+        first = g.record_python_operation("ttnn.add", (), {})
+        second = g.record_python_operation("ttnn.add", (), {})
+        g.record_python_operation_error(second, "RuntimeError", "boom")
+        assert "error" not in first
+        assert second["error"] == {"type": "RuntimeError", "message": "boom"}
+
+    def test_error_is_noop_when_no_current_record(self):
+        import ttnn.graph as g
+
+        first = g.record_python_operation("ttnn.add", (), {})
+        g.record_python_operation_error(None, "RuntimeError", "python_io setup failed")
+        assert "error" not in first
+
     def test_python_stack_trace_captured_when_enabled(self):
         import ttnn.graph as g
 
@@ -4867,6 +4883,47 @@ class TestFastOperationGraphTracking:
         add_starts = [n for n in graph if n["node_type"] == "function_start" and n["params"].get("name") == "ttnn.add"]
         assert add_starts, "successor operation must appear in the capture"
         assert add_starts[0]["stacking_level"] == 1, "ttnn.add must not be nested under the failed FastOperation setup"
+
+    def test_setup_failure_does_not_mark_earlier_same_name_record(self, monkeypatch, expect_error):
+        """A later record_python_operation failure must not rewrite an earlier success."""
+        from ttnn.decorators import FastOperation
+
+        original = ttnn.graph.record_python_operation
+        calls = {"n": 0}
+
+        def maybe_boom(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise RuntimeError("python_io setup failed")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(ttnn.graph, "record_python_operation", maybe_boom)
+
+        op = FastOperation(
+            python_fully_qualified_name="ttnn.dummy_setup_fail",
+            function=lambda *a, **k: None,
+            preprocess_golden_function_inputs=lambda x: x,
+            golden_function=None,
+            postprocess_golden_function_outputs=lambda x: x,
+            is_cpp_operation=True,
+            is_experimental=False,
+        )
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            with (
+                ttnn.manage_config("enable_fast_runtime_mode", True),
+                ttnn.manage_config("enable_logging", False),
+                ttnn.manage_config("enable_comparison_mode", False),
+            ):
+                op()
+                with expect_error(RuntimeError, "python_io setup failed"):
+                    op()
+            records = [r for r in ttnn.graph._python_io_data if r["name"] == "ttnn.dummy_setup_fail"]
+            assert len(records) == 1
+            assert "error" not in records[0]
+        finally:
+            ttnn.graph.end_graph_capture()
 
 
 class TestUnwindAbandonedScopes:
