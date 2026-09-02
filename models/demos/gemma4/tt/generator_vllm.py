@@ -1308,6 +1308,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # original contract (persistent trace output input, TILE return).
         for m in self.model:
             m._g4_batched_prefill_consumption = will_batch
+
         try:
             with self._route_per_layer_page_tables(per_submesh):
                 out = super().prefill_forward_text(**kwargs)

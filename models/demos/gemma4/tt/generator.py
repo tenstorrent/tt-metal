@@ -790,7 +790,9 @@ class ChunkedPrefillPageTableGuardMixin:
         """True if any layer has a cross-chunk ``_sliding_prefill_tail`` stash."""
         for layer in getattr(self.model[model_id], "layers", []):
             attn = getattr(layer, "self_attn", None)
-            if attn is not None and getattr(attn, "_sliding_prefill_tail", None) is not None:
+            if attn is not None and any(
+                v is not None for v in (getattr(attn, "_sliding_tails_by_key", None) or {}).values()
+            ):
                 return True
         return False
 
@@ -813,6 +815,27 @@ class ChunkedPrefillPageTableGuardMixin:
         self, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs
     ):
         self._activate_sequential_per_layer_row(page_table)
+        # Bind this request's stable identity (its first global block id — the
+        # same keying _bounded_ring_slots uses) to every layer config so the
+        # cross-chunk sliding-tail stash is consumed/produced PER REQUEST.
+        # Interleaved multi-request continuations through a single per-layer
+        # slot handed one request's window tail to another (conc3/9k fluent
+        # nondeterministic corruption); scheduler order and row placement are
+        # not stable across rounds (plugin PR #68), so only a request-owned
+        # key is safe.
+        req_key = None
+        if page_table is not None and torch.is_tensor(page_table) and page_table.numel() > 0:
+            pt2d = page_table if page_table.dim() > 1 else page_table.unsqueeze(0)
+            if int(pt2d[0, 0]) > 0:
+                # First block id 0 = vLLM null block / warmup mock tables —
+                # never a real request; keep key None so trace-unsafe pool
+                # copies cannot run during warmup capture.
+                req_key = int(pt2d[0, 0])
+        for model in self.model:
+            for layer in getattr(model, "layers", []):
+                cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+                if cfg is not None:
+                    cfg._g4_active_req_key = req_key
         if page_table is not None and kv_cache is not None:
             block_size = self._effective_paged_block_size(kv_cache)
             needed_blocks = num_blocks_in_seq(tokens.shape[-1] + num_cached_tokens, block_size)

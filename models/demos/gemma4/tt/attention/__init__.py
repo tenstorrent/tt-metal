@@ -124,6 +124,40 @@ class Gemma4Attention:
         # None means packed_decode_forward falls back to the per-position loop.
         self.kv_staging = None
 
+        # Trace-safe cross-chunk sliding-tail pool. The stash's runtime-allocated
+        # clones can land on a live prefill trace's baked scratch, and an
+        # INTERLEAVED request's trace replay then clobbers them (#30187 class —
+        # proven by put/get checksums: fluent nondeterministic corruption of the
+        # victim's continuation at conc>=2 with 1024-bucket remnants). Boot-time
+        # allocation reserves addresses no later capture can alias; tails are
+        # ttnn.copy'd in at stash time and cloned out (transient, same-call) at
+        # consume time.
+        self._tail_pool = None
+        self._tail_pool_map = {}
+        if config.is_sliding and config.sliding_window:
+            tp = max(1, int(getattr(mesh_config, "tp", 1)))
+            nkv_local = 1 if self.weights.kv_replicated else max(1, config.num_key_value_heads // tp)
+            shape = [1, nkv_local, int(config.sliding_window), int(config.head_dim)]
+            self._tail_pool = [
+                (
+                    ttnn.zeros(
+                        shape,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=mesh_device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    ),
+                    ttnn.zeros(
+                        shape,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=mesh_device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    ),
+                )
+                for _ in range(8)
+            ]
+
     def __call__(
         self,
         hidden_states,
@@ -224,10 +258,24 @@ class Gemma4Attention:
             # first generator chunk with chunk_start_idx==0). Traced multi-chunk
             # passes a device tensor offset — the generator resets tails before
             # the first chunk; do not int()-cast the tensor here.
+            # Cross-chunk sliding tails are PER REQUEST: under vLLM, chunks of
+            # different requests interleave through this layer in scheduler
+            # order (and rows are re-ordered between rounds — plugin PR #68's
+            # "mutable live-batch indexing" lesson), so a single per-layer slot
+            # hands one request's window tail to another request's continuation
+            # (fluent nondeterministic corruption of the victim's final chunk,
+            # measured at conc3/9k). Key the stash by the request's stable
+            # identity — its first global block id — set by the generator via
+            # ``config._g4_active_req_key``; None (demo / non-vLLM paths) keys a
+            # single legacy slot.
+            _req_key = getattr(self.config, "_g4_active_req_key", None)
             if isinstance(chunk_start_idx, ttnn.Tensor):
                 pass
             elif chunk_start_idx is None or int(chunk_start_idx) == 0:
-                self._release_sliding_prefill_tail()
+                # First chunk of THIS request: drop only this request's stale
+                # tail — releasing the shared slot here wiped tails other
+                # requests still needed (second victim mode of the same bug).
+                self._release_sliding_prefill_tail(req_key=_req_key)
             tt_out, kept_kv, sliding_tail_out = prefill_forward(
                 hidden_states=hidden_states,
                 cos_cache=cos_cache,
@@ -246,29 +294,123 @@ class Gemma4Attention:
                 valid_seq_len=valid_seq_len,
                 chunk_start_idx=chunk_start_idx,
                 chunk_page_table=chunk_page_table,
-                sliding_tail_in=getattr(self, "_sliding_prefill_tail", None),
+                sliding_tail_in=self._get_sliding_tail(_req_key),
             )
             # prefill_forward consumed (deallocated) the incoming tail; stash the
-            # new one for the next chunk.
-            self._sliding_prefill_tail = sliding_tail_out
+            # new one for the next chunk under this request's key.
+            self._put_sliding_tail(_req_key, sliding_tail_out)
             self._last_kv = kept_kv
             return tt_out
 
-    def _release_sliding_prefill_tail(self, *, clear_persistent: bool = False):
-        """Drop the cross-chunk sliding tail for the next prefill's first chunk.
+    # ── per-request sliding-tail stash ─────────────────────────────────────
+    _SLIDING_TAIL_MAX_KEYS = 33  # max concurrent requests (32) + legacy None slot
 
-        Traced multi-chunk binds persistent K/V ring buffers into the captured
-        graph. Soft release (default) keeps those buffers so runtime replay can
-        ``ttnn.copy`` into the same addresses. Hard clear (``clear_persistent``)
-        is only for sp0 compile↔capture: both passes must take the first-alloc
-        path — leaving persistent set makes capture hit ``ttnn.copy`` without
-        that program in cache (TT_FATAL !is_capturing_trace, WH-T3K nightly).
+    def _get_sliding_tail(self, req_key):
+        # Pool path: clone out of the boot-allocated (trace-safe) slot. The
+        # transient clones are consumed within this same forward call, before
+        # any other request's replay can run.
+        pool_map = getattr(self, "_tail_pool_map", None) or {}
+        slot = pool_map.get(req_key) if req_key else None
+        if slot is not None and self._tail_pool is not None:
+            kb, vb = self._tail_pool[slot]
+            return (
+                ttnn.clone(kb, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                ttnn.clone(vb, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            )
+        tails = getattr(self, "_sliding_tails_by_key", None)
+        if tails is None:
+            return None
+        entry = tails.get(req_key)
+        if entry is not None:
+            tails[req_key] = None  # consumed by prefill_forward (it deallocates)
+        return entry
+
+    def _put_sliding_tail(self, req_key, tail):
+        if tail is None:
+            return
+        pool = self._tail_pool
+        # Pool only for real runtime requests (truthy key): warmup/traced paths
+        # must keep the legacy stash — a ttnn.copy during capture TT_FATALs
+        # ("Cannot load new binaries during trace capture").
+        if pool is not None and req_key:
+            k, v = tail
+            hist = int(self.config.sliding_window)
+            if int(k.shape[-2]) != hist:
+                from .prefill import _left_pad_kv_to_hist
+
+                k, v = _left_pad_kv_to_hist(k, v, hist, self.config.head_dim, deallocate_inputs=True)
+            kb_shape = list(pool[0][0].shape)
+            if list(k.shape) == kb_shape and list(v.shape) == kb_shape:
+                pool_map = self._tail_pool_map
+                slot = pool_map.pop(req_key, None)
+                if slot is None:
+                    used = set(pool_map.values())
+                    free = [i for i in range(len(pool)) if i not in used]
+                    if free:
+                        slot = free[0]
+                    else:  # evict oldest
+                        oldest_key = next(iter(pool_map))
+                        slot = pool_map.pop(oldest_key)
+                pool_map[req_key] = slot
+                kb, vb = pool[slot]
+                ttnn.copy(k, kb)
+                ttnn.copy(v, vb)
+                for t in (k, v):
+                    try:
+                        t.deallocate(True)
+                    except Exception:
+                        pass
+                return
+            tail = (k, v)  # shape mismatch — fall back to the clone stash
+        tails = getattr(self, "_sliding_tails_by_key", None)
+        if tails is None:
+            tails = {}
+            self._sliding_tails_by_key = tails
+        old = tails.pop(req_key, None)
+        self._dealloc_tail(old)
+        tails[req_key] = tail
+        while len(tails) > self._SLIDING_TAIL_MAX_KEYS:
+            evict_key = next(iter(tails))
+            self._dealloc_tail(tails.pop(evict_key))
+
+    def _dealloc_tail(self, tail):
+        if not tail:
+            return
+        persistent = getattr(self.config, "sliding_prefill_tail_persistent", None)
+        if persistent is not None and len(tail) == 2 and len(persistent) == 2 and tail[0] is persistent[0]:
+            return  # persistent ring buffers are owned by the traced path
+        for t in tail:
+            try:
+                t.deallocate(True)
+            except Exception:
+                pass
+
+    def _release_sliding_prefill_tail(self, *, clear_persistent: bool = False, req_key=..., all_keys: bool = False):
+        """Drop cross-chunk sliding tails.
+
+        Default (``req_key`` given): drop only that request's tail — the shared
+        single-slot release wiped tails other in-flight requests still needed.
+        ``all_keys`` / no ``req_key``: drop every stashed tail (generator-level
+        clears around trace capture). Traced multi-chunk binds persistent K/V
+        ring buffers into the captured graph. Soft release keeps those buffers
+        so runtime replay can ``ttnn.copy`` into the same addresses. Hard clear
+        (``clear_persistent``) is only for sp0 compile↔capture: both passes must
+        take the first-alloc path — leaving persistent set makes capture hit
+        ``ttnn.copy`` without that program in cache (TT_FATAL
+        !is_capturing_trace, WH-T3K nightly).
         """
-        tail = getattr(self, "_sliding_prefill_tail", None)
+        tails = getattr(self, "_sliding_tails_by_key", None) or {}
+        pool_map = getattr(self, "_tail_pool_map", None)
+        if req_key is not ... and not all_keys and not clear_persistent:
+            self._dealloc_tail(tails.pop(req_key, None))
+            if pool_map is not None:
+                pool_map.pop(req_key, None)  # pool buffers persist (boot-owned)
+            return
         persistent = getattr(self.config, "sliding_prefill_tail_persistent", None)
         if clear_persistent:
             seen: set[int] = set()
-            for group in (tail, persistent):
+            groups = list(tails.values()) + ([persistent] if persistent is not None else [])
+            for group in groups:
                 if group is None:
                     continue
                 for t in group:
@@ -280,17 +422,10 @@ class Gemma4Attention:
                         t.deallocate(True)
                     except Exception:
                         pass
-            self._sliding_prefill_tail = None
+            tails.clear()
             self.config.sliding_prefill_tail_persistent = None
             return
-        if tail is not None:
-            is_persistent = (
-                persistent is not None and len(tail) == 2 and len(persistent) == 2 and tail[0] is persistent[0]
-            )
-            if not is_persistent:
-                for t in tail:
-                    try:
-                        t.deallocate(True)
-                    except Exception:
-                        pass
-        self._sliding_prefill_tail = None
+        for key in list(tails.keys()):
+            self._dealloc_tail(tails.pop(key))
+        if pool_map is not None:
+            pool_map.clear()  # pool buffers persist (boot-owned)
