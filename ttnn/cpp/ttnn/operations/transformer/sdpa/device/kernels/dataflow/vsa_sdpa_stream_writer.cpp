@@ -66,6 +66,7 @@ void kernel_main() {
     const auto k = TensorAccessor(k_args, k_addr);
     const auto q = TensorAccessor(q_args, q_addr);
 
+#ifdef VSA_IS_LEADER
     if (is_leader) {
         // Fetch K for every kreq {block_id, slot} from DRAM into the shared stream slots;
         // a sentinel kreq ends each pass. Fetches are pipelined kAckLag blocks deep with
@@ -100,8 +101,22 @@ void kernel_main() {
                 ack_oldest();
             }
         };
-        for (uint32_t pass = 0; pass < n_passes; ++pass) {
-            while (true) {
+        // Leader-as-worker: this core also holds resident rows, so the K service is one arm of a
+        // polled loop that additionally loads each pass's Q rows and drains its own row outputs.
+        if (row_count > 0) {
+            dataflow_kernel_lib::
+                calculate_and_prepare_reduce_scaler<cb_scale, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+            generate_bcast_col_scalar(experimental::CB(cb_col_identity), one_bf16_packed);
+            constexpr uint32_t mask_tile_bytes = get_tile_size(cb_neginf);
+            experimental::CB(cb_neginf).reserve_back(1);
+            fill_neginf_tile<mask_tile_bytes>(cb_neginf, 0);
+            experimental::CB(cb_neginf).push_back(1);
+        }
+        uint32_t drained = 0;
+        uint32_t pass_base = 0;
+        uint32_t sentinels_seen = 0;
+        while (sentinels_seen < n_passes || drained < row_count) {
+            while (cb_pages_available_at_front(cb_kreq, 1)) {
                 kreq_cb.wait_front(1);
                 uint32_t b0, s0, b1, s1;
                 {
@@ -117,16 +132,50 @@ void kernel_main() {
                     while (nacked < nfetch) {
                         ack_oldest();
                     }
-                    break;
+                    ++sentinels_seen;
+                    continue;
                 }
                 fetch_one(b0, s0);
                 if (b1 != kNoBlock) {
                     fetch_one(b1, s1);
                 }
             }
+            if (row_count > 0 && pass_base < row_count && drained >= pass_base) {
+                const uint32_t pass_rows = (row_count - pass_base < R_MAX) ? (row_count - pass_base) : R_MAX;
+                for (uint32_t r = 0; r < pass_rows; ++r) {
+                    const uint32_t ri = pass_base + r;  // chunk-cyclic (see reader)
+                    const uint32_t q_tile = row_start + (ri >> VSA_ROW_CHUNK_LOG2) * row_stride +
+                                            (ri & ((1u << VSA_ROW_CHUNK_LOG2) - 1));
+                    const uint32_t page0 = (head * n_q_tiles + q_tile) * q_tiles_per_row;
+                    for (uint32_t i = 0; i < q_tiles_per_row; ++i) {
+                        // cb_q_res is RAM-mode: never reserved/pushed here, offsets from the base.
+                        noc.async_read(
+                            q, q_cb, q_tile_bytes, {.page_id = page0 + i},
+                            {.offset_bytes = (r * q_tiles_per_row + i) * q_tile_bytes});
+                    }
+                }
+                noc.async_read_barrier();
+                qdone_cb.reserve_back(1);
+                qdone_cb.push_back(1);
+                pass_base += pass_rows;
+            }
+            if (row_count > 0 && cb_pages_available_at_front(cb_out, out_tiles_per_row)) {
+                out_cb.wait_front(out_tiles_per_row);
+                const uint32_t q_tile = row_start + (drained >> VSA_ROW_CHUNK_LOG2) * row_stride +
+                                        (drained & ((1u << VSA_ROW_CHUNK_LOG2) - 1));
+                const uint32_t page0 = (head * n_q_tiles + q_tile) * out_tiles_per_row;
+                for (uint32_t i = 0; i < out_tiles_per_row; ++i) {
+                    noc.async_write(
+                        out_cb, out, out_tile_bytes, {.offset_bytes = i * out_tile_bytes}, {.page_id = page0 + i});
+                }
+                noc.async_write_barrier();
+                out_cb.pop_front(out_tiles_per_row);
+                ++drained;
+            }
         }
         return;
     }
+#else
 
     // ---------------- WORKER ----------------
     dataflow_kernel_lib::
@@ -234,4 +283,5 @@ void kernel_main() {
             ++drained;
         }
     }
+#endif  // VSA_IS_LEADER
 }

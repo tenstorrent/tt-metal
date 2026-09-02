@@ -587,6 +587,10 @@ void kernel_main() {
             if (type == MSG_WINDOW) {
                 const uint32_t n_slots = ckernel::read_tile_value(cb_ctrl, 0, 1);
                 ctrl_cb.pop_front(1);
+                if (n_slots == 0) {
+                    drain_pend();  // NUDGE: the sender is gated on credits this deferred PV holds
+                    continue;
+                }
                 // Process the buffered visits in region-sized chunks. All but the final chunk's
                 // PV drains inside the loop; the final chunk's PV is deferred, so the window's
                 // slot credits ride with it (V slots stay pinned until that PV consumed them).

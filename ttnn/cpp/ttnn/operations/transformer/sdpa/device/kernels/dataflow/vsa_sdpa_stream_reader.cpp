@@ -120,6 +120,7 @@ void kernel_main() {
     log_cb.reserve_back(1);
     const uint32_t log_l1 = log_cb.get_write_ptr();
 
+#ifdef VSA_IS_LEADER
     if (is_leader) {
         // ---------------- LEADER ----------------
         // Multicast strips (height-1 rectangles covering the group's workers) follow in the
@@ -151,6 +152,152 @@ void kernel_main() {
                 while (ackbox[w] < target) {
                     invalidate_l1_cache();
                 }
+            }
+        };
+
+        // ---- Leader-as-worker: this core's compute is otherwise idle, and every block's K/V is
+        // already resident in its own stream slots -- so the leader carries resident rows too.
+        // The machinery mirrors a worker's window engine minus the pulls and the log-ring spin:
+        // arrivals are consumed inline at publish time. `own_commit` is the prefix of arrivals
+        // whose slots the local compute no longer needs; the slot-reuse gate takes the MIN of the
+        // workers' posted counts and own_commit.
+        idx_cb.reserve_back(1);
+        volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_cb.get_write_ptr());
+        experimental::CB bitmap_cb(cb_bitmap);
+        bitmap_cb.reserve_back(1);
+        volatile tt_l1_ptr uint32_t* bitmaps = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bitmap_cb.get_write_ptr());
+        uint32_t own_row_parity = 0, own_row_seen = 0;
+        constexpr uint32_t kOwnWin = stream_depth / 2;
+        uint32_t own_pending[32][kOwnWin > 0 ? kOwnWin : 1];
+        uint32_t own_np[32];
+        uint32_t own_commit = 0, own_consumed = 0;
+        bool own_busy[stream_depth] = {};
+        uint32_t own_warr[kOwnWin > 0 ? kOwnWin : 1];
+        uint32_t own_wslots = 0;
+        constexpr uint32_t kOwnFifo = 16;
+        uint32_t own_fifo_arr[kOwnFifo][kOwnWin > 0 ? kOwnWin : 1];
+        uint32_t own_fifo_n[kOwnFifo];
+        uint32_t own_head = 0, own_tail = 0;
+        uint32_t own_pass_rows = 0;
+        const auto own_advance = [&]() {
+            while (own_commit < own_consumed && !own_busy[own_commit % stream_depth]) {
+                ++own_commit;
+            }
+        };
+        const auto own_poll_credits = [&]() {
+            while (own_head != own_tail && cb_pages_available_at_front(cb_free, own_fifo_n[own_head % kOwnFifo])) {
+                const uint32_t h = own_head % kOwnFifo;
+                free_cb.wait_front(own_fifo_n[h]);
+                free_cb.pop_front(own_fifo_n[h]);
+                for (uint32_t j = 0; j < own_fifo_n[h]; ++j) {
+                    own_busy[own_fifo_arr[h][j] % stream_depth] = false;
+                }
+                ++own_head;
+                own_advance();
+            }
+        };
+        const auto own_close_window = [&]() {
+            if (own_wslots == 0) {
+                return;
+            }
+            for (uint32_t r = 0; r < own_pass_rows; ++r) {
+                if (own_np[r] == 0) {
+                    continue;
+                }
+                const uint32_t rbit = 1u << r;
+                uint32_t info = r;
+                if (!(own_row_seen & rbit)) {
+                    info |= ROW_IS_FIRST;
+                    own_row_seen |= rbit;
+                } else {
+                    own_row_parity ^= rbit;
+                    if (own_row_parity & rbit) {
+                        info |= ROW_PARITY;
+                    }
+                }
+                ctrl_cb.reserve_back(1);
+                {
+                    volatile tt_l1_ptr uint32_t* cp =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
+                    cp[0] = MSG_VISIT | (own_np[r] << 16);
+                    cp[1] = info;
+                    for (uint32_t j = 0; j < own_np[r]; ++j) {
+                        cp[2 + j] = own_pending[r][j];
+                    }
+                }
+                ctrl_cb.push_back(1);
+                own_np[r] = 0;
+            }
+            ctrl_cb.reserve_back(1);
+            {
+                volatile tt_l1_ptr uint32_t* cp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
+                cp[0] = MSG_WINDOW;
+                cp[1] = own_wslots;
+            }
+            ctrl_cb.push_back(1);
+            const uint32_t t = own_tail % kOwnFifo;
+            own_fifo_n[t] = own_wslots;
+            for (uint32_t j = 0; j < own_wslots; ++j) {
+                own_fifo_arr[t][j] = own_warr[j];
+            }
+            ++own_tail;
+            own_wslots = 0;
+        };
+        const auto own_consume = [&](uint32_t b, uint32_t slot) {
+            uint32_t listing[32];
+            uint32_t nl = 0;
+            const uint32_t wd = b >> 5;
+            const uint32_t bit = 1u << (b & 31);
+            for (uint32_t r = 0; r < own_pass_rows; ++r) {
+                if (bitmaps[r * bitmap_words + wd] & bit) {
+                    listing[nl++] = r;
+                }
+            }
+            if (nl == 0) {
+                ++own_consumed;
+                own_advance();
+                return;
+            }
+            const uint32_t count = counts_ptr[b];
+            const bool ragged = count < block_size;
+            const bool needs_vmask = ragged && (count % keys_per_tile) != 0;
+            if (needs_vmask) {
+                constexpr uint32_t mask_tile_bytes = get_tile_size(cb_vmask);
+                fill_vertical_tile_bf16<mask_tile_bytes>(noc, cb_vmask, slot, count % keys_per_tile);
+            }
+            const uint32_t entry = slot | (count << 8) | (needs_vmask ? (1u << 15) : 0);
+            for (uint32_t j = 0; j < nl; ++j) {
+                own_pending[listing[j]][own_np[listing[j]]++] = entry;
+            }
+            own_busy[slot] = true;
+            own_warr[own_wslots++] = own_consumed;
+            ++own_consumed;
+            if (own_wslots == kOwnWin) {
+                own_close_window();
+                own_poll_credits();
+            }
+        };
+        // Gate helper: workers' posted counts AND the local compute's committed prefix. Compute
+        // defers a chunk's credits with its deferred PV until the NEXT chunk -- which will never
+        // come while we are gated -- so a zero-slot WINDOW message nudges it to drain.
+        const auto own_wait_at = [&](uint32_t target) {
+            if (own_commit >= target) {
+                return;
+            }
+            own_close_window();  // our own open window can be what pins the commit
+            own_poll_credits();
+            if (own_commit >= target) {
+                return;
+            }
+            ctrl_cb.reserve_back(1);
+            {
+                volatile tt_l1_ptr uint32_t* cp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
+                cp[0] = MSG_WINDOW;
+                cp[1] = 0;
+            }
+            ctrl_cb.push_back(1);
+            while (own_commit < target) {
+                own_poll_credits();
             }
         };
 
@@ -207,13 +354,22 @@ void kernel_main() {
                 slots[j] = pend_slot[(arrival + j) % kFetchLag];
             }
             publish_run(bs, slots, k);
+            if (row_count > 0) {
+                for (uint32_t j = 0; j < k; ++j) {
+                    own_consume(bs[j], slots[j]);
+                }
+                own_poll_credits();
+            }
             arrival += k;
         };
         // Fetch a pair (or single tail) of blocks: ONE gate check, ONE kreq page, per-block trids.
         const auto issue_pair = [&](const uint32_t* bs, uint32_t k) {
             if (fetched + k > stream_depth) {
-                // Every worker must have consumed the arrivals that last used these slots.
+                // Every consumer (workers AND the local compute) must be done with these slots.
                 wait_all_workers_at(fetched + k - stream_depth);
+                if (row_count > 0) {
+                    own_wait_at(fetched + k - stream_depth);
+                }
             }
             kreq_cb.reserve_back(1);
             {
@@ -241,6 +397,34 @@ void kernel_main() {
             }
         };
         for (uint32_t pass = 0; pass < n_passes; ++pass) {
+            const uint32_t pass_row_base = pass * R_MAX;
+            own_pass_rows = (row_count > pass_row_base)
+                                ? ((row_count - pass_row_base < R_MAX) ? row_count - pass_row_base : R_MAX)
+                                : 0;
+            for (uint32_t r = 0; r < own_pass_rows; ++r) {
+                volatile tt_l1_ptr uint32_t* bm = bitmaps + r * bitmap_words;
+                for (uint32_t wd = 0; wd < bitmap_words; ++wd) {
+                    bm[wd] = 0;
+                }
+                const uint32_t ri = pass_row_base + r;
+                const uint32_t q_tile = row_start + (ri >> VSA_ROW_CHUNK_LOG2) * row_stride +
+                                        (ri & ((1u << VSA_ROW_CHUNK_LOG2) - 1));
+                noc.async_read(
+                    idx, idx_cb, idx_row_bytes, {.page_id = head * n_q_tiles + q_tile}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                for (uint32_t e = 0; e < W; ++e) {
+                    const uint32_t bb = idx_ptr[e];
+                    if (bb == sentinel) {
+                        break;
+                    }
+                    bm[bb >> 5] |= (1u << (bb & 31));
+                }
+            }
+            own_row_parity = 0;
+            own_row_seen = 0;
+            for (uint32_t r = 0; r < own_pass_rows; ++r) {
+                own_np[r] = 0;
+            }
             uint32_t pair[2];
             uint32_t np = 0;
             for (uint32_t b = 0; b < n_kv_blocks; ++b) {
@@ -282,6 +466,27 @@ void kernel_main() {
                 const uint32_t sb = sentinel, ss = 0;
                 publish_run(&sb, &ss, 1);
             }
+            // Own pass end: close the open window and FLUSH the rows FIRST (the FLUSH handler
+            // drains compute's deferred PV, releasing the last window's stashed credits), then
+            // reclaim the FIFO.
+            if (row_count > 0) {
+                own_close_window();
+                for (uint32_t r = 0; r < own_pass_rows; ++r) {
+                    ctrl_cb.reserve_back(1);
+                    {
+                        volatile tt_l1_ptr uint32_t* cp =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
+                        cp[0] = MSG_FLUSH;
+                        cp[1] = r;
+                        cp[2] = (own_row_parity >> r) & 1u;
+                    }
+                    ctrl_cb.push_back(1);
+                }
+                while (own_head != own_tail) {
+                    own_poll_credits();
+                }
+                own_advance();
+            }
         }
         // Drain: every arrival consumed before the program ends (so no worker still reads our
         // L1), and no arrivals-sem atomic may still be in flight when the next program resets it.
@@ -289,6 +494,7 @@ void kernel_main() {
         noc_async_atomic_barrier(noc.get_noc_id());
         return;
     }
+#else
 
     // ---------------- WORKER ----------------
     if (worker_index >= n_workers) {
@@ -632,4 +838,5 @@ void kernel_main() {
     // writes would otherwise land on the next program's memory (watcher-detected race otherwise).
     noc.async_write_barrier();
     noc_async_atomic_barrier(noc.get_noc_id());
+#endif  // VSA_IS_LEADER
 }

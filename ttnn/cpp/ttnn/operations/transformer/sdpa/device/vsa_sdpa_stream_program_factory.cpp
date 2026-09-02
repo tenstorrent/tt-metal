@@ -20,6 +20,7 @@
 #include <bit>
 #include <cstdlib>
 #include <map>
+#include <set>
 #include <string>
 #include <variant>
 #include <vector>
@@ -155,6 +156,20 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     const uint32_t num_cores = grid.x * grid.y;
     TT_FATAL(num_cores >= 2 * H, "vsa_sdpa streaming needs >= 2 cores per head (H {}, cores {})", H, num_cores);
     auto core_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+    // The reader/writer kernels compile their LEADER and WORKER halves separately (both bodies in
+    // one binary overflow the Tensix kernel-config buffer), so each is instantiated twice on
+    // disjoint core sets with the role fixed by a define.
+    std::set<tt::tt_metal::CoreRange> leader_ranges, worker_ranges;
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const tt::tt_metal::CoreCoord c = {i % grid.x, i / grid.x};
+        if (core_schedule(i, num_cores, H).is_leader) {
+            leader_ranges.insert(tt::tt_metal::CoreRange(c, c));
+        } else {
+            worker_ranges.insert(tt::tt_metal::CoreRange(c, c));
+        }
+    }
+    const auto leader_grid = tt::tt_metal::CoreRangeSet(leader_ranges);
+    const auto worker_grid = tt::tt_metal::CoreRangeSet(worker_ranges);
 
     desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
         .id = sem_arrivals, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
@@ -258,23 +273,34 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     static_assert((kRowChunk & (kRowChunk - 1)) == 0, "kernel chunk math shifts by log2(kRowChunk)");
     probe_defines["VSA_ROW_CHUNK_LOG2"] = std::to_string(std::bit_width(kRowChunk) - 1);
 
+    auto leader_defines = probe_defines;
+    leader_defines["VSA_IS_LEADER"] = "1";
+
     tt::tt_metal::KernelDescriptor reader_desc;
     reader_desc.kernel_source = kdir + "dataflow/vsa_sdpa_stream_reader.cpp";
     reader_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = core_grid;
+    reader_desc.core_ranges = worker_grid;
     reader_desc.compile_time_args = reader_ct;
     reader_desc.common_runtime_args = reader_crt;
     reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
     reader_desc.defines = tt::tt_metal::KernelDescriptor::Defines(probe_defines.begin(), probe_defines.end());
 
+    tt::tt_metal::KernelDescriptor reader_leader_desc = reader_desc;
+    reader_leader_desc.core_ranges = leader_grid;
+    reader_leader_desc.defines = tt::tt_metal::KernelDescriptor::Defines(leader_defines.begin(), leader_defines.end());
+
     tt::tt_metal::KernelDescriptor writer_desc;
     writer_desc.kernel_source = kdir + "dataflow/vsa_sdpa_stream_writer.cpp";
     writer_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = core_grid;
+    writer_desc.core_ranges = worker_grid;
     writer_desc.compile_time_args = writer_ct;
     writer_desc.common_runtime_args = writer_crt;
     writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
     writer_desc.defines = tt::tt_metal::KernelDescriptor::Defines(probe_defines.begin(), probe_defines.end());
+
+    tt::tt_metal::KernelDescriptor writer_leader_desc = writer_desc;
+    writer_leader_desc.core_ranges = leader_grid;
+    writer_leader_desc.defines = tt::tt_metal::KernelDescriptor::Defines(leader_defines.begin(), leader_defines.end());
 
     auto [math_fidelity, math_approx, fp32_acc, packer_l1_acc, dst_full_sync] =
         get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), attrs.compute_kernel_config);
@@ -315,11 +341,14 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
 
         const tt::tt_metal::CoreCoord leader_logical = {sched.group_first % grid.x, sched.group_first / grid.x};
         const tt::tt_metal::CoreCoord leader_phys = device->worker_core_from_logical_core(leader_logical);
-        // worker 0 always holds the most rows under chunk-cyclic dealing
+        // The leader computes too (its K/V are local and its TRISCs are otherwise idle), so rows
+        // are dealt over n_active workers PLUS the leader; the leader is consumer n_active.
+        // Consumer 0 always holds the most rows under chunk-cyclic dealing.
+        const uint32_t n_consumers = n_active + 1;
         uint32_t max_rows = 0;
         {
             const uint32_t nc = (n_q_tiles + kRowChunk - 1) / kRowChunk;
-            for (uint32_t c = 0; c < nc; c += n_active) {
+            for (uint32_t c = 0; c < nc; c += n_consumers) {
                 const uint32_t c0 = c * kRowChunk;
                 max_rows += (n_q_tiles - c0 < kRowChunk) ? (n_q_tiles - c0) : kRowChunk;
             }
@@ -331,14 +360,15 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         // while dealing chunks cyclically spreads the fully-dense exempt-query rows -- a purely
         // contiguous split piles them all onto worker 0 (measured 3x worst-shard regression).
         const uint32_t n_chunks = (n_q_tiles + kRowChunk - 1) / kRowChunk;
+        const uint32_t consumer_index = sched.is_leader ? n_active : sched.worker_index;
         uint32_t row_count = 0;
-        if (!sched.is_leader && !is_idle) {
-            for (uint32_t c = sched.worker_index; c < n_chunks; c += n_active) {
+        if (!is_idle) {
+            for (uint32_t c = consumer_index; c < n_chunks; c += n_consumers) {
                 const uint32_t c0 = c * kRowChunk;
                 row_count += (n_q_tiles - c0 < kRowChunk) ? (n_q_tiles - c0) : kRowChunk;
             }
         }
-        const uint32_t row_start = sched.is_leader ? 0 : sched.worker_index * kRowChunk;
+        const uint32_t row_start = consumer_index * kRowChunk;
 
         RtArgs reader_rt;
         reader_rt.reserve(13 + 2 * kMaxWorkers);
@@ -353,7 +383,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         reader_rt.push_back(n_active);
         reader_rt.push_back(sched.is_leader ? 0u : sched.worker_index);
         reader_rt.push_back(row_start);
-        reader_rt.push_back(n_active * kRowChunk);  // chunk-cyclic big stride
+        reader_rt.push_back(n_consumers * kRowChunk);  // chunk-cyclic big stride
         reader_rt.push_back(row_count);
         if (sched.is_leader) {
             // The group's workers are consecutive logical core ids in a row-major grid: they span
@@ -390,7 +420,11 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
                 reader_rt.push_back(st.n);
             }
         }
-        reader_desc.emplace_runtime_args(core, reader_rt);
+        if (sched.is_leader) {
+            reader_leader_desc.emplace_runtime_args(core, reader_rt);
+        } else {
+            reader_desc.emplace_runtime_args(core, reader_rt);
+        }
 
         RtArgs writer_rt(12);
         writer_rt[0] = out_buf;
@@ -402,10 +436,14 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         writer_rt[6] = static_cast<uint32_t>(leader_phys.x);
         writer_rt[7] = static_cast<uint32_t>(leader_phys.y);
         writer_rt[8] = row_start;
-        writer_rt[9] = n_active * kRowChunk;  // chunk-cyclic big stride
+        writer_rt[9] = n_consumers * kRowChunk;  // chunk-cyclic big stride
         writer_rt[10] = row_count;
         writer_rt[11] = 0u;
-        writer_desc.emplace_runtime_args(core, writer_rt);
+        if (sched.is_leader) {
+            writer_leader_desc.emplace_runtime_args(core, writer_rt);
+        } else {
+            writer_desc.emplace_runtime_args(core, writer_rt);
+        }
 
         RtArgs compute_rt(1);
         compute_rt[0] = row_count;
@@ -413,7 +451,9 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     }
 
     desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(reader_leader_desc));
     desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(writer_leader_desc));
     desc.kernels.push_back(std::move(compute_desc));
     return desc;
 }
