@@ -118,6 +118,9 @@ def test_random_weight_fallback_travels_with_the_result(tmp_path: Path) -> None:
     out = _resolved(d, "loader written")
     assert out["resolved"] is True and out["random_weights"] is True
     assert "RANDOM weights" in out["caveat"]
+    # And it must reach `reason`, which is the only field any caller of resolve() actually prints.
+    # Carried solely under its own key, the caveat was written and read by nobody.
+    assert "RANDOM weights" in out["reason"], out["reason"]
 
 
 def test_real_weight_loader_carries_no_caveat(tmp_path: Path) -> None:

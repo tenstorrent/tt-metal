@@ -721,7 +721,12 @@ def weight_provenance(model_id: str, ref) -> dict:
 
 
 def _resolved(demo_dir: Path, reason: str) -> dict:
-    """Success payload, carrying the random-weight caveat when one applies."""
+    """Success payload, carrying the random-weight caveat when one applies.
+
+    The caveat is folded into `reason` as well as carried under its own key. Every caller of
+    `resolve` either ignores the payload or prints `reason`, so a caveat that lived only in its own
+    field was written and read by nobody -- the one thing a caveat cannot afford to be.
+    """
     out = {"resolved": True, "path": str(loader_path(demo_dir)), "reason": reason}
     if uses_random_weights(demo_dir):
         out["random_weights"] = True
@@ -729,6 +734,7 @@ def _resolved(demo_dir: Path, reason: str) -> dict:
             "reference built from RANDOM weights, not the shipped checkpoint: PCC against it "
             "verifies STRUCTURE only and does not bound numerical correctness"
         )
+        out["reason"] = f"{reason} -- CAVEAT: {out['caveat']}"
     return out
 
 

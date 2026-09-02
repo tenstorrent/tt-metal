@@ -306,6 +306,9 @@ _SAMPLES_DIRNAME = "samples"
 # once here because the reader and the writer disagreeing is a silent failure: the set is simply
 # treated as absent and the test drops back to synthetic inputs with nothing said.
 CAPTURE_ARTIFACT_FILES: Tuple[str, ...] = ("args.pt", "kwargs.pt", "output.pt")
+# Same reason, for the sidecar that records what was captured: writer and reader sit on opposite
+# sides of the generation boundary, so the name is stated once on each and pinned equal by a test.
+CAPTURE_MANIFEST_FILE = "manifest.json"
 
 
 def _save_capture_triple(dest: Path, capture: Dict[str, Any]) -> None:
@@ -831,7 +834,7 @@ def capture_real_inputs(
                 "kwargs": _summarize_value(capture.get("kwargs", {})),
                 "output": _summarize_value(capture["output"]),
             }
-            (comp_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+            (comp_dir / CAPTURE_MANIFEST_FILE).write_text(json.dumps(manifest, indent=2))
             out[comp_name] = {
                 "status": "captured",
                 "submodule_path": path,
@@ -860,6 +863,7 @@ def capture_real_inputs(
 CAPTURE_LOADER_SOURCE = '''
 _ARTIFACT_FILES = ("args.pt", "kwargs.pt", "output.pt")
 _SAMPLES_SUBDIR = "samples"
+_MANIFEST_FILE = "manifest.json"
 
 
 def _component_dir(component_name):
@@ -889,7 +893,7 @@ def _captured_submodule_path(component_name):
     the manifest's recorded path and using it as the FIRST candidate
     keeps capture's resolution and test's resolution aligned."""
     import json as _json
-    manifest_p = _component_dir(component_name) / "manifest.json"
+    manifest_p = _component_dir(component_name) / _MANIFEST_FILE
     if not manifest_p.is_file():
         return None
     try:

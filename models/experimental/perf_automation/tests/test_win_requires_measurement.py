@@ -161,8 +161,13 @@ def test_both_sections_agree_on_what_a_win_is(tmp_path):
         )
     )
     out = sm.render_summary(kl, model="m", task="main", finalized=True)
-    # the legend line explains what ✓win MEANS, so it is not a claim about an attempt
-    body = [l for l in out.splitlines() if not l.startswith("levels:")]
+    # The legend explains what ✓win MEANS, so it is not a claim about an attempt. Everything from
+    # its heading on is legend, which is what this drops -- it used to drop the single line starting
+    # `levels:`, and silently stopped covering the marks when the legend was wrapped onto a second
+    # line, so the explanation of ✓win read as an attempt claiming one.
+    _legend = next((i for i, l in enumerate(out.splitlines()) if l.strip() == "Legend"), None)
+    body = out.splitlines()[:_legend]
+    assert _legend is not None, out
     assert not [l for l in body if "✓win" in l or "✓ win" in l], "\n".join(body)
     # the attempts table no longer carries the note text, so find the row by its op and verdict
     attempt_rows = [l for l in body if l.lstrip().startswith("Matmul") and "· no gain" in l]

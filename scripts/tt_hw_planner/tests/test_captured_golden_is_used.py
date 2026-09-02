@@ -438,6 +438,7 @@ def test_the_reader_and_the_writer_agree_on_where_a_sample_lives() -> None:
     ns = _loader_ns()
     assert tuple(ns["_ARTIFACT_FILES"]) == tuple(ci.CAPTURE_ARTIFACT_FILES)
     assert ns["_SAMPLES_SUBDIR"] == ci._SAMPLES_DIRNAME
+    assert ns["_MANIFEST_FILE"] == ci.CAPTURE_MANIFEST_FILE
 
 
 def test_one_place_derives_a_components_capture_directory() -> None:

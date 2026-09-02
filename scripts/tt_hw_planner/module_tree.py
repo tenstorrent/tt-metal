@@ -761,11 +761,14 @@ def _load_reference_module(model_id: str, demo_dir=None):
                 f"  [discovery] {model_id} does not load via AutoModel/AutoConfig — synthesizing a "
                 f"reference loader to enumerate its module tree ..."
             )
-            _rlr.resolve(
+            _res = _rlr.resolve(
                 model_id=model_id,
                 demo_dir=demo_dir,
                 failure_text="discovery: model does not load via AutoModel/AutoConfig (config-less repo)",
             )
+            # Printed, not discarded: `reason` is where a resolve that fell back to RANDOM weights
+            # says so, and a caveat nobody reads is not a caveat.
+            print(f"  [discovery] reference loader: {_res.get('resolved')} ({_res.get('reason')})")
         if not _rlr.has_loader(demo_dir):
             return None
         loader_file = _rlr.loader_path(demo_dir)
