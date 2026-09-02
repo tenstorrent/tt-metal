@@ -7335,3 +7335,49 @@ trustworthy; `ov_linear_uni` is the noisiest config (C measured -2.55% in the ma
   more reps. Deliberately deferred rather than run at low confidence.
 - Single-device / no-eth tests: not sync-relevant (no device<->device links to sync), skipped by
   construction.
+
+---
+
+## Overhead, extended to 2D-fabric coverage and a second 1D variant -- and the "1D costs" framing RETRACTED
+
+The previous section did not say which FABRIC MODE each config exercised. The mapping is explicit
+(test_tt_fabric.cpp): `Topology::Mesh -> FABRIC_2D`, `Linear -> FABRIC_1D`, `Ring -> FABRIC_1D_RING`,
+`NeighborExchange -> FABRIC_1D_NEIGHBOR_EXCHANGE`. So four of the five configs already WERE 2D
+fabric. Two gaps closed here: multi-group 2D, and a second 1D variant.
+
+| config | fabric mode | 100 Hz | 1 kHz | rows |
+|--------|-------------|--------|-------|------|
+| fabric_1grp   | 2D (Mesh)        | -0.31% | -0.38% | 24 |
+| ov_mesh_uni   | 2D (Mesh)        | -0.32% | -0.22% | 4  |
+| ov_neighbor   | 2D (Mesh)        | -0.88% | -1.02% | 4  |
+| ov_bigpkt     | 2D (Mesh, 7616B) | +0.68% | +0.64% | 2  |
+| fabric_2d_two | **2D multi-group** | **-0.25%** | **-0.27%** | 48 |
+| ov_ring       | **1D (Ring)**    | **+0.33%** | **+0.67%** | 4  |
+| ov_linear_uni | 1D (Linear)      | -2.55% | -2.58% | 4  |
+
+**POOLED 2D fabric: -0.28% at 100 Hz over 82 rows.** Multi-group 2D (two test groups, 48 rows,
+sequential fabric re-init) is the largest single sample and the cheapest result of all: -0.25%.
+Lossless in every arm; 5081 rounds/link at 1 kHz on the multi-group config with 0 dropped.
+
+### RETRACTION: "2D is free, 1D costs" -- refuted within the same sweep
+That framing was stated on the strength of ONE 1D config. `ov_ring` is also 1D fabric
+(FABRIC_1D_RING), with the SAME packet sizes (512 + 4096), same link counts (1, 4), same
+unicast_write, and it costs **nothing** (+0.33% / +0.67%). Fabric dimension does not predict the
+cost.
+
+So the honest scope of the outlier is narrow: **one config -- Linear topology with the
+`unidirectional_linear` pattern -- costs ~2.5%, rate-independently.** Everything ruled out so far:
+- NOT the sync round rate (rate-independent, -2.55% vs -2.58% across 10x)
+- NOT the per-iteration doorbell (arm S with grid doorbells was 1.1 pt WORSE)
+- NOT fabric dimension (Ring is 1D and free)
+- NOT packet size (Ring uses the same 512 B and is free)
+- NOT link count (both vary 1 and 4)
+
+What is left is the pattern/topology pair itself, and the untested hook-presence hypothesis. Do not
+generalize this number to "1D fabric" or to "small packets" -- both readings are now falsified.
+
+### Bottom line
+Continuous sync costs **~0.3% on 2D fabric across 82 rows spanning mcast/unicast, 2-4 KB and 7.6 KB
+packets, 1-4 links, single- and multi-group**, and is indistinguishable between 100 Hz and 1 kHz.
+One 1D config is the sole exception at ~2.5% and its mechanism is unexplained after five
+eliminations.
