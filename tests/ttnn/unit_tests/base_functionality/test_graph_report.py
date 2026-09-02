@@ -5014,7 +5014,9 @@ class TestTracerStateSurvivesFailure:
                 depth = len(ttnn.torch_tracer.GRAPH_STACK)
                 with expect_error(RuntimeError, "boom"):
                     ttnn.tracer.trace_ttnn_operation("boom", boom)()
-                assert len(ttnn.torch_tracer.GRAPH_STACK) == depth
+                assert (
+                    len(ttnn.torch_tracer.GRAPH_STACK) == depth
+                ), f"raising operation left its graph behind: depth {len(ttnn.torch_tracer.GRAPH_STACK)}, expected {depth}"
 
     def test_graph_stack_is_popped_when_a_torch_module_raises(self, expect_error):
         class Boom(torch.nn.Module):
@@ -5026,15 +5028,17 @@ class TestTracerStateSurvivesFailure:
                 depth = len(ttnn.torch_tracer.GRAPH_STACK)
                 with expect_error(RuntimeError, "boom"):
                     Boom()(torch.rand((8, 8)))
-                assert len(ttnn.torch_tracer.GRAPH_STACK) == depth
+                assert (
+                    len(ttnn.torch_tracer.GRAPH_STACK) == depth
+                ), f"raising module left its graph behind: depth {len(ttnn.torch_tracer.GRAPH_STACK)}, expected {depth}"
 
     def test_tracer_is_disabled_when_the_traced_block_raises(self, expect_error):
         with ttnn.manage_config("enable_fast_runtime_mode", False):
             with expect_error(RuntimeError, "boom"):
                 with ttnn.tracer.trace():
                     raise RuntimeError("boom")
-            assert not ttnn.tracer.ENABLE_TRACER
-            assert ttnn.torch_tracer.GRAPH_STACK is None
+            assert not ttnn.tracer.ENABLE_TRACER, "error escaping trace() left tracing enabled"
+            assert ttnn.torch_tracer.GRAPH_STACK is None, "error escaping trace() left the torch graph stack in place"
 
     def test_enable_tracer_stays_false_when_the_torch_side_fails(self, monkeypatch, expect_error):
         def boom():
@@ -5044,7 +5048,7 @@ class TestTracerStateSurvivesFailure:
         with ttnn.manage_config("enable_fast_runtime_mode", False):
             with expect_error(RuntimeError, "boom"):
                 ttnn.tracer.enable_tracing()
-            assert not ttnn.tracer.ENABLE_TRACER
+            assert not ttnn.tracer.ENABLE_TRACER, "a failed torch-side enable left tracing half-enabled"
 
 
 @skip_for_slow_dispatch()
@@ -5057,14 +5061,14 @@ class TestLoggingDuringTraceCapture:
     """
 
     def test_is_trace_capture_active_tracks_capture(self, device):
-        assert not ttnn.is_trace_capture_active(device)
+        assert not ttnn.is_trace_capture_active(device), "capture reported active before begin_trace_capture"
         trace_id = ttnn.begin_trace_capture(device, cq_id=0)
         try:
-            assert ttnn.is_trace_capture_active(device)
+            assert ttnn.is_trace_capture_active(device), "capture not reported active during begin/end_trace_capture"
         finally:
             ttnn.end_trace_capture(device, trace_id, cq_id=0)
             ttnn.release_trace(device, trace_id)
-        assert not ttnn.is_trace_capture_active(device)
+        assert not ttnn.is_trace_capture_active(device), "capture still reported active after end_trace_capture"
 
     def test_op_inside_trace_capture_with_logging(self, device):
         shape = (1, 1, 32, 32)
