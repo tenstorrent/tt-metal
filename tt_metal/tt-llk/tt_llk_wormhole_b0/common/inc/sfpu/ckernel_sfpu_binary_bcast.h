@@ -133,6 +133,8 @@ constexpr std::uint32_t ODD_COLS_OFFSET             = 2; // addr +2 selects cols
 //   LREG6/LREG7 retain the scalar mean and inverse standard deviation for the
 //   tile traversal. This invalidates the BCAST_COL lane mask in LREG6, so a
 //   subsequent BCAST_COL operation must call sfpu_bcast_col_init() again.
+//   LREG12 (programmable constant 0) is clobbered while extracting each scalar.
+//   A subsequent SFPU operation that uses this constant must run its init first.
 
 constexpr std::uint32_t LREG_BCAST = p_sfpu::LREG0;
 constexpr std::uint32_t LREG_TMP   = p_sfpu::LREG2;

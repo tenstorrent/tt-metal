@@ -151,6 +151,8 @@ ALWI void sfpu_residual_normalize_bcast_col(
 
 // Apply (data - mean) * inv_std, broadcasting scalar element zero of the
 // statistic tiles across the complete data tile.
+// This operation clobbers programmable constant register 0; a subsequent SFPU
+// operation that consumes that constant must run its init first.
 ALWI void sfpu_normalize_bcast_scalar_init() {
     // Scalar broadcast needs the common SFPU config and zero-stride address modifier,
     // but not the persistent column-broadcast mask or replay program.
