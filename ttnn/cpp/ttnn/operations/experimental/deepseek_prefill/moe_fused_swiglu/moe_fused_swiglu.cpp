@@ -35,6 +35,18 @@ ttnn::Tensor moe_fused_swiglu(
         w_ups.size(),
         w_downs.size());
     const uint32_t experts_per_chip = static_cast<uint32_t>(w_gates.size());
+    // What follows indexes the activation shape and dereferences its device, both before the device
+    // operation's validate() runs. Tensor::device() is null for host or unallocated storage, so
+    // without these a malformed public call is answered with a null dereference instead of a
+    // diagnostic. Rank is restated rather than left to validate() for the same ordering reason --
+    // padded_shape()[-2] is indexed here, and its own out-of-range throw names ShapeBase, not the op.
+    TT_FATAL(activations.storage_type() == StorageType::DEVICE, "moe_fused_swiglu: activations must be on device");
+    TT_FATAL(activations.is_allocated(), "moe_fused_swiglu: activations must be allocated");
+    const auto activations_rank = activations.logical_shape().rank();
+    TT_FATAL(
+        activations_rank == 2 || activations_rank == 4,
+        "moe_fused_swiglu: activations must have rank 2 or 4, got {}",
+        activations_rank);
     const uint32_t capacity_tiles = activations.padded_shape()[-2] / TILE;
     const uint32_t m_tiles = input_m_tiles.value_or(capacity_tiles);
     const auto device_grid = activations.device()->compute_with_storage_grid_size();
