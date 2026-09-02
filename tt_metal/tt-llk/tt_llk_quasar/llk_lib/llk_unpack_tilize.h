@@ -136,6 +136,14 @@ inline void _llk_unpack_tilize_(const std::uint32_t l1_tile_idx)
     const std::uint32_t src_addr_offset_datums =
         l1_tile_idx *
         (TILE_C_DIM / FACE_C_DIM); // should be tensor_shape.num_faces_c_dim, but it is not available here yet, this will work only for 32x32 tiles
+    // amokan/fused_conv's commit 1 added this STALLWAIT, then commit 2 ("Remove stallwait") dropped it -- safe
+    // in the single-shot conv tilize, but the standalone tilize op drives this fn in a PER-TILE loop
+    // (llk_unpack_tilize_api.h): without the stall, the next tile's cfg_rmw config write races the previous
+    // tile's in-flight UNPACR_TILIZE MOP (MMIO-vs-MOP), corrupting the unpack -> NEO_SEMAPHORES
+    // WAIT_ON_UNINITIALIZED on the standalone tilize (regressed bottleneck_1x1_64to64). Re-add: block the CFG
+    // write until this unpacker resource is idle so the offset lands cleanly before the MOP reads it.
+    constexpr std::uint32_t STALL_UNP_RES = (CNT_SEL == p_unpacr::UNP_A) ? p_stall::UNPACK0 : p_stall::UNPACK1;
+    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, STALL_UNP_RES);
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_TILIZE_SRC_ADDR_OFFSET_RMW, src_addr_offset_datums);
