@@ -7211,3 +7211,11 @@ Measured, one run, all four links (closure that run: -0.3 ns mean; lossless; geo
 The remaining error terms are at or below the physical round noise, and no measured structure
 points at a next lever. Declared done at this level; anything further should start from a NEW
 measurement showing structure, not from a candidate fix.
+
+### Inverse falsifier: delay injection UNDER two-stamp -- the subtraction proven live
+Same 200 ns ECHO_DELAY that shifted single-stamp closure by -217 ns moved two-stamp closure to
++4.3 ns (cancelling; no-delay baseline -0.9): a >=40x suppression, with rtt_min unchanged at
+781 cy (the injected turnaround excluded from the wire rtt too) and losslessness intact. The
+injected delay is measured by the stamp pair on every round and subtracted on that round, exactly
+as designed. The residual ~+5 ns sits near the edge of the run-to-run band and is unresolved at
+n=1 -- noted, not chased.
