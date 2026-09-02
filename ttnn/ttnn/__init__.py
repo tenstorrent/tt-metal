@@ -529,6 +529,44 @@ ttnn.Tensor.__lt__ = lambda self, *args, **kwargs: ttnn.lt(self, *args, **kwargs
 ttnn.Tensor.__le__ = lambda self, *args, **kwargs: ttnn.le(self, *args, **kwargs)
 ttnn.Tensor.__getitem__ = lambda self, *args, **kwargs: ttnn.operations.core.__getitem__(self, *args, **kwargs)
 
+
+# The nanobind __repr__ is ttnn::to_string, which formats the tensor *values*: for a device
+# tensor that is a full readback to host, plus a to_layout (TILE -> ROW_MAJOR) and, for
+# block-float dtypes, a to_dtype. Repr gets called incidentally -- an f-string in a log line,
+# a debugger's variables pane, a tensor inside a list that something printed -- so that work
+# lands in places nobody asked for it, and on a large tensor it dominates. Describe the tensor
+# instead, from spec metadata only, and keep the value dump one explicit call away.
+ttnn.Tensor.to_string = ttnn.Tensor.__repr__
+
+
+def _tensor_repr(self):
+    """Single-line spec summary. Touches no tensor data, and never raises."""
+    try:
+        parts = [f"shape={list(self.shape)}"]
+        # Only worth the width when tiling actually padded the logical shape.
+        if list(self.padded_shape) != list(self.shape):
+            parts.append(f"padded={list(self.padded_shape)}")
+        parts.append(f"dtype={getattr(self.dtype, 'name', self.dtype)}")
+        parts.append(f"layout={getattr(self.layout, 'name', self.layout)}")
+
+        memory_config = self.memory_config()
+        parts.append(f"buffer={getattr(memory_config.buffer_type, 'name', memory_config.buffer_type)}")
+        parts.append(f"memory={getattr(memory_config.memory_layout, 'name', memory_config.memory_layout)}")
+
+        if not self.is_allocated():
+            parts.append("<not allocated>")
+        else:
+            # Tensor::device() is null for host and for unallocated tensors, not an error.
+            device = self.device()
+            parts.append(f"mesh={list(device.shape)}" if device is not None else "host")
+
+        return f"ttnn.Tensor({', '.join(parts)})"
+    except Exception as e:  # A repr that throws breaks debuggers and logging.
+        return f"<ttnn.Tensor: repr failed: {e!r}>"
+
+
+ttnn.Tensor.__repr__ = _tensor_repr
+
 from ttnn.operations.matmul import (
     MatmulMultiCoreReuseProgramConfig,
     MatmulMultiCoreReuseMultiCastProgramConfig,
