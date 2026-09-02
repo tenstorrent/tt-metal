@@ -44,7 +44,10 @@ tt::tt_metal::ProgramDescriptor ConcatS2SRMProgramFactory::create_descriptor(
     const uint32_t groups = static_cast<uint32_t>(operation_attributes.groups);
     ProgramDescriptor desc;
 
-    const uint32_t num_output_rows = output.padded_shape()[-2];
+    // Height-sharded row count is the whole flattened height, not just dim[-2]: the shards
+    // tile (prod(dims[0..-2]), dims[-1]). Using padded_shape()[-2] under-counts whenever the
+    // leading dims are not all 1, which mis-sizes the ragged last core below.
+    const uint32_t num_output_rows = output.physical_volume() / output.padded_shape()[-1];
     const uint32_t num_input_tensors = input_tensors.size();
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const CoreRangeSet all_cores = input_tensors[0].shard_spec().value().grid;
