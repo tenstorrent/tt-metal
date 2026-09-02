@@ -1,0 +1,596 @@
+<title>Gated DeltaNet Op Profile</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+<style>
+  :root {
+    --ground:      #FBFAFC;
+    --surface:     #FFFFFF;
+    --surface-alt: #F4F2F8;
+    --ink:         #1B1926;
+    --ink-soft:    #3D3950;
+    --muted:       #6E6A82;
+    --rule:        #E2DEEC;
+    --rule-strong: #CBC5DC;
+    --accent:      #5B4BD6;
+    --accent-soft: #EDEAFB;
+    --hot:         #C2410C;
+    --hot-soft:    #FBEAE1;
+    --cool:        #0E7C6B;
+    --cool-soft:   #E1F2EF;
+
+    --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --f-body:    "Source Serif 4", Georgia, "Times New Roman", serif;
+    --f-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #141320;
+      --surface:     #1C1A2B;
+      --surface-alt: #232036;
+      --ink:         #E9E7F2;
+      --ink-soft:    #C4C0D6;
+      --muted:       #918CA6;
+      --rule:        #2E2B41;
+      --rule-strong: #423E5C;
+      --accent:      #A99BFF;
+      --accent-soft: #292546;
+      --hot:         #F98A5A;
+      --hot-soft:    #3A2418;
+      --cool:        #4FC8B2;
+      --cool-soft:   #14322D;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #141320;
+    --surface:     #1C1A2B;
+    --surface-alt: #232036;
+    --ink:         #E9E7F2;
+    --ink-soft:    #C4C0D6;
+    --muted:       #918CA6;
+    --rule:        #2E2B41;
+    --rule-strong: #423E5C;
+    --accent:      #A99BFF;
+    --accent-soft: #292546;
+    --hot:         #F98A5A;
+    --hot-soft:    #3A2418;
+    --cool:        #4FC8B2;
+    --cool-soft:   #14322D;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 940px;
+    margin: 0 auto;
+    padding: 4rem 1.75rem 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3.25rem;
+  }
+
+  /* ---------- masthead ---------- */
+  .masthead { display: flex; flex-direction: column; gap: 1rem; }
+
+  .eyebrow {
+    font-family: var(--f-mono);
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  h1 {
+    font-family: var(--f-display);
+    font-weight: 700;
+    font-size: clamp(2.1rem, 5.2vw, 3.1rem);
+    line-height: 1.06;
+    letter-spacing: -0.025em;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  .standfirst {
+    font-size: 1.14rem;
+    color: var(--ink-soft);
+    max-width: 62ch;
+    margin: 0;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.5rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--rule);
+    font-family: var(--f-mono);
+    font-size: 0.76rem;
+    color: var(--muted);
+  }
+  .meta b { color: var(--ink-soft); font-weight: 500; }
+
+  /* ---------- sections ---------- */
+  section { display: flex; flex-direction: column; gap: 1.15rem; }
+
+  h2 {
+    font-family: var(--f-display);
+    font-weight: 600;
+    font-size: 1.5rem;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+    margin: 0;
+    padding-bottom: 0.6rem;
+    border-bottom: 2px solid var(--rule-strong);
+  }
+
+  h3 {
+    font-family: var(--f-display);
+    font-weight: 600;
+    font-size: 1.02rem;
+    letter-spacing: -0.005em;
+    margin: 0.5rem 0 0;
+  }
+
+  p { margin: 0; max-width: 68ch; }
+  p + p { margin-top: 0.85rem; }
+
+  .lede { font-size: 1.06rem; }
+
+  strong { font-weight: 600; }
+  code {
+    font-family: var(--f-mono);
+    font-size: 0.855em;
+    background: var(--surface-alt);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 0.08em 0.34em;
+  }
+
+  /* ---------- headline finding ---------- */
+  .finding {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    padding: 1.35rem 1.6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+  .finding .label {
+    font-family: var(--f-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .finding p { max-width: 66ch; }
+
+  /* ---------- stat strip ---------- */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .stat {
+    background: var(--surface);
+    padding: 1.05rem 1.15rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .stat .v {
+    font-family: var(--f-mono);
+    font-weight: 700;
+    font-size: 1.42rem;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+  .stat .v.hot  { color: var(--hot); }
+  .stat .v.cool { color: var(--cool); }
+  .stat .k {
+    font-family: var(--f-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* ---------- tables ---------- */
+  .scroll {
+    overflow-x: auto;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    background: var(--surface);
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--f-mono);
+    font-size: 0.79rem;
+    font-variant-numeric: tabular-nums;
+  }
+  caption {
+    caption-side: top;
+    text-align: left;
+    padding: 0.85rem 1rem 0.7rem;
+    font-family: var(--f-display);
+    font-size: 0.83rem;
+    font-weight: 600;
+    color: var(--ink-soft);
+    border-bottom: 1px solid var(--rule);
+  }
+  th, td {
+    padding: 0.5rem 0.85rem;
+    text-align: right;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--rule);
+  }
+  th:first-child, td:first-child { text-align: left; }
+  thead th {
+    font-weight: 500;
+    font-size: 0.68rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--surface-alt);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr.total td {
+    background: var(--surface-alt);
+    font-weight: 700;
+    color: var(--ink);
+  }
+  td.hot  { color: var(--hot);  font-weight: 700; }
+  td.cool { color: var(--cool); font-weight: 500; }
+  td.dim  { color: var(--muted); }
+
+  .indent-1 { padding-left: 2rem !important; color: var(--ink-soft); }
+  .indent-2 { padding-left: 3.4rem !important; color: var(--muted); }
+
+  /* magnitude bar behind the share column */
+  td.bar {
+    position: relative;
+    text-align: right;
+  }
+  td.bar span { position: relative; z-index: 1; }
+  td.bar::before {
+    content: "";
+    position: absolute;
+    top: 4px; bottom: 4px; right: 0;
+    width: var(--w, 0%);
+    background: var(--accent-soft);
+    border-radius: 2px;
+  }
+  td.bar.is-hot::before { background: var(--hot-soft); }
+
+  /* ---------- steps ---------- */
+  ol.steps {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: step;
+    display: flex;
+    flex-direction: column;
+    gap: 1.4rem;
+  }
+  ol.steps > li {
+    counter-increment: step;
+    display: grid;
+    grid-template-columns: 1.9rem 1fr;
+    gap: 0.9rem;
+    align-items: start;
+  }
+  ol.steps > li::before {
+    content: counter(step);
+    font-family: var(--f-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--accent);
+    border: 1px solid var(--rule-strong);
+    border-radius: 50%;
+    width: 1.9rem; height: 1.9rem;
+    display: grid;
+    place-items: center;
+  }
+  ol.steps .body { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+
+  pre {
+    margin: 0;
+    background: var(--surface-alt);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 0.85rem 1rem;
+    overflow-x: auto;
+    font-family: var(--f-mono);
+    font-size: 0.775rem;
+    line-height: 1.6;
+    color: var(--ink-soft);
+  }
+
+  ul.notes {
+    margin: 0;
+    padding-left: 1.15rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    max-width: 68ch;
+  }
+  ul.notes li::marker { color: var(--accent); }
+
+  .caveat {
+    background: var(--surface-alt);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 1.15rem 1.4rem;
+    font-size: 0.94rem;
+    color: var(--ink-soft);
+  }
+  .caveat h3 { margin-top: 0; color: var(--ink); }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 1.25rem;
+    font-family: var(--f-mono);
+    font-size: 0.73rem;
+    color: var(--muted);
+    line-height: 1.8;
+  }
+  footer b { color: var(--ink-soft); font-weight: 500; }
+
+  @media (max-width: 620px) {
+    body { font-size: 16px; }
+    .wrap { padding: 2.5rem 1.1rem 4rem; gap: 2.5rem; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">Device profile · Qwen3.6-27B bring-up</div>
+    <h1>Gated DeltaNet op profile</h1>
+    <p class="standfirst">Op-level Tracy measurements of one TTNN Gated DeltaNet layer at three sequence lengths, broken down by pipeline stage. The bottleneck is not the same one at decode and at prefill.</p>
+    <div class="meta">
+      <span><b>Device</b> Wormhole n150, 1×1 mesh</span>
+      <span><b>Build</b> build_Release, ENABLE_TRACY=ON</span>
+      <span><b>Metric</b> DEVICE KERNEL DURATION</span>
+      <span><b>Samples</b> 4 iters + 1 warmup</span>
+      <span><b>Date</b> 2026-08-27</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="finding">
+      <div class="label">Headline</div>
+      <p class="lede"><strong>The bottleneck flips with sequence length.</strong> At T=1 the input projections are the single largest cost at 51.5% and the recurrent scan is only 33.4%. By T=32 the scan is 93.2%, and at T=128 it is 96.3%. Decode and prefill need different fixes.</p>
+      <p>The projections are already running near DRAM-bandwidth roofline, so decode has little headroom without batching. The scan is entirely ours to fix — it is dispatch-latency bound, not compute bound.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>One layer, end to end</h2>
+    <div class="stats">
+      <div class="stat"><span class="v">2.58<span style="font-size:.72em"> ms</span></span><span class="k">T=1 · 75 ops</span></div>
+      <div class="stat"><span class="v">34.2<span style="font-size:.72em"> ms</span></span><span class="k">T=32 · 918 ops</span></div>
+      <div class="stat"><span class="v">148<span style="font-size:.72em"> ms</span></span><span class="k">T=128 · 3483 ops</span></div>
+      <div class="stat"><span class="v hot">8.1<span style="font-size:.72em"> tok/s</span></span><span class="k">decode ceiling, 48 layers</span></div>
+    </div>
+    <p>Matmul dispatch count is exactly <code>3T + 5</code> — three per token in the scan, plus four projections and <code>out_proj</code>. Measured: 8, 101, 389.</p>
+  </section>
+
+  <section>
+    <h2>Where the time goes</h2>
+    <p>Stages are signposted individually, so a parent's figure includes its children. <code>causal_conv1d</code> nests inside <code>project</code>. “Unattributed” is <code>out_proj</code>, reshapes, and deallocations.</p>
+
+    <div class="scroll">
+      <table>
+        <caption>Per-forward device time by stage (µs), one layer</caption>
+        <thead>
+          <tr>
+            <th>Stage</th>
+            <th>T=1</th><th>share</th>
+            <th>T=32</th><th>share</th>
+            <th>T=128</th><th>share</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>project</td>
+            <td class="hot">1326.4</td><td class="bar is-hot" style="--w:51.5%"><span>51.5%</span></td>
+            <td>1763.1</td><td class="bar" style="--w:5.2%"><span>5.2%</span></td>
+            <td>3751.9</td><td class="bar" style="--w:2.5%"><span>2.5%</span></td>
+          </tr>
+          <tr>
+            <td class="indent-1">causal_conv1d</td>
+            <td class="dim">291.1</td><td class="dim">11.3%</td>
+            <td class="dim">364.6</td><td class="dim">1.1%</td>
+            <td class="dim">1148.3</td><td class="dim">0.8%</td>
+          </tr>
+          <tr>
+            <td>gates</td>
+            <td>26.1</td><td class="bar" style="--w:1.0%"><span>1.0%</span></td>
+            <td>28.3</td><td class="dim">0.1%</td>
+            <td>28.1</td><td class="dim">0.0%</td>
+          </tr>
+          <tr>
+            <td>l2norm_qk</td>
+            <td>14.1</td><td class="bar" style="--w:0.5%"><span>0.5%</span></td>
+            <td>29.1</td><td class="dim">0.1%</td>
+            <td>65.1</td><td class="dim">0.0%</td>
+          </tr>
+          <tr>
+            <td>delta_rule_recurrent</td>
+            <td>860.1</td><td class="bar" style="--w:33.4%"><span>33.4%</span></td>
+            <td class="hot">31824.5</td><td class="bar is-hot" style="--w:93.2%"><span>93.2%</span></td>
+            <td class="hot">142741.0</td><td class="bar is-hot" style="--w:96.3%"><span>96.3%</span></td>
+          </tr>
+          <tr>
+            <td>gated_norm</td>
+            <td>17.5</td><td class="bar" style="--w:0.7%"><span>0.7%</span></td>
+            <td>67.0</td><td class="dim">0.2%</td>
+            <td>151.5</td><td class="dim">0.1%</td>
+          </tr>
+          <tr>
+            <td class="dim">unattributed</td>
+            <td class="dim">330.4</td><td class="dim">12.8%</td>
+            <td class="dim">448.6</td><td class="dim">1.3%</td>
+            <td class="dim">1465.1</td><td class="dim">1.0%</td>
+          </tr>
+          <tr class="total">
+            <td>total</td>
+            <td>2574.6</td><td>100%</td>
+            <td>34160.6</td><td>100%</td>
+            <td>148202.6</td><td>100%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <caption>Dispatch count per forward, by stage</caption>
+        <thead>
+          <tr><th>Stage</th><th>T=1</th><th>T=32</th><th>T=128</th><th>scaling</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>project</td><td>42</td><td>40</td><td>40</td><td class="cool">flat</td></tr>
+          <tr><td class="indent-1">causal_conv1d</td><td class="dim">25</td><td class="dim">23</td><td class="dim">23</td><td class="dim">flat</td></tr>
+          <tr><td>gates</td><td>6</td><td>6</td><td>6</td><td class="cool">flat</td></tr>
+          <tr><td>l2norm_qk</td><td>2</td><td>2</td><td>2</td><td class="cool">flat</td></tr>
+          <tr><td>delta_rule_recurrent</td><td>20</td><td class="hot">865</td><td class="hot">3430</td><td class="hot">≈26.7 / token</td></tr>
+          <tr><td>gated_norm</td><td>3</td><td>3</td><td>3</td><td class="cool">flat</td></tr>
+          <tr class="total"><td>total</td><td>75</td><td>918</td><td>3483</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Finding 1 — a layout tax that only exists for T &gt; 1</h2>
+    <p>Inside the scan, tile/row-major conversion appears from nowhere the moment the sequence has more than one token.</p>
+
+    <div class="scroll">
+      <table>
+        <caption>delta_rule_recurrent, op mix</caption>
+        <thead>
+          <tr><th>Op</th><th>T=1 ops</th><th>T=1 µs</th><th>T=32 ops</th><th>T=32 µs</th><th>T=32 share</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Matmul</td><td>3</td><td>569.5</td><td>96</td><td>18201.4</td><td class="bar" style="--w:57.2%"><span>57.2%</span></td></tr>
+          <tr><td>BinaryNg</td><td>4</td><td>198.5</td><td>128</td><td>6115.7</td><td class="bar" style="--w:19.2%"><span>19.2%</span></td></tr>
+          <tr><td>TilizeWithValPadding</td><td class="cool">0</td><td class="cool">0.0</td><td class="hot">156</td><td class="hot">3268.2</td><td class="bar is-hot" style="--w:10.3%"><span>10.3%</span></td></tr>
+          <tr><td>Untilize</td><td class="cool">0</td><td class="cool">0.0</td><td class="hot">93</td><td class="hot">1287.6</td><td class="bar is-hot" style="--w:4.0%"><span>4.0%</span></td></tr>
+          <tr><td>UntilizeWithUnpadding</td><td class="cool">0</td><td class="cool">0.0</td><td class="hot">94</td><td class="hot">1164.6</td><td class="bar is-hot" style="--w:3.7%"><span>3.7%</span></td></tr>
+          <tr><td>ReshapeView</td><td>2</td><td>17.2</td><td>64</td><td>584.6</td><td class="dim">1.8%</td></tr>
+          <tr><td>Slice</td><td class="dim">0</td><td class="dim">0.0</td><td>160</td><td>528.2</td><td class="dim">1.7%</td></tr>
+          <tr><td>Transpose</td><td>7</td><td>42.5</td><td>38</td><td>473.1</td><td class="dim">1.5%</td></tr>
+          <tr><td>Unary</td><td>1</td><td>4.8</td><td>32</td><td>154.7</td><td class="dim">0.5%</td></tr>
+          <tr><td>Typecast</td><td>3</td><td>27.6</td><td>3</td><td>28.4</td><td class="dim">0.1%</td></tr>
+          <tr><td>Concat</td><td class="dim">0</td><td class="dim">0.0</td><td>1</td><td>17.8</td><td class="dim">0.1%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>At T=32 the three layout ops are <strong>343 of 865 dispatches (40%) and 5.7 ms of 31.8 ms (18%)</strong> — doing no arithmetic. Slicing token <em>t</em> out of a TILE-layout <code>[B,H,T,128]</code> tensor is not tile-aligned, so every <code>slice</code> becomes untilize → slice → tilize. At T=1 the tensor is a single row and none of it is needed.</p>
+    <p>Matmul cost per call is flat — <strong>189.8 µs at T=1, 189.6 µs at T=32</strong> — for a <code>[1,48,1,128] @ [1,48,128,128]</code> product. Identical work per call at every T means these are pure dispatch latency.</p>
+  </section>
+
+  <section>
+    <h2>Finding 2 — projections are at roofline, except two of them</h2>
+    <p>The four <code>_project</code> matmuls at T=1, with achieved weight-read bandwidth:</p>
+
+    <div class="scroll">
+      <table>
+        <caption>Projection matmuls, T=1</caption>
+        <thead>
+          <tr><th>Weight</th><th>Shape</th><th>Size</th><th>Duration</th><th>Cores</th><th>Achieved</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>in_proj_qkv</td><td>5120 × 10240</td><td>104.9 MB</td><td>507.3 µs</td><td class="cool">64</td><td class="cool">207 GB/s</td></tr>
+          <tr><td>in_proj_z</td><td>5120 × 6144</td><td>62.9 MB</td><td>296.4 µs</td><td class="cool">64</td><td class="cool">212 GB/s</td></tr>
+          <tr><td>in_proj_b</td><td>5120 × 48 → 64</td><td>0.7 MB</td><td>51.9 µs</td><td class="hot">2</td><td class="hot">13 GB/s</td></tr>
+          <tr><td>in_proj_a</td><td>5120 × 48 → 64</td><td>0.7 MB</td><td>52.2 µs</td><td class="hot">2</td><td class="hot">13 GB/s</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p><code>qkv</code> and <code>z</code> sustain <strong>≈210 GB/s</strong>, a large fraction of this part's DRAM bandwidth. They are weight-bandwidth bound and cannot get meaningfully faster at batch 1 — the only lever is batching, which amortizes the weight read across users.</p>
+    <p><code>b</code> and <code>a</code> are the outlier. 48 output columns pad to 64, which is two tiles, so each matmul lands on <strong>2 of 64 cores</strong> and runs 16× slower per byte. Together they burn <strong>104 µs — 8% of <code>project</code>, 4% of the entire T=1 layer — to produce 96 numbers.</strong> Fusing them into one <code>[5120, 96]</code> projection, or folding them into <code>in_proj_qkv</code>, recovers most of that. Small in isolation; it repeats across 48 layers.</p>
+  </section>
+
+  <section>
+    <h2>What this means</h2>
+    <ul class="notes">
+      <li><strong>Decode is capped at ≈8 tok/s by this layer alone.</strong> 2.58 ms × 48 GDN layers ≈ 124 ms/token, before attention layers, MLPs, or the LM head.</li>
+      <li><strong>Roughly half of decode cost is irreducible at batch 1.</strong> The projections are at bandwidth roofline; only batching helps.</li>
+      <li><strong>The chunked scan is the prefill fix, and it wins twice.</strong> It replaces 3T small matmuls with a handful of <code>[64,128]</code>-shaped ones — attacking both the dispatch-latency ceiling and the per-token layout conversions, which disappear when tokens are processed in tile-aligned blocks.</li>
+      <li><strong>Fusing <code>in_proj_b</code> and <code>in_proj_a</code> is a cheap, isolated win</strong> worth ~4% of decode time.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Reproducing this</h2>
+    <ol class="steps">
+      <li>
+        <div class="body">
+          <h3>Confirm the build has the profiler</h3>
+          <pre>grep ENABLE_TRACY build_Release/CMakeCache.txt   # ENABLE_TRACY:BOOL=ON</pre>
+        </div>
+      </li>
+      <li>
+        <div class="body">
+          <h3>Run the workload under Tracy</h3>
+          <pre>python3 -m tracy -p -r -o /tmp/prof \
+    -a device_kernel_duration --op-support-count 40000 \
+    -m 'pytest models/experimental/qwen_3_27b/tests/test_perf.py -k deltanet'</pre>
+          <p><code>-r</code> is required or no ops CSV is produced. <code>--op-support-count</code> defaults to <strong>1000</strong>; exceeding it fails post-processing with a missing-op assertion rather than a clear error.</p>
+        </div>
+      </li>
+      <li>
+        <div class="body">
+          <h3>Summarize</h3>
+          <pre>python models/experimental/qwen_3_27b/tests/summarize_perf.py /tmp/prof</pre>
+          <p>Stage attribution comes from signpost pairs wrapped around the stage methods by the test, so the module itself carries no profiling code.</p>
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <section>
+    <div class="caveat">
+      <h3>Read these numbers with four caveats</h3>
+      <ul class="notes">
+        <li><strong>Wormhole n150, not Blackhole.</strong> The target is 8×P150; absolute figures will move, the shape of the breakdown should not.</li>
+        <li><strong>Random weights.</strong> This measures arithmetic and dispatch, not model quality.</li>
+        <li><strong>Recurrent scan, not chunked.</strong> The chunked path is not yet implemented — that is what these numbers argue for.</li>
+        <li><strong>Single device, batch 1, prefill path.</strong> No tensor parallelism, no trace capture, no multi-user batching.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    <b>Raw data</b> generated/qwen36_perf/ops_perf_results_2026_08_27_08_48_05.csv — 22,578 rows, one per device op, 380+ columns (shapes, dtypes, layouts, core count, math fidelity, per-core min/max).<br>
+    <b>Text summary</b> generated/qwen36_perf/summary.txt<br>
+    <b>Harness</b> models/experimental/qwen_3_27b/tests/test_perf.py · summarize_perf.py
+  </footer>
+
+</div>
