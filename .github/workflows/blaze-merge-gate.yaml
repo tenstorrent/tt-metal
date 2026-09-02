@@ -59,12 +59,26 @@ on:
         default: main
       wait-timeout-minutes:
         description: >-
-          How long to wait for the tt-blaze run. The bucket itself is bounded by
-          tt-blaze's own per-bucket budget; the bulk of this is queue time for a
-          free BH Loudbox.
+          Overall deadline for the tt-blaze run, queue time plus execution. Must
+          stay comfortably above the bucket's own budget (gpt-oss-temporal-multiuser
+          declares timeout: 120 in tt-blaze's silicon-tests-bh-loudbox-impl.yaml),
+          or this gate would cancel a healthy run mid-test. Runner scarcity is
+          bounded by queue-timeout-minutes instead, not by this.
         required: false
         type: number
-        default: 180
+        default: 70
+      queue-timeout-minutes:
+        description: >-
+          How long the tt-blaze run may sit with no job actually executing —
+          i.e. how long to wait for a free BH Loudbox — before this gate gives
+          up. Tracked separately from wait-timeout-minutes because the two
+          failures are different: this one means "tt-blaze had no runner", not
+          "the tests are slow". The clock resets whenever the run reports
+          in_progress, so a bucket that starts late still gets the full
+          wait-timeout-minutes to finish.
+        required: false
+        type: number
+        default: 60
     outputs:
       blaze-run-url:
         description: "URL of the tt-blaze run this gate waited on (empty if none was ever found)."
@@ -103,6 +117,7 @@ jobs:
           METAL_REF: ${{ inputs.metal-ref }}
           BLAZE_REF: ${{ inputs.blaze-ref }}
           TIMEOUT_MINUTES: ${{ inputs.wait-timeout-minutes }}
+          QUEUE_TIMEOUT_MINUTES: ${{ inputs.queue-timeout-minutes }}
         shell: bash
         run: |
           set -euo pipefail
@@ -125,16 +140,42 @@ jobs:
             echo "::error::wait-timeout-minutes=${TIMEOUT_MINUTES} exceeds ${MAX_WAIT_MINUTES}. This job is capped at 360 min by GitHub, so a longer deadline would be cut short by the runner instead of reported here."
             exit 1
           fi
+          if [[ ! "${QUEUE_TIMEOUT_MINUTES:-}" =~ ^[0-9]+$ ]] || [ "$QUEUE_TIMEOUT_MINUTES" -lt 1 ]; then
+            echo "::error::queue-timeout-minutes must be a positive whole number of minutes (got '${QUEUE_TIMEOUT_MINUTES:-}')."
+            exit 1
+          fi
+          # A queue deadline at or past the overall one can never fire -- the
+          # overall deadline gets there first -- which would silently drop the
+          # runner-scarcity diagnosis this input exists to give.
+          if [ "$QUEUE_TIMEOUT_MINUTES" -ge "$TIMEOUT_MINUTES" ]; then
+            echo "::error::queue-timeout-minutes=${QUEUE_TIMEOUT_MINUTES} must be below wait-timeout-minutes=${TIMEOUT_MINUTES}; at or above it the queue deadline is unreachable."
+            exit 1
+          fi
 
-          # Newest tt-blaze workflow_dispatch run whose title contains $1.
-          # `displayTitle` is where a computed `run-name` lands; `name` is the
-          # workflow's own name. Both are searched so this keeps working if gh
-          # ever changes which one carries it.
-          find_blaze_run() {
+          # One list fetch, reused for every probe against it.
+          #
+          # Fetching per probe is what made the anchored/bare fallback below
+          # misreport: the two calls are a second apart, the dispatched run
+          # becomes visible to `gh run list` somewhere in that second, and the
+          # anchored probe then sees NO run while the bare probe sees it. That
+          # is an indexing race, not run-name drift, but the fallback could only
+          # report it as drift. Probing a single snapshot makes "found by bare
+          # but not by anchored" mean what the warning claims it means.
+          list_blaze_runs() {
             gh run list --repo "$BLAZE_REPO" --workflow "$BLAZE_WORKFLOW" \
               --event workflow_dispatch --limit 100 \
               --json databaseId,displayTitle,name \
-              --jq "[.[] | select(((.displayTitle // \"\") + \" \" + (.name // \"\")) | contains(\"$1\"))] | .[0].databaseId // empty" \
+              2>/dev/null || echo "[]"
+          }
+
+          # Newest run in snapshot $1 whose title contains $2.
+          # `displayTitle` is where a computed `run-name` lands; `name` is the
+          # workflow's own name. Both are searched so this keeps working if gh
+          # ever changes which one carries it. --arg, not interpolation: the
+          # probe carries parentheses and must reach jq as data.
+          match_blaze_run() {
+            printf '%s' "$1" | jq -r --arg probe "$2" \
+              '[.[] | select(((.displayTitle // "") + " " + (.name // "")) | contains($probe))] | .[0].databaseId // empty' \
               2>/dev/null || echo ""
           }
 
@@ -193,6 +234,11 @@ jobs:
 
           started=$(date +%s)
           deadline=$(( started + TIMEOUT_MINUTES * 60 ))
+          # Start of the current unbroken stretch of "nothing is executing".
+          # Seeded at $started so the indexing window counts toward it; that
+          # window is capped at GRACE_SECONDS and is noise against the queue
+          # budget.
+          queued_since=$started
           run_id=""
           run_url=""
 
@@ -214,14 +260,17 @@ jobs:
               # 'metal-X-12'. Attempts are strictly sequential so that pair
               # cannot be in flight at once, but the parens cost nothing and
               # remove the class entirely.
-              run_id=$(find_blaze_run "(${DISPATCH_ID})")
+              snapshot=$(list_blaze_runs)
+              run_id=$(match_blaze_run "$snapshot" "(${DISPATCH_ID})")
 
               # Fall back to the bare token if the anchored form finds nothing,
               # so a future run-name change on the tt-blaze side degrades to the
               # old behaviour instead of hanging this gate until GRACE_SECONDS
-              # and failing. Warn, because that drift needs fixing.
+              # and failing. Warn, because that drift needs fixing. Both probes
+              # read the SAME snapshot, so reaching the warning means the run is
+              # listed and its title really has lost the parentheses.
               if [ -z "$run_id" ]; then
-                run_id=$(find_blaze_run "${DISPATCH_ID}")
+                run_id=$(match_blaze_run "$snapshot" "${DISPATCH_ID}")
                 if [ -n "$run_id" ]; then
                   echo "::warning::Matched tt-blaze run ${run_id} on the bare dispatch-id: its run-name no longer wraps the token as '(${DISPATCH_ID})'. Correlation is unanchored until the two sides agree again."
                 fi
@@ -314,13 +363,29 @@ jobs:
               esac
             fi
 
-            if [ "$(date +%s)" -ge "$deadline" ]; then
+            # Runner-scarcity deadline, deliberately separate from the overall
+            # one. Run-level status is the proxy for "no job is executing": it
+            # reads in_progress the moment ANY job runs, so this clock resets on
+            # tt-blaze's prologue (check-skip / artifact download / bucket
+            # selection) and again the instant the Loudbox leg is picked up. A
+            # run genuinely blocked on a free Loudbox reports queued for the
+            # whole wait -- which is exactly the case this bounds.
+            now=$(date +%s)
+            if [ "$status" = "in_progress" ]; then
+              queued_since=$now
+            elif [ "$(( now - queued_since ))" -ge "$(( QUEUE_TIMEOUT_MINUTES * 60 ))" ]; then
+              echo "::error::tt-blaze run has been '${status}' for ${QUEUE_TIMEOUT_MINUTES} min with no job executing -- no BH Loudbox came free. That is runner scarcity on the tt-blaze side, not a tt-metal regression: re-run this job when a Loudbox is available, or raise queue-timeout-minutes. ${run_url}"
+              echo "- ⏱️ tt-blaze — no BH Loudbox free after ${QUEUE_TIMEOUT_MINUTES} min ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+
+            if [ "$now" -ge "$deadline" ]; then
               echo "::error::Timed out after ${TIMEOUT_MINUTES} min with the tt-blaze run still '${status}'. Raise wait-timeout-minutes or check runner availability. ${run_url}"
               echo "- ⏱️ tt-blaze — timed out after ${TIMEOUT_MINUTES} min ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
 
-            echo "tt-blaze run ${run_id}: ${status} (${elapsed}s elapsed)"
+            echo "tt-blaze run ${run_id}: ${status} (${elapsed}s elapsed, $(( now - queued_since ))s not executing)"
             sleep "$POLL_SECONDS"
           done
 
@@ -363,15 +428,22 @@ jobs:
 
           run_id="${BLAZE_RUN_ID:-}"
 
-          # Same anchored form as the poll loop -- see the comment there for why
-          # the parentheses are load-bearing and why the bare token is only a
-          # fallback. Cancelling the WRONG blaze run would be worse here than a
+          # Same anchored form, and the same one-snapshot-per-attempt rule, as
+          # the poll loop -- see the comments there for why the parentheses are
+          # load-bearing, why the bare token is only a fallback, and why probing
+          # two separate list fetches misreports an indexing race as run-name
+          # drift. Cancelling the WRONG blaze run would be worse here than a
           # missed cleanup, so the anchored form is tried first every attempt.
-          find_blaze_run() {
+          list_blaze_runs() {
             gh run list --repo "$BLAZE_REPO" --workflow "$BLAZE_WORKFLOW" \
               --event workflow_dispatch --limit 100 \
               --json databaseId,displayTitle,name \
-              --jq "[.[] | select(((.displayTitle // \"\") + \" \" + (.name // \"\")) | contains(\"$1\"))] | .[0].databaseId // empty" \
+              2>/dev/null || echo "[]"
+          }
+
+          match_blaze_run() {
+            printf '%s' "$1" | jq -r --arg probe "$2" \
+              '[.[] | select(((.displayTitle // "") + " " + (.name // "")) | contains($probe))] | .[0].databaseId // empty' \
               2>/dev/null || echo ""
           }
 
@@ -381,9 +453,10 @@ jobs:
             # way to find out, and finding nothing is a legitimate outcome.
             echo "No run id recorded yet; searching ${BLAZE_REPO} for a run carrying '(${BLAZE_DISPATCH_ID})'"
             for attempt in $(seq 1 "$RETRIES"); do
-              run_id=$(find_blaze_run "(${BLAZE_DISPATCH_ID})")
+              snapshot=$(list_blaze_runs)
+              run_id=$(match_blaze_run "$snapshot" "(${BLAZE_DISPATCH_ID})")
               if [ -z "$run_id" ]; then
-                run_id=$(find_blaze_run "${BLAZE_DISPATCH_ID}")
+                run_id=$(match_blaze_run "$snapshot" "${BLAZE_DISPATCH_ID}")
                 [ -n "$run_id" ] && echo "  matched on the bare dispatch-id (run-name no longer parenthesises it)"
               fi
               [ -n "$run_id" ] && break
