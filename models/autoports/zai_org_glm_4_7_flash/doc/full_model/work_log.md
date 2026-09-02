@@ -730,7 +730,7 @@ Repo: `tt-metal`, branch `ttmodelmanager/glm47-flash-probe`, no push.
 | `59cd8b4204a` | full-model stage: `tt/model.py`, `tt/generator.py`, six test modules, five probes, `doc/full_model/` (62 artifacts), the updated `doc/context_contract.json`, the fresh AIME24 reference and `readiness_autoregressive/`, and the two `models/common/readiness_check/` fixes (one of which changes a shared default, see FM-008) |
 | `a1f8f235fb2` | records the SHA above, plus the round-2 documentation fixes |
 | `84b11d86639` | round-3 source fixes (FM-015): the traced-loop context guard and `replay_decode_trace`, the synchronized cold-compile timer, `source_manifest`, the needle phase in `test_full_context.py`, and the smaller items |
-| `FULLMODEL_EVIDENCE_SHA` | the FM-015 evidence sweep and the report rewritten from it: all `doc/full_model/` artifacts and logs, `README.md`, `work_log.md`, `doc/context_contract.json` |
+| `88c33f005a6` | the FM-015 evidence sweep and the report rewritten from it: all `doc/full_model/` artifacts and logs, `README.md`, `work_log.md`, `doc/context_contract.json` |
 | (this commit) | records the SHA above |
 
 The source and the evidence are deliberately in separate commits: the sweep ran
