@@ -12,6 +12,8 @@ import os
 import csv
 from pathlib import Path
 import json
+import re
+import uuid
 import yaml
 from datetime import datetime
 import copy
@@ -30,7 +32,6 @@ from tracy.common import (
     PROFILER_CPP_DEVICE_PERF_REPORT,
     PROFILER_ARTIFACTS_DIR,
     PROFILER_OUTPUT_DIR,
-    PROFILER_SESSION_MANIFEST,
     TRACY_FILE_NAME,
     TRACY_OPS_TIMES_FILE_NAME,
     TRACY_OPS_DATA_FILE_NAME,
@@ -47,6 +48,41 @@ from tracy.perf_counter_analysis import (
     print_efficiency_metrics_summary,
     get_device_op_data,
 )
+
+RUN_SESSION_ID_ENV = "TTNN_RUN_SESSION_ID"
+SESSION_MANIFEST_FILENAME = "session.json"
+SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+
+
+def validate_session_id(session_id: str) -> str:
+    """Require a compact identifier safe in environment and report metadata."""
+    if not SESSION_ID_PATTERN.fullmatch(session_id):
+        raise ValueError(f"Session ID must be 1-128 ASCII letters, digits, '.', '_', ':', or '-'; got {session_id!r}")
+    return session_id
+
+
+def get_or_create_session_id() -> str:
+    """Return the caller-supplied session ID or publish a new one for the child process."""
+    session_id = os.environ.get(RUN_SESSION_ID_ENV)
+    if not session_id:
+        session_id = uuid.uuid4().hex
+        os.environ[RUN_SESSION_ID_ENV] = session_id
+    return validate_session_id(session_id)
+
+
+def write_session_manifest(report_dir: Path) -> Optional[Path]:
+    """Write session.json directly into a report directory when an ID is available."""
+    session_id = os.environ.get(RUN_SESSION_ID_ENV)
+    if not session_id:
+        return None
+
+    manifest_path = Path(report_dir) / SESSION_MANIFEST_FILENAME
+    with manifest_path.open("w") as manifest_file:
+        json.dump({"session_id": validate_session_id(session_id)}, manifest_file)
+        manifest_file.write("\n")
+    logger.info(f"Wrote session manifest to {manifest_path}")
+    return manifest_path
+
 
 yaml.SafeDumper.ignore_aliases = lambda *args: True
 
@@ -1184,9 +1220,8 @@ def get_device_data_generate_report(
         perCoreCSVPath = os.path.join(outFolder, f"{perCoreName}.csv")
         logger.info(f"Copying runtime artifacts")
         os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
-        for artifact in (PROFILER_DEVICE_SIDE_LOG, PROFILER_SESSION_MANIFEST):
-            if os.path.isfile(logFolder / artifact):
-                os.system(f"cp {logFolder / artifact} {outFolder}")
+        if os.path.isfile(logFolder / PROFILER_DEVICE_SIDE_LOG):
+            os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
 
     if os.path.isfile(deviceTimesLog):
         logger.info(f"Getting device only ops data")
@@ -1399,6 +1434,8 @@ def get_device_data_generate_report(
                     writer.writerow(rowDict)
             logger.info(f"Device only per core op to op times csv generated at: {perCoreCSVPath}")
 
+        if export_csv:
+            write_session_manifest(Path(outFolder))
         if cleanup_device_log:
             os.remove(deviceTimesLog)
     else:
@@ -1440,9 +1477,11 @@ def generate_reports(
 
     logger.info(f"Copying runtime artifacts")
     os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
-    for artifact in (TRACY_FILE_NAME, PROFILER_DEVICE_SIDE_LOG, PROFILER_SESSION_MANIFEST):
-        if os.path.isfile(logFolder / artifact):
-            os.system(f"cp {logFolder / artifact} {outFolder}")
+    if os.path.isfile(logFolder / TRACY_FILE_NAME):
+        os.system(f"cp {logFolder / TRACY_FILE_NAME} {outFolder}")
+    if os.path.isfile(logFolder / PROFILER_DEVICE_SIDE_LOG):
+        os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
+    write_session_manifest(Path(outFolder))
     if os.path.isdir(f"{logFolder.parent / 'npe_viz'}"):
         os.system(f"cp -r {logFolder.parent / 'npe_viz'} {outFolder}")
 

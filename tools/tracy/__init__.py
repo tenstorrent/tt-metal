@@ -7,12 +7,9 @@ import sys
 import signal
 import os
 import io
-import json
-import re
 import subprocess
 import time
 import socket
-import uuid
 
 from loguru import logger
 
@@ -22,7 +19,6 @@ from .common import (
     PROFILER_BIN_DIR,
     PROFILER_LOGS_DIR,
     PROFILER_ARTIFACTS_DIR,
-    PROFILER_SESSION_MANIFEST,
     PROFILER_SCRIPTS_ROOT,
     PROFILER_WASM_DIR,
     PROFILER_WASM_TRACE_FILE_NAME,
@@ -40,33 +36,6 @@ from .common import (
 import tracy.tracy_state
 
 DEFAULT_CHILD_CALLS = ["CompileProgram", "HWCommandQueue_write_buffer"]
-RUN_SESSION_ID_ENV = "TTNN_RUN_SESSION_ID"
-SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
-
-
-def validate_session_id(session_id):
-    """Require a compact identifier safe in environment and CSV metadata."""
-    if not SESSION_ID_PATTERN.fullmatch(session_id):
-        raise ValueError(f"Session ID must be 1-128 ASCII letters, digits, '.', '_', ':', or '-'; got {session_id!r}")
-    return session_id
-
-
-def get_or_create_session_id():
-    """Return the caller-supplied session ID or publish a new one for the child process."""
-    session_id = os.environ.get(RUN_SESSION_ID_ENV)
-    if not session_id:
-        session_id = uuid.uuid4().hex
-        os.environ[RUN_SESSION_ID_ENV] = session_id
-    return validate_session_id(session_id)
-
-
-def write_session_manifest(manifest_path, session_id):
-    """Write the validated session ID into a small performance-report sidecar."""
-    session_id = validate_session_id(session_id)
-    with open(manifest_path, "w") as manifest_file:
-        json.dump({"session_id": session_id}, manifest_file)
-        manifest_file.write("\n")
-    logger.info(f"Wrote session manifest to {manifest_path}")
 
 
 def signpost(header, message=None):
@@ -154,13 +123,7 @@ def run_report_setup(verbose, outputFolder, binFolder, port):
 
 
 def generate_report(
-    outputFolder,
-    binFolder,
-    nameAppend,
-    childCalls,
-    collect_noc_traces=False,
-    device_analysis_types=[],
-    session_id=None,
+    outputFolder, binFolder, nameAppend, childCalls, collect_noc_traces=False, device_analysis_types=[]
 ):
     logsFolder = generate_logs_folder(outputFolder)
     tracyOutFile = logsFolder / TRACY_FILE_NAME
@@ -208,9 +171,6 @@ def generate_report(
         )
 
     logger.info(f"Host side ops data report generated at {logsFolder / TRACY_OPS_DATA_FILE_NAME}")
-
-    if session_id:
-        write_session_manifest(logsFolder / PROFILER_SESSION_MANIFEST, session_id)
 
     process_ops(
         outputFolder,

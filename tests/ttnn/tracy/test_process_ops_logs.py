@@ -11,14 +11,14 @@ from pathlib import Path
 
 import pytest
 
-from tracy import (
+from tracy import process_ops_logs
+from tracy.process_ops_logs import (
     RUN_SESSION_ID_ENV,
+    SESSION_MANIFEST_FILENAME,
     get_or_create_session_id,
-    process_ops_logs,
     validate_session_id,
     write_session_manifest,
 )
-from tracy.common import PROFILER_SESSION_MANIFEST
 
 
 # class for mocking creation of npe data
@@ -170,11 +170,11 @@ def test_build_sub_device_id_lookup_ignores_manager_id_only_rows(tmp_path):
     assert lookup[(0, 42, 0, 1)] == 0
 
 
-def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
+def test_generate_reports_writes_multicast_noc_util_column(tmp_path, monkeypatch):
     log_folder = tmp_path / "logs"
     report_folder = tmp_path / "reports"
     log_folder.mkdir(parents=True, exist_ok=True)
-    write_session_manifest(log_folder / PROFILER_SESSION_MANIFEST, "session-123")
+    monkeypatch.setenv(RUN_SESSION_ID_ENV, "session-123")
 
     ops = {
         1: {
@@ -212,7 +212,7 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
         assert row["MULTICAST NOC UTIL (%)"] == "25.0"
         assert "SESSION ID" not in reader.fieldnames
 
-    with (report_folder / PROFILER_SESSION_MANIFEST).open() as manifest_file:
+    with (report_folder / SESSION_MANIFEST_FILENAME).open() as manifest_file:
         assert json.load(manifest_file) == {"session_id": "session-123"}
 
 
@@ -238,10 +238,17 @@ def test_validate_session_id_rejects_unsafe_metadata(session_id, expect_error):
         validate_session_id(session_id)
 
 
-def test_write_session_manifest(tmp_path):
-    manifest_path = tmp_path / PROFILER_SESSION_MANIFEST
+def test_write_session_manifest(tmp_path, monkeypatch):
+    monkeypatch.setenv(RUN_SESSION_ID_ENV, "session-123")
 
-    write_session_manifest(manifest_path, "session-123")
+    manifest_path = write_session_manifest(tmp_path)
 
     with manifest_path.open() as manifest_file:
         assert json.load(manifest_file) == {"session_id": "session-123"}
+
+
+def test_write_session_manifest_skips_when_session_id_is_unset(tmp_path, monkeypatch):
+    monkeypatch.delenv(RUN_SESSION_ID_ENV, raising=False)
+
+    assert write_session_manifest(tmp_path) is None
+    assert not (tmp_path / SESSION_MANIFEST_FILENAME).exists()

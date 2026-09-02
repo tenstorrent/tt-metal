@@ -7,6 +7,7 @@ from shutil import copyfile
 
 
 from tracy import *
+from tracy.process_ops_logs import get_or_create_session_id
 from tracy.serve_wasm import launch_server_subprocess, point_embed_at_trace
 
 
@@ -214,22 +215,13 @@ def main():
             sys.exit(1)
 
     if options.processLogsOnly:
-        session_id = os.environ.get(RUN_SESSION_ID_ENV)
-        if session_id:
-            session_id = validate_session_id(session_id)
-        generate_report(
-            outputFolder,
-            binaryFolder,
-            "",
-            None,
-            options.collect_noc_traces,
-            session_id=session_id,
-        )
+        generate_report(outputFolder, binaryFolder, "", None, options.collect_noc_traces)
         sys.exit(0)
 
     # Create the ID in the parent before launching the profiled command. The child
-    # inherits it for graph reporting, and this process retains it for CSV annotation.
-    session_id = get_or_create_session_id() if options.report else None
+    # inherits it for graph reporting, and report processing writes it to session.json.
+    if options.report:
+        get_or_create_session_id()
 
     if options.port:
         port = options.port
@@ -505,7 +497,6 @@ def main():
                         options.child_functions,
                         options.collect_noc_traces,
                         options.device_analysis_types,
-                        session_id=session_id,
                     )
             except subprocess.TimeoutExpired as e:
                 captureProcess.terminate()
