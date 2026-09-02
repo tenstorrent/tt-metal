@@ -231,6 +231,7 @@ def test_demo_text(
                 enable_trace=enable_trace,
                 draft_len=draft_len,
                 num_layers=num_layers,
+                input_prompts=input_prompts,
             )
             return
         prompt = load_inputs(input_prompts, 1, instruct)[0]
@@ -245,6 +246,7 @@ def test_demo_text(
             enable_trace=enable_trace,
             draft_len=draft_len,
             num_layers=num_layers,
+            input_prompts=input_prompts,
         )
         return
 
