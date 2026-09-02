@@ -865,6 +865,30 @@ def publication_sets_dvalid(text: str, arch: str) -> bool:
     return bool(v) and v != "0"
 
 
+_CLEAR_TOKENS = ("ZEROSRC", "CLR_SRC", "CLRSRC", "NEGINFSRC")
+
+
+def publication_clears_bank(text: str) -> bool:
+    """True if this UNPACR_NOP writes the clear value into Unpackers[i].SrcBank.
+
+    Only the ZEROSRC / CLR_SRC family clears data. SET_DVALID does NOT: per
+    UNPACR_NOP_SETDVALID.md it sets AllowedClient = MatrixUnit, flips
+    Unpackers[i].SrcBank and sets SrcRow, writing no data at all."""
+    return any(t in text for t in _CLEAR_TOKENS)
+
+
+def publication_is_bare_setdvalid(text: str) -> bool:
+    """A hand-over with no clear in the same instruction.
+
+    Per UNPACR_NOP_SETDVALID.md this form performs NO wait of its own, so the
+    wait-like-UNPACR bit has nothing to select and the pipelined/serializing
+    distinction does not apply to it. It must instead INHERIT a wait by sequencing,
+    from a preceding real UNPACR or an UNPACR_NOP that does ZEROSRC (either form of
+    the wait bit -- the ISA only requires that the predecessor performed a wait), or
+    be preceded by an explicit STALLWAIT on the unpacker-owned-bank conditions."""
+    return "SET_DVALID" in text and not publication_clears_bank(text)
+
+
 def publication_bank_controls(text: str, arch: str):
     """(waits_own_bank, clears_both_banks) for one UNPACR_NOP publication.
 
