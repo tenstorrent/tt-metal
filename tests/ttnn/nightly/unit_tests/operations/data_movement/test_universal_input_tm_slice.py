@@ -1003,6 +1003,25 @@ def test_slice_rm_bw_sharded_subaligned_shard_row_in(device):
     )
 
 
+def test_slice_rm_block_sharded_subaligned_shard_row_in(device):
+    """BLOCK-sharded counterpart of the input-side case. `_block_sharded`'s 2x2 grid can't reach it —
+    any tile-aligned W halved is still a multiple of 8 bf16 elems — so use an explicit 2x8 grid:
+    a (32, 12) shard on (1, 1, 64, 96) gives a 24B row while W stays tile-aligned."""
+    in_shape = (1, 1, 64, 96)
+    _run_slice(
+        in_shape,
+        (0, 0, 0, 0),
+        (1, 1, 32, 96),
+        (1, 1, 1, 1),
+        ttnn.ROW_MAJOR_LAYOUT,
+        _explicit_block_shard_config(device, 2, 8, 32, 12),
+        L1_INTERLEAVED,
+        ttnn.bfloat16,
+        device,
+        ulp_when_exact=True,
+    )
+
+
 def test_slice_rm_bw_sharded_rescaled_subaligned_shard_row(device):
     """Implicit output spec (no memory_config): the output inherits the input's shard spec and then has
     it rescaled to the sliced width, after the composite decision. The inherited row is 16 bf16 elems
