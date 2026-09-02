@@ -32,6 +32,16 @@ ALWI void sub_bcast_cols_compensated_init(
     UNPACK((llk_unpack_AB_sub_bcast_col_init_custom(input_cb, split_mean_cb)));
 }
 
+/**
+ * @brief Subtracts a split mean from consecutive input tiles without cancelling the retained row anchor.
+ *
+ * @param input_cb Circular buffer containing the input tiles.
+ * @param split_mean_cb Circular buffer containing the anchor and anchor-minus-mean statistics tile.
+ * @param input_tile Index of the first input tile.
+ * @param dst_tile Index of the first destination tile.
+ * @param tile_count Number of consecutive tiles to process.
+ * @note Call @ref sub_bcast_cols_compensated_init first. The destination range must fit in the acquired DEST bank.
+ */
 ALWI void sub_bcast_cols_compensated(
     std::uint32_t input_cb,
     std::uint32_t split_mean_cb,
