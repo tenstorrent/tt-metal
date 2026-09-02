@@ -71,6 +71,11 @@ class BgeM3ForEmbedding:
         self.models = None
         self.data_parallel = None
         self.submeshes = None
+        # Set by _initialize_model once the mesh is known.
+        self._data_parallel = False
+        # Long-lived device tensors plus the trace that replays over them.
+        self._traced_inputs = None
+        self._traced_output = None
         self.state_dict = None
         self.tokenizer = None
         # Cache for mean-pool helper tensors keyed by (batch, seq) to avoid per-step
@@ -116,10 +121,28 @@ class BgeM3ForEmbedding:
             **kwargs,
         )
 
+    def _mesh_is_dp2(self) -> bool:
+        """True when the device is the 2-chip mesh that the serving path needs.
+
+        ModelArgs rejects data_parallel on any other mesh, so a single chip and a
+        larger mesh both keep the base path.
+        """
+        try:
+            return self.device.get_num_devices() == 2 and tuple(self.device.shape) == (2, 1)
+        except AttributeError:
+            return False
+
     def _initialize_model(self) -> None:
         if self._is_initialized and self.model is not None:
             return
 
+        # Data parallel needs the 2-chip mesh, 8192 tokens, and batch 12. ModelArgs
+        # reads these and selects the serving modules.
+        self._data_parallel = (
+            self._mesh_is_dp2()
+            and self.max_seq_len == BGE_M3_LONG_SEQ_LEN
+            and int(self.max_batch_size) == BGE_M3_LONG_SEQ_CHUNK
+        )
         self.model_args, self.model, self.state_dict = create_tt_model(
             mesh_device=self.device,
             max_batch_size=self.max_batch_size,
@@ -127,6 +150,7 @@ class BgeM3ForEmbedding:
             dtype=self.dtype,
             state_dict=self.state_dict,
             hf_model_name=self.model_name,
+            data_parallel=self._data_parallel,
         )
         self.tokenizer = self.model_args.tokenizer
         self._is_initialized = True
@@ -184,6 +208,166 @@ class BgeM3ForEmbedding:
 
         return padded_inputs
 
+    def _to_device_dp(self, tensor: torch.Tensor, *, on_device: bool = True) -> ttnn.Tensor:
+        """Split a host tensor over the mesh on the batch dimension.
+
+        The batch 12 request becomes 6 rows per chip. Each chip then runs a full
+        replica over the whole sequence and uses no collectives.
+
+        ``on_device`` False keeps the result in host storage, which
+        ``copy_host_to_device_tensor`` requires when it refills a traced buffer.
+        """
+        kwargs = {"mesh_mapper": ttnn.ShardTensorToMesh(self.device, dim=0)}
+        if on_device:
+            kwargs.update(device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.from_torch(
+            tensor.to(torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            **kwargs,
+        )
+
+    def _capture_trace(self, staged: dict[str, torch.Tensor]) -> None:
+        """Stage the inputs once, then record one forward over them.
+
+        Replay overwrites these same buffers, so they must outlive the capture.
+        The trace covers the whole mesh operation, the batch split included.
+        """
+        device_inputs = {
+            "input_ids": self._to_device_dp(staged["input_ids"]),
+            "token_type_ids": self._to_device_dp(staged["token_type_ids"]),
+            "position_ids": self._to_device_dp(staged["position_ids"]),
+            # The kernels read per-request valid lengths and build only the
+            # boundary mask tiles. A dense [B, 1, S, S] mask costs about 1.5 GiB here.
+            "attention_mask": self._to_device_dp(staged["valid_lengths"]),
+        }
+        warmup = self.model(**device_inputs)
+        ttnn.synchronize_device(self.device)
+        ttnn.deallocate(warmup)
+
+        # Allocate the pooling helpers now. Allocating a device buffer while a trace
+        # is live is unsafe, and Metal warns about it, so nothing may allocate after
+        # capture. Both helpers shard on the batch dimension to match the output.
+        keep = staged["attention_mask_2d"].to(torch.bfloat16)
+        self._pool_mask = ttnn.from_torch(
+            keep.unsqueeze(-1),
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._pool_counts = ttnn.from_torch(
+            keep.sum(dim=1, keepdim=True).clamp(min=1.0).unsqueeze(-1),
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        self._traced_output = self.model.capture_trace(**device_inputs, mesh_device=self.device, cq_id=0)
+        self._traced_inputs = device_inputs
+
+    def _forward_chunk_traced(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        token_type_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        *,
+        chunk_batch_size: int,
+    ) -> dict[str, torch.Tensor]:
+        """Replay the captured trace on new inputs."""
+        # _pad_inputs returns None for either id tensor when the caller omits it, but
+        # the trace records a fixed set of buffers, so both must exist.
+        if token_type_ids is None:
+            token_type_ids = torch.zeros_like(input_ids)
+        if position_ids is None:
+            nonpad = attention_mask.to(torch.long)
+            position_ids = torch.cumsum(nonpad, dim=1) * nonpad + int(self.tokenizer.pad_token_id)
+        staged = {
+            "input_ids": input_ids,
+            "token_type_ids": token_type_ids,
+            "position_ids": position_ids,
+            "valid_lengths": attention_mask.sum(dim=1, keepdim=True),
+            "attention_mask_2d": attention_mask,
+        }
+        if self._traced_inputs is None:
+            self._capture_trace(staged)
+        else:
+            for name, source_key in (
+                ("input_ids", "input_ids"),
+                ("token_type_ids", "token_type_ids"),
+                ("position_ids", "position_ids"),
+                ("attention_mask", "valid_lengths"),
+            ):
+                ttnn.copy_host_to_device_tensor(
+                    self._to_device_dp(staged[source_key], on_device=False), self._traced_inputs[name]
+                )
+
+        self.model.execute_trace(blocking=True)
+
+        # Pool on the chip that holds the rows. Reading the whole hidden state instead
+        # would move about 400 MB per request over PCIe and cost more than the forward.
+        hidden = self._traced_output
+        if len(hidden.shape) == 4:
+            hidden = ttnn.squeeze(hidden, dim=1)
+        if self.sentence_pooling_method == "cls":
+            pooled_tt = ttnn.slice(hidden, [0, 0, 0], [hidden.shape[0], 1, hidden.shape[2]])
+        else:
+            masked = ttnn.multiply(hidden, self._pool_mask)
+            pooled_tt = ttnn.div(ttnn.sum(masked, dim=1, keepdim=True), self._pool_counts)
+            ttnn.deallocate(masked)
+
+        # Only [B, 1, D] crosses PCIe now.
+        composer = ttnn.ConcatMesh2dToTensor(self.device, dims=(0, 2), mesh_shape=(2, 1))
+        pooled = ttnn.to_torch(pooled_tt, mesh_composer=composer).to(torch.float32)
+        ttnn.deallocate(pooled_tt)
+        pooled = pooled.reshape(-1, self.model_args.dim)[: input_ids.shape[0]]
+        if self.normalize_embeddings:
+            pooled = torch.nn.functional.normalize(pooled, p=2, dim=-1)
+        if self.return_sparse or self.return_colbert:
+            raise NotImplementedError(
+                "The traced data-parallel path returns dense vectors only. "
+                "Ask for sparse or colbert vectors on the base path."
+            )
+        return {"dense_vecs": pooled[:chunk_batch_size]}
+
+    def _pool_outputs_host(self, hidden, input_ids, attention_mask, chunk_batch_size):
+        """Pool one forward output on the host.
+
+        Mirrors the device heads in _pool_outputs. The traced path uses this one,
+        because a device allocation during a live trace is unsafe.
+        """
+        return_dict = {}
+        if self.return_dense:
+            if self.sentence_pooling_method == "cls":
+                pooled = hidden[:, 0, :]
+            else:
+                keep = attention_mask.to(hidden.dtype).unsqueeze(-1)
+                pooled = (hidden * keep).sum(dim=1) / keep.sum(dim=1).clamp(min=1.0)
+            if self.normalize_embeddings:
+                pooled = torch.nn.functional.normalize(pooled, p=2, dim=-1)
+            return_dict["dense_vecs"] = pooled[:chunk_batch_size]
+        if self.return_sparse or self.return_colbert:
+            raise NotImplementedError(
+                "The traced data-parallel path returns dense vectors only. "
+                "Ask for sparse or colbert vectors on the base path."
+            )
+        return return_dict
+
+    def _pool_outputs(self, output, input_ids, attention_mask, chunk_batch_size):
+        """Run the requested pooling heads over one forward output."""
+        return_dict = {}
+        if self.return_dense:
+            return_dict["dense_vecs"] = self._dense_embedding(output, attention_mask)[:chunk_batch_size]
+        if self.return_sparse:
+            return_dict["sparse_vecs"] = self._sparse_embedding(output, input_ids)[:chunk_batch_size]
+        if self.return_colbert:
+            return_dict["colbert_vecs"] = self._colbert_embedding(output, attention_mask)[:chunk_batch_size]
+        return return_dict
+
     def _forward_chunk(
         self,
         input_ids: torch.Tensor,
@@ -203,15 +387,7 @@ class BgeM3ForEmbedding:
         if output.layout != ttnn.TILE_LAYOUT:
             output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
 
-        return_dict = {}
-        if self.return_dense:
-            return_dict["dense_vecs"] = self._dense_embedding(output, attention_mask)[:chunk_batch_size]
-        if self.return_sparse:
-            return_dict["sparse_vecs"] = self._sparse_embedding(output, input_ids)[:chunk_batch_size]
-        if self.return_colbert:
-            return_dict["colbert_vecs"] = self._colbert_embedding(output, attention_mask)[:chunk_batch_size]
-
-        return return_dict
+        return self._pool_outputs(output, input_ids, attention_mask, chunk_batch_size)
 
     def _get_or_build_mean_pool_helpers(
         self,
@@ -403,8 +579,11 @@ class BgeM3ForEmbedding:
                 position_ids=_slice_optional_batch_tensor(position_ids, start, end),
                 padded_batch_size=target_padded_batch_size,
             )
+            # The trace needs one fixed shape and long-lived input buffers, so it
+            # serves the data-parallel shape only. Every other request stays eager.
+            forward_chunk = self._forward_chunk_traced if self._data_parallel else self._forward_chunk
             chunk_outputs.append(
-                self._forward_chunk(
+                forward_chunk(
                     input_ids=padded_inputs["input_ids"],
                     attention_mask=padded_inputs["attention_mask"],
                     token_type_ids=padded_inputs["token_type_ids"],
@@ -446,9 +625,12 @@ def register_model() -> None:
 # HELPER FUNCTIONS
 ########################################################
 
-# Long-sequence path uses fixed 16-wide device execution regardless of max_batch_size.
+# The long-sequence path runs a fixed 12-wide device execution, whatever
+# max_batch_size says. ModelArgs turns on the data-parallel serving modules only at
+# batch 12 over 8192 tokens (model_config.py), so any other width drops to the base
+# path. The mesh mapper then gives each chip 6 rows.
 BGE_M3_LONG_SEQ_LEN = 8192
-BGE_M3_LONG_SEQ_CHUNK = 16
+BGE_M3_LONG_SEQ_CHUNK = 12
 # Short-sequence multi-request path pads to 32 rows for device execution.
 BGE_M3_SHORT_SEQ_PADDED_BATCH = 32
 
@@ -471,8 +653,8 @@ def get_target_padded_batch_size(original_batch_size: int, padded_seq_len: int) 
 
 def get_execution_chunk_size(original_batch_size: int, padded_seq_len: int) -> int:
     """
-    Number of real batch rows per forward. For long sequences, fixed at 16; tail
-    chunks still pad to get_target_padded_batch_size (16).
+    Number of real batch rows per forward. For long sequences, fixed at 12; tail
+    chunks still pad to get_target_padded_batch_size (12).
     """
     if is_long_seq_8192(padded_seq_len):
         return BGE_M3_LONG_SEQ_CHUNK
