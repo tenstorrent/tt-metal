@@ -2,13 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Regression for the canonical direction <-> slot bijection in fabric_builder_helpers.
-//
-// Connection placement (the get_downstream_sender_channel arithmetic) and producer naming
-// (get_sender_channel_direction) used to be two independent implementations of this relation,
-// agreeing only because the enum ordering happened to line up with five hand-written tables.
-// They now share one derivation; these tests pin the relation itself so the two sides cannot
-// drift -- a divergence here would silently stamp the wrong flow-control guard on a live sender.
+// Pins the direction-to-slot relation shared by connection placement and producer naming. A
+// divergence would stamp a flow-control guard onto the wrong sender.
 
 #include <gtest/gtest.h>
 

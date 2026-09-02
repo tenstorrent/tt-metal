@@ -91,7 +91,7 @@ void route_table_2d_t::calculate_chip_to_all_routing_fields(
     // is memset to zero above, and a failed pack therefore embeds an ALL-ZERO routing table. Every
     // route buffer then widens to zeros, every router decodes action 0, action_is_valid() rejects it,
     // and nothing forwards -- a silent cluster-wide hang with senders stuck at 0 packets, rather than
-    // a diagnosable error. Same fail-loud reasoning as the multicast one-feeder gate (D9.1).
+    // a diagnosable error.
     TT_FATAL(
         ok,
         "2D route table: mesh {} shape {}x{} is not representable in the destination-major 2D action-map format "

@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Regression for express-routing connection wiring, per
-// GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md sections 3.5 and 4.4.
+// Regression for express-routing connection wiring.
 //
 // The two properties that matter: cardinal and express outputs exist on every carrier VC (a landed
 // VC1 carrier can decode a Z action and there is no VC1->VC0 crossover), and an ordinary X ingress is
@@ -42,7 +41,7 @@ constexpr std::array<ZPortRole, 3> k_all_z_roles = {
 // The capability of an egress on the chip these tests describe: cardinals are ordinary same-mesh
 // edges, and what the Z port carries is exactly what its role says. Named once here because the
 // primitive keys both sides of dimension order on capability, so every call has to say which chip
-// the egress belongs to (contract section 4.4).
+// the egress belongs to.
 std::optional<EdgeCapability> egress_capability_on(RoutingDirection egress, ZPortRole chip_z_role) {
     if (egress != RoutingDirection::Z) {
         return EdgeCapability::INTRAMESH_CARDINAL;
@@ -114,7 +113,7 @@ RouterTurnSet express_mapping(
     return turn_set_for_router(Topology::Torus, direction, caps, k_express, enable_vc1 ? &k_full_mesh : nullptr);
 }
 
-// --- Legal transition set (builder contract section 4.4 wiring policy) ---
+// --- Legal transition set ---
 
 TEST(ExpressConnectionWiringTest, YIngressReachesCardinalTurnsAndExpress) {
     // A packet still in its Y phase may continue Y, turn onto either X direction, or take the chord.
@@ -292,7 +291,7 @@ TEST(ExpressConnectionWiringTest, IntermeshZTemplateStillAppliesUnderExpress) {
     EXPECT_TRUE(target_directions(mapping, 0).contains(RoutingDirection::Z));
 }
 
-// --- Z output existence (F3): only a chip that terminates the chord may emit a Z target ---
+// --- Z output existence: only a chip that terminates the chord may emit a Z target ---
 
 TEST(ExpressConnectionWiringTest, ChipWithoutExpressChordEmitsNoZTarget) {
     // Express is mesh-level, but this chip has no intramesh chord (a leaf chip, or one whose only Z
@@ -327,7 +326,7 @@ TEST(ExpressConnectionWiringTest, IntermeshZOnlyChipVc1BoundaryTargetDoesNotAlia
     EXPECT_EQ(used_directions.size(), 4u);  // S, E, W cardinals + the boundary target
 }
 
-// --- Wired producer sets (F1): the rule the injection-flag derivation consumes ---
+// --- Wired producer sets consumed by the injection-flag derivation ---
 //
 // The derivation classifies a producer's protected-ring effect only when the connection map wires
 // that producer into the egress. The wired set is pinned here directly so the two cannot drift.
@@ -638,9 +637,8 @@ TEST(ExpressConnectionWiringTest, OnlyTheBoundaryProducerIsVcSensitive) {
 }
 
 TEST(ExpressConnectionWiringTest, ImpossiblePairsFoldIntoTheirImpliedRoles) {
-    // The fold is the behaviour, not a formality: pairs no real chip has take the answers of the
-    // role they structurally imply, and an IMPOSSIBLE-returns-false mapping would change these
-    // answers. Pin the positive side of each fold -- the negative sides are swept elsewhere.
+    // Impossible pairs use their structurally implied role rather than mapping to false. These
+    // assertions pin the positive folds; negative cases are swept elsewhere.
     // (Z, INTRAMESH_CARDINAL) folds into EXPRESS_CHORD: it wires into cardinals like a chord.
     EXPECT_TRUE(wires_into_chip(
         RoutingDirection::Z,

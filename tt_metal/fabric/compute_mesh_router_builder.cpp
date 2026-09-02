@@ -903,10 +903,8 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             defines["FABRIC_2D_VC0_CROSSOVER_TO_VC1"] = "";
         }
 
-        // No FABRIC_EXPRESS_ENABLED here. The router's 2D action-map decode is now selected by
-        // FABRIC_2D (set above), since every 2D mesh runs it. The router has no other use for the
-        // express flag: it does not include routing_plane_connection_manager.hpp, so the Z-port
-        // capacity consumer -- the flag's one remaining device consumer -- is worker-side only.
+        // FABRIC_2D selects action-map decode for every 2D router. FABRIC_EXPRESS_ENABLED is omitted;
+        // its remaining device use is worker-side Z-port capacity.
     }
 
     // Get SOC descriptor for eth core lookup

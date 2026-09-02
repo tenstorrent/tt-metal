@@ -49,62 +49,45 @@ static constexpr std::size_t num_sender_channels_with_tensix_config = 1;
 // num sender channels based on more accurate topology
 static constexpr std::size_t num_sender_channels_1d_neighbor_exchange = 1;
 static constexpr std::size_t num_sender_channels_1d_linear = 2;
-// The frozen non-express forwarding VC0 count, used by the tensix/L1 path. The wiring-side
-// statement of the same number is non_express_vc0_sender_count() in router_wiring_rules (the two
-// are static_assert-ed equal there); they unify when the tensix path is widened for express.
+// Frozen non-express VC0 width used by the tensix/L1 path. router_wiring_rules.hpp asserts that its
+// wiring-side derivation matches this value.
 static constexpr std::size_t num_sender_channels_2d_mesh = 4;
 
-// Per-family sender counts beyond the frozen non-express 2D width are not constants here: they
-// are derived in builder/router_wiring_rules.* from the wiring rules -- the express family as the
-// family max over facing of wired-producer arity, the boundary family from the mesh-direction
-// count. Both are 5 VC0 / 4 VC1, by unrelated arithmetic.
+// Wider family counts are derived from the wiring rules. Express and Z-boundary families both
+// reach 5 VC0 / 4 VC1 senders through different wiring.
 
 // VC2: 1 sender channel (worker-type, neighbour exchange) + 1 receiver (non-Z only)
 static constexpr std::size_t num_sender_channels_vc2 = 1;
 static constexpr std::size_t num_receiver_channels_vc2 = 1;
 
 static constexpr std::size_t num_sender_channels_1d = 2;
-// VC0: Worker + 3 of [N/E/S/W], plus the express chord when express routing is on = 4 or 5 channels
-// VC1: Up to 4 channels (no worker): 3 of [N/E/S/W] for inter-mesh, plus a Z sender when the device
-// has an intermesh Z router or the mesh has express routing -- a carrier that crossed a mesh
-// boundary stays on VC1 and can still decode a Z action, so the express output must exist on VC1.
-// Total 2D without VC2: 5 + 4 = 9 channels (VC2 added dynamically)
-//
-// Sized for the widest 2D shape so the flat index space is the same whether or not express routing is
-// enabled. num_max_sender_channels is unchanged at 10: express with VC2 reaches it exactly (5+4+1),
-// matching the capacity analysis in GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md section 3.6. The
-// Z-facing intermesh boundary family is also 5+4(+1), so the ceilings below cover it as well.
+// Widest 2D family: 5 VC0 + 4 VC1 senders. VC1 includes Z because a carrier that crossed a mesh
+// boundary remains on VC1 and can still decode a Z action. VC2 adds one sender dynamically.
 static constexpr std::size_t num_sender_channels_2d = 9;
-// Max including VC2 — used only for array sizing
+// Max including VC2 -- used only for array sizing.
 static constexpr std::size_t num_sender_channels_2d_with_vc2 = num_sender_channels_2d + num_sender_channels_vc2;
-// Without VC2 — used for firmware CT args and L1 layout when VC2 is disabled
+// Without VC2 -- used for firmware CT args and L1 layout when VC2 is disabled.
 static constexpr std::size_t num_max_sender_channels_without_vc2 =
     std::max({num_sender_channels_1d, num_sender_channels_2d});
-// = max(2, 9) = 9
-// Absolute maximum — used for host-side array sizing (always big enough for any config)
+// Absolute maximum -- used for host-side array sizing.
 static constexpr std::size_t num_max_sender_channels =
     std::max({num_sender_channels_1d, num_sender_channels_2d_with_vc2});
-// = max(2, 10) = 10
 static constexpr std::size_t num_receiver_channels_1d = 1;
-// Without VC2 — VC2 receiver added dynamically
+// Without VC2 -- VC2 receiver is added dynamically.
 static constexpr std::size_t num_receiver_channels_2d = 2;  // VC0(1) + VC1(1)
-// Max including VC2 — used only for array sizing
+// Max including VC2 -- used only for array sizing.
 static constexpr std::size_t num_receiver_channels_2d_with_vc2 = num_receiver_channels_2d + num_receiver_channels_vc2;
-// Without VC2 — used for firmware CT args and L1 layout when VC2 is disabled
+// Without VC2 -- used for firmware CT args and L1 layout when VC2 is disabled.
 static constexpr std::size_t num_max_receiver_channels_without_vc2 =
     std::max({num_receiver_channels_1d, num_receiver_channels_2d});
-// = max(1, 2) = 2
-// Absolute maximum — used for host-side array sizing (always big enough for any config)
+// Absolute maximum -- used for host-side array sizing.
 static constexpr std::size_t num_max_receiver_channels =
     std::max({num_receiver_channels_1d, num_receiver_channels_2d_with_vc2});
-// = max(1, 3) = 3
 
 static constexpr std::size_t num_downstream_edms_vc0 = 1;
 static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
-// With express routing, a Y-facing VC0 receiver can fan out to four downstream routers rather than
-// three: continue Y cardinally, take the express chord, and turn onto either X direction. The stream
-// register for that fourth edge already exists (vc_0_free_slots_from_downstream_edge_4), so this
-// widening needs no new flow-control resource.
+// Express Y-facing VC0 can continue cardinally, take Z, or turn onto either X direction. The fourth
+// downstream stream register is already reserved.
 static constexpr std::size_t num_downstream_edms_2d_vc0_express = 4;
 static constexpr std::size_t num_downstream_edms_2d_vc1 = 3;  // XY intermesh: 3 mesh directions
 static constexpr std::size_t num_downstream_edms_2d_vc1_wide =
@@ -120,28 +103,15 @@ static constexpr uint32_t num_mesh_directions_2d = 4;
 // in builder/router_wiring_rules.* (boundary_vc0/vc1_sender_count) from this direction count, not
 // stated here.
 
-// Slots an injection channel's downstream receiver must have for bubble flow control to work: it only
-// sends when it sees this many free, so a smaller receiver stalls it permanently.
-//
-// Must match BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS on the device side, which the
-// host cannot include. That constant is already duplicated in fabric_router_mux_extension.cpp, so this
-// is the third copy; they have to move together.
+// Bubble injection requires at least two downstream slots. Must match
+// BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS and fabric_router_mux_extension.cpp;
+// the host cannot include the device constant.
 static constexpr uint32_t bubble_flow_control_protected_receiver_min_slots = 2;
 
-// Which VCs actually realize bubble flow control. VC1 carries intermesh traffic, whose dependency
-// graph has no bubble proof for arbitrary cross-mesh patterns, so its senders run unguarded even
-// where the express derivation classifies one as a ring acquisition
-// (GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md 3.4, assessment 5.7.5).
-//
-// This is not a preference the call sites may each restate: the injection flags and the
-// protected-receiver slot check both read it, and disagreement between them is a silent
-// miscompile rather than an error.
-//
-// First-level ack is not derived from this, and the two only look coupled by coincidence. The
-// device's static_assert is one-way -- a sender flagged as injection under deadlock avoidance
-// requires first-level ack on its VC, but not the converse -- so an unguarded VC is free to ack
-// early. VC1 does not, for the unrelated reason that the ack paths do not fit in the ACTIVE_ETH
-// kernel config window (see ENABLE_FIRST_LEVEL_ACK_VC1 in erisc_datamover_builder.cpp).
+// Only VC0 uses bubble flow control. VC1's intermesh dependency graph has no bubble proof for
+// arbitrary cross-mesh patterns, so its senders remain unguarded. Injection flags and protected-slot
+// validation must share this predicate. First-level ACK is independent; VC1 ACK paths do not fit in
+// the ACTIVE_ETH kernel config window (see ENABLE_FIRST_LEVEL_ACK_VC1 in erisc_datamover_builder.cpp).
 constexpr bool bubble_flow_control_enabled_on_vc(uint32_t vc) { return vc == 0; }
 
 uint32_t get_sender_channel_count(bool is_2D_routing);

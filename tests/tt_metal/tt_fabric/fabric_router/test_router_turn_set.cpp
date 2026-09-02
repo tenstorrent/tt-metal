@@ -73,10 +73,8 @@ std::set<RoutingDirection> non_self_cardinals(RoutingDirection facing) {
 }
 
 // One chip, named by the only fact that distinguishes the families below: what its Z port is for.
-// Every cardinal is an ordinary same-mesh edge. Both the router's own capability and the chip's
-// Z-port role are read back off this set, so the pairings the cross-check used to reject at
-// runtime -- a Z-facing INTERMESH edge on a chip claiming no boundary, say -- can no longer be
-// written down at all. validate_facing_role_consistency is exercised directly instead.
+// Every cardinal is an ordinary same-mesh edge. Deriving both facing capability and Z role from
+// this set prevents inconsistent pairings; validate_facing_role_consistency is tested directly.
 PerDirectionCapabilities chip_with_z(std::optional<EdgeCapability> z_capability) {
     PerDirectionCapabilities caps;
     for (const auto direction : k_all_cardinals) {
@@ -322,8 +320,7 @@ TEST_F(RouterTurnSetTest, ExpressChord_RequiresExpressEnabledAnd2D) {
 
 TEST_F(RouterTurnSetTest, CardinalCapabilityOnZFacingIsAConfigurationError) {
     // Direction letter and capability disagree: a same-mesh Z edge is an express chord and must
-    // carry INTRAMESH_EXPRESS; an ordinary cardinal-capability Z edge cannot exist. Both
-    // derivations reject it -- the shape used to silently produce mesh-like counts for it.
+    // carry INTRAMESH_EXPRESS; an ordinary cardinal-capability Z edge cannot exist.
     EXPECT_ANY_THROW(turn_set_for_router(
         Topology::Mesh,
         RoutingDirection::Z,
@@ -409,9 +406,7 @@ TEST_F(RouterTurnSetTest, ConnectionTarget_Semantics) {
 // A mesh graph descriptor names an intermesh connection without naming ports, so which ports the
 // seam lands on is discovery's answer, not the descriptor's. On the 16x4x2 express fixture it lands
 // on the cardinal N/S edge ports, because the chips' Z ports are already spent on express chords.
-// That combination -- express enabled, a cardinal INTERMESH facing, and a chip whose Z role is
-// EXPRESS_CHORD -- is the one this file did not previously cover, and it is the configuration every
-// landed packet traverses.
+// Landed packets therefore combine express mode, a cardinal INTERMESH facing, and EXPRESS_CHORD Z role.
 
 namespace {
 

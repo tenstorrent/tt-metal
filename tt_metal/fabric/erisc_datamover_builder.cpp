@@ -1252,10 +1252,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             control_plane.get_physical_mesh_shape(this->local_fabric_node_id.mesh_id, MeshScope::GLOBAL);
         named_args["MESH_Y_SIZE"] = mesh_shape[0];
         named_args["MESH_X_SIZE"] = mesh_shape[1];
-        // A router receives inter-mesh landings iff its eth peer is in another mesh, and both carrier
-        // VCs take them: a neighbour mesh's workers inject on VC0, so that traffic arrives here on VC0
-        // rather than VC1. VC2 is excluded -- see guide 2.3, which takes that as the builder's own
-        // documented decision rather than re-deriving it.
+        // Both carrier VCs accept intermesh landings: neighboring workers inject on VC0, so landings
+        // are not confined to VC1. VC2 is excluded by builder policy.
         for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
             named_args[fmt::format("IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", i)] = (is_inter_mesh && i < 2) ? 1 : 0;
         }
