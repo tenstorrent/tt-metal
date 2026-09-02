@@ -179,29 +179,29 @@ skus:
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc1:
     runs_on:
-      - exabox-multihost-ci-sc1
+      - exabox-multihost-ci-volcano-sc1
 
   # Like bh_sc1, but high-power pool (exabox.tenstorrent.com/power=14kw).
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc1_high_power:
     runs_on:
-      - exabox-multihost-ci-sc1-hp
+      - exabox-multihost-ci-volcano-sc1-hp
 
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc4:
     runs_on:
-      - exabox-multihost-ci-sc4
+      - exabox-multihost-ci-volcano-sc4
 
   # Like bh_sc4, but high-power pool (exabox.tenstorrent.com/power=14kw).
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc4_high_power:
     runs_on:
-      - exabox-multihost-ci-sc4-hp
+      - exabox-multihost-ci-volcano-sc4-hp
 
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc16:
     runs_on:
-      - exabox-multihost-ci-sc16
+      - exabox-multihost-ci-volcano-sc16
 
   cpu_medium:
     runs_on:
