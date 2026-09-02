@@ -121,6 +121,9 @@ BufferShardingArgs distribution_spec_args(const CoreCoord& core) {
 }
 }  // namespace
 
+// The next three are one scenario with the opt-in on and off. Without it the chip-wide scan
+// stays, which is what keeps a multicast past a buffer's own cores from landing on a per-core
+// allocation; with it the scan covers only the cores the buffer states, through either spec.
 TEST_F(HybridAllocatorTest, PlacesBesideAPerCoreHogWhenScoped) {
     run_lockstep_beside_per_core_hog(
         this->devices_[0],
@@ -142,8 +145,6 @@ TEST_F(HybridAllocatorTest, PlacesBesideAPerCoreHogWhenScopedByADistributionSpec
         },
         /*expect_range_lockstep=*/true);
 }
-
-// Without the opt-in the chip-wide scan stays, which is what keeps a multicast past a buffer's
 
 TEST_F(HybridAllocatorTest, RefusesToPlaceBesideAPerCoreHogWhenNotScoped) {
     run_lockstep_beside_per_core_hog(this->devices_[0], shard_spec_args, /*expect_range_lockstep=*/false);
