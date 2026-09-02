@@ -276,7 +276,13 @@
       "status": "reported-ready-for-review",
       "note": "PR #55002 fully resolved: validation run 33438439178 (galaxy-sanity) job 99645804592 (Fabric CCL tests wh_galaxy) completed/success. Re-grepped test-execution job log (5000-line sample) for the pydantic deprecation string/PerfMetric/OpParam/pydantic_models: 0 occurrences confirmed. Outcome commented (/codeowners ping) and marked ready for review (2026-09-01).",
       "number": 55002
+    },
+    {
+      "branch": "silencer/quiet-artifact-tar-extract",
+      "pattern": "tar -xvf ttm_any.tar.zst verbose extraction noise",
+      "status": "pr-opened",
+      "validation_workflow": "galaxy_multi_user_isolation_tests"
     }
   ],
-  "backlog_cursor": "Reconciled #51894 (pr-gate run 33557656596 success but inconclusive - test job did not exercise matmul path). No Phase B target selected this run due to reconciliation focus. Next run: proceed to Phase B scan of an untried workflow (models t1/t2, single-card, blackhole)."
+  "backlog_cursor": "Phase B target this run: verbose tar extraction noise fixed. Next run: continue scanning untried workflows (models t1/t2, single-card, blackhole) or check validation results for this PR."
 }
