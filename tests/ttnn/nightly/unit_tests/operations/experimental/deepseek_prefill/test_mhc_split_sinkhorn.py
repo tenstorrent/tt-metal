@@ -4,7 +4,9 @@
 """PCC: fused mHC kernel (ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn) vs the
 pure-torch ground truth (models/demos/deepseek_v3_d_p/reference/mhc/mhc_reference.py::parametrize).
 
-Unit (B=1,S=1 -> T=1) is issue #40707; T=32 exercises a full tile of tokens.
+The op is per-token: it reads mixes[T, (2+n)*n] and writes that token's H matrices, with no
+dependency between tokens and none on the hidden dim. Coverage therefore varies only T --
+unit, one tile, multi-tile + partial, full grid, and prefill scale -- plus the sharded layout.
 """
 
 import pytest
@@ -14,7 +16,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import MHCConfig, parametrize
-from models.demos.deepseek_v3_d_p.tt.mhc.mhc_kernel import mhc_split_sinkhorn
+from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import build_consts
 
 PCC = 0.999
 
@@ -28,20 +30,37 @@ def _check(name, ref, dev, pcc=PCC):
     assert passed, f"{name}: pcc={val} | max|Δ|={md:.2e} (threshold {pcc})"
 
 
+def _params(cfg, scale_val, T):
+    g = torch.Generator().manual_seed(1)
+    mixes = torch.randn(T, cfg.mix_hc, generator=g)
+    scale = torch.full((3,), float(scale_val))
+    base = torch.randn(cfg.mix_hc, generator=g)
+    return mixes, scale, base
+
+
+def _run(device, mixes, scale, base, cfg):
+    """mixes: [T, (2+n)*n] -> (pre [T,n], post [T,n], comb [T,n,n]) as torch tensors."""
+    n, T = cfg.n, mixes.shape[0]
+    mixes_tt = ttnn.from_torch(mixes.float(), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
+    consts_tt = ttnn.from_torch(
+        build_consts(cfg, scale, base), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32
+    )
+    pre, post, comb = ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn(
+        mixes_tt, consts_tt, n, int(cfg.sinkhorn_iters), float(cfg.eps)
+    )
+    return ttnn.to_torch(pre), ttnn.to_torch(post), ttnn.to_torch(comb).reshape(T, n, n)
+
+
 # T=1 unit (#40707), 32 one full tile, 100 multi-tile+partial, 2048 spans ~64 cores (multi-core #40719/#40722)
 @pytest.mark.parametrize("T", [1, 32, 100, 2048], ids=["T1", "T32", "T100", "T2048"])
 @pytest.mark.parametrize("scale_val", [0.01, 1.0], ids=["s0.01", "s1.0"])
 def test_mhc_split_sinkhorn(device, T, scale_val):
     torch.manual_seed(0)
     cfg = MHCConfig(dim=64, n=4)  # dim is irrelevant to parametrization
-    g = torch.Generator().manual_seed(1)
-    mixes = torch.randn(T, cfg.mix_hc, generator=g)
-    scale = torch.full((3,), float(scale_val))
-    base = torch.randn(cfg.mix_hc, generator=g)
+    mixes, scale, base = _params(cfg, scale_val, T)
 
     r_pre, r_post, r_comb = parametrize(mixes.reshape(1, T, cfg.mix_hc), scale, base, cfg, constraint="sinkhorn")
-
-    d_pre, d_post, d_comb = mhc_split_sinkhorn(device, mixes, scale, base, cfg)
+    d_pre, d_post, d_comb = _run(device, mixes, scale, base, cfg)
 
     _check("pre", r_pre.reshape(T, cfg.n), d_pre)
     _check("post", r_post.reshape(T, cfg.n), d_post)
@@ -56,13 +75,10 @@ def test_mhc_split_sinkhorn_prefill_scale(device):
     torch.manual_seed(0)
     cfg = MHCConfig(dim=64, n=4)
     T = 32 * 16384  # = B*S tokens; the kernel never distinguishes B from S
-    g = torch.Generator().manual_seed(1)
-    mixes = torch.randn(T, cfg.mix_hc, generator=g)
-    scale = torch.full((3,), 1.0)
-    base = torch.randn(cfg.mix_hc, generator=g)
+    mixes, scale, base = _params(cfg, 1.0, T)
 
     r_pre, r_post, r_comb = parametrize(mixes.reshape(1, T, cfg.mix_hc), scale, base, cfg, constraint="sinkhorn")
-    d_pre, d_post, d_comb = mhc_split_sinkhorn(device, mixes, scale, base, cfg)
+    d_pre, d_post, d_comb = _run(device, mixes, scale, base, cfg)
 
     _check("pre", r_pre.reshape(T, cfg.n), d_pre)
     _check("post", r_post.reshape(T, cfg.n), d_post)
@@ -74,15 +90,10 @@ def test_mhc_split_sinkhorn_prefill_scale(device):
 @pytest.mark.parametrize("cores_x", [8], ids=["x8"])
 @pytest.mark.parametrize("tiles_per_core", [1, 2], ids=["tpc1", "tpc2"])
 def test_mhc_split_sinkhorn_sharded(device, cores_x, tiles_per_core):
-    from models.demos.deepseek_v3_d_p.tt.mhc.mhc_kernel import build_consts
-
     torch.manual_seed(0)
     cfg = MHCConfig(dim=64, n=4)
     T = cores_x * tiles_per_core * 32
-    g = torch.Generator().manual_seed(1)
-    mixes = torch.randn(T, cfg.mix_hc, generator=g)
-    scale = torch.full((3,), 1.0)
-    base = torch.randn(cfg.mix_hc, generator=g)
+    mixes, scale, base = _params(cfg, 1.0, T)
 
     r_pre, r_post, r_comb = parametrize(mixes.reshape(1, T, cfg.mix_hc), scale, base, cfg, constraint="sinkhorn")
 
