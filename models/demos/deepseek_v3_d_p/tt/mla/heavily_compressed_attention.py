@@ -207,6 +207,7 @@ class TtHCA(LightweightModule):
         Every host tensor this layer will ever need is built here, which is what leaves forward with none.
         So the caller has to own the state: a prefill of one chunk allocates the same way a long one
         does."""
+        assert batch == 1, f"HCA state is single-user for now, got batch={batch}"
         entries = -(-int(max_seq_len) // self.compressor.compress_rate)
         capacity = -(-entries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE  # cache writes land on tile boundaries
         # A write always rewrites whole tiles, so the last one can reach past the entries themselves.
