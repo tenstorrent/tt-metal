@@ -113,14 +113,14 @@ std::vector<RoutingDirection> mcast_root_output_directions(
     int w_hops,
     std::string* failure = nullptr);
 
-// Writes this chip's two trees -- T(my_y) and T(my_x) -- into its 2D route table at the offsets the
-// device loader reads. Unlike the mesh-identical unicast action maps, these are written per chip.
+// Writes this chip's two trees -- T(my_y) and T(my_x) -- into the fixed multicast-tree region.
+// Unlike the mesh-identical action vectors, these are written per chip.
 //
 // This also serves as the mesh-wide gate, since every root on an axis is some chip's own root: refusing
 // a non-arborescent tree here rejects exactly the meshes the full sweep would, at O(axis^2) per chip.
 //
 // Returns false with `failure` set on a non-arborescent root, an axis past the packing bound, or a
-// shape whose hybrid layout does not fit the slot.
+// shape whose vectors or trees exceed their fixed region.
 bool embed_mcast_reverse_trees(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,
@@ -128,7 +128,7 @@ bool embed_mcast_reverse_trees(
     const AxisRouteTopology& x_topo,
     int my_y,
     int my_x,
-    std::uint8_t* route_table_2d,
+    std::uint8_t* mcast_trees,
     std::string* failure = nullptr);
 
 }  // namespace tt::tt_fabric

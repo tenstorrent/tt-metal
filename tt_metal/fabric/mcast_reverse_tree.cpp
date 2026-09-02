@@ -283,17 +283,15 @@ std::vector<RoutingDirection> mcast_root_output_directions(
     const auto y_size = static_cast<std::uint32_t>(y_topo.axis_len);
     const auto x_size = static_cast<std::uint32_t>(x_topo.axis_len);
 
-    // Runs the worker's encoder over a table laid out exactly as the device sees it.
-    std::vector<std::uint8_t> route_table_2d(Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES, 0);
-    if (!embed_mcast_reverse_trees(
-            mesh_graph, mesh_id, y_topo, x_topo, root_y, root_x, route_table_2d.data(), failure)) {
+    std::vector<std::uint8_t> mcast_trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
+    if (!embed_mcast_reverse_trees(mesh_graph, mesh_id, y_topo, x_topo, root_y, root_x, mcast_trees.data(), failure)) {
         return {};
     }
 
     std::vector<std::uint8_t> maps(y_size + x_size, 0);
     encode_2d_mcast_maps(
         maps.data(),
-        route_table_2d.data(),
+        mcast_trees.data(),
         y_size,
         x_size,
         static_cast<std::uint32_t>(root_y),
@@ -378,41 +376,34 @@ bool embed_mcast_reverse_trees(
     const AxisRouteTopology& x_topo,
     int my_y,
     int my_x,
-    std::uint8_t* route_table_2d,
+    std::uint8_t* mcast_trees,
     std::string* failure) {
     const auto y_size = static_cast<std::uint32_t>(y_topo.axis_len);
     const auto x_size = static_cast<std::uint32_t>(x_topo.axis_len);
 
-    if (!Routing2DCodec::hybrid_region_fits(y_size, x_size)) {
+    if (!Routing2DCodec::route_table_regions_fit(y_size, x_size)) {
         if (failure != nullptr) {
             *failure = fmt::format(
-                "[{},{}] needs {} B of 2D action maps plus {} B of reverse trees, over the {} B union slot; "
-                "routing_l1_info_t must grow first",
+                "[{},{}] needs {} B of action vectors and {} B of reverse trees, exceeding fixed capacities "
+                "{} B and {} B",
                 y_size,
                 x_size,
                 Routing2DCodec::vectors_region_bytes(y_size, x_size),
                 Routing2DCodec::mcast_tree_region_bytes(y_size, x_size),
-                Routing2DCodec::ROUTE_TABLE_CAPACITY_BYTES);
+                Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES,
+                Routing2DCodec::MCAST_TREE_CAPACITY_BYTES);
         }
         return false;
     }
 
-    return embed_one_axis(
-               mesh_graph,
-               mesh_id,
-               y_topo,
-               my_y,
-               route_table_2d,
-               Routing2DCodec::mcast_tree_y_offset(y_size, x_size),
-               "Y",
-               failure) &&
+    return embed_one_axis(mesh_graph, mesh_id, y_topo, my_y, mcast_trees, 0, "Y", failure) &&
            embed_one_axis(
                mesh_graph,
                mesh_id,
                x_topo,
                my_x,
-               route_table_2d,
-               Routing2DCodec::mcast_tree_x_offset(y_size, x_size),
+               mcast_trees,
+               Routing2DCodec::mcast_tree_x_offset(y_size),
                "X",
                failure);
 }
