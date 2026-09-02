@@ -481,8 +481,9 @@ def _first_tensor(out):
     heard of.
 
     Deliberately not `bringup_loop._normalize_out`, which unwraps one specific field name and so
-    hands back the wrapper untouched for any model that does not use it -- and which lives in a
-    module that pulls in ttnn, where this one must keep working on a box with no torch at all.
+    hands back the wrapper untouched for a model that names its result anything else -- a causal
+    LM's logits among them. Unifying the two is worth doing, but that helper is consumed by the
+    generated PCC tests, so widening it is a change to their behaviour and not a free refactor.
     """
     import torch
 
