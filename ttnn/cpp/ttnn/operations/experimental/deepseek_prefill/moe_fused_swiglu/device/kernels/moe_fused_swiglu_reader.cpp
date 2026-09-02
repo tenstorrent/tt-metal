@@ -93,6 +93,9 @@ constexpr uint32_t X_PAGE = CT(X_PAGE);
 constexpr uint32_t X_SLICE = CT(X_SLICE);
 constexpr uint32_t COUNTS_PAGE = CT(COUNTS_PAGE);
 constexpr uint32_t IDX_PAGE = CT(IDX_PAGE);
+// Entries in the counts tensor, i.e. the one past-the-end global expert id. Bounds the routing
+// table's values, which are device-resident and so beyond anything the host can check.
+constexpr uint32_t NUM_GLOBAL_EXPERTS = CT(NUM_GLOBAL_EXPERTS);
 constexpr uint32_t W_TILE = CT(W_TILE_BYTES);  // weight tile stride: bfp4 576, bfp8 1088, bf16 2048
 constexpr uint32_t BFP8_TILE = CT(BFP8_TILE);
 // h is bfp8, like x, the output and the reduce operands. It cannot be bfp4: the packer emits bfp8,
@@ -405,7 +408,15 @@ void kernel_main() {
         noc_async_read_barrier();
         invalidate_l1_cache();
         const uint32_t global_expert_id = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_idx)[local_expert_id];
-        const uint32_t raw_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_cnt)[global_expert_id];
+        // The routing table lives on device, so the host can size it but never bound its VALUES. An
+        // id past the counts tensor indexes outside the scratch page, which would turn whatever L1
+        // follows into this expert's token count and, through start_row below, into the writer's NOC
+        // base. Out of range means no work -- the same answer the active-token band gives a count it
+        // does not accept -- so a malformed table skips experts instead of corrupting memory.
+        const bool expert_in_range = global_expert_id < NUM_GLOBAL_EXPERTS;
+        ASSERT(expert_in_range);
+        const uint32_t raw_count =
+            expert_in_range ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_cnt)[global_expert_id] : 0u;
         const uint32_t count = (raw_count < MIN_ACTIVE_TOKENS || raw_count > MAX_ACTIVE_TOKENS) ? 0u : raw_count;
 
         uint32_t m_t = (count + TILE_H - 1) / TILE_H;
@@ -424,15 +435,18 @@ void kernel_main() {
         // the fused mode costs zero extra L1.
         uint32_t start_row = 0;
         if constexpr (NEED_START) {
-            const uint32_t l1_start = get_write_ptr(cb_counts_scratch);
-            noc_async_read(start_acc.get_noc_addr(0), l1_start, START_PAGE);
-            noc_async_read_barrier();
-            invalidate_l1_cache();
-            start_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_start)[global_expert_id];
-            // Region bases are tile-aligned by construction (the dispatch lays experts out in whole
-            // tile-rows) and every consumer floors by TILE_H, so a misaligned base would silently
-            // shift this expert's rows rather than fail.
-            ASSERT(start_row % TILE_H == 0);
+            // Same bound as the count: this lookup is the one that becomes the writer's NOC base.
+            if (expert_in_range) {
+                const uint32_t l1_start = get_write_ptr(cb_counts_scratch);
+                noc_async_read(start_acc.get_noc_addr(0), l1_start, START_PAGE);
+                noc_async_read_barrier();
+                invalidate_l1_cache();
+                start_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_start)[global_expert_id];
+                // Region bases are tile-aligned by construction (the dispatch lays experts out in
+                // whole tile-rows) and every consumer floors by TILE_H, so a misaligned base would
+                // silently shift this expert's rows rather than fail.
+                ASSERT(start_row % TILE_H == 0);
+            }
         }
 
         // Publish {count, M_t, m_blocks, start_row} so compute (all three TRISCs) and the writer can
