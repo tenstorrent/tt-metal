@@ -288,11 +288,11 @@ namespace {
 // conversion paths has to put them back, or an opt-in silently degrades to the default at
 // allocation time with nothing on the way there reporting it.
 MemoryConfig restore_experimental_flags(const MemoryConfig& source, MemoryConfig rebuilt) {
-    if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(source)) {
-        tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(rebuilt, true);
+    if (experimental::per_core_allocation::is_per_core_allocation(source)) {
+        experimental::per_core_allocation::set_per_core_allocation(rebuilt, true);
     }
-    if (tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(source)) {
-        tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(rebuilt, true);
+    if (experimental::range_lockstep_allocation::is_range_lockstep_allocation(source)) {
+        experimental::range_lockstep_allocation::set_range_lockstep_allocation(rebuilt, true);
     }
     return rebuilt;
 }
