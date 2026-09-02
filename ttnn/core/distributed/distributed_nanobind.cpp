@@ -517,6 +517,24 @@ void py_module(nb::module_& mod) {
                     >>> logical_core = ttnn.CoreCoord(0, 0)
                     >>> worker_core = device.worker_core_from_logical_core(logical_core)
                     >>> print(f"Worker core: x={worker_core.x}, y={worker_core.y}")
+            )doc")
+        .def(
+            "worker_core_from_logical_core_at",
+            &MeshDevice::worker_core_from_logical_core_at,
+            nb::arg("mesh_coordinate"),
+            nb::arg("logical_core"),
+            R"doc(
+                Convert a logical worker-core coordinate using the device selected by a mesh coordinate.
+
+                Unlike ``worker_core_from_logical_core``, this method does not require every device in
+                the mesh to have the same logical-to-virtual mapping.
+
+                Args:
+                    mesh_coordinate (MeshCoordinate): The coordinate of the device in the mesh.
+                    logical_core (CoreCoord): The logical worker-core coordinate to convert.
+
+                Returns:
+                    CoreCoord: The virtual NoC coordinate for the selected device.
             )doc");
 
     // Per-device optimal DRAM-bank-to-logical-worker assignment. Bound as an overload of the same

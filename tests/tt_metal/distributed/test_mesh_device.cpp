@@ -172,6 +172,20 @@ TEST_F(MeshDevice2x4Test, GetOptimalDramBankToLogicalWorkerAssignmentPerDevice) 
     }
 }
 
+TEST_F(MeshDevice2x4Test, WorkerCoreFromLogicalCoreAtUsesSelectedDevice) {
+    const CoreCoord logical_core{0, 0};
+    for (const auto& mesh_coordinate : MeshCoordinateRange(mesh_device_->shape())) {
+        auto* physical_device = mesh_device_->impl().get_device(mesh_coordinate);
+        ASSERT_NE(physical_device, nullptr);
+        EXPECT_EQ(
+            mesh_device_->worker_core_from_logical_core_at(mesh_coordinate, logical_core),
+            physical_device->worker_core_from_logical_core(logical_core));
+    }
+
+    EXPECT_ANY_THROW(
+        mesh_device_->worker_core_from_logical_core_at(MeshCoordinate{mesh_device_->shape()[0], 0}, logical_core));
+}
+
 TEST(GetWorkerNocHopDistanceAPI, UnitMeshes) {
     auto device_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
     std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());
