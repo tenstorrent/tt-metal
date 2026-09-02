@@ -919,7 +919,7 @@ Repo: `tt-metal`, branch `ttmodelmanager/glm47-flash-probe`, no push.
 | `88c33f005a6` | the FM-015 evidence sweep and the report rewritten from it: all `doc/full_model/` artifacts and logs, `README.md`, `work_log.md`, `doc/context_contract.json` |
 | `3107c5661d1` | records the SHA above |
 | `13148176475` | round-4 source fixes (FM-016): the cache-reset zero buffer moved before capture, `recapture_decode_traces` plus the exact program-cache trigger, the whole-tile terminal slice and `warmup_terminal_shapes`, the drained `reset()`, the TTFT breakdown, `tt/provenance.py`, the on-demand sampling-trace capture, and two new probes |
-| `FULLMODEL_R4_EVIDENCE_SHA` | the FM-016 evidence sweep and the report rebuilt from it |
+| `7037afbba94` | the FM-016 evidence sweep and the report rebuilt from it |
 | (this commit) | records the SHA above |
 
 The source and the evidence are deliberately in separate commits: the sweep ran
