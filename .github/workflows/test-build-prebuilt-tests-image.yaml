@@ -14,6 +14,7 @@ on:
       - ".github/workflows/build-prebuilt-tests-image.yaml"
       - ".github/workflows/test-build-prebuilt-tests-image.yaml"
       - "dockerfile/Dockerfile.prebuilt-tests-packages"
+      - "dockerfile/Dockerfile.prebuilt-tests-env"
   workflow_dispatch:
 
 permissions:
@@ -204,3 +205,152 @@ jobs:
         run: |
           /usr/bin/tt-metalium-validation-smoke \
             --gtest_filter="MeshDispatchFixture.TensixFailOnDuplicateKernelCreationDataflow"
+
+  # The packages arm above sets publish-artifact: false, so it makes no tarball
+  # and no wheel. The env image needs both, hence a second build rather than
+  # widening the one whose inputs are already proven.
+  build-env:
+    name: "Build tarball and wheel"
+    if: ${{ github.event.pull_request.head.repo.fork != true && !github.event.pull_request.draft }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      # 22.04: the setup-job consumers this serves pull the 22.04 ci-test base,
+      # and the hardware leg below runs on a 22.04 runner.
+      platform: "Ubuntu 22.04"
+      toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+      build-type: "Release"
+      publish-artifact: true
+      build-wheel: true
+      use-system-sfpi: true
+
+  bake-env-full:
+    name: "Bake env image / full"
+    needs: build-env
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-env.outputs.build-artifact-name }}
+      base-image: ${{ needs.build-env.outputs.ci-test-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      # Own ghcr package: the env payload is sized nothing like the packages one,
+      # so its retention must not be shared with theirs.
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=full
+
+  bake-env-wheel:
+    name: "Bake env image / wheel"
+    needs: build-env
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-env.outputs.wheel-artifact-name }}
+      base-image: ${{ needs.build-env.outputs.ci-test-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=wheel
+
+  # Payload shape is what breaks silently: a wrong one still builds and publishes.
+  # Checking both costs no hardware, so only the full image needs a real leg below.
+  verify-env-payloads:
+    name: "Check both env images carry the right payload"
+    needs: [bake-env-full, bake-env-wheel]
+    if: ${{ needs.bake-env-full.outputs.image != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Assert each payload
+        env:
+          FULL: ${{ needs.bake-env-full.outputs.image }}
+          WHEEL: ${{ needs.bake-env-wheel.outputs.image }}
+        run: |
+          set -euo pipefail
+          echo "::group::${FULL}"
+          docker run --rm --entrypoint cat "$FULL" /etc/prebuilt-tests-env-manifest | grep -q '^profile=full$'
+          docker run --rm --entrypoint sh "$FULL" -c 'test -d /work/build && test -d /work/tests'
+          # A COPYed payload would leave the tarball in a layer and eat the saving.
+          test -z "$(docker run --rm --entrypoint sh "$FULL" -c 'find / -xdev -name "*.tar.zst" 2>/dev/null')"
+          # Proves the .dockerignore worked; otherwise .git rides along unnoticed.
+          test -z "$(docker run --rm --entrypoint sh "$FULL" -c 'ls -d /work/.git 2>/dev/null')"
+          echo "::endgroup::"
+          echo "::group::${WHEEL}"
+          docker run --rm --entrypoint cat "$WHEEL" /etc/prebuilt-tests-env-manifest | grep -q '^profile=wheel$'
+          docker run --rm --entrypoint sh "$WHEEL" -c 'test ! -d /work/build && test -d /work/tests'
+          echo "::endgroup::"
+
+  verify-env:
+    name: "Run a test from the env image"
+    needs: bake-env-full
+    # Runs freshly built native code from the PR on hardware, and only needs to
+    # pull an image. Do not let it inherit packages: write.
+    permissions:
+      contents: read
+      packages: read
+    # Empty ref means the producer was skipped (fork); nothing to verify.
+    if: ${{ needs.bake-env-full.outputs.image != '' }}
+    runs-on: tt-ubuntu-2204-N150-viommu-stable
+    timeout-minutes: 20
+    container:
+      image: ${{ needs.bake-env-full.outputs.image }}
+      # The runner pulls before any step runs, so no login step can help here.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: wormhole_b0
+        LOGURU_LEVEL: INFO
+      # No /work volume on purpose: the image owns /work, and a bind mount would
+      # mask the payload, which is the whole point of this arm.
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: The environment came from the image, not from a checkout
+        run: |
+          set -euo pipefail
+          test -s /etc/prebuilt-tests-env-manifest
+          cat /etc/prebuilt-tests-env-manifest
+          # Source, build output, and the .so the tarball merges into the source
+          # package dir - the three things a consumer stops fetching.
+          test -d /work/tests && test -d /work/build/lib
+          test -f /work/tools/tt-triage.py
+          ls /work/ttnn/ttnn/*.so >/dev/null
+          # .git is deliberately absent; scripts shelling out to git cannot run here.
+          test ! -d /work/.git
+          ls -la /work/build/test/tt_metal/
+
+      - name: Run a runtime test against the baked build
+        timeout-minutes: 10
+        env:
+          GTEST_COLOR: yes
+        run: |
+          # Same fixture as the runtime_sanity_api leg: DRAM R/W, L1 R/W, and a
+          # JIT kernel compile, so it exercises the baked tree end to end.
+          ./build/test/tt_metal/unit_tests_api \
+            --gtest_filter='*DRAMLoopbackSingleCore*:*TestSimpleL1*:*CompileProgram*'
