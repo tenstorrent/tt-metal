@@ -94,7 +94,16 @@ permissions: {}
 jobs:
   blaze-ci:
     name: tt-blaze CI (gpt-oss temporal multiuser Loudbox bucket)
-    runs-on: ubuntu-slim
+    # NOT ubuntu-slim. That 1-core runner was introduced (#49992) for *trivial*
+    # jobs -- matrix generation, jq/curl bookkeeping, Slack notifications -- and
+    # kills a job at ~15m12s. This job is trivial in CPU terms but the opposite
+    # in wall-clock: it polls a tt-blaze run for as long as it takes a BH Loudbox
+    # to come free and the bucket to finish. On ubuntu-slim it was cancelled
+    # three times running at 911s, 912s and 913s into the poll loop, each time
+    # taking a healthy tt-blaze run down with it via the cleanup step below; the
+    # last run on ubuntu-latest polled for 69.7 min and passed. The timeout-minutes
+    # below is the only execution cap this job should have.
+    runs-on: ubuntu-latest
     # Long timeout to accommodate waiting for the loudbox to become available
     timeout-minutes: 360
     outputs:
