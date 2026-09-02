@@ -25,6 +25,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hal_types.hpp"
 #include "llrt.hpp"
+#include "zone_meta.hpp"
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -55,6 +56,14 @@ const ll_api::memory& get_risc_binary(
         ll_api::memory* mutable_ptr = new ll_api::memory(path, loading);
         if (update_callback) {
             update_callback(*mutable_ptr);
+        }
+        // Harvest this binary's streaming-profiler zone source locations (.tt_zone_meta). This is the
+        // right hook precisely because it is the funnel EVERY device-executed image passes through --
+        // kernels and firmware, cache hits included -- and because it runs before the image can execute,
+        // so a zone's name is registered strictly before that zone can appear on the wire. See
+        // llrt/zone_meta.hpp for why a one-shot snapshot taken by the consumer is not equivalent.
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled()) {
+            ZoneMetaRegistry::instance().ingest_elf(path);
         }
 
         lock.lock();
