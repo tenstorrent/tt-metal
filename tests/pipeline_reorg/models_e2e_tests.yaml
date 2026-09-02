@@ -1418,6 +1418,39 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# ── WAN 2.2 (Black Hole single galaxy, bh_sc1) ───────────────────
+- name: TT-DiT Wan2.2-I2V-A14B single galaxy e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
+    export NO_PROMPT=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # Single-galaxy counterparts of the bh_sc4 quad legs above, on one rank instead of tt-run:
+    # ring_bh_4x8 for perf (it requests a Blackhole-sized fabric packet payload, so it self-skips
+    # on Wormhole only, not here), and the 4x8 linear pipeline case, which is the only 4x8 config
+    # test_pipeline_wan_i2v.py defines for Blackhole -- there is no 4x8 ring case for I2V.
+    fail=0
+    run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest "$@" || fail=1; }
+    run --timeout 1200 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
+      -k "ring_bh_4x8_sp1tp0 and resolution_720p and i2v"
+    run --timeout 3000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py \
+      -k "4x8sp1tp0nl2_linear_is_fsdp0 and resolution_720p"
+    exit $fail
+  model: wan-2.2-i2v
+  model_family: Wan
+  skus:
+    bh_sc1:
+      timeout: 75
+      tier: 1
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # ── LTX-2.3 (Black Hole single galaxy, bh_sc1) ───────────────────
 - name: TT-DiT LTX-2.3 Pro T2V e2e tests
   cmd: |
