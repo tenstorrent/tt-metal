@@ -3,6 +3,8 @@ title: "[BEVFormer] Use fused multi-scale deformable attention"
 issue_id: "05"
 status: todo
 state: open
+issue: "55198"
+url: "https://github.com/tenstorrent/tt-metal/issues/55198"
 parent: "https://github.com/tenstorrent/tt-metal/issues/55048"
 depends_on:
   - "02 | [BEVFormer] Fold the offset normalizer into Linear weights"

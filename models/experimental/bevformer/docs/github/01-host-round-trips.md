@@ -3,6 +3,8 @@ title: "[BEVFormer] Remove encoder host round-trips and sync points"
 issue_id: "01"
 status: todo
 state: open
+issue: "55191"
+url: "https://github.com/tenstorrent/tt-metal/issues/55191"
 parent: "https://github.com/tenstorrent/tt-metal/issues/55048"
 ---
 

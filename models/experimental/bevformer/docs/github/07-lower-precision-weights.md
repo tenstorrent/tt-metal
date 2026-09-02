@@ -3,6 +3,8 @@ title: "[BEVFormer] Evaluate lower-precision weights with explicit math fidelity
 issue_id: "07"
 status: todo
 state: open
+issue: "55211"
+url: "https://github.com/tenstorrent/tt-metal/issues/55211"
 parent: "https://github.com/tenstorrent/tt-metal/issues/55048"
 ---
 

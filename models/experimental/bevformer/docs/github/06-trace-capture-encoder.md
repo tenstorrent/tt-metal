@@ -3,6 +3,8 @@ title: "[BEVFormer] Trace-capture the encoder"
 issue_id: "06"
 status: todo
 state: open
+issue: "55210"
+url: "https://github.com/tenstorrent/tt-metal/issues/55210"
 parent: "https://github.com/tenstorrent/tt-metal/issues/55048"
 depends_on:
   - "01 | [BEVFormer] Remove encoder host round-trips and sync points"
@@ -26,7 +28,7 @@ After applying the prerequisite optimization prototypes, steady-state host gap i
 
 ## Proposed direction
 
-- Reprofile the encoder after ticket `01` using repeated measured iterations that separate queue-entry cost from steady-state host dispatch.
+- Reprofile the encoder after ticket #55191 using repeated measured iterations that separate queue-entry cost from steady-state host dispatch.
 - Compare total encoder wall time with the repeated layer body and report the percentage that trace replay can potentially recover before implementing capture.
 - Preallocate persistent input, intermediate, and output buffers required by the capture.
 - Capture the full encoder device-operation sequence after the `max_len` high-water mark and tensor shapes are established.

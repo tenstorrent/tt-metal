@@ -3,6 +3,8 @@ title: "[BEVFormer] Classify and attribute encoder data-movement cost"
 issue_id: "03"
 status: todo
 state: open
+issue: "55202"
+url: "https://github.com/tenstorrent/tt-metal/issues/55202"
 parent: "https://github.com/tenstorrent/tt-metal/issues/55048"
 depends_on:
   - "05 | [BEVFormer] Use fused multi-scale deformable attention"
@@ -30,7 +32,7 @@ Prototype profiling after fused MSDA shows that the child changes can reduce the
 - Map each movement operation to its producer tensor, consuming operation, layout contract, and measured device time.
 - Separate required transformations from accidental ones that can be removed by changing storage order or fusion boundaries.
 - Validate the independent child changes for dead work, sampling-grid arithmetic, attention preparation, head-axis movement, and layer-invariant camera layout.
-- Reserve NoC analysis for the remaining value-path permute and untilize work tracked by ticket `05.02`.
+- Reserve NoC analysis for the remaining value-path permute and untilize work tracked by ticket #55200.
 
 ## Acceptance criteria
 
