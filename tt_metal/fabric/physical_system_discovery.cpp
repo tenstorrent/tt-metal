@@ -56,8 +56,18 @@ PortType to_metal_port_type(tt::scaleout_tools::PortType pt) {
     return PortType::UNKNOWN;
 }
 
-// OS hostname for live clusters; mock cluster descriptor filename (basename) per rank in mock mode.
-std::string get_local_discovery_hostname() {
+// The descriptor's host id when it carries one; otherwise the mock cluster descriptor filename
+// (basename) per rank in mock mode, or the OS hostname for live clusters.
+std::string get_local_discovery_hostname(const tt::umd::ClusterDescriptor& cluster_desc) {
+    // host_id names the group of accelerators behind a common host / controller / root complex. UMD
+    // stamps it from $TT_HOST_ID or gethostname() during live discovery, and a captured descriptor
+    // carries the id of the machine it came from. Preferring it is what lets a mock run key on the
+    // same string as the factory system descriptor instead of on an asset filename, which is the
+    // only reason the two agree on a chip's address. The field is optional, so the fallbacks below
+    // stay for descriptors that predate it.
+    if (const auto& host_id = cluster_desc.get_host_id(); host_id.has_value()) {
+        return *host_id;
+    }
     // Read the mock cluster descriptor path straight from the environment rather than through
     // MetalContext (see file-header note: MetalContext must not be instantiated here). This matches how
     // rtoptions defines "mock enabled" (mock_cluster_desc_path non-empty, set from
@@ -179,6 +189,7 @@ std::pair<TrayID, ASICLocation> get_asic_position(
 }
 
 bool resolve_hostname_uniqueness(
+    const tt::umd::ClusterDescriptor& cluster_desc,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
@@ -187,7 +198,7 @@ bool resolve_hostname_uniqueness(
     bool all_hostnames_unique = true;
     if (my_rank == controller_rank) {
         std::vector<std::string> hostnames = {};
-        hostnames.push_back(get_local_discovery_hostname());
+        hostnames.push_back(get_local_discovery_hostname(cluster_desc));
         for (std::size_t rank = 0; rank < *(distributed_context->size()); rank++) {
             if (rank != controller_rank) {
                 std::size_t peer_hostname_size = 0;
@@ -218,7 +229,7 @@ bool resolve_hostname_uniqueness(
             }
         }
     } else {
-        auto host_name = get_local_discovery_hostname();
+        auto host_name = get_local_discovery_hostname(cluster_desc);
         auto serialized_hostname = std::vector<uint8_t>(host_name.begin(), host_name.end());
         std::size_t serialized_hostname_size = serialized_hostname.size();
         distributed_context->send(
@@ -649,7 +660,7 @@ PhysicalSystemDescriptor run_local_discovery(
     auto cross_host_eth_connections = cluster_desc.get_ethernet_connections_to_remote_devices();
 
     auto my_rank = *(distributed_context->rank());
-    auto hostname = get_local_discovery_hostname();
+    auto hostname = get_local_discovery_hostname(cluster_desc);
 
     // Cluster descriptor basename (mock) or OS hostname (live). When multiple MPI ranks share the same
     // discovery hostname (e.g. 64-rank superpod reusing 16 mock descriptors), suffix with MPI rank so
@@ -778,7 +789,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
 
     // Resolve hostname uniqueness before discovery so run_local_discovery can use the right key
     // (hostname when unique, hostname_rank when not), matching my_host_name() for lookups.
-    bool all_hostnames_unique = resolve_hostname_uniqueness(distributed_context);
+    bool all_hostnames_unique = resolve_hostname_uniqueness(cluster_desc, distributed_context);
 
     static constexpr bool dispatch_local_discovery = false;
     static constexpr bool dispatch_live_discovery = true;
@@ -796,7 +807,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
 
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
-    psd.set_discovery_data(get_local_discovery_hostname(), my_rank, all_hostnames_unique);
+    psd.set_discovery_data(get_local_discovery_hostname(cluster_desc), my_rank, all_hostnames_unique);
 
     if (run_global_discovery) {
         exchange_metadata(psd, distributed_context, true);

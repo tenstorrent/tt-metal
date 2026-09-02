@@ -1,6 +1,6 @@
 asic_to_fabric_node_mapping:
   hostnames:
-    - hostname: closet_box_cluster_desc_metal-wh-01.yaml
+    - hostname: metal-wh-01
       mesh:
         - mesh: 1
         - chips:
@@ -68,7 +68,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 1
                 chip_id: 4
               asic_id: 14521741489
-    - hostname: closet_box_cluster_desc_metal-wh-04.yaml
+    - hostname: metal-wh-04
       mesh:
         - mesh: 3
         - chips:
@@ -136,7 +136,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 3
                 chip_id: 3
               asic_id: 14521741423
-    - hostname: closet_box_cluster_desc_metal-wh-05.yaml
+    - hostname: metal-wh-05
       mesh:
         - mesh: 0
         - chips:
@@ -204,7 +204,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 0
                 chip_id: 7
               asic_id: 14521741468
-    - hostname: closet_box_cluster_desc_metal-wh-06.yaml
+    - hostname: metal-wh-06
       mesh:
         - mesh: 2
         - chips:

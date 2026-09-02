@@ -1,6 +1,6 @@
 asic_to_fabric_node_mapping:
   hostnames:
-    - hostname: dual_t3k_ci_cluster_desc_f10cs03_rank_0.yaml
+    - hostname: f10cs03
       mesh:
         - mesh: 0
         - chips:
@@ -68,7 +68,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 0
                 chip_id: 3
               asic_id: 14520885742
-    - hostname: dual_t3k_ci_cluster_desc_f10cs04_rank_1.yaml
+    - hostname: f10cs04
       mesh:
         - mesh: 1
         - chips:

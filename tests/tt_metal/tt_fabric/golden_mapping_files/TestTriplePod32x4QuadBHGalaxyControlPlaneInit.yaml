@@ -1,6 +1,6 @@
 asic_to_fabric_node_mapping:
   hostnames:
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d05u02_rank_4.yaml
+    - hostname: bh-glx-110-d05u02
       mesh:
         - mesh: 2
         - chips:
@@ -260,7 +260,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 2
                 chip_id: 109
               asic_id: 15028277671089687679
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d05u08_rank_5.yaml
+    - hostname: bh-glx-110-d05u08
       mesh:
         - mesh: 2
         - chips:
@@ -520,7 +520,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 2
                 chip_id: 77
               asic_id: 3968902519925589972
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d06u02_rank_6.yaml
+    - hostname: bh-glx-110-d06u02
       mesh:
         - mesh: 2
         - chips:
@@ -780,7 +780,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 2
                 chip_id: 13
               asic_id: 18080982798508798832
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d06u08_rank_7.yaml
+    - hostname: bh-glx-110-d06u08
       mesh:
         - mesh: 2
         - chips:
@@ -1040,7 +1040,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 2
                 chip_id: 45
               asic_id: 12060143095851202463
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d07u02_rank_8.yaml
+    - hostname: bh-glx-110-d07u02
       mesh:
         - mesh: 1
         - chips:
@@ -1300,7 +1300,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 1
                 chip_id: 45
               asic_id: 16696018284483091843
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d07u08_rank_9.yaml
+    - hostname: bh-glx-110-d07u08
       mesh:
         - mesh: 1
         - chips:
@@ -1560,7 +1560,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 1
                 chip_id: 13
               asic_id: 11258413412853395504
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d08u02_rank_10.yaml
+    - hostname: bh-glx-110-d08u02
       mesh:
         - mesh: 1
         - chips:
@@ -1820,7 +1820,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 1
                 chip_id: 77
               asic_id: 6906402073766592788
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d08u08_rank_11.yaml
+    - hostname: bh-glx-110-d08u08
       mesh:
         - mesh: 1
         - chips:
@@ -2080,7 +2080,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 1
                 chip_id: 109
               asic_id: 2842730311413033310
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d09u02_rank_12.yaml
+    - hostname: bh-glx-110-d09u02
       mesh:
         - mesh: 0
         - chips:
@@ -2340,7 +2340,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 0
                 chip_id: 13
               asic_id: 1486480469639335971
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d09u08_rank_13.yaml
+    - hostname: bh-glx-110-d09u08
       mesh:
         - mesh: 0
         - chips:
@@ -2600,7 +2600,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 0
                 chip_id: 109
               asic_id: 8589580276590394118
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d10u02_rank_14.yaml
+    - hostname: bh-glx-110-d10u02
       mesh:
         - mesh: 0
         - chips:
@@ -2860,7 +2860,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 0
                 chip_id: 45
               asic_id: 177127060856827182
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d10u08_rank_15.yaml
+    - hostname: bh-glx-110-d10u08
       mesh:
         - mesh: 0
         - chips:
