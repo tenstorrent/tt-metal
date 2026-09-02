@@ -148,10 +148,10 @@ enum class ReduceDataFormatReconfigMode { NONE, INPUT, OUTPUT, INPUT_AND_OUTPUT 
  *   Cross-call Accumulate (CB accumulator across reduce() calls) IS supported: the accumulator CB holds the
  *   RAW partial-sum tile (not a reduced tile), each later call copy-seeds or folds it into DEST, and sfpu_reduce
  *   finalizes only on the last call (Accumulate::at_last). Resident and streamed/chunked input are supported.
- *   PARTIAL (ROW/COL) composes with Accumulate — the masked last tile
- *   folds into each chunk's sum via fold_partial_last — EXCEPT with the CopySeedZeroPair reload, which needs
- *   the scaler CB for its zero tile (asserted). A cross-chunk AVG uses the GRAND-TOTAL reduce_factor; raw
- *   partial sums remain unscaled until the last chunk finalizes.
+ *   PARTIAL (ROW/COL) composes with Accumulate — the masked last tile folds into each chunk's sum via
+ *   fold_partial_last. CopySeedZeroPair may be used at the same time: the zero tile immediately follows the
+ *   partial mask/scaler representation in the auxiliary CB. A cross-chunk AVG uses the GRAND-TOTAL
+ *   reduce_factor; raw partial sums remain unscaled until the last chunk finalizes.
  */
 /**
  * @brief Whether AccumulateViaAdd runs the WITHIN-TILE collapse at the end of the reduction.
@@ -247,8 +247,8 @@ enum class ReduceDataFormatReconfigMode { NONE, INPUT, OUTPUT, INPUT_AND_OUTPUT 
  * - CopySeedZeroPair: copy_tile-reload the accumulator into DST[0], then add the new tiles in pairs; the odd
  *   leftover is paired with a ZERO tile (in scaler_dfb) via an acc_to_dest add_tiles, which keeps the running
  *   sum in fp32 DST (no DEST-reuse TF32 truncation) with NO SFPU op. Aims for CopySeedSfpuAdd accuracy at
- *   CopySeedPairs speed. Requires the caller to fill scaler_dfb with a zero tile; aligned (no-partial) only,
- *   since a partial reduce needs scaler_dfb for the mask.
+ *   CopySeedPairs speed. With no partial, the zero is scaler_dfb[0]. With a partial mask/scaler representation,
+ *   the zero immediately follows it (for AccumulateViaAdd's mask-only layout: mask[0], zero[1]).
  */
 // =============================================================================
 // Configuration Types
@@ -407,9 +407,9 @@ struct AccumulationConfig {
  */
 struct Accumulate {
     AccumulationConfig config;
-    // AccumulateViaAdd indexed-input path: how a later call folds the accumulator with its new tiles. Default
-    // is safe for any accumulator CB, including UnpackToDestFp32. Streamed/grouped input always uses the safe
-    // copy-seed path because popped input cannot support the indexed reload variants.
+    // AccumulateViaAdd: how a later call folds the accumulator with its new tiles. Default is safe for any
+    // accumulator CB, including UnpackToDestFp32. Indexed input supports every mode; streamed/grouped input
+    // uses its safe copy seed and additionally honors CopySeedZeroPair for odd tiles after DEST is seeded.
     AccumulateReloadMode reload = AccumulateReloadMode::CopySeedPairs;
     std::uint32_t iteration = 0;
     // AccumulateViaAdd only: marks the LAST chunk. The accumulator CB holds the RAW partial-sum tile, so the

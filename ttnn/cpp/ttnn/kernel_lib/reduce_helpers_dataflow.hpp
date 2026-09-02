@@ -76,8 +76,9 @@ FORCE_INLINE void prepare_reduce_mask(uint32_t valid_elems);
 /**
  * @brief Materialize the auxiliary recipe selected by the host ReducePlan.
  *
- * The factory defines at most one of REDUCE_AUX_SCALER_PAIR, REDUCE_AUX_MASK,
- * or REDUCE_AUX_ZERO. With no define this emits the ordinary scalar tile.
+ * REDUCE_AUX_ZERO may accompany REDUCE_AUX_MASK. In that case this emits the
+ * mask first and the zero second. Otherwise the factory defines at most one
+ * recipe, and with no define this emits the ordinary scalar tile.
  */
 template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim>
 FORCE_INLINE void prepare_planned_reduce_aux(float scaler_f, uint32_t valid_reduce_dim_elements_in_tile);
