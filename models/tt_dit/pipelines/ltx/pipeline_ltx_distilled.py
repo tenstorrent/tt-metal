@@ -1320,6 +1320,19 @@ class LTXDistilledPipeline(LTXPipeline):
             trace_key=s1_trace_key,
         )
         t_stage1 = time.time() - t0
+
+        def _stats(label, t):
+            # LTX_DEBUG_STATS=1: host-side summary per stage, to tell a dead denoise from a dead decode
+            # when the output is flat — a grey mp4 carries no trace of where the signal was lost.
+            if os.environ.get("LTX_DEBUG_STATS", "0") != "1" or not torch.is_tensor(t):
+                return
+            f = t.detach().float()
+            logger.info(
+                f"STATS {label}: shape={tuple(f.shape)} abs_mean={f.abs().mean():.4g} std={f.std():.4g} "
+                f"nan_frac={torch.isnan(f).float().mean():.3f} zero_frac={(f == 0).float().mean():.3f}"
+            )
+
+        _stats("s1_video", s1_video)
         timings.append(("Stage 1 denoise", t_stage1))
         logger.info(f"Stage 1 denoise: {t_stage1:.1f}s")
 
@@ -1331,6 +1344,7 @@ class LTXDistilledPipeline(LTXPipeline):
         self._prepare_upsampler()
         upsampled = upsample_latent(self.upsampler, s1_spatial, *self._vae_per_channel_stats())
         t_upsample = time.time() - t0
+        _stats("upsampled", upsampled)
         timings.append(("Latent upsample", t_upsample))
         logger.info(f"Latent upsample: {t_upsample:.1f}s")
         hw_full = (height // SPATIAL_COMPRESSION) * (width // SPATIAL_COMPRESSION)
@@ -1357,6 +1371,7 @@ class LTXDistilledPipeline(LTXPipeline):
             trace_key=s2_trace_key,
         )
         t_stage2 = time.time() - t0
+        _stats("s2_video", s2_video)
         timings.append(("Stage 2 denoise", t_stage2))
         logger.info(f"Stage 2 denoise: {t_stage2:.1f}s")
 
@@ -1375,6 +1390,7 @@ class LTXDistilledPipeline(LTXPipeline):
         if num_frames_out != num_frames:
             video_pixels = video_pixels[:, :, :num_frames_out]  # (B,3,F,H,W): drop the tail-pad frame(s)
         t_vae_decode = time.time() - t0
+        _stats("video_pixels", video_pixels)
         timings.append(("VAE decode", t_vae_decode))
         logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
 
