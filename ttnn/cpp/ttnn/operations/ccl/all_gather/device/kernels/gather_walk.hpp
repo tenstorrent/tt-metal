@@ -84,6 +84,8 @@ FORCE_INLINE uint32_t contiguous_chunks(const Accessor& acc, RunSource src, uint
 
 // The walk order plus the output's runs. Reader and writer build this the same way, so their walks
 // cannot diverge.
+// Run grouping can still differ per side; that is safe only because the CB is packed -- chunk k
+// sits at k * chunk_size.
 struct WalkPlan {
     uint32_t stride;
     uint32_t xfer;
@@ -95,6 +97,9 @@ FORCE_INLINE WalkPlan walk_plan(const Accessor& out) {
     const uint32_t page_stride = out.contiguous_page_stride();
     // Concat packs chunks inside one output page, so there neighbours are one chunk apart.
     const uint32_t stride = chunks_per_page > 1 ? 1u : page_stride;
+    // `packed`: the output's aligned page is exactly tiled by chunks. Perf-only for multicast (no
+    // run merging when false), but a correctness precondition for unicast, which relays by reading
+    // its own output back into the packed CB. The host enforces it, so unicast always sees true.
     const bool packed = out.get_aligned_page_size() == chunks_per_page * chunk_size;
     return {stride, packed ? xfer_max : 1u, run_source(packed, chunks_per_page, page_stride, stride)};
 }

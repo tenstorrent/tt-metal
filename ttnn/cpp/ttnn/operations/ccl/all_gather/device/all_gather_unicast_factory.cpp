@@ -192,6 +192,19 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         output_chunks_per_page == 1 || input_page_size == input_unaligned_page_size,
         "concat requires an unpadded input page");  // so slots align to content
 
+    // Relay reads our own output back into the CB, which is packed at chunk stride, so the output's
+    // aligned page must be exactly tiled by chunks. select_program_factory routes these away;
+    // reaching here means unicast was forced (2D bent axis or neighbour-exchange fabric).
+    TT_FATAL(
+        output_tensor.buffer()->aligned_page_size() == output_chunks_per_page * output_chunk_size,
+        "all_gather unicast cannot relay a padded output page: {} B of content in a {} B page holding {} chunk(s) of "
+        "{} B. Use a row size that is a multiple of the output's memory alignment, or the same buffer type on both "
+        "sides.",
+        output_unaligned_page_size,
+        output_tensor.buffer()->aligned_page_size(),
+        output_chunks_per_page,
+        output_chunk_size);
+
     const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
     const uint32_t num_output_chunks = num_input_pages * split_factor;
     TT_FATAL(

@@ -17,8 +17,10 @@
 #include <algorithm>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 namespace ttnn::operations::ccl {
 
@@ -52,6 +54,17 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
         const auto& output_tensor = tensor_args.persistent_output_tensor.value();
 
         TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor must be on device!");
+
+        // The framework never compares compute_output_specs() against create_output_tensors(), so
+        // the spec and the real buffer can disagree. Buffer type sets page alignment, so a spec
+        // claiming DRAM over an L1 buffer writes DRAM-sized chunks into smaller L1 pages.
+        TT_FATAL(
+            output_tensor.memory_config().buffer_type() == args.output_spec.memory_config().buffer_type(),
+            "Output tensor memory config {} is in a different memory than the {} this all_gather was built for. "
+            "Pass the output tensor's own memory config, or none at all.",
+            output_tensor.memory_config(),
+            args.output_spec.memory_config());
+
         TT_FATAL(
             output_tensor.layout() == input_tensor.layout(),
             "Output tensor layout {} should be same as input tensor layout {}",
@@ -290,6 +303,26 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 break;
             }
             default: break;  // uncalibrated arch
+        }
+
+        // Limitation: unicast relays by reading its own output back into a CB packed at chunk
+        // stride, and a NoC read needs local and remote congruent mod the output's read alignment
+        // (64 B DRAM on Blackhole, 32 B on Wormhole). So an aligned output page must be exactly
+        // tiled by chunks. Multicast never reads the output.
+        // Heuristic branch only: the branches above have no alternative, and the unicast factory
+        // TT_FATALs there instead.
+        if (use_unicast) {
+            const auto& in_buf = *input_tensor.buffer();
+            const uint32_t in_page = in_buf.page_size();
+            const uint32_t out_page = args.output_spec.compute_page_size_bytes();
+            // Mirrors the copy-mode derivation in AllGatherUnicastFactory.
+            const bool is_split = in_page > out_page;
+            const uint32_t chunk = is_split ? out_page : in_buf.aligned_page_size();
+            const uint32_t chunks_per_page = is_split ? 1u : out_page / in_page;
+            const uint32_t out_align = args.output_spec.memory_config().is_dram()
+                                           ? tt::tt_metal::hal::get_dram_alignment()
+                                           : tt::tt_metal::hal::get_l1_alignment();
+            use_unicast = tt::align(out_page, out_align) == chunks_per_page * chunk;
         }
     }
 

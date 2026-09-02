@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import torch
 import ttnn
 
-from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
+from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl, _dram_width_sharded
 from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_less_dev
 
 
@@ -522,3 +523,82 @@ def test_all_gather_broken(
         num_buffers_per_channel=2,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
+
+
+# Unicast relays by reading its own output back into a CB packed at chunk stride, so an aligned
+# output page must be exactly tiled by chunks. Unpacked ones are routed to multicast, which never
+# reads the output.
+#
+# Blackhole-specific: needs a DRAM output page that is not a multiple of the 64 B DRAM alignment
+# (32 B on Wormhole, where a 32 B page is already aligned). Relaying needs 3+ devices.
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(3)
+@pytest.mark.parametrize(
+    "num_devices, ag_output_shape, dim, mem_config_input, mem_config_ag",
+    [
+        (4, [4, 1, 32768, 16], 0, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        # Controls: the output page comes out unpadded, so these stay on unicast.
+        (4, [4, 1, 32768, 16], 0, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        (4, [4, 1, 32768, 16], 0, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (4, [1, 1, 65536, 32], 2, ttnn.L1_MEMORY_CONFIG, _dram_width_sharded(65536, 16, 2)),
+        # Odd device count: with a 16 B input page, an even count gives a 64 B multiple.
+        (3, [1, 1, 32768, 24], 3, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+    ],
+    ids=[
+        "matched_32B_l1_to_dram",
+        "matched_32B_l1_to_l1",
+        "matched_32B_dram_to_dram",
+        "split_32B_out_page",
+        "concat_48B_page",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True, ids=["fabric_linear"]
+)
+def test_all_gather_output_page_alignment(
+    bh_1d_mesh_device, num_devices, ag_output_shape, dim, mem_config_input, mem_config_ag
+):
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    run_all_gather_impl(
+        submesh_device,
+        ag_output_shape,
+        dim,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mem_config_input,
+        mem_config_ag,
+        enable_trace=False,
+        num_iters=1,
+        cluster_axis=0,
+        allowed_pcc=0.9999,
+    )
+
+
+# A memory_config naming a different memory than output_tensor would size writes for the wrong
+# page alignment.
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True, ids=["fabric_linear"]
+)
+def test_all_gather_persistent_output_memory_config_conflict(bh_1d_mesh_device, expect_error):
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((2, 1)))
+    shape = [2, 1, 256, 256]
+    tt_input = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16),
+        device=submesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(submesh_device, dim=0),
+    )
+    persistent_output = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16),
+        device=submesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh_device),
+    )
+    with expect_error(RuntimeError, "omit memory_config to take it from the output tensor"):
+        ttnn.all_gather(tt_input, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_tensor=persistent_output)

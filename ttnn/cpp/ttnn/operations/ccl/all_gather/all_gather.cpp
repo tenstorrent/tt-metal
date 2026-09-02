@@ -151,17 +151,34 @@ ttnn::Tensor all_gather(
             "topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores.");
     }
 
-    auto [use_composite, composite_reason] = use_composite_all_gather(input_tensor, dim, memory_config, cluster_axis);
+    // The persistent output tensor is the buffer that actually gets written, so it defines the
+    // output config. Only buffer type is compared: full MemoryConfig equality would reject
+    // nd-sharded configs, which compute_output_specs_helper() normalizes.
+    if (memory_config.has_value() && persistent_output_tensor.has_value()) {
+        TT_FATAL(
+            memory_config->buffer_type() == persistent_output_tensor->memory_config().buffer_type(),
+            "all_gather was given a memory_config ({}) in a different memory than the output_tensor's ({}). They "
+            "must agree; omit memory_config to take it from the output tensor.",
+            *memory_config,
+            persistent_output_tensor->memory_config());
+    }
+    const std::optional<ttnn::MemoryConfig> output_memory_config =
+        persistent_output_tensor.has_value()
+            ? std::optional<ttnn::MemoryConfig>(persistent_output_tensor->memory_config())
+            : memory_config;
+
+    auto [use_composite, composite_reason] =
+        use_composite_all_gather(input_tensor, dim, output_memory_config, cluster_axis);
     if (use_composite) {
         log_info(tt::LogOp, "Using slower composite all_gather: {}", composite_reason);
         // NOTE: persistent_output_tensor and sub_core_grid have no equivalent in the composite
         // path and are ignored here for now.
         return composite_common::composite_all_gather(
-            input_tensor, dim, std::nullopt, std::nullopt, memory_config, subdevice_id, cluster_axis);
+            input_tensor, dim, std::nullopt, std::nullopt, output_memory_config, subdevice_id, cluster_axis);
     }
 
     return ttnn::prim::all_gather(
-        input_tensor, persistent_output_tensor, dim, memory_config, cluster_axis, subdevice_id, sub_core_grid);
+        input_tensor, persistent_output_tensor, dim, output_memory_config, cluster_axis, subdevice_id, sub_core_grid);
 }
 
 }  // namespace ttnn

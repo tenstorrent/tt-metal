@@ -99,7 +99,11 @@ public:
 
     // A segment that does not fit starts a new packet rather than spilling into this one: splitting it
     // would fill the tail but cost an extra scatter chunk, i.e. an extra NoC write at the receiver.
+    //
+    // Precondition: a packet has one payload from start_l1_addr, so its segments must be contiguous
+    // in L1. The packed CB gives that; a CB with gaps would need a send() here.
     FORCE_INLINE void queue_segment(uint32_t l1_addr, uint64_t remote_noc_addr, uint32_t bytes) {
+        ASSERT(chunk_count == 0 || l1_addr == start_l1_addr + payload);
         // Only a chunk larger than a packet gets here; the caller caps runs at packet_size.
         while (bytes > packet_size) {
             send();
