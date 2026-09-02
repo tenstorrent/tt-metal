@@ -32,7 +32,7 @@ using RtArgs = std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>;
 
 constexpr uint32_t kRMax = 15;         // resident rows per pass (bounded by L1; <= 32 for the bitmasks)
 constexpr uint32_t kRowGroup = 8;      // rows fused per compute phase group
-constexpr uint32_t kStreamDepth = 14;  // KV blocks in flight (two window halves of 7)
+constexpr uint32_t kStreamDepth = 12;  // KV blocks in flight (two window halves of 6); 14 fits an EMPTY L1 only -- the model keeps L1 buffers live across the op
 constexpr uint32_t kLogDepth = 16;     // leader arrival-log ring (> leader depth + sentinel slack)
 constexpr uint32_t kMaxWorkers = 16;   // leader runtime-arg array bound
 constexpr uint32_t kRowChunk = 4;      // contiguous rows per placement chunk (matches the kernels)

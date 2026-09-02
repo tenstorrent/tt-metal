@@ -338,6 +338,15 @@ void kernel_main() {
                     for (uint32_t sr = 0; sr < Sqt; ++sr) {
                         copy_tile(cb_max_res, old_st + sr, i * Sqt + sr);
                     }
+                } else {
+                    // The block max-reduce folds the running max held in DEST into every tile,
+                    // including the first: a first visit must seed DEST with -inf, or it maxes
+                    // against whatever the previous acquire left there (stale but usually benign
+                    // untraced; on a re-launched program the DEST bank phase differs and it is not).
+                    sdpa_reduce_copy_tile_to_dst_init_short(cb_neginf);
+                    for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                        copy_tile(cb_neginf, 0, i * Sqt + sr);
+                    }
                 }
                 const uint32_t qk_cols = v.n * Skt;
                 reduce_block_max_row_init_runtime(cb_max_res, qk_cols, cb_qk, cb_scale, false);

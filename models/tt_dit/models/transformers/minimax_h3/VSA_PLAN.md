@@ -212,6 +212,20 @@ neutral (16.10/16.03), kept. Post-lever profile: PACK 93% busy, MATH 89%, UNPACK
 alternate waits (MATH-heavy QK vs PACK-heavy exp) and the deferred-PV region is the DEST half-sync
 handoff, not issue work. Practical ceiling of this design ~26-28%.
 
+### Model integration (2026-09-02)
+- Op default flipped to `streaming=true` (model had been on v1 all along; every block-level number
+  before this date used v1). kStreamDepth 14 -> 12: depth 14 fits an EMPTY L1 only; the model
+  keeps ~69 KB of L1 live across the op (`l1_small_size=65536` + small buffers) -> static CB clash.
+- Untraced VSA transformer block at 15s/768p passes with the streaming kernel.
+- Traced block HANGS (all 32 devices; workers stuck in the lazy-emission wait, leaders at the slot
+  gate). The op ALONE replays fine under trace on 1 and 32 devices (test_vsa_sdpa_trace.py) ->
+  model-context specific; under investigation with the watcher.
+- Run-to-run NONDETERMINISM: untraced repeats agree only to PCC ~0.9986 (topk) / 0.9990 (model):
+  the starvation-driven `close_window()` makes visit partitioning timing-dependent, changing bf16
+  rounding order (O/sum re-round to bf16 every visit). Trace adds nothing beyond that. Fix candidate:
+  deterministic windows (close on a fixed arrival stride, not on starvation).
+- First-visit max reduce now seeds DEST with -inf (the block reduce folds DEST into every tile).
+
 Measured hard floors (per worker, 15s topk median, probe 9 MATH timers + probes 1/3/5/7):
 - SFPU exp (lossless, pack-thread): ~6.5 ms -- sets util ceiling ~60% ALONE if everything else hides under it
 - PACK thread total (exp + ~30 packs/visit): ~10 ms
