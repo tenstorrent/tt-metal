@@ -1058,6 +1058,17 @@ class LTXDistilledPipeline(LTXPipeline):
             ttnn.add_(state.tt_audio_lat, a_vel)
             ttnn.multiply_(state.tt_audio_lat, state.tt_audio_pad_mask)
             logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f}")
+            if os.environ.get("LTX_DEBUG_STATS", "0") == "1":
+                # Device-0 shard only: enough to see whether the DiT's velocity or the running latent
+                # first leaves the finite range, without a mesh-wide gather inside the step loop.
+                for _lbl, _t in (("v_vel", v_vel), ("video_lat", state.tt_video_lat)):
+                    _f = ttnn.to_torch(ttnn.get_device_tensors(_t)[0]).float()
+                    _fin = _f[torch.isfinite(_f)]
+                    logger.info(
+                        f"STATS step{step_idx + 1} {_lbl}(dev0): finite_abs_mean={_fin.abs().mean():.4g} "
+                        f"finite_max={_fin.abs().max():.4g} inf_frac={torch.isinf(_f).float().mean():.4f} "
+                        f"nan_frac={torch.isnan(_f).float().mean():.4f}"
+                    )
 
         v_final = LTXTransformerModel.device_to_host(
             state.tt_video_lat,
@@ -1179,6 +1190,23 @@ class LTXDistilledPipeline(LTXPipeline):
         enc = self.encode_prompts([prompt])
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         t_encode = time.time() - t0
+
+        def _stats(label, t):
+            # LTX_DEBUG_STATS=1: host-side summary per stage, to tell a dead encoder from a dead denoise
+            # from a dead decode when the output is flat — a grey mp4 carries no trace of where the
+            # signal was lost.
+            if os.environ.get("LTX_DEBUG_STATS", "0") != "1" or not torch.is_tensor(t):
+                return
+            f = t.detach().float()
+            finite = f[torch.isfinite(f)]
+            logger.info(
+                f"STATS {label}: shape={tuple(f.shape)} finite_abs_mean={finite.abs().mean():.4g} "
+                f"finite_max={finite.abs().max():.4g} nan_frac={torch.isnan(f).float().mean():.3f} "
+                f"inf_frac={torch.isinf(f).float().mean():.3f} zero_frac={(f == 0).float().mean():.3f}"
+            )
+
+        _stats("v_embeds", v_embeds)
+        _stats("a_embeds", a_embeds)
         timings.append(("Encoder (cache)" if cached else "Encoder", t_encode))
         logger.info(f"Encoding ({'cache' if cached else 'device'}): {t_encode:.1f}s")
 
@@ -1320,18 +1348,6 @@ class LTXDistilledPipeline(LTXPipeline):
             trace_key=s1_trace_key,
         )
         t_stage1 = time.time() - t0
-
-        def _stats(label, t):
-            # LTX_DEBUG_STATS=1: host-side summary per stage, to tell a dead denoise from a dead decode
-            # when the output is flat — a grey mp4 carries no trace of where the signal was lost.
-            if os.environ.get("LTX_DEBUG_STATS", "0") != "1" or not torch.is_tensor(t):
-                return
-            f = t.detach().float()
-            logger.info(
-                f"STATS {label}: shape={tuple(f.shape)} abs_mean={f.abs().mean():.4g} std={f.std():.4g} "
-                f"nan_frac={torch.isnan(f).float().mean():.3f} zero_frac={(f == 0).float().mean():.3f}"
-            )
-
         _stats("s1_video", s1_video)
         timings.append(("Stage 1 denoise", t_stage1))
         logger.info(f"Stage 1 denoise: {t_stage1:.1f}s")
