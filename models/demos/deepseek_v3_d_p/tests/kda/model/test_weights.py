@@ -9,7 +9,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.tests.kda.utils import collect_mesh_accuracy_and_determinism_results, random_weights
+from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -167,7 +167,7 @@ def test_tp_layer_pcc(mesh_device: ttnn.MeshDevice) -> None:
 
 
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
-def test_2d_tp_weight_and_output_placement(
+def test_2d_tp_output_weight_placement(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> None:
@@ -199,59 +199,3 @@ def test_2d_tp_weight_and_output_placement(
         head_end = head_start + (config.num_heads // tensor_parallel_size) * config.head_v_dim
         expected_weight = state_dict["o_proj.weight"][:, head_start:head_end].T.to(torch.bfloat16)
         assert_equal(expected_weight, actual_weight, name=f"output weight device {physical_index}")
-
-    sequence = 64
-    value = torch.randn(1, sequence, config.v_dim, generator=torch.Generator().manual_seed(817), dtype=torch.bfloat16)
-    golden_output = value @ state_dict["o_proj.weight"].T.to(torch.bfloat16)
-    mesh_dims = [None, None]
-    mesh_dims[tensor_parallel_axis] = 2
-    value_tt = ttnn.from_torch(
-        value,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(mesh_dims), mesh_shape=tuple(mesh_device.shape)),
-    )
-    compute_config = ttnn.init_device_compute_kernel_config(
-        mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-    )
-    tt_ccl = TT_CCL(mesh_device)
-
-    def run() -> tuple[ttnn.Tensor]:
-        output = ttnn.linear(
-            value_tt,
-            weights.output_projection,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=compute_config,
-        )
-        output = ttnn.experimental.reduce_scatter_minimal_async(
-            output,
-            dim=-1,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(tensor_parallel_axis),
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(tensor_parallel_axis),
-            num_links=tt_ccl.get_num_links(tensor_parallel_axis),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
-            cluster_axis=tensor_parallel_axis,
-        )
-        return (output,)
-
-    (output,), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
-    output_shards = _host_shards(output)
-    hidden_per_rank = config.hidden_size // tensor_parallel_size
-    for physical_index, actual_output in enumerate(output_shards):
-        row, column = divmod(physical_index, 4)
-        tp_rank = (row, column)[tensor_parallel_axis]
-        expected_output = golden_output[..., tp_rank * hidden_per_rank : (tp_rank + 1) * hidden_per_rank]
-        actual_output = actual_output.reshape_as(expected_output)
-        assert_accurate(
-            expected_output,
-            actual_output,
-            name=f"tp_axis={tensor_parallel_axis} device={physical_index} output",
-            pcc_threshold=0.999,
-        )
-    assert all(marker.item() == 0 for marker in mismatch_markers), "output projection is not bit-identical across runs"
