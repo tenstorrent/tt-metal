@@ -46,8 +46,9 @@ jobs:
       architecture: ${{ inputs.architecture || 'all' }}
       # Nightly runs always use speed-of-light; manual runs use the checkbox.
       speed-of-light: ${{ github.event_name == 'schedule' || inputs.speed-of-light }}
-      # Off for the scheduled nightly until the warehouse key is authorised.
-      # A scheduled run has no inputs, so the expression falls through to false.
+      # Off for the scheduled nightly until the warehouse key is authorised. A
+      # scheduled run has no inputs, so the expression falls through to false.
+      # Turning it on for every night is this one expression -> true.
       upload-to-warehouse: ${{ inputs.upload-to-warehouse || false }}
     secrets: inherit
 
