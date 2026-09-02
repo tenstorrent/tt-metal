@@ -93,14 +93,14 @@ constexpr StatisticsBackend select_interleaved_statistics_backend(
 }
 
 constexpr StatisticsBackend select_sharded_statistics_backend(
-    bool requested_use_welford, tt::ARCH arch, bool is_pre_all_gather, bool is_post_all_gather) {
-    if (!requested_use_welford) {
+    bool requested_use_welford, tt::ARCH arch, bool fp32_dest_acc_en) {
+    if (!requested_use_welford || !fp32_dest_acc_en) {
         return StatisticsBackend::TILE_REDUCTION;
     }
     if (arch == tt::ARCH::QUASAR) {
         return StatisticsBackend::TILE_REDUCTION;
     }
-    if (arch == tt::ARCH::BLACKHOLE && !is_pre_all_gather && !is_post_all_gather) {
+    if (arch == tt::ARCH::BLACKHOLE) {
         return StatisticsBackend::TILE_REDUCTION;
     }
     return StatisticsBackend::SFPU_TWO_PASS;

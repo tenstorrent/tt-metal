@@ -122,15 +122,15 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     ////////////////////////////////////////////////////////////////////////////
     IDevice* device = a.device();
 
-    const auto statistics_backend = layernorm::select_sharded_statistics_backend(
-        requested_use_welford, device->arch(), is_pre_all_gather, is_post_all_gather);
-    const bool use_welford = statistics_backend == layernorm::StatisticsBackend::SFPU_TWO_PASS;
-
     // convert data format
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+
+    const auto statistics_backend =
+        layernorm::select_sharded_statistics_backend(requested_use_welford, device->arch(), fp32_dest_acc_en);
+    const bool use_welford = statistics_backend == layernorm::StatisticsBackend::SFPU_TWO_PASS;
 
     assert_subblock_compute_config_compatible(dst_full_sync_en, fp32_dest_acc_en, subblock_wt);
 

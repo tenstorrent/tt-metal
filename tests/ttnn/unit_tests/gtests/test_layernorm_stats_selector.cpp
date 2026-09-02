@@ -171,18 +171,12 @@ TEST(LayerNormStatsSelector, InterleavedArchitectureAndLayoutPolicy) {
         StatisticsBackend::TILE_REDUCTION);
 }
 
-TEST(LayerNormStatsSelector, ShardedDistributedPolicy) {
-    EXPECT_EQ(
-        select_sharded_statistics_backend(true, tt::ARCH::BLACKHOLE, false, false), StatisticsBackend::TILE_REDUCTION);
-    EXPECT_EQ(
-        select_sharded_statistics_backend(true, tt::ARCH::BLACKHOLE, true, false), StatisticsBackend::SFPU_TWO_PASS);
-    EXPECT_EQ(
-        select_sharded_statistics_backend(true, tt::ARCH::WORMHOLE_B0, false, false), StatisticsBackend::SFPU_TWO_PASS);
-    EXPECT_EQ(
-        select_sharded_statistics_backend(true, tt::ARCH::QUASAR, false, false), StatisticsBackend::TILE_REDUCTION);
-    EXPECT_EQ(
-        select_sharded_statistics_backend(false, tt::ARCH::WORMHOLE_B0, false, false),
-        StatisticsBackend::TILE_REDUCTION);
+TEST(LayerNormStatsSelector, ShardedArchitectureAndPrecisionPolicy) {
+    EXPECT_EQ(select_sharded_statistics_backend(true, tt::ARCH::BLACKHOLE, true), StatisticsBackend::TILE_REDUCTION);
+    EXPECT_EQ(select_sharded_statistics_backend(true, tt::ARCH::WORMHOLE_B0, true), StatisticsBackend::SFPU_TWO_PASS);
+    EXPECT_EQ(select_sharded_statistics_backend(true, tt::ARCH::WORMHOLE_B0, false), StatisticsBackend::TILE_REDUCTION);
+    EXPECT_EQ(select_sharded_statistics_backend(true, tt::ARCH::QUASAR, true), StatisticsBackend::TILE_REDUCTION);
+    EXPECT_EQ(select_sharded_statistics_backend(false, tt::ARCH::WORMHOLE_B0, true), StatisticsBackend::TILE_REDUCTION);
 }
 
 }  // namespace
