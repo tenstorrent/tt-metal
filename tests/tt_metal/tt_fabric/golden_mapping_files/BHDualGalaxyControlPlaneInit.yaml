@@ -1,6 +1,6 @@
 asic_to_fabric_node_mapping:
   hostnames:
-    - hostname: g08blx03_cluster_descriptor.yaml
+    - hostname: g08blx03
       mesh:
         - mesh: 1
         - chips:
@@ -260,7 +260,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 1
                 chip_id: 2
               asic_id: 17527977821468111180
-    - hostname: g08blx04_cluster_descriptor.yaml
+    - hostname: g08blx04
       mesh:
         - mesh: 0
         - chips:

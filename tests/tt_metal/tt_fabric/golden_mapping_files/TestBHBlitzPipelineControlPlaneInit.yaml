@@ -1,6 +1,6 @@
 asic_to_fabric_node_mapping:
   hostnames:
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d03u08_rank_1.yaml
+    - hostname: bh-glx-d03u08
       mesh:
         - mesh: 16
         - chips:
@@ -200,7 +200,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 18
                 chip_id: 1
               asic_id: 9394870631221255312
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d04u08_rank_3.yaml
+    - hostname: bh-glx-d04u08
       mesh:
         - mesh: 15
         - chips:
@@ -268,7 +268,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 15
                 chip_id: 5
               asic_id: 5670778640144730146
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d05u02_rank_4.yaml
+    - hostname: bh-glx-d05u02
       mesh:
         - mesh: 7
         - chips:
@@ -534,7 +534,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 10
                 chip_id: 6
               asic_id: 1698379830945815222
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d05u08_rank_5.yaml
+    - hostname: bh-glx-d05u08
       mesh:
         - mesh: 11
         - chips:
@@ -800,7 +800,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 14
                 chip_id: 6
               asic_id: 14359329708194393833
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d06u02_rank_6.yaml
+    - hostname: bh-glx-d06u02
       mesh:
         - mesh: 3
         - chips:
@@ -1066,7 +1066,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 6
                 chip_id: 6
               asic_id: 1466404354324792723
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d06u08_rank_7.yaml
+    - hostname: bh-glx-d06u08
       mesh:
         - mesh: 1
         - chips:
@@ -1200,7 +1200,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 2
                 chip_id: 6
               asic_id: 11254796596262279600
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d07u02_rank_8.yaml
+    - hostname: bh-glx-d07u02
       mesh:
         - mesh: 25
         - chips:
@@ -1466,7 +1466,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 28
                 chip_id: 6
               asic_id: 10272368071379752254
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d07u08_rank_9.yaml
+    - hostname: bh-glx-d07u08
       mesh:
         - mesh: 29
         - chips:
@@ -1732,7 +1732,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 32
                 chip_id: 6
               asic_id: 3868341087315840210
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d08u02_rank_10.yaml
+    - hostname: bh-glx-d08u02
       mesh:
         - mesh: 21
         - chips:
@@ -1998,7 +1998,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 24
                 chip_id: 6
               asic_id: 10145009310774598967
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d08u08_rank_11.yaml
+    - hostname: bh-glx-d08u08
       mesh:
         - mesh: 19
         - chips:
@@ -2198,7 +2198,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 33
                 chip_id: 2
               asic_id: 11881887861193807234
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d09u02_rank_12.yaml
+    - hostname: bh-glx-d09u02
       mesh:
         - mesh: 43
         - chips:
@@ -2464,7 +2464,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 46
                 chip_id: 6
               asic_id: 17352350493115727449
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d09u08_rank_13.yaml
+    - hostname: bh-glx-d09u08
       mesh:
         - mesh: 0
         - chips:
@@ -2664,7 +2664,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 47
                 chip_id: 6
               asic_id: 17295445229584620239
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d10u02_rank_14.yaml
+    - hostname: bh-glx-d10u02
       mesh:
         - mesh: 39
         - chips:
@@ -2930,7 +2930,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 42
                 chip_id: 6
               asic_id: 7608801860044290962
-    - hostname: SC16_32x4_revAB_aisleD_cluster_desc_bh-glx-d10u08_rank_15.yaml
+    - hostname: bh-glx-d10u08
       mesh:
         - mesh: 35
         - chips:
