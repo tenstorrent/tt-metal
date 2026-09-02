@@ -8,7 +8,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "broadcast_ring.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
 namespace nb = nanobind;
@@ -41,7 +41,7 @@ void bind_broadcast_ring(nb::module_& mod) {
             ttnn.Tensor: same shape as the input; every device on the ring line holds the sender shard's data.
         )doc";
 
-    ttnn::bind_function<"broadcast_ring">(
+    ttnn::bind_function<"broadcast_ring", "ttnn.experimental.">(
         mod,
         doc,
         &ttnn::broadcast_ring,
