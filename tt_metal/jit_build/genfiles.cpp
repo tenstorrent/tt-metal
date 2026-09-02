@@ -8,7 +8,6 @@
 #include "data_format.hpp"
 #include <algorithm>
 #include <cstdint>
-#include <span>
 #include <tt_backend_api_types.hpp>
 #include <cstddef>
 #include <cstring>
@@ -125,43 +124,54 @@ bool write_named_ct_arg_map_header(const string& out_dir, const JitBuildSettings
 }
 
 /**
- * Emit get_binding_if_present() helper for a given binding type.
+ * Emit get_token_if_present() helper for a given binding type.
  *
- * get_binding_if_present() is a helper function on the device side that performs lookup of the resource binding token
+ * get_token_if_present() is a helper function on the device side that performs lookup of the resource binding token
  * by name. The function returns a pointer to the binding token if found, otherwise nullptr.
  *
  * This is used by kernels to check if a binding is present when kernel is meant to be reusable across different
  * programs.
  */
 template <typename Entry>
-void emit_programatic_binding_token_getter(ostream& content, const vector<Entry>& entries) {
+void emit_programmatic_binding_token_getter(
+    ostream& content, const vector<Entry>& entries, string_view null_binding_type) {
     // Function header
     content << "template <::internal::TemplateString name>\n"
-            // Using auto to avoid pulling in includes when no bindings are emitted.
-            << "constexpr auto get_binding_if_present() {\n";
+            // Using auto here as the tokens could be templated differently depending on the name.
+            << "constexpr auto get_token_if_present() {\n";
+
+    // 4 space left pad.
+    string padding(4, ' ');
 
     // If statements for each entry, switching between `if constexpr` and `else if constexpr`
-    const char* if_kw = "    if constexpr";
+    const char* if_kw = "if constexpr";
     for (const auto& entry : entries) {
-        // Emits equivlanet to:
+        // Emits equivalent to:
         // if constexpr (name == "entry_name") {
         //     return &entry_name;
         // }
-        content << if_kw << " (name == \"" << entry.name << "\") {\n"
-                << "        return &" << entry.name << ";\n";
+        content << padding << if_kw << " (name == \"" << entry.name << "\") {\n"
+                << padding << padding << "return &" << entry.name << ";\n";
 
-        if_kw = "    } else if constexpr";
+        if_kw = "} else if constexpr";
     }
 
     // Emit "cannot find binding" case
+    //
+    // equivalent to:
+    // using null_token_ptr_t = const <null_binding_type>*;
+    // return null_token_ptr_t{nullptr};
     if (entries.empty()) {
-        content << "   return nullptr;\n";
+        content << padding << "using null_token_ptr_t = const " << null_binding_type << "*;\n"
+                << padding << "return null_token_ptr_t{nullptr};\n";
     } else {
-        content << "    } else {\n"
-                << "        return nullptr;\n"
-                << "    }\n";
+        content << padding << "} else {\n"
+                << padding << padding << "using null_token_ptr_t = const " << null_binding_type << "*;\n"
+                << padding << padding << "return null_token_ptr_t{nullptr};\n"
+                << padding << "}\n";
     }
 
+    // Function close
     content << "}\n";
 }
 
@@ -260,15 +270,14 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
 
+    // Binding-token headers are included even when a kernel has no bindings of that kind.
+    // get_token_if_present() is always emitted, and its absent path names the token type as
+    // the return type, so those types must be in scope for any Metal 2.0 kernel.
     content << "#include \"internal/template_string.h\"\n";
-    if (!dfb_entries.empty()) {
-        content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
-    }
-    if (!sem_entries.empty()) {
-        // Defines SemaphoreBindingToken and SemScope. Header-only and dependency-free,
-        // so it is safe on compute builds too.
-        content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
-    }
+    content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
+    // Defines SemaphoreBindingToken and SemScope. Header-only and dependency-free,
+    // so it is safe on compute builds too.
+    content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
     if (has_cached_sem) {
         // Include for the entry/exit stubs' bodies (get_semaphore + the MEM_ defines),
         // guarded exactly like those bodies (the pool is DM-only).
@@ -276,18 +285,10 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         content << "#include \"api/dataflow/dataflow_api.h\"\n";
         content << "#endif\n";
     }
-    if (!ta_entries.empty()) {
-        // This header defines TensorBindingToken, a type which can be used
-        // to construct a TensorAccessor or LocalTensorAccessor.
-        content << "#include \"api/tensor/tensor_binding_token.h\"\n";
-    }
+    content << "#include \"api/tensor/tensor_binding_token.h\"\n";
+    content << "#include \"api/scratchpad.h\"\n";
     if (!tensor_binding_sequence_entries.empty()) {
         content << "#include <tuple>\n";
-    }
-    if (!scratch_entries.empty()) {
-        // The full Scratchpad type (NOC-free, so it compiles on both data-movement and
-        // compute/TRISC builds), which also pulls in the ScratchpadBindingToken type.
-        content << "#include \"api/scratchpad.h\"\n";
     }
     content << "\n";
 
@@ -307,13 +308,14 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << "};\n";
         }
     }
-    emit_programatic_binding_token_getter(content, dfb_entries);
+    emit_programmatic_binding_token_getter(content, dfb_entries, "DFBBindingToken");
     content << "}  // namespace dfb\n";
 
     // Emit Semaphore bindings
     tt::tt_metal::emit_semaphore_binding_tokens(content, sem_entries);
     content << "namespace sem {\n";
-    emit_programatic_binding_token_getter(content, sem_entries);
+    emit_programmatic_binding_token_getter(
+        content, sem_entries, "::SemaphoreBindingToken<0u, ::SemScope::LOCAL_NONATOMIC>");
     content << "}  // namespace sem\n";
     if (has_cached_sem) {
         // Cached-pool entry/exit stubs. A cached semaphore's pool row must be seeded
@@ -388,7 +390,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
     }
 
-    emit_programatic_binding_token_getter(content, ta_entries);
+    // Unlike other binding token types, TensorBindingToken has meaningful template parameters associated with it.
+    // Thus, a dedicated type is needed to represent the absence of a binding.
+    emit_programmatic_binding_token_getter(content, ta_entries, "::tensor_accessor::NullTensorBindingToken");
 
     // Emit TensorBindingToken sequences
     for (const auto& sequence : tensor_binding_sequence_entries) {
@@ -412,7 +416,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                 << entry.size_bytes << "u};\n";
     }
 
-    emit_programatic_binding_token_getter(content, scratch_entries);
+    emit_programmatic_binding_token_getter(content, scratch_entries, "ScratchpadBindingToken");
 
     content << "}  // namespace scratch\n";
 

@@ -8,7 +8,7 @@
 
 namespace internal {
 
-// Maximum number of characters this type can hold, excluding the terminating NUL.
+// Maximum number of characters this type can hold, including the terminating NUL.
 //
 // This restriction is aribtary to support use of TemplateString type as a non-type template parameter without CTAD.
 // This should go away when we upgrade to C++20.

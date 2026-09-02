@@ -4013,8 +4013,8 @@ void kernel_main() {
     (void)noc_addr;
 }
 
-static_assert(tensor::get_binding_if_present<"input_tensor">() == &tensor::input_tensor);
-static_assert(tensor::get_binding_if_present<"not_a_tensor">() == nullptr);
+static_assert(tensor::get_token_if_present<"input_tensor">() == &tensor::input_tensor);
+static_assert(tensor::get_token_if_present<"not_a_tensor">() == nullptr);
 )"};
 
     spec.kernels = {dm_kernel};
@@ -4026,7 +4026,7 @@ static_assert(tensor::get_binding_if_present<"not_a_tensor">() == nullptr);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_GetBindingIfPresentReturnsNullptrWhenNoBindingsJITSmoke) {
+TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentReturnsNullptrWhenNoBindingsJITSmoke) {
     // The lookup is emitted even when a kernel has no bindings of a given kind, so a kernel can
     // probe for an optional resource without the host having to inject a dummy token. This is the
     // empty-namespace path (no DFB / tensor / scratchpad / semaphore bindings at all); the
@@ -4039,15 +4039,484 @@ TEST_F(ProgramSpecTestGen1, CPU_GetBindingIfPresentReturnsNullptrWhenNoBindingsJ
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
-    static_assert(dfb::get_binding_if_present<"missing">() == nullptr);
-    static_assert(tensor::get_binding_if_present<"missing">() == nullptr);
-    static_assert(scratch::get_binding_if_present<"missing">() == nullptr);
-    static_assert(sem::get_binding_if_present<"missing">() == nullptr);
+    static_assert(dfb::get_token_if_present<"missing">() == nullptr);
+    static_assert(tensor::get_token_if_present<"missing">() == nullptr);
+    static_assert(scratch::get_token_if_present<"missing">() == nullptr);
+    static_assert(sem::get_token_if_present<"missing">() == nullptr);
 }
 )"};
 
     spec.kernels = {dm_kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentReturnsNullptrWhenNoBindingsComputeJITSmoke) {
+    // Same empty-namespace lookups as the DM smoke above, on a compute kernel with no bindings.
+    // Covers the TRISC compile of kernel_bindings_generated.h's unconditional token-header includes.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "binding_lookup_empty_compute";
+
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+    compute.source = KernelSpec::SourceCode{R"(
+#include "api/tensor/local_tensor_accessor.h"
+
+void kernel_main() {
+    static_assert(dfb::get_token_if_present<"missing">() == nullptr);
+    if (const auto* token = dfb::get_token_if_present<"missing">()) {
+        DataflowBuffer buf(*token);
+        (void)buf;
+    }
+
+    static_assert(tensor::get_token_if_present<"missing">() == nullptr);
+    if (const auto* token = tensor::get_token_if_present<"missing">()) {
+        LocalTensorAccessor<uint32_t> local_accessor(*token);
+        (void)local_accessor;
+    }
+
+    static_assert(scratch::get_token_if_present<"missing">() == nullptr);
+    if (const auto* token = scratch::get_token_if_present<"missing">()) {
+        Scratchpad<int32_t> pad(*token);
+        (void)pad;
+    }
+
+    static_assert(sem::get_token_if_present<"missing">() == nullptr);
+}
+)"};
+
+    spec.kernels = {compute};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstructsWhenNoBindingsJITSmoke) {
+    // Same empty ProgramSpec as the nullptr static_assert smoke above, but with the
+    // `if (const auto* token = get_token_if_present<...>())` shape so each absent lookup's
+    // false branch still type-checks constructing the resource from *token.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "binding_lookup_empty_constructs";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/local_tensor_accessor.h"
+
+void kernel_main() {
+    static_assert(dfb::get_token_if_present<"missing">() == nullptr);
+    if (const auto* token = dfb::get_token_if_present<"missing">()) {
+        DataflowBuffer buf(*token);
+        (void)buf;
+    }
+
+    static_assert(tensor::get_token_if_present<"missing">() == nullptr);
+    if (const auto* token = tensor::get_token_if_present<"missing">()) {
+        TensorAccessor accessor(*token);
+        LocalTensorAccessor<uint32_t> local_accessor(*token);
+        (void)accessor;
+        (void)local_accessor;
+    }
+
+    static_assert(scratch::get_token_if_present<"missing">() == nullptr);
+    if (const auto* token = scratch::get_token_if_present<"missing">()) {
+        Scratchpad<int32_t> pad(*token);
+        (void)pad;
+    }
+
+    static_assert(sem::get_token_if_present<"missing">() == nullptr);
+    if (const auto* token = sem::get_token_if_present<"missing">()) {
+        Semaphore s(*token);
+        (void)s;
+    }
+}
+)"};
+
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+// ============================================================================
+// get_token_if_present: construct the resource from a present token, and keep
+// an optional nullptr path compiling (same if (const auto* token = ...) shape)
+// ============================================================================
+
+TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstructsDataflowBufferJITSmoke) {
+    // dfb_present is bound; dfb_absent is not. Both lookups use the same `if (const auto* token = ...)`
+    // shape so the absent path still type-checks DataflowBuffer(*token) in the false branch.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].dfb_bindings[0].accessor_name = "dfb_present";
+    spec.kernels[1].dfb_bindings[0].accessor_name = "dfb_present";
+
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    static_assert(dfb::get_token_if_present<"dfb_present">() == &dfb::dfb_present);
+    if (const auto* token = dfb::get_token_if_present<"dfb_present">()) {
+        DataflowBuffer buf(*token);
+        (void)buf;
+    }
+
+    static_assert(dfb::get_token_if_present<"dfb_absent">() == nullptr);
+    if (const auto* token = dfb::get_token_if_present<"dfb_absent">()) {
+        DataflowBuffer buf(*token);
+        (void)buf;
+    }
+}
+)"};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstructsScratchpadJITSmoke) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "binding_lookup_constructs_scratch";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    static_assert(scratch::get_token_if_present<"scratch_present">() == &scratch::scratch_present);
+    if (const auto* token = scratch::get_token_if_present<"scratch_present">()) {
+        Scratchpad<int32_t> pad(*token);
+        (void)pad;
+    }
+
+    static_assert(scratch::get_token_if_present<"scratch_absent">() == nullptr);
+    if (const auto* token = scratch::get_token_if_present<"scratch_absent">()) {
+        Scratchpad<int32_t> pad(*token);
+        (void)pad;
+    }
+}
+)"};
+    dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch_present"});
+
+    spec.kernels = {dm_kernel};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstructsTensorAccessorJITSmoke) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "binding_lookup_constructs_tensor";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+#include "api/tensor/local_tensor_accessor.h"
+
+void kernel_main() {
+    static_assert(tensor::get_token_if_present<"tensor_present">() == &tensor::tensor_present);
+    if (const auto* token = tensor::get_token_if_present<"tensor_present">()) {
+        TensorAccessor accessor(*token);
+        LocalTensorAccessor<uint32_t> local_accessor(*token);
+        (void)accessor;
+        (void)local_accessor;
+    }
+
+    static_assert(tensor::get_token_if_present<"tensor_absent">() == nullptr);
+    if (const auto* token = tensor::get_token_if_present<"tensor_absent">()) {
+        TensorAccessor accessor(*token);
+        LocalTensorAccessor<uint32_t> local_accessor(*token);
+        (void)accessor;
+        (void)local_accessor;
+    }
+}
+)"};
+
+    spec.kernels = {dm_kernel};
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor", tt::tt_metal::BufferType::L1)};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "tensor_present");
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstructsSemaphoreJITSmoke) {
+    // sem_present is bound; sem_absent is not. Semaphore is constructed from the looked-up id (*token).
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    SemaphoreSpec sem;
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
+    sem.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem};
+    spec.kernels[0].semaphore_bindings = {
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "sem_present"}};
+
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+#include "api/dataflow/noc_semaphore.h"
+void kernel_main() {
+    static_assert(sem::get_token_if_present<"sem_present">() == &sem::sem_present);
+    if (const auto* token = sem::get_token_if_present<"sem_present">()) {
+        Semaphore s(*token);
+        (void)s;
+    }
+
+    static_assert(sem::get_token_if_present<"sem_absent">() == nullptr);
+    if (const auto* token = sem::get_token_if_present<"sem_absent">()) {
+        Semaphore s(*token);
+        (void)s;
+    }
+}
+)"};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentDisambiguatesMultipleBindingsJITSmoke) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    auto dfb_b = MakeMinimalDFB("dfb_1");
+    dfb_b.data_format_metadata = tt::DataFormat::Float16_b;
+    spec.dataflow_buffers.push_back(dfb_b);
+    spec.kernels[0].dfb_bindings[0].accessor_name = "dfb_a";
+    spec.kernels[0].dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_1"}, "dfb_b"));
+    spec.kernels[1].dfb_bindings[0].accessor_name = "dfb_a";
+    spec.kernels[1].dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_1"}, "dfb_b"));
+
+    spec.tensor_parameters = {
+        MakeMinimalTensorParameter("t0", tt::tt_metal::BufferType::L1),
+        MakeMinimalTensorParameter("t1", tt::tt_metal::BufferType::L1),
+    };
+    BindTensorParameterToKernel(spec.kernels[0], "t0", "tensor_a");
+    BindTensorParameterToKernel(spec.kernels[0], "t1", "tensor_b");
+
+    spec.scratchpads = {
+        ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024},
+        ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_1"}, .size_per_node = 1024},
+    };
+    spec.kernels[0].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "scratch_a"},
+        KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = ScratchpadSpecName{"scratch_1"}, .accessor_name = "scratch_b"},
+    };
+
+    SemaphoreSpec sem_0;
+    sem_0.unique_id = SemaphoreSpecName{"sem_0"};
+    sem_0.target_nodes = NodeCoord{0, 0};
+    SemaphoreSpec sem_1;
+    sem_1.unique_id = SemaphoreSpecName{"sem_1"};
+    sem_1.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem_0, sem_1};
+    spec.kernels[0].semaphore_bindings = {
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "sem_a"},
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_1"}, .accessor_name = "sem_b"},
+    };
+
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/local_tensor_accessor.h"
+
+void kernel_main() {
+    static_assert(dfb::get_token_if_present<"dfb_a">() == &dfb::dfb_a);
+    if (const auto* token = dfb::get_token_if_present<"dfb_a">()) {
+        DataflowBuffer buf(*token);
+        (void)buf;
+    }
+
+    static_assert(dfb::get_token_if_present<"dfb_b">() == &dfb::dfb_b);
+    if (const auto* token = dfb::get_token_if_present<"dfb_b">()) {
+        DataflowBuffer buf(*token);
+        (void)buf;
+    }
+
+    static_assert(tensor::get_token_if_present<"tensor_a">() == &tensor::tensor_a);
+    if (const auto* token = tensor::get_token_if_present<"tensor_a">()) {
+        TensorAccessor accessor(*token);
+        LocalTensorAccessor<uint32_t> local_accessor(*token);
+        (void)accessor;
+        (void)local_accessor;
+    }
+
+    static_assert(tensor::get_token_if_present<"tensor_b">() == &tensor::tensor_b);
+    if (const auto* token = tensor::get_token_if_present<"tensor_b">()) {
+        TensorAccessor accessor(*token);
+        LocalTensorAccessor<uint32_t> local_accessor(*token);
+        (void)accessor;
+        (void)local_accessor;
+    }
+
+    static_assert(scratch::get_token_if_present<"scratch_a">() == &scratch::scratch_a);
+    if (const auto* token = scratch::get_token_if_present<"scratch_a">()) {
+        Scratchpad<int32_t> pad(*token);
+        (void)pad;
+    }
+
+    static_assert(scratch::get_token_if_present<"scratch_b">() == &scratch::scratch_b);
+    if (const auto* token = scratch::get_token_if_present<"scratch_b">()) {
+        Scratchpad<int32_t> pad(*token);
+        (void)pad;
+    }
+
+    static_assert(sem::get_token_if_present<"sem_a">() == &sem::sem_a);
+    if (const auto* token = sem::get_token_if_present<"sem_a">()) {
+        Semaphore s(*token);
+        (void)s;
+    }
+
+    static_assert(sem::get_token_if_present<"sem_b">() == &sem::sem_b);
+    if (const auto* token = sem::get_token_if_present<"sem_b">()) {
+        Semaphore s(*token);
+        (void)s;
+    }
+}
+)"};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_GetTokenIfPresentConstantExpressionBigSmoke) {
+    // Same bindings as CPU_GetTokenIfPresentDisambiguatesMultipleBindingsJITSmoke.
+    // Present names use `if constexpr (get_token_if_present<"x">() == &ns::x)` — converting the
+    // pointer to bool is -Werror=address because it is the address of a constexpr object.
+    // Absent names use `if constexpr (constexpr const auto* token = get_token_if_present<"missing">())`.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    auto dfb_b = MakeMinimalDFB("dfb_1");
+    dfb_b.data_format_metadata = tt::DataFormat::Float16_b;
+    spec.dataflow_buffers.push_back(dfb_b);
+    spec.kernels[0].dfb_bindings[0].accessor_name = "dfb_a";
+    spec.kernels[0].dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_1"}, "dfb_b"));
+    spec.kernels[1].dfb_bindings[0].accessor_name = "dfb_a";
+    spec.kernels[1].dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_1"}, "dfb_b"));
+
+    spec.tensor_parameters = {
+        MakeMinimalTensorParameter("t0", tt::tt_metal::BufferType::L1),
+        MakeMinimalTensorParameter("t1", tt::tt_metal::BufferType::L1),
+    };
+    BindTensorParameterToKernel(spec.kernels[0], "t0", "tensor_a");
+    BindTensorParameterToKernel(spec.kernels[0], "t1", "tensor_b");
+
+    spec.scratchpads = {
+        ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024},
+        ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_1"}, .size_per_node = 1024},
+    };
+    spec.kernels[0].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "scratch_a"},
+        KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = ScratchpadSpecName{"scratch_1"}, .accessor_name = "scratch_b"},
+    };
+
+    SemaphoreSpec sem_0;
+    sem_0.unique_id = SemaphoreSpecName{"sem_0"};
+    sem_0.target_nodes = NodeCoord{0, 0};
+    SemaphoreSpec sem_1;
+    sem_1.unique_id = SemaphoreSpecName{"sem_1"};
+    sem_1.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem_0, sem_1};
+    spec.kernels[0].semaphore_bindings = {
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "sem_a"},
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_1"}, .accessor_name = "sem_b"},
+    };
+
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/local_tensor_accessor.h"
+
+void kernel_main() {
+    static_assert(dfb::get_token_if_present<"dfb_a">() == &dfb::dfb_a);
+    if constexpr (dfb::get_token_if_present<"dfb_a">() == &dfb::dfb_a) {
+        constexpr const auto* token = dfb::get_token_if_present<"dfb_a">();
+        DataflowBuffer buf(*token);
+        (void)buf;
+    }
+    static_assert(dfb::get_token_if_present<"dfb_absent">() == nullptr);
+    if constexpr (constexpr const auto* token = dfb::get_token_if_present<"dfb_absent">()) {
+        DataflowBuffer buf(*token);
+        (void)buf;
+    }
+
+    static_assert(dfb::get_token_if_present<"dfb_b">() == &dfb::dfb_b);
+    if constexpr (dfb::get_token_if_present<"dfb_b">() == &dfb::dfb_b) {
+        constexpr const auto* token = dfb::get_token_if_present<"dfb_b">();
+        DataflowBuffer buf(*token);
+        (void)buf;
+    }
+
+    static_assert(tensor::get_token_if_present<"tensor_a">() == &tensor::tensor_a);
+    if constexpr (tensor::get_token_if_present<"tensor_a">() == &tensor::tensor_a) {
+        constexpr const auto* token = tensor::get_token_if_present<"tensor_a">();
+        TensorAccessor accessor(*token);
+        LocalTensorAccessor<uint32_t> local_accessor(*token);
+        (void)accessor;
+        (void)local_accessor;
+    }
+    static_assert(tensor::get_token_if_present<"tensor_absent">() == nullptr);
+    if constexpr (constexpr const auto* token = tensor::get_token_if_present<"tensor_absent">()) {
+        TensorAccessor accessor(*token);
+        LocalTensorAccessor<uint32_t> local_accessor(*token);
+        (void)accessor;
+        (void)local_accessor;
+    }
+
+    static_assert(tensor::get_token_if_present<"tensor_b">() == &tensor::tensor_b);
+    if constexpr (tensor::get_token_if_present<"tensor_b">() == &tensor::tensor_b) {
+        constexpr const auto* token = tensor::get_token_if_present<"tensor_b">();
+        TensorAccessor accessor(*token);
+        LocalTensorAccessor<uint32_t> local_accessor(*token);
+        (void)accessor;
+        (void)local_accessor;
+    }
+
+    static_assert(scratch::get_token_if_present<"scratch_a">() == &scratch::scratch_a);
+    if constexpr (scratch::get_token_if_present<"scratch_a">() == &scratch::scratch_a) {
+        constexpr const auto* token = scratch::get_token_if_present<"scratch_a">();
+        Scratchpad<int32_t> pad(*token);
+        (void)pad;
+    }
+    static_assert(scratch::get_token_if_present<"scratch_absent">() == nullptr);
+    if constexpr (constexpr const auto* token = scratch::get_token_if_present<"scratch_absent">()) {
+        Scratchpad<int32_t> pad(*token);
+        (void)pad;
+    }
+
+    static_assert(scratch::get_token_if_present<"scratch_b">() == &scratch::scratch_b);
+    if constexpr (scratch::get_token_if_present<"scratch_b">() == &scratch::scratch_b) {
+        constexpr const auto* token = scratch::get_token_if_present<"scratch_b">();
+        Scratchpad<int32_t> pad(*token);
+        (void)pad;
+    }
+
+    static_assert(sem::get_token_if_present<"sem_a">() == &sem::sem_a);
+    if constexpr (sem::get_token_if_present<"sem_a">() == &sem::sem_a) {
+        constexpr const auto* token = sem::get_token_if_present<"sem_a">();
+        Semaphore s(*token);
+        (void)s;
+    }
+    static_assert(sem::get_token_if_present<"sem_absent">() == nullptr);
+    if constexpr (constexpr const auto* token = sem::get_token_if_present<"sem_absent">()) {
+        Semaphore s(*token);
+        (void)s;
+    }
+
+    static_assert(sem::get_token_if_present<"sem_b">() == &sem::sem_b);
+    if constexpr (sem::get_token_if_present<"sem_b">() == &sem::sem_b) {
+        constexpr const auto* token = sem::get_token_if_present<"sem_b">();
+        Semaphore s(*token);
+        (void)s;
+    }
+}
+)"};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
@@ -4372,8 +4841,8 @@ void kernel_main() {
     (void)base;
 }
 
-static_assert(scratch::get_binding_if_present<"scratch">() == &scratch::scratch);
-static_assert(scratch::get_binding_if_present<"not_a_scratch">() == nullptr);
+static_assert(scratch::get_token_if_present<"scratch">() == &scratch::scratch);
+static_assert(scratch::get_token_if_present<"not_a_scratch">() == nullptr);
 )"};
     dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
@@ -4404,8 +4873,8 @@ void kernel_main() {
     (void)base;
 }
 
-static_assert(scratch::get_binding_if_present<"scratch">() == &scratch::scratch);
-static_assert(scratch::get_binding_if_present<"not_a_scratch">() == nullptr);
+static_assert(scratch::get_token_if_present<"scratch">() == &scratch::scratch);
+static_assert(scratch::get_token_if_present<"not_a_scratch">() == nullptr);
 )"};
 
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
@@ -4438,8 +4907,8 @@ void kernel_main() {
     (void)sink;
 }
 
-static_assert(scratch::get_binding_if_present<"scratch">() == &scratch::scratch);
-static_assert(scratch::get_binding_if_present<"not_a_scratch">() == nullptr);
+static_assert(scratch::get_token_if_present<"scratch">() == &scratch::scratch);
+static_assert(scratch::get_token_if_present<"not_a_scratch">() == nullptr);
 )"};
     dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
@@ -4483,8 +4952,8 @@ TT_KERNEL void compute_entry(uint32_t input_offset, uint32_t num_tiles) {  // RT
     (void)sink;
 }
 
-static_assert(dfb::get_binding_if_present<"out_dfb">() == &dfb::out_dfb);
-static_assert(dfb::get_binding_if_present<"not_a_dfb">() == nullptr);
+static_assert(dfb::get_token_if_present<"out_dfb">() == &dfb::out_dfb);
+static_assert(dfb::get_token_if_present<"not_a_dfb">() == nullptr);
 )";
 
 TEST_F(ProgramSpecTestGen1, CPU_TtKernelComputeShimCompiles) {
