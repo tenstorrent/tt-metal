@@ -38,6 +38,14 @@ struct PertinentFields {
     bool padded_shape = false;
     bool logical_rank = false;
 
+    // The unaligned page size. Pinning the UNALIGNED value is sound because the aligned value the
+    // accessor carries is align(unaligned, allocator_alignment(buffer_type)), and buffer_type lives
+    // in memory_config inside tensor_layout -- load-bearing everywhere -- so equal unaligned implies
+    // equal aligned. It is merely conservative in the other direction: two widths that align to the
+    // same value are rejected even though their CTA would have been identical. Loud, and the match
+    // has no MeshDevice to compute the aligned value with anyway.
+    bool page_size = false;
+
     // The sharded distribution geometry: the squeezed shard shape and the bank (core) list.
     //
     // Only pertinent where the shape is otherwise free. When the logical or padded shape is pinned
@@ -52,7 +60,7 @@ struct PertinentFields {
 // a proof -- also extend the flag-combination sweep in test_tensor_spec_relaxations.cpp, which is
 // what actually detects a disagreement.
 static_assert(
-    sizeof(PertinentFields) == 4,
+    sizeof(PertinentFields) == 5,
     "A PertinentFields member was added or removed. Wire the new term into BOTH "
     "hash_tensorspec_with_relaxation and tensorspecs_match_with_relaxation, then update this count.");
 
@@ -62,6 +70,7 @@ PertinentFields pertinent_fields(const TensorSpecRelaxations& relaxation) {
         // the sharded distribution geometry is load-bearing either way -- see shard_distribution.
         return PertinentFields{
             .logical_rank = !relaxation.relax_logical_rank,
+            .page_size = relaxation.match_page_size,
             .shard_distribution = true,
         };
     }
@@ -121,6 +130,9 @@ std::uint64_t hash_tensorspec_with_relaxation(
     if (fields.logical_rank) {
         hash = ttsl::hash::hash_objects(hash, spec.logical_shape().rank());
     }
+    if (fields.page_size) {
+        hash = ttsl::hash::hash_objects(hash, spec.compute_page_size_bytes());
+    }
     if (fields.shard_distribution) {
         // CoreCoord is a bare tt_xy_pair with no reflected hash, so fold the coordinates directly
         // rather than rely on hashing the vector.
@@ -155,6 +167,9 @@ bool tensorspecs_match_with_relaxation(
         return false;
     }
     if (fields.logical_rank && a.logical_shape().rank() != b.logical_shape().rank()) {
+        return false;
+    }
+    if (fields.page_size && a.compute_page_size_bytes() != b.compute_page_size_bytes()) {
         return false;
     }
     if (fields.shard_distribution) {

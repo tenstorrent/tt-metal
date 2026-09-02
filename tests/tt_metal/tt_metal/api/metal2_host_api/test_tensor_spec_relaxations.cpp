@@ -184,9 +184,96 @@ TEST(TensorSpecRelaxations, CPU_RelaxLogicalRankInertWithoutDynamicTensorShape) 
     }
 }
 
+// match_page_size pins the page size while the shape stays free. Interleaved ROW-MAJOR is the only
+// regime where that is not already implied by tensor_layout: the page size is the padded last
+// dimension times the element size, so it moves with the shape.
+//
+// Note the direction. This is a TIGHTENING, not a relaxation: it declares a narrower equivalence
+// class so the TensorAccessor can keep the page size as a compile-time constant instead of an
+// implicit runtime argument. bfloat16, so width 64 -> 128 bytes and width 128 -> 256 bytes.
+TEST(TensorSpecRelaxations, CPU_MatchPageSizePinsRowMajorWidth) {
+    const TensorSpecRelaxations dyn{.dynamic_tensor_shape = true};
+    const TensorSpecRelaxations pinned{.dynamic_tensor_shape = true, .match_page_size = true};
+    const auto a = make_spec(Shape{1, 1, 32, 64}, Layout::ROW_MAJOR);
+    const auto wider = make_spec(Shape{1, 1, 32, 128}, Layout::ROW_MAJOR);
+    ASSERT_EQ(a.tensor_layout(), wider.tensor_layout());  // only the width separates them
+    ASSERT_NE(a.compute_page_size_bytes(), wider.compute_page_size_bytes());
+
+    // dynamic_tensor_shape alone accepts the width change, re-emitting the page size per dispatch.
+    EXPECT_TRUE(tensorspecs_match_with_relaxation(a, wider, dyn));
+    // match_page_size declares that it will not vary, so the same argument is now rejected rather
+    // than read with a stale compile-time page size.
+    EXPECT_FALSE(tensorspecs_match_with_relaxation(a, wider, pinned));
+    EXPECT_NE(hash_tensorspec_with_relaxation(a, pinned), hash_tensorspec_with_relaxation(wider, pinned));
+}
+
+// ...and the shape is still genuinely free: only the width is pinned, not the other dims.
+TEST(TensorSpecRelaxations, CPU_MatchPageSizeStillFreesShapeAtConstantWidth) {
+    const TensorSpecRelaxations pinned{.dynamic_tensor_shape = true, .match_page_size = true};
+    const auto a = make_spec(Shape{1, 1, 32, 64}, Layout::ROW_MAJOR);
+    const auto taller = make_spec(Shape{1, 1, 128, 64}, Layout::ROW_MAJOR);
+    ASSERT_NE(a.logical_shape(), taller.logical_shape());
+    ASSERT_EQ(a.compute_page_size_bytes(), taller.compute_page_size_bytes());  // same width
+
+    EXPECT_TRUE(tensorspecs_match_with_relaxation(a, taller, pinned));
+    EXPECT_EQ(hash_tensorspec_with_relaxation(a, pinned), hash_tensorspec_with_relaxation(taller, pinned));
+}
+
+// match_page_size composes with relax_logical_rank rather than conflicting with it. Freeing the rank
+// is what makes a constant width hard to GUARANTEE by hand -- which is the argument for checking it
+// instead: a rank change that moves the width is rejected on the page-size term, so the two flags
+// need no legality rule between them.
+TEST(TensorSpecRelaxations, CPU_MatchPageSizeComposesWithRelaxLogicalRank) {
+    const TensorSpecRelaxations relaxed{
+        .dynamic_tensor_shape = true,
+        .relax_logical_rank = true,
+        .match_page_size = true,
+    };
+    const auto rank4 = make_spec(Shape{1, 1, 32, 64}, Layout::ROW_MAJOR);
+    const auto rank2_same_width = make_spec(Shape{32, 64}, Layout::ROW_MAJOR);
+    const auto rank2_wider = make_spec(Shape{32, 128}, Layout::ROW_MAJOR);
+    ASSERT_NE(rank4.logical_shape().rank(), rank2_same_width.logical_shape().rank());
+
+    // Rank freed, width preserved -> accepted.
+    EXPECT_TRUE(tensorspecs_match_with_relaxation(rank4, rank2_same_width, relaxed));
+    EXPECT_EQ(
+        hash_tensorspec_with_relaxation(rank4, relaxed), hash_tensorspec_with_relaxation(rank2_same_width, relaxed));
+    // Rank freed, width moved -> still rejected, on the page-size term.
+    EXPECT_FALSE(tensorspecs_match_with_relaxation(rank4, rank2_wider, relaxed));
+    EXPECT_NE(hash_tensorspec_with_relaxation(rank4, relaxed), hash_tensorspec_with_relaxation(rank2_wider, relaxed));
+}
+
+// Inert without dynamic_tensor_shape, in the same idiom as relax_logical_rank: there is no free
+// shape for it to re-pin, so there is nothing for it to do.
+TEST(TensorSpecRelaxations, CPU_MatchPageSizeInertWithoutDynamicTensorShape) {
+    const auto a = make_spec(Shape{1, 1, 32, 64}, Layout::ROW_MAJOR);
+    const auto b = make_spec(Shape{1, 1, 32, 128}, Layout::ROW_MAJOR);
+
+    for (const bool padded_only : {false, true}) {
+        const TensorSpecRelaxations without{.match_padded_shape_only = padded_only};
+        const TensorSpecRelaxations with{.match_padded_shape_only = padded_only, .match_page_size = true};
+        EXPECT_EQ(tensorspecs_match_with_relaxation(a, b, without), tensorspecs_match_with_relaxation(a, b, with));
+        EXPECT_EQ(hash_tensorspec_with_relaxation(a, without), hash_tensorspec_with_relaxation(a, with));
+    }
+}
+
+// A no-op wherever the page size is already pinned by tensor_layout, which is every regime except
+// interleaved row-major: a tiled page size is fixed by dtype and tile dims, both of which
+// tensor_layout pins.
+TEST(TensorSpecRelaxations, CPU_MatchPageSizeIsNoOpOnTiled) {
+    const TensorSpecRelaxations dyn{.dynamic_tensor_shape = true};
+    const TensorSpecRelaxations pinned{.dynamic_tensor_shape = true, .match_page_size = true};
+    const auto a = make_spec(Shape{1, 1, 32, 32});
+    const auto b = make_spec(Shape{1, 1, 64, 128});
+    ASSERT_EQ(a.compute_page_size_bytes(), b.compute_page_size_bytes());  // tile-fixed, not width-derived
+
+    EXPECT_EQ(tensorspecs_match_with_relaxation(a, b, dyn), tensorspecs_match_with_relaxation(a, b, pinned));
+    EXPECT_EQ(hash_tensorspec_with_relaxation(a, pinned), hash_tensorspec_with_relaxation(b, pinned));
+}
+
 // Build a relaxation from a bit pattern, one bit per flag, so the sweep below can enumerate every
 // combination rather than a hand-picked list.
-constexpr unsigned kNumRelaxationFlags = 3;
+constexpr unsigned kNumRelaxationFlags = 4;
 static_assert(
     sizeof(TensorSpecRelaxations) == kNumRelaxationFlags,
     "A TensorSpecRelaxations flag was added or removed. Update kNumRelaxationFlags and relaxation_from_bits, so the "
@@ -198,6 +285,7 @@ TensorSpecRelaxations relaxation_from_bits(unsigned bits) {
         .match_padded_shape_only = (bits & 0b001u) != 0,
         .dynamic_tensor_shape = (bits & 0b010u) != 0,
         .relax_logical_rank = (bits & 0b100u) != 0,
+        .match_page_size = (bits & 0b1000u) != 0,
     };
 }
 
@@ -295,7 +383,12 @@ TEST(TensorSpecRelaxations, CPU_HashConsistentWithMatch) {
         // and matches again once relax_logical_rank frees the rank. Without it, dropping the rank
         // term from both functions at once would go undetected.
         make_spec(Shape{32}),
-        make_spec(Shape{1, 1, 32, 32}, Layout::ROW_MAJOR),                // different layout
+        make_spec(Shape{1, 1, 32, 32}, Layout::ROW_MAJOR),  // different layout
+        // Second ROW_MAJOR entry, identical layout and rank to the one above but a different width.
+        // Interleaved row-major is the only regime where the page size is not already pinned by
+        // tensor_layout, so this pair is the sweep's only discriminator for the page_size term: it
+        // matches under dynamic_tensor_shape and must NOT match once match_page_size is added.
+        make_spec(Shape{1, 1, 32, 64}, Layout::ROW_MAJOR),
         make_spec(Shape{1, 1, 32, 32}, Layout::TILE, DataType::FLOAT32),  // different dtype
     };
 

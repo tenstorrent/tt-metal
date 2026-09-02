@@ -57,6 +57,8 @@ struct TensorSpecRelaxations {
     //    dynamic_tensor_shape wins.
     //  - dynamic_tensor_shape requires that the logical rank remain constant. To
     //    further relax the logical rank, additionally set relax_logical_rank.
+    //  - dynamic_tensor_shape assumes that an interleaved row-major tensor's page
+    //    size may vary with shape. To tighten, additionally set match_page_size.
     //
     // Effects:
     //  - Validation checks are relaxed.
@@ -90,6 +92,19 @@ struct TensorSpecRelaxations {
     //    (The "rank" carried by the TensorAccessor is not the logical rank, but the physical
     //     "squeezed" rank of the memory layout.)
     bool relax_logical_rank = false;
+
+    // Require that the tensor argument's page size matches that of the TensorParameter.
+    // This is intended to be used in conjunction with dynamic_tensor_shape.
+    // (The flag is inert if dynamic_tensor_shape is not set.)
+    //
+    // Effects:
+    //  - Validation checks are tightened (relative to the dynamic_tensor_shape default behavior).
+    //    The (unaligned) page size must match exactly.
+    //  - For an interleaved ROW-MAJOR tensor:
+    //    The TensorAccessor's aligned_page_size is made a static compile-time constant, rather
+    //    than a dynamic common runtime argument (the default dynamic_tensor_shape behavior).
+    //  - For any other tensor layout, it has no effect.
+    bool match_page_size = false;
 };
 
 // Do two TensorSpecs "match" under a TensorSpecRelaxations?

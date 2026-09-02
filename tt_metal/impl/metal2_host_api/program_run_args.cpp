@@ -74,6 +74,19 @@ static void report_tensor_arg_mismatch(
                 runtime_spec.logical_shape().rank(),
                 expected_spec.logical_shape().rank());
         }
+        if (relaxation.match_page_size) {
+            TT_FATAL(
+                runtime_spec.compute_page_size_bytes() == expected_spec.compute_page_size_bytes(),
+                "TensorArgument for binding '{}' supplied a MeshTensor whose page size ({} bytes) differs from the "
+                "binding's declared page size ({} bytes). match_page_size declares that the page size is constant "
+                "even though the shape varies, so it is pinned rather than re-emitted per dispatch -- which is what "
+                "lets the TensorAccessor keep it as a compile-time constant. Drop match_page_size if the width really "
+                "does vary; on an interleaved row-major tensor the page size is last_dim_width * element_size, so it "
+                "varies with the shape unless the last dimension is held fixed.",
+                param_name,
+                runtime_spec.compute_page_size_bytes(),
+                expected_spec.compute_page_size_bytes());
+        }
         // The distribution geometry stays load-bearing even though the shape values are free, so it
         // is the remaining way this mode can reject. Worth its own message: with the layout and rank
         // both matching, the generic backstop below would leave a user staring at a spec that looks
@@ -141,6 +154,9 @@ static void report_tensor_arg_mismatch(
 //         rank must match. Both logical_shape and padded_shape per-dim values may differ.
 //       - dynamic_tensor_shape=true with relax_logical_rank=true: tensor_layout() alone must
 //         match. The rank is freed along with the per-dim values.
+//       - match_page_size=true (with dynamic_tensor_shape): as above, plus the page size must
+//         match. A TIGHTENING rather than a relaxation -- it declares that the width is constant
+//         even though the shape varies, so the accessor can keep the page size compile-time.
 //     relax_logical_rank is inert unless dynamic_tensor_shape is also set; the load-bearing field
 //     set for every combination is derived in one place, by pertinent_fields()
 //     (tensor_spec_relaxations.cpp), which both this validation and the relaxation-aware hash use.

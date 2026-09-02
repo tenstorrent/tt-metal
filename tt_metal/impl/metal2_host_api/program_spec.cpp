@@ -672,7 +672,6 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 // representative of every device in the mesh.
 
 void ValidateNodeBounds(const ProgramSpec& spec) {
-
     MetalEnvImpl& env_impl = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
 
     // Handle the mock device case (for cheap unit testing)
@@ -696,25 +695,24 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
     // No need for dispatch-specific checks (and dispatch-specific error messages confuse users)
     const CoreCoord compute_grid = tt::get_compute_grid_size(env_impl, chip_id, num_hw_cqs, dispatch_core_config);
 
-    auto check_target_nodes = [&](const Nodes& target_nodes,
-                                  std::string_view entity_type,
-                                  std::string_view entity_name) {
-        const NodeRangeSet range_set = to_node_range_set(target_nodes);
-        for (const NodeRange& range : range_set.ranges()) {
-            for (const NodeCoord& node : range) {
-                TT_FATAL(
-                    node.x < compute_grid.x && node.y < compute_grid.y,
-                    "{} '{}' targets node ({},{}), which is out of bounds. "
-                    "The compute worker grid on this device is {}x{}.",
-                    entity_type,
-                    entity_name,
-                    node.x,
-                    node.y,
-                    compute_grid.x,
-                    compute_grid.y);
+    auto check_target_nodes =
+        [&](const Nodes& target_nodes, std::string_view entity_type, std::string_view entity_name) {
+            const NodeRangeSet range_set = to_node_range_set(target_nodes);
+            for (const NodeRange& range : range_set.ranges()) {
+                for (const NodeCoord& node : range) {
+                    TT_FATAL(
+                        node.x < compute_grid.x && node.y < compute_grid.y,
+                        "{} '{}' targets node ({},{}), which is out of bounds. "
+                        "The compute worker grid on this device is {}x{}.",
+                        entity_type,
+                        entity_name,
+                        node.x,
+                        node.y,
+                        compute_grid.x,
+                        compute_grid.y);
+                }
             }
-        }
-    };
+        };
 
     for (const auto& work_unit : spec.work_units) {
         check_target_nodes(work_unit.target_nodes, "WorkUnitSpec", work_unit.name);
@@ -1676,7 +1674,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     total_size_a == total_size_b,
                     "Aliased DFBs '{}' and '{}' have different total sizes ({} vs {} bytes). "
                     "Aliased DFBs must have the same total size (entry_size * num_entries).",
-                    dfb.unique_id, alias_name, total_size_a, total_size_b);
+                    dfb.unique_id,
+                    alias_name,
+                    total_size_a,
+                    total_size_b);
 
                 // Rule 3: same node coverage.
                 const auto& nodes_b = collected.dfb_node_set.at(alias_name);
@@ -1763,10 +1764,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             }
             if (nodes_intersect(work_unit.target_nodes, other_work_unit.target_nodes)) {
                 TT_FATAL(
-                    false,
-                    "WorkUnitSpecs '{}' and '{}' overlap in target nodes",
-                    work_unit.name,
-                    other_work_unit.name);
+                    false, "WorkUnitSpecs '{}' and '{}' overlap in target nodes", work_unit.name, other_work_unit.name);
             }
         }
     }
@@ -2315,14 +2313,20 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     // dynamic_tensor_shape lets the bound tensor's logical shape vary. For an interleaved ROW-MAJOR
     // tensor the page size (= last_dim_width * elem_size) is part of that varying shape, so it must
     // ride a runtime CRTA word too -- otherwise it goes stale on a program-cache hit and the
-    // accessor strides by the wrong number of bytes. We fold that in here rather than expose a
-    // separate flag: a useful page-size change is ALWAYS a shape change on row-major (you can't vary
-    // the width without varying the logical shape), so there is no "page size varies but shape
-    // doesn't" case to give a flag to. Tiled page size is dtype-fixed and sharded page size is
-    // spec-fixed, so neither triggers this; sharded dynamic_tensor_shape carries shape-in-pages
-    // words instead (dyn_shape above). dyn_shape and dyn_page are mutually exclusive by layout.
-    const bool dyn_page =
-        tensor_parameter.relaxations.dynamic_tensor_shape && !is_sharded && spec.layout() == Layout::ROW_MAJOR;
+    // accessor strides by the wrong number of bytes. We induce that here rather than expose a flag
+    // for it: a useful page-size change is ALWAYS a shape change on row-major (you can't vary the
+    // width without varying the logical shape), so there is no "page size varies but shape doesn't"
+    // case to give a flag to. Tiled page size is dtype-fixed and sharded page size is spec-fixed, so
+    // neither triggers this; sharded dynamic_tensor_shape carries shape-in-pages words instead
+    // (dyn_shape above). dyn_shape and dyn_page are mutually exclusive by layout.
+    //
+    // match_page_size opts out of the induction, for the CONVERSE case: shape varies, width does
+    // not. That implication runs only one way, so the flag does not reopen the reasoning above --
+    // it declares a narrower equivalence class in which the page size is pinned, and the match
+    // enforces it (tensor_spec_relaxations.cpp), so the CTA below cannot go stale.
+    const bool dyn_page = tensor_parameter.relaxations.dynamic_tensor_shape &&
+                          !tensor_parameter.relaxations.match_page_size && !is_sharded &&
+                          spec.layout() == Layout::ROW_MAJOR;
 
     tensor_accessor::ArgsConfig args_config;
     if (is_sharded) {
@@ -2695,8 +2699,7 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec, ContextId context_i
 // This is deliberate, done so ProgramSpec stays hashable for TTNN's program caching.
 // For now, just convert to the map types that the core runtime expects.
 // TODO: Fix this inefficiency eventually.
-std::unordered_map<std::string, uint32_t> to_named_compile_args_map(
-    const KernelSpec::CompileTimeArgs& bindings) {
+std::unordered_map<std::string, uint32_t> to_named_compile_args_map(const KernelSpec::CompileTimeArgs& bindings) {
     return std::unordered_map<std::string, uint32_t>(bindings.begin(), bindings.end());
 }
 std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOptions::Defines& defines) {
