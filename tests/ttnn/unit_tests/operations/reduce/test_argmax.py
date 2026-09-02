@@ -118,21 +118,38 @@ def _argmax_nc_nd_rank5():
 
 
 # On Blackhole ttnn.argmax routes TILE / bfloat16 / last-dim / width-multiple-of-32 inputs
-# onto the accelerated paths, and of those the ones with H < 32 -- which includes every
+# onto the vector paths, and of those the ones with H < 32 -- which includes every
 # rank-1 shape, H == 1 by construction -- onto the RVV path, whose kernel runs on TRISC2's
-# Zve32f vector unit (accelerated_paths_can_serve + select_argmax_path in
+# Zve32f vector unit (vector_paths_can_serve + select_argmax_path in
 # ttnn/cpp/ttnn/operations/reduction/argmax/argmax.cpp).
+#
+# kSfpuMinRows in argmax.cpp is the H at which routing switches from RVV to the SFPU path.
+# It is mirrored here as a named constant, the same way test_argmax_rvv.py and
+# test_argmax_sfpu.py mirror it, because there is no binding that exposes it to Python: if the
+# C++ constant moves and this one does not, _routes_to_rvv mis-classifies cases, and a case it
+# wrongly says is not RVV-routed keeps its ttsim skip off and takes the worker down with
+# _Exit(1) rather than failing.
+SFPU_MIN_ROWS = 32
+
+
 def _routes_to_rvv(tensor_shape, tensor_layout, dim, dtype):
     if tensor_layout != TL or dtype != torch.bfloat16 or dim is None:
         return False
     rank = len(tensor_shape)
     if rank < 1 or 0 in tensor_shape:
         return False
-    if dim % rank != rank - 1:  # reduction over the last dim only
+    # Mirrors normalize_dim() in argmax/device/argmax_utils.hpp, which is `dim < 0 ? dim + rank
+    # : dim` and leaves an out-of-range dim out of range. Python's `dim % rank` would instead
+    # wrap such a dim back into range and could call it a last-dim reduction when the op does
+    # not; no case below passes an out-of-range dim today, and this keeps it that way if one
+    # ever does.
+    normalized_dim = dim + rank if dim < 0 else dim
+    if normalized_dim != rank - 1:  # reduction over the last dim only
         return False
     if tensor_shape[-1] % 32 != 0:  # the reduction dim must fill whole tiles
         return False
-    return rank < 2 or tensor_shape[-2] < 32  # H >= 32 goes to the SFPU path instead
+    # H >= kSfpuMinRows goes to the SFPU path instead.
+    return rank < 2 or tensor_shape[-2] < SFPU_MIN_ROWS
 
 
 # The skip below is a hard requirement rather than a convenience: ttsim's error path for the

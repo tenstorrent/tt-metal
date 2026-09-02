@@ -25,9 +25,10 @@ enum class ArgMaxPath : uint8_t {
     Rvv,
     // Blackhole TILE last-dim reduction on the SFPU, all 32 rows of a tile-row
     // per pass. Chosen at or above kSfpuMinRows rows, and never under
-    // exact_special_values: the compare is IEEE-on-fp32 behind a bf16 gasket,
-    // so NaN, denormals, -0 and tiny max values diverge from the scalar readers
-    // (measured; see kernels/argmax_sfpu_tile_compute.cpp).
+    // exact_special_values: this path normalises NaN, signed zero and denormal
+    // inputs before an IEEE fp32 compare, so NaN, denormals, -0 and tiny max
+    // values diverge from the scalar readers' bit-pattern ordering (measured;
+    // see kernels/argmax_sfpu_tile_compute.cpp).
     Sfpu,
 };
 
@@ -45,7 +46,7 @@ struct ArgmaxInputs {
     Tensor input;
     std::optional<Tensor> optional_output_tensor;
     // Optional preallocated BFLOAT16 ROW_MAJOR tensor (same logical shape as the
-    // index output), filled with the winning max VALUES by Rvv and Sfpu. The
+    // index output), filled with the winning max values by Rvv and Sfpu. The
     // scalar readers cannot, so supplying it there is a hard error.
     std::optional<Tensor> optional_maxval_tensor;
 };

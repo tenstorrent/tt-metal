@@ -10,30 +10,31 @@
 // no-ops and the pack thread runs the whole scan, so the dataflow RISC only
 // streams tiles and writes results.
 //
-// The RVV scan visits every tile once PER VALID ROW, so a pass is linear in
+// The RVV scan visits every tile once per valid row, so a pass is linear in
 // both w_tiles and H: one core over an 8192-tile row measures ~0.043 us/tile
 // for the first row plus ~0.019 us/tile per further row. The work split is the
 // SFPU path's (described in argmax_sfpu_tile_program_factory.cpp), except that
 // core j emits one (global index, max value) candidate per valid row instead
 // of a per-column candidate tile.
 //
-// The merge reuses that path's exchange PROTOCOL (per-core slots plus two
-// cumulative semaphores) but NOT its comparator. This path exists to be
-// bit-identical to the scalar readers, so the merge runs bfloat16_greater's
-// sign-magnitude BIT-PATTERN total order with a smallest-global-index
-// tie-break, never an IEEE compare (reader_argmax_rvv_tile.cpp). Unifying the
-// two merges would silently break bit-exactness.
+// The merge reuses that path's exchange protocol (per-core slots plus two
+// cumulative semaphores); the comparator is the one thing it does not reuse.
+// This path exists to be bit-identical to the scalar readers, so the merge
+// runs bfloat16_greater's sign-magnitude bit-pattern total order with a
+// smallest-global-index tie-break, never an IEEE compare
+// (reader_argmax_rvv_tile.cpp). Unifying the two merges would silently break
+// bit-exactness.
 //
 //     num_cores = ceil(sqrt(w_tiles * (h_logical + 2)) / 3)
 //
 // Both paths pay ~0.44 us/core of per-program dispatch, so both optima have
 // the form sqrt(per-core-work / floor); only the work differs. The SFPU pass
 // is flat in H, so sqrt(1.5 * w_tiles) suits it and is wrong for a per-row
-// scan. That fixes the rule's SHAPE and nothing else: the 2 and the 3 are
-// FITTED PARAMETERS from a grid search scored on the worst per-shape ratio to
+// scan. That fixes the shape of the rule and nothing else: the 2 and the 3 are
+// fitted parameters from a grid search scored on the worst per-shape ratio to
 // the measured optimum over V = 4096..262144 x H = 1/8/32, core counts pinned
 // with sub_core_grids and swept 1..130.
-// Do NOT "correct" them against the per-tile costs above — the closed form
+// Do not "correct" them against the per-tile costs above — the closed form
 // those imply, sqrt(w_tiles * (H + 1.26)) / 4.81, differs in both constants
 // and does not track the measurements: at H == 1, V == 32768 it asks for 11
 // cores where the swept optimum is 24.
@@ -252,7 +253,7 @@ ProgramDescriptor ArgMaxRvvTileProgramFactory::create_descriptor(
     if (has_maxval) {
         TensorAccessorArgs(tensor_args.optional_maxval_tensor->mesh_tensor()).append_to(reader_ct_args);
     } else {
-        // Contract with reader_argmax_rvv_tile.cpp: it parses exactly THREE
+        // Contract with reader_argmax_rvv_tile.cpp: it parses exactly three
         // TensorAccessorArgs blocks (src, dst, val) unconditionally, because the
         // constexpr offset chain (next_compile_time_args_offset) cannot be made
         // conditional. With no maxval tensor this duplicate of the output's args

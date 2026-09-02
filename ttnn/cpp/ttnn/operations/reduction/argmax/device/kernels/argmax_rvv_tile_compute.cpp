@@ -7,7 +7,7 @@
 // RISC's RVV (Zve32f) unit. Blackhole only; selected internally by
 // ttnn.argmax (ArgMaxPath::Rvv).
 //
-// The scalar-reader TILE-input argmax has NO compute kernel: the whole reduction
+// The scalar-reader TILE-input argmax has no compute kernel: the whole reduction
 // is a scalar C++ loop on a single dataflow RISC, with the NOC read and the
 // scan of each tile serialized against each other. Here the reader streams
 // tiles into a double-buffered CB, the scan of one chunk overlaps the staging
@@ -20,18 +20,18 @@
 //     NOC-overlay scratch registers, MMIO-visible from any RISC; this kernel
 //     is the sole acker of the input CB and sole producer of the output CBs).
 //
-// ALGORITHM (per outer index, per 32-row tile-row, chunk-streamed):
+// Algorithm (per outer index, per 32-row tile-row, chunk-streamed):
 //   Tiles arrive in chunks of CHUNK_PAGES. Rows are processed in pairs: the
-//   two 16-element face rows of a row-pair are CONTIGUOUS in a tile face, so
+//   two 16-element face rows of a row-pair are contiguous in a tile face, so
 //   one e16m4 (vl=32) load covers rows {2g, 2g+1} x cols 0..15 of one face.
 //   Pass A per chunk accumulates a lane-wise unsigned max of x ^ 0x8000 over
 //   the chunk's tiles (2 loads + 2 xor + 2 vmaxu = 6 vector instrs per tile
 //   per row-pair). At the chunk boundary each valid row's 32 accumulator
 //   lanes are reduced; if the chunk's row-max beats the running max, the
 //   still-resident chunk is re-scanned (vmseq + vfirst on the raw bits) for
-//   the FIRST occurrence.
+//   the first occurrence.
 //
-// SEMANTICS — exactly ttnn.argmax's bfloat16_greater + std::min tie-break:
+// Semantics — exactly ttnn.argmax's bfloat16_greater + std::min tie-break:
 //   bfloat16_greater is a pure sign-magnitude bit-pattern total order. The
 //   xor trick (t = x ^ 0x8000) makes unsigned lane max agree with that order
 //   whenever the lane set contains any sign-0 pattern; a chunk-row whose max
@@ -43,15 +43,15 @@
 //   Strictly-greater updates + first-match re-scan preserve the smallest-
 //   index tie-break across lanes, faces, tiles, and chunks.
 //
-// MULTICORE: this kernel only ever scans ITS OWN slice of the tile-row —
-//   w_count tiles, a runtime arg — so the indices it emits are LOCAL to that
+// Multicore: this kernel only ever scans its own slice of the tile-row —
+//   w_count tiles, a runtime arg — so the indices it emits are local to that
 //   slice (element 0 of the slice is index 0). The reader adds the slice's
 //   w_start * 32 offset before any cross-core compare, and merges the
 //   per-core candidates in the same bit-pattern total order; see
 //   reader_argmax_rvv_tile.cpp. Nothing about the scan itself changes: a core
 //   with the whole row (num_cores == 1) sees exactly the single-core case.
 //
-// REGISTER BUDGET (hard-earned): e16m4 dual-stream uses 16 of 32 vregs.
+// Register budget (hard-earned): e16m4 dual-stream uses 16 of 32 vregs.
 // e16m8 dual-stream needs all 32 and GCC spills a multi-KB stack frame
 // against the pack RISC's ~256B stack — instant overflow hang. Keep helpers
 // noinline and check any future change's prologue for vlenb-scaled sub sp.
@@ -93,11 +93,12 @@ inline void amx_out_reserve(uint32_t cb, uint16_t my_received, uint16_t n) {
 // Publish `n` pages of CB `cb` after the caller has written `bytes_written`
 // bytes starting at the (16B-aligned) page base `page_addr`. Stores from this
 // RISC drain to L1 in program order, so reading back the aligned 4-byte word
-// that CONTAINS the last written byte — offset (bytes_written - 1) & ~3 —
+// that contains the last written byte — offset (bytes_written - 1) & ~3 —
 // guarantees every store into the page is L1-visible before the received
-// counter moves. Rounding DOWN is required (an aligned uint32_t load whose
-// span covers the final byte), so e.g. bytes_written == 2 fences word 0:
-// that IS the word holding the last written half-word, not an "early" fence.
+// counter moves. Rounding down is required, not optional: the read-back has to
+// be the aligned uint32_t load whose span covers the final byte. So
+// bytes_written == 2 fences word 0, and word 0 is the word holding that last
+// written half-word — this is not an "early" fence.
 inline void amx_out_push(uint32_t cb, uint16_t& my_received, uint32_t page_addr, uint32_t bytes_written, uint16_t n) {
     asm volatile("fence" ::: "memory");
     (void)*(volatile uint32_t*)(page_addr + ((bytes_written - 1u) & ~3u));
@@ -193,12 +194,12 @@ __attribute__((noinline)) void amx_process_chunk_group(
         uint16_t mono;
         uint16_t raw;
         if (t_row >= kSignBit) {
-            // Some sign-0 pattern exists: xor-domain max IS the winner.
+            // Some sign-0 pattern exists: the xor-domain max is the winner.
             mono = t_row;
             raw = (uint16_t)(t_row ^ kSignBit);
         } else {
             // All-negative chunk-row: both-negative order is reversed, take
-            // the exact unsigned MIN over the (still resident) chunk.
+            // the exact unsigned min over the (still resident) chunk.
             // NOTE: 16 lanes of e16 need m2 — VLEN=128 caps e16m1 at vl=8.
             const size_t vl1 = __riscv_vsetvl_e16m2(16);
             vuint16m2_t mn = __riscv_vmv_v_x_u16m2(0xFFFFu, vl1);

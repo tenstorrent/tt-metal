@@ -10,7 +10,7 @@
 //
 // Work split: phase 1 reduces all 32 rows of a tile-row lane-parallel, so a
 // tile-row pass costs the same whether 1 or 32 rows are valid — the batch-shape
-// win. Multicore splits the REDUCTION dim's tiles across cores: core j reduces
+// win. Multicore splits the reduction dim's tiles across cores: core j reduces
 // slice [w_start_j, w_start_j + w_count_j) of every tile-row pass and finishes
 // it with a per-row phase 2 on its dataflow RISC; the gather core (core 0) then
 // merges the per-core per-row candidates with the same lexicographic rule. The
@@ -18,11 +18,11 @@
 // never tiles.
 //
 // Core count: ceil(sqrt(1.5 * w_tiles)), capped by the grid and by w_tiles.
-// Phase 1 costs a fixed ~0.60 us/tile that does NOT depend on H, while every
+// Phase 1 costs a fixed ~0.60 us/tile that does not depend on H, while every
 // extra core adds a gather-merge pass and ~0.44 us of per-program dispatch, so
 // the optimum sits near sqrt(w_tiles) and does not move with H; this lands
 // within 0.87x-1.04x of this path's own per-shape optimum at every point swept.
-// Deliberately not the RVV path's rule, whose scan costs per ROW and whose
+// Deliberately not the RVV path's rule, whose scan costs per row and whose
 // optimum therefore grows with H (see argmax_rvv_tile_program_factory.cpp).
 //
 // An explicit sub_core_grids overrides the heuristic (capped by w_tiles only);
@@ -227,7 +227,7 @@ ProgramDescriptor ArgMaxSfpuTileProgramFactory::create_descriptor(
     if (has_maxval) {
         TensorAccessorArgs(tensor_args.optional_maxval_tensor->mesh_tensor()).append_to(reader_ct_args);
     } else {
-        // Contract with reader_argmax_sfpu_tile.cpp: it parses exactly THREE
+        // Contract with reader_argmax_sfpu_tile.cpp: it parses exactly three
         // TensorAccessorArgs blocks (src, dst, val) unconditionally, because the
         // constexpr offset chain (next_compile_time_args_offset) cannot be made
         // conditional. With no maxval tensor this duplicate of the output's args

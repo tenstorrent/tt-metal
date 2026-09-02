@@ -22,7 +22,7 @@ Compile-side coverage runs device-free in CI
 Multicore: the RVV path splits the reduction dim's tiles across cores and
 merges the per-core (index, value) candidates on a gather core. The whole point
 of this path is that it is bit-identical to the scalar readers, so the merge
-runs bfloat16_greater's BIT-PATTERN order with a smallest-global-index
+runs bfloat16_greater's bit-pattern order with a smallest-global-index
 tie-break — not an IEEE compare. Every golden below is therefore the same
 _ref_argmax_row whatever the core count, and the special-value cases are run
 across explicit core counts (including ones that leave a ragged last slice)
@@ -109,7 +109,42 @@ def _single_core_grid():
 
 
 def _make_case(name: str, v: int, b: int, rng: np.random.Generator) -> np.ndarray:
-    """Row-major [b, v] bf16 bit patterns for one named case from CASES."""
+    """Build the input for one named case: a row-major [b, v] array of bf16 bit
+    patterns (uint16), not floats. The caller reinterprets them as bfloat16, so a
+    case can plant the exact NaN, signed-zero and denormal encodings that
+    generating floats and converting them could not reach.
+
+    b is the number of rows, each of which is reduced independently; v is the
+    number of elements in a row, i.e. the width of the reduction. name picks one
+    of the scenarios listed in CASES -- which is defined just below this function
+    rather than above it, so that is where to look for the legal values.
+
+    Most cases start from a random bf16 background and then overwrite a few
+    positions; denormal and all_neginf replace the row wholesale, and
+    all_negative rewrites the sign of every element in it. The overwritten
+    positions are fractions of v so that one set of positions works at every width
+    the tests sweep, and each fraction is there for what it lets an assertion
+    catch rather than for the number itself:
+
+      * 5 * v // 8 puts the maximum in the interior of the row. A scan whose
+        bounds are off by one at either end can still find a maximum sitting at
+        index 0 or at index v - 1, so those two ends are their own cases
+        (max_at_zero, max_at_end) and this one keeps the maximum away from both.
+      * v // 3 (unique_max) is a decoy one ULP below the planted maximum, placed
+        ahead of it in the row. A reader that stopped at the first large value it
+        saw, or that compared in the wrong order, answers v // 3 rather than
+        5 * v // 8.
+      * 7 * v // 8 (tie_first_wins) repeats the very same maximum behind the
+        first one, so the row holds two equal maxima and the smallest-index
+        tie-break becomes observable: the answer must stay 5 * v // 8.
+
+    One limit worth stating outright: a tile is 32 wide, so at the narrowest
+    width in the sweep (v = 32) the whole row is a single tile and both tie
+    positions land inside it (5 * 32 // 8 = 20, 7 * 32 // 8 = 28). tie_first_wins
+    is a within-tile tie at that width; the wider widths (2016 and up) are what
+    make it a cross-tile tie, and a multicore split is what makes it a cross-core
+    one.
+    """
     x = rng.standard_normal((b, v), dtype=np.float32) * 4.0
     bits = _bits_of(torch.from_numpy(x).bfloat16()).reshape(b, v)
     kdecoy = 0x7F7E  # one ULP below BF16_MAX_FINITE: a decoy the RNG cannot reach
@@ -220,15 +255,15 @@ def test_argmax_rvv_matches_upstream_tile_path(device, name, v, b):
 @pytest.mark.parametrize("name", CASES)
 @pytest.mark.parametrize("v", [32, 2016, 4096])
 def test_argmax_rank1_with_maxval_through_public_entry(device, name, v):
-    """A rank-1 [v] TILE bfloat16 last-dim reduction through the PUBLIC entry,
+    """A rank-1 [v] TILE bfloat16 last-dim reduction through the public entry,
     carrying a maxval_tensor.
 
     Rank 1 has no second-to-last dim, so it is the H == 1 shape by
     construction and must reach the RVV path: the scalar readers cannot fill a
     max-value output, so routing rank 1 to them would make this exact call
     raise instead. Both outputs are checked against the host bit-level
-    reference, not just the index, because the max value is the half only an
-    accelerated path can produce."""
+    reference, not just the index, because the max value is the half only the
+    vector paths can produce."""
     rng = np.random.default_rng(99 + v)
     bits = _make_case(name, v, 1, rng)[0]  # rank-1: one row, no batch dim
     x = torch.from_numpy(bits.astype(np.int16)).view(torch.bfloat16).reshape(v)
@@ -323,8 +358,8 @@ def test_argmax_rvv_runs_on_explicit_grid_without_origin(device, num_cores):
 
 
 def test_argmax_rvv_multicore_placement_does_not_change_the_answer(device):
-    """The same tensor over every core count from 1 to 12 must give the SAME
-    bits. A merge that silently favoured, say, the gather core's own slice
+    """The same tensor over every core count from 1 to 12 must give bit-identical
+    results. A merge that silently favoured, say, the gather core's own slice
     would still match the golden at some core counts and not others."""
     v, b = 2016, 3
     rng = np.random.default_rng(2718)
@@ -346,10 +381,10 @@ def test_argmax_rvv_multicore_placement_does_not_change_the_answer(device):
 
 @pytest.mark.parametrize("num_cores", [2, 4, 9])
 def test_argmax_rvv_multicore_merge_uses_bit_pattern_order(device, num_cores):
-    """The cross-core merge must run bfloat16_greater's BIT-PATTERN order — the
-    scalar readers' order — and NOT the IEEE compare the SFPU path's merge
+    """The cross-core merge must run bfloat16_greater's bit-pattern order — the
+    scalar readers' order — rather than the IEEE compare the SFPU path's merge
     uses. Two rows are built whose answers differ between the two orders, with
-    the discriminating element deliberately placed in the LAST tile (index
+    the discriminating element deliberately placed in the last tile (index
     2000 of 2016, tile 62), i.e. never in the gather core's own slice:
 
       * row 0: the largest finite bf16 early on, a +NaN at 2000. IEEE says a
@@ -358,7 +393,7 @@ def test_argmax_rvv_multicore_merge_uses_bit_pattern_order(device, num_cores):
       * row 1: all -0 except a +0 at 2000. IEEE says +0 == -0, so an IEEE merge
         would tie-break to the smaller index (0); the bit order says +0 > -0,
         so 2000 is the answer again.
-      * row 2: all -0 except a -NaN at 2000, which must NEVER win under either
+      * row 2: all -0 except a -NaN at 2000, which can never win under either
         order — it sorts below -inf — so the answer is 0.
 
     Reusing the SFPU path's exchange protocol with its comparator would fail
@@ -448,10 +483,10 @@ def test_argmax_rvv_rejects_row_major_input(device, expect_error):
 
 
 def _assert_empty_program_cache(device):
-    """Precondition for the delta-0 proxy, checked BEFORE anything is warmed.
+    """Precondition for the delta-0 proxy, checked before anything is warmed.
 
     "The auto call added no cache entry" only proves the route when the warmed
-    path is the ONLY argmax program cached for this shape. A stale entry for a
+    path is the only argmax program cached for this shape. A stale entry for a
     different path -- left by an earlier test sharing the device -- would
     absorb a mis-route as a cache hit and the assertion would pass vacuously.
     The `device` fixture is function-scoped (conftest.py), so each of these tests
@@ -484,10 +519,12 @@ SFPU_MIN_ROWS = 32
 def test_argmax_auto_routes_to_rvv_below_the_sfpu_boundary(device, h):
     """Every H below kSfpuMinRows is the RVV path's shape: the SFPU
     alternative pays for all 32 lanes whether or not 32 rows are real, and at
-    equal core counts it is measured slower for all of these (SFPU/RVV is
-    12.4x at H = 1 and 3.1x at H = 8 on one core; see the table in
-    argmax.cpp). h = 31 is the just-below-the-boundary case: it must NOT route
-    to the SFPU, or kSfpuMinRows is not where argmax.cpp says it is."""
+    equal core counts it is measured slower for all of these — on one core the
+    SFPU takes 12.4x as long as RVV at H = 1, and 3.1x as long at H = 8. Those
+    two ratios come from test_argmax_path_crossover_bench.py in this directory,
+    which is what regenerates them. h = 31 is the just-below-the-boundary case:
+    it must not route to the SFPU, or kSfpuMinRows is not where argmax.cpp says
+    it is."""
     _assert_empty_program_cache(device)
     x = torch.randn(1, 1, h, 4096).bfloat16()
     t_tile = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -518,9 +555,11 @@ def test_argmax_auto_routes_rank1_to_rvv(device):
 
 @pytest.mark.parametrize("h", [1, 5, 32, 64])
 def test_argmax_exact_special_values_pins_rvv(device, h):
-    """exact_special_values excludes the SFPU path (its special-value gasket
-    diverges), so an eligible call lands on RVV at every H — including the
-    H >= kSfpuMinRows shapes the default would send to the SFPU."""
+    """exact_special_values excludes the SFPU path, which normalises NaN, signed
+    zero and denormal inputs before it compares them and so answers differently
+    from the scalar readers for those values. An eligible call therefore lands on
+    RVV at every H — including the H >= kSfpuMinRows shapes the default would
+    send to the SFPU."""
     _assert_empty_program_cache(device)
     x = torch.randn(1, 1, h, 4096).bfloat16()
     t_tile = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -535,7 +574,7 @@ def test_argmax_exact_special_values_pins_rvv(device, h):
 
 
 def test_argmax_exact_special_values_changes_the_route(device):
-    """The flag has to MOVE the decision, not merely be accepted: at H = 32 the
+    """The flag has to change the decision, not merely be accepted: at H = 32 the
     default routes to the SFPU path, and asking for exact special values
     moves the very same call to RVV."""
     _assert_empty_program_cache(device)
@@ -550,7 +589,7 @@ def test_argmax_exact_special_values_changes_the_route(device):
     assert torch.equal(got.to(torch.int64), expected.to(torch.int64))
     assert device.num_program_cache_entries() == entries_before, "exact_special_values did not pin the RVV path"
 
-    # Same tensor, same dim, flag dropped: this must NOT reuse the RVV program.
+    # Same tensor, same dim, flag dropped: this must not reuse the RVV program.
     ttnn.to_torch(ttnn.argmax(t_tile, dim=3, keepdim=True))
     msg = "the default at H = 32 reused the RVV program; exact_special_values would then be a no-op"
     assert device.num_program_cache_entries() > entries_before, msg

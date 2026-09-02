@@ -17,104 +17,84 @@ namespace ttnn::operations::reduction::detail {
 void bind_reduction_argmax_operation(nb::module_& mod) {
     const auto* doc =
         R"doc(
-            Argmax. Returns indices of maximum values.
-            Output is UINT32, ROW_MAJOR, INTERLEAVED (DRAM or L1).
+            Returns the indices of the maximum values along a dimension.
+
+            The output is UINT32 in ROW_MAJOR layout. When several elements tie for the
+            maximum, the smallest index wins.
 
             Args:
-                input_tensor (ttnn.Tensor): On-device, INTERLEAVED input.
+                input_tensor (ttnn.Tensor): the input tensor. Must be on device and interleaved.
 
             Keyword args:
-                dim (int, optional): Dim to reduce. ``None`` reduces all elements (ROW_MAJOR input only). Default: ``None``.
-                keepdim (bool, optional): Keep reduced dim. Default: ``False``.
-                sub_core_grids (CoreRangeSet, optional): Limits execution to a subset of cores. Supported on ROW_MAJOR last-dim reductions (<= 2 ranges), batch/channel dim reductions, and the accelerated last-dim paths described below. Default: ``None``.
-                memory_config (ttnn.MemoryConfig, optional): Output memory (INTERLEAVED DRAM/L1). Default: input's memory_config.
-                output_tensor (ttnn.Tensor, optional): Preallocated output (must be UINT32, ROW_MAJOR, INTERLEAVED, same device). Default: ``None``.
-                exact_special_values (bool, optional): Restricts the automatic path selection below to paths that
-                    are bit-identical to the default scalar reader kernels on EVERY input, special values included.
-                    Today that admits the scalar readers and the RVV path and excludes the SFPU path, whose compare
-                    is IEEE-on-fp32 behind a bf16 special-value gasket rather than those readers' bit-pattern total
-                    order -- the same divergence class the existing batch/channel dim compute path ships vs the default
-                    scalar reader kernels. Concretely, on the SFPU path (measured on silicon):
-                    NaN behaves as same-signed infinity (a NaN row-max yields the NaN's index but max value +inf
-                    ``0x7F80``, not the NaN payload; -NaN never wins); -0 flushes to +0 in the max-value output and
-                    +0/-0 compare equal (first zero's index is kept); denormals flush to zero before the compare;
-                    max values below ~2^-118 carry a +2^-127 additive pack bias. All finite normal data -- including
-                    every exact tie -- matches the scalar readers bit-for-bit (smallest index wins ties), so the
-                    default is right for ordinary data. Setting this can cost throughput, never correctness.
+                dim (int, optional): the dimension to reduce. If ``None``, the maximum is taken
+                    over every element, which requires a ROW_MAJOR input. Default: ``None``.
+                keepdim (bool, optional): if ``True``, the reduced dimension is kept with size 1.
                     Default: ``False``.
-                maxval_tensor (ttnn.Tensor, optional): Preallocated BFLOAT16 ROW_MAJOR tensor with the same logical
-                    shape as the index output. Honored only on the accelerated paths: alongside each winning index,
-                    it receives the maximum VALUE found at that index, so the caller does not need a second pass over
-                    the input with ``ttnn.max`` to recover the value it has just located. Because only those paths
-                    can fill it, supplying it on a call that the selection below routes to the scalar readers raises,
-                    rather than silently handing back the buffer untouched. Default: ``None``.
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the output.
+                    Default: the input tensor's memory configuration.
+                output_tensor (ttnn.Tensor, optional): a preallocated tensor to receive the
+                    indices. Must be UINT32, ROW_MAJOR, interleaved, on the same device, and
+                    shaped like the result. Default: ``None``.
+                maxval_tensor (ttnn.Tensor, optional): a preallocated BFLOAT16 ROW_MAJOR tensor
+                    shaped like the index output. If given, it receives the maximum value found
+                    at each index, so a second pass with :func:`ttnn.max` is not needed to
+                    recover it. Only available for the Blackhole cases described below;
+                    supplying it for any other call raises an error rather than returning an
+                    unwritten tensor. Default: ``None``.
+                exact_special_values (bool, optional): controls how special values are handled
+                    on Blackhole. By default a faster implementation may run, and it differs
+                    from the reference implementation on a few inputs: a NaN reports its index
+                    but the value written to ``maxval_tensor`` reads as infinity, negative zero
+                    is reported as positive zero, denormal values are treated as zero, and
+                    values below roughly ``2**-118`` may differ by a very small amount. Ordinary
+                    finite values, including ties, always give identical results. Set this to
+                    ``True`` when the data contains NaNs, signed zeros or denormals and results
+                    must match the reference implementation exactly. It can reduce throughput,
+                    but never changes results for ordinary data. Default: ``False``.
+                sub_core_grids (ttnn.CoreRangeSet, optional): restricts execution to a subset of
+                    cores. Supported when reducing the last dimension, when reducing a batch or
+                    channel dimension, and for the Blackhole cases described below.
+                    Default: ``None``.
 
-            Path selection (automatic):
+            Returns:
+                ttnn.Tensor: the indices of the maximum values, as UINT32.
 
-            The reduction is served by one of three paths and the operation picks one from the input spec; there is
-            no argument that names a path. A call is eligible for the two accelerated paths when it runs on a
-            Blackhole device over a BFLOAT16 TILE-layout input of rank >= 1 in INTERLEAVED memory, reduces the last
-            dim explicitly, uses standard 32x32 tiles, has a last dim that is a multiple of 32, writes an INTERLEAVED
-            output, and (if ``output_tensor`` is supplied) that tensor's logical shape is the reduction output shape.
-            Everything else runs the scalar reader kernels.
+            Supported inputs:
 
-            Among eligible calls the choice keys on the size of the second-to-last dim (H -- the rows per tile-row),
-            because that is what the two accelerated paths price differently:
+            - ``dim=None`` (reduce every element): ROW_MAJOR only; BFLOAT16, FLOAT32, INT32,
+              UINT32, UINT16.
+            - last dimension: ROW_MAJOR with the same dtypes as above, or TILE with BFLOAT16 or
+              FLOAT32.
+            - second-to-last dimension: BFLOAT16 or FLOAT32.
+            - batch or channel dimension (rank >= 3): BFLOAT16 or FLOAT32.
 
-            - **H >= 32** runs on the SFPU (the Tensix vector FPU), multicore, reading TILE layout directly. All 32
-              rows of a tile-row are reduced in one lane-parallel pass, so the cost is essentially flat in H; the
-              reduction dim is additionally split across cores, with a per-row scalar merge on a gather core. Pass a
-              single-core ``sub_core_grids`` to keep it on one core.
-            - **H < 32** runs on TRISC2 (the pack-thread RISC-V core) and its Zve32f vector unit ("RVV"), multicore,
-              also reading TILE layout directly. Its scan visits every tile once per valid ROW, so it wins wherever
-              the SFPU would pay for all 32 lanes to serve fewer than 32 real rows. It splits the reduction dim
-              across cores the same way, and merges the per-core candidates in the scalar readers' bit-pattern order,
-              so the result is bit-identical however many cores it runs on. It is also the path for eligible calls
-              that ask for ``exact_special_values``, at any H.
+            Sharded tensors are not supported; inputs and outputs must be interleaved.
 
-            A rank-1 input has no second-to-last dim; it counts as H == 1 (one valid row in a tile-row whose other 31
-            rows are padding) and always runs on RVV -- it is never routed to the SFPU. Both paths honour any
-            ``sub_core_grids``, so the grid never changes which path serves a call. When none is given they pick
-            DIFFERENT core counts, because their cost models differ: the SFPU factory uses
-            ``ceil(sqrt(1.5 * w_tiles))`` and the RVV factory ``ceil(sqrt(w_tiles * (H + 2)) / 3)``, each capped by
-            the compute grid and by ``w_tiles``. Neither takes the whole grid: past those counts both paths scale
-            NEGATIVELY, because every additional core adds roughly 0.44 us of per-program dispatch.
+            On Blackhole, reducing the last dimension of a BFLOAT16 tensor runs a faster
+            implementation when the tensor is in TILE layout, is interleaved, and its last
+            dimension is a multiple of 32. Padding the last dimension up to a multiple of 32 is
+            therefore worth doing if it is not already. This is chosen automatically and does not
+            change results, apart from the special values noted under ``exact_special_values``.
 
-            The H = 32 boundary is a measured crossover, not a guess; the measurements behind it and the rationale
-            for the exact value live next to ``kSfpuMinRows`` in
-            ``ttnn/cpp/ttnn/operations/reduction/argmax/argmax.cpp``.
+            Example:
 
-            Supported:
+            .. code-block:: python
 
-            - **dim=None** (reduce all elements):
+                # index of the largest value in each row
+                logits = ttnn.from_torch(
+                    torch.randn(1, 1, 32, 4096), dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT, device=device)
+                indices = ttnn.argmax(logits, dim=-1)
 
-              - input layout: ROW_MAJOR
-              - dtypes: BFLOAT16/FLOAT32/INT32/UINT32/UINT16
+                # keep the reduced dimension
+                indices = ttnn.argmax(logits, dim=-1, keepdim=True)
 
-            - **dim = rank-1** (last / width):
-
-              - ROW_MAJOR input: BFLOAT16/FLOAT32/INT32/UINT32/UINT16 (multi-core by default)
-              - TILE input: BFLOAT16/FLOAT32 (single-core scalar readers, or an accelerated path when the call
-                qualifies -- see Path selection)
-
-            - **dim = rank-2** (height):
-
-              - BFLOAT16/FLOAT32 only
-              - ROW_MAJOR inputs are internally tilized; this path runs single-core
-
-            - **0 <= dim < rank-2** (batch/channel dims, rank >= 3):
-
-              - BFLOAT16/FLOAT32 only (integer dtypes not supported)
-              - input may be ROW_MAJOR or TILE (ROW_MAJOR is converted to TILE internally)
-              - output is produced in TILE internally and converted to ROW_MAJOR
-              - ``sub_core_grids`` is supported (pass a single-core ``CoreRangeSet`` to run on one core)
-
-            Not supported:
-
-            - Sharded tensors (inputs/outputs must be INTERLEAVED)
-            - TILE input with ``dim=None``
-            - Batch/channel dim reductions with INT/UINT inputs
-            - Integer dtypes on batch/channel dim reductions
+                # index of the largest element in the whole tensor
+                flat = ttnn.from_torch(
+                    torch.randn(64), dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+                index = ttnn.argmax(flat)
+        
         )doc";
 
     ttnn::bind_function<"argmax">(
@@ -144,16 +124,19 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Output memory.
                 output_tensor (ttnn.Tensor, optional): Preallocated UINT32 ROW_MAJOR output.
                 maxval_tensor (ttnn.Tensor, optional): Preallocated BFLOAT16 ROW_MAJOR max-value output;
-                    accelerated paths only.
+                    the RVV and SFPU paths only.
 
             Returns:
                 ttnn.Tensor: the UINT32 index output.
         )doc";
 
     static const std::string force_scalar_reader_doc = std::string(R"doc(
-            Verification only: runs the scalar reader kernels unconditionally, on any architecture. Not part
-            of the ttnn API; use ttnn.argmax, which selects a path on its own. This is the golden leg the two
-            accelerated paths are compared against.
+            Verification only: forces the non-vector implementation, so a last-dim reduction runs the
+            scalar reader kernels. Note this only bypasses the RVV and SFPU paths -- a batch or channel
+            dim reduction still reaches the compute kernel ttnn.argmax would pick for it, so the scalar
+            readers are what this runs for the last-dim shapes the suites compare against, not for every
+            input. Not part of the ttnn API; use ttnn.argmax, which selects a path on its own. This is
+            the reference leg the RVV and SFPU paths are compared against.
         )doc") + force_doc_suffix;
 
     static const std::string force_rvv_doc = std::string(R"doc(

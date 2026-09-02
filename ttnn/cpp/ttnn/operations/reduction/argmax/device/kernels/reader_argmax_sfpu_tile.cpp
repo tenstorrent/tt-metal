@@ -8,28 +8,28 @@
 // Per 32-row tile-row pass, every core:
 //   1. Streams its `w_count` input tiles (slice [w_start, w_start + w_count)
 //      of the tile-row) into the double-buffered input CB in chunks. The CB
-//      is treated as a ring of pages addressed by GLOBAL page index
+//      is treated as a ring of pages addressed by global page index
 //      (slot = t % num_pages) on both sides, so chunk batches may wrap
 //      mid-batch without any linear-placement assumption (same scheme as
 //      reader_argmax_rvv_tile.cpp).
 //   2. Collects phase 1's two candidate tiles (max values -> bf16 CB,
-//      winning LOCAL tile indices -> UInt32 CB) and finishes its slice with
-//      PHASE 2: for each valid row r, scan the 32 per-column candidates in
+//      winning local tile indices -> UInt32 CB) and finishes its slice with
+//      phase 2: for each valid row r, scan the 32 per-column candidates in
 //      ascending column order with the lexicographic rule
 //          take c  iff  val_c > best_val                 (IEEE, on bf16 bits)
 //                   or (val_c == best_val && idx_c < best_idx)
 //      where idx_c = (w_start + win_tile[r][c]) * 32 + c. The IEEE compare
 //      is emulated bit-exactly on bf16 patterns (NaN never compares
 //      greater/equal; +0 == -0), matching gt_binary_tile's fp32 semantics so
-//      the whole op implements ONE documented order (phase 1 already mapped
-//      NaN -> same-signed inf and flushed denormals, so no NaN/denormal bit
-//      pattern can appear among the candidates anyway).
+//      the whole op implements a single documented order (phase 1 already
+//      mapped NaN -> same-signed inf and flushed denormals, so no NaN/denormal
+//      bit pattern can appear among the candidates anyway).
 //
-// MULTICORE (num_cores > 1): each core deposits its per-row (index, value)
+// Multicore (num_cores > 1): each core deposits its per-row (index, value)
 // candidates — 32 rows x 8 bytes = 256 B — into its slot of the exchange
 // buffer on the gather core (core_id 0) and bumps the done semaphore; the
 // gather core merges the num_cores candidates per row with the same
-// lexicographic rule (a per-row scalar merge — NOT a cross-core tile
+// lexicographic rule (a per-row scalar merge, not a cross-core tile
 // reduce) and stages the final results into output pages. Slot reuse across
 // passes is flow-controlled by a cumulative credit semaphore: workers may
 // send pass p only once the gather core has consumed pass p-1. Both
@@ -141,7 +141,7 @@ void kernel_main() {
 
     const bool is_gather = (core_id == 0);
 
-    // Contract with the factory: exactly THREE TensorAccessorArgs blocks are
+    // Contract with the factory: exactly three TensorAccessorArgs blocks are
     // appended (src, dst, val) — when no maxval tensor is supplied the dst
     // block is duplicated as a placeholder so the constexpr offset chain
     // lines up; has_maxval guards every use of the third accessor.
@@ -161,7 +161,7 @@ void kernel_main() {
     CircularBuffer stage_val_cb(cb_stage_val);
 
     // Input CB ring base (write pointer sits at base before any push). The ring
-    // is addressed by GLOBAL page index, so the base is captured ONCE here: the
+    // is addressed by global page index, so the base is captured once here: the
     // CB's own write pointer advances on every push_back and cannot be used as
     // the NoC destination, hence a CoreLocalMem over the fixed base + offset.
     const CoreLocalMem<uint32_t> in_ring(in_cb.get_write_ptr());

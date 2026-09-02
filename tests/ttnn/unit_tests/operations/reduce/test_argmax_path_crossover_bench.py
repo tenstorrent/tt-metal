@@ -2,12 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Trace-replay measurement of the Blackhole accelerated argmax paths (RVV, SFPU).
+"""Trace-replay measurement of the Blackhole vector argmax paths (RVV, SFPU).
 
 WHAT THIS MEASURES
 ------------------
-Per-op **device** time of ``ttnn.argmax``'s accelerated paths as a function of
-the core count they are given, so two questions can be answered from data:
+Per-op **device** time of ``ttnn.argmax``'s vector paths as a function of
+the core count they are given, so three questions can be answered from data:
 
 1. **How few cores does each path need?** A fused argmax epilogue would share
    the compute grid with the LM-head matmul it follows, so it can only ever be
@@ -20,7 +20,7 @@ the core count they are given, so two questions can be answered from data:
    count** rather than only at the defaults, and prints a `cores x time` column
    as a proxy for how much of the machine a result costs.
 2. How far does each path actually scale, and where does it saturate? The
-   factories ship DIFFERENT defaults, both capped by the grid and by
+   factories ship different defaults, both capped by the grid and by
    ``w_tiles``: ``ceil(sqrt(1.5 * w_tiles))`` for the SFPU path (flat in H)
    and ``ceil(sqrt(w_tiles * (H + 2)) / 3)`` for the RVV path (per-row), see
    argmax_{sfpu,rvv}_tile_program_factory.cpp. Those are models fitted to
@@ -28,7 +28,7 @@ the core count they are given, so two questions can be answered from data:
    knee, and any core count where adding cores made things *slower*, next to
    what the heuristic picks.
 3. How much of the wall-clock cost an eager caller sees is host dispatch rather
-   than device work. Every point is measured BOTH ways -- eager and traced --
+   than device work. Every point is measured both ways -- eager and traced --
    and every derived headline (cores-to-match included) is reported in both
    flavours, because an eager-only conclusion and a trace-only conclusion can
    disagree.
@@ -51,14 +51,16 @@ Timing is **trace capture + replay**, which is the only mechanism here that
 reports device time without a profiler: the whole dispatch command stream is
 recorded once and replayed from device DRAM, so the per-op host cost that
 dominates eager dispatch of a ~50 us kernel is not in the measured window.
-Pattern copied from ``tests/ttnn/unit_tests/benchmarks/test_benchmark.py:200``
-(run_matmul_measurement: warm up, ``begin_trace_capture``, N ops, ``end_trace_capture``,
-time one ``execute_trace`` + ``synchronize_device``, divide by N) and
-``tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py:21``
+Pattern copied from ``run_matmul_measurement`` in
+``tests/ttnn/unit_tests/benchmarks/test_benchmark.py`` (warm up,
+``begin_trace_capture``, N ops, ``end_trace_capture``, time one
+``execute_trace`` + ``synchronize_device``, divide by N) and from
+``test_single_device_single_trace`` in
+``tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py``
 (pre-allocate the activation with ``allocate_tensor_on_device``, push new data
 in with ``copy_host_to_device_tensor``, replay, read the output back).
 
-- **N ops per trace.** A trace holds N back-to-back copies of the SAME argmax
+- **N ops per trace.** A trace holds N back-to-back copies of one and the same argmax
   call, and per-op time is (one replay) / N. N is chosen per point to keep a
   replay near ``TARGET_REPLAY_US`` (bounded by ``N_OPS_MIN`` / ``N_OPS_MAX``) and
   is printed in the table, so nothing about the divisor is implicit.
@@ -68,10 +70,10 @@ in with ``copy_host_to_device_tensor``, replay, read the output back).
   ``test_argmax_trace_launch_overhead`` re-measures it and prints it.
 - **A vacuous trace fails loudly.** After capture, a *different* input is copied
   into the pre-allocated device tensor and the trace is replayed; the output must
-  equal the golden for that NEW input. A trace that captured nothing, or that
+  equal the golden for that new input. A trace that captured nothing, or that
   replayed stale results, cannot pass -- it would still be holding the answer for
   the input that was resident at capture time.
-- Warm-up (JIT compile + program cache fill) always happens BEFORE capture, so
+- Warm-up (JIT compile + program cache fill) always happens before capture, so
   capture records the steady-state program.
 
 CAVEATS
@@ -88,7 +90,7 @@ CAVEATS
   documented special-value divergence is out of scope and the two paths must
   agree exactly, ties included. That is asserted at every point.
 
-NOT A REGRESSION GATE. Nothing about timing is asserted; timings are the output.
+This is not a regression gate. Nothing about timing is asserted; timings are the output.
 Correctness *is* asserted, at every point.
 """
 
@@ -105,10 +107,12 @@ from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 
-# Manual-only benchmark. tests/pipeline_reorg/ttnn_sanity_tests.yaml sweeps this whole directory with
-# `pytest --timeout 300 ... tests/ttnn/unit_tests/benchmarks ... -xv`, and a full run of this file takes
-# hours, so every test in it is gated behind an opt-in env var. Same arrangement as
-# GEMM_FLOPS_BENCHMARK_ENV in test_benchmark.py alongside it.
+# Manual-only benchmark. CI sweeps this whole directory: the "ttnn reduce group" entry in
+# tests/pipeline_reorg/ttnn_sanity_tests.yaml runs `pytest --timeout 300
+# tests/ttnn/unit_tests/operations/reduce -xv`, and a full run of this file takes hours, so every test
+# in it is gated behind an opt-in env var. Same arrangement as GEMM_FLOPS_BENCHMARK_ENV in
+# tests/ttnn/unit_tests/benchmarks/test_benchmark.py, which gates that directory's manual-only
+# benchmark the same way.
 ARGMAX_CROSSOVER_BENCH_ENV = "TTNN_RUN_ARGMAX_CROSSOVER_BENCH"
 
 pytestmark = [
@@ -116,7 +120,7 @@ pytestmark = [
         os.getenv(ARGMAX_CROSSOVER_BENCH_ENV) != "1",
         reason=f"Benchmark is manual-only; set {ARGMAX_CROSSOVER_BENCH_ENV}=1 to run",
     ),
-    run_for_blackhole("the accelerated argmax paths (RVV, SFPU) are Blackhole-only"),
+    run_for_blackhole("the vector argmax paths (RVV, SFPU) are Blackhole-only"),
     skip_with_watcher("Watcher perturbs kernel timing; a scaling curve measured under it is not the real one."),
     skip_with_llk_assert("LLK asserts perturb kernel timing."),
 ]
@@ -131,13 +135,15 @@ _FORCE = {
 }
 _PATHS = ("RVV", "SFPU")
 
-# Reduction widths and rows-per-tile-row. The two V values are the ones tabulated in argmax.cpp;
-# H spans the kSfpuMinRows boundary (shipped at 32): 1 and 8 are below it, 32 is at it.
+# Reduction widths and rows-per-tile-row. 32768 is an LLM vocabulary width, the shape this path
+# exists to serve; 262144 is eight times wider, past any real vocabulary, and is here so the table
+# shows how each path scales with width rather than only how it does at one width. H spans the
+# kSfpuMinRows boundary (shipped at 32): 1 and 8 are below it, 32 is at it.
 V_SWEEP = (32768, 262144)
 H_SWEEP = (1, 8, 32)
 
 # Explicit core counts to pin with sub_core_grids. `None` means "no sub_core_grids", i.e. whatever the
-# shipped heuristic in that path's program factory picks -- which is NOT the same formula for the two
+# shipped heuristic in that path's program factory picks -- which is not the same formula for the two
 # paths; see _default_num_cores.
 CORE_SWEEP = (1, 2, 4, 8, 16, 32, 64, 111, None)
 
@@ -204,7 +210,7 @@ def _default_num_cores(path: str, v: int, h: int, grid_cores: int) -> int:
     """The shipped heuristic, mirrored from argmax_{rvv,sfpu}_tile_program_factory.cpp so the report can
     name the core count a call with no ``sub_core_grids`` actually gets.
 
-    The two factories do NOT use the same formula, because their cost models differ: the SFPU pass is
+    The two factories do not use the same formula, because their cost models differ: the SFPU pass is
     flat in H, so its optimum only tracks the reduction width, while the RVV scan is per row and its
     optimum grows with H as well. Mirroring one formula for both would mislabel every RVV `default` row.
     """
@@ -301,7 +307,7 @@ def _measure_eager_us(device, run_fn, n: int) -> float:
 
 
 def _measure_eager_isolated_us(device, run_fn, n: int) -> float:
-    """Min over ``n`` samples of ONE dispatch followed immediately by ``synchronize_device``.
+    """Min over ``n`` samples of a single dispatch followed immediately by ``synchronize_device``.
 
     This is latency-mode eager: nothing is in flight to hide the host behind, so the full per-op host
     dispatch cost is exposed. `_measure_eager_us` is throughput-mode -- it queues n dispatches before
@@ -506,7 +512,7 @@ def test_argmax_trace_launch_overhead(device):
 # (H, V, cores or None for default, note)
 SAFETY_SHAPES = (
     (1, 1056, 7, "ragged: 33 w_tiles over 7 cores (4 or 5 each), single pass"),
-    (80, 1056, 7, "ragged AND multi-pass: 33 w_tiles over 7 cores, 3 tile-row passes"),
+    (80, 1056, 7, "ragged and multi-pass: 33 w_tiles over 7 cores, 3 tile-row passes"),
     (80, 32768, None, "multi-pass at the default core count: 1024 w_tiles, 3 passes"),
     (32, 262144, 111, "widest single pass, 8192 w_tiles over 111 cores"),
 )
@@ -552,7 +558,7 @@ def test_argmax_trace_safety(device, path, h, v, n_cores, note):
                 assert torch.equal(got, staging.golden[k]), (
                     f"{path} {note}: replay {i} (payload {k}) returned the wrong indices on "
                     f"{int((got != staging.golden[k]).sum())} of {got.numel()} rows. "
-                    f"Matches the OTHER payload's golden: {torch.equal(got, staging.golden[1 - k])}."
+                    f"Matches the other payload's golden: {torch.equal(got, staging.golden[1 - k])}."
                 )
         finally:
             ttnn.release_trace(device, tid)
@@ -661,7 +667,7 @@ def _report_headline(lines, rows, key, flavour):
 def _report_saturation(lines, rows, key, flavour):
     lines.append(f"##### Saturation and negative scaling ({flavour})")
     lines.append("")
-    lines.append("| V | H | path | knee (cores) | knee time | best (cores) | best time | adding cores HURTS at |")
+    lines.append("| V | H | path | knee (cores) | knee time | best (cores) | best time | adding cores hurts at |")
     lines.append("|---:|---:|:---|---:|---:|---:|---:|:---|")
     for v, h in _shapes(rows):
         for path in _PATHS:
@@ -680,7 +686,7 @@ def _report_saturation(lines, rows, key, flavour):
     lines.append("")
     lines.append(
         f"knee = fewest cores within {SATURATION_TOL:.0%} of that path's best over the sweep. A bolded "
-        f"`adding cores HURTS` cell is a core count more than {REGRESSION_TOL:.0%} slower than the next "
+        f"`adding cores hurts` cell is a core count more than {REGRESSION_TOL:.0%} slower than the next "
         "smaller one measured -- negative scaling, worth a look rather than an average."
     )
     lines.append("")
@@ -694,7 +700,7 @@ def _report_scaling(rows, grid_cores: int) -> None:
         f"`argmax_force.hpp`; core counts pinned with `sub_core_grids`, `default` = no `sub_core_grids`, "
         f"i.e. that path's own shipped heuristic -- `ceil(sqrt(1.5 * w_tiles))` for SFPU and "
         f"`ceil(sqrt(w_tiles * (H + 2)) / 3)` for RVV, each capped by the grid and by `w_tiles`, so the two "
-        f"`default` cells in a row are generally DIFFERENT core counts. Compute grid: {grid_cores} cores."
+        f"`default` cells in a row are generally different core counts. Compute grid: {grid_cores} cores."
     )
     lines.append("")
     lines.append(

@@ -134,11 +134,11 @@ Tensor run_argmax_nc(
 
 using ttnn::prim::ArgMaxPath;
 
-// Correctness gate shared by both accelerated paths: the preconditions under
+// Correctness gate shared by both vector paths: the preconditions under
 // which the Blackhole TILE-layout last-dim kernels are defined at all. Mirrors
 // the per-path TT_FATALs in ArgMaxDeviceOperation::validate_on_program_cache_miss
 // and uses the same hal::get_arch(), so the two cannot drift silently.
-bool accelerated_paths_can_serve(
+bool vector_paths_can_serve(
     const Tensor& input,
     const std::optional<int>& dim,
     bool keepdim,
@@ -161,11 +161,11 @@ bool accelerated_paths_can_serve(
     // Rank 0 is a correctness gate, not a preference: its logical_volume() is 1
     // so the check above admits it, normalize_dim(-1, 0) == -1 compares equal
     // to rank - 1 just below so the dim check admits it too, and
-    // logical_shape[-1] would then index out of bounds. Rank 1 IS served, by
-    // the RVV path: both accelerated factories fold it to h_logical == 1, so a
-    // [V] input compiles exactly like a [1, 1, 1, V] one, and only these paths
-    // can fill a max-value output for it. select_argmax_path, not this gate,
-    // keeps rank 1 off the SFPU path.
+    // logical_shape[-1] would then index out of bounds. Rank 1, by contrast,
+    // is served, and by the RVV path: both vector factories fold it to
+    // h_logical == 1, so a [V] input compiles exactly like a [1, 1, 1, V] one,
+    // and only these paths can fill a max-value output for it.
+    // select_argmax_path, not this gate, keeps rank 1 off the SFPU path.
     if (rank < 1) {
         return false;
     }
@@ -184,12 +184,12 @@ bool accelerated_paths_can_serve(
         output_memory_config.memory_layout() != tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         return false;
     }
-    // The accelerated readers page their writes off the preallocated output, so
+    // The vector readers page their writes off the preallocated output, so
     // a prealloc whose logical shape is not the reduction output shape leaves
     // results unwritten or writes past its page count. This demotes rather than
     // raising: the scalar readers mis-handle the same shapes -- they page off
     // the reduction output shape and ignore the prealloc's own, silently
-    // short-writing when its TRAILING dim differs (Blackhole, [1, 1, 32, 2048],
+    // short-writing when its trailing dim differs (Blackhole, [1, 1, 32, 2048],
     // keepdim = false, [1, 1, 32, 1] prealloc: element 0 correct, the other 31
     // left at zero) -- while three reshape-equivalent preallocs do return
     // correct results today, which raising here would turn into hard errors on
@@ -203,8 +203,8 @@ bool accelerated_paths_can_serve(
 }
 
 // Valid rows per tile-row pass -- the H dim, which is what separates the two
-// accelerated paths (see select_argmax_path). Rank 1 has no second-to-last dim
-// and answers 1, the same value both accelerated factories bind as `h_logical`,
+// vector paths (see select_argmax_path). Rank 1 has no second-to-last dim
+// and answers 1, the same value both vector factories bind as `h_logical`,
 // so routing and kernels agree on what rank 1 means.
 uint32_t argmax_rows_per_tile_row(const Tensor& input) {
     const auto& logical_shape = input.logical_shape();
@@ -235,11 +235,11 @@ ArgMaxPath select_argmax_path(
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     bool exact_special_values) {
-    if (!accelerated_paths_can_serve(input, dim, keepdim, output_memory_config, optional_output_tensor)) {
+    if (!vector_paths_can_serve(input, dim, keepdim, output_memory_config, optional_output_tensor)) {
         return ArgMaxPath::ScalarReader;
     }
 
-    // Both accelerated paths split the reduction dim's tiles across cores and
+    // Both vector paths split the reduction dim's tiles across cores and
     // honour any sub_core_grids the caller supplies, so the grid does not
     // constrain the choice -- it is purely the H comparison below. The SFPU
     // path diverges from the scalar readers on special values, so a caller that
@@ -349,7 +349,7 @@ Tensor argmax_impl(
     // than no-op through the host-side fallback and leave it stale.
     TT_FATAL(
         !optional_maxval_tensor.has_value() || path != ArgMaxPath::ScalarReader,
-        "argmax: the max-value output tensor (maxval_tensor) is only produced by the accelerated paths, and this "
+        "argmax: the max-value output tensor (maxval_tensor) is only produced by the vector paths, and this "
         "call was routed to the scalar reader path. Those paths require a Blackhole device, a BFLOAT16 TILE-layout "
         "input of rank >= 1 in INTERLEAVED memory, an explicit last-dim reduction, standard 32x32 tiles, a reduction "
         "dim that is a multiple of 32, an INTERLEAVED output, and (if a preallocated output tensor is supplied) that "
@@ -357,7 +357,7 @@ Tensor argmax_impl(
     if (path != ArgMaxPath::ScalarReader) {
         TT_FATAL(
             rank > 0 && input_tensor.logical_volume() > 0,
-            "argmax: the accelerated paths support only non-empty tensors of rank >= 1 (got rank {}, logical "
+            "argmax: the vector paths support only non-empty tensors of rank >= 1 (got rank {}, logical "
             "volume {})",
             rank,
             input_tensor.logical_volume());
@@ -401,13 +401,13 @@ Tensor argmax_impl(
         return preallocated_tensor;
     }
 
-    // Accelerated paths (see ArgMaxPath): Blackhole TILE-layout last-dim
+    // Vector paths (see ArgMaxPath): Blackhole TILE-layout last-dim
     // argmax, taking TILE input directly -- no to_layout / untilize hop -- and
     // optionally returning the max values. Eligibility is re-checked by the
     // device op.
     if (path != ArgMaxPath::ScalarReader) {
         // Automatic dispatch demotes a wrong-shaped prealloc to the scalar
-        // readers before reaching here (see accelerated_paths_can_serve); a
+        // readers before reaching here (see vector_paths_can_serve); a
         // forced path has to be told no.
         if (optional_output_tensor.has_value()) {
             const auto expected_shape = ttnn::Shape(ttnn::prim::get_output_shape(input_tensor, dim, keepdim));

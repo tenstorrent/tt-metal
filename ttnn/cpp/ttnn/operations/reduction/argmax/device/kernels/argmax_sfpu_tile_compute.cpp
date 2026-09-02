@@ -2,50 +2,51 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// SFPU TILE-layout last-dim argmax, PHASE 1: for each 32-row tile-row pass,
-// reduce this core's `w_count` input tiles to ONE (max value, winning tile
+// SFPU TILE-layout last-dim argmax, phase 1: for each 32-row tile-row pass,
+// reduce this core's `w_count` input tiles to one (max value, winning tile
 // index) pair per DST lane — i.e. per (row, column) — with the
 // argmax_nc_compute.cpp op chain below, five DST-wide ops per tile:
 //
 //   DST 0: running max_val (fp32; bf16 inputs widen exactly)
-//   DST 1: running win_tile (uint32 = LOCAL index of the winning tile t; the
+//   DST 1: running win_tile (uint32 = local index of the winning tile t; the
 //          lane's own column c is implicit, so the consumer reconstructs the
 //          element index as (w_start + t) * 32 + c)
 //   DST 2/3: scratch (new value / new tile index, gt mask)
 //
-// Storing the winning TILE index (constant per step, like the NC kernel's k)
+// Storing the winning tile index (constant per step, like the NC kernel's k)
 // instead of the global element index removes a persistent column-ramp tile in
 // DST and an add_int32 step. The uint32-CB/SrcA corruption documented in
 // argmax_nc_compute.cpp cannot bite here: indices are materialized in DST by
-// fill_tile_int and only ever PACKED out.
+// fill_tile_int and only ever packed out.
 //
-// PHASE 2 — the horizontal reduce of the 32 per-column candidates per row plus
+// Phase 2 — the horizontal reduce of the 32 per-column candidates per row plus
 // the cross-core merge — is 32 scalar lexicographic compares per row on the
 // dataflow RISC (reader_argmax_sfpu_tile.cpp): O(32) per row against phase 1's
 // O(32 * w_count) per lane, so it amortizes to noise at large widths.
 //
-// SEMANTICS — the divergence from the scalar TILE reader that
+// Semantics — the divergence from the scalar TILE reader that
 // exact_special_values is defined against. All silicon-measured on Blackhole
 // with planted special-value probes. Everything finite and normal, every exact
 // tie included, matches the scalar readers' bfloat16_greater + smallest-index
 // semantics bit-for-bit: strict-gt per lane keeps the lowest tile, and phase
 // 2's lexicographic rule keeps the lowest global index across columns and
-// cores. What diverges is a bf16 special-value gasket in front of an IEEE
-// fp32 compare:
-//   * qNaN behaves as SAME-SIGNED INFINITY end-to-end: it WINS the argmax (the
-//     index the scalar readers give for single-NaN rows) but the value output
-//     reads 0x7F80 (+inf), not the NaN payload; -NaN acts as -inf and never
-//     wins. A row holding a +inf and a later NaN reports the +inf's index —
-//     they tie as +inf, where the scalar bit-pattern order picks the NaN.
+// cores. The divergence comes from normalising NaN, signed zero and denormal
+// inputs before the IEEE fp32 compare:
+//   * qNaN behaves as a same-signed infinity end-to-end: it wins the argmax
+//     (the index the scalar readers give for single-NaN rows) but the value
+//     output reads 0x7F80 (+inf), not the NaN payload; -NaN acts as -inf and
+//     never wins. A row holding a +inf and a later NaN reports the +inf's
+//     index — they tie as +inf, where the scalar bit-pattern order picks the
+//     NaN.
 //   * -0 flushes to +0 in the value output, and +0/-0 compare equal, so the
-//     FIRST zero's index is kept (the scalar order prefers a later +0 over an
+//     first zero's index is kept (the scalar order prefers a later +0 over an
 //     earlier -0).
 //   * Denormals flush to zero before the compare (the scalar readers rank them
 //     normally) — the known Blackhole eltwise min-normal flush.
 //   * The value output carries a +2^-127 additive pack bias, visible only when
 //     the winner's magnitude is below ~2^-118; compare order and the index are
 //     unaffected.
-// PRECEDENT: these corners already differ by dispatched dim — the NC compute
+// Precedent: these corners already differ by dispatched dim — the NC compute
 // kernel (dim < rank-2) runs the same IEEE gt_binary_tile chain while the
 // scalar readers use the bfloat16_greater bit order.
 //
@@ -84,7 +85,7 @@ void kernel_main() {
     // below — exactly what the deprecated init_sfpu(icb, ocb) forwarded to.
     compute_kernel_hw_startup(cb_in, cb_res_val);
     copy_init(cb_in);
-    // One where_tile_init serves BOTH updates (fp32 max / int32 argmax): it and
+    // One where_tile_init serves both updates (fp32 max / int32 argmax): it and
     // binary_max_min_init both write SFPCONFIG macros 0 and 1, so they cannot
     // coexist. See argmax_nc_compute.cpp.
     gt_binary_tile_init();

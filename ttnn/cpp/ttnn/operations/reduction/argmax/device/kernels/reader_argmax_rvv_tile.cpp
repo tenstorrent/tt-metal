@@ -10,14 +10,14 @@
 // chunks, then collects the per-row (index, maxval) results the compute
 // kernel pushes and writes them to the output tensor(s).
 //
-// The input CB is treated as a ring of pages addressed by GLOBAL page index
-// (slot = t % num_pages) on BOTH sides, so chunk batches may wrap mid-batch
+// The input CB is treated as a ring of pages addressed by global page index
+// (slot = t % num_pages) on both sides, so chunk batches may wrap mid-batch
 // without any linear-placement assumption. NOC reads are issued per chunk
 // with batched barriers — the scan on the compute side overlaps the next
 // chunk's staging.
 //
-// MULTICORE (num_cores > 1): the compute kernel's indices are LOCAL to the
-// core's slice, so this kernel adds w_start * 32 to make them GLOBAL, then
+// Multicore (num_cores > 1): the compute kernel's indices are local to the
+// core's slice, so this kernel adds w_start * 32 to make them global, then
 // deposits its per-row (index, value) candidates — 32 rows x 8 bytes = 256 B
 // — into its slot of the exchange buffer on the gather core (core_id 0) and
 // bumps the done semaphore. The gather core merges the num_cores candidates
@@ -27,16 +27,16 @@
 // cumulatively (wait_min, no mid-run resets) and are restored to 0 at kernel
 // end so trace replay — which does not re-run the dispatcher's semaphore
 // init — starts clean. This exchange protocol is the SFPU path's
-// (reader_argmax_sfpu_tile.cpp); the COMPARATOR is not — see below.
+// (reader_argmax_sfpu_tile.cpp); the comparator is not — see below.
 //
 // The exchange buffer is a CB allocated identically on every core, so a
 // worker's local cb_xchg write pointer equals the gather core's address.
 //
-// MERGE ORDER — the reason this path exists: the RVV scan is bit-identical
+// Merge order — the reason this path exists: the RVV scan is bit-identical
 // to the scalar reader kernels, whose compare is bfloat16_greater, a pure
-// sign-magnitude BIT-PATTERN total order (NaN payloads participate, +0 sorts
+// sign-magnitude bit-pattern total order (NaN payloads participate, +0 sorts
 // above -0), with the smallest index winning ties. The cross-core merge must
-// govern by that same order, NOT by the IEEE compare the SFPU path's merge
+// govern by that same order, not by the IEEE compare the SFPU path's merge
 // uses, or the multicore result would diverge from the single-core one on
 // exactly the special values this path promises to reproduce.
 //
@@ -65,10 +65,10 @@ namespace {
 
 // bfloat16_greater (tt_metal/hw/inc/api/numeric/bfloat16.h) on raw bits — the
 // scalar readers' sign-magnitude total order, reproduced here so the
-// cross-core merge and the RVV scan implement ONE order. Deliberately not an
-// IEEE compare: NaN payloads are ordinary patterns here (a +NaN sorts above
-// +inf, a -NaN below -inf) and +0 is strictly greater than -0. Equality is
-// therefore plain bit equality, which is what the tie-break below tests.
+// cross-core merge and the RVV scan implement a single order. Deliberately
+// not an IEEE compare: NaN payloads are ordinary patterns here (a +NaN sorts
+// above +inf, a -NaN below -inf) and +0 is strictly greater than -0. Equality
+// is therefore plain bit equality, which is what the tie-break below tests.
 inline bool bf16_bits_greater(uint16_t a, uint16_t b) {
     if ((a ^ b) & 0x8000u) {
         return (a & 0x8000u) == 0;  // signs differ: the positive one is greater
@@ -108,7 +108,7 @@ void kernel_main() {
     constexpr uint32_t xchg_slot_words = 64;
     constexpr uint32_t xchg_slot_bytes = xchg_slot_words * sizeof(uint32_t);
 
-    // Base addresses are positional RUNTIME args by design (repo idiom, cf.
+    // Base addresses are positional runtime args by design (repo idiom, cf.
     // reader_argmax_tile_layout*.cpp): TensorAccessorArgs carry only the
     // compile-time banking/layout — TensorAccessor requires the base address
     // at construction so program-cache rebinds can update it per allocation.
@@ -129,7 +129,7 @@ void kernel_main() {
     const auto s_src = TensorAccessor(s_src_args, src_base_addr, src_page_size);
     const auto s_dst = TensorAccessor(s_dst_args, dst_base_addr, dst_page_size);
 
-    // Contract with the factory: exactly THREE TensorAccessorArgs blocks are
+    // Contract with the factory: exactly three TensorAccessorArgs blocks are
     // appended (src, dst, val) — when no maxval tensor is supplied the dst
     // block is duplicated as a placeholder so the constexpr offset chain
     // lines up; has_maxval guards every use of the third accessor.
@@ -145,7 +145,7 @@ void kernel_main() {
     CircularBuffer xchg_cb(cb_xchg);
 
     // Input CB ring base (write pointer sits at base before any push). The ring
-    // is addressed by GLOBAL page index, so the base is captured ONCE here: the
+    // is addressed by global page index, so the base is captured once here: the
     // CB's own write pointer advances on every push_back and cannot be used as
     // the NoC destination, hence a CoreLocalMem over the fixed base + offset.
     const CoreLocalMem<uint32_t> in_ring(in_cb.get_write_ptr());
@@ -213,8 +213,8 @@ void kernel_main() {
             const CoreLocalMem<volatile uint16_t> vp(res_val_cb.get_read_ptr());
 
             if constexpr (num_cores == 1) {
-                // Single core owns the whole row: the scan's answer IS the
-                // answer, no offset and no merge.
+                // Single core owns the whole row: the scan's answer is already
+                // the final answer, no offset and no merge.
                 for (uint32_t r = 0; r < units; r++) {
                     stage_idx[collected] = ip[r];
                     if constexpr (has_maxval) {
@@ -269,7 +269,7 @@ void kernel_main() {
                             const uint32_t ic = slot[r];
                             const uint16_t vc = (uint16_t)slot[32u + r];
                             // Bit-pattern order, and equality is bit equality:
-                            // the smallest GLOBAL index wins a tie.
+                            // the smallest global index wins a tie.
                             if (bf16_bits_greater(vc, best_v) || (vc == best_v && ic < best_i)) {
                                 best_v = vc;
                                 best_i = ic;

@@ -37,8 +37,9 @@ struct ArgMaxRvvTileProgramFactory {
 // dataflow RISC finishes each row with 32 lexicographic compares. Multicore
 // splits the reduction dim's tiles across cores, each producing per-row
 // candidates that a gather core merges by scalar compare. Returns indices and
-// (optionally) max values. Compare semantics: IEEE behind the SFPU's bf16
-// special-value gasket, detailed in kernels/argmax_sfpu_tile_compute.cpp.
+// (optionally) max values. Compare semantics: the SFPU normalises NaN, signed
+// zero and denormal inputs before an IEEE fp32 compare; the consequences are
+// detailed in kernels/argmax_sfpu_tile_compute.cpp.
 struct ArgMaxSfpuTileProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);

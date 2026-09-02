@@ -18,12 +18,13 @@ Gating: architecture only. The kernels are plain SFPU compute kernels that JIT
 with the stock toolchain, so these tests run automatically on any Blackhole
 host and skip on every other architecture.
 
-Goldens: the SFPU path's compare is IEEE-on-fp32 behind a bf16 special-value
-gasket (silicon-measured; see argmax_sfpu_tile_compute.cpp), NOT the scalar
-readers' bfloat16_greater bit order. On finite, normal data — including every
-exact tie — the two orders agree bit-for-bit, so finite cases score against
-the scalar-reader golden; NaN- and denormal-bearing cases score against the
-gasket model implemented here:
+Goldens: the SFPU path normalises NaN, signed zero and denormal inputs before
+it compares them, and then compares as IEEE fp32 (silicon-measured; see
+argmax_sfpu_tile_compute.cpp). That is not the scalar readers' bfloat16_greater
+order, which ranks those same values by their raw bit patterns. On finite,
+normal data — including every exact tie — the two orders agree bit-for-bit, so
+finite cases score against the scalar-reader golden; NaN- and denormal-bearing
+cases score against the model of that normalisation implemented here:
   * NaN acts as same-signed infinity (a winning NaN reports its index but
     max value BF16_POS_INF, not the NaN payload; -NaN never wins),
   * denormals and -0 flush to +0 before the compare (first zero's index wins),
@@ -61,8 +62,8 @@ _force_scalar_reader = ttnn._ttnn.operations.reduction.argmax_force_scalar_reade
 BF16_MAX_FINITE = 0x7F7F  # largest finite bf16: exponent 0xFE with every mantissa bit set
 BF16_POS_INF = 0x7F80  # +inf, and the magnitude above which a bit pattern is a NaN
 BF16_NEG_INF = 0xFF80  # -inf, which is also the scalar-reader kernel's accumulator init
-BF16_POS_NAN = 0x7FC0  # a quiet +NaN; the gasket maps it to +inf, so it can win
-BF16_NEG_NAN = 0xFFC0  # a quiet -NaN; the gasket maps it to -inf, so it can never win
+BF16_POS_NAN = 0x7FC0  # a quiet +NaN; the SFPU path normalises it to +inf, so it can win
+BF16_NEG_NAN = 0xFFC0  # a quiet -NaN; the SFPU path normalises it to -inf, so it can never win
 BF16_SIGN_BIT = 0x8000  # the sign bit alone is -0.0; OR-ing it makes any value negative
 
 
@@ -76,9 +77,9 @@ def _monotone(bits: np.ndarray) -> np.ndarray:
     return np.where(bits >= BF16_SIGN_BIT, (~bits) & 0xFFFF, bits | BF16_SIGN_BIT).astype(np.uint32)
 
 
-def _gasket_map(bits: np.ndarray) -> np.ndarray:
-    """The SFPU pipeline's measured bf16 special-value gasket:
-    NaN -> same-signed infinity, denormals and +/-0 -> +0."""
+def _sfpu_special_values(bits: np.ndarray) -> np.ndarray:
+    """The SFPU pipeline's measured normalisation of bf16 special values, applied
+    before the compare: NaN -> same-signed infinity, denormals and +/-0 -> +0."""
     bits = bits.astype(np.uint16)
     mag = (bits & 0x7FFF).astype(np.uint16)
     out = bits.copy()
@@ -88,12 +89,12 @@ def _gasket_map(bits: np.ndarray) -> np.ndarray:
     return out
 
 
-def _gasket_argmax_row(bits_row: np.ndarray):
-    """SFPU-path semantics: IEEE compare on gasket-mapped values, smallest
-    index on ties; the max-value output is the gasket-mapped winner."""
-    g = _gasket_map(bits_row)
-    m = _monotone(g)  # post-gasket there are no NaNs and only +0, so the
-    i = int(np.argmax(m))  # monotone bit order IS the IEEE order
+def _sfpu_argmax_row(bits_row: np.ndarray):
+    """SFPU-path semantics: IEEE compare on the normalised values, smallest
+    index on ties; the max-value output is the normalised winner."""
+    g = _sfpu_special_values(bits_row)
+    m = _monotone(g)  # after normalisation there are no NaNs and only +0, so
+    i = int(np.argmax(m))  # the monotone bit order is the IEEE order
     return i, int(g[i])
 
 
@@ -115,8 +116,43 @@ def _bits_of(t: torch.Tensor) -> np.ndarray:
 
 
 def _make_case(name: str, v: int, b: int, rng: np.random.Generator) -> np.ndarray:
-    """Row-major [b, v] bf16 bit patterns for one named case from CASES (the
-    same bank as test_argmax_rvv.py)."""
+    """Build the input for one named case: a row-major [b, v] array of bf16 bit
+    patterns (uint16), not floats. The caller reinterprets them as bfloat16, so a
+    case can plant the exact NaN, signed-zero and denormal encodings that
+    generating floats and converting them could not reach.
+
+    b is the number of rows, each of which is reduced independently; v is the
+    number of elements in a row, i.e. the width of the reduction. name picks one
+    of the scenarios listed in CASES (the same bank as test_argmax_rvv.py) --
+    which is defined just below this function rather than above it, so that is
+    where to look for the legal values.
+
+    Most cases start from a random bf16 background and then overwrite a few
+    positions; denormal and all_neginf replace the row wholesale, and
+    all_negative rewrites the sign of every element in it. The overwritten
+    positions are fractions of v so that one set of positions works at every width
+    the tests sweep, and each fraction is there for what it lets an assertion
+    catch rather than for the number itself:
+
+      * 5 * v // 8 puts the maximum in the interior of the row. A scan whose
+        bounds are off by one at either end can still find a maximum sitting at
+        index 0 or at index v - 1, so those two ends are their own cases
+        (max_at_zero, max_at_end) and this one keeps the maximum away from both.
+      * v // 3 (unique_max) is a decoy one ULP below the planted maximum, placed
+        ahead of it in the row. A reader that stopped at the first large value it
+        saw, or that compared in the wrong order, answers v // 3 rather than
+        5 * v // 8.
+      * 7 * v // 8 (tie_first_wins) repeats the very same maximum behind the
+        first one, so the row holds two equal maxima and the smallest-index
+        tie-break becomes observable: the answer must stay 5 * v // 8.
+
+    One limit worth stating outright: a tile is 32 wide, so at the narrowest
+    width in the sweep (v = 32) the whole row is a single tile and both tie
+    positions land inside it (5 * 32 // 8 = 20, 7 * 32 // 8 = 28). tie_first_wins
+    is a within-tile tie at that width; the wider widths (2016 and up) are what
+    make it a cross-tile tie, and a multicore split is what makes it a cross-core
+    one.
+    """
     x = rng.standard_normal((b, v), dtype=np.float32) * 4.0
     bits = _bits_of(torch.from_numpy(x).bfloat16()).reshape(b, v)
     kdecoy = 0x7F7E  # one ULP below BF16_MAX_FINITE: a decoy the RNG cannot reach
@@ -161,16 +197,16 @@ CASES = [
     "all_neginf",
 ]
 
-# Classes where the gasket order provably equals the scalar readers' bit order
+# Classes where the SFPU path's order provably equals the scalar readers' bit order
 # (finite normal data, ties included; all_neginf hits both paths' -inf rule).
 SCALAR_READER_EXACT_CASES = [c for c in CASES if c not in ("denormal", "nan_bearing")]
 
 
 def _golden_row(name: str, bits_row: np.ndarray):
-    """Score finite classes against the scalar-reader golden (stronger claim)
-    and NaN/denormal classes against the gasket model."""
+    """Score finite classes against the scalar-reader golden (stronger claim) and
+    NaN/denormal classes against the special-value normalisation model above."""
     if name in ("denormal", "nan_bearing"):
-        return _gasket_argmax_row(bits_row)
+        return _sfpu_argmax_row(bits_row)
     return _ref_argmax_row(bits_row)
 
 
@@ -225,7 +261,7 @@ def test_argmax_sfpu_matches_upstream_tile_path(device, name, v, b):
     tensor for every class where the two orders provably agree (finite data
     plus the all--inf corner). The NaN/denormal classes are excluded by
     construction — that divergence is documented, measured, and asserted
-    against the gasket model in the special-values test above."""
+    against the normalisation model in the special-values test above."""
     rng = np.random.default_rng(42 + v + 100 * b)
     bits = _make_case(name, v, b, rng)
     x = torch.from_numpy(bits.astype(np.int16)).view(torch.bfloat16).reshape(1, 1, b, v)
@@ -338,10 +374,10 @@ def test_argmax_sfpu_runs_on_explicit_nonzero_core(device):
 
 
 def _assert_empty_program_cache(device):
-    """Precondition for the delta-0 proxy, checked BEFORE anything is warmed.
+    """Precondition for the delta-0 proxy, checked before anything is warmed.
 
     "The auto call added no cache entry" only proves the route when the warmed
-    path is the ONLY argmax program cached for this shape. A stale entry for a
+    path is the only argmax program cached for this shape. A stale entry for a
     different path -- left by an earlier test sharing the device -- would
     absorb a mis-route as a cache hit and the assertion would pass vacuously.
     The `device` fixture is function-scoped (conftest.py), so each of these tests
@@ -379,9 +415,10 @@ def test_argmax_auto_routes_to_sfpu_at_batch(device, h):
     to the SFPU, or kSfpuMinRows is not where argmax.cpp says it is.
 
     The boundary sits at 32 rather than lower because at H = 8 the multicore
-    RVV path is measured FASTER than the multicore SFPU at every core count up
-    to 64 (SFPU/RVV 3.1x on one core, 1.2x on 64) -- see the table in
-    argmax.cpp."""
+    RVV path is measured faster than the multicore SFPU at every core count up
+    to 64: the SFPU takes 3.1x as long as RVV on one core and 1.2x as long on
+    64. Those two ratios come from test_argmax_path_crossover_bench.py in this
+    directory, which is what regenerates them."""
     _assert_empty_program_cache(device)
     x = torch.randn(1, 1, h, 4096).bfloat16()
     t_tile = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -399,13 +436,13 @@ def test_argmax_auto_routes_to_sfpu_at_batch(device, h):
     [
         # last dim not a multiple of the tile width
         ((1, 1, 32, 2000), ttnn.TILE_LAYOUT),
-        # ROW_MAJOR input: the accelerated paths read TILE directly
+        # ROW_MAJOR input: the vector paths read TILE directly
         ((1, 1, 32, 2048), ttnn.ROW_MAJOR_LAYOUT),
     ],
     ids=["ragged_last_dim", "row_major"],
 )
 def test_argmax_auto_falls_back_to_scalar_readers(device, shape, layout):
-    """A case outside the accelerated paths' preconditions must demote to the
+    """A case outside the vector paths' preconditions must demote to the
     scalar readers, not raise: automatic dispatch may never turn a servable
     call into an error."""
     _assert_empty_program_cache(device)
@@ -421,7 +458,7 @@ def test_argmax_auto_falls_back_to_scalar_readers(device, shape, layout):
 
 
 def test_argmax_maxval_tensor_on_scalar_reader_route_raises(device, expect_error):
-    """maxval_tensor can only be filled by the accelerated paths. A call the
+    """maxval_tensor can only be filled by the vector paths. A call the
     heuristic sends to the scalar readers must say so rather than hand the
     buffer back untouched."""
     x = torch.randn(1, 1, 32, 2048).bfloat16()
@@ -432,5 +469,5 @@ def test_argmax_maxval_tensor_on_scalar_reader_route_raises(device, expect_error
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
-    with expect_error(RuntimeError, "only produced by the accelerated paths"):
+    with expect_error(RuntimeError, "only produced by the vector paths"):
         ttnn.argmax(t_rm, dim=3, keepdim=True, maxval_tensor=mv)

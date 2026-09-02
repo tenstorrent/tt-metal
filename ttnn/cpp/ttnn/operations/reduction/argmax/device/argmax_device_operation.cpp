@@ -80,7 +80,7 @@ ArgMaxDeviceOperation::program_factory_t ArgMaxDeviceOperation::select_program_f
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // The path was decided once, on the host, by select_argmax_path (see
     // argmax.cpp); this only maps it onto a factory. Eligibility for the two
-    // accelerated paths is enforced in validate_on_program_cache_miss.
+    // vector paths is enforced in validate_on_program_cache_miss.
     switch (args.path) {
         case ArgMaxPath::Rvv: return ArgMaxRvvTileProgramFactory{};
         case ArgMaxPath::Sfpu: return ArgMaxSfpuTileProgramFactory{};
@@ -208,7 +208,7 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
         validate_reduce_op_tensor(tensor_args.input, "Argmax", "input", &grid_opts);
     }
 
-    // Accelerated-path eligibility. Under automatic dispatch these are
+    // Vector-path eligibility. Under automatic dispatch these are
     // unreachable: select_argmax_path (argmax.cpp) checks the same
     // preconditions and demotes to ArgMaxPath::ScalarReader instead of
     // choosing a path that would trip one. They stay as hard errors because
@@ -254,9 +254,10 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (args.path == ArgMaxPath::Sfpu) {
-        // Blackhole-only for now: the path's special-value semantics (the
-        // NaN-as-infinity / flush-to-zero gasket documented in
-        // argmax_sfpu_tile_compute.cpp) are silicon-validated on Blackhole.
+        // Blackhole-only for now: the path's special-value semantics (NaN
+        // treated as a same-signed infinity, denormals and -0 flushed to zero,
+        // documented in argmax_sfpu_tile_compute.cpp) are silicon-validated on
+        // Blackhole.
         // Nothing in the kernels is architecturally Blackhole-specific;
         // enabling Wormhole is a follow-up gated on re-running the
         // special-value cases there.
@@ -298,7 +299,7 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
     if (optional_maxval.has_value()) {
         TT_FATAL(
             args.path != ArgMaxPath::ScalarReader,
-            "argmax max-value output is only produced by the accelerated paths (RVV / SFPU)");
+            "argmax max-value output is only produced by the vector paths (RVV / SFPU)");
         const auto& maxval = optional_maxval.value();
         TT_FATAL(is_device_tensor(maxval), "argmax max-value tensor must be allocated on device");
         // Device affinity: the program is launched from the input tensor, so a
