@@ -350,7 +350,7 @@ ttnn/cpp/ttnn/operations/embedding/ @tenstorrent/metalium-developers-ops-data-mo
 ttnn/cpp/ttnn/operations/embedding/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @TT-BrianLiu @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/embedding_backward/ @tenstorrent/metalium-developers-ops-data-movement @TT-BrianLiu
 ttnn/cpp/ttnn/operations/embedding_backward/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @TT-BrianLiu @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/operations/experimental/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-sdpa @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-developers-external-experience @cglagovichTT @jonathansuTT @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-sdpa @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-developers-external-experience @cglagovichTT @jonathansuTT @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-infra @tenstorrent/cse-developer-ttnn
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/ccl/ @tenstorrent/metalium-developers-ops-data-movement @jonathansuTT
