@@ -77,9 +77,9 @@ def test_cache_hit_complex_fft_uses_fresh_args(device, dtype, tol):
     n_after_warmup = device.num_program_cache_entries()
     re, im = ttnn.experimental.fft(_from_torch(br, device, dtype), _from_torch(bi, device, dtype))
     n_after_hit = device.num_program_cache_entries()
-    assert n_after_hit == n_after_warmup, (
-        f"expected a cache HIT on the 2nd complex fft; got {n_after_warmup} → {n_after_hit}"
-    )
+    assert (
+        n_after_hit == n_after_warmup
+    ), f"expected a cache HIT on the 2nd complex fft; got {n_after_warmup} → {n_after_hit}"
 
     got = torch.complex(
         ttnn.to_torch(re).reshape(-1).to(torch.float32),

@@ -92,7 +92,7 @@ ttnn:
     bh_galaxy: 40
     bh_p100: 805
     bh_p150b_civ2: 1045
-    wh_n150_civ2: 1245  # +30 for "ttnn nightly experimental fft tests (wormhole)"
+    wh_n150_civ2: 1215
     wh_n300_civ2: 1180
     bh_p150b_civ2_viommu: 115
     bh_p300: 60

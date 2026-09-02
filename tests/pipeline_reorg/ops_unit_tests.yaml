@@ -79,6 +79,8 @@
 
 - name: ttnn nightly experimental tests (wormhole)
   # test_moe_grouped_topk hangs on Wormhole (TODO: file issue + restore). Exclude on WH only.
+  # Ignore experimental/fft: WH-B0 only, needs a dedicated per-file job; registering that
+  # job requires a time_budget.yaml bump that fork PRs cannot land.
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft -xv -k "not performance and not test_moe_grouped_topk" -m "not requires_host_iommu" --timeout=600'
   skus:
     wh_n150_civ2:
@@ -125,27 +127,6 @@
     bh_p150b_civ2:
       timeout: 10
   owner_id: U07M7QZ0BQA # Camilo Vega
-  team: ttnn
-  category: experimental
-
-- name: ttnn nightly experimental fft tests (wormhole)
-  # FFT is Wormhole-B0 only (router preflight TT_FATALs elsewhere), so no bh_ SKUs.
-  # Each file runs in its own pytest process: per-file is green, a single-process
-  # full-directory run can accumulate LLK device state (see fft conftest). Skip
-  # the Blackhole-only diagnostic here.
-  cmd: |
-    rc=0
-    for f in tests/ttnn/nightly/unit_tests/operations/experimental/fft/test_*.py; do
-      case "$f" in *test_fft_blackhole_diagnose.py) continue;; esac
-      echo "::group::$f"
-      pytest "$f" -v --timeout=600 || rc=1
-      echo "::endgroup::"
-    done
-    exit $rc
-  skus:
-    wh_n150_civ2:
-      timeout: 30
-  owner_id: U080FKG7KEU # Utku Aydonat
   team: ttnn
   category: experimental
 
