@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: Apache-2.0
 """
 Shared helpers for the Llama-3.1-8B decode op sweeps (Blackhole P150).
