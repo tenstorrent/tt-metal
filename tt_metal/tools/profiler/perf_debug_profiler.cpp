@@ -2100,6 +2100,26 @@ namespace {
 // means the host waits on rounds nothing will ever serve.
 constexpr double kDefaultFabricSyncHz = 100.0;
 
+// Samples per sync round. DEFAULT 2: this link is measured stable (rtt_min spread 839-846 cy
+// across ten runs, solver residual ~2.7 cy median) and rate comes from ROUND deltas, never from
+// within a round -- so a round needs exactly one clean (offset, mid) point. Sample 0 is the
+// doorbell (dropped by the solver's small-n path), sample 1 is the anchor. 16 remains reachable
+// for diagnostics. Values 3..15 are legal but pointless; 2 and 16 are the two shapes that matter.
+uint32_t fabric_sync_samples() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_SAMPLES");
+        long n = (s != nullptr && *s != '\0') ? std::strtol(s, nullptr, 10) : 2;
+        if (n < 2) {
+            n = 2;  // n=1 would anchor on the doorbell itself, whose wait is asymmetric
+        }
+        if (n > static_cast<long>(tt::tt_fabric::router_sync::kMaxSamples)) {
+            n = static_cast<long>(tt::tt_fabric::router_sync::kMaxSamples);
+        }
+        return static_cast<uint32_t>(n);
+    }();
+    return v;
+}
+
 double fabric_sync_hz() {
     static const double v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ");
@@ -2393,7 +2413,7 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
         body[0] = kFlagEnabled | (initiator ? kFlagInitiator : 0);
         body[1] = static_cast<uint32_t>(interval & 0xFFFFFFFFu);
         body[2] = static_cast<uint32_t>(interval >> 32);
-        body[3] = FabricSyncState::kNSamples;
+        body[3] = fabric_sync_samples();
         body[4] = 1u << 21;  // first_wait ~1.55 ms: responder poll cadence + a context-switch stretch
         body[5] = 1u << 19;  // next_wait ~0.39 ms: mid-round tolerance for the peer's context switch
         body[6] = peer_blk;
@@ -2445,7 +2465,7 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
             e.resp.logical.x,
             e.resp.logical.y,
             hz,
-            FabricSyncState::kNSamples,
+            fabric_sync_samples(),
             e.in_tree ? "" : " [closure edge]");
     }
 
@@ -2505,7 +2525,7 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
             // route samples into per-edge pending rounds
             for (const auto& s : batch) {
                 if (s.dev >= ctx.devices.size() || s.lane >= ctx.devices[s.dev].lanes.size() ||
-                    s.idx >= FabricSyncState::kNSamples) {
+                    s.idx >= fabric_sync_samples()) {
                     continue;
                 }
                 const auto& li = ctx.devices[s.dev].lanes[s.lane];
@@ -2541,7 +2561,7 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
             for (auto& e : st->edges) {
                 for (auto it = e.pending.begin(); it != e.pending.end();) {
                     auto& r = it->second;
-                    const uint32_t full = (1u << FabricSyncState::kNSamples) - 1;
+                    const uint32_t full = (1u << fabric_sync_samples()) - 1;
                     const bool complete = (r.got0 & r.got1 & r.got2) == full;
                     const bool stale = now_tp - r.first_seen > std::chrono::milliseconds(complete ? 0 : 700);
                     if (!complete && !stale) {
@@ -2551,7 +2571,7 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
                     std::vector<eth_sync::Trip> trips;
                     const size_t draws_before = e.draws.size();
                     const uint32_t have = r.got0 & r.got1 & r.got2;
-                    for (uint32_t i = 0; i < FabricSyncState::kNSamples; i++) {
+                    for (uint32_t i = 0; i < fabric_sync_samples(); i++) {
                         if ((have & (1u << i)) == 0 || r.t2[i] < r.t0[i]) {
                             continue;
                         }
@@ -2564,7 +2584,11 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
                             e.draws.push_back({r.t0[i], r.t1[i], r.t2[i], 0, 0, 0});
                         }
                     }
-                    if (trips.size() < 4) {
+                    // Refuse only what the solver itself cannot use (< 2 trips: a lone trip is the
+                    // doorbell). The small-n acceptance rule lives in ONE place -- eth_sync::solve()'s
+                    // small-n path -- after this gate silently duplicated the old >= 4 rule and dropped
+                    // every n=2 round on the floor (668/668 dropped, device 100% healthy).
+                    if (trips.size() < 2) {
                         e.rounds_dropped++;
                         it = e.pending.erase(it);
                         continue;
@@ -3266,7 +3290,8 @@ void PerfDebugProfiler::fabric_sync_disable_devices() {
     // Quiesced == the core has run poll() SINCE the flags were cleared and taken the disabled branch,
     // i.e. published state 1 (unconfigured/disabled) or 2 (interval 0). States 4/5 mean it is INSIDE a
     // round right now; 6..9 are failure sites published from inside one, so they are not idle either.
-    // Worst case is one round (~7.4 ms = first_wait 1.55 ms + 15 x next_wait 0.39 ms) plus one whole
+    // Worst case is one round (first_wait 1.55 ms + (n-1) x next_wait 0.39 ms; ~2 ms at the
+    // default n=2, ~7.4 ms at the diagnostic n=16) plus one whole
     // interval (50 ms at 20 Hz) before it polls again -- so ~60 ms. The bound below is ~8x that.
     //
     // ON EXPIRY WE PROCEED ANYWAY, loudly. A hook stuck in-round must never hang teardown: the card

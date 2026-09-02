@@ -299,22 +299,27 @@ __attribute__((noinline)) void responder_service(uint32_t n) {
 template <bool kActive, uint32_t TXQ, uint32_t BLK>
 inline void poll() {
     if constexpr (kActive) {
-        if (((++g_prescaler) & (FABRIC_ROUTER_SYNC_PRESCALER_MASK)) != 0) [[likely]] {
-            return;
-        }
 #if !defined(FABRIC_ROUTER_SYNC_SLOW_DOORBELL)
-        // RESPONDER DOORBELL FAST PATH. Answer a ping on every prescaler expiry instead of only on
-        // our own deadline. Without this the responder notices a doorbell once per interval, so
-        // sample 0's wait is the PHASE OFFSET between the two routers' independently-advancing
-        // deadlines -- measured ~194 us at 100 Hz, but drifting, and bounded only by first_wait
-        // (1.55 ms). Both routers spin inside the round, so that offset is blocked forwarding time
-        // on both ends, and it is what the fabric-bandwidth cost of syncing actually buys.
-        // responder_service() self-checks the doorbell tag and returns immediately when there is
-        // none, so the added cost per expiry is one call plus one L1 tag read.
+        // RESPONDER: EVERY iteration, doorbell only -- the receiver never answers on a timer.
+        // The design rule: timers are for the INITIATOR (it schedules rounds); the responder's one
+        // job is to answer doorbells, so the doorbell check is the only thing gating its response.
+        // History, so nobody re-adds a grid: answering on the prescaler grid made sample-0's wait
+        // the PHASE between the two ends' identical expiry periods -- and that phase is a
+        // DETERMINISTIC property of topology + launch order (it survived a host reboot: the same
+        // two links redrew ~175-254 us at mask 63), so bad links stay bad on every boot. Grid
+        // period 4x'd under mask 15 and the "worst" link became the fastest -- phase, not silicon.
+        // Answering every iteration removes the grid entirely: worst notice latency = one router
+        // loop iteration (~3.2 us loaded, sub-us idle).
+        // Cost: unarmed lanes (and initiators) pay one register test; an armed responder pays
+        // responder_service()'s no-doorbell entry -- cache invalidate + one L1 tag read + compares.
+        // The prescaler below now gates only the initiator machinery and the gap instrument.
         if (g_responder_n != 0) {
             responder_service<TXQ, BLK>(g_responder_n);
         }
 #endif
+        if (((++g_prescaler) & (FABRIC_ROUTER_SYNC_PRESCALER_MASK)) != 0) [[likely]] {
+            return;
+        }
         const uint64_t now = now64();
         // Gap tracking BEFORE the deadline early-return: every expiry contributes, not just the
         // ones that cross a deadline. now is already in hand; this is ~6 instructions.

@@ -6746,3 +6746,63 @@ deterministic phase draws at mask 63. Nothing is wrong with chip 3.
 The consistency check ("does 2x rtt0 equal the measured mean gap?") is what exposed the wrong
 model — fast links printed 45k vs 273k. An instrument that carries its own cross-check converts a
 wrong inference into a finding instead of a buried assumption.
+
+---
+
+## Doorbell-every-iteration + 2-sample rounds: the lottery is gone (user's design, landed)
+
+Two design directives from the user, both now default:
+
+1. **The receiver never answers on a timer — only the doorbell.** `responder_service()` (which
+   self-checks the tag and returns when there is none) moved from the prescaler-expiry branch to
+   the TOP of poll(), before the prescaler increment: every router iteration, one register test
+   (unarmed lanes/initiators) or one cache-invalidate + L1 tag read (armed responders). Timers
+   remain for what timers are for: the INITIATOR's round schedule, and lifecycle (arm/disarm via
+   config re-read) on the coarse path. The prescaler now gates only initiator machinery and the
+   gap instrument.
+2. **n_samples = 2 by default** (`TT_METAL_PERF_DEBUG_FABRIC_SYNC_SAMPLES`, clamp 2..16): this link
+   is measured stable (rtt_min spread 839-846 cy across ten runs, residual ~2.7-4.1 cy median) and
+   rate comes from ROUND deltas, never within-round — a round needs exactly one clean (offset, mid)
+   point. Sample 0 = doorbell (excluded by construction), sample 1 = the anchor.
+
+### Reboot interlude that sharpened the mechanism
+A host reboot re-dealt nothing: the chip-3 links came back slow AGAIN at mask 63 (3->0 175k,
+2->3 254k cy — 2->3 within 2% of pre-reboot). So the phase draw is DETERMINISTIC (topology +
+launch order), not random per boot — "bad" links stay bad on every boot. What proved phase over
+silicon still stands (mask 15 made 3->0 the fastest link). The MMIO degradation also survived the
+reboot (probes 1667-1880 ns/read, unchanged): a warm reboot is not the cold power cycle the
+degraded state needs.
+
+### The bug on the way in: the >= 4 rule existed in TWO places
+First n=2 run: device 100% healthy (668/668 rounds ok both ends, all samples at the host sink) —
+and 0 rounds solved, 668 dropped/link. The solver's small-n path was written, but a HOST-side
+pre-gate duplicated the old `trips.size() < 4` rule in front of solve() and dropped every 2-trip
+round unseen. Same disease as the clock_synced triplication: policy copied instead of referenced.
+The gate now refuses only < 2 (what the solver itself cannot use); the small-n rule lives in
+solve() alone. Also documented there: n == 4 must never route through the keep_frac path — the
+`keep = max(n/4, 4)` clamp would KEEP the doorbell outlier.
+
+### Result (same boot as the n=16 baseline, same config)
+
+| edge | rtt0 mean, n=16 grid-doorbell | rtt0 mean, n=2 every-iter | rounds | p/d/s |
+|------|-------------------------------|---------------------------|--------|-------|
+| 0->1 | 22,526 cy (16.7 us)           | **3,888 cy (2.9 us)**     | 374    | 0/0/0 |
+| 3->0 | 175,281 cy (130 us)           | **3,732 cy (2.8 us)**     | 374    | 0/0/0 |
+| 1->2 | 23,822 cy (17.6 us)           | **4,030 cy (3.0 us)**     | 374    | 0/0/0 |
+| 2->3 | 254,178 cy (188 us)           | **2,384 cy (1.8 us)**     | 373    | 0/0/0 |
+
+No slow class left: every link ~2-3 us, min ~920-1040 cy (wire + ~1 iteration), occasional max
+tails (96k-175k cy = a rare long stall on one end; bounded by first_wait and discarded by the
+solver). Closure -86..-119 ns = identical to this boot's n=16 baseline (accuracy preserved);
+corrections composing (4 CORRDBG writes); geomean 1.0119, 0 golden failures (baseline 1.0083 same
+boot) — the per-iteration doorbell check has no visible bandwidth cost. Blocked-router time per
+round: ~212 us worst (old) -> ~3 us typical.
+
+### Caveats, stated
+- **`residual` is 0.0 by construction at n=2** (one kept trip per round). It is no longer a health
+  stat; judge accuracy by CLOSURE and the cross-round rate fit. The FINAL line still prints it.
+- Closure bias moved boot-to-boot (-47 ns pre-reboot, -86..-119 ns now): consistent with real
+  link asymmetry that re-trains per boot; still the accuracy frontier, unrelated to n.
+- FSYNC_RTT rendering now draws <= 2 zones/round (only what the round carries).
+- n=1 is refused everywhere (host clamp + solver): a lone trip is the doorbell itself, and its
+  wait is one-sided — anchoring on it would inject exactly the bias this design removes.

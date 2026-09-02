@@ -80,6 +80,30 @@ inline EthSyncSolution solve(std::vector<Trip> trips, double keep_frac = 0.25) {
     EthSyncSolution s;
     s.n_total = trips.size();
     if (trips.size() < 4) {
+        // SMALL-n ROUNDS (n_samples <= 3, stable-link mode). Sample 0 is the DOORBELL -- its trip
+        // carries the responder's notice latency, which is one-sided and would bias the offset --
+        // so it is excluded by construction: take the FASTEST trip only. The keep_frac machinery
+        // below needs >= 4 trips, and n == 4 must NOT be routed through it: keep = max(n/4, 4)
+        // would keep all four trips INCLUDING the doorbell outlier. 2..3 here, >= 4 below.
+        if (trips.size() < 2) {
+            return s;  // a lone trip is the doorbell itself; refuse rather than anchor on it
+        }
+        s.rtt_first = trips.front().rtt;  // sample order; read before any sort
+        const Trip* best = &trips[0];
+        for (const auto& t : trips) {
+            if (t.rtt < best->rtt) {
+                best = &t;
+            }
+        }
+        s.rtt_min = best->rtt;
+        s.rtt_med = best->rtt;
+        s.n_kept = 1;
+        s.offset = best->offset;
+        s.mid_ref = best->mid;
+        s.offset_spread = 0;
+        s.residual_rms = 0.0;
+        s.rate = 1.0;  // rate comes from ROUND deltas in the caller, never from within a round
+        s.valid = true;
         return s;
     }
 

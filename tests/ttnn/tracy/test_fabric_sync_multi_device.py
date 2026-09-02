@@ -43,7 +43,7 @@ ARTIFACTS = PROFILER_ARTIFACTS_DIR / "fabric_sync_tests"
 
 SYNC_HZ = "20"
 # kMaxSamples in the router-sync wire format: samples per round, per link.
-SAMPLES_PER_ROUND = 16
+SAMPLES_PER_ROUND = int(os.environ.get("TT_METAL_PERF_DEBUG_FABRIC_SYNC_SAMPLES", "2"))
 # t0/t1/t2 -- three PP_SYNC packets per sample reach the sink.
 ENDPOINTS_PER_SAMPLE = 3
 
