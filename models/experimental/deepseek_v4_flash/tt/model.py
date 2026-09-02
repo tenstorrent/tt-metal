@@ -298,6 +298,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self.use_submeshes = use_submeshes
         self.mesh_devices = full_device.get_num_devices()
         pipeline_devices = system_config.pipeline.resolve_num_devices(self.mesh_devices)
+        # Galaxy32 TP4 only needs two 1x4 stages for this latency-oriented path.
+        # Keep the remaining chips out of the pipeline so they do not add socket
+        # hops or get represented by unused submeshes.
+        if use_submeshes and system_config.name == "galaxy32" and tp_size == 4:
+            pipeline_devices = 2 * tp_size
         if pipeline_devices % tp_size:
             raise ValueError(f"pipeline uses {pipeline_devices} devices, which is not divisible by tp_size {tp_size}")
         self.pipeline_devices = pipeline_devices
