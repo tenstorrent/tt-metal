@@ -373,6 +373,18 @@ public:
     friend class tensor_accessor::PagesAddressIteratorInterleaved<TensorAccessor>;
 };
 
+struct ConstexprDiscardTensorAccessorSpec {};
+
+template <>
+struct TensorAccessor<ConstexprDiscardTensorAccessorSpec> {
+    // This specialization exists only so an accessor in an `if constexpr (false)` branch is
+    // well-formed. Reaching it at runtime is always a host-schema/kernel-schema mismatch. Its
+    // parse-only API is intentionally minimal and should be extended only when another migrated
+    // kernel's discarded branch requires an additional member.
+    explicit TensorAccessor(tensor_accessor::ConstexprDiscardTensorBindingToken) { ASSERT(false); }
+    uint32_t get_bank_base_address() const { return 0; }
+};
+
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 template <
     uint32_t RankCT,
@@ -562,6 +574,9 @@ TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>
         /* IsDram */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_dram,
         /* IsShardContiguous */
         TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_shard_contiguous>>;
+
+TensorAccessor(tensor_accessor::ConstexprDiscardTensorBindingToken)
+    -> TensorAccessor<ConstexprDiscardTensorAccessorSpec>;
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)

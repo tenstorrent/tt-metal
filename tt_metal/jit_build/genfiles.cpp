@@ -151,12 +151,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         string name;
         uint32_t cta_offset;
         uint32_t addr_crta_offset;
+        bool constexpr_discard_only;
     };
     vector<TaEntry> ta_entries;
-    settings.process_tensor_binding_handles(
-        [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset, uint32_t /*num_rt_words*/) {
-            ta_entries.push_back({name, cta_offset, addr_crta_offset});
-        });
+    settings.process_tensor_binding_handles([&ta_entries](
+                                                const string& name,
+                                                uint32_t cta_offset,
+                                                uint32_t addr_crta_offset,
+                                                uint32_t /*num_rt_words*/,
+                                                bool constexpr_discard_only) {
+        ta_entries.push_back({name, cta_offset, addr_crta_offset, constexpr_discard_only});
+    });
 
     // Get the scratchpad bindings from the settings callback.
     // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed
@@ -257,6 +262,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // Tensor binding sequences are constexpr std::tuple of those member tokens (members order).
             content << "namespace tensor {\n";
             for (const auto& entry : ta_entries) {
+                if (entry.constexpr_discard_only) {
+                    content << "constexpr ::tensor_accessor::ConstexprDiscardTensorBindingToken " << entry.name
+                            << "{};\n";
+                    continue;
+                }
                 content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset
                         << "u, " << entry.addr_crta_offset << "u>;\n";
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";

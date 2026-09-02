@@ -45,7 +45,7 @@
 #include "impl/host_api/temp_quasar_api.hpp"  // for QuasarComputeConfig
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal.hpp>                      // for CompileProgram (JIT trigger)
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>  // tensor_accessor::ArgsConfig / ArgConfig::RuntimePageSize
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -245,8 +245,10 @@ TEST_F(ProgramSpecTestQuasar, CPU_SharedLocalAccessorNameForDifferentDFBsFails) 
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Kernel 'kernel' uses accessor_name 'same_accessor' for two different DFBs")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Kernel 'kernel' uses accessor_name 'same_accessor' for two different DFBs"),
+            ::testing::HasSubstr("first DFB 'dfb_0'"),
+            ::testing::HasSubstr("conflicting DFB 'dfb_1'"))));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_DuplicateProducerBindingForSameLocalAccessorNameFails) {
@@ -297,6 +299,58 @@ TEST_F(ProgramSpecTestQuasar, CPU_SelfLoopWithSharedLocalAccessorNameSucceeds) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBAccessorAliasesSucceed) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec;
+    spec.name = "dfb_accessor_aliases";
+
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    auto producer_binding = ProducerOf(DFBSpecName{"dfb"}, "out");
+    producer_binding.accessor_aliases = {"legacy_out", "row_major_out"};
+    producer.dfb_bindings.push_back(std::move(producer_binding));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    std::unordered_map<std::string, uint16_t> handles;
+    program.impl()
+        .get_kernel_by_spec_name("producer")
+        ->process_dataflow_buffer_binding_handles(
+            [&handles](const std::string& accessor_name, uint16_t slot) { handles.emplace(accessor_name, slot); });
+    ASSERT_EQ(handles.size(), 3u);
+    ASSERT_TRUE(handles.contains("out"));
+    EXPECT_EQ(handles.at("legacy_out"), handles.at("out"));
+    EXPECT_EQ(handles.at("row_major_out"), handles.at("out"));
+}
+
+TEST_F(ProgramSpecTestQuasar, DuplicateDFBAccessorAliasFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec;
+    spec.name = "duplicate_dfb_accessor_alias";
+
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb");
+    auto producer_binding = ProducerOf(DFBSpecName{"dfb"}, "out");
+    producer_binding.accessor_aliases = {"out"};
+    producer.dfb_bindings.push_back(std::move(producer_binding));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Accessor aliases must be unique")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_DMKernelSelfLoopOnGen2Fails) {
@@ -1177,6 +1231,52 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOffsetSubrangeSucceeds) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/16, /*dfb_num_entries=*/2);
+    spec.dataflow_buffers[0].borrowed_memory_offset = 32;
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOffsetSubrangeOversizedFails) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/16, /*dfb_num_entries=*/2);
+    spec.dataflow_buffers[0].borrowed_memory_offset = 48;
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("borrowed subrange")));
+}
+
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOffsetMisalignedFails) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec();
+    spec.dataflow_buffers[0].borrowed_memory_offset = 8;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be aligned to entry_size")));
+}
+
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOffsetNoCMisalignedFails) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/8, /*dfb_num_entries=*/2);
+    spec.dataflow_buffers[0].borrowed_memory_offset = 8;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("must be aligned to the L1/NoC address alignment")));
+}
+
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOffsetWithoutBackingFails) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec();
+    spec.dataflow_buffers[0].borrowed_from.reset();
+    spec.dataflow_buffers[0].borrowed_memory_offset = 16;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("without borrowed_from")));
+}
+
 TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBBackingParameterNeedNotBeKernelBoundSucceeds) {
     // Regression: a TensorParameter used ONLY as a borrowed-memory DFB's backing (referenced via
     // borrowed_from, never bound by a kernel) is a legitimate use. The validator must count
@@ -1392,6 +1492,112 @@ TEST_F(ProgramSpecTestQuasar, CPU_UnknownScratchpadReferenceFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("references unknown scratchpad")));
+}
+
+TEST_F(ProgramSpecTestQuasar, OptionalUnboundDFBForConstexprDiscardSucceeds) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    spec.kernels[0].dfb_bindings.push_back(KernelSpec::DFBBinding{
+        .dfb_spec_name = DFBSpecName{"compile_time_discarded"},
+        .accessor_name = "optional_dfb",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+        .allow_unbound_for_constexpr_discard = true});
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    std::unordered_map<std::string, uint16_t> handles;
+    program.impl()
+        .get_kernel_by_spec_name("dm_kernel")
+        ->process_dataflow_buffer_binding_handles(
+            [&handles](const std::string& accessor_name, uint16_t slot) { handles.emplace(accessor_name, slot); });
+    ASSERT_EQ(handles.size(), 2u);
+    EXPECT_EQ(handles.at("optional_dfb"), std::numeric_limits<uint16_t>::max());
+}
+
+TEST_F(ProgramSpecTestQuasar, DuplicateOptionalUnboundDFBFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].dfb_bindings.push_back(KernelSpec::DFBBinding{
+        .dfb_spec_name = DFBSpecName{"compile_time_discarded"},
+        .accessor_name = "optional_a",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+        .allow_unbound_for_constexpr_discard = true});
+    spec.kernels[0].dfb_bindings.push_back(KernelSpec::DFBBinding{
+        .dfb_spec_name = DFBSpecName{"compile_time_discarded"},
+        .accessor_name = "optional_b",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+        .allow_unbound_for_constexpr_discard = true});
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("two PRODUCER bindings")));
+}
+
+TEST_F(ProgramSpecTestQuasar, OptionalUnboundDFBRejectsAccessorAliases) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].dfb_bindings.push_back(KernelSpec::DFBBinding{
+        .dfb_spec_name = DFBSpecName{"compile_time_discarded"},
+        .accessor_name = "optional_dfb",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+        .accessor_aliases = {"alias"},
+        .allow_unbound_for_constexpr_discard = true});
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("cannot declare accessor aliases")));
+}
+
+TEST_F(ProgramSpecTestQuasar, OptionalDFBRejectsPresentSpec) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].dfb_bindings[0].allow_unbound_for_constexpr_discard = true;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("optional bindings must be unbound")));
+}
+
+TEST_F(ProgramSpecTestQuasar, OptionalUnboundScratchpadForConstexprDiscardSucceeds) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"compile_time_discarded"},
+        .accessor_name = "optional_scratch",
+        .allow_unbound_for_constexpr_discard = true}};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto& handles = program.impl().get_kernel_by_spec_name("dm_kernel")->scratchpad_binding_handles();
+    ASSERT_EQ(handles.size(), 1u);
+    EXPECT_EQ(handles[0].accessor_name, "optional_scratch");
+    EXPECT_EQ(handles[0].size_bytes, 0u);
+    EXPECT_EQ(handles[0].allocated_address, 0u);
+}
+
+TEST_F(ProgramSpecTestQuasar, OptionalScratchpadRejectsPresentSpec) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"unexpected_scratch"}, .size_per_node = 1024}};
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"unexpected_scratch"},
+        .accessor_name = "optional_scratch",
+        .allow_unbound_for_constexpr_discard = true}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("optional bindings must be unbound")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DuplicateOptionalUnboundScratchpadFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = ScratchpadSpecName{"compile_time_discarded"},
+            .accessor_name = "optional_a",
+            .allow_unbound_for_constexpr_discard = true},
+        KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = ScratchpadSpecName{"compile_time_discarded"},
+            .accessor_name = "optional_b",
+            .allow_unbound_for_constexpr_discard = true}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("more than once")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_UnboundScratchpadFails) {
@@ -3127,6 +3333,137 @@ protected:
     std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
 };
 
+TEST_F(ProgramSpecTestGen1, DFBAccessorAliasCompilesInKernelSource) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].dfb_bindings[0].accessor_aliases = {"legacy_input"};
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    static_assert(static_cast<uint32_t>(dfb::legacy_input) == static_cast<uint32_t>(dfb::input_dfb));
+}
+)"};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, OptionalUnboundDFBForConstexprDiscardCompilesInKernelSource) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    if constexpr (false) {
+        DataflowBuffer optional_dfb(dfb::optional_dfb);
+        (void)optional_dfb;
+    }
+}
+)"};
+    spec.kernels[0].dfb_bindings.push_back(KernelSpec::DFBBinding{
+        .dfb_spec_name = DFBSpecName{"compile_time_discarded"},
+        .accessor_name = "optional_dfb",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+        .allow_unbound_for_constexpr_discard = true});
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, OptionalUnboundSemaphoreForConstexprDiscardEmitsInvalidToken) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    static_assert(sem::optional_sem == 0xFFFF);
+}
+)"};
+    spec.kernels[0].semaphore_bindings = {SemaphoreBinding{
+        .semaphore_spec_name = SemaphoreSpecName{"compile_time_discarded"},
+        .accessor_name = "optional_sem",
+        .allow_unbound_for_constexpr_discard = true}};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, OptionalSemaphoreBindingRejectsPresentSpec) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.semaphores = {SemaphoreSpec{
+        .unique_id = SemaphoreSpecName{"present_sem"},
+        .target_nodes = NodeCoord{0, 0},
+    }};
+    spec.kernels[0].semaphore_bindings = {SemaphoreBinding{
+        .semaphore_spec_name = SemaphoreSpecName{"present_sem"},
+        .accessor_name = "optional_sem",
+        .allow_unbound_for_constexpr_discard = true}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("optional for constexpr discard, but that SemaphoreSpec is present")));
+}
+
+TEST_F(ProgramSpecTestGen1, OptionalUnboundTensorForConstexprDiscardEmitsTokenOnly) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+#include "api/tensor/tensor_accessor.h"
+void kernel_main() {
+    if constexpr (false) {
+        const TensorAccessor input(tensor::optional_input);
+        (void)input.get_bank_base_address();
+    }
+}
+)"};
+    spec.kernels[0].tensor_bindings = {TensorBinding{
+        .tensor_parameter_name = TensorParamName{"compile_time_discarded"},
+        .accessor_name = "optional_input",
+        .allow_unbound_for_constexpr_discard = true}};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto& handles = program.impl().get_kernel_by_spec_name("dm_kernel")->tensor_binding_handles();
+    ASSERT_EQ(handles.size(), 1u);
+    EXPECT_TRUE(handles[0].constexpr_discard_only);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, OptionalTensorBindingRejectsPresentParameter) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters = {MakeMinimalTensorParameter("present_tensor")};
+    spec.kernels[0].tensor_bindings = {TensorBinding{
+        .tensor_parameter_name = TensorParamName{"present_tensor"},
+        .accessor_name = "optional_input",
+        .allow_unbound_for_constexpr_discard = true}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("optional for constexpr discard, but that parameter is present")));
+}
+
+TEST_F(ProgramSpecTestGen1, OptionalUnboundScratchpadForConstexprDiscardEmitsZeroToken) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    if constexpr (false) {
+        Scratchpad<uint32_t> optional_scratch(scratch::optional_scratch);
+        (void)optional_scratch;
+    }
+}
+)"};
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"compile_time_discarded"},
+        .accessor_name = "optional_scratch",
+        .allow_unbound_for_constexpr_discard = true}};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto& handles = program.impl().get_kernel_by_spec_name("dm_kernel")->scratchpad_binding_handles();
+    ASSERT_EQ(handles.size(), 1u);
+    EXPECT_EQ(handles[0].size_bytes, 0u);
+    EXPECT_EQ(handles[0].allocated_address, 0u);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
 // Gen1 counterpart of the compute-config translation-stability tests (the Gen2 pair lives in the
 // Quasar suite): a default ComputeGen1Config{} must yield the historical internal ComputeConfig
 // defaults. Guards the perf/precision knobs that don't move a functional pass/fail result.
@@ -3436,6 +3773,83 @@ TEST_F(ProgramSpecTestGen1, CPU_DFBMixedKindProducersOnSameNodeSucceedsWithFlag)
         MakeMinimalWorkUnit("work_unit", node, {"producer_compute", "producer_dm", "consumer"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, DFBComputeSelfLoopWithoutFlagLowersToIntraTensix) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec;
+    spec.name = "compute_self_loop";
+
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {compute};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
+
+    auto program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto dfb_id = program.impl().get_dfb_handle("dfb");
+    const auto& config = program.impl().get_dataflow_buffer(dfb_id)->config;
+    ASSERT_TRUE(config.tensix_scope.has_value());
+    EXPECT_EQ(config.tensix_scope, dfb::TensixScope::INTRA);
+}
+
+TEST_F(ProgramSpecTestGen1, DFBDataMovementEndpointsUseExplicitSync) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec;
+    spec.name = "gen1_dm_explicit_sync";
+
+    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    auto program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto dfb_id = program.impl().get_dfb_handle("dfb");
+    const auto& config = program.impl().get_dataflow_buffer(dfb_id)->config;
+    EXPECT_FALSE(config.enable_producer_implicit_sync);
+    EXPECT_FALSE(config.enable_consumer_implicit_sync);
+}
+
+TEST_F(ProgramSpecTestGen1, DFBComputeSelfLoopAndDMParticipantWithFlagLowersToPlainExplicitSyncCB) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "compute_self_loop_with_dm_participant";
+
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+    auto dm = MakeMinimalGen1DMKernel("dm", DataMovementProcessor::RISCV_0);
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.advanced_options.allow_instance_multi_binding = true;
+
+    // Both kernels intentionally bind both sides: on Gen1 this escape hatch represents one
+    // legacy circular buffer shared across RISCs, not an intra-Tensix credit-flow DFB.
+    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "compute_out"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "compute_in"));
+    dm.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "dm_out"));
+    dm.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "dm_in"));
+
+    spec.kernels = {compute, dm};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute", "dm"})};
+
+    auto program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto dfb_id = program.impl().get_dfb_handle("dfb");
+    const auto& config = program.impl().get_dataflow_buffer(dfb_id)->config;
+    EXPECT_FALSE(config.tensix_scope.has_value());
+    EXPECT_FALSE(config.enable_producer_implicit_sync);
+    EXPECT_FALSE(config.enable_consumer_implicit_sync);
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_MultiThreadedDMKernelFails) {
@@ -5283,6 +5697,39 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnInconsistentBorrowedFrom) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("inconsistent borrowed_from")));
+}
+
+TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnInconsistentBorrowedMemoryOffset) {
+    const NodeCoord node{0, 0};
+
+    auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/16, /*num_entries=*/2);
+    auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/16, /*num_entries=*/2);
+    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_b"}}};
+    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_a"}}};
+    dfb_a.borrowed_from = TensorParamName{"borrowed_tensor"};
+    dfb_b.borrowed_from = TensorParamName{"borrowed_tensor"};
+    dfb_a.borrowed_memory_offset = 0;
+    dfb_b.borrowed_memory_offset = 16;
+
+    KernelSpec producer = MakeMinimalGen2DMKernel("producer_kernel");
+    KernelSpec consumer = MakeMinimalGen2DMKernel("consumer_kernel");
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_a"}, "out_a"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_a"}, "in_a"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_b"}, "out_b"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_b"}, "in_b"));
+
+    auto tensor_param = MakeMinimalTensorParameter("borrowed_tensor", tt::tt_metal::BufferType::L1);
+    BindTensorParameterToKernel(producer, "borrowed_tensor", "borrowed_t");
+
+    ProgramSpec spec;
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb_a, dfb_b};
+    spec.tensor_parameters = {tensor_param};
+    spec.work_units = {MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("inconsistent borrowed_memory_offset")));
 }
 
 //---------------------------------------------------------------------------------

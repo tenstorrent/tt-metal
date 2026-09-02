@@ -46,4 +46,8 @@ struct TensorBindingToken {
     static constexpr uint32_t addr_crta_offset = ADDR_CRTA_OFFSET;  // in bytes
 };
 
+// Parse-only token for a binding referenced exclusively from an if-constexpr-discarded branch.
+// It deliberately carries no CTA/CRTA offsets; constructing an accessor from it in live code is invalid.
+struct ConstexprDiscardTensorBindingToken {};
+
 }  // namespace tensor_accessor

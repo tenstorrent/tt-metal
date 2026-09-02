@@ -440,7 +440,7 @@ void AttachBorrowedDFBBuffers(
 
     // tensor_by_param is the param_name -> MeshTensor lookup the caller already built to fill the
     // binding CRTA sections; reuse it here rather than rebuilding an identical map per enqueue.
-    for (const auto& [dfb_id, tp_name] : borrowed_bindings) {
+    for (const auto& [dfb_id, tp_name, memory_offset] : borrowed_bindings) {
         auto it = tensor_by_param.find(tp_name);
         if (it == tensor_by_param.end()) {
             // Partial update (require_all=false): the borrowed TensorParameter was omitted; the DFB
@@ -460,6 +460,7 @@ void AttachBorrowedDFBBuffers(
         // Attach-time legality checks (analogous to dynamic CB's
         // CircularBufferConfig::set_globally_allocated_address_and_total_size validations).
         //   - L1-residency: only L1 buffers may back a DFB.
+        //   - Alignment: the absolute borrowed subrange address must satisfy L1/NoC alignment.
         //   - Sizing: the DFB's total bytes must fit in the buffer's per-bank allocation.
         // ProgramSpec-time validation already enforced the TensorSpec-level analogs; these
         // refine the check now that a concrete Buffer is in hand.
@@ -469,26 +470,49 @@ void AttachBorrowedDFBBuffers(
             dfb_id,
             tp_name);
         auto dfb_impl = program_impl.get_dataflow_buffer(dfb_id);
-        const uint32_t dfb_total_bytes = dfb_impl->config.entry_size * dfb_impl->config.num_entries;
+        const uint64_t dfb_total_bytes =
+            static_cast<uint64_t>(dfb_impl->config.entry_size) * dfb_impl->config.num_entries;
         TT_FATAL(
-            dfb_total_bytes <= buffer->aligned_size_per_bank(),
-            "Borrowed-memory DFB id {} (from TensorParameter '{}') has total size {} B, which exceeds the borrowed "
-            "Buffer's per-bank size of {} B.",
+            memory_offset % dfb_impl->config.entry_size == 0,
+            "Borrowed-memory DFB id {} (from TensorParameter '{}') has subrange offset {} B, which is not aligned "
+            "to its effective entry size of {} B.",
             dfb_id,
             tp_name,
+            memory_offset,
+            dfb_impl->config.entry_size);
+        const uint64_t address = static_cast<uint64_t>(buffer->address()) + memory_offset;
+        TT_FATAL(
+            address <= std::numeric_limits<uint32_t>::max(),
+            "Borrowed Buffer subrange address {} (base {} + offset {}) for DFB id {} (TensorParameter '{}') "
+            "exceeds uint32_t max.",
+            address,
+            buffer->address(),
+            memory_offset,
+            dfb_id,
+            tp_name);
+        TT_FATAL(
+            address % buffer->alignment() == 0,
+            "Borrowed-memory DFB id {} (from TensorParameter '{}') has absolute address {} (buffer address {} + "
+            "offset {}), which is not aligned to the L1/NoC address alignment of {} bytes.",
+            dfb_id,
+            tp_name,
+            address,
+            buffer->address(),
+            memory_offset,
+            buffer->alignment());
+        TT_FATAL(
+            static_cast<uint64_t>(memory_offset) + dfb_total_bytes <= buffer->aligned_size_per_bank(),
+            "Borrowed-memory DFB id {} (from TensorParameter '{}') has subrange offset {} + size {} B, which "
+            "exceeds the borrowed Buffer's per-bank size of {} B.",
+            dfb_id,
+            tp_name,
+            memory_offset,
             dfb_total_bytes,
             buffer->aligned_size_per_bank());
 
         // Attach the address to the device-side DFB. Per-enqueue update_program_dispatch_commands
         // reads from the cache this populates, so no further dispatch-command invalidation is
         // needed for either first-call or re-entry.
-        const auto address = buffer->address();
-        TT_FATAL(
-            address <= std::numeric_limits<uint32_t>::max(),
-            "Borrowed Buffer base address {} for DFB id {} (TensorParameter '{}') exceeds uint32_t max.",
-            address,
-            dfb_id,
-            tp_name);
         dfb_impl->set_borrowed_memory_base_addr(static_cast<uint32_t>(address));
     }
 }
@@ -532,6 +556,9 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     // kernel_run_args loop below and the binding-only second pass after it.
     auto append_binding_crtas = [&](const auto& binding_handles, std::vector<uint32_t>& out) {
         for (const auto& handle : binding_handles) {
+            if (handle.constexpr_discard_only) {
+                continue;
+            }
             auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
             TT_FATAL(
                 t_it != tensor_by_param.end(),
@@ -717,7 +744,9 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         const auto& binding_handles = kernel->tensor_binding_handles();
         std::size_t binding_section_words = 0;
         for (const auto& handle : binding_handles) {
-            binding_section_words += 1u + handle.num_runtime_field_crta_words;
+            if (!handle.constexpr_discard_only) {
+                binding_section_words += 1u + handle.num_runtime_field_crta_words;
+            }
         }
         std::vector<uint32_t> combined_crtas;
         combined_crtas.reserve(
@@ -760,7 +789,9 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
         const auto& binding_handles = kernel->tensor_binding_handles();
         const auto& scratchpad_handles = kernel->scratchpad_binding_handles();
-        if (binding_handles.empty() && scratchpad_handles.empty()) {
+        const bool has_runtime_tensor_binding =
+            std::ranges::any_of(binding_handles, [](const auto& handle) { return !handle.constexpr_discard_only; });
+        if (!has_runtime_tensor_binding && scratchpad_handles.empty()) {
             continue;  // No bindings => nothing to supply; no CRTA dispatch buffer needed.
         }
         // Binding-only kernel: its CRTA buffer is exactly the TensorBinding + scratchpad sections (it has
@@ -832,7 +863,9 @@ void UpdateTensorArgs(
     for (const auto& kernel_name : program_impl.get_registered_kernel_names()) {
         std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
         const auto& binding_handles = kernel->tensor_binding_handles();
-        if (binding_handles.empty()) {
+        const bool has_runtime_tensor_binding =
+            std::ranges::any_of(binding_handles, [](const auto& handle) { return !handle.constexpr_discard_only; });
+        if (!has_runtime_tensor_binding) {
             continue;
         }
 
@@ -847,6 +880,9 @@ void UpdateTensorArgs(
 
         RuntimeArgsData& crta = kernel->common_runtime_args_data();
         for (const auto& handle : binding_handles) {
+            if (handle.constexpr_discard_only) {
+                continue;
+            }
             auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
             TT_FATAL(
                 t_it != tensor_by_param.end(),
@@ -1043,7 +1079,8 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
     // (require_all=true); on this partial path the backing tensor may be omitted, which would
     // otherwise let a grown DFB overflow its borrowed buffer's per-bank region unchecked at execution.
     std::unordered_map<uint32_t, std::string> borrowed_backing;  // dfb_id -> backing TensorParameter name
-    for (const auto& [dfb_id, tp_name] : program_impl.get_dfb_borrowed_bindings()) {
+    for (const auto& [dfb_id, tp_name, memory_offset] : program_impl.get_dfb_borrowed_bindings()) {
+        (void)memory_offset;
         borrowed_backing.emplace(dfb_id, tp_name);
     }
     std::unordered_set<DFBSpecName> dfbs_with_params;
@@ -1189,7 +1226,9 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                 const auto& binding_handles = kernel->tensor_binding_handles();
                 size_t binding_section_words = 0;
                 for (const auto& h : binding_handles) {
-                    binding_section_words += 1u + h.num_runtime_field_crta_words;
+                    if (!h.constexpr_discard_only) {
+                        binding_section_words += 1u + h.num_runtime_field_crta_words;
+                    }
                 }
                 const size_t scratchpad_section_words = kernel->scratchpad_binding_handles().size();
                 const size_t crta_vararg_base =
@@ -1227,11 +1266,16 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
         for (const auto& kernel_name : program_impl.get_registered_kernel_names()) {
             std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
             const auto& binding_handles = kernel->tensor_binding_handles();
-            if (binding_handles.empty()) {
+            const bool has_runtime_tensor_binding =
+                std::ranges::any_of(binding_handles, [](const auto& handle) { return !handle.constexpr_discard_only; });
+            if (!has_runtime_tensor_binding) {
                 continue;
             }
             bool any_supplied = false;
             for (const auto& handle : binding_handles) {
+                if (handle.constexpr_discard_only) {
+                    continue;
+                }
                 if (tensor_by_param.contains(handle.tensor_parameter_name)) {
                     any_supplied = true;
                     break;
@@ -1247,6 +1291,9 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                 kernel_name);
             RuntimeArgsData& crta = kernel->common_runtime_args_data();
             for (const auto& handle : binding_handles) {
+                if (handle.constexpr_discard_only) {
+                    continue;
+                }
                 auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
                 if (t_it == tensor_by_param.end()) {
                     continue;  // tensor omitted → binding slot retained.

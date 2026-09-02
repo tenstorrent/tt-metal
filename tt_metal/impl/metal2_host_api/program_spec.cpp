@@ -299,6 +299,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         // use a single device-side accessor name instead of two aliasing wrappers.
         struct AccessorBindingInfo {
             DFBSpecName dfb_spec_name;
+            bool primary = false;
             bool has_producer = false;
             bool has_consumer = false;
         };
@@ -316,25 +317,56 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         };
         std::unordered_map<DFBSpecName, DFBBoundRoles> dfb_bound_roles;
         for (const auto& dfb_binding : kernel.dfb_bindings) {
-            auto [it, inserted] = accessor_bindings.try_emplace(
-                dfb_binding.accessor_name, AccessorBindingInfo{dfb_binding.dfb_spec_name});
-            AccessorBindingInfo& info = it->second;
-            if (inserted) {
-                TT_FATAL(
-                    IsValidCppIdentifier(dfb_binding.accessor_name),
-                    "Kernel '{}' DFB accessor_name '{}' must be a valid C++ identifier",
-                    kernel.unique_id,
-                    dfb_binding.accessor_name);
-            } else {
-                TT_FATAL(
-                    info.dfb_spec_name == dfb_binding.dfb_spec_name,
-                    "Kernel '{}' uses accessor_name '{}' for two different DFBs ('{}' and '{}'). "
-                    "Reusing a name is only permitted when both bindings target the same DFB (self-loop pair).",
-                    kernel.unique_id,
-                    dfb_binding.accessor_name,
-                    info.dfb_spec_name,
-                    dfb_binding.dfb_spec_name);
+            auto register_accessor = [&](const std::string& accessor_name, bool primary) {
+                auto [it, inserted] = accessor_bindings.try_emplace(
+                    accessor_name, AccessorBindingInfo{.dfb_spec_name = dfb_binding.dfb_spec_name, .primary = primary});
+                AccessorBindingInfo& info = it->second;
+                if (inserted) {
+                    TT_FATAL(
+                        IsValidCppIdentifier(accessor_name),
+                        "Kernel '{}' DFB accessor_name '{}' must be a valid C++ identifier",
+                        kernel.unique_id,
+                        accessor_name);
+                } else {
+                    TT_FATAL(
+                        info.dfb_spec_name == dfb_binding.dfb_spec_name,
+                        "Kernel '{}' uses accessor_name '{}' for two different DFBs; an accessor name may be reused "
+                        "only by the producer/consumer pair of the same self-loop DFB (first DFB '{}', conflicting "
+                        "DFB '{}')",
+                        kernel.unique_id,
+                        accessor_name,
+                        info.dfb_spec_name,
+                        dfb_binding.dfb_spec_name);
+                    TT_FATAL(
+                        primary && info.primary,
+                        "Kernel '{}' reuses DFB accessor name '{}' across bindings. Accessor aliases must be "
+                        "unique within a kernel; only a primary accessor may be reused by a self-loop pair.",
+                        kernel.unique_id,
+                        accessor_name);
+                }
+                return std::ref(info);
+            };
+            AccessorBindingInfo& info = register_accessor(dfb_binding.accessor_name, true).get();
+            for (const auto& alias : dfb_binding.accessor_aliases) {
+                register_accessor(alias, false);
             }
+            const bool has_dfb = collected.dfb_by_name.contains(dfb_binding.dfb_spec_name);
+            TT_FATAL(
+                has_dfb || dfb_binding.allow_unbound_for_constexpr_discard,
+                "Kernel '{}' references unknown DFB '{}'",
+                kernel.unique_id,
+                dfb_binding.dfb_spec_name);
+            TT_FATAL(
+                !(has_dfb && dfb_binding.allow_unbound_for_constexpr_discard),
+                "Kernel '{}' marks DFB '{}' as optional for constexpr discard, but that DataflowBufferSpec is "
+                "present; optional bindings must be unbound so accidental L1 allocation is diagnosed",
+                kernel.unique_id,
+                dfb_binding.dfb_spec_name);
+            TT_FATAL(
+                !dfb_binding.allow_unbound_for_constexpr_discard || dfb_binding.accessor_aliases.empty(),
+                "Kernel '{}' optional constexpr-discard DFB '{}' cannot declare accessor aliases",
+                kernel.unique_id,
+                dfb_binding.dfb_spec_name);
             const bool is_producer = (dfb_binding.endpoint_type == DFBEndpointType::PRODUCER);
             bool& seen_this_type = is_producer ? info.has_producer : info.has_consumer;
             TT_FATAL(
@@ -367,12 +399,9 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 dfb_binding.dfb_spec_name);
             role_already_bound = true;
 
-            // Referential integrity: the DFB must exist
-            TT_FATAL(
-                collected.dfb_by_name.contains(dfb_binding.dfb_spec_name),
-                "Kernel '{}' references unknown DFB '{}'",
-                kernel.unique_id,
-                dfb_binding.dfb_spec_name);
+            if (!has_dfb) {
+                continue;
+            }
 
             CollectedSpecData::DFBEndpointInfo& endpoint_info = collected.dfb_endpoints[dfb_binding.dfb_spec_name];
 
@@ -428,9 +457,16 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' semaphore accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
+            const bool has_semaphore = collected.semaphore_by_name.contains(binding.semaphore_spec_name);
             TT_FATAL(
-                collected.semaphore_by_name.contains(binding.semaphore_spec_name),
+                has_semaphore || binding.allow_unbound_for_constexpr_discard,
                 "Kernel '{}' references unknown semaphore '{}'",
+                kernel.unique_id,
+                binding.semaphore_spec_name);
+            TT_FATAL(
+                !(has_semaphore && binding.allow_unbound_for_constexpr_discard),
+                "Kernel '{}' marks semaphore '{}' as optional for constexpr discard, but that SemaphoreSpec is "
+                "present; optional bindings must be unbound so accidental allocation is diagnosed",
                 kernel.unique_id,
                 binding.semaphore_spec_name);
         }
@@ -468,9 +504,16 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' scratchpad accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
+            const bool has_scratchpad = collected.scratchpad_by_name.contains(binding.scratchpad_spec_name);
             TT_FATAL(
-                collected.scratchpad_by_name.contains(binding.scratchpad_spec_name),
+                has_scratchpad || binding.allow_unbound_for_constexpr_discard,
                 "Kernel '{}' references unknown scratchpad '{}'",
+                kernel.unique_id,
+                binding.scratchpad_spec_name);
+            TT_FATAL(
+                !(has_scratchpad && binding.allow_unbound_for_constexpr_discard),
+                "Kernel '{}' marks scratchpad '{}' as optional for constexpr discard, but that ScratchpadSpec is "
+                "present; optional bindings must be unbound so accidental L1 allocation is diagnosed",
                 kernel.unique_id,
                 binding.scratchpad_spec_name);
             // A kernel may bind a given scratchpad at most once. Two bindings would request two
@@ -485,6 +528,9 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 kernel.unique_id,
                 binding.scratchpad_spec_name,
                 binding.accessor_name);
+            if (!has_scratchpad) {
+                continue;
+            }
             collected.scratchpad_binders[binding.scratchpad_spec_name].push_back(&kernel);
         }
     }
@@ -523,13 +569,23 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' tensor accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
+            const bool has_tensor_parameter =
+                collected.tensor_parameter_by_name.contains(binding.tensor_parameter_name);
             TT_FATAL(
-                collected.tensor_parameter_by_name.contains(binding.tensor_parameter_name),
+                has_tensor_parameter || binding.allow_unbound_for_constexpr_discard,
                 "Kernel '{}' references unknown TensorParameter '{}'",
                 kernel.unique_id,
                 binding.tensor_parameter_name);
+            TT_FATAL(
+                !(has_tensor_parameter && binding.allow_unbound_for_constexpr_discard),
+                "Kernel '{}' marks TensorParameter '{}' as optional for constexpr discard, but that parameter is "
+                "present; optional bindings must be unbound so accidental runtime payload is diagnosed",
+                kernel.unique_id,
+                binding.tensor_parameter_name);
 
-            collected.tensor_parameter_users[binding.tensor_parameter_name].push_back(&kernel);
+            if (has_tensor_parameter) {
+                collected.tensor_parameter_users[binding.tensor_parameter_name].push_back(&kernel);
+            }
         }
 
         std::unordered_set<std::string> reserved_type_aliases;
@@ -1315,7 +1371,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         // flag: the role-uniformity checks are skipped and the per-node census relaxes its "exactly
         // one" counts to "at least one".
         const bool allow_multi = dfb.advanced_options.allow_instance_multi_binding;
-
         // (3) and (4): per-role uniformity of binding-site parameters, plus kernel kind.
         // Kind (compute vs DM) must agree because the DFB's hardware config carries a single
         // processor mask per role, and compute / DM masks live in disjoint bit ranges (bits
@@ -1410,16 +1465,15 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             return names;
         };
 
-        // Per-node census. Under allow_multi (see top of loop) the "exactly one" upper bound relaxes
-        // to "at least one": a node may host multiple instances of a role, but must still host at
-        // least one producer AND one consumer, or the FIFO is half-wired.
+        // Per-node census. Under allow_multi, the "exactly one" upper bound relaxes to "at least one"
+        // on both sides.
         for (const NodeCoord& node : footprint) {
             auto p_it = producers_on_node.find(node);
             auto c_it = consumers_on_node.find(node);
             const size_t num_producers = p_it == producers_on_node.end() ? 0 : p_it->second.size();
             const size_t num_consumers = c_it == consumers_on_node.end() ? 0 : c_it->second.size();
-            const bool node_ok =
-                allow_multi ? (num_producers >= 1 && num_consumers >= 1) : (num_producers == 1 && num_consumers == 1);
+            const bool node_ok = allow_multi ? (num_producers >= 1 && num_consumers >= 1)
+                                             : (num_producers == 1 && num_consumers == 1);
             if (node_ok) {
                 continue;
             }
@@ -1434,8 +1488,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     "(via its WorkUnitSpec membership).";
             } else {
                 guidance =
-                    "Multiple same-role kernel instances land on this node — their placements overlap; "
-                    "give each disjoint nodes.";
+                    "Multiple same-role kernel instances land on this node — their placements overlap; give each "
+                    "disjoint nodes. If they intentionally share a Gen1 plain CB, use allow_instance_multi_binding.";
             }
             TT_FATAL(
                 false,
@@ -1576,8 +1630,26 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // That's on the user; this is an advanced feature.
     for (const auto& dfb : spec.dataflow_buffers) {
         if (!dfb.borrowed_from.has_value()) {
+            TT_FATAL(
+                dfb.borrowed_memory_offset == 0,
+                "DFB '{}' specifies borrowed_memory_offset={} without borrowed_from.",
+                dfb.unique_id,
+                dfb.borrowed_memory_offset);
             continue;
         }
+        TT_FATAL(
+            dfb.borrowed_memory_offset % dfb.entry_size == 0,
+            "DFB '{}' borrowed_memory_offset={} must be aligned to entry_size={}.",
+            dfb.unique_id,
+            dfb.borrowed_memory_offset,
+            dfb.entry_size);
+        const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+        TT_FATAL(
+            dfb.borrowed_memory_offset % l1_alignment == 0,
+            "DFB '{}' borrowed_memory_offset={} must be aligned to the L1/NoC address alignment of {} bytes.",
+            dfb.unique_id,
+            dfb.borrowed_memory_offset,
+            l1_alignment);
         const TensorParamName& tp_name = *dfb.borrowed_from;
         auto it = collected.tensor_parameter_by_name.find(tp_name);
         TT_FATAL(
@@ -1593,23 +1665,26 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             "required). Both L1 and L1_SMALL are accepted.",
             dfb.unique_id,
             tp_name);
-        // Coarse spec-time sizing check against the TensorSpec's full packed size. No Buffer is
-        // available at spec time, so we can't query the per-bank allocation; the precise per-bank
-        // check fires at attach time in AttachBorrowedDFBBuffers (program_run_args.cpp), where
-        // a Buffer is in hand. For sharded L1 tensors the two checks differ — a DFB can pass
-        // here against the full-tensor size and still fail per-bank later. By design.
+        // Coarse spec-time sizing check against the TensorSpec's full packed size. A sharded
+        // TensorSpec does not describe its aligned per-bank allocation: for a small shard that
+        // allocation can legitimately be larger than the tensor's packed logical payload. Defer
+        // sharded sizing to the mandatory precise check in AttachBorrowedDFBBuffers, where the
+        // concrete Buffer's aligned_size_per_bank() is available.
         const size_t dfb_bytes = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
         const size_t tensor_bytes = tensor_spec.compute_packed_buffer_size_bytes();
-        TT_FATAL(
-            dfb_bytes <= tensor_bytes,
-            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) is larger than its borrowed TensorParameter '{}' "
-            "({} bytes).",
-            dfb.unique_id,
-            dfb.entry_size,
-            dfb.num_entries,
-            dfb_bytes,
-            tp_name,
-            tensor_bytes);
+        if (!tensor_spec.memory_config().is_sharded()) {
+            TT_FATAL(
+                static_cast<size_t>(dfb.borrowed_memory_offset) + dfb_bytes <= tensor_bytes,
+                "DFB '{}' borrowed subrange (offset {} + entry_size {} * num_entries {} = {} bytes) is larger than "
+                "its borrowed TensorParameter '{}' ({} bytes).",
+                dfb.unique_id,
+                dfb.borrowed_memory_offset,
+                dfb.entry_size,
+                dfb.num_entries,
+                static_cast<size_t>(dfb.borrowed_memory_offset) + dfb_bytes,
+                tp_name,
+                tensor_bytes);
+        }
     }
 
     // Validate DFB alias groups.
@@ -1672,7 +1747,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     total_size_a == total_size_b,
                     "Aliased DFBs '{}' and '{}' have different total sizes ({} vs {} bytes). "
                     "Aliased DFBs must have the same total size (entry_size * num_entries).",
-                    dfb.unique_id, alias_name, total_size_a, total_size_b);
+                    dfb.unique_id,
+                    alias_name,
+                    total_size_a,
+                    total_size_b);
 
                 // Rule 3: same node coverage.
                 const auto& nodes_b = collected.dfb_node_set.at(alias_name);
@@ -1692,6 +1770,13 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     "of an alias group borrows, or all members borrow from the same TensorParameter.",
                     dfb.unique_id,
                     alias_name);
+                TT_FATAL(
+                    dfb.borrowed_memory_offset == alias_spec->borrowed_memory_offset,
+                    "Aliased DFBs '{}' and '{}' have inconsistent borrowed_memory_offset values ({} vs {}).",
+                    dfb.unique_id,
+                    alias_name,
+                    dfb.borrowed_memory_offset,
+                    alias_spec->borrowed_memory_offset);
             }
         }
     }
@@ -2466,6 +2551,14 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
     size_t crta_word_index = base_named_crta_count;
     uint32_t binding_section_words = 0;
     for (const auto& binding : kernel.tensor_bindings) {
+        if (binding.allow_unbound_for_constexpr_discard) {
+            out.handles.push_back(TensorBindingHandle{
+                .accessor_name = binding.accessor_name,
+                .tensor_parameter_name = binding.tensor_parameter_name.get(),
+                .constexpr_discard_only = true,
+            });
+            continue;
+        }
         const ResolvedTensorParameter& resolved = resolved_tensor_parameters.at(binding.tensor_parameter_name);
         const std::vector<uint32_t>& binding_ctas = resolved.cta_payload;
 
@@ -2513,11 +2606,11 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
 
     size_t crta_word_index = scratchpad_base_crta_word;
     for (const auto& binding : kernel.scratchpad_bindings) {
-        const ScratchpadSpec* scratchpad_spec = scratchpad_by_name.at(binding.scratchpad_spec_name);
+        const auto scratchpad_it = scratchpad_by_name.find(binding.scratchpad_spec_name);
 
         ScratchpadBindingHandle handle;
         handle.accessor_name = binding.accessor_name;
-        handle.size_bytes = scratchpad_spec->size_per_node;
+        handle.size_bytes = scratchpad_it == scratchpad_by_name.end() ? 0 : scratchpad_it->second->size_per_node;
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
         // handle.allocated_address stays 0 until allocate_scratchpads runs.
         out.handles.push_back(std::move(handle));
@@ -2532,17 +2625,32 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
 // dfb::<name> accessor, so it must be the device slot rather than the program-wide id.
 tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
+    constexpr uint16_t invalid_dfb_slot = std::numeric_limits<uint16_t>::max();
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
-        const uint32_t slot = dfb_name_to_slot.at(dfb_binding.dfb_spec_name);
+        const auto slot_it = dfb_name_to_slot.find(dfb_binding.dfb_spec_name);
+        if (slot_it == dfb_name_to_slot.end()) {
+            TT_FATAL(
+                dfb_binding.allow_unbound_for_constexpr_discard,
+                "Kernel '{}' has no device slot for DFB '{}'",
+                kernel_spec.unique_id,
+                dfb_binding.dfb_spec_name);
+            out.emplace(dfb_binding.accessor_name, invalid_dfb_slot);
+            continue;
+        }
+        const uint32_t slot = slot_it->second;
         TT_FATAL(
-            slot <= std::numeric_limits<uint16_t>::max(),
-            "Kernel '{}' DFB '{}' device slot {} does not fit uint16_t",
+            slot < invalid_dfb_slot,
+            "Kernel '{}' DFB '{}' device slot {} collides with the reserved optional-unbound sentinel {}",
             kernel_spec.unique_id,
             dfb_binding.dfb_spec_name,
-            slot);
+            slot,
+            invalid_dfb_slot);
         out.emplace(dfb_binding.accessor_name, static_cast<uint16_t>(slot));
+        for (const auto& alias : dfb_binding.accessor_aliases) {
+            out.emplace(alias, static_cast<uint16_t>(slot));
+        }
     }
     return out;
 }
@@ -2550,16 +2658,28 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
 // Create map of accessor name -> logical Semaphore id
 tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
     const KernelSpec& kernel_spec, const SemaphoreNameToIdMap& semaphore_name_to_id) {
+    constexpr uint16_t invalid_semaphore_id = std::numeric_limits<uint16_t>::max();
     tt::tt_metal::SemaphoreBindingHandleMap out;
     out.reserve(kernel_spec.semaphore_bindings.size());
     for (const auto& semaphore_binding : kernel_spec.semaphore_bindings) {
-        const uint32_t id = semaphore_name_to_id.at(semaphore_binding.semaphore_spec_name);
+        const auto id_it = semaphore_name_to_id.find(semaphore_binding.semaphore_spec_name);
+        if (id_it == semaphore_name_to_id.end()) {
+            TT_FATAL(
+                semaphore_binding.allow_unbound_for_constexpr_discard,
+                "Kernel '{}' has no id for semaphore '{}'",
+                kernel_spec.unique_id,
+                semaphore_binding.semaphore_spec_name);
+            out.emplace(semaphore_binding.accessor_name, invalid_semaphore_id);
+            continue;
+        }
+        const uint32_t id = id_it->second;
         TT_FATAL(
-            id <= std::numeric_limits<uint16_t>::max(),
-            "Kernel '{}' semaphore '{}' id {} does not fit uint16_t",
+            id < invalid_semaphore_id,
+            "Kernel '{}' semaphore '{}' id {} collides with the reserved optional-unbound sentinel {}",
             kernel_spec.unique_id,
             semaphore_binding.semaphore_spec_name,
-            id);
+            id,
+            invalid_semaphore_id);
         out.emplace(semaphore_binding.accessor_name, static_cast<uint16_t>(id));
     }
     return out;
@@ -2614,8 +2734,13 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         }
         return false;
     }();
+    // Gen1 instance-multi-binding is an escape hatch for legacy shared-CB topologies. It must
+    // remain a plain circular buffer even if one of its participants is a compute self-loop;
+    // interpreting that overlap as an intra-Tensix credit-flow DFB would no longer be plain-CB
+    // lowering and is incompatible with a DM participant on the same buffer.
+    const bool force_plain_gen1_cb = dfb_spec->advanced_options.allow_instance_multi_binding;
     std::optional<experimental::dfb::TensixScope> tensix_scope;
-    if (is_self_loop && producer->is_compute_kernel()) {
+    if (is_self_loop && producer->is_compute_kernel() && !force_plain_gen1_cb) {
         tensix_scope = experimental::dfb::TensixScope::INTRA;
     }
 
@@ -2630,11 +2755,11 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
             if (!ep.kernel->is_data_movement_kernel()) {
                 continue;
             }
-            any_dm = true;
             const auto& dm_config = std::get<DataMovementHardwareConfig>(ep.kernel->hw_config);
             if (!std::holds_alternative<DataMovementGen2Config>(dm_config)) {
                 continue;
             }
+            any_dm = true;
             if (DmKernelDisablesImplicitSync(std::get<DataMovementGen2Config>(dm_config), dfb_spec->unique_id)) {
                 disabled = true;
             }
@@ -3025,7 +3150,8 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // SetProgramRunArgs / UpdateTensorArgs can resolve and attach the actual L1 Buffer
         // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
         if (dfb_spec.borrowed_from.has_value()) {
-            program_impl->register_dfb_borrowed_binding(dfb_id, dfb_spec.borrowed_from->get());
+            program_impl->register_dfb_borrowed_binding(
+                dfb_id, dfb_spec.borrowed_from->get(), dfb_spec.borrowed_memory_offset);
         }
     }
 
@@ -3086,11 +3212,13 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         const auto& user_named_crtas = kernel_spec.runtime_arg_schema.common_runtime_arg_names;
         const auto& cta_varargs = kernel_spec.advanced_options.compile_time_varargs;
         const uint32_t vararg_cta_count = static_cast<uint32_t>(cta_varargs.size());
+        std::vector<uint32_t> positional_cta_prefix = cta_varargs;
+        const uint32_t positional_cta_prefix_count = static_cast<uint32_t>(positional_cta_prefix.size());
         TensorBindingsForKernel ta_bindings = ResolveTensorBindingsForKernel(
             kernel_spec,
             resolved_tensor_parameters,
             /*base_named_crta_count=*/user_named_crtas.size(),
-            /*base_cta_offset=*/vararg_cta_count);
+            /*base_cta_offset=*/positional_cta_prefix_count);
 
         // Create TensorBindingHandles for this kernel
         const std::vector<TensorBindingHandle>& tensor_binding_handles = ta_bindings.handles;
@@ -3112,8 +3240,8 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // CRTA list through unchanged.
         const auto& named_rtas = kernel_spec.runtime_arg_schema.runtime_arg_names;
 
-        // Positional CTAs: [ user CTA varargs | TensorBinding CTA payloads ]
-        std::vector<uint32_t> compile_args = cta_varargs;
+        // Positional CTAs: [ user CTA varargs or legacy compatibility bindings | TensorBinding CTA payloads ]
+        std::vector<uint32_t> compile_args = std::move(positional_cta_prefix);
         compile_args.insert(compile_args.end(), ta_bindings.cta_words.begin(), ta_bindings.cta_words.end());
 
         // Create the kernel object

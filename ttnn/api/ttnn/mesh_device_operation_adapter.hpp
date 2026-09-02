@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt_stl/small_vector.hpp>
 
 #include <algorithm>
 #include <iterator>
@@ -236,6 +237,18 @@ public:
 
     static void validate_on_program_cache_miss(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         DeviceOperation::validate_on_program_cache_miss(attrs, tensor_args);
+    }
+
+    static void validate_after_program_cache_miss(
+        const operation_attributes_t& attrs,
+        const tensor_args_t& tensor_args,
+        const tensor_return_value_t& tensor_return_value,
+        const tt::tt_metal::distributed::MeshWorkload& workload)
+        requires requires {
+            DeviceOperation::validate_after_program_cache_miss(attrs, tensor_args, tensor_return_value, workload);
+        }
+    {
+        DeviceOperation::validate_after_program_cache_miss(attrs, tensor_args, tensor_return_value, workload);
     }
 
     static spec_return_value_t compute_output_specs(

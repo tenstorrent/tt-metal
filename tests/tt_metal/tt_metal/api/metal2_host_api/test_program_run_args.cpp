@@ -28,6 +28,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <limits>
 #include <optional>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -1362,6 +1363,27 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_ResizingBorrowedDFBBey
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds the borrowed")));
 }
 
+// The fit check must widen before multiplication. UINT32_MAX * 2 wraps to 0xfffffffe in uint32_t,
+// which could otherwise make an impossibly large borrowed DFB appear to fit a small L1 buffer.
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_BorrowedDFBSizeDoesNotWrapBeforeFitCheck) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
+    ProgramRunArgs setup = MakeBorrowedDFBRunArgs();
+    setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+    SetProgramRunArgs(program, setup);
+
+    ProgramRunArgs upd;
+    upd.dfb_run_overrides.push_back(
+        {.dfb = DFBSpecName{"dfb"}, .entry_size = std::numeric_limits<uint32_t>::max(), .num_entries = 2});
+    upd.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+    EXPECT_THAT(
+        [&] { UpdateProgramRunArgs(program, upd); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("size 8589934590 B")));
+}
+
 // Regression: a kernel that binds a tensor but declares no scalar args (no named/vararg RTAs or
 // CRTAs) may be omitted from kernel_run_args. SetProgramRunArgs must still validate, and must write
 // the binding's base address into that kernel's CRTA buffer via its second pass — the binding
@@ -1459,6 +1481,34 @@ inline ProgramSpec MakeGen1SpecWithRTAs(const NodeCoord& /*node*/, size_t num_pe
     // kernels[1] has no varargs (defaults)
 
     return spec;
+}
+
+TEST_F(ProgramRunArgsTestGen1, BorrowedDFBOverrideRejectsMisalignedEffectiveEntrySize) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.dataflow_buffers[0].entry_size = 16;
+    spec.dataflow_buffers[0].num_entries = 2;
+    spec.dataflow_buffers[0].borrowed_from = TensorParamName{"borrowed_tensor"};
+    spec.dataflow_buffers[0].borrowed_memory_offset = 16;
+    auto tensor_param = MakeMinimalTensorParameter("borrowed_tensor", tt::tt_metal::BufferType::L1);
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
+    auto memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
+    tensor_param.spec = tt::tt_metal::TensorSpec(
+        tt::tt_metal::Shape{1, 64},
+        tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config));
+    BindTensorParameterToKernel(spec.kernels[0], "borrowed_tensor", "borrowed_tensor");
+    spec.tensor_parameters = {tensor_param};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    program.impl().finalize_dataflow_buffer_configs();
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, tensor_param.spec);
+    ProgramRunArgs params;
+    params.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .entry_size = 32});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("not aligned to its effective entry size")));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgsSucceeds_ZeroRTAs) {

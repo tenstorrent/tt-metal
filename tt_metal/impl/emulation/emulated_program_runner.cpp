@@ -555,6 +555,7 @@ struct Metal2BindingsSnapshot {
         std::string name;
         uint32_t cta_offset;
         uint32_t addr_crta_offset;
+        bool constexpr_discard_only;
     };
     // Scratchpad bindings, in insertion order (matches genfiles.cpp's vector).
     struct ScratchEntry {
@@ -583,8 +584,8 @@ struct Metal2BindingsSnapshot {
             s += ":sem:" + name + "=" + std::to_string(id);
         }
         for (const auto& ta : ta_accessors) {
-            s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," +
-                 std::to_string(ta.addr_crta_offset);
+            s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," + std::to_string(ta.addr_crta_offset) +
+                 "," + std::to_string(ta.constexpr_discard_only);
         }
         for (const auto& sp : scratch_accessors) {
             s += ":scratch:" + sp.name + "=" + std::to_string(sp.size_bytes) + "," + std::to_string(sp.addr_crta_word);
@@ -808,7 +809,12 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
         // num_rt_words == 0 and are unaffected. Fail loudly on dynamic-shape until
         // snapshot + cache key + get_common_vararg offset math are wired up to
         // consume the per-binding count.
-        [&s](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off, uint32_t num_rt_words) {
+        [&s](
+            const std::string& name,
+            uint32_t cta_off,
+            uint32_t addr_crta_off,
+            uint32_t num_rt_words,
+            bool constexpr_discard_only) {
             TT_FATAL(
                 num_rt_words == 0,
                 "Emule does not yet support dynamic-shape Metal 2.0 tensor bindings "
@@ -818,7 +824,7 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
                 "before enabling this path.",
                 name,
                 num_rt_words);
-            s.ta_accessors.push_back({name, cta_off, addr_crta_off});
+            s.ta_accessors.push_back({name, cta_off, addr_crta_off, constexpr_discard_only});
         });
     kernel.process_scratchpad_binding_handles(
         [&s](const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
@@ -903,6 +909,10 @@ static void emit_metal2_namespaces(
     if (!s.ta_accessors.empty()) {
         f << "namespace tensor {\n";
         for (const auto& ta : s.ta_accessors) {
+            if (ta.constexpr_discard_only) {
+                f << "constexpr ::tensor_accessor::ConstexprDiscardTensorBindingToken " << ta.name << "{};\n";
+                continue;
+            }
             f << "using " << ta.name << "_t = ::tensor_accessor::TensorBindingToken<" << ta.cta_offset << "u, "
               << ta.addr_crta_offset << "u>;\n";
             f << "constexpr " << ta.name << "_t " << ta.name << "{};\n";
@@ -925,8 +935,12 @@ static void emit_metal2_namespaces(
     // section, and the scratchpad section.
     if (s.is_metal2) {
         const uint32_t named_rta_words = static_cast<uint32_t>(s.runtime_arg_names.size());
-        const uint32_t named_crta_words = static_cast<uint32_t>(
-            s.common_runtime_arg_names.size() + s.ta_accessors.size() + s.scratch_accessors.size());
+        uint32_t num_tensor_bindings = 0;
+        for (const auto& ta : s.ta_accessors) {
+            num_tensor_bindings += !ta.constexpr_discard_only;
+        }
+        const uint32_t named_crta_words =
+            static_cast<uint32_t>(s.common_runtime_arg_names.size() + num_tensor_bindings + s.scratch_accessors.size());
         f << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { "
           << "return get_arg_val<uint32_t>(" << named_rta_words << " + idx); }\n";
         f << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { "
