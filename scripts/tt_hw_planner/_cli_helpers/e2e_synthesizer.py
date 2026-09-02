@@ -3,8 +3,8 @@
 When the LLM verify pass (Item 2) returns FAIL or no chained forward
 exists yet, this module iterates with the LLM to actually SYNTHESIZE a
 chained ``demo.py`` that wires the graduated TTNN components into a
-top-level forward matching HF's reference. Gated on end-to-end PCC
-≥ 0.99, capped by iter budget.
+top-level forward matching HF's reference. Gated on the end-to-end PCC
+tier (``pcc_targets.E2E_PCC``), capped by iter budget.
 
 The existing ``e2e_emitter.py`` produces a SKELETON ``demo.py`` with
 ``# TODO[e2e]`` markers — that's deterministic template substitution
@@ -18,8 +18,10 @@ Distinct from existing per-component synthesis (``llm_synth.py``):
     component at a time, gated on per-component PCC ≥ 0.99 via
     ``tests/pcc/test_<comp>.py``.
   * E2E synthesis writes the chained ``demo.py`` that calls all
-    graduated components in HF-matching order, gated on end-to-end
-    PCC ≥ 0.99 via the strict gate.
+    graduated components in HF-matching order, gated on the end-to-end
+    tier (``pcc_targets.E2E_PCC``) via the strict gate. That tier is
+    looser than the per-component one above, and deliberately so —
+    error accumulates along the chain.
 
 Both share the same agent dispatcher (``_invoke_agent``) and the
 same iter-loop shape (prompt → invoke → measure → adapt). The
@@ -46,6 +48,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+from ..pcc_targets import E2E_PCC
 
 
 # ─── Result schema ──────────────────────────────────────────────────
@@ -115,7 +119,7 @@ def extract_late_discovery_markers(demo_py_src: str) -> List[str]:
 # ─── Prompt builder ──────────────────────────────────────────────────
 
 
-_PCC_TARGET = 0.99
+_PCC_TARGET = E2E_PCC
 
 
 def build_synthesis_prompt(

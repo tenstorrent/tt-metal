@@ -41,7 +41,7 @@ harness-skipped (manual).
 Config via env:
   BRINGUP_MCP_DEMO_DIR / BRINGUP_MCP_MODEL_ID / BRINGUP_MCP_STATE (required)
   BRINGUP_MCP_MAX_ATTEMPTS (base cap, default 2)
-  BRINGUP_MCP_PCC (default 0.99) · BRINGUP_MCP_TIMEOUT (default 1800)
+  BRINGUP_MCP_PCC (default: pcc_targets.COMPONENT_PCC) · BRINGUP_MCP_TIMEOUT (default 1800)
 """
 from __future__ import annotations
 
@@ -61,6 +61,7 @@ from scripts.tt_hw_planner import shard_plan as _shard  # noqa: E402
 from scripts.tt_hw_planner._cli_helpers import auto_iterate as _auto  # noqa: E402
 from scripts.tt_hw_planner._cli_helpers import bringup_ladder  # noqa: E402
 from scripts.tt_hw_planner._cli_helpers.agent import resolve_claude_bin  # noqa: E402
+from scripts.tt_hw_planner.pcc_targets import COMPONENT_PCC  # noqa: E402
 
 try:
     from mcp.server.fastmcp import FastMCP  # noqa: E402
@@ -92,7 +93,7 @@ _MAX_ATTEMPTS = int(os.environ.get("BRINGUP_MCP_MAX_ATTEMPTS", "2"))
 _NEW_UNLIMITED = _MAX_ATTEMPTS <= 0
 _ADAPT_CAP = _MAX_ATTEMPTS if _MAX_ATTEMPTS > 0 else 2
 _HARD_CAP = max(3, _ADAPT_CAP * 2)
-_PCC = float(os.environ.get("BRINGUP_MCP_PCC", "0.99"))
+_PCC = float(os.environ.get("BRINGUP_MCP_PCC", str(COMPONENT_PCC)))
 _TIMEOUT = int(os.environ.get("BRINGUP_MCP_TIMEOUT", "1800"))
 _SHARD_TP = int(os.environ.get("TT_HW_PLANNER_SHARD_TP", "2"))
 _SHARD_DP = int(os.environ.get("TT_HW_PLANNER_SHARD_DP", "1"))

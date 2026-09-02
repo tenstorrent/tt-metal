@@ -17,7 +17,7 @@ unless E2E_SKIP_HOST_FREE=1 (correctness-only escape for a genuinely host-bound 
 
 Config via env (set in the --mcp-config):
   E2E_MCP_DEMO_DIR   demo dir to gate (required)
-  E2E_MCP_PCC        required e2e PCC threshold (default 0.99)
+  E2E_MCP_PCC        required e2e PCC threshold (default: pcc_targets.E2E_PCC)
   E2E_MCP_TIMEOUT    per-gate pytest timeout seconds (default 1800)
 """
 
@@ -34,6 +34,7 @@ _REPO = _THP.parents[1]
 sys.path.insert(0, str(_REPO))
 
 from scripts.tt_hw_planner.commands.emit_e2e import _run_deterministic_gates  # noqa: E402
+from scripts.tt_hw_planner.pcc_targets import E2E_PCC  # noqa: E402
 
 try:
     from mcp.server.fastmcp import FastMCP  # noqa: E402
@@ -59,7 +60,7 @@ except Exception:  # noqa: BLE001 -- a server that cannot report progress must s
         pass
 
 _DEMO_DIR = os.environ.get("E2E_MCP_DEMO_DIR", "")
-_PCC = float(os.environ.get("E2E_MCP_PCC", "0.99"))
+_PCC = float(os.environ.get("E2E_MCP_PCC", str(E2E_PCC)))
 _TIMEOUT = int(os.environ.get("E2E_MCP_TIMEOUT", "1800"))
 
 

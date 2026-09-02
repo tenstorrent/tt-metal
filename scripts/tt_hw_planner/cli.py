@@ -23,6 +23,7 @@ from .bringup import (
     render_text as render_bringup_text,
 )
 from .discovery import BRINGUP_ROOT, safe_relative_to_root
+from .pcc_targets import E2E_PCC
 from .bringup_loop import (
     autofill_stubs,
     emit_runnable_demo,
@@ -11094,8 +11095,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     pe2e.add_argument(
         "--pcc-target",
         type=float,
-        default=0.95,
-        help="PCC threshold for the final HF-vs-TT comparison (default: 0.95)",
+        default=E2E_PCC,
+        help=f"PCC threshold for the final HF-vs-TT comparison (default: {E2E_PCC})",
     )
     pe2e.add_argument(
         "--overwrite",
