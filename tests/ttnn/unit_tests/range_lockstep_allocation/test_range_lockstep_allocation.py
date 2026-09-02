@@ -20,6 +20,7 @@ import pytest
 import torch
 
 import ttnn
+from conftest import requires_hybrid_allocator
 
 
 PAGE_SIZE = 32
@@ -107,10 +108,10 @@ def hog(hybrid_mesh_device):
         try:
             holder.append(_allocate(mesh, core, num_bytes, per_core=True))
         except RuntimeError as exc:
-            # HYBRID is latched at the first MetalContext construction, so the env var the fixture
-            # sets is too late if an earlier test in the same pytest process already opened a
-            # device. Skip rather than fail: under LOCKSTEP no per-core ranges are gathered at all,
-            # and these tests would prove nothing. Per-core allocation is what reports it.
+            # The marker only sees the env var; HYBRID is latched at the first MetalContext
+            # construction, so it can be exported and still not active if something already opened
+            # a device in this process. Skip rather than fail: per-core allocation is what reports
+            # it, and under LOCKSTEP these tests would prove nothing anyway.
             if "AllocatorMode::HYBRID" not in str(exc):
                 raise
             pytest.skip("HYBRID allocator mode is not active in this process")
@@ -134,6 +135,7 @@ def hogged_mesh(hog):
     yield mesh, place(HOGGED_CORE)
 
 
+@requires_hybrid_allocator
 def test_range_lockstep_ignores_per_core_ranges_on_other_cores(hogged_mesh):
     """FREE_CORE holds nothing, so a range lockstep buffer of the same size must fit there."""
     mesh, num_bytes = hogged_mesh
@@ -141,6 +143,7 @@ def test_range_lockstep_ignores_per_core_ranges_on_other_cores(hogged_mesh):
     assert tensor is not None
 
 
+@requires_hybrid_allocator
 def test_default_lockstep_still_avoids_per_core_ranges_everywhere(hogged_mesh, expect_error):
     """The default must keep scanning every bank.
 
@@ -152,6 +155,7 @@ def test_default_lockstep_still_avoids_per_core_ranges_everywhere(hogged_mesh, e
         _allocate(mesh, FREE_CORE, num_bytes)
 
 
+@requires_hybrid_allocator
 @pytest.mark.parametrize("hog_index", [0, 1, 2], ids=["hog-first", "hog-middle", "hog-last"])
 def test_range_lockstep_still_avoids_per_core_ranges_on_its_own_cores(hog, expect_error, hog_index):
     """Scoping the scan must narrow it to the buffer's own cores, not switch it off.
@@ -170,6 +174,7 @@ def test_range_lockstep_still_avoids_per_core_ranges_on_its_own_cores(hog, expec
         _allocate(mesh, first, num_bytes, last_core=last, range_lockstep=True)
 
 
+@requires_hybrid_allocator
 def test_range_lockstep_spans_several_free_cores(hogged_mesh):
     """A multi-core grid that excludes the hogged core must still be placeable."""
     mesh, num_bytes = hogged_mesh
@@ -178,6 +183,7 @@ def test_range_lockstep_spans_several_free_cores(hogged_mesh):
     assert tensor is not None
 
 
+@requires_hybrid_allocator
 def test_range_lockstep_round_trip(hybrid_mesh_device):
     """Data written through a range lockstep config reads back intact.
 

@@ -12,7 +12,6 @@ allocators to scan.
 """
 
 import gc
-import os
 
 import pytest
 import ttnn
@@ -27,7 +26,6 @@ def hybrid_mesh_device():
     is_data_transformation_required. Tests that allocate therefore need a mesh, but not more
     than one device.
     """
-    os.environ["TT_METAL_ALLOCATOR_MODE_HYBRID"] = "1"
     mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1))
     yield mesh
     # A test that asserted on a refused allocation leaves the exception's traceback holding its
@@ -35,4 +33,3 @@ def hybrid_mesh_device():
     # collected after close aborts the process from its destructor.
     gc.collect()
     ttnn.close_mesh_device(mesh)
-    os.environ.pop("TT_METAL_ALLOCATOR_MODE_HYBRID", None)
