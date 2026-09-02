@@ -29,7 +29,9 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshAssignsStrandedSlotsToLocalWork
             available_space,
             memory_regions);
 
+        // The uniform table depth is 2 and 5 slots are stranded, so worker injection gets all 7.
         EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 0), 7);
+
         for (size_t channel = 1; channel < sender_channels[0]; ++channel) {
             EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, channel), 2);
         }
@@ -50,6 +52,26 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshAssignsStrandedSlotsToLocalWork
         }
         EXPECT_EQ(allocated_slots, available_space / channel_buffer_size);
     }
+}
+
+TEST(FabricStaticSizedChannelsAllocatorTest, MeshCapsLocalWorkerInjectionDepth) {
+    // Worker injection depth stays capped at 127 no matter how much buffering space is available.
+    constexpr size_t channel_buffer_size = 14432;
+    constexpr size_t available_space = channel_buffer_size * 10000;
+    constexpr std::array<size_t, builder_config::MAX_NUM_VCS> sender_channels = {4, 3, 0};
+    constexpr std::array<size_t, builder_config::MAX_NUM_VCS> receiver_channels = {1, 1, 0};
+    const std::vector<MemoryRegion> memory_regions = {{0, available_space}};
+
+    const FabricStaticSizedChannelsAllocator allocator(
+        Topology::Torus,
+        FabricEriscDatamoverOptions{},
+        sender_channels,
+        receiver_channels,
+        channel_buffer_size,
+        available_space,
+        memory_regions);
+
+    EXPECT_EQ(allocator.get_sender_channel_number_of_slots(0, 0), 127);
 }
 
 TEST(FabricStaticSizedChannelsAllocatorTest, RingKeepsUniformChannelDepth) {
