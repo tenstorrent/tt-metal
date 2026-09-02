@@ -44,6 +44,11 @@ inline const DFBSpecName OUT_DFB{"out"};                        // c_16
 // no FIFO semantics, which is all the kernel ever used it as.
 inline const ScratchpadSpecName ZERO_SCRATCH{"zero"};  // c_27
 
+// Retained for deepseek_prefill/rotary_embedding_indexed, which shares this vocabulary and still
+// binds a self-looped zero DFB (its Gen2 uplift is tracked separately). Not used by the three
+// rotary_embedding_llama factories.
+inline const DFBSpecName ZERO_DFB{"zero"};  // c_27
+
 // Tensor parameters
 inline const TensorParamName INPUT_PARAM{"input"};
 inline const TensorParamName COS_PARAM{"cos"};
