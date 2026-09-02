@@ -14,6 +14,8 @@ Supports two layer types:
 
 import os
 
+from loguru import logger
+
 import ttnn
 from models.demos.gemma4.config import MeshConfig, Mode
 
@@ -143,6 +145,12 @@ class Gemma4Attention:
         self._tail_pool = None
         self._tail_pool_map = {}
         _pool_slots = max(0, int(os.environ.get("GEMMA4_TAIL_POOL_SLOTS", "8")))
+        if config.is_sliding and config.sliding_window and _pool_slots == 0 and layer_idx == 0:
+            logger.warning(
+                "GEMMA4_TAIL_POOL_SLOTS=0: cross-chunk sliding tails use the "
+                "runtime clone stash, which is NOT trace-safe under interleaved "
+                "replay (#30187 class) — bring-up only, do not serve with this."
+            )
         if config.is_sliding and config.sliding_window and _pool_slots:
             tp = max(1, int(getattr(mesh_config, "tp", 1)))
             nkv_local = 1 if self.weights.kv_replicated else max(1, config.num_key_value_heads // tp)
