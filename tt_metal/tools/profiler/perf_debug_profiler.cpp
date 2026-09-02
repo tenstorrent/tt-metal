@@ -2140,6 +2140,18 @@ uint32_t fabric_sync_publish_ms() {
     return v;
 }
 
+// Orientation rule for sync edges. FALSE (default) = orient by chip id, which on a ring leaves one
+// asymmetry term cancelling in the closure sum (~2 eps). TRUE = balance initiator/responder counts
+// per chip, which on a ring forces a directed cycle and accumulates every term (~4 eps). See the
+// orientation comment at the edge-construction site for why these cannot both be had.
+bool fabric_sync_balance_roles() {
+    static const bool v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_BALANCE_ROLES");
+        return s != nullptr && *s != '\0' && *s != '0';
+    }();
+    return v;
+}
+
 double fabric_sync_hz() {
     static const double v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ");
@@ -2338,20 +2350,39 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
             }
             seen_pairs.insert(pk);
             FabricSyncState::Edge e;
-            // ROLE BALANCE, not chip id. Orienting every edge by `a->id() < pid` makes the
-            // lowest-numbered chip initiate ALL of its links and the highest respond to all of its
-            // own: on the 4-chip ring that is chip 0 initiating twice and chip 3 responding twice.
-            // Not cosmetic -- every link whose RESPONDER was chip 3 kept a ~190-260 us sample-0
-            // doorbell wait that the fast-doorbell fix cleared on every other link, and chip 3 was
-            // the only responder-only chip. Balancing gives each chip one send and one receive (a
-            // directed ring), so no chip carries two of the same role.
-            // role_load = (times initiator) - (times responder); the lighter end initiates, with the
-            // old chip-id rule kept as the tie-break so the assignment stays deterministic.
+            // EDGE ORIENTATION, and it is a CLOSURE-ACCURACY decision, not a cosmetic one.
+            //
+            // Each link's forward/return asymmetry eps enters the ring-closure sum with a sign set
+            // by the direction it is TRAVERSED, so orientation decides whether those errors cancel
+            // or accumulate. Measured on this 4-ring (eps ~= 24 ns per link):
+            //   chip-id orientation  {0->1, 0->3, 1->2, 2->3}: one term cancels -> -2 eps, ~48 ns
+            //   directed ring        {0->1, 1->2, 2->3, 3->0}: all accumulate  -> -4 eps, ~96 ns
+            //
+            // Those are MUTUALLY EXCLUSIVE with role balance, and provably so: "every chip one send
+            // and one receive" means out-degree 1 and in-degree 1 at every node, which on a cycle IS
+            // the directed cycle -- the maximally-accumulating orientation. You cannot have both.
+            //
+            // Balance was added on the belief that a responder-only chip (3) was intrinsically slow.
+            // That was refuted: the ~190-260 us sample-0 waits were a PHASE artifact of answering
+            // doorbells on a prescaler grid, and are gone now that responders answer every
+            // iteration. With its motivation dead and 2x the closure error as its price, the
+            // default reverts to the cancelling orientation.
+            //
+            // TT_METAL_PERF_DEBUG_FABRIC_SYNC_BALANCE_ROLES=1 restores the balanced directed ring
+            // (kept because on a NON-cycle topology the conflict need not arise, and because it is
+            // the arm that produced the 2x measurement).
             const uint32_t ca = static_cast<uint32_t>(a->id());
             const uint32_t cb = static_cast<uint32_t>(pid);
-            const int la = role_load[ca];
-            const int lb = role_load[cb];
-            const bool a_initiates = (la != lb) ? (la < lb) : (a->id() < pid);
+            bool a_initiates;
+            if (fabric_sync_balance_roles()) {
+                // role_load = (times initiator) - (times responder); lighter end initiates, chip id
+                // as the deterministic tie-break.
+                const int la = role_load[ca];
+                const int lb = role_load[cb];
+                a_initiates = (la != lb) ? (la < lb) : (a->id() < pid);
+            } else {
+                a_initiates = a->id() < pid;
+            }
             role_load[ca] += a_initiates ? 1 : -1;
             role_load[cb] += a_initiates ? -1 : 1;
             FabricSyncState::End ea{static_cast<uint32_t>(a->id()), ec, CoreCoord{}, 0};

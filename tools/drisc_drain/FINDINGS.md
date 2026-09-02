@@ -6940,3 +6940,125 @@ what every measured value is.
 Two runs (`gap`, `mask15`) sat between the role change and the reboot and were the only thing that
 could separate the two candidate causes. Neither was collected for this purpose. Keeping full logs
 from every arm is what made the retraction possible in one query instead of a re-run per hypothesis.
+
+---
+
+## Orientation reverted to the cancelling rule: closure halved, confirmed same-boot (2.06x)
+
+Role balance was added on the belief that a responder-only chip was intrinsically slow. That was
+refuted (phase, not silicon -- responders now answer every iteration). Its remaining effect was
+pure cost: on a ring, "every chip one send and one receive" means out-degree 1 and in-degree 1 at
+every node, which IS the directed cycle -- the orientation in which every link's asymmetry
+accumulates. The two goals are mutually exclusive on a cycle, provably, so the default reverts to
+the chip-id orientation and the balanced rule stays reachable via
+`TT_METAL_PERF_DEBUG_FABRIC_SYNC_BALANCE_ROLES=1`.
+
+7 arms x 2 reps, interleaved, control `SYNC_HZ=0`, one boot:
+
+| arm                 | edges                | closure (2 reps)      | geomean | worst 4-link |
+|---------------------|----------------------|-----------------------|---------|--------------|
+| ctrl SYNC_HZ=0      | --                   | --                    | 1.0150  | -0.74, -0.72 |
+| 100 Hz / pub 40     | 0->1 0->3 1->2 2->3  | 41.7, 50.6 -> **46.2**| 1.0120  | -0.70, -0.69 |
+| 100 Hz / pub 5      | (same)               | 49.2, 45.8 -> 47.5    | 1.0119  | -0.70, -0.71 |
+| 500 Hz / pub 40     | (same)               | 42.4, 46.8 -> 44.6    | 1.0116  | -0.70, -0.69 |
+| 1000 Hz / pub 40    | (same)               | 48.8, 47.6 -> 48.2    | 1.0112  | -0.75, -0.75 |
+| 1000 Hz / pub 5     | (same)               | 46.9, 49.4 -> 48.2    | 1.0113  | -0.73, -0.75 |
+| **100 Hz BALANCE=1**| 0->1 1->2 2->3 3->0  | 96.4, 94.3 -> **95.4**| 1.0119  | -0.71, -0.71 |
+
+### The 2 eps / 4 eps model is now CONFIRMED, not inferred
+The BAL arm is the same code, same boot, same config -- only the orientation flag differs --
+and it lands at **95.4 / 46.2 = 2.06x**. eps solves to **23.1 ns** from the 2 eps arm and
+**23.9 ns** from the 4 eps arm: one physical quantity reproduced from two independent
+measurements, which is what separates a confirmed model from a curve fit. Earlier the same
+comparison was only available ACROSS boots and across a code change, where it could not be
+disentangled from the reboot.
+
+### Orientation is free
+BAL geomean 1.0119 vs default 1.0120; worst 4-link -0.71 vs -0.70. Choosing the cancelling
+orientation costs nothing in bandwidth, so there is no tradeoff to weigh against the 2x accuracy.
+
+### The rate-sweep conclusions survive re-measurement on the new orientation
+Rate buys nothing: 46.2 / 44.6 / 48.2 ns across 100 / 500 / 1000 Hz, spread inside the within-arm
+noise (41.7-50.6 on one arm alone). Republish does not bind: pub 5 vs pub 40 is 47.5 vs 46.2 at
+100 Hz and 48.2 vs 48.2 at 1000 Hz. Sync costs 0.30-0.38 pts of geomean against the control, flat
+in rate. Lossless everywhere (0/0/0 to 3706 rounds/link), 0 golden failures, and all 14 runs
+completed -- no repeat of the previous sweep's UMD DeviceTimeoutError, which supports reading that
+as a degraded-box flake rather than a rate effect (still n=1 either way).
+
+### Standing recommendation
+100 Hz, default (cancelling) orientation, publish 40 ms. Per-link asymmetry eps ~= 23-24 ns is the
+measurement floor and is unaffected by every knob swept here; the shared-slope term (ppm-scale,
+integrating to ms over a session) remains the dominant DELIVERED error and the only place a real
+accuracy win is left.
+
+---
+
+## Orientation reverted (closure halved, 2.03x same-boot) -- and the accounting REFUTES the "wire asymmetry" story
+
+Role balance was added on the belief that a responder-only chip was intrinsically slow. Refuted
+(phase, not silicon). Its remaining effect was pure cost: on a ring, "every chip one send and one
+receive" means out-degree 1 and in-degree 1 at every node, which IS the directed cycle -- the
+orientation where every link's bias accumulates. Provably mutually exclusive, so the default
+reverts to the chip-id orientation; the balanced rule stays reachable via
+`TT_METAL_PERF_DEBUG_FABRIC_SYNC_BALANCE_ROLES=1`.
+
+### Same-boot A/B, n=10 vs n=5 (not n=1)
+Closure per run (each itself a mean of 8 samples), one boot, same binary:
+
+    cancelling {0->1,0->3,1->2,2->3}, n=10: 41.7 50.6 49.2 45.8 42.4 46.8 48.8 47.6 46.9 49.4
+                                            -> mean 46.9, range 41.7-50.6
+    directed   {0->1,1->2,2->3,3->0}, n=5:  96.4 94.3 97.4 86.3 100.6
+                                            -> mean 95.0, range 86.3-100.6
+    ratio 2.03, ranges DISJOINT.
+
+Across the whole session: 14 runs on the cancelling set (41.7-52.6) and 6 on the directed ring
+(86.3-100.6), still disjoint.
+
+### The k accounting, and what it rules out
+Closure edge is `2->3` in BOTH topologies (verified); only the spanning tree differs. Writing
+`O_AB = t_AB + eps` for a link measured A->B and composing the 2<->3 offset through each tree:
+
+    OLD tree {0->1, 0->3, 1->2}:  closure = -eps_a - eps_c + eps_b  - eps_d
+    NEW tree {0->1, 1->2, 3->0}:  closure = -eps_a - eps_c - eps_b' - eps_d
+
+**If eps were true forward/return WIRE asymmetry it would be ANTISYMMETRIC** -- flipping the link
+flips its sign, `eps_b' = -eps_b`, and the two expressions are ALGEBRAICALLY IDENTICAL: k = 2 in
+both topologies and the measured 2x is impossible.
+
+Observing k = 2 vs k = 4 therefore REQUIRES eps to be direction-INDEPENDENT. Cristian's error
+decomposes as `eps = (d_fwd - d_ret - p)/2`: the wire term is antisymmetric and cancels, but the
+RESPONDER TURNAROUND p does not -- it is the same code at both ends, so it enters with the same
+sign whichever way the link is measured.
+
+**Conclusion: the systematic bias is dominated by OUR OWN responder turnaround, not by the wire.**
+eps ~= -p/2 with eps ~= 23-24 ns gives **p ~= 46-48 ns** -- plausible for stamp t1 -> write tag ->
+fence -> txq_wait_idle -> eth send. It also predicts closure NEGATIVE in both topologies, which all
+20 runs are.
+
+**RETRACTION:** "systematic -47 ns closure bias from eth forward/return asymmetry breaking
+Cristian's symmetry assumption" was asserted repeatedly this session (including in the commit that
+retracted the boot-local story). The topology experiment refutes it: a wire-asymmetry bias cannot
+produce a topology-dependent k. What the assumption actually breaks on is turnaround, not the wire.
+
+### Testable consequences, NOT yet run
+- eps should scale with responder turnaround: shaving instructions between the t1 stamp and the
+  echo send should reduce it proportionally. This makes the "floor" SOFT -- it is a code property,
+  not a physical one.
+- eps should be near-equal on all four links (same code both ends), which is what the clean 2.03x
+  requires and gets.
+- A deliberate delay inserted before the echo send should move eps by half the inserted amount.
+
+### The rest of the sweep, on the reverted orientation
+Rate still buys nothing: 46.9 (100 Hz) / 44.6 (500) / 48.2 (1000), spread inside the within-arm
+noise (41.7-50.6 on the 100 Hz arm alone). Republish still does not bind: pub 5 vs pub 40 is
+47.5 vs 46.2 at 100 Hz and 48.2 vs 48.2 at 1000 Hz. Orientation is FREE in bandwidth (BAL geomean
+1.0119 vs default 1.0120; worst 4-link -0.71 vs -0.70), so there is no tradeoff against the 2x.
+Sync costs 0.30-0.38 pts vs the SYNC_HZ=0 control, flat in rate. Lossless everywhere (0/0/0 to
+3706 rounds/link), 0 golden failures, all 14 sweep runs + 3 repeats completed -- no recurrence of
+the previous sweep's UMD DeviceTimeoutError.
+
+### Standing recommendation
+100 Hz, default (cancelling) orientation, publish 40 ms. The invariant to quote is **eps ~= 23-24 ns
+per link**, NOT a closure number -- closure is k*eps and k depends on topology, so any closure
+figure is meaningless without its edge set. Delivered accuracy is still dominated by the
+shared-slope term (ppm-scale, ms over a session), which none of these knobs touch.
