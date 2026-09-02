@@ -437,14 +437,6 @@ def run_ring_joint_sdpa(
         logger.debug("✓ Distributed synchronization completed")
 
 
-def _ci_unsupported_param_combos_mla_sdpa(**params):
-    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
-
-    if not on_ci:
-        return False
-    return True
-
-
 def _ci_unsupported_param_combos_mla_sdpa_perf(**params):
     on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
 
@@ -454,7 +446,6 @@ def _ci_unsupported_param_combos_mla_sdpa_perf(**params):
 
 
 #  Note: seq_len and nhq_v will be scaled down to the hw test runs on, inputs are for 32x4 devices configuration
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_mla_sdpa)
 @pytest.mark.parametrize("q_dtype, kv_dtype", [(ttnn.bfloat16, ttnn.bfloat8_b)], ids=["q_bf16_kv_bf8"])
 @pytest.mark.parametrize(
     "seq_len, q_chunk_size, k_chunk_size",
