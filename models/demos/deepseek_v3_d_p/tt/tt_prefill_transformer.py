@@ -872,7 +872,8 @@ class TtPrefillTransformer(LightweightModule):
 
         ``TtLMHead.forward`` narrows to the one 32-row tile containing the target row before the
         vocab matmul, so the whole chain is 32 rows wide: one tile-sized head call, one ``argmax``,
-        one 32-id embedding gather, one 32-row all-gather. It is SP-FRACTURED -- only the chip the
+        one 32-id embedding gather, one 32-row all-gather (plus one vocab-dim gather when the head is
+        column-parallel, as GLM 5.2's is). It is SP-FRACTURED -- only the chip the
         target row lives on computes the real logits -- so the gather is what makes the result
         available to the chips whose union holds the position being written; the caller's one-hot
         selector picks row ``device_id*32 + token_offset`` out of it and ignores the rest.
@@ -881,11 +882,20 @@ class TtPrefillTransformer(LightweightModule):
         sampling here would make level ``k+1``'s input depend on the trunk's temperature.
         """
         assert self.lm_head is not None, "MTP generation needs the LM head (last rank, build_tail)"
-        assert not self.lm_head.is_column_parallel, (
-            "MTP device generation needs the full vocab on every chip to argmax it there; a "
-            "column-parallel LM head leaves vocab/tp per chip, which argmaxes to a per-shard id"
-        )
-        logits, _ = self.lm_head(h_normed, actual_isl - 1)  # [1, 1, 32, vocab], TP-replicated
+        logits, _ = self.lm_head(h_normed, actual_isl - 1)  # [1, 1, 32, vocab] (vocab/tp if column)
+        if self.lm_head.is_column_parallel and self.tp_factor > 1:
+            # argmax needs the whole vocab on one chip -- a column-parallel head leaves vocab/tp per
+            # chip, which argmaxes to a per-shard id. Gather on the vocab dim in TP-device order,
+            # the same order `TtLMHead.logit_to_host` concatenates the shards in on host.
+            full = ttnn.all_gather(
+                logits,
+                dim=-1,
+                cluster_axis=self.tp_axis,
+                num_links=self.lm_head.num_links,
+                topology=self.lm_head.topology,
+            )
+            ttnn.deallocate(logits)
+            logits = full
         ids = ttnn.argmax(logits, dim=-1, keepdim=False)  # [1, 1, 32] uint32 ROW_MAJOR
         ttnn.deallocate(logits)
         emb = self.mtp_embed_ids(ids)  # [1, 1, 32, H/tp] bf16 TILE

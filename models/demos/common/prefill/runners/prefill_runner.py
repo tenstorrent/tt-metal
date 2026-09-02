@@ -172,6 +172,14 @@ SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 # semaphores to L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static
 # CBs, which needs the mesh opened with an L1_SMALL region. The adapter owns both knobs.
 _L1_SMALL_SIZE = ADAPTER.l1_small_size
+# The MTP tail adds CCL calls the trunk never makes -- the last chunk generates its lookahead ids on
+# device, which is an LM-head gather (when the head is column-parallel, as GLM 5.2's is) plus an SP
+# gather of the embedding, once per level. Their global semaphores land in L1_SMALL, and GLM's 1152 B
+# is already fully committed (routing 512 B + sparse-MLA 256 B + the trunk's own collectives): the
+# allocator reports `free: 0 B` on a 16 B/bank request. 512 B is 32 more semaphore slots, well over
+# the 2 x MTP_LEVELS this path needs, and it is only carved out when MTP is on.
+if MTP_LEVELS:
+    _L1_SMALL_SIZE += 512
 # Capture each rank's per-chunk forward as a (segmented) ttnn trace and replay it every chunk instead of
 # re-dispatching op-by-op. Needs the mesh opened with a trace region; the segmented capture (sub-device
 # swaps + per-layer acks) is handled by SubDeviceTraceController inside the runtime.
