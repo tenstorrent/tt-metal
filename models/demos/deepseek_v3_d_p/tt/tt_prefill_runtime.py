@@ -781,6 +781,11 @@ class TtPrefillRuntime:
         release = getattr(self.model, "release_sub_device_managers", None)
         if release is not None:
             release()
+        # The D2H ack service is baked into the capture, so this holds the last reference to it once
+        # the caller has dropped its own. Releasing its device service cores and their L1 needs the
+        # mesh still open, so keeping it alive past close leaves those cores claimed for the life of
+        # the process.
+        self._trace_d2h_service = None
 
     def set_layer_ack_channel(self, layer_ack_channel) -> None:
         """Register the per-layer-ack channel (docs/scheduler/prefill.md §3.11).
