@@ -594,10 +594,14 @@ def _typecast_golden_function(
     if output_dtype is None:
         raise TypeError("ttnn.typecast golden requires an output dtype")
 
+    # Integer conversion semantics depend on source dtype/placement and target architecture, which can change rounding.
+    # Environment markers override runtime detection for simulator paths; other target dtypes need no architecture query.
     input_dtype = _ttnn_input_dtype if _ttnn_input_dtype is not None else input_dtype
-    arch_name = (_ttnn_arch_name or ttnn.get_arch_name()).lower()
+    arch_name = _ttnn_arch_name.lower() if _ttnn_arch_name is not None else None
     if any("quasar" in os.environ.get(variable, "").lower() for variable in ("ARCH_NAME", "CHIP_ARCH")):
         arch_name = "quasar"
+    elif output_dtype in (ttnn.uint8, ttnn.uint16) and arch_name is None:
+        arch_name = ttnn.get_arch_name().lower()
 
     # Comparison preprocessing supplies source values rather than the cast result.
     # Integer conversion differs across host, Wormhole/Blackhole, and Quasar paths,

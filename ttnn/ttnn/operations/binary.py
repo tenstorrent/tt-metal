@@ -582,9 +582,30 @@ ttnn.attach_golden_function(
 )
 
 
-def _golden_function_assign(input_tensor_a, input_tensor_b=None, *args, **kwargs):
-    # Both assign overloads return the source values, independently of the destination storage.
-    return input_tensor_a.clone()
+def _golden_function_assign(
+    input_tensor=None,
+    *args,
+    memory_config=None,
+    dtype=None,
+    output_tensor=None,
+    input_a=None,
+    input_b=None,
+    **kwargs,
+):
+    # Accommodate both nanobind overloads while preserving their public argument names.
+    source_tensor = input_tensor if input_tensor is not None else input_a
+    if source_tensor is None:
+        raise TypeError("ttnn.assign golden requires input_tensor or input_a")
+    if args and input_b is None:
+        input_b = args[0]
+
+    if dtype is not None:
+        from ttnn.operations.core import _typecast_golden_function
+
+        return _typecast_golden_function(source_tensor, output_dtype=dtype)
+
+    # The destination overload casts to input_b's storage dtype.
+    return source_tensor.to(input_b.dtype) if input_b is not None else source_tensor.clone()
 
 
 ttnn.attach_golden_function(ttnn.assign, golden_function=_golden_function_assign)
@@ -609,14 +630,14 @@ def _preprocess_broadcast_golden_inputs(function_args, function_kwargs):
     return tuple(function_args), function_kwargs
 
 
-def _golden_function_broadcast(input_tensors, sender_coord, *args, _ttnn_golden_mesh_shape=None, **kwargs):
+def _golden_function_broadcast(input_tensor, sender_coord, *args, _ttnn_golden_mesh_shape=None, **kwargs):
     if _ttnn_golden_mesh_shape is None:
         return None
 
     sender_index = 0
     for coordinate, dimension in zip(sender_coord, _ttnn_golden_mesh_shape):
         sender_index = sender_index * dimension + int(coordinate)
-    return input_tensors[sender_index]
+    return input_tensor[sender_index]
 
 
 ttnn.attach_golden_function(

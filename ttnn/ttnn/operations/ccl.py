@@ -54,7 +54,7 @@ def _get_first_collective_group(input_tensors, mesh_shape, cluster_axis):
 
 
 def _golden_function_all_broadcast(
-    input_tensors,
+    input_tensor,
     *args,
     cluster_axis=None,
     _ttnn_golden_mesh_shape=None,
@@ -64,7 +64,7 @@ def _golden_function_all_broadcast(
         return None
 
     # Each result broadcasts one rank's payload across the first cluster group.
-    return _get_first_collective_group(input_tensors, _ttnn_golden_mesh_shape, cluster_axis)
+    return _get_first_collective_group(input_tensor, _ttnn_golden_mesh_shape, cluster_axis)
 
 
 ttnn.attach_golden_function(
@@ -75,7 +75,7 @@ ttnn.attach_golden_function(
 
 
 def _golden_function_all_gather(
-    input_tensors,
+    input_tensor,
     dim,
     *args,
     cluster_axis=None,
@@ -86,7 +86,7 @@ def _golden_function_all_gather(
 
     if _ttnn_golden_mesh_shape is None:
         return None
-    input_group = _get_first_collective_group(input_tensors, _ttnn_golden_mesh_shape, cluster_axis)
+    input_group = _get_first_collective_group(input_tensor, _ttnn_golden_mesh_shape, cluster_axis)
     # The first rank receives every rank's shard concatenated along the requested dimension.
     return torch.cat(input_group, dim=dim)
 
@@ -99,7 +99,7 @@ ttnn.attach_golden_function(
 
 
 def _golden_function_all_reduce(
-    input_tensors,
+    input_tensor,
     *args,
     cluster_axis=None,
     _ttnn_golden_mesh_shape=None,
@@ -109,7 +109,7 @@ def _golden_function_all_reduce(
 
     if _ttnn_golden_mesh_shape is None:
         return None
-    input_group = _get_first_collective_group(input_tensors, _ttnn_golden_mesh_shape, cluster_axis)
+    input_group = _get_first_collective_group(input_tensor, _ttnn_golden_mesh_shape, cluster_axis)
     # Stable all-reduce always performs a sum and replicates it to the group.
     return torch.stack(input_group).sum(dim=0)
 
@@ -122,7 +122,7 @@ ttnn.attach_golden_function(
 
 
 def _golden_function_reduce_scatter(
-    input_tensors,
+    input_tensor,
     dim,
     *args,
     cluster_axis=None,
@@ -133,7 +133,7 @@ def _golden_function_reduce_scatter(
 
     if _ttnn_golden_mesh_shape is None:
         return None
-    input_group = _get_first_collective_group(input_tensors, _ttnn_golden_mesh_shape, cluster_axis)
+    input_group = _get_first_collective_group(input_tensor, _ttnn_golden_mesh_shape, cluster_axis)
     reduced = torch.stack(input_group).sum(dim=0)
     # The first rank receives the first equal chunk of the reduced tensor.
     return torch.chunk(reduced, len(input_group), dim=dim)[0]
@@ -147,7 +147,7 @@ ttnn.attach_golden_function(
 
 
 def _golden_function_mesh_partition(
-    input_tensors,
+    input_tensor,
     dim,
     cluster_axis=None,
     *args,
@@ -158,7 +158,7 @@ def _golden_function_mesh_partition(
 
     if _ttnn_golden_mesh_shape is None:
         return None
-    input_group = _get_first_collective_group(input_tensors, _ttnn_golden_mesh_shape, cluster_axis)
+    input_group = _get_first_collective_group(input_tensor, _ttnn_golden_mesh_shape, cluster_axis)
     # The first rank keeps the first equal partition of its local input.
     return torch.chunk(input_group[0], len(input_group), dim=dim)[0]
 
@@ -182,7 +182,7 @@ def _mesh_coordinate_to_index(coordinate, mesh_shape):
 
 
 def _golden_function_point_to_point(
-    input_tensors,
+    input_tensor,
     sender_coord,
     receiver_coord,
     *args,
@@ -194,7 +194,7 @@ def _golden_function_point_to_point(
 
     sender_index = _mesh_coordinate_to_index(sender_coord, _ttnn_golden_mesh_shape)
     receiver_index = _mesh_coordinate_to_index(receiver_coord, _ttnn_golden_mesh_shape)
-    output = input_tensors[sender_index].clone()
+    output = input_tensor[sender_index].clone()
     # Point-to-point initializes only the receiver shard of its fresh output tensor.
     output._ttnn_mesh_index = receiver_index
     return output
@@ -324,9 +324,9 @@ def _preprocess_reduce_to_root_golden_inputs(function_args, function_kwargs):
 
 
 def _golden_function_reduce_to_root(
-    input_tensors_l,
-    input_tensors_s,
-    input_tensors_m,
+    input_tensor_l,
+    input_tensor_s,
+    input_tensor_m,
     root_coord,
     *args,
     scale_fp32=1.0,
@@ -337,16 +337,16 @@ def _golden_function_reduce_to_root(
 
     if _ttnn_golden_mesh_shape is None:
         return None
-    if len(input_tensors_l) != 4 or len(input_tensors_s) != 4 or len(input_tensors_m) != 4:
+    if len(input_tensor_l) != 4 or len(input_tensor_s) != 4 or len(input_tensor_m) != 4:
         raise ValueError("reduce_to_root golden requires the operation's fixed four-device topology")
 
     tile_width = 32
-    num_cores = input_tensors_s[0].shape[-1] // tile_width
-    if num_cores == 0 or input_tensors_s[0].shape[-1] % tile_width != 0:
+    num_cores = input_tensor_s[0].shape[-1] // tile_width
+    if num_cores == 0 or input_tensor_s[0].shape[-1] % tile_width != 0:
         raise ValueError("reduce_to_root golden requires tile-aligned S state")
 
     states = []
-    for tensor_l, tensor_s, tensor_m in zip(input_tensors_l, input_tensors_s, input_tensors_m):
+    for tensor_l, tensor_s, tensor_m in zip(input_tensor_l, input_tensor_s, input_tensor_m):
         if tensor_s.shape != tensor_m.shape or tensor_l.shape[-1] % num_cores != 0:
             raise ValueError("reduce_to_root golden received incompatible L, S, and M state shapes")
         l_core_width = tensor_l.shape[-1] // num_cores
@@ -375,9 +375,9 @@ def _golden_function_reduce_to_root(
     tensor_l, tensor_s, tensor_m = reduce_states(right_reduction, left_reduction)
     tensor_l = tensor_l / tensor_s[..., :1].expand(*tensor_l.shape)
 
-    output_l = tensor_l.reshape(input_tensors_l[0].shape)
-    output_s = tensor_s.reshape(input_tensors_s[0].shape)
-    output_m = tensor_m.reshape(input_tensors_m[0].shape)
+    output_l = tensor_l.reshape(input_tensor_l[0].shape)
+    output_s = tensor_s.reshape(input_tensor_s[0].shape)
+    output_m = tensor_m.reshape(input_tensor_m[0].shape)
     root_index = _mesh_coordinate_to_index(root_coord, _ttnn_golden_mesh_shape)
     for output in (output_l, output_s, output_m):
         output._ttnn_mesh_index = root_index

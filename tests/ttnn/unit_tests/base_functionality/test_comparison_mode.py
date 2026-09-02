@@ -222,6 +222,27 @@ def test_global_typecast_inputs_receive_local_host_metadata():
     assert result.item() == 0
 
 
+def test_assign_golden_uses_nanobind_argument_names_and_casts_dtype():
+    from ttnn.operations.binary import _golden_function_assign
+
+    input_tensor = torch.tensor([1.234567], dtype=torch.float32)
+    expected = input_tensor.to(torch.bfloat16)
+
+    allocating_result = _golden_function_assign(
+        input_tensor=input_tensor,
+        memory_config=None,
+        dtype=ttnn.bfloat16,
+        output_tensor=None,
+    )
+    destination_result = _golden_function_assign(
+        input_a=input_tensor,
+        input_b=torch.zeros_like(expected),
+    )
+
+    assert torch.equal(allocating_result, expected)
+    assert torch.equal(destination_result, expected)
+
+
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
