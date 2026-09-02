@@ -842,25 +842,22 @@ void kernel_main() {
                         sweep_peak = peak;
                     }
                 }
-                if (live == 0) {
-                    // A hot core scanning empty is almost always the producer's 64-word batched tail publish, not
-                    // idleness; skipping it would double its service interval. One-shot: an idle core wastes one empty
-                    // frame.
-                    if (hot[c] == 0) {
+                if (live != 0) {
+                    // Deferral must survive one more interval of production, so `grew` (last interval's words) must
+                    // be under the threshold too; that bounds a deferred core at ~2x threshold.
+                    if (grid_busy && stop_seen_at == 0 && peak < kLaneShipWords && grew < kLaneShipWords &&
+                        peak < kLaneTrigger) {
                         continue;
                     }
+                    hot[c] = 1;
+                    ship_list[n_ship++] = static_cast<uint8_t>(c);
+                } else if (hot[c] != 0) {
+                    // A hot core scanning empty is almost always the producer's 64-word batched tail publish, not
+                    // idleness; skipping it would double its service interval. One-shot: an idle core wastes one
+                    // empty frame.
                     hot[c] = 0;
                     ship_list[n_ship++] = static_cast<uint8_t>(c);
-                    continue;
                 }
-                // Deferral must survive one more interval of production, so `grew` (last interval's words) must be
-                // under the threshold too; that bounds a deferred core at ~2x threshold.
-                if (grid_busy && stop_seen_at == 0 && peak < kLaneShipWords && grew < kLaneShipWords &&
-                    peak < kLaneTrigger) {
-                    continue;
-                }
-                hot[c] = 1;
-                ship_list[n_ship++] = static_cast<uint8_t>(c);
             }
         }
 
