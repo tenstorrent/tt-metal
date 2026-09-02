@@ -169,8 +169,12 @@ class BgeM3ForEmbedding:
         position_ids: Optional[torch.Tensor] = None,
         *,
         padded_batch_size: int,
+        padded_seq_len: Optional[int] = None,
     ) -> dict[str, Optional[torch.Tensor]]:
-        padded_seq_len = _get_padded_seq_len(input_ids.shape[1])
+        # The caller passes a length when the shape is fixed, as the data-parallel
+        # path is. Otherwise pad to the next supported length.
+        if padded_seq_len is None:
+            padded_seq_len = _get_padded_seq_len(input_ids.shape[1])
 
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
@@ -569,6 +573,12 @@ class BgeM3ForEmbedding:
         self._validate_request(batch_size, padded_seq_len)
         self._initialize_model()
 
+        # The data-parallel modules are built for one shape and reject any other, so
+        # every request pads up to it. A short request costs a full forward, which is
+        # what makes this configuration a fixed-shape serving path.
+        if self._data_parallel:
+            padded_seq_len = BGE_M3_LONG_SEQ_LEN
+
         target_padded_batch_size = get_target_padded_batch_size(batch_size, padded_seq_len)
         chunk_outputs = []
         for start, end in iter_execution_ranges(batch_size, padded_seq_len):
@@ -578,10 +588,17 @@ class BgeM3ForEmbedding:
                 token_type_ids=_slice_optional_batch_tensor(token_type_ids, start, end),
                 position_ids=_slice_optional_batch_tensor(position_ids, start, end),
                 padded_batch_size=target_padded_batch_size,
+                padded_seq_len=padded_seq_len,
             )
-            # The trace needs one fixed shape and long-lived input buffers, so it
-            # serves the data-parallel shape only. Every other request stays eager.
-            forward_chunk = self._forward_chunk_traced if self._data_parallel else self._forward_chunk
+            # The serving modules need the exact B12/S8192 shard, and the trace needs
+            # one fixed shape. A shorter request, such as the one-prompt warmup, keeps
+            # the eager path.
+            traced_shape = (
+                self._data_parallel
+                and target_padded_batch_size == BGE_M3_LONG_SEQ_CHUNK
+                and padded_seq_len == BGE_M3_LONG_SEQ_LEN
+            )
+            forward_chunk = self._forward_chunk_traced if traced_shape else self._forward_chunk
             chunk_outputs.append(
                 forward_chunk(
                     input_ids=padded_inputs["input_ids"],
