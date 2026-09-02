@@ -4826,6 +4826,51 @@ class TestFastOperationGraphTracking:
         assert connected >= 1, f"Expected at least 1 connected tensor ID, got {connected}"
         conn.close()
 
+    def test_setup_failure_closes_scope_so_later_ops_stay_top_level(self, monkeypatch, expect_error):
+        """record_python_operation after track_function_start must not leave the scope open.
+
+        Copilot r3905642313: that hole skips unwind_open_functions and hides later ops.
+        """
+        from ttnn.decorators import FastOperation
+
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("python_io setup failed")
+
+        monkeypatch.setattr(ttnn.graph, "record_python_operation", boom)
+
+        op = FastOperation(
+            python_fully_qualified_name="ttnn.dummy_setup_fail",
+            function=lambda *a, **k: None,
+            preprocess_golden_function_inputs=lambda x: x,
+            golden_function=None,
+            postprocess_golden_function_outputs=lambda x: x,
+            is_cpp_operation=True,
+            is_experimental=False,
+        )
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            with (
+                ttnn.manage_config("enable_fast_runtime_mode", True),
+                ttnn.manage_config("enable_logging", False),
+                ttnn.manage_config("enable_comparison_mode", False),
+            ):
+                with expect_error(RuntimeError, "python_io setup failed"):
+                    op()
+            assert ttnn.graph._operation_scope_depth.value == 0
+            ttnn.graph.track_function_start("ttnn.add")
+            ttnn.graph.track_function_end()
+        finally:
+            graph = ttnn.graph.end_graph_capture()
+
+        dummy_ends = [
+            n for n in graph if n["node_type"] == "function_end" and n["params"].get("name") == "ttnn.dummy_setup_fail"
+        ]
+        assert dummy_ends, "setup failure must still close the FastOperation scope"
+        add_starts = [n for n in graph if n["node_type"] == "function_start" and n["params"].get("name") == "ttnn.add"]
+        assert add_starts, "successor operation must appear in the capture"
+        assert add_starts[0]["stacking_level"] == 1, "ttnn.add must not be nested under the failed FastOperation setup"
+
 
 class TestUnwindAbandonedScopes:
     """Issue #28836: a top-level operation closes the scopes an earlier failure left open.
