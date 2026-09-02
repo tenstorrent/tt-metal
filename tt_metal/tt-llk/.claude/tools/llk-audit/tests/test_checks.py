@@ -1205,6 +1205,118 @@ def test_srcreg_dest_to_src_quasar_is_unconfirmed_not_flagged():
     assert len(out_wh) == 1 and out_wh[0].hint == "DEST2SRC_NO_MATH_DRAIN", out_wh
 
 
+@case
+def test_srcreg_dummy_publication_unguarded():
+    # BH default form: Stall_Clr_Cntrl=0 -> waits on MatrixUnit.Src?Bank while
+    # clearing Unpackers[i].SrcBank. Recall candidate, never a flag.
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    facts = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", F, 100, 200),
+        # A bare unpacker-PIPELINE stall is not a bank guard.
+        macro(
+            F,
+            105,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK)",
+            func="u",
+        ),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_UNGUARDED", out
+
+
+@case
+def test_srcreg_dummy_publication_guarded_forms_are_clean():
+    # Three accepted guards, one per variant, must all suppress the candidate.
+    BH = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    WH = "tt_llk_wormhole_b0/llk_lib/llk_unpack_common.h"
+    # (1) BH Stall_Clr_Cntrl=1
+    bh = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", BH, 100, 200),
+        macro(
+            BH,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    # (2) WH wait-like NoOp encoding
+    wh_bit = [
+        fn("_llk_unpack_mul_reduce_scalar_switch_to_reduce_", WH, 100, 200),
+        macro(
+            WH,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY)",
+            func="u",
+        ),
+    ]
+    # (3) WH explicit stall on the unpacker-owned-bank conditions (the real shape)
+    wh_stall = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", WH, 100, 200),
+        macro(
+            WH,
+            105,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK | p_stall::SRCA_CLR | p_stall::SRCB_CLR)",
+            func="u",
+        ),
+        macro(
+            WH,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID)",
+            func="u",
+        ),
+    ]
+    for arch, facts in (
+        ("blackhole", bh),
+        ("wormhole", wh_bit),
+        ("wormhole", wh_stall),
+    ):
+        out = [
+            f
+            for f in SrcRegBank().run(FactBase(arch, facts))
+            if f.kind == "dvalid:DUMMY_PUBLISH"
+        ]
+        assert out == [], (arch, out)
+
+
+@case
+def test_srcreg_dummy_publication_scoped_to_publisher_functions():
+    # An ordinary MOP-config publication (tilize/matmul/unpack_A) has no Dest->Src
+    # consumer; unscoped this bucket would swallow ~90% of all publications.
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_A.h"
+    facts = [
+        fn("_llk_unpack_A_mop_config_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert out == [], out
+
+
 # --- mailbox-sync (lite) --------------------------------------------------
 
 
