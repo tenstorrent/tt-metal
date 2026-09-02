@@ -377,7 +377,7 @@ void kernel_main() {
                 for (uint32_t g = min_group; g < num_groups; ++g) {
                     const uint32_t cols_available = tile_width - group_offset;
                     const uint32_t cols_consumed = std::min(cols_available, channels_left);
-                    two_pass_stats_update_rows<true, num_groups == 1>(input_dst, group_offset, cols_consumed);
+                    two_pass_stats_update_rows<num_groups == 1>(input_dst, group_offset, cols_consumed);
                     channels_left -= cols_consumed;
                     group_offset += cols_consumed;
                     if (channels_left > 0) {

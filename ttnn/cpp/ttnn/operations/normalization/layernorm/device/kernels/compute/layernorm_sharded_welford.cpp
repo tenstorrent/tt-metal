@@ -437,7 +437,7 @@ void kernel_main() {
             if (w >= 3) {
                 transpose_tile(dfb_x_welford_id, w + index_h_offset, welford_input_dst);
             }
-            two_pass_stats_update_rows<true>(stats_input_dst, 0, tile_width);
+            two_pass_stats_update_rows(stats_input_dst, 0, tile_width);
         }
         if (partial_welford_tile_w > 0) {
             const uint32_t stats_input_dst =
@@ -447,7 +447,7 @@ void kernel_main() {
             if (num_full_welford_tiles >= 3) {
                 transpose_tile(dfb_x_welford_id, index_h_offset + num_full_welford_tiles, welford_input_dst);
             }
-            two_pass_stats_update_rows<true>(stats_input_dst, 0, partial_welford_tile_w);
+            two_pass_stats_update_rows(stats_input_dst, 0, partial_welford_tile_w);
         }
         two_pass_stats_finalize_to_row(welford_mean_dst, (*p_reciprocals)[partial_reduce_W - 1]);
         // We should transpose back to columns here

@@ -106,7 +106,7 @@ void kernel_main() {
 #ifdef WELFORD_TWO_PASS_L1_REPLAY
         for (uint32_t wt = 0; wt < Wt; ++wt) {
             transpose_tile(dfb::in, wt, input_dst);
-            two_pass_stats_update_rows<true>(input_dst, 0, wt == Wt - 1 ? last_tile_rows : tile_width);
+            two_pass_stats_update_rows(input_dst, 0, wt == Wt - 1 ? last_tile_rows : tile_width);
         }
         dfb_in.pop_front(Wt);
 #else
@@ -122,16 +122,16 @@ void kernel_main() {
         constexpr uint32_t num_front_retained = Wt < num_front_retained_limit ? Wt : num_front_retained_limit;
         for (uint32_t wt = 0; wt < num_front_retained; ++wt) {
             const uint32_t stats_input_dst = wt == 0 ? retained_input_dst : wt;
-            two_pass_stats_update_rows<true>(stats_input_dst, 0, wt == Wt - 1 ? last_tile_rows : tile_width);
+            two_pass_stats_update_rows(stats_input_dst, 0, wt == Wt - 1 ? last_tile_rows : tile_width);
         }
         if constexpr (Wt > num_front_retained) {
             for (uint32_t wt = num_front_retained; wt < Wt - 1; ++wt) {
                 dfb_in.wait_front(onetile);
                 transpose_tile(dfb::in, 0, retained_input_dst);
                 dfb_in.pop_front(onetile);
-                two_pass_stats_update_rows<true>(retained_input_dst, 0, tile_width);
+                two_pass_stats_update_rows(retained_input_dst, 0, tile_width);
             }
-            two_pass_stats_update_rows<true>(input_dst, 0, last_tile_rows);
+            two_pass_stats_update_rows(input_dst, 0, last_tile_rows);
         }
 #endif
         two_pass_stats_finalize_to_row(mean_dst, two_pass_variance_reciprocal);

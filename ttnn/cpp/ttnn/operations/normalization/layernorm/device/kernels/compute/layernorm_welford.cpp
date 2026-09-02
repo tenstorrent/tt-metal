@@ -244,14 +244,14 @@ void kernel_main() {
         constexpr uint32_t num_front_retained = Wt < 3 ? Wt : 3;
         for (uint32_t wt = 0; wt < num_front_retained; ++wt) {
             const uint32_t stats_input_dst = wt == 0 ? retained_input_dst : wt;
-            two_pass_stats_update_rows<true>(stats_input_dst, 0, wt == last_tile_idx ? last_tile_rows : tile_width);
+            two_pass_stats_update_rows(stats_input_dst, 0, wt == last_tile_idx ? last_tile_rows : tile_width);
         }
         if constexpr (Wt > num_front_retained) {
             for (uint32_t wt = num_front_retained; wt < last_tile_idx; ++wt) {
                 transpose_tile(dfb_x_welford, wt, retained_input_dst);
-                two_pass_stats_update_rows<true>(retained_input_dst, 0, tile_width);
+                two_pass_stats_update_rows(retained_input_dst, 0, tile_width);
             }
-            two_pass_stats_update_rows<true>(last_pass1_dst, 0, last_tile_rows);
+            two_pass_stats_update_rows(last_pass1_dst, 0, last_tile_rows);
         }
 
         // Store the mean and variance to the destination registers

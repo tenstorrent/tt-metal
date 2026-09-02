@@ -98,23 +98,23 @@ void kernel_main() {
 #ifdef WELFORD_TWO_PASS_L1_REPLAY
         for (uint32_t ht = 0; ht < Ht; ++ht) {
             copy_tile(dfb::in, ht, input_dst);
-            two_pass_stats_update_rows<true>(input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
+            two_pass_stats_update_rows(input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
         }
         dfb_in.pop_front(Ht);
 #else
         constexpr uint32_t num_front_retained = Ht < 2 ? Ht : 2;
         for (uint32_t ht = 0; ht < num_front_retained; ++ht) {
             const uint32_t stats_input_dst = ht == 0 ? retained_input_dst : ht;
-            two_pass_stats_update_rows<true>(stats_input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
+            two_pass_stats_update_rows(stats_input_dst, 0, ht == Ht - 1 ? last_tile_rows : tile_height);
         }
         if constexpr (Ht > num_front_retained) {
             for (uint32_t ht = num_front_retained; ht < Ht - 1; ++ht) {
                 dfb_in.wait_front(onetile);
                 copy_tile(dfb::in, 0, retained_input_dst);
                 dfb_in.pop_front(onetile);
-                two_pass_stats_update_rows<true>(retained_input_dst, 0, tile_height);
+                two_pass_stats_update_rows(retained_input_dst, 0, tile_height);
             }
-            two_pass_stats_update_rows<true>(input_dst, 0, last_tile_rows);
+            two_pass_stats_update_rows(input_dst, 0, last_tile_rows);
         }
 #endif
         two_pass_stats_finalize_to_row(mean_dst, two_pass_variance_reciprocal);

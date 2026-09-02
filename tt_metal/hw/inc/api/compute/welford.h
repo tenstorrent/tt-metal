@@ -81,17 +81,16 @@ ALWI void welford_clear() { MATH((llk_math_welfords_sfpu_clear_previous_mean_and
 ALWI void two_pass_stats_init_shifted() { MATH((llk_math_two_pass_sfpu_init())); }
 
 /**
- * @brief Accumulates a row range into the current two-pass sum or centred-M2 state.
- * @tparam accumulate_m2 If true, accumulates squared differences from the current mean; otherwise accumulates sums.
+ * @brief Accumulates squared differences from the current mean over a row range.
  * @tparam dual_m2 If true, uses two independent accumulators to hide SFPU dependency latency.
  * @param input_dst_idx Index of the input tile in the DST register buffer.
  * @param start_row First tile row to process.
  * @param num_rows Number of consecutive tile rows to process.
  */
-template <bool accumulate_m2, bool dual_m2 = true>
+template <bool dual_m2 = true>
 ALWI void two_pass_stats_update_rows(std::uint32_t input_dst_idx, std::uint32_t start_row, std::uint32_t num_rows) {
     ASSERT(start_row + num_rows <= TILE_WIDTH);
-    MATH((llk_math_two_pass_sfpu_update_rows<accumulate_m2, dual_m2>(input_dst_idx, start_row, num_rows)));
+    MATH((llk_math_two_pass_sfpu_update_rows<dual_m2>(input_dst_idx, start_row, num_rows)));
 }
 
 /**
