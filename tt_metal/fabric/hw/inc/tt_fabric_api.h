@@ -22,15 +22,8 @@ using namespace tt::tt_fabric;
 namespace tt::tt_fabric {
 
 #if !defined(FABRIC_2D_MESH_Y_SIZE)
-// Shape defines are emitted only to 2D worker kernels. Every other compile that includes this header
-// still *parses* the 2D helpers below -- they are plain function bodies, not templates, so the
-// compiler needs the names to exist even where the functions are never called. That covers the ERISC
-// router (which never instantiates the worker path) and, importantly, non-2D builds such as the
-// cq_dispatch / cq_prefetch kernels, which include this header without -DFABRIC_2D.
-//
-// Deliberately NOT gated on defined(FABRIC_2D): gating it there is what broke the dispatch kernels,
-// because the guard tracked "is this a 2D build" while the actual requirement is "does this
-// translation unit parse the 2D helpers", which is always.
+// All translation units parse the non-template 2D helpers below, including kernels that never call
+// them. Provide zero defaults when the builder does not emit shape defines; do not gate this on FABRIC_2D.
 #define FABRIC_2D_MESH_Y_SIZE 0
 #define FABRIC_2D_MESH_X_SIZE 0
 #endif

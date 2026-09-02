@@ -1967,11 +1967,8 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
     MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
     uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
     TT_ASSERT(num_chips <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
-    // Was a flat `<= 32` per axis, which predates the destination-major 2D route table and no longer
-    // describes any real limit. The binding constraint is that the packed action maps address both
-    // coordinates and fit the L1 slot. shape_fits_route_table() is the same predicate the packer
-    // enforces, so a shape that passes here cannot later fail to pack. The packet header's
-    // Y + X <= 67 bound is separate and reported by FabricContext.
+    // Both axes must be addressable and their packed action maps must fit the L1 slot. FabricContext
+    // separately enforces the packet-header bound Y + X <= 67.
     TT_ASSERT(
         Routing2DCodec::shape_fits_route_table(mesh_shape[0], mesh_shape[1]),
         "Mesh {} shape {}x{} cannot use the 2D route table: axes must be <= {} and the packed action maps must "
@@ -1982,20 +1979,14 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
         Routing2DCodec::MAX_AXIS_SIZE,
         Routing2DCodec::ROUTE_TABLE_BYTES);
 
-    // Every 2D mesh embeds the destination-major 2D action-map route table. The legacy compressed 2D
-    // table is gone from the union's live meaning; a chip's L1 layout and its decode are now the same
-    // for all 2D meshes rather than agreeing per-mesh by construction.
+    // Every 2D mesh embeds the destination-major action-map route table.
     {
         route_table_2d_t route_table_2d;
         route_table_2d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
 
-        // The unicast action-map rows above are mesh-identical, but the reverse trees are not: this
-        // chip gets only T(its own row) and T(its own column), written into the tail of the same slot.
-        // axis_topology() rather than ring_for_direction(): the latter is null on a non-express mesh
-        // (Y) or a non-closing dimension (X), and a null topology here means the tree region stays
-        // zeroed -- which on device decodes as feeder=0/command=0 for every row, yielding an empty
-        // map and a multicast that silently delivers to nothing. The line fallback guarantees an
-        // answer for any non-degenerate axis.
+        // Unicast rows are mesh-identical, but each chip stores reverse trees for its own row and
+        // column. Use axis_topology() for its ring-or-line fallback; a missing tree decodes as an
+        // empty multicast map.
         const auto* y_topo = this->axis_topology(mesh_id, 0);
         const auto* x_topo = this->axis_topology(mesh_id, 1);
         TT_FATAL(
@@ -2005,11 +1996,8 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
             y_topo == nullptr ? "Y" : "X",
             mesh_shape[0],
             mesh_shape[1]);
-        // A RING-declared axis has no wrap edges unless connectivity was built at a torus fabric
-        // config, so a torus can silently derive as a LINE here -- and a line reverse tree cannot
-        // close a full-ring multicast, which then delivers to only part of the ring and hangs any
-        // sync waiting on the whole ring. Logged once per mesh so the derived kind is visible in
-        // every run rather than inferred from a hang.
+        // A declared ring closes only when connectivity includes wrap edges. Log the derived kind
+        // once per mesh because a line fallback cannot cover a full-ring multicast.
         if (chip_id == 0) {
             log_info(
                 tt::LogFabric,
@@ -2023,11 +2011,9 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
         {
             const auto coord = this->get_mesh_graph().chip_to_coordinate(mesh_id, chip_id);
             std::string failure;
-            // Hard failure, not a warning. There is no fallback multicast encoder, so a zeroed tree
-            // region is not "multicast unavailable" -- it is a multicast that reports success and
-            // delivers nowhere. A row with two feeders is also structurally impossible on a chordless
-            // axis (each row's only way in is from its neighbour toward the root), so this can only
-            // trip on an express topology, where it already has to pass today.
+            // No fallback multicast encoder exists: an invalid tree would otherwise report success
+            // while delivering nowhere. Multiple feeders cannot occur on a chordless axis, so this
+            // also validates express topology structure.
             TT_FATAL(
                 embed_mcast_reverse_trees(
                     this->get_mesh_graph(),

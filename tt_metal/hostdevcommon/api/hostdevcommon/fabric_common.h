@@ -248,24 +248,13 @@ struct Routing2DCodec {
     }
 
     // ---- L1 region sizing -------------------------------------------------------
-    // Two different limits, kept distinct because conflating them is what excluded live meshes:
-    //
-    //   SLOT_SHAPE_{Y,X}  the shape the L1 slot is *sized* for. [64,4] gives 1024 B of Y table plus
-    //                     4 B of X table, reusing the legacy 1024 B 2D union slot plus 4 B of
-    //                     trailing padding. This is a budget, not a constraint on mesh shape.
-    //   MAX_AXIS_SIZE
-    //                     the largest coordinate either axis may take. Fixed at 64 by the packed
-    //                     reverse-tree descriptor, which spends 6 bits per row index.
-    //
-    // A shape is admissible when both axes are within MAX_AXIS_SIZE *and* its packed tables
-    // fit ROUTE_TABLE_BYTES -- not when it matches SLOT_SHAPE. The old per-axis `X <= 4`
-    // cap excluded in-tree descriptors ([8,8], [8,16], [16,8], [1,16]) whose tables are an order of
-    // magnitude smaller than the slot: [8,16] needs 80 B of 1028.
+    // SLOT_SHAPE defines the fixed 1028 B L1 budget, not a supported mesh shape. MAX_AXIS_SIZE is 64
+    // because packed reverse-tree descriptors use 6-bit row indices. A shape is admissible when both
+    // axes fit those fields and its packed vectors fit ROUTE_TABLE_BYTES.
     static constexpr uint32_t SLOT_SHAPE_Y = 64;
     static constexpr uint32_t SLOT_SHAPE_X = 4;
     static constexpr uint32_t MAX_AXIS_SIZE = 64;
-    // Expanded inline because Clang does not treat in-class constexpr member functions as defined for
-    // constant evaluation within the class body, so table_bytes() cannot be called here.
+    // Expanded because Clang cannot call table_bytes() here before the class definition is complete.
     static constexpr uint32_t ROUTE_TABLE_BYTES =
         SLOT_SHAPE_Y * ((SLOT_SHAPE_Y + ACTIONS_PER_BYTE - 1) / ACTIONS_PER_BYTE) +
         SLOT_SHAPE_X * ((SLOT_SHAPE_X + ACTIONS_PER_BYTE - 1) / ACTIONS_PER_BYTE);  // 1028
@@ -339,13 +328,9 @@ struct Routing2DCodec {
         return table + table_bytes(y_size) + dst_x * row_bytes(x_size);
     }
 
-    // Whether the 2D action-map codec can represent this unicast shape: both axes must be within
-    // the coordinate range an action map can address, and the packed tables must fit the L1 slot.
-    // This is the real bound that the old per-axis `<= 32` stood in for. It does NOT cover the two
-    // other independent limits a shape must also satisfy:
-    //   - the packet header route buffer, Y + X <= 67 (checked in FabricContext, issue #32237)
-    //   - the multicast trees, hybrid_region_fits() above
-    // [64,4] passes this one exactly (1028 B, the whole slot) and fails the header bound by one byte.
+    // Unicast action-map bound only: both axes must be addressable and the packed vectors must fit
+    // the L1 slot. FabricContext separately checks Y + X <= 67 for the packet header, while
+    // hybrid_region_fits() checks multicast trees. [64,4] fills this slot exactly.
     static constexpr bool shape_fits_route_table(uint32_t y_size, uint32_t x_size) {
         return y_size <= MAX_AXIS_SIZE && x_size <= MAX_AXIS_SIZE &&
                vectors_region_bytes(y_size, x_size) <= ROUTE_TABLE_BYTES;
@@ -957,10 +942,8 @@ static const uint16_t MAX_CHIPS_LOWLAT_1D = 64;
 // Size of each routing table entry in bytes
 static const uint16_t SINGLE_ROUTE_SIZE_1D = 16;  // 4 words for 64 hops: base + 3 extension words
 
-// 1D only. 2D used to share this template via a `dim` parameter, holding compressed_route_2d_t hop
-// programs; 2D now carries destination-major action-map vectors in route_table_2d_t instead, so the 2D
-// arms are gone. `dim` is retained at 1 so the existing <1, compressed> spellings still name this
-// type.
+// 1D routing-path table. `dim` remains for existing call sites but is constrained to 1; 2D uses
+// route_table_2d_t.
 template <uint8_t dim, bool compressed>
 struct __attribute__((packed)) intra_mesh_routing_path_t {
     static_assert(dim == 1, "intra_mesh_routing_path_t is 1D only; 2D uses route_table_2d_t");
@@ -1080,8 +1063,8 @@ struct routing_l1_info_t {
     direction_table_t<MAX_MESH_SIZE> intra_mesh_direction_table{};   // 96 bytes
     direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};  // 384 bytes
 
-    // Union overlaps the 1D and 2D routing tables at the same offset; a build is one or the other.
-    // 2D always uses the destination-major route table now -- the legacy compressed_route_2d_t table is gone.
+    // Union overlaps the 1D and 2D routing tables at one offset; a build uses exactly one member.
+    // The 2D member stores destination-major action maps.
     union __attribute__((packed)) {
         intra_mesh_routing_path_t<1, false> routing_path_table_1d;  // 1024 bytes
         route_table_2d_t route_table_2d;                            // 1028 bytes

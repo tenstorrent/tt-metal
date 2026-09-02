@@ -380,18 +380,14 @@ std::map<std::string, std::string> FabricContext::get_2d_kernel_defines(
     // by global chip ids, so a local-scope shape would desync the encode from the table.
     const auto mesh_shape = control_plane.get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
 
-    // The mesh shape is unconditional for 2D: every 2D mesh now carries 2D action maps, and the
-    // worker widens against this shape. It is not an express fact.
+    // Every 2D worker needs the global shape to encode destination-major action maps.
     std::map<std::string, std::string> defines{
         {"FABRIC_2D_MESH_Y_SIZE", std::to_string(mesh_shape[0])},
         {"FABRIC_2D_MESH_X_SIZE", std::to_string(mesh_shape[1])},
     };
 
-    // FABRIC_EXPRESS_ENABLED stays conditional, and keeps its name, because it no longer selects a
-    // codec -- it reports that this mesh declares express chords. Its one remaining device consumer is
-    // Z-port capacity in routing_plane_connection_manager.hpp (6 connection slots instead of 4) and
-    // the UDM guard that refuses express + UDM. Making it unconditional would grow every Blackhole
-    // connection manager by two slots and break every UDM build.
+    // Express enablement no longer selects the codec. It widens worker-side Z-port capacity and
+    // rejects express with UDM; keeping it conditional avoids growing non-express connection managers.
     if (control_plane.express_routing_enabled(mesh_id)) {
         defines.emplace("FABRIC_EXPRESS_ENABLED", "1");
     }

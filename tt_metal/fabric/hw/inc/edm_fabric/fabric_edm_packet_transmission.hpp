@@ -431,14 +431,9 @@ FORCE_INLINE void update_packet_header_for_next_hop(
     packet_header->routing_fields.value = new_value;
 }
 
-// 2D transit is immutable: the destination-major action maps are complete when the worker writes them, and no
-// router advances a cursor. These two overloads used to implement the legacy hop-program advance --
-// `routing_fields.value + 1` on the RX side, and the equivalent remote slot-word write on the sender
-// side, selected by UPDATE_PKT_HDR_ON_RX_CH. Both are now no-ops.
-//
-// They are kept rather than removed because forward_payload_to_downstream_edm() is shared with 1D and
-// resolves this overload by header type. Deleting them would make the shared call site fail to
-// compile on a 2D build. The 1D overloads above still do real work.
+// Destination-major 2D action maps are complete at injection and immutable in transit. These no-op
+// overloads keep the shared 1D/2D forwarding path well-formed when it resolves updates by header type;
+// the 1D overloads above still advance their routes.
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader* /*packet_header*/,
     tt::tt_fabric::LowLatencyMeshRoutingFields /*cached_routing_fields*/) {}
