@@ -107,8 +107,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
         EXPECT_FALSE(program.impl().get_per_core_cross_node_dfbs().empty());
         const auto& kernel_groups = program.impl().get_kernel_groups(index);
         ASSERT_FALSE(kernel_groups.empty());
-        EXPECT_NE(
-            kernel_groups[0]->launch_msg.view().kernel_config().cross_node_dfb_offset(), REMOTE_DFB_OFFSET_NONE);
+        EXPECT_NE(kernel_groups[0]->launch_msg.view().kernel_config().cross_node_dfb_offset(), REMOTE_DFB_OFFSET_NONE);
     }
     // UpdateDynamicCrossNodeDFBAddress: valid case - retargets to a distinct matching buffer.
     {
@@ -808,8 +807,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BasicPushPop_1to1) {
     const uint32_t entry_size = 256;
     const uint32_t num_entries = 4;
 
-    // write_primitive=2: write_to_receiver(0) then push_back (1:1 uses receiver index 0).
-    uint32_t pass = run_1toN_program(mesh_device, sender_core, receiver_cores, entry_size, num_entries, 2);
+    uint32_t pass = run_1toN_program(mesh_device, sender_core, receiver_cores, entry_size, num_entries, 0);
     EXPECT_EQ(pass, 1u) << "1:1 basic push/pop failed";
 }
 
@@ -878,69 +876,6 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_WriteBroadcast_1to4) {
 
     uint32_t pass = run_1toN_program(mesh_device, sender_core, receiver_cores, entry_size, num_entries, 0);
     EXPECT_EQ(pass, 4u) << "write_broadcast 1:4 failed";
-}
-
-TEST_F(CrossNodeDFBFixture, CrossNodeDFB_WriteStrided_1to4) {
-    auto mesh_device = devices_[0];
-
-    CoreCoord sender_core(0, 0);
-    CoreRangeSet receiver_cores(CoreRange({1, 0}, {4, 0}));
-
-    const uint32_t entry_size = 256;
-    const uint32_t num_entries = 4;
-
-    // write_primitive=1: sender writes interleaved, each receiver verifies its index pattern.
-    uint32_t pass = run_1toN_program(mesh_device, sender_core, receiver_cores, entry_size, num_entries, 1);
-    EXPECT_EQ(pass, 4u) << "write_strided 1:4 failed";
-}
-
-TEST_F(CrossNodeDFBFixture, CrossNodeDFB_WriteToReceiver_ReceiverContiguous) {
-    auto mesh_device = devices_[0];
-
-    CoreCoord sender_core(0, 0);
-    CoreRangeSet receiver_cores(CoreRange({1, 0}, {4, 0}));
-
-    const uint32_t entry_size = 256;
-    const uint32_t num_entries = 4;
-
-    // write_primitive=2: write_to_receiver N times then collective push_back.
-    // Each receiver gets its unique data (receiver_idx pattern).
-    uint32_t pass = run_1toN_program(mesh_device, sender_core, receiver_cores, entry_size, num_entries, 2);
-    EXPECT_EQ(pass, 4u) << "write_to_receiver (receiver-contiguous) 1:4 failed";
-}
-
-TEST_F(CrossNodeDFBFixture, CrossNodeDFB_RoundRobinPushBackToReceiver) {
-    auto mesh_device = devices_[0];
-
-    CoreCoord sender_core(0, 0);
-    CoreRangeSet receiver_cores(CoreRange({1, 0}, {4, 0}));
-
-    const uint32_t entry_size = 256;
-    const uint32_t num_entries = 1;
-
-    // write_primitive=3: write_to_receiver + push_back_to_receiver per iteration.
-    uint32_t pass = run_1toN_program(mesh_device, sender_core, receiver_cores, entry_size, num_entries, 3);
-    EXPECT_EQ(pass, 4u) << "write_to_receiver + push_back_to_receiver round-robin failed";
-}
-
-TEST_F(CrossNodeDFBFixture, CrossNodeDFB_PerReceiverCreditInterleaved_RingDepth4) {
-    // Per-receiver credit with a ring deeper than one entry, pushed entry-major so the
-    // receivers are never in lockstep: receiver 0 is credited entry i while receiver 1 is
-    // still one entry behind. Every receiver must still see entry i at slot i, which only
-    // holds if the sender keeps an independent write position per receiver (derived from
-    // that receiver's entries_sent credits). A single shared cursor places receiver r's
-    // entry i at slot (i * num_receivers + r) % depth, so the rings come back rotated and
-    // partly overwritten.
-    auto mesh_device = devices_[0];
-
-    CoreCoord sender_core(0, 0);
-    CoreRangeSet receiver_cores(CoreRange({1, 0}, {2, 0}));
-
-    const uint32_t entry_size = 256;
-    const uint32_t num_entries = 4;
-
-    uint32_t pass = run_1toN_program(mesh_device, sender_core, receiver_cores, entry_size, num_entries, 5);
-    EXPECT_EQ(pass, 2u) << "Interleaved push_back_to_receiver must keep an independent write position per receiver";
 }
 
 TEST_F(CrossNodeDFBFixture, CrossNodeDFB_DecoupledWriteThenCredit) {
@@ -1211,8 +1146,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedMemoryPushPop_1to1) {
 
     const uint32_t entry_size = 256;
     const uint32_t num_entries = 4;
-    constexpr uint32_t data_pattern =
-        static_cast<uint32_t>(cross_node_dfb_test::SenderDataPattern::PerReceiverConstant);
+    constexpr uint32_t data_pattern = static_cast<uint32_t>(cross_node_dfb_test::SenderDataPattern::MulticastCounter);
 
     auto user_data = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
     tt_metal::Program program = CreateProgram();
@@ -1231,8 +1165,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedMemoryPushPop_1to1) {
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            // write_primitive=2: write_to_receiver(0) for 1:1
-            .compile_args = {remote_dfb_id, entry_size, num_entries, 2u, data_pattern, 0u}});
+            .compile_args = {remote_dfb_id, entry_size, num_entries, 0u, data_pattern, 0u}});
     tt::tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/cross_node_dfb_receiver.cpp",
@@ -1602,14 +1535,7 @@ CrossNodeTracePushPop make_1to1_trace_push_pop(distributed::MeshDevice& device) 
     cross_node_dfb_test::set_sender_l1_staging_runtime_args(
         program, sender_k, ctx.sender_cores, *ctx.gdfb, staging_size);
     cross_node_dfb_test::write_sender_l1_staging(
-        device,
-        ctx.sender_cores,
-        *ctx.gdfb,
-        ctx.data_pattern,
-        ctx.entry_size,
-        ctx.num_entries,
-        1,
-        ctx.counter_base);
+        device, ctx.sender_cores, *ctx.gdfb, ctx.data_pattern, ctx.entry_size, ctx.num_entries, 1, ctx.counter_base);
 
     ctx.workload.add_program(unit_mesh_device_range(), std::move(program));
     return ctx;
