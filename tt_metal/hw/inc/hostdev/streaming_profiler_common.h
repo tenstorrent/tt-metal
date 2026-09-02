@@ -9,9 +9,9 @@
 // Everything the streaming backend adds on top of the DRAM profiler's hostdev/profiler_common.h lives here,
 // so that header stays byte-for-byte the DRAM profiler's own. The two backends are mutually exclusive at run
 // time (TT_METAL_DEVICE_PROFILER vs TT_METAL_STREAMING_PROFILER, see llrt/rtoptions.cpp), and the device
-// producer for this backend is tools/profiler/streaming_profiler.hpp, selected by -DPROFILE_STREAMING.
+// producer for this backend is tools/profiler/kernel_profiler_streaming.hpp, selected by -DPROFILE_STREAMING.
 //
-// Consumers: the SPSC producer (streaming_profiler.hpp), the DRISC filler kernels
+// Consumers: the SPSC producer (kernel_profiler_streaming.hpp), the DRISC filler kernels
 // (tools/profiler/kernels/drisc_*.cpp), the host receiver/decoder (tools/profiler/perf_debug_*,
 // spsc_marker_decode.hpp) and the DRISC test kernels.
 
@@ -210,10 +210,10 @@ constexpr static std::uint32_t SPSC_SPAN_RAW_FLAG = 1u;
 // ---- Wire codes shared with the producer and the host decoder --------------------------------------
 //
 // Codes MUST match spsc_packet.h's PP_* -- asserted in spsc_marker_decode.hpp, which is the one place that
-// sees both headers -- and streaming_profiler.hpp's ppfmt (inlined there because the JIT build lacks the
+// sees both headers -- and kernel_profiler_streaming.hpp's ppfmt (inlined there because the JIT build lacks the
 // spsc_packet.h include path).
 
-// Producer tail-publish batch (streaming_profiler.hpp publish_tail_batched): the published TAIL can lag
+// Producer tail-publish batch (kernel_profiler_streaming.hpp publish_tail_batched): the published TAIL can lag
 // true ring occupancy by up to this many words between fenced publishes -- drainer-invisible occupancy
 // against the producer's 506-word bar. Must be a power of two. 16, not 64: the interleaved microbench
 // (device reset between runs, 200k zones/RISC) measured 64 at 59.82/60.31 cycles/zone and 16 at
@@ -231,7 +231,7 @@ static constexpr std::uint32_t SPSC_TIMER_HI_MASK = 0x7FFFFFFu;  // the 27-bit l
 
 // FULL 27 bits. This mask was 0xFFFF once, and that truncation was invisible: markers rendered
 // perfectly and only their NAMES could not be resolved. Any change to the id width has to be made in
-// EVERY copy of the packer at once -- this one, ppfmt in streaming_profiler.hpp, and pp_* in spsc_packet.h.
+// EVERY copy of the packer at once -- this one, ppfmt in kernel_profiler_streaming.hpp, and pp_* in spsc_packet.h.
 inline std::uint32_t spsc_marker_w0(std::uint32_t type, std::uint32_t zone_id) {
     return (type << SPSC_SPAN_TYPE_SHIFT) | (zone_id & TT_ZONE_ID_MASK);
 }

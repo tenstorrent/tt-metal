@@ -4,7 +4,7 @@
 
 #pragma once
 #if defined(PROFILE_STREAMING)
-#include "tools/profiler/streaming_profiler.hpp"
+#include "tools/profiler/kernel_profiler_streaming.hpp"
 #else
 
 #include <climits>

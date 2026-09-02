@@ -47,7 +47,7 @@ uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)] __a
 #if defined(PROFILE_STREAMING)
 // Streaming-profiler producer state for DRISC kernels. main has no DRISC profiler at all, so unlike the other
 // firmwares this block is streaming-only: a DRISC kernel built under TT_METAL_STREAMING_PROFILER resolves
-// kernel_profiler::wIndex (and zoneValid, which streaming_profiler.hpp defines itself for FW builds) out of
+// kernel_profiler::wIndex (and zoneValid, which kernel_profiler_streaming.hpp defines itself for FW builds) out of
 // this firmware ELF via --just-symbols. Without it the kernel fails to link.
 #include "tools/profiler/kernel_profiler.hpp"
 namespace kernel_profiler {
