@@ -1307,12 +1307,20 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         prev_disable = getattr(args0, "disable_batched_prefill", False)
         if use_sequential:
             args0.disable_batched_prefill = True
+        # Arm the gemma4-owned batched-consumption hygiene (per-slot slice
+        # dealloc + RM return + retire list in process_logits_after_prefill_trace)
+        # only when this call truly batches; the single-user path must keep the
+        # original contract (persistent trace output input, TILE return).
+        for m in self.model:
+            m._g4_batched_prefill_consumption = will_batch
         try:
             with self._route_per_layer_page_tables(per_submesh):
                 out = super().prefill_forward_text(**kwargs)
         finally:
             if use_sequential:
                 args0.disable_batched_prefill = prev_disable
+            for m in self.model:
+                m._g4_batched_prefill_consumption = False
             self._clear_sequential_batch_page_tables()
 
         # Device work is synchronous after the TT forward returns — same

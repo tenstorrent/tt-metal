@@ -1844,32 +1844,42 @@ class Gemma4Model:
         If the last dim is already vocab-sized (legacy / batched path that ran
         lm_head inside the trace), only slice and return.
 
-        Trace-safety contract (owned here, NOT in tt_transformers): the
-        caller's input slice and every intermediate are deallocated before
-        the next trace replay — the input immediately, the returned tensor
-        via the retire list (already ROW_MAJOR, so the caller's
-        ``to_layout`` is a no-op and creates nothing new).
+        Trace-safety contract (owned here, NOT in tt_transformers), applied
+        only to the BATCHED consumption (``_g4_batched_prefill_consumption``
+        set by the vLLM bridge around a batched call): the caller's per-slot
+        input slice and every intermediate are deallocated before the next
+        trace replay, and the return is already ROW_MAJOR so the caller's
+        ``to_layout`` is a no-op and creates nothing new. The single-user
+        path is untouched: its input is the trace's PERSISTENT output buffer
+        (must not be deallocated) and its consumer untilizes a TILE return.
         """
-        self._g4_retire_scavenge()
+        batched = bool(getattr(self, "_g4_batched_prefill_consumption", False))
+        if batched:
+            self._g4_retire_scavenge()
         get_last_token = (last_token_idx // 32) * 32
         sliced = ttnn.slice(
             hidden_states,
             (0, 0, get_last_token, 0),
             (1, 1, get_last_token + 32, hidden_states.shape[-1]),
         )
-        if hidden_states is not sliced:
+        if batched and hidden_states is not sliced:
             hidden_states.deallocate(True)
         if sliced.shape[-1] == self.hidden_size:
             logits = self._apply_lm_head(sliced, is_decode=False)
-            if logits is not sliced:
+            if batched and logits is not sliced:
                 sliced.deallocate(True)
         else:
             logits = sliced
         # Trace deferred lm_head: commit bounded ring fills after logits.
         self._flush_deferred_bounded_fills_if_needed()
-        logits_rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if logits_rm is not logits:
-            logits.deallocate(True)
+        if not batched:
+            return logits
+        if logits.layout == ttnn.ROW_MAJOR_LAYOUT:
+            logits_rm = logits
+        else:
+            logits_rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if logits_rm is not logits:
+                logits.deallocate(True)
         self._g4_retire(logits_rm)
         return logits_rm
 
