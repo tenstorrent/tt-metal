@@ -45,7 +45,7 @@
 #include "impl/kernels/kernel.hpp"  // DramConfig (a DRISC kernel is not in the public headers yet)
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "hostdev/profiler_common.h"
+#include "hostdev/streaming_profiler_common.h"
 
 #include "tools/profiler/spsc_marker_decode.hpp"
 #include "tools/profiler/perf_debug_consumer.hpp"

@@ -3,13 +3,40 @@
 The streaming profiler drains device zones to the host and hands decoded records to any
 callback you register.
 
+## Three device-profiler modes (mutually exclusive)
+
+| mode | `TT_METAL_DEVICE_PROFILER` | `TT_METAL_STREAMING_PROFILER` | device kernels | DRAM profiler (L1 → DRAM → per-op dump) | streaming (SPSC producer + DRISC fillers + host receiver) | real-time profiler |
+|---|---|---|---|---|---|---|
+| 1 | unset | unset | no profiler code | off | off | on |
+| 2 | set | unset | legacy `kernel_profiler.hpp` (`-DPROFILE_KERNEL`) | on | off | on |
+| 3 | unset | set | streaming producer (`-DPROFILE_KERNEL=1 -DPROFILE_STREAMING=1`) | off | on | disabled |
+
+Setting both variables is a `TT_FATAL` at `MetalContext` construction, before any device opens.
+Mode 3 is Blackhole only (it needs DRISC drainers); on Quasar it is a `TT_FATAL`.
+
+Sub-switches:
+
+| variable | applies in | meaning |
+|---|---|---|
+| `TT_METAL_DEVICE_PROFILER_DISPATCH`, `TT_METAL_DEVICE_PROFILER_NOC_EVENTS`, `TT_METAL_PROFILER_SYNC`, ... | mode 2 only | legacy DRAM-profiler options (ride on `profiler_enabled`) |
+| `TT_METAL_STREAMING_PROFILER_TRACY` | mode 3 | built-in Tracy sink (opt-in) |
+| `TT_METAL_PERF_DEBUG_OPS_CSV`, `TT_METAL_PERF_DEBUG_ZONE_CSV`, `TT_METAL_PERF_DEBUG_STALL_CSV` | mode 3 | built-in CSV consumers |
+| `TT_METAL_DEVICE_PROFILER_SYNC_EVENTS` | mode 3 only | sync-event zones at CB/semaphore waits (`-DPROFILE_SYNC_EVENTS`) |
+| `TT_METAL_DRISC_PROFILER` | mode 3 only | arm the producers but do not boot the built-in receiver (caller supplies a DRISC drainer) |
+
+Device-side selection is one header: `tools/profiler/kernel_profiler.hpp` is main's DRAM producer
+verbatim, wrapped so that `-DPROFILE_STREAMING` swaps in `tools/profiler/streaming_profiler.hpp`.
+Shared streaming constants live in `hw/inc/hostdev/streaming_profiler_common.h`;
+`hw/inc/hostdev/profiler_common.h` is the DRAM profiler's own. Not supported on the streaming
+producer: sum zones (`DeviceZoneScopedSumN*`) and `DeviceRecordEvent` (both compile to nothing).
+
 ## Enable (Blackhole)
 
 ```
 export TT_METAL_STREAMING_PROFILER=1
 ```
 
-One switch — it also arms the device-side markers.
+One switch — it also arms the device-side markers. Leave `TT_METAL_DEVICE_PROFILER` unset.
 
 ## Register a callback
 

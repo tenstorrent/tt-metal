@@ -6,7 +6,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 
-#include "hostdev/profiler_common.h"
+#include "hostdev/streaming_profiler_common.h"
 #include "tools/profiler/perf_debug_profiler_packets.hpp"
 #include "tools/profiler/perf_debug_profiler_tracy_handler.hpp"
 

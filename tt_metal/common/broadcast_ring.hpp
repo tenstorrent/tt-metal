@@ -71,12 +71,16 @@ public:
      */
     explicit BroadcastRing(size_t capacity) :
         capacity_(capacity ? std::bit_ceil(capacity) : 1),
-        storage_(allocate_slots(capacity_, /*construct_slots=*/true)),
+        storage_(heap_slots(capacity_)),
         writer_(&shared_state_, view()) {}
 
     /**
      * @brief Constructs the ring but leaves its slots UNTOUCHED, for a caller that will call
-     *        construct_slots() from the thread that is going to write them.
+     *        construct_slots() from the thread that is going to write them. The slots are backed by an
+     *        anonymous mmap (huge pages above 64 MiB) rather than the heap -- see mmap_slots().
+     *
+     * This is the constructor the streaming profiler's receiver uses; the default constructor above keeps
+     * main's heap-backed slots byte-for-byte for every other ring (e.g. the real-time profiler's).
      *
      * First touch decides a page's NUMA node for the life of the mapping. Constructing the slots here binds
      * every page to whichever thread happened to build the ring -- for a multi-GB ring written by a
@@ -87,7 +91,7 @@ public:
     struct DeferSlotInit {};
     BroadcastRing(size_t capacity, DeferSlotInit) :
         capacity_(capacity ? std::bit_ceil(capacity) : 1),
-        storage_(allocate_slots(capacity_, /*construct_slots=*/false)),
+        storage_(mmap_slots(capacity_)),
         writer_(&shared_state_, view()) {}
 
     /**
@@ -509,14 +513,24 @@ private:
         size_t map_bytes = 0;
     };
 
-    // mmap-backed at EVERY size, not just the huge-page tier: a page-aligned base is what guarantees the
-    // cache-line alignment that direct emitters stream 64 B non-temporal stores against (via
-    // emit_slot_ptr) -- the new[] fallback's 16 B alignment general-protection-faulted such a store, which
-    // presents as a SIGSEGV at a nil address, on any ring small enough to have skipped the mmap. Large
-    // slot arrays are additionally walked far beyond TLB reach, so they get 2 MiB pages; THP is
-    // madvise-opt-in on typical deployments, hence the explicit MADV_HUGEPAGE (over-mapped by one huge
-    // page to guarantee an aligned start, which the huge-page fault path requires).
-    static SlotStorage allocate_slots(size_t n, bool construct_slots) {
+    // Default constructor's storage: heap slots, constructed, exactly as main.
+    static SlotStorage heap_slots(size_t n) {
+        SlotStorage storage;
+        storage.owned = std::make_unique<Slot[]>(n);
+        storage.slots = storage.owned.get();
+        return storage;
+    }
+
+    // DeferSlotInit storage (streaming profiler receiver). mmap-backed at EVERY size, not just the
+    // huge-page tier: a page-aligned base is what guarantees the cache-line alignment that direct emitters
+    // stream 64 B non-temporal stores against (via emit_slot_ptr) -- new[]'s 16 B alignment
+    // general-protection-faulted such a store, which presents as a SIGSEGV at a nil address, on any ring
+    // small enough to have skipped the mmap. Large slot arrays are additionally walked far beyond TLB
+    // reach, so they get 2 MiB pages; THP is madvise-opt-in on typical deployments, hence the explicit
+    // MADV_HUGEPAGE (over-mapped by one huge page to guarantee an aligned start, which the huge-page fault
+    // path requires). Slots are left unconstructed for construct_slots(). Falls back to (unconstructed)
+    // heap slots if mmap fails or off Linux.
+    static SlotStorage mmap_slots(size_t n) {
         SlotStorage storage;
 #if defined(__linux__)
         static constexpr size_t kHugePageSize = size_t{2} << 20;
@@ -534,14 +548,11 @@ private:
                 ::madvise(reinterpret_cast<void*>(aligned), bytes, MADV_HUGEPAGE);
             }
             storage.slots = reinterpret_cast<Slot*>(aligned);
-            if (construct_slots) {
-                for (size_t i = 0; i < n; i++) {
-                    new (storage.slots + i) Slot();
-                }
-            }
             return storage;
         }
 #endif
+        // Heap fallback: make_unique<Slot[]> value-initializes, so these slots are already constructed
+        // and construct_slots()'s placement-new over them is a harmless re-construction of trivial state.
         storage.owned = std::make_unique<Slot[]>(n);
         storage.slots = storage.owned.get();
         return storage;

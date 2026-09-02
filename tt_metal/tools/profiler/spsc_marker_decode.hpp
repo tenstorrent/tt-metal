@@ -35,7 +35,7 @@
 #include <immintrin.h>
 #endif
 
-#include "hostdev/profiler_common.h"
+#include "hostdev/streaming_profiler_common.h"
 #include "spsc_packet.h"
 
 static_assert(

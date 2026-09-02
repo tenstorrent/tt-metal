@@ -12,7 +12,7 @@
 #include <string>
 #include <utility>
 
-#include "hostdev/profiler_common.h"
+#include "hostdev/streaming_profiler_common.h"
 
 #if defined(TRACY_ENABLE)
 #include <common/TracyTTDeviceData.hpp>

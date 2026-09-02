@@ -25,7 +25,7 @@
 #include <utility>
 #include <vector>
 
-#include "hostdev/profiler_common.h"
+#include "hostdev/streaming_profiler_common.h"
 
 #include <tt-metalium/core_coord.hpp>
 

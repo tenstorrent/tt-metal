@@ -14,7 +14,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/socket_api.h"
-#include "hostdev/profiler_common.h"
+#include "hostdev/streaming_profiler_common.h"
 #include "internal/tt-1xx/risc_common.h"
 
 #include "experimental/drisc_mode.h"

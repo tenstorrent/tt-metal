@@ -27,7 +27,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "hostdev/profiler_common.h"
+#include "hostdev/streaming_profiler_common.h"
 #include "tools/profiler/perf_debug_consumer.hpp"
 
 namespace tt::tt_metal::perf_debug {

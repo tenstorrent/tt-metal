@@ -62,7 +62,8 @@ const ll_api::memory& get_risc_binary(
         // kernels and firmware, cache hits included -- and because it runs before the image can execute,
         // so a zone's name is registered strictly before that zone can appear on the wire. See
         // llrt/zone_meta.hpp for why a one-shot snapshot taken by the consumer is not equivalent.
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled()) {
+        // Streaming only: the DRAM profiler's ELFs carry no .tt_zone_meta and resolve names its own way.
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_streaming_profiler_enabled()) {
             ZoneMetaRegistry::instance().ingest_elf(path);
         }
 

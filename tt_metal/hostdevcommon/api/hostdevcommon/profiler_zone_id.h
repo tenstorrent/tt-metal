@@ -6,7 +6,7 @@
 //
 // SCOPE: this file describes the id that travels in `low27` of every streaming marker's word0
 // (tools/profiler/spsc_packet.h) and the ELF records that give that id a name. It says NOTHING about the
-// push-to-DRAM backend (tools/profiler/kernel_profiler_push.hpp + impl/profiler/profiler.cpp), which keeps
+// push-to-DRAM backend (tools/profiler/kernel_profiler.hpp + impl/profiler/profiler.cpp), which keeps
 // its own 16-bit `timer_id`. Do not wire these constants into that path.
 //
 // ---- WHY STRUCTURAL, NOT A HASH --------------------------------------------------------------------

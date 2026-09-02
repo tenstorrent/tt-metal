@@ -40,9 +40,9 @@
 // zone for every legacy compute call while DFB calls emitted one -- silently double-counting the
 // kernels that have not migrated.
 //
-// OPT-IN, off by default: TT_METAL_DEVICE_PROFILER_SYNC_EVENTS=1 injects PROFILE_SYNC_EVENTS into
-// every JIT build (jit_build/build.cpp), so it is part of the JIT cache key. That flag is the entire
-// reason these macros exist rather than calls to DeviceZoneScopedN / DeviceTimestampedData written
+// OPT-IN, off by default, STREAMING ONLY: TT_METAL_STREAMING_PROFILER=1 TT_METAL_DEVICE_PROFILER_SYNC_EVENTS=1
+// injects PROFILE_SYNC_EVENTS into every JIT build (jit_build/build.cpp), so it is part of the JIT cache key. That flag
+// is the entire reason these macros exist rather than calls to DeviceZoneScopedN / DeviceTimestampedData written
 // straight at the hook sites: the profiler's own macros are gated on PROFILE_KERNEL and
 // !DISPATCH_KERNEL, and this tool needs a third gate on top. Doing it with #if at each site would
 // work, but then the disabled build would not COMPILE the hook expressions at all, and an opt-in
@@ -53,7 +53,10 @@
 // The DISPATCH_KERNEL exclusion is load-bearing, same as kernel_profiler.hpp's: dispatch cores have
 // no drainer, and a marker written into an undrained ring wedges the NEXT capture.
 
-#if defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && defined(PROFILE_SYNC_EVENTS)
+// PROFILE_STREAMING is part of the gate on purpose: the host only emits -DPROFILE_SYNC_EVENTS together with
+// -DPROFILE_STREAMING (TT_METAL_DEVICE_PROFILER_SYNC_EVENTS is a streaming-only option, jit_build/build.cpp),
+// and this keeps the legacy DRAM profiler's build preprocessor-identical to main even if that ever regresses.
+#if defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && defined(PROFILE_SYNC_EVENTS) && defined(PROFILE_STREAMING)
 
 // The macros expand where the HOOK SITE is parsed -- an inline function body in dataflow_api.h, the
 // llk_io headers, or the semaphore headers -- so the profiler header has to be in first. Pulling it

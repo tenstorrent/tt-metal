@@ -1584,28 +1584,6 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
     if (realtime_profiler_) {
         return;
     }
-    // The perf-debug (drainer) profiler REPLACES this one -- do not run both. They are not independent:
-    // RealtimeProfilerManager reserves a tensix core, owns its own D2H socket + dispatch handshake, and
-    // consumes the SAME per-RISC SPSC profiler rings the drainer firmware drains. Two consumers on one SPSC
-    // ring see each other's partial reads (observed: ~1800 "zone with end < start" warnings per ResNet
-    // run), and its shutdown interleaves with dispatch teardown.
-    // NOTE: TT_METAL_NO_RT_PROFILER is read NOWHERE in the tree -- it never disabled anything. This gate
-    // is the actual off switch, keyed on the same variable that turns the drain path on.
-    const char* pd = std::getenv("TT_METAL_STREAMING_PROFILER");
-    if (pd != nullptr && *pd != '\0' && *pd != '0') {
-        log_info(tt::LogMetal, "[perf-debug profiler] enabled -- legacy realtime profiler is disabled for this run.");
-        return;
-    }
-    // Same exclusion, for the DRISC drainer. It is the successor to the drainer consumer and reads the very
-    // same SPSC rings, so it cannot share them with RealtimeProfilerManager either. This needs its own
-    // variable rather than reusing TT_METAL_STREAMING_PROFILER, because that one does double duty: it
-    // also BOOTS the drainer (init_perf_debug_profiler), which would just swap one competing consumer for
-    // another. Producers on, no built-in consumer -- the drainer is supplied externally.
-    const char* dd = std::getenv("TT_METAL_DRISC_PROFILER");
-    if (dd != nullptr && *dd != '\0' && *dd != '0') {
-        log_info(tt::LogMetal, "[drisc profiler] enabled -- legacy realtime profiler is disabled for this run.");
-        return;
-    }
     realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);
 }
 
@@ -1613,12 +1591,25 @@ void MeshDeviceImpl::init_perf_debug_profiler(const std::shared_ptr<MeshDevice>&
     if (perf_debug_profiler_) {
         return;
     }
-    // Opt-in: the drainer device-zone profiler boots the device-side drainer and spawns host drain threads.
-    // Off by default so it never contends with a standalone drainer bring-up or the standard profiler.
-    // TT_METAL_STREAMING_PROFILER also implies TT_METAL_DEVICE_PROFILER (rtoptions), so this one switch
-    // arms the producers too.
-    const char* s = std::getenv("TT_METAL_STREAMING_PROFILER");
-    if (s == nullptr || *s == '\0' || *s == '0') {
+    // Streaming (perf_debug) profiler: TT_METAL_STREAMING_PROFILER=1 (llrt/rtoptions.cpp) boots the
+    // device-side DRISC fillers and spawns the host receiver. Off by default. It is a mode of its own,
+    // exclusive with TT_METAL_DEVICE_PROFILER (rtoptions TT_FATALs on the pair), and the real-time profiler
+    // stands down while it is on (realtime_profiler_manager.cpp: evaluate_realtime_profiler_eligibility) --
+    // both would consume the same per-RISC L1 rings.
+    const auto& rtoptions = MetalContext::instance(get_context_id()).rtoptions();
+    if (!rtoptions.get_streaming_profiler_enabled()) {
+        return;
+    }
+    TT_FATAL(
+        MetalContext::instance(get_context_id()).hal().get_arch() != tt::ARCH::QUASAR,
+        "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC drainer, "
+        "which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
+    // TT_METAL_DRISC_PROFILER: producers armed, no built-in consumer -- the caller supplies its own DRISC
+    // drainer (tests/tt_metal/tt_metal/api/test_dram_kernels.cpp), so booting ours would compete with it.
+    if (rtoptions.get_drisc_profiler_enabled()) {
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] TT_METAL_DRISC_PROFILER set -- producers armed, built-in receiver not started.");
         return;
     }
     perf_debug_profiler_ = std::make_unique<PerfDebugProfiler>(mesh_device);

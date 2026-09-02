@@ -23,7 +23,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
-#include "hostdev/profiler_common.h"
+#include "hostdev/streaming_profiler_common.h"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
 
@@ -3118,7 +3118,7 @@ TEST_F(DramKernelDRISCScatterFixture, DRISCServicesRealProfiledWorkers) {
         log_info(LogTest, "[{}] device {:.3f} ms, host wall {:.3f} s", label, cycles * 1000.0 / clk_hz, wall_s);
 
         if (total_words == 0) {
-            GTEST_SKIP() << "no markers produced -- run with TT_METAL_DEVICE_PROFILER=1 TT_METAL_DRISC_PROFILER=1";
+            GTEST_SKIP() << "no markers produced -- run with TT_METAL_STREAMING_PROFILER=1 TT_METAL_DRISC_PROFILER=1";
         }
 
         // The real proof: every lane fully drained, head == tail on every producing core.

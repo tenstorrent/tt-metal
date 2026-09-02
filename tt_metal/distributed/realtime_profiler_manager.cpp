@@ -124,6 +124,18 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     const auto& cluster = metal.get_cluster();
     auto& dispatch_core_manager = metal.get_dispatch_core_manager();
 
+    // The streaming (perf_debug) profiler owns the per-RISC L1 profiler rings while it is on; this manager
+    // consumes those same rings, and two consumers on one SPSC ring see each other's partial reads
+    // (observed: ~1800 "zone with end < start" warnings per ResNet run). Stand down for the run.
+    if (metal.rtoptions().get_streaming_profiler_enabled()) {
+        log_info(
+            tt::LogMetal,
+            "Real-time profiler disabled on device {}: TT_METAL_STREAMING_PROFILER is set and the streaming "
+            "profiler drains the same device rings.",
+            device_id);
+        return {};
+    }
+
     // Gate mock/emulated targets: D2HSocket::init_host_buffer_hugepage dereferences a real PCIe hugepage absent there.
     if (cluster.is_mock_or_emulated()) {
         log_debug(

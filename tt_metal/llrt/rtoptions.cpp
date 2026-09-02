@@ -127,7 +127,8 @@ enum class EnvVarID {
     // PROFILING & PERFORMANCE
     // ========================================
     TT_METAL_DEVICE_PROFILER,                      // Enable device profiling
-    TT_METAL_STREAMING_PROFILER,                   // Enable the streaming device-zone profiler (implies the above)
+    TT_METAL_STREAMING_PROFILER,                   // Enable the streaming device-zone profiler (excludes the above)
+    TT_METAL_DRISC_PROFILER,                       // Streaming producers only; caller supplies the DRISC drainer
     TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
     TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
@@ -387,6 +388,17 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
         "Cannot enable both debug printing and profiling");
+    // The DRAM (TT_METAL_DEVICE_PROFILER) and streaming (TT_METAL_STREAMING_PROFILER) device profilers are
+    // mutually exclusive modes: their device producers overlay the same L1 profiler region with different
+    // layouts, and their hosts would both drive it. Refuse here, at MetalContext construction, before any
+    // device is opened or any kernel is compiled.
+    TT_FATAL(
+        !(get_profiler_enabled() && get_streaming_profiler_enabled()),
+        "TT_METAL_DEVICE_PROFILER and TT_METAL_STREAMING_PROFILER are mutually exclusive: set exactly one of "
+        "them (DRAM profiler vs streaming profiler).");
+    TT_FATAL(
+        !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_streaming_profiler_enabled()),
+        "Cannot enable both debug printing and the streaming profiler");
 }
 
 void RunTimeOptions::set_root_dir(const std::string& root_dir) {
@@ -918,11 +930,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_STREAMING_PROFILER
-        // Boots the streaming device-zone profiler (resident DRISC drainers + host receiver) at
-        // MeshDevice bring-up, and IMPLIES TT_METAL_DEVICE_PROFILER -- one switch arms both the
-        // producers (kernels emit markers) and the consumer. The Tracy sink is NOT implied: opt in
-        // with TT_METAL_STREAMING_PROFILER_TRACY=1; without it, records go only to registered
-        // consumers (register_consumer / TT_METAL_PERF_DEBUG_OPS_CSV).
+        // Boots the streaming device-zone profiler (resident DRISC fillers + host receiver) at MeshDevice
+        // bring-up and compiles kernels with the streaming producer (-DPROFILE_STREAMING). This is a
+        // SEPARATE mode from TT_METAL_DEVICE_PROFILER (the legacy DRAM profiler): it does NOT set
+        // profiler_enabled, so nothing of the DRAM profiler (DRAM buffers, per-op dump, dispatch/NoC-event
+        // options) is active, and the two may not be enabled together (TT_FATAL below). The real-time
+        // profiler is disabled while this is on (it reads the same L1 rings). The Tracy sink is NOT
+        // implied: opt in with TT_METAL_STREAMING_PROFILER_TRACY=1; without it, records go only to
+        // registered consumers (register_consumer / TT_METAL_PERF_DEBUG_OPS_CSV).
         // Default: false
         // Usage: export TT_METAL_STREAMING_PROFILER=1
         case EnvVarID::TT_METAL_STREAMING_PROFILER:
@@ -930,9 +945,21 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             TT_FATAL(false, "TT_METAL_STREAMING_PROFILER requires a Tracy-enabled build of tt-metal.");
 #else
             if (is_env_enabled(value)) {
-                this->profiler_enabled = true;
+                this->streaming_profiler_enabled = true;
             }
 #endif
+            break;
+
+        // TT_METAL_DRISC_PROFILER
+        // Streaming-profiler sub-option: arm the streaming producers but do NOT boot the built-in
+        // filler/receiver -- the caller supplies its own DRISC drainer (test_dram_kernels.cpp). Only
+        // effective together with TT_METAL_STREAMING_PROFILER=1; ignored otherwise.
+        // Default: false
+        // Usage: export TT_METAL_STREAMING_PROFILER=1 TT_METAL_DRISC_PROFILER=1
+        case EnvVarID::TT_METAL_DRISC_PROFILER:
+            if (is_env_enabled(value)) {
+                this->drisc_profiler_enabled = true;
+            }
             break;
 
         // TT_METAL_DEVICE_PROFILER_DISPATCH
@@ -981,10 +1008,10 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // TT_METAL_DEVICE_PROFILER_SYNC_EVENTS
         // Enables synchronization-event profiling (CB wait/push, semaphore wait/set markers) for the
         // critical-path tool. Opt-in: these hooks sit in per-tile hot paths (cb_wait_front, semaphore
-        // spins), so they are compiled in only when asked for. Requires the device profiler to be on
-        // (streaming or DRAM); without it the JIT define is never emitted.
+        // spins), so they are compiled in only when asked for. STREAMING ONLY: requires
+        // TT_METAL_STREAMING_PROFILER=1; with the DRAM profiler the JIT define is never emitted.
         // Default: false
-        // Usage: export TT_METAL_DEVICE_PROFILER_SYNC_EVENTS=1
+        // Usage: export TT_METAL_STREAMING_PROFILER=1 TT_METAL_DEVICE_PROFILER_SYNC_EVENTS=1
         case EnvVarID::TT_METAL_DEVICE_PROFILER_SYNC_EVENTS:
             if (is_env_enabled(value)) {
                 this->profiler_sync_events_enabled = true;

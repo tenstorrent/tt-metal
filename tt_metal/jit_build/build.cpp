@@ -338,10 +338,23 @@ void JitBuildEnv::init(
 
         this->defines_ += "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" +
                           std::to_string(config.profiler_dram_bank_size_per_risc_bytes) + " ";
+    }
+    if (rtoptions.get_streaming_profiler_enabled()) {
+        // Streaming (perf_debug) profiler. Mutually exclusive with get_profiler_enabled() (rtoptions
+        // TT_FATALs on both), so this branch never stacks on the one above. PROFILE_KERNEL=1 keeps every
+        // DeviceZoneScopedN / DeviceTimestampedData site compiled; PROFILE_STREAMING makes
+        // tools/profiler/kernel_profiler.hpp select the SPSC producer (streaming_profiler.hpp) instead of
+        // the DRAM one. No DRAM options (dispatch cores, trace-only, sum, accumulate) apply here.
+        TT_FATAL(
+            this->arch_ != tt::ARCH::QUASAR,
+            "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC "
+            "drainer, which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
+        this->defines_ += "-DPROFILE_KERNEL=1 -DPROFILE_STREAMING=1 ";
 
         // Critical-path tool: sync-event markers in cb_wait_front/semaphore paths. A distinct define
         // (not a PROFILER_OPT bit) so the hook headers can gate without parsing PROFILE_KERNEL's value;
         // it lands in defines_ and therefore in the JIT cache key like every other profiler option.
+        // Streaming-only: get_profiler_sync_events_enabled() is false unless streaming is on.
         if (rtoptions.get_profiler_sync_events_enabled()) {
             this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
         }
@@ -772,12 +785,13 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         cflags += " -save-temps=obj -fdump-tree-all -fdump-rtl-all";
     }
 
-    // Per-TU half of the structural device zone id. Kept out of `defines_`/`build_key_` on purpose: a
-    // tu_id is a property of the SOURCE, not of the build recipe, so folding it into the cache key would
-    // split the cache for no reason. It is stable for a given source identity, so a cached object never
-    // disagrees with a freshly compiled one.
+    // Per-TU half of the structural device zone id (STREAMING profiler only; the DRAM profiler's 16-bit
+    // hash ids need no registry). Kept out of `defines_`/`build_key_` on purpose: a tu_id is a property of
+    // the SOURCE, not of the build recipe, so folding it into the cache key would split the cache for no
+    // reason. It is stable for a given source identity, so a cached object never disagrees with a freshly
+    // compiled one.
     std::vector<std::string> defines = recipe.defines;
-    if (env_.get_rtoptions().get_profiler_enabled()) {
+    if (env_.get_rtoptions().get_streaming_profiler_enabled()) {
         // Firmware has no JitBuildSettings; its source identity is the source path itself plus the target,
         // which is stable across build configs (out_dir is not -- it carries the build key, and keying on it
         // would mint a fresh tu_id per config for the same source).
