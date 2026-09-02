@@ -380,11 +380,12 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     last_exc = None
     for candidate in candidates:
         try:
-            out = (
-                try_direct()
-                if candidate == "direct"
-                else try_mac(last_exc) if candidate == "mac" else try_chunk(candidate)
-            )
+            if candidate == "direct":
+                out = try_direct()
+            elif candidate == "mac":
+                out = try_mac(last_exc)
+            else:
+                out = try_chunk(candidate)
         except RuntimeError as exc:
             last_exc = exc
             continue
