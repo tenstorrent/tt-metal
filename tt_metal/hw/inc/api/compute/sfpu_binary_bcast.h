@@ -151,6 +151,12 @@ ALWI void sfpu_residual_normalize_bcast_col(
 
 // Apply (data - mean) * inv_std, broadcasting scalar element zero of the
 // statistic tiles across the complete data tile.
+ALWI void sfpu_normalize_bcast_scalar_init() {
+    // Scalar broadcast needs the common SFPU config and zero-stride address modifier,
+    // but not the persistent column-broadcast mask or replay program.
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::ROW))));
+}
+
 ALWI void sfpu_normalize_bcast_scalar(
     uint32_t dst_data_idx, uint32_t dst_mean_scalar_idx, uint32_t dst_inv_std_scalar_idx) {
     MATH(

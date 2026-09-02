@@ -469,6 +469,9 @@ void kernel_main() {
         }
 
         // Start Final Normalization
+        if constexpr (fp32_sfpu_normalizer) {
+            sfpu_normalize_bcast_scalar_init();
+        }
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
             uint32_t out_block_h_actual = out_block_h_normal;
             if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {

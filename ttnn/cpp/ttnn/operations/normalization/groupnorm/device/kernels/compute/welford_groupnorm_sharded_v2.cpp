@@ -397,6 +397,9 @@ void kernel_main() {
         }
 
         // Start Final Val Calc
+        if constexpr (fp32_sfpu_normalizer) {
+            sfpu_normalize_bcast_scalar_init();
+        }
         tile_id = b * block_hw;
         for (std::uint32_t i = 0; i < block_h; ++i) {
             // This indicates the smallest group that is yet to be processed for this block
