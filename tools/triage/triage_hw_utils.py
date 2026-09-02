@@ -5,6 +5,7 @@
 
 import importlib.metadata
 import datetime
+from dataclasses import dataclass
 from pathlib import Path
 
 from ttexalens.tt_exalens_lib import read_arc_telemetry_entry
@@ -107,3 +108,49 @@ def get_pkg_version(pkg: str) -> str:
         return importlib.metadata.version(pkg)
     except importlib.metadata.PackageNotFoundError:
         return "not installed"
+
+
+# ---------------------------------------------------------------------------
+# GDDR telemetry decoders
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class GddrModule:
+    index: int
+    corr_rd: int
+    corr_wr: int
+    uncorr_rd: int
+    uncorr_wr: int
+    temp_top: int
+    temp_bottom: int
+
+
+# Two modules per word: even in [15:0], odd in [31:16]; low byte read, high byte write.
+# Transcribed from decode_gddr_module_telemetry in UMD's firmware_info_provider_implementation.cpp.
+def decode_gddr_module(index: int, temp_word: int, corr_word: int, uncorr_bitmask: int) -> GddrModule:
+    shift = 16 if index % 2 else 0
+    return GddrModule(
+        index=index,
+        corr_rd=(corr_word >> shift) & 0xFF,
+        corr_wr=(corr_word >> (shift + 8)) & 0xFF,
+        uncorr_rd=(uncorr_bitmask >> (2 * index)) & 1,
+        uncorr_wr=(uncorr_bitmask >> (2 * index + 1)) & 1,
+        temp_bottom=(temp_word >> shift) & 0xFF,
+        temp_top=(temp_word >> (shift + 8)) & 0xFF,
+    )
+
+
+# Low bit = complete, high bit = error. 0b00 is IN_PROGRESS, not FAIL.
+def decode_status_bits(two_bits: int) -> str:
+    return {0b01: "SUCCESS", 0b10: "FAIL", 0b11: "FAIL"}.get(two_bits & 0x3, "IN_PROGRESS")
+
+
+# Per channel: (training, bist). BIST is the same layout shifted by 16.
+def decode_ddr_status(status_word: int, num_channels: int, check_bist: bool) -> list[tuple[str, str]]:
+    out = []
+    for ch in range(num_channels):
+        training = decode_status_bits((status_word >> (2 * ch)) & 0x3)
+        bist = decode_status_bits((status_word >> (16 + 2 * ch)) & 0x3) if check_bist else "n/a"
+        out.append((training, bist))
+    return out
