@@ -16,7 +16,7 @@
 // content depends solely on tile indices and the window boundaries -- never on the Q/K/V data -- so it
 // can be produced independently of the reader.
 
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include <tt-metalium/constants.hpp>
 #include "dataflow_common.hpp"
@@ -36,7 +36,7 @@ inline void fill_diag_subtile_zeros(
     uint32_t col_end_idx) {
     constexpr uint32_t FH = tt::constants::FACE_HEIGHT;
     constexpr uint32_t FW = tt::constants::FACE_WIDTH;
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     uint32_t write_addr = cb.get_write_ptr() + tile_id * tile_bytes;
     volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(write_addr);
     for (uint32_t r = row_start_idx; r < row_end_idx; ++r) {
@@ -68,7 +68,7 @@ inline void generate_windowed_mask_for_q_chunk(
     uint32_t q_tok_offset) {
     // cu_window_seqlens is INT32/UINT32 (validated host-side); both store non-negative cumulative
     // lengths in 32-bit words, so a plain uint32 read is correct for either.
-    CircularBuffer cb_cu(cb_cu_window_in);
+    DataflowBuffer cb_cu(cb_cu_window_in);
     volatile tt_l1_ptr uint32_t* cu_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_cu.get_read_ptr());
     auto get_cu = [&](uint32_t idx) -> uint32_t { return cu_ptr[idx]; };
     auto get_window_indices = [&](uint32_t i) {
@@ -117,7 +117,7 @@ inline void generate_windowed_mask_for_q_chunk(
         k_num_chunks,
         tt::constants::TILE_HEIGHT);
     const uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
-    CircularBuffer cb_mask(cb_mask_in);
+    DataflowBuffer cb_mask(cb_mask_in);
     uint32_t local_window_idx = start_window_idx;
     for (uint32_t k_chunk = k_range.k_lo; k_chunk < k_range.k_hi; ++k_chunk) {
         const uint32_t k_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt);

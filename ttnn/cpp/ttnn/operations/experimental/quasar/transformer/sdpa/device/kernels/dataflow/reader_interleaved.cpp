@@ -380,11 +380,12 @@ void kernel_main() {
                         dfb_page_table.pop_front(1);
                     }
                     dfb_page_table.reserve_back(1);
-                    // Inlined page-table read. The legacy shared helper read_page_table_for_batch (in
-                    // dataflow_common.hpp) takes a TensorAccessorArgs + raw address; a tensor:: binding
-                    // token cannot cross into that shared header, so the read is inlined here against the
-                    // page_table TensorBinding. The redundant page-size 3rd accessor arg is dropped (the
-                    // binding supplies the aligned page size); page_table_stick_size remains the read size.
+                    // Inlined page-table read. It is kept here rather than in a shared dataflow_common.hpp
+                    // helper because such a helper would take a TensorAccessorArgs + raw address, and a
+                    // tensor:: binding token cannot cross into a shared header -- so the read is inlined
+                    // against the page_table TensorBinding. The redundant page-size 3rd accessor arg is
+                    // dropped (the binding supplies the aligned page size); page_table_stick_size remains
+                    // the read size.
                     uint32_t page_table_dfb_wr_ptr = dfb_page_table.get_write_ptr();
                     const auto page_table_reader = TensorAccessor(tensor::page_table);
                     noc.async_read(

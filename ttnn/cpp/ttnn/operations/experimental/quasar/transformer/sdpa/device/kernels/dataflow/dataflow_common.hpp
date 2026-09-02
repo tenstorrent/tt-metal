@@ -13,7 +13,7 @@
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -28,7 +28,7 @@ constexpr uint32_t get_barrier_read_threshold() {
 }
 
 inline void fill_zeros_async(const Noc& noc, uint32_t cb_id, uint32_t tile_bytes, uint32_t offset_bytes = 0) {
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     noc.async_write_zeros(cb, tile_bytes, {.offset_bytes = offset_bytes});
 }
 
@@ -71,29 +71,6 @@ uint32_t virtual_seq_tile_id_to_physical_tile_id(
     const uint32_t block_row_offset = seq_tile_idx % block_size_t;
     const uint32_t block_offset = block_row_offset * Wt;
     return physical_block * block_stride + head_offset + block_offset;
-}
-
-template <typename PageTableArgs>
-volatile tt_l1_ptr uint32_t* read_page_table_for_batch(
-    Noc noc,
-    uint32_t cb_id,
-    uint32_t batch_idx,
-    const PageTableArgs& page_table_args,
-    uint32_t page_table_addr,
-    uint32_t page_table_stick_size) {
-    CircularBuffer cb(cb_id);
-    uint32_t page_table_cb_wr_ptr = cb.get_write_ptr();
-    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
-    // program cache hits.
-    const auto page_table_reader = TensorAccessor(page_table_args, page_table_addr, page_table_stick_size);
-    noc.async_read(
-        page_table_reader,
-        CoreLocalMem<uint32_t>(page_table_cb_wr_ptr),
-        page_table_stick_size,
-        {.page_id = batch_idx},
-        {});
-    noc.async_read_barrier();
-    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
 }
 
 class TensorTileShape {
@@ -159,7 +136,7 @@ uint32_t read_chunk_with_padding(
     */
     Noc noc;
     const uint32_t num_tiles = dst_rows * dst_cols;
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     cb.reserve_back(num_tiles);
     const uint32_t base_write_ptr = cb.get_write_ptr();
     uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
@@ -220,7 +197,7 @@ FORCE_INLINE void read_q_subblock(
     const uint32_t barrier_threshold) {
     Noc noc;
     const uint32_t sb_tiles = subblock_h * dst_cols;
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     cb.reserve_back(sb_tiles);
     const uint32_t base_write_ptr = cb.get_write_ptr();
 
@@ -274,7 +251,7 @@ void read_paged_chunk_with_padding(
     const uint32_t skip_src_cols = 0) {
     Noc noc;
     const uint32_t num_tiles = dst_rows * dst_cols;
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     cb.reserve_back(num_tiles);
     const uint32_t base_write_ptr = cb.get_write_ptr();
 
@@ -340,7 +317,7 @@ void fill_neginf_tile(uint32_t cb_id, uint32_t tile_id) {
     constexpr uint32_t bfp8_size = num_exponents + tt::constants::TILE_HW;
     constexpr uint32_t bf16_size = tt::constants::TILE_HW * 2;
 
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     uint32_t write_addr = cb.get_write_ptr() + tile_id * tile_bytes;
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
     constexpr uint32_t total_words = tile_bytes / sizeof(uint32_t);
@@ -384,7 +361,7 @@ void fill_vertical_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id, uint32_t
     constexpr uint32_t uint32_per_face_row = tt::constants::FACE_WIDTH / bf16_per_uint32;  // 8
     constexpr uint32_t uint32_per_face = tt::constants::FACE_HW / bf16_per_uint32;         // 128
 
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     volatile tt_l1_ptr uint32_t* ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
 
@@ -452,7 +429,7 @@ void fill_causal_diagonal_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id) {
     constexpr uint32_t uint32_per_face_row = tt::constants::FACE_WIDTH / bf16_per_uint32;  // 8
     constexpr uint32_t uint32_per_face = tt::constants::FACE_HW / bf16_per_uint32;         // 128
 
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     volatile tt_l1_ptr uint32_t* ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
 
@@ -515,7 +492,7 @@ void fill_diagonal_edge_tile_bf16(Noc noc, uint32_t cb_id, uint32_t tile_id) {
     constexpr uint32_t uint32_per_face_row = tt::constants::FACE_WIDTH / bf16_per_uint32;  // 8
     constexpr uint32_t uint32_per_face = tt::constants::FACE_HW / bf16_per_uint32;         // 128
 
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     volatile tt_l1_ptr uint32_t* ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
 
@@ -629,7 +606,7 @@ void generate_lightweight_mask_tiles(Noc noc) {
     constexpr uint32_t total_mask_tiles = 1 + sliding_diag_tiles + causal_diag_tiles + partial_mask_tiles;
     constexpr uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);
 
-    CircularBuffer cb(cb_mask_in);
+    DataflowBuffer cb(cb_mask_in);
     cb.reserve_back(total_mask_tiles);
 
     // Tile 0: neginf tile
@@ -700,7 +677,7 @@ inline void fill_custom_diagonal_tile_bfp4(
     constexpr uint32_t uint32_datums_per_face = (tt::constants::FACE_HW) / bf4_mant_per_uint32;
     constexpr uint32_t uint32_exp_per_face = tt::constants::FACE_HEIGHT / bf4_exp_per_uint32;
 
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     volatile tt_l1_ptr uint32_t* uint32_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
 
@@ -812,7 +789,7 @@ void fill_vertical_tile_bfp4(Noc noc, uint32_t cb_id, uint32_t tile_id, uint32_t
     constexpr uint32_t uint32_datums_per_face = (tt::constants::FACE_HW) / bf4_mant_per_uint32;
     constexpr uint32_t uint32_exp_per_face = tt::constants::FACE_HEIGHT / bf4_exp_per_uint32;
 
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     volatile tt_l1_ptr uint32_t* uint32_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
 
@@ -900,7 +877,7 @@ void generate_causal_sliding_window_mask(
     bool is_causal = true,
     uint32_t sliding_window_size = 0) {
     uint32_t mask_size_tiles = Sq_chunk_t * Sk_chunk_t;
-    CircularBuffer cb(cb_mask_in);
+    DataflowBuffer cb(cb_mask_in);
     cb.reserve_back(mask_size_tiles);
 
     uint32_t write_ptr_base = cb.get_write_ptr();
@@ -1029,7 +1006,7 @@ void generate_causal_sliding_window_mask(
 template <uint32_t cb_mask_in>
 void generate_noncausal_padded_mask(Noc noc, uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t unpadded_Sk) {
     uint32_t mask_size_tiles = Sq_chunk_t * Sk_chunk_t;
-    CircularBuffer cb(cb_mask_in);
+    DataflowBuffer cb(cb_mask_in);
     cb.reserve_back(mask_size_tiles);
 
     uint32_t write_ptr_base = cb.get_write_ptr();
@@ -1519,7 +1496,7 @@ void read_block(
     const bool transpose,
     const uint32_t barrier_threshold = 0) {
     const uint32_t num_tiles = src_slice.get_d2_size() * src_slice.get_d3_size();
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     cb.reserve_back(num_tiles);
     fetch_block(
         cat_addr_generator,
@@ -1548,7 +1525,7 @@ void write_block(
     const uint32_t dst_rows = dst_slice.get_d2_size();
     const uint32_t dst_cols = dst_slice.get_d3_size();
     const uint32_t num_tiles = dst_rows * dst_cols;
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     const uint32_t outer_ptr_stride = dst_cols * tile_bytes;
     const uint32_t inner_ptr_stride = tile_bytes;
 
@@ -1573,7 +1550,7 @@ void write_block(
     uint32_t barrier_count = 0;
     uint32_t tile_id = out_tile_id;
 
-    CircularBuffer cb(cb_out);
+    DataflowBuffer cb(cb_out);
     cb.wait_front(out_chunk_tiles);
 
     uint32_t tile_offset = 0;
@@ -1619,7 +1596,7 @@ void write_block_row_grouped(
     const uint32_t remainder_rows = total_rows - num_full_groups * sbh;
     const uint32_t num_groups = num_full_groups + (remainder_rows ? 1 : 0);
 
-    CircularBuffer cb(cb_out);
+    DataflowBuffer cb(cb_out);
     for (uint32_t rg = 0; rg < num_groups; ++rg) {
         const uint32_t rows_this_group = (rg < num_full_groups) ? sbh : remainder_rows;
         const uint32_t tiles_this_group = rows_this_group * cols;
@@ -1669,7 +1646,7 @@ void write_block_row_grouped_trid(
     const uint32_t remainder_rows = total_rows - num_full_groups * sbh;
     const uint32_t num_groups = num_full_groups + (remainder_rows ? 1 : 0);
 
-    CircularBuffer cb(cb_out);
+    DataflowBuffer cb(cb_out);
     for (uint32_t rg = 0; rg < num_groups; ++rg) {
         const uint32_t rows_this_group = (rg < num_full_groups) ? sbh : remainder_rows;
         const uint32_t tiles_this_group = rows_this_group * cols;
@@ -1715,7 +1692,7 @@ void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t sour
     // This ensures stale L1 values don't affect the max computation
     constexpr uint16_t neg_inf_bf16 = 0xFF80;
 
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     uint32_t write_ptr = cb.get_write_ptr();
 
     // Tile is 32x32 in row-major order within faces
