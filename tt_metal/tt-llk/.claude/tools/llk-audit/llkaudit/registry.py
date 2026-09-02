@@ -730,6 +730,53 @@ DEST_TO_SRC_MOVE_SUBSTR = ("MOVD2A", "MOVD2B")
 SRC_BANK_VLD_TOKENS = ("SRCA_VLD", "SRCB_VLD")
 
 
+# STALLWAIT wait-condition tokens for "the UNPACKER owns the bank" (C8/C9 on WH):
+# Src?[Unpackers[i].SrcBank].AllowedClient != Unpackers.
+SRC_BANK_CLR_TOKENS = ("SRCA_CLR", "SRCB_CLR")
+
+# Functions whose PURPOSE is publishing a dummy Src bank for a Dest->Src consumer.
+# Scoping the unguarded-publication recall to these keeps it a worklist: unscoped,
+# ~90% of ALL UNPACR_NOP publications in the tree lack the wait (most are ordinary
+# tilize/untilize/matmul publications with no MOVD2A/MOVD2B consumer), which carries
+# no signal.
+DEST_REUSE_PUBLISHER_FN_SUBSTR = ("dummy_valid", "switch_to_reduce", "reuse_dest")
+
+
+def is_dest_reuse_publisher_fn(name: str) -> bool:
+    low = name.lower()
+    return any(t in low for t in DEST_REUSE_PUBLISHER_FN_SUBSTR)
+
+
+def macro_args(text: str) -> list:
+    """Top-level, comma-separated macro arguments, nesting-aware."""
+    lp, rp = text.find("("), text.rfind(")")
+    if lp < 0 or rp <= lp:
+        return []
+    inner, depth, start, args = text[lp + 1 : rp], 0, 0, []
+    for i, ch in enumerate(inner):
+        if ch in "([<{":
+            depth += 1
+        elif ch in ")]>}":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            args.append(inner[start:i])
+            start = i + 1
+    args.append(inner[start:])
+    return [a.strip() for a in args]
+
+
+def publication_waits_own_bank(text: str) -> bool:
+    """True if an UNPACR_NOP publication gates on Unpackers[i].SrcBank.
+
+    Two encodings: Blackhole exposes a `Stall_Clr_Cntrl` operand (index 5 of the
+    9-operand form); Wormhole has no such operand and uses a distinct NoOp constant
+    (UNP_ZEROSRC_STALL_RESET_WR_RDY = ZEROSRC | WaitLikeUnpacr<<4)."""
+    if "STALL_RESET_WR_RDY" in text:
+        return True
+    a = macro_args(text)
+    return len(a) >= 6 and a[5] == "1"
+
+
 def is_dest_to_src_move(name: str) -> bool:
     """True for an ISSUED Dest->Src move macro (TTI_MOVD2A / TT_MOVD2B / ...).
 
