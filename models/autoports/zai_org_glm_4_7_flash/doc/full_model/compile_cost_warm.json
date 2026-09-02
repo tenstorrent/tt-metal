@@ -2,7 +2,7 @@
   "source_manifest": {
     "tt/provenance.py": "3b162e8ac0fe0674",
     "tt/model.py": "271136535a97122f",
-    "tt/generator.py": "922a7ec9a5052e7d",
+    "tt/generator.py": "1d05363ee78cea4c",
     "tt/optimized_decoder.py": "b2abc9f36278b32f",
     "tt/fused_decoder.py": "0dbbe26e401a1716",
     "tt/functional_decoder.py": "d04c7d1958a8fe74",
@@ -10,9 +10,9 @@
   },
   "kernel_cache": "/home/stisi/.cache/tt-metal-cache",
   "build": {
-    "prefill_programs_warmed_s": 4.6,
+    "prefill_programs_warmed_s": 4.5,
     "decode_+_sampling_traces_captured_s": 0.3,
-    "build_total_s": 180.59
+    "build_total_s": 181.78
   },
   "prefill": {
     "prompt_128": {
@@ -20,28 +20,28 @@
       "warmed_at_build": true,
       "first_call_ms": 313.8,
       "repeat_calls_ms": [
+        313.7,
+        313.8,
         313.5,
-        313.5,
-        313.5,
-        313.6
+        313.3
       ],
-      "repeat_mean_ms": 313.5,
-      "repeat_spread_pct": 0.0,
-      "first_minus_repeat_mean_ms": 0.3
+      "repeat_mean_ms": 313.6,
+      "repeat_spread_pct": 0.2,
+      "first_minus_repeat_mean_ms": 0.2
     },
     "prompt_3000": {
       "physical_len": 3072,
       "warmed_at_build": false,
-      "first_call_ms": 6480.3,
+      "first_call_ms": 6480.6,
       "repeat_calls_ms": [
-        6475.6,
-        6476.4,
-        6475.1,
-        6476.1
+        6477.6,
+        6476.6,
+        6477.7,
+        6477.6
       ],
-      "repeat_mean_ms": 6475.8,
+      "repeat_mean_ms": 6477.4,
       "repeat_spread_pct": 0.0,
-      "first_minus_repeat_mean_ms": 4.5
+      "first_minus_repeat_mean_ms": 3.2
     }
   }
 }

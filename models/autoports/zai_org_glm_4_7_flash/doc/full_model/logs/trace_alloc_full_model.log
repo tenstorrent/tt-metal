@@ -1,75 +1,75 @@
-2026-09-02 03:26:56.017 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+2026-09-02 06:56:17.691 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
 Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
-2026-09-02 03:26:57.364 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
-2026-09-02 03:26:57.364 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
-2026-09-02 03:26:57.364 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
-2026-09-02 03:26:57.364 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
-2026-09-02 03:26:57.377 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
-2026-09-02 03:26:57.377 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
-2026-09-02 03:26:57.437 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
-2026-09-02 03:26:57.437 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
-2026-09-02 03:26:57.437 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
-2026-09-02 03:26:57.437 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
-2026-09-02 03:26:57.439 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
-2026-09-02 03:26:57.626 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
-2026-09-02 03:26:57.728 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
-2026-09-02 03:26:57.728 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
-2026-09-02 03:26:57.728 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
-2026-09-02 03:26:57.728 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
-2026-09-02 03:26:57.728 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
-2026-09-02 03:26:57.768 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-09-02 06:56:19.042 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-02 06:56:19.042 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-02 06:56:19.042 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-02 06:56:19.042 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-02 06:56:19.055 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:576)
+2026-09-02 06:56:19.055 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-02 06:56:19.142 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-02 06:56:19.142 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-09-02 06:56:19.142 | info     |             UMD | KMD version: 2.8.1 (cluster.cpp:150)
+2026-09-02 06:56:19.142 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-02 06:56:19.144 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-02 06:56:19.319 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-02 06:56:19.421 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-02 06:56:19.421 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-02 06:56:19.421 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-02 06:56:19.421 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-02 06:56:19.421 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-02 06:56:19.461 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
   [   0.0s] building 47 decoder layers from /home/stisi/.cache/huggingface/hub/models--zai-org--GLM-4.7-Flash/snapshots/7dd20894a642a0aa287e9827cb1a1f7f91386b67
   [   0.5s]   layer 0 (dense) built [1/47]
   [   4.3s]   layer 1 (moe) built [2/47]
   [   8.1s]   layer 2 (moe) built [3/47]
   [  11.7s]   layer 3 (moe) built [4/47]
-  [  15.3s]   layer 4 (moe) built [5/47]
-  [  19.0s]   layer 5 (moe) built [6/47]
-  [  22.7s]   layer 6 (moe) built [7/47]
-  [  26.3s]   layer 7 (moe) built [8/47]
-  [  29.9s]   layer 8 (moe) built [9/47]
-  [  33.5s]   layer 9 (moe) built [10/47]
-  [  37.1s]   layer 10 (moe) built [11/47]
-  [  40.8s]   layer 11 (moe) built [12/47]
-  [  44.5s]   layer 12 (moe) built [13/47]
-  [  48.1s]   layer 13 (moe) built [14/47]
-  [  51.8s]   layer 14 (moe) built [15/47]
-  [  55.5s]   layer 15 (moe) built [16/47]
-  [  59.1s]   layer 16 (moe) built [17/47]
-  [  62.8s]   layer 17 (moe) built [18/47]
-  [  66.4s]   layer 18 (moe) built [19/47]
-  [  70.1s]   layer 19 (moe) built [20/47]
-  [  73.7s]   layer 20 (moe) built [21/47]
-  [  77.4s]   layer 21 (moe) built [22/47]
-  [  81.0s]   layer 22 (moe) built [23/47]
-  [  84.7s]   layer 23 (moe) built [24/47]
-  [  88.4s]   layer 24 (moe) built [25/47]
-  [  92.1s]   layer 25 (moe) built [26/47]
-  [  95.7s]   layer 26 (moe) built [27/47]
-  [  99.4s]   layer 27 (moe) built [28/47]
-  [ 103.0s]   layer 28 (moe) built [29/47]
-  [ 106.7s]   layer 29 (moe) built [30/47]
-  [ 110.3s]   layer 30 (moe) built [31/47]
-  [ 114.0s]   layer 31 (moe) built [32/47]
-  [ 117.7s]   layer 32 (moe) built [33/47]
-  [ 121.3s]   layer 33 (moe) built [34/47]
-  [ 125.0s]   layer 34 (moe) built [35/47]
-  [ 128.6s]   layer 35 (moe) built [36/47]
-  [ 132.2s]   layer 36 (moe) built [37/47]
-  [ 135.9s]   layer 37 (moe) built [38/47]
-  [ 139.6s]   layer 38 (moe) built [39/47]
-  [ 143.2s]   layer 39 (moe) built [40/47]
-  [ 146.9s]   layer 40 (moe) built [41/47]
-  [ 150.6s]   layer 41 (moe) built [42/47]
-  [ 154.2s]   layer 42 (moe) built [43/47]
-  [ 157.9s]   layer 43 (moe) built [44/47]
-  [ 161.6s]   layer 44 (moe) built [45/47]
-  [ 165.2s]   layer 45 (moe) built [46/47]
-  [ 168.9s]   layer 46 (moe) built [47/47]
-  [ 168.9s]   decode rope tables (ROW_MAJOR) built
-  [ 169.7s]   embedding table uploaded
-  [ 170.8s]   lm head uploaded
-model built in 171.2s
+  [  15.4s]   layer 4 (moe) built [5/47]
+  [  19.1s]   layer 5 (moe) built [6/47]
+  [  22.8s]   layer 6 (moe) built [7/47]
+  [  26.4s]   layer 7 (moe) built [8/47]
+  [  30.1s]   layer 8 (moe) built [9/47]
+  [  33.8s]   layer 9 (moe) built [10/47]
+  [  37.6s]   layer 10 (moe) built [11/47]
+  [  41.3s]   layer 11 (moe) built [12/47]
+  [  44.9s]   layer 12 (moe) built [13/47]
+  [  48.7s]   layer 13 (moe) built [14/47]
+  [  52.3s]   layer 14 (moe) built [15/47]
+  [  56.0s]   layer 15 (moe) built [16/47]
+  [  59.7s]   layer 16 (moe) built [17/47]
+  [  63.4s]   layer 17 (moe) built [18/47]
+  [  67.0s]   layer 18 (moe) built [19/47]
+  [  70.8s]   layer 19 (moe) built [20/47]
+  [  74.8s]   layer 20 (moe) built [21/47]
+  [  78.5s]   layer 21 (moe) built [22/47]
+  [  82.2s]   layer 22 (moe) built [23/47]
+  [  85.9s]   layer 23 (moe) built [24/47]
+  [  89.6s]   layer 24 (moe) built [25/47]
+  [  93.3s]   layer 25 (moe) built [26/47]
+  [  96.9s]   layer 26 (moe) built [27/47]
+  [ 100.6s]   layer 27 (moe) built [28/47]
+  [ 104.3s]   layer 28 (moe) built [29/47]
+  [ 108.0s]   layer 29 (moe) built [30/47]
+  [ 111.6s]   layer 30 (moe) built [31/47]
+  [ 115.3s]   layer 31 (moe) built [32/47]
+  [ 119.0s]   layer 32 (moe) built [33/47]
+  [ 122.6s]   layer 33 (moe) built [34/47]
+  [ 126.3s]   layer 34 (moe) built [35/47]
+  [ 129.9s]   layer 35 (moe) built [36/47]
+  [ 133.6s]   layer 36 (moe) built [37/47]
+  [ 137.2s]   layer 37 (moe) built [38/47]
+  [ 140.8s]   layer 38 (moe) built [39/47]
+  [ 144.5s]   layer 39 (moe) built [40/47]
+  [ 148.1s]   layer 40 (moe) built [41/47]
+  [ 151.8s]   layer 41 (moe) built [42/47]
+  [ 155.5s]   layer 42 (moe) built [43/47]
+  [ 159.0s]   layer 43 (moe) built [44/47]
+  [ 162.7s]   layer 44 (moe) built [45/47]
+  [ 166.4s]   layer 45 (moe) built [46/47]
+  [ 170.0s]   layer 46 (moe) built [47/47]
+  [ 170.0s]   decode rope tables (ROW_MAJOR) built
+  [ 170.9s]   embedding table uploaded
+  [ 172.0s]   lm head uploaded
+model built in 172.4s
   weights[layers    ] =   16.382 GiB
   weights[embedding ] =    0.591 GiB
   weights[lm_head   ] =    0.314 GiB
@@ -79,34 +79,34 @@ model built in 171.2s
   kv cache @ 202752 x batch 1 = 5.431 GiB
   weights + cache = 22.814 GiB of 31.5 GiB allocatable
   cache allocated in 0.3s
-2026-09-02 03:29:49.721 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 03:29:49.721 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 03:29:49.859 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 03:29:49.859 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-  decode + sampling traces captured in 0.6s
-2026-09-02 03:29:50.146 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 03:29:50.146 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 03:29:50.272 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
-2026-09-02 03:29:50.343 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 03:29:50.343 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-2026-09-02 03:29:50.446 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 03:29:50.446 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-  cold generate (compiles prefill programs): 1.53s
-2026-09-02 03:29:51.611 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
-2026-09-02 03:29:51.611 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
-  warmed generate(prompt=128, 128) in 40.49s
-  TTFT 289.3 ms   token-out decode 316.319 ms/token (3.16 t/s/u)
+2026-09-02 06:59:12.637 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 06:59:12.637 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 06:59:12.774 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1229824 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 06:59:12.774 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+  decode + sampling traces captured in 0.3s
+2026-09-02 06:59:13.064 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 06:59:13.064 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 06:59:13.190 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
+2026-09-02 06:59:13.263 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 06:59:13.263 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+2026-09-02 06:59:13.364 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 06:59:13.364 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+  cold generate (compiles prefill programs): 1.60s
+2026-09-02 06:59:14.596 | warning  |              Op | ttnn.split: L1 budget exceeded (need ~9945088 B, have 1139712 B for 4 chunks); DRAM downgrade. (split.cpp:262)
+2026-09-02 06:59:14.596 | warning  |              Op | ttnn.split: migrating L1 input (9912320 B) to DRAM before slice fallback. (split.cpp:426)
+  warmed generate(prompt=128, 128) in 42.11s
+  TTFT 289.5 ms   token-out decode 329.035 ms/token (3.04 t/s/u)
   preds[:16]: [278, 77, 944, 312, 64, 501, 502, 503, 504, 505, 506, 507, 508, 509, 510, 511]
   counters: {'model_trace_replays': 127, 'sampling_trace_replays': 127, 'eager_decode_steps': 0, 'token_input_refreshes': 2, 'position_refreshes': 2, 'rope_index_refreshes': 0, 'page_table_refreshes': 0, 'device_synchronizations': 1, 'token_readbacks': 128, 'full_logits_readbacks': 0, 'host_argmax_calls': 0, 'kv_cache_resets': 1, 'trace_recaptures': 0}
-  model trace only                        158.209 ms/token (    6.32 t/s/u)
-  model + sampling traces                 315.460 ms/token (    3.17 t/s/u)
-  model + sampling + token readback       316.213 ms/token (    3.16 t/s/u)
-2026-09-02 03:30:58.001 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(3))
+  model trace only                        164.970 ms/token (    6.06 t/s/u)
+  model + sampling traces                 329.834 ms/token (    3.03 t/s/u)
+  model + sampling + token readback       329.218 ms/token (    3.04 t/s/u)
+2026-09-02 07:00:23.738 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(3))
 CAPACITY_OK
-2026-09-02 03:30:58.654 | info     |    BuildKernels | JIT cache stats: 674/674 hits (100.0%) [674 cached, 173 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
-2026-09-02 03:30:58.654 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
-2026-09-02 03:30:58.678 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
-2026-09-02 03:30:58.678 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
-2026-09-02 03:30:59.145 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
-2026-09-02 03:30:59.145 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
-2026-09-02 03:30:59.145 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)
+2026-09-02 07:00:24.408 | info     |    BuildKernels | JIT cache stats: 674/674 hits (100.0%) [674 cached, 176 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-02 07:00:24.408 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-02 07:00:24.430 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-02 07:00:24.430 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-02 07:00:24.838 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-02 07:00:24.838 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-02 07:00:24.838 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)
