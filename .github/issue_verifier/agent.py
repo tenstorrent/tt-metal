@@ -84,16 +84,27 @@ def run_session(
     except subprocess.TimeoutExpired as exc:
         raise AgentFailed(f"session exceeded {timeout_s}s") from exc
 
+    # The CLI reports auth and API failures as structured JSON on stdout while
+    # still exiting non-zero, so stdout has to be read before the exit code is
+    # trusted — reporting only stderr yields a blank error message.
+    payload: dict | None = None
+    if completed.stdout.strip():
+        try:
+            payload = json.loads(completed.stdout)
+        except json.JSONDecodeError:
+            payload = None
+
+    if payload is not None and payload.get("is_error"):
+        status = payload.get("api_error_status")
+        detail = str(payload.get("result") or payload.get("terminal_reason") or "").strip()
+        raise AgentFailed(f"session failed{f' (HTTP {status})' if status else ''}: {detail[:2000]}")
+
     if completed.returncode != 0:
-        raise AgentFailed(f"claude exited {completed.returncode}: {completed.stderr.strip()[:2000]}")
+        detail = completed.stderr.strip() or completed.stdout.strip() or "(no output on either stream)"
+        raise AgentFailed(f"claude exited {completed.returncode}: {detail[:2000]}")
 
-    try:
-        payload = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        raise AgentFailed(f"unparseable session output: {completed.stdout[:2000]}") from exc
-
-    if payload.get("is_error"):
-        raise AgentFailed(f"session reported an error: {payload.get('result', '')[:2000]}")
+    if payload is None:
+        raise AgentFailed(f"unparseable session output: {completed.stdout[:2000]}")
 
     return AgentResult(
         text=payload.get("result", ""),
