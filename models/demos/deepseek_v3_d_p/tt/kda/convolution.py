@@ -21,24 +21,10 @@ def exchange_convolution_carry(
     ``final_carry`` is the global stream tail replicated across SP. Channels
     remain sharded across TP.
     """
-    if sequence_parallel_axis not in (0, 1):
-        raise ValueError(f"sequence_parallel_axis must be 0 or 1, got {sequence_parallel_axis}")
-    if len(projected_qkv.shape) != 3 or len(initial_carry.shape) != 3:
-        raise ValueError("KDA convolution carry exchange expects rank-3 tensors")
-
     batch, local_sequence, channels = projected_qkv.shape
-    carry_batch, history, carry_channels = initial_carry.shape
-    if batch != carry_batch or channels != carry_channels:
-        raise ValueError("KDA convolution carry exchange requires matching batch and channel dimensions")
-    if history <= 0 or local_sequence < history:
-        raise ValueError("KDA convolution carry exchange requires 0 < history <= local T")
-    if history > ttnn.TILE_SIZE:
-        raise ValueError("KDA convolution history must fit in one tile")
-
+    history = initial_carry.shape[1]
     mesh_device = projected_qkv.device()
     mesh_shape = tuple(mesh_device.shape)
-    if len(mesh_shape) != 2 or mesh_shape[sequence_parallel_axis] <= 1:
-        raise ValueError("KDA convolution carry exchange requires a 2D mesh with SP > 1")
     sp_size = mesh_shape[sequence_parallel_axis]
 
     local_tail = ttnn.slice(
