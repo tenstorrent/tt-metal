@@ -40,10 +40,11 @@ def apply_glu_activation(
     separate arguments avoids a concat the device path would not do either. Computed in fp32 to match
     upstream, which casts both halves up before the tanh/sigmoid.
 
-    NOTE: the fused routed-expert kernel implements SiTU on Blackhole
-    (``ttnn.RoutedExpertActivation.SituGlu``, issue #51351); everywhere else -- shared expert,
-    dense FFN, Wormhole -- the device path still runs SiLU, so those comparisons must run
-    ``silu`` on both sides.
+    NOTE: every K3 FFN site runs SiTU on device -- the routed experts through the fused kernel
+    (``ttnn.RoutedExpertActivation.SituGlu``), the shared expert and the layer-0 dense FFN through
+    the composed path in ``TtSharedExpert`` / ``TtFfn``. All three are Blackhole-only, and K3 names
+    SiTU unconditionally, so there is no Wormhole configuration of K3 to compare against; ``silu``
+    here serves the other models.
     """
     if activation == ACTIVATION_SILU:
         return F.silu(gate_out) * up_out

@@ -22,9 +22,11 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_20b_config import GptOss20BConfig
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import fabric_to_device_params
@@ -39,7 +41,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombine2dModule, TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     assert_output_shape,
     log_combine_mismatch_details,
@@ -63,6 +65,7 @@ def run_combine(
     dispatched_buffer_layout,
     use_fp8_output,
     num_links=2,
+    cmb_version=1,
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
@@ -223,26 +226,56 @@ def run_combine(
         torch_output = torch_output.to(torch.float8_e4m3fn).to(torch.bfloat16)
 
     # Run ttnn combine
-    tt_combine = TtCombineModule(
-        mesh_device=mesh_device,
-        dispatch_group_size=dispatch_group_size,
-        num_dispatch_groups=num_dispatch_groups,
-        experts_per_chip=experts_per_chip,
-        num_experts_per_tok=num_experts_per_tok,
-        seq_len_per_chip=seq_len_per_chip,
-        cluster_axis=sp_axis,
-        num_links=num_links,
-        topology=topology,
-        init_zeros=False,
-        fp8_output=use_fp8_output,
-    )
+    if cmb_version == 1:
+        tt_combine = TtCombineModule(
+            mesh_device=mesh_device,
+            dispatch_group_size=dispatch_group_size,
+            num_dispatch_groups=num_dispatch_groups,
+            experts_per_chip=experts_per_chip,
+            num_experts_per_tok=num_experts_per_tok,
+            seq_len_per_chip=seq_len_per_chip,
+            cluster_axis=sp_axis,
+            num_links=num_links,
+            topology=topology,
+            init_zeros=False,
+            fp8_output=use_fp8_output,
+        )
 
-    tt_output = tt_combine(
-        tt_dispatched_buffer,
-        tt_dispatched_metadata,
-        tt_expert_token_counts,
-        tt_expert_region_offsets,
-    )
+        tt_output = tt_combine(
+            tt_dispatched_buffer,
+            tt_dispatched_metadata,
+            tt_expert_token_counts,
+            tt_expert_region_offsets,
+        )
+    else:
+        tt_expert_offsets = ttnn.from_torch(
+            expert_offsets,
+            # expert_offsets has to be replicated along the ring axis: every chip needs every origin
+            # chip's run boundaries for the experts it hosts, which is what lets each kernel walk the
+            # token sequence locally instead of exchanging addresses.
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 0)),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.int32,
+        )
+
+        tt_combine = TtCombine2dModule(
+            mesh_device=mesh_device,
+            experts_per_chip=experts_per_chip,
+            num_experts_per_tok=num_experts_per_tok,
+            seq_len_per_chip=seq_len_per_chip,
+            cluster_axis=sp_axis,
+            num_links=num_links,
+            topology=topology,
+        )
+
+        tt_output = tt_combine(
+            tt_dispatched_buffer,
+            tt_dispatched_metadata,
+            tt_expert_token_counts,
+            tt_expert_region_offsets,
+            tt_expert_offsets,
+        )
 
     if not run_pcc_check:
         ttnn.synchronize_device(mesh_device)
@@ -353,7 +386,7 @@ COMBINE_MODELS = [
 # Scales down model hyper-params for a given hardware to obtain good/meaningful proxy test
 # How exactly to scale it down is op-specific (more precisely - even op-implementation specific)
 # Thus it makes sense for this to be combine-specific function
-def _model_scaledown_for_combine(model, ref_mesh, target_mesh, pcc_only):
+def _model_scaledown(model, ref_mesh, target_mesh, pcc_only):
     # number of experts has to be reduced to preserve the experts per chip
     ref_num_chips = ref_mesh[0] * ref_mesh[1]
     target_num_chips = target_mesh[0] * target_mesh[1]
@@ -362,8 +395,11 @@ def _model_scaledown_for_combine(model, ref_mesh, target_mesh, pcc_only):
         model.NUM_ROUTED_EXPERTS = (model.NUM_ROUTED_EXPERTS // ref_num_chips) * target_num_chips
 
     # number of experts selected to proces every token (top-K) has to be scaled to preserve average expert activation per dispatch group
+    # Clamped at 1: the ideal scale is topK * target_groups / ref_groups, which lands below 1 whenever the
+    # model routes to fewer experts than the reference mesh has dispatch groups (e.g. GPT-OSS top-4 on a
+    # 4x8 reference collapsed to a single-group proxy). Routing every token to zero experts is not a test.
     if ref_mesh[1] != target_mesh[1]:
-        model.NUM_EXPERTS_PER_TOKEN = (model.NUM_EXPERTS_PER_TOKEN // ref_mesh[1]) * target_mesh[1]
+        model.NUM_EXPERTS_PER_TOKEN = max(1, (model.NUM_EXPERTS_PER_TOKEN // ref_mesh[1]) * target_mesh[1])
 
     # further reduce these two hyperparams in case of pcc check test to get faster, although not perf-representative test
     if pcc_only:
@@ -400,9 +436,7 @@ def _cross_product_conflated_cmb_test_dimensions():
                 ("perf_no_pcc", 640, 8, False),
             ]
             for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in test_scenarios:
-                model_config = _model_scaledown_for_combine(
-                    model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc
-                )
+                model_config = _model_scaledown(model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc)
 
                 num_experts = model_config.NUM_ROUTED_EXPERTS
                 topk = model_config.NUM_EXPERTS_PER_TOKEN
@@ -532,4 +566,145 @@ def test_ttnn_combine(
         run_pcc_check,
         dispatched_buffer_layout,
         use_fp8_output,
+    )
+
+
+def _all_externally_owned_test_cases():
+    def _tc(mesh, fabric_cfg, seq_len_per_chip, num_links, model):
+        model_name = model.__class__.__name__.removesuffix("Config")
+        return pytest.param(
+            mesh,
+            fabric_to_device_params(fabric_cfg),
+            seq_len_per_chip,
+            model.EMB_SIZE,
+            model.NUM_ROUTED_EXPERTS,
+            model.NUM_EXPERTS_PER_TOKEN,
+            num_links,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=_topo_marker(mesh, fabric_cfg)),
+            id=f"{model_name}-{mesh[0]}x{mesh[1]}-{fabric_cfg.name.lower()}-{seq_len_per_chip}-{num_links}link-rand-pcc-tile-bf16",
+        )
+
+    return [
+        # Full scale mesh tests as invoked in production scenarios
+        _tc((4, 8), ttnn.FabricConfig.FABRIC_1D, 1024, 4, GptOss20BConfig()),
+        _tc((4, 8), ttnn.FabricConfig.FABRIC_1D, 128, 2, GptOss120BConfig()),
+        _tc((4, 8), ttnn.FabricConfig.FABRIC_1D, 1280, 2, GptOss120BConfig()),
+        _tc((8, 4), ttnn.FabricConfig.FABRIC_1D, 128, 2, MiniMaxM3Config()),
+        _tc((8, 4), ttnn.FabricConfig.FABRIC_1D, 640, 2, MiniMaxM3Config()),
+        # Proxy tests executable on CIs which run op unit tests
+        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 1024, 4, _model_scaledown(GptOss20BConfig(), (4, 8), (4, 1), False)),
+        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 128, 2, _model_scaledown(GptOss120BConfig(), (4, 8), (4, 1), False)),
+        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 1280, 2, _model_scaledown(GptOss120BConfig(), (4, 8), (4, 1), False)),
+        _tc((8, 1), ttnn.FabricConfig.FABRIC_1D, 128, 2, _model_scaledown(MiniMaxM3Config(), (8, 4), (8, 1), False)),
+        _tc((8, 1), ttnn.FabricConfig.FABRIC_1D, 640, 2, _model_scaledown(MiniMaxM3Config(), (8, 4), (8, 1), False)),
+    ]
+
+
+def _unsupported_externally_owned_param_combos(**params):
+    # Blackhole exposes 2 fabric links per device, Wormhole 4.
+    if params["num_links"] > 2 and params["is_bh"]:
+        return True
+
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_unsupported_externally_owned_param_combos)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, num_links",
+    _all_externally_owned_test_cases(),
+    indirect=["mesh_device", "device_params"],
+)
+def test_externally_owned_cases(
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    num_links,
+):
+    # Same derivation test_ttnn_combine uses: combine drives cluster_axis=0, so it wants the
+    # sp-axis topology of whatever fabric the case opened (Linear for the unwrapped FABRIC_1D).
+    topology = per_axis_topology(device_params["fabric_config"])[0]
+    run_combine(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        2,  # buffer capacity factor
+        topology,
+        use_predictable_data=False,
+        run_pcc_check=True,
+        dispatched_buffer_layout=ttnn.TILE_LAYOUT,
+        use_fp8_output=False,
+        num_links=num_links,
+    )
+
+
+def _cmb_fabric2d_dimensions():
+    """The (mesh, device_params, ...) tuples the fabric2d case runs on.
+
+    Same two scenarios the direct op carries: a small pcc run that checks the op computes the
+    right thing, and the seq-640 perf run this op's development has been measured against.
+    """
+    mesh = SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh
+    fabric_cfg = SINGLE_GLX_AND_PROXY_MESHES.target_meshes[mesh]
+    marks = pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=_topo_marker(mesh, fabric_cfg))
+
+    params = []
+    for scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in (
+        ("pcc", 128, 4, True),
+        ("perf_no_pcc", 640, 8, False),
+    ):
+        model_config = _model_scaledown(
+            DeepSeekV3Config(), SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh, mesh, pcc_only=run_pcc
+        )
+        params.append(
+            pytest.param(
+                mesh,
+                fabric_to_device_params(fabric_cfg),
+                per_axis_topology(fabric_cfg)[0],  # sp axis; the op rings along cluster_axis=sp_axis
+                seq_len_per_chip,
+                model_config.EMB_SIZE,
+                model_config.NUM_ROUTED_EXPERTS,
+                model_config.NUM_EXPERTS_PER_TOKEN,
+                dispatch_buffer_capacity_factor,
+                run_pcc,
+                marks=marks,
+                id=f"dsv3-fabric2d-{_mesh_id(mesh, fabric_cfg)}-row_major-2link-{scenario_id}",
+            )
+        )
+    return params
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, topology, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    _cmb_fabric2d_dimensions(),
+    indirect=["mesh_device", "device_params"],
+)
+def test_ttnn_combine_fabric2d(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    topology,
+    run_pcc_check,
+):
+    run_combine(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links=2,
+        topology=topology,
+        use_predictable_data=False,
+        run_pcc_check=run_pcc_check,
+        dispatched_buffer_layout=ttnn.ROW_MAJOR_LAYOUT,
+        use_fp8_output=False,
+        cmb_version=2,
     )

@@ -3,13 +3,15 @@
 
 """Reusable pytest plugin for the LLK test harness.
 
-In-tree tests load this via ``tests/python_tests/conftest.py``. Out-of-tree
-suites (proprietary kernels that cannot live in this public repo) load the
-same plugin from the suite rootdir ``conftest`` after putting this
-``tests/python_tests`` on ``sys.path`` once:
+In-tree tests load this via ``tests/python_tests/conftest.py``.
+
+Out-of-tree suites should **not** name this module. It is implementation, with
+no stability promise; the supported entry point is the ``tt_llk_harness``
+facade, which forwards here and is what
+``docs/tests/getting_started.md`` §9 documents:
 
     sys.path.insert(0, str(llk_python_tests))
-    pytest_plugins = ["helpers.llk_pytest_plugin"]
+    pytest_plugins = ["tt_llk_harness.plugin"]
 
 Test modules do not mutate ``sys.path``. ``pytest_configure`` prepends
 ``<rootdir>/python_tests`` when that directory exists so suite-local
@@ -19,9 +21,10 @@ packages (for example a ``goldens/`` tree) import like in-tree
 Set ``LLK_HOME`` to the tt-llk root if it cannot be inferred. Register extra
 header ``-I`` dirs with ``TestConfig.add_include_dirs(...)`` and extra
 ``#include <foo.cpp>`` search dirs with ``add_src_include_dirs(...)`` (or a
-``tests/helpers``-layout tree with ``add_helpers_tree``). They are prepended
-so they win over in-tree metal/llk_api and ``helpers/src`` copies.
-``TestConfig`` also accepts an absolute path as ``test_name`` for a C++
+``tests/helpers``-layout tree with ``add_helpers_tree``) — importing
+``TestConfig`` from ``tt_llk_harness``, not from ``helpers.test_config``. They
+are prepended so they win over in-tree metal/llk_api and ``helpers/src``
+copies. ``TestConfig`` also accepts an absolute path as ``test_name`` for a C++
 driver that lives outside ``tests/sources/``.
 """
 
@@ -389,6 +392,17 @@ def pytest_configure(config):
     # when assembling per-variant compile options.
     if config.getoption("--disable-sfploadmacro", default=False):
         os.environ["TT_METAL_DISABLE_SFPLOADMACRO"] = "1"
+
+    # Fix this run's perf report directory here, on the controller, before xdist
+    # spawns workers: they inherit the environment, so every process resolves the
+    # same perf_data/runs/<tag>. Left to first use, each worker would mint its own
+    # timestamp and scatter one run across several directories.
+    #
+    # Unconditional on purpose. It only mints a string into the environment — no
+    # directory is created until a perf report is actually written — and at
+    # configure time there is no reliable way to know whether a perf test will be
+    # selected (a node id selects one without ever naming the marker).
+    TestConfig.perf_run_tag()
 
     config.coverage_enabled = config.getoption("--coverage", default=False)
 
