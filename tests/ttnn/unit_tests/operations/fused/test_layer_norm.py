@@ -93,6 +93,23 @@ def create_recip_tensor(device, w, use_welford):
     return ttnn.create_layer_norm_reciprocals(device, core_range_set, w)
 
 
+@run_for_blackhole()
+def test_layer_norm_welford_requires_reciprocal_tensor(device, expect_error):
+    torch.manual_seed(17)
+    h, w = 32, 64
+    input_tensor = ttnn.from_torch(torch.randn((h, w), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch.randn((w,), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch.randn((w,), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "Reciprocal tensor not provided for Welford layernorm"):
+        ttnn.layer_norm(
+            input_tensor,
+            weight=weight,
+            bias=bias,
+            program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+        )
+
+
 @pytest.mark.parametrize("h", [32, 42])
 @pytest.mark.parametrize("w", [24, 64])
 @pytest.mark.parametrize("use_welford", [True, False])

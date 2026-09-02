@@ -293,7 +293,7 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
     };
 
     const bool tile_fits = footprint(false).fits(usable_l1);
-    const bool two_pass_fits = tensor_args.recip_tensor.has_value() && footprint(true).fits(usable_l1);
+    const bool two_pass_fits = footprint(true).fits(usable_l1);
     const bool row_major_affine = (gamma.has_value() && gamma->layout() == Layout::ROW_MAJOR) ||
                                   (beta.has_value() && beta->layout() == Layout::ROW_MAJOR);
     plan.use_welford =
