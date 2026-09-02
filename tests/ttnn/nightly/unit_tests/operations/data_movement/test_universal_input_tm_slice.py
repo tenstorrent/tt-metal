@@ -1003,6 +1003,26 @@ def test_slice_rm_bw_sharded_subaligned_shard_row_in(device):
     )
 
 
+def test_slice_rm_bw_sharded_rescaled_subaligned_shard_row(device):
+    """Implicit output spec (no memory_config): the output inherits the input's shard spec and then has
+    it rescaled to the sliced width, after the composite decision. The inherited row is 16 bf16 elems
+    = 32B and aligned, but the rescale yields div_up(96, 8) = 12 elems = 24B, which is not — so the
+    guard has to test the rescaled width rather than the inherited one."""
+    in_shape = (1, 1, 64, 128)
+    _run_slice(
+        in_shape,
+        (0, 0, 0, 0),
+        (1, 1, 64, 96),
+        (1, 1, 1, 1),
+        ttnn.ROW_MAJOR_LAYOUT,
+        _width_sharded(in_shape, device, num_cores=8, layout=ttnn.ROW_MAJOR_LAYOUT),
+        None,
+        ttnn.bfloat16,
+        device,
+        ulp_when_exact=True,
+    )
+
+
 def test_slice_rm_bw_sharded_subaligned_shard_row_out(device):
     """Mirror of the input-side case on the writer: RM interleaved → WIDTH-sharded output with a
     24B shard row. Input W is tile-aligned, so needs_rm_composite_output must fire on the shard row

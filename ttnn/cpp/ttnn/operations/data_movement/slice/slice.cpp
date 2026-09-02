@@ -44,14 +44,41 @@ inline bool has_nontile_w(const ttnn::Tensor& input) {
 // TensorAccessor strides pages by the buffer's *aligned* page size, but `noc_async_*_sharded` reads
 // that same value back as the per-page *payload*. For a B/W-sharded RM buffer the page is the shard
 // row, so the two only agree when the row is already a multiple of the buffer's alignment.
+inline bool is_subaligned_shard_row(
+    tt::tt_metal::BufferType buffer_type, uint32_t shard_row_elems, uint32_t element_size) {
+    const uint32_t alignment = buffer_type == tt::tt_metal::BufferType::DRAM ? tt::tt_metal::hal::get_dram_alignment()
+                                                                             : tt::tt_metal::hal::get_l1_alignment();
+    return (shard_row_elems * element_size) % alignment != 0;
+}
+
 inline bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& mc, uint32_t element_size) {
     if (!mc.shard_spec().has_value()) {
         return false;
     }
-    const uint32_t alignment = mc.buffer_type() == tt::tt_metal::BufferType::DRAM
-                                   ? tt::tt_metal::hal::get_dram_alignment()
-                                   : tt::tt_metal::hal::get_l1_alignment();
-    return (mc.shard_spec()->shape[1] * element_size) % alignment != 0;
+    return is_subaligned_shard_row(mc.buffer_type(), mc.shard_spec()->shape[1], element_size);
+}
+
+// Shard width that `slice`'s implicit-inheritance rescale (issue #38016) will give a sharded output
+// that inherited its spec from the input. Sole owner of this formula: the rescale itself calls this
+// too, so the composite guards can test the spec the op will actually run with rather than the
+// pre-rescale one. Caller applies tile rounding when the output isn't row-major. nullopt means the
+// width isn't split across cores (HEIGHT) or the BLOCK grid isn't rectangular, which the rescale
+// rejects with its own TT_FATAL.
+inline std::optional<uint32_t> rescaled_inherited_shard_width(
+    const tt::tt_metal::ShardSpec& spec, tt::tt_metal::TensorMemoryLayout layout, uint32_t output_width) {
+    if (layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
+        return tt::div_up(output_width, spec.num_cores());
+    }
+    if (layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
+        const auto bbox = spec.grid.bounding_box();
+        const uint32_t grid_h = bbox.end_coord.y - bbox.start_coord.y + 1;
+        const uint32_t grid_w = bbox.end_coord.x - bbox.start_coord.x + 1;
+        if (spec.num_cores() != grid_h * grid_w) {
+            return std::nullopt;
+        }
+        return tt::div_up(output_width, grid_w);
+    }
+    return std::nullopt;
 }
 
 // Route RM sharded input through composite when native isn't safe: nontile-aligned B/W, B/W with a
@@ -75,13 +102,22 @@ inline bool needs_rm_composite_input(
 }
 
 // Compose RM B/W-sharded output on nontile-aligned W or a sub-aligned shard row (irregular H is
-// fine natively). A spec-less output inherits the input's shard spec, which the input-side check
-// already covers.
-inline bool needs_rm_composite_output(const ttnn::Tensor& input, const tt::tt_metal::MemoryConfig& output_mc) {
+// fine natively). `rescaled_shard_width`, when set, is the width the implicit-inheritance rescale
+// will install after this decision point; it supersedes output_mc's own, which is still the input's.
+inline bool needs_rm_composite_output(
+    const ttnn::Tensor& input,
+    const tt::tt_metal::MemoryConfig& output_mc,
+    std::optional<uint32_t> rescaled_shard_width = std::nullopt) {
     if (input.layout() != Layout::ROW_MAJOR || !is_rm_bw_sharded(output_mc)) {
         return false;
     }
-    return has_nontile_w(input) || has_subaligned_shard_row(output_mc, input.element_size());
+    if (has_nontile_w(input)) {
+        return true;
+    }
+    if (rescaled_shard_width.has_value()) {
+        return is_subaligned_shard_row(output_mc.buffer_type(), *rescaled_shard_width, input.element_size());
+    }
+    return has_subaligned_shard_row(output_mc, input.element_size());
 }
 
 // Sharded-no-spec output that can't seed from the input (not sharded, or layout differs);
@@ -201,11 +237,44 @@ ttnn::Tensor slice(
         return finalize_into_preallocated(ret_adjustment(input_tensor));
     }
 
+    // Create modified vectors with wrapped indices and adjust them to match the tensor's rank
+    ttsl::SmallVector<uint32_t> modified_begins(input_rank, 0);
+    ttsl::SmallVector<uint32_t> modified_ends(input_rank, 0);
+    ttsl::SmallVector<uint32_t> modified_step(input_rank, 1);
+
+    // Wrap indices and adjust begins, ends, and step
+    for (size_t i = 0; i < begins.size(); ++i) {
+        if constexpr (std::is_signed_v<T>) {
+            modified_begins[i] = operations::data_movement::wrap_index(begins[i], input_shape[i]);
+            modified_ends[i] = operations::data_movement::wrap_index(ends[i], input_shape[i]);
+            modified_step[i] = static_cast<uint32_t>(step[i]);
+        } else {
+            modified_begins[i] = begins[i];
+            modified_ends[i] = ends[i];
+            modified_step[i] = step[i];
+        }
+    }
+
+    auto output_dim_i = [&modified_begins, &modified_step](size_t i, const ttsl::SmallVector<uint32_t>& modified_ends) {
+        return (modified_ends[i] - modified_begins[i] + modified_step[i] - 1) / modified_step[i];
+    };
+
     // Composite hop: unshard to L1 interleaved if needed, slice, then convert to the requested mc.
     const bool width_begin_nonzero = !begins.empty() && begins.back() != 0;
+    // A sharded output with no explicit config inherits the input's shard spec and then has it
+    // rescaled to the sliced shape further down, i.e. after this decision. Test the width that
+    // rescale will produce. RM only, so there is no tile rounding to mirror.
+    std::optional<uint32_t> rescaled_out_shard_w;
+    if (input_layout == Layout::ROW_MAJOR && !memory_config_arg.has_value() && !optional_output_tensor.has_value() &&
+        input_tensor.is_sharded() && input_rank >= 2 && output_memory_config.shard_spec().has_value()) {
+        rescaled_out_shard_w = detail::rescaled_inherited_shard_width(
+            output_memory_config.shard_spec().value(),
+            output_memory_config.memory_layout(),
+            output_dim_i(input_rank - 1, modified_ends));
+    }
     const bool rm_in_bad =
         detail::needs_rm_composite_input(input_tensor, output_memory_config, no_step, width_begin_nonzero);
-    const bool rm_out_bad = detail::needs_rm_composite_output(input_tensor, output_memory_config);
+    const bool rm_out_bad = detail::needs_rm_composite_output(input_tensor, output_memory_config, rescaled_out_shard_w);
     const bool out_no_spec = detail::needs_sharded_output_reshard(input_tensor, output_memory_config);
     if (rm_in_bad || rm_out_bad || out_no_spec) {
         // Snapshot orientation before the L1-interleaved staging hop strips it.
@@ -228,28 +297,6 @@ ttnn::Tensor slice(
         const auto target = can_land_in_preallocated(sliced) ? optional_output_tensor : std::nullopt;
         return finalize_into_preallocated(ttnn::to_memory_config(sliced, final_mc, std::nullopt, target));
     }
-
-    // Create modified vectors with wrapped indices and adjust them to match the tensor's rank
-    ttsl::SmallVector<uint32_t> modified_begins(input_rank, 0);
-    ttsl::SmallVector<uint32_t> modified_ends(input_rank, 0);
-    ttsl::SmallVector<uint32_t> modified_step(input_rank, 1);
-
-    // Wrap indices and adjust begins, ends, and step
-    for (size_t i = 0; i < begins.size(); ++i) {
-        if constexpr (std::is_signed_v<T>) {
-            modified_begins[i] = operations::data_movement::wrap_index(begins[i], input_shape[i]);
-            modified_ends[i] = operations::data_movement::wrap_index(ends[i], input_shape[i]);
-            modified_step[i] = static_cast<uint32_t>(step[i]);
-        } else {
-            modified_begins[i] = begins[i];
-            modified_ends[i] = ends[i];
-            modified_step[i] = step[i];
-        }
-    }
-
-    auto output_dim_i = [&modified_begins, &modified_step](size_t i, const ttsl::SmallVector<uint32_t>& modified_ends) {
-        return (modified_ends[i] - modified_begins[i] + modified_step[i] - 1) / modified_step[i];
-    };
 
     auto check_handled_tile_alignment = [&modified_begins, &input_rank, &tile_shape]() -> bool {
         return (
@@ -304,8 +351,8 @@ ttnn::Tensor slice(
                 }
                 new_shard_shape = {new_shard_h, output_width};
             } else if (mem_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
-                uint32_t num_cores = shard_spec_val.num_cores();
-                uint32_t new_shard_w = tt::div_up(output_width, num_cores);
+                uint32_t new_shard_w =
+                    detail::rescaled_inherited_shard_width(shard_spec_val, mem_layout, output_width).value();
                 if (!rm_only) {
                     new_shard_w = std::max(tt::round_up(new_shard_w, tile_shape[1]), tile_shape[1]);
                 }
@@ -322,7 +369,8 @@ ttnn::Tensor slice(
                     grid_h,
                     grid_w);
                 uint32_t new_shard_h = tt::div_up(output_height, grid_h);
-                uint32_t new_shard_w = tt::div_up(output_width, grid_w);
+                uint32_t new_shard_w =
+                    detail::rescaled_inherited_shard_width(shard_spec_val, mem_layout, output_width).value();
                 if (!rm_only) {
                     new_shard_h = std::max(tt::round_up(new_shard_h, tile_shape[0]), tile_shape[0]);
                     new_shard_w = std::max(tt::round_up(new_shard_w, tile_shape[1]), tile_shape[1]);
