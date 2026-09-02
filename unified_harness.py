@@ -193,32 +193,38 @@ class Dfb:
     OUTPUT = "output"
     INTERMED = "intermed"
 
-    def __init__(self, name, num_entries=2, *, dtype=ttnn.bfloat16, kind=None, thread=None):
+    def __init__(self, name, num_entries=2, *, dtype=ttnn.bfloat16, kind=None, thread=None, entry_bytes=None):
         self.name = name
         self.num_entries = num_entries
         self.dtype = dtype
+        # Entry bytes, when the buffer is NOT one full tile. The default is
+        # DTYPE_TILE_BYTES, i.e. a 32x32 tile, which is what every buffer in this repo has
+        # been. A sub-tile geometry -- ttnn.Tile([1, 32]) -- has a smaller page, and
+        # check_entry_format asserts the buffer and the tensor agree, so it has to be said
+        # here rather than inferred.
+        self.entry_bytes = entry_bytes
         self.kind = kind
         self.thread = thread
 
 
-def dfb(name, num_entries=2, *, dtype=ttnn.bfloat16):
+def dfb(name, num_entries=2, *, dtype=ttnn.bfloat16, entry_bytes=None):
     """A buffer whose endpoints the harness reads off the kernel. The usual form."""
-    return Dfb(name, num_entries, dtype=dtype)
+    return Dfb(name, num_entries, dtype=dtype, entry_bytes=entry_bytes)
 
 
-def dfb_input(name, thread, *, dtype=ttnn.bfloat16, num_entries=2):
+def dfb_input(name, thread, *, dtype=ttnn.bfloat16, num_entries=2, entry_bytes=None):
     """Filled by DM thread `thread`, read by compute. Stated rather than derived."""
-    return Dfb(name, num_entries, dtype=dtype, kind=Dfb.INPUT, thread=thread)
+    return Dfb(name, num_entries, dtype=dtype, kind=Dfb.INPUT, thread=thread, entry_bytes=entry_bytes)
 
 
-def dfb_output(name, thread, *, dtype=ttnn.bfloat16, num_entries=2):
+def dfb_output(name, thread, *, dtype=ttnn.bfloat16, num_entries=2, entry_bytes=None):
     """Filled by compute, drained by DM thread `thread`. Stated rather than derived."""
-    return Dfb(name, num_entries, dtype=dtype, kind=Dfb.OUTPUT, thread=thread)
+    return Dfb(name, num_entries, dtype=dtype, kind=Dfb.OUTPUT, thread=thread, entry_bytes=entry_bytes)
 
 
-def dfb_intermed(name, *, dtype=ttnn.bfloat16, num_entries=2):
+def dfb_intermed(name, *, dtype=ttnn.bfloat16, num_entries=2, entry_bytes=None):
     """Compute on both ends: an accumulator, a retained value, a scratch block."""
-    return Dfb(name, num_entries, dtype=dtype, kind=Dfb.INTERMED, thread=None)
+    return Dfb(name, num_entries, dtype=dtype, kind=Dfb.INTERMED, thread=None, entry_bytes=entry_bytes)
 
 
 # tt/unified/api.h's Storage declarations and data-movement calls, as patterns. The kernel is
@@ -601,7 +607,7 @@ def unified_program_spec(
             d.kind, d.thread = derived[d.name]
         spec = ps.DataflowBufferSpec()
         spec.unique_id = d.name
-        spec.entry_size = DTYPE_TILE_BYTES[d.dtype]
+        spec.entry_size = d.entry_bytes if d.entry_bytes is not None else DTYPE_TILE_BYTES[d.dtype]
         spec.num_entries = d.num_entries
         spec.data_format_metadata = d.dtype
         dfb_specs.append(spec)
