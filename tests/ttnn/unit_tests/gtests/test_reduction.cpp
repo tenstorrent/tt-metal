@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -139,6 +140,39 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
         EXPECT_EQ(call.plan.chunk.reduce_axis_tiles, 2U);
         EXPECT_EQ(call.plan.chunk.output_tiles, 8U);
     }
+
+    const auto partial_input = make_tiled_spec(Shape{1, 1, 32, 5 * 32 + 7});
+    const std::vector<ReduceCbConfig> partial_reductions{
+        {0U,
+         ReduceCallConfig{
+             .input_spec = partial_input,
+             .output_spec = output,
+             .reduce_math = ReduceOpMath::SUM,
+             .reduce_dim = ReduceOpDim::W,
+             .scalar = 1.0F,
+             .fp32_mode = ReduceFp32Mode::Fast}},
+        {1U,
+         ReduceCallConfig{
+             .input_spec = partial_input,
+             .output_spec = output,
+             .reduce_math = ReduceOpMath::SUM,
+             .reduce_dim = ReduceOpDim::W,
+             .scalar = 1.0F,
+             .fp32_mode = ReduceFp32Mode::Fast}},
+    };
+    const auto partial_sequence = make_reduce_plan(
+        partial_reductions, {.auxiliary_cb_id = 2U, .accumulator_cb_id = 4U, .output_cb_id = 3U}, hardware);
+    ASSERT_EQ(partial_sequence.calls.size(), 2U);
+    EXPECT_EQ(partial_sequence.calls[0].plan.auxiliary_kind, ReduceAuxiliaryKind::Mask);
+    EXPECT_EQ(partial_sequence.calls[1].plan.reload_mode, compute_kernel_lib::AccumulateReloadMode::CopySeedZeroPair);
+    EXPECT_EQ(partial_sequence.calls[1].plan.auxiliary_kind, ReduceAuxiliaryKind::MaskAndZero);
+    EXPECT_EQ(partial_sequence.calls[1].plan.auxiliary_tile_count, 2U);
+    ASSERT_NE(partial_sequence.calls[1].plan.find_cb(ReduceCbRole::Auxiliary), nullptr);
+    EXPECT_EQ(partial_sequence.calls[1].plan.find_cb(ReduceCbRole::Auxiliary)->page_count, 2U);
+    std::map<std::string, std::string> partial_defines;
+    add_reduce_plan_defines(partial_defines, partial_sequence.calls[1].plan);
+    EXPECT_TRUE(partial_defines.contains("REDUCE_AUX_MASK"));
+    EXPECT_TRUE(partial_defines.contains("REDUCE_AUX_ZERO"));
 
     const CoreRangeSet shard_grid(CoreRange(CoreCoord{0, 0}, CoreCoord{0, 0}));
     const MemoryConfig sharded_l1(

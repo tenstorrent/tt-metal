@@ -335,30 +335,34 @@ ALWI void reduce_accumulate_via_add(
         ASSERT(get_dfb_num_pages(input_dfb_id) >= in_tiles);
     }
 
-    // Scaler is consumed by the partial 0/1 mask or, on the indexed path, the CopySeedZeroPair zero tile;
-    // never popped. Streaming always uses the safe copy-seed/pairs reload because its input indices disappear
-    // as tiles are popped.
-    bool wait_scaler = has_partial;
+    // The auxiliary CB is never popped here. A partial consumes its mask/scaler representation; a
+    // CopySeedZeroPair zero follows that representation, so mask and zero can coexist in the same CB.
+    // With AccumulateViaAdd's mask-only partial layout this is [mask@0, zero@1]; without a partial it is
+    // [zero@0].
+    const uint32_t zero_idx = has_partial ? partial_scaler.scaler_tile_count() : 0u;
+    uint32_t required_aux_tiles = has_partial ? mask_idx + 1u : 0u;
     if constexpr (has_accum) {
-        // AccumulateReloadMode contracts for indexed input. acc_cb (running RAW partial sum) is maybe_unused:
-        // only ASSERTs read it.
+        // AccumulateReloadMode contracts for indexed input. Streamed/grouped paths normally use their safe
+        // copy-seed fold, but honor CopySeedZeroPair for an odd tile/row once DST has already been seeded.
+        // acc_cb (running RAW partial sum) is maybe_unused: only ASSERTs read it.
         [[maybe_unused]] const uint32_t acc_cb = accumulate.config.cb_accumulator;
         ASSERT(input_dfb_id != acc_cb);
         if constexpr (!streamed_input) {
             // FoldViaAdd reads acc_cb via SrcA/SrcB — invalid for an UnpackToDestFp32 CB (see
             // dfb_unpacks_to_dest).
             UNPACK(ASSERT(accumulate.reload != AccumulateReloadMode::FoldViaAdd || !dfb_unpacks_to_dest(acc_cb)));
-            // CopySeedZeroPair takes scaler_dfb for its zero tile, so it can't also carry a partial mask.
-            ASSERT(accumulate.reload != AccumulateReloadMode::CopySeedZeroPair || !has_partial);
 #ifdef ARCH_QUASAR
             ASSERT(accumulate.reload != AccumulateReloadMode::CopySeedSfpuAdd);  // needs add_binary_tile (WH/BH only)
 #endif
-            wait_scaler = wait_scaler || (accumulate.reload == AccumulateReloadMode::CopySeedZeroPair);
+        }
+        if (accumulate.reload == AccumulateReloadMode::CopySeedZeroPair) {
+            const uint32_t zero_tile_count = zero_idx + 1u;
+            required_aux_tiles = required_aux_tiles < zero_tile_count ? zero_tile_count : required_aux_tiles;
         }
     }
-    if (wait_scaler) {
+    if (required_aux_tiles > 0) {
         ASSERT(input_dfb_id != scaler_dfb_id && output_dfb_id != scaler_dfb_id);
-        scaler_dfb.wait_front(mask_idx + 1);  // partial: 0/1 mask (row-0/col-0); CopySeedZeroPair: zero tile
+        scaler_dfb.wait_front(required_aux_tiles);
     }
     if constexpr (helper_waits_block) {
         input_dfb.wait_front(in_tiles);  // Bulk / WaitUpfront: whole resident block, indexed per output
@@ -447,13 +451,31 @@ ALWI void reduce_accumulate_via_add(
                     uint32_t local_h = 0;
                     if (full_rows & 1u) {
                         if (dst_seeded) {
-                            binary_dest_reuse_tiles_init<
-                                ckernel::EltwiseBinaryType::ELWADD,
-                                ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
-                            for (uint32_t out = 0; out < current_outputs; ++out) {
-                                binary_dest_reuse_tiles<
+                            if constexpr (has_accum) {
+                                if (accumulate.reload == AccumulateReloadMode::CopySeedZeroPair) {
+                                    add_tiles_init(input_dfb_id, scaler_dfb_id, true);
+                                    for (uint32_t out = 0; out < current_outputs; ++out) {
+                                        add_tiles(input_dfb_id, scaler_dfb_id, out, zero_idx, out);
+                                    }
+                                } else {
+                                    binary_dest_reuse_tiles_init<
+                                        ckernel::EltwiseBinaryType::ELWADD,
+                                        ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
+                                    for (uint32_t out = 0; out < current_outputs; ++out) {
+                                        binary_dest_reuse_tiles<
+                                            ckernel::EltwiseBinaryType::ELWADD,
+                                            ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id, out, out);
+                                    }
+                                }
+                            } else {
+                                binary_dest_reuse_tiles_init<
                                     ckernel::EltwiseBinaryType::ELWADD,
-                                    ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id, out, out);
+                                    ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
+                                for (uint32_t out = 0; out < current_outputs; ++out) {
+                                    binary_dest_reuse_tiles<
+                                        ckernel::EltwiseBinaryType::ELWADD,
+                                        ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id, out, out);
+                                }
                             }
                         } else {
                             copy_tile_init(input_dfb_id);
@@ -533,12 +555,19 @@ ALWI void reduce_accumulate_via_add(
             if (full_cnt & 1u) {
                 input_dfb.wait_front(1);
                 if (loaded_accumulator) {
-                    binary_dest_reuse_tiles_init<
-                        ckernel::EltwiseBinaryType::ELWADD,
-                        ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
-                    binary_dest_reuse_tiles<
-                        ckernel::EltwiseBinaryType::ELWADD,
-                        ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id, 0, 0);
+                    if constexpr (has_accum) {
+                        if (accumulate.reload == AccumulateReloadMode::CopySeedZeroPair) {
+                            add_tiles_init(input_dfb_id, scaler_dfb_id, true);
+                            add_tiles(input_dfb_id, scaler_dfb_id, 0, zero_idx, 0);
+                        } else {
+                            binary_dest_reuse_tiles_init<
+                                ckernel::EltwiseBinaryType::ELWADD,
+                                ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
+                            binary_dest_reuse_tiles<
+                                ckernel::EltwiseBinaryType::ELWADD,
+                                ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id, 0, 0);
+                        }
+                    }
                 } else {
                     copy_tile_init(input_dfb_id);
                     copy_tile(input_dfb_id, 0, 0);
@@ -703,13 +732,13 @@ ALWI void reduce_accumulate_via_add(
                                     input_dfb_id, start + k * stride, 0);
                             }
                         } else if (accumulate.reload == AccumulateReloadMode::CopySeedZeroPair) {
-                            // Odd leftover pairs with a ZERO tile (scaler_dfb[0]) via an acc_to_dest add_tiles:
+                            // Odd leftover pairs with the planned ZERO tile via an acc_to_dest add_tiles:
                             // DST += input[leftover] + 0, keeping the running sum in fp32 DST (no DEST-reuse
-                            // truncation, no SFPU). Bulk in pairs. Aligned only (scaler_dfb is the zero tile).
+                            // truncation, no SFPU). The zero follows any partial mask in the auxiliary CB.
                             uint32_t k = 0;
                             if (full_cnt & 1u) {
                                 add_tiles_init(input_dfb_id, scaler_dfb_id, true);
-                                add_tiles(input_dfb_id, scaler_dfb_id, start, 0, 0);  // DST += input[start] + 0
+                                add_tiles(input_dfb_id, scaler_dfb_id, start, zero_idx, 0);
                                 k = 1;
                             }
                             add_tiles_init(input_dfb_id, input_dfb_id, true);

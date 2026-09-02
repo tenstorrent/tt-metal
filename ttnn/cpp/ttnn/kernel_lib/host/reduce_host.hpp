@@ -39,6 +39,8 @@ enum class ReduceAuxiliaryKind : std::uint8_t {
     FullAndPartialScaler,
     Mask,
     Zero,
+    // AccumulateViaAdd partial + CopySeedZeroPair: mask at tile 0, zero at tile 1.
+    MaskAndZero,
 };
 
 struct ReduceHardwareConfig {

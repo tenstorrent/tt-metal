@@ -543,10 +543,12 @@ ReducePlan make_row_major_plan(
     plan.chunk = {.reduce_axis_tiles = axis_chunk, .output_tiles = 1, .buffers = staging_buffers};
     plan.input_policy =
         reduced_tiles == axis_chunk ? ReduceInputPolicy::BulkWaitBulkPop : ReduceInputPolicy::ChunkedWaitChunkedPop;
-    plan.reload_mode = plan.algorithm == ReduceAlgorithm::AccumulateViaAdd && !has_partial
-                           ? compute_kernel_lib::AccumulateReloadMode::CopySeedZeroPair
-                           : compute_kernel_lib::AccumulateReloadMode::CopySeedPairs;
-    if (plan.algorithm == ReduceAlgorithm::AccumulateViaAdd && reduced_tiles != axis_chunk && !has_partial) {
+    const bool additive_chunks = plan.algorithm == ReduceAlgorithm::AccumulateViaAdd && reduced_tiles != axis_chunk;
+    plan.reload_mode = additive_chunks ? compute_kernel_lib::AccumulateReloadMode::CopySeedZeroPair
+                                       : compute_kernel_lib::AccumulateReloadMode::CopySeedPairs;
+    if (additive_chunks) {
+        // Dense input is identity-padded before tilization, so a logical partial does not consume an aux mask.
+        // The zero tile is therefore available for odd staged chunks regardless of logical alignment.
         plan.auxiliary_kind = ReduceAuxiliaryKind::Zero;
     }
 
@@ -712,6 +714,89 @@ ReducePlan make_reduce_plan(
         std::nullopt);
 }
 
+namespace {
+
+std::uint32_t reduced_axis_tiles(const ReducePlan& plan, ReduceOpDim dim) {
+    if (dim == ReduceOpDim::W) {
+        return plan.Wt;
+    }
+    if (dim == ReduceOpDim::H) {
+        return plan.Ht;
+    }
+    return checked_mul_u32(plan.Ht, plan.Wt, "HW tile count");
+}
+
+bool zero_pair_avoids_an_odd_fold(const ReducePlan& plan, ReduceOpDim dim, bool is_first_call) {
+    if (plan.algorithm != ReduceAlgorithm::AccumulateViaAdd) {
+        return false;
+    }
+
+    const std::uint32_t axis_tiles = reduced_axis_tiles(plan, dim);
+    const std::uint32_t full_tiles = axis_tiles - (plan.partial_reduce_axis_elements != 0 ? 1U : 0U);
+    if (full_tiles == 0) {
+        return false;
+    }
+
+    const bool grouped_col = dim == ReduceOpDim::H && (plan.input_policy == ReduceInputPolicy::BulkWaitBulkPop ||
+                                                       plan.input_policy == ReduceInputPolicy::ChunkedWaitChunkedPop);
+    if (!grouped_col) {
+        // The first call can copy-seed an odd tile. A later call has already seeded DEST from the accumulator,
+        // so an odd full-tile count otherwise needs one DEST-reuse fold.
+        return !is_first_call && (full_tiles & 1U) != 0;
+    }
+
+    // Grouped COL restarts pairing at every row-chunk boundary while retaining DEST. The first odd group can
+    // copy-seed only on the first call; every odd group after DEST is seeded benefits from a zero pair.
+    const std::uint32_t row_chunk =
+        plan.input_policy == ReduceInputPolicy::ChunkedWaitChunkedPop ? plan.chunk.reduce_axis_tiles : axis_tiles;
+    bool dst_seeded = !is_first_call;
+    for (std::uint32_t processed = 0; processed < full_tiles;) {
+        const std::uint32_t rows = std::min(row_chunk, full_tiles - processed);
+        if (dst_seeded && (rows & 1U) != 0) {
+            return true;
+        }
+        dst_seeded = true;
+        processed += rows;
+    }
+    return false;
+}
+
+bool try_enable_zero_pair(ReducePlan& plan, const ReduceHardwareConfig& hardware) {
+    auto auxiliary = std::find_if(plan.cb_requirements.begin(), plan.cb_requirements.end(), [](const auto& req) {
+        return req.role == ReduceCbRole::Auxiliary;
+    });
+    TT_FATAL(auxiliary != plan.cb_requirements.end(), "Reduce planner: plan is missing its auxiliary CB");
+
+    std::uint32_t extra_tiles = 0;
+    ReduceAuxiliaryKind new_kind = plan.auxiliary_kind;
+    switch (plan.auxiliary_kind) {
+        case ReduceAuxiliaryKind::Scalar: new_kind = ReduceAuxiliaryKind::Zero; break;
+        case ReduceAuxiliaryKind::Mask:
+            new_kind = ReduceAuxiliaryKind::MaskAndZero;
+            extra_tiles = 1;
+            break;
+        case ReduceAuxiliaryKind::Zero:
+        case ReduceAuxiliaryKind::MaskAndZero: break;
+        case ReduceAuxiliaryKind::FullAndPartialScaler:
+            return false;  // ReduceTile-only representation; CopySeedZeroPair cannot reach this case.
+    }
+
+    const std::size_t extra_bytes = static_cast<std::size_t>(extra_tiles) * auxiliary->page_size;
+    if (extra_bytes > hardware.available_l1_bytes - plan.total_owned_l1_bytes) {
+        return false;  // CopySeedPairs is the correct no-extra-L1 fallback.
+    }
+
+    plan.reload_mode = compute_kernel_lib::AccumulateReloadMode::CopySeedZeroPair;
+    plan.auxiliary_kind = new_kind;
+    plan.auxiliary_tile_count += extra_tiles;
+    auxiliary->page_count = plan.auxiliary_tile_count;
+    auxiliary->total_size_bytes += extra_bytes;
+    plan.total_owned_l1_bytes += extra_bytes;
+    return true;
+}
+
+}  // namespace
+
 ReduceSequencePlan make_reduce_plan(
     const std::vector<ReduceCbConfig>& reductions,
     const ReduceSequenceCbIds& cb_ids,
@@ -790,6 +875,14 @@ ReduceSequencePlan make_reduce_plan(
                 hardware,
                 config.max_input_cb_bytes,
                 ReduceAlgorithm::ReduceTile));
+        }
+    }
+
+    if (accumulates && plans.front().algorithm == ReduceAlgorithm::AccumulateViaAdd) {
+        for (std::size_t i = 0; i < plans.size(); ++i) {
+            if (zero_pair_avoids_an_odd_fold(plans[i], reductions[i].second.reduce_dim, i == 0)) {
+                try_enable_zero_pair(plans[i], hardware);
+            }
         }
     }
 
@@ -934,6 +1027,10 @@ void add_reduce_plan_defines(std::map<std::string, std::string>& defines, const 
         case ReduceAuxiliaryKind::FullAndPartialScaler: defines["REDUCE_AUX_SCALER_PAIR"] = "1"; break;
         case ReduceAuxiliaryKind::Mask: defines["REDUCE_AUX_MASK"] = "1"; break;
         case ReduceAuxiliaryKind::Zero: defines["REDUCE_AUX_ZERO"] = "1"; break;
+        case ReduceAuxiliaryKind::MaskAndZero:
+            defines["REDUCE_AUX_MASK"] = "1";
+            defines["REDUCE_AUX_ZERO"] = "1";
+            break;
         case ReduceAuxiliaryKind::Scalar: break;
     }
 }
