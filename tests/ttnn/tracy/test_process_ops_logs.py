@@ -201,16 +201,17 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
         row = next(reader)
         assert "MULTICAST NOC UTIL (%)" in reader.fieldnames
         assert row["MULTICAST NOC UTIL (%)"] == "25.0"
+        assert "SESSION ID" not in reader.fieldnames
 
 
-# The profiler appends "RUN_ID: <id>" to the device log preamble so a performance report can be
+# The profiler appends "SESSION_ID: <id>" to the device log preamble so a performance report can be
 # paired with the memory report from the same run. Readers of the preamble must ignore it.
-_RUN_ID = "0123456789abcdef0123456789abcdef"
+_SESSION_ID = "0123456789abcdef0123456789abcdef"
 
 
 def _write_device_log(path: Path, arch: str = "wormhole_b0", rows: tuple = ()) -> Path:
     lines = [
-        f"ARCH: {arch}, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64, RUN_ID: {_RUN_ID}",
+        f"ARCH: {arch}, CHIP_FREQ[MHz]: 1000, Max Compute Cores: 64, SESSION_ID: {_SESSION_ID}",
         "PCIe slot,core_x,core_y,RISC processor type,timer_id,time[cycles since reset],data,run host ID,trace id,trace id counter,zone name,type,source line,source file,meta data",
         *rows,
     ]
@@ -218,7 +219,7 @@ def _write_device_log(path: Path, arch: str = "wormhole_b0", rows: tuple = ()) -
     return path
 
 
-def test_extract_device_info_ignores_trailing_run_id(tmp_path):
+def test_extract_device_info_ignores_trailing_session_id(tmp_path):
     device_log = _write_device_log(tmp_path / "profile_log_device.csv")
 
     arch, freq, max_compute_cores = extract_device_info(device_log)
@@ -229,13 +230,13 @@ def test_extract_device_info_ignores_trailing_run_id(tmp_path):
 
 
 @pytest.mark.parametrize("arch,expected", [("wormhole_b0", False), ("quasar", True)])
-def test_is_quasar_device_log_unaffected_by_run_id(tmp_path, arch, expected):
+def test_is_quasar_device_log_unaffected_by_session_id(tmp_path, arch, expected):
     device_log = _write_device_log(tmp_path / "profile_log_device.csv", arch=arch)
 
     assert process_ops_logs.is_quasar_device_log(device_log) is expected
 
 
-def test_build_sub_device_id_lookup_skips_preamble_with_run_id(tmp_path):
+def test_build_sub_device_id_lookup_skips_preamble_with_session_id(tmp_path):
     device_log = _write_device_log(
         tmp_path / "profile_log_device.csv",
         rows=('0,0,0,BRISC,1,100,0,42,0,1,BRISC-FW,ZONE_START,1,k.cpp,{"sub_device_id":3}',),

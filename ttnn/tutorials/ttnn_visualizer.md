@@ -210,18 +210,47 @@ export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode":false,"enable_logging"
 python -m tracy -p -r -v -m pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[0-pretrained_weight_true-0]
 ```
 
-Both artefacts are stamped with the same run identifier, which lets TT-NN Visualizer pair them rather than infer the pairing from directory timestamps:
+Both reports carry one overall session ID, so they can be paired without relying on directory timestamps:
 
-* Memory report: a `run_id` row in the `report_metadata` table of `db.sqlite`
-* Performance report: a `RUN_ID:` field on the first line of `profile_log_device.csv`
+- The memory report stores it in the `session_id` column of each `graph_captures` row in `db.sqlite`.
+- The performance report stores it as `SESSION_ID` in the first line of `profile_log_device.csv`.
 
-Upload the two directories as usual; no extra flags are required. Note that the performance-side identifier travels in the device log, so it is only present when device profiling ran (the `-r` flag above).
-
-Across a multi-host run each rank mints its own identifier unless one is supplied. Export `TT_METAL_RUN_ID` before launching to make every rank agree:
+The ID is generated once per process. Set `TTNN_RUN_SESSION_ID` before launch when several ranks must share a caller-supplied ID:
 
 ```bash
-export TT_METAL_RUN_ID=$(uuidgen)
+export TTNN_RUN_SESSION_ID=$(uuidgen)
 ```
+
+After selecting the performance report whose `profile_log_device.csv` `SESSION_ID` matches the memory report's `session_id`, use the capture ranges to select the work belonging to each graph. Each graph capture gets a row in the `graph_captures` table:
+
+| Column | Meaning |
+| --- | --- |
+| `capture_index` | Counts graph captures within the process; `0` is the first |
+| `rank` | Distributed rank the capture ran on |
+| `device_operation_id_begin` / `_end` | Half-open range of device operation ids the capture dispatched |
+
+`device_operation_id_*` holds raw device operation ids. The `GLOBAL CALL COUNT` column of `ops_perf_results.csv` is **not** a raw id: the profiler packs the operation id together with the device id and a host-fallback flag, via `EncodePerDeviceProgramID` in `tt_metal/impl/profiler/tt_metal_profiler.cpp` (`DEVICE_ID_NUM_BITS = 10`, `DEVICE_OP_ID_NUM_BITS = 31`). Decode it before comparing:
+
+```python
+DEVICE_ID_NUM_BITS, DEVICE_OP_ID_NUM_BITS = 10, 31
+op_id     = (global_call_count & ((1 << DEVICE_OP_ID_NUM_BITS) - 1)) >> DEVICE_ID_NUM_BITS
+device_id =  global_call_count & ((1 << DEVICE_ID_NUM_BITS) - 1)
+```
+
+The performance rows belonging to a capture are then those satisfying:
+
+```sql
+((GLOBAL_CALL_COUNT & 0x7FFFFFFF) >> 10) >= device_operation_id_begin
+AND ((GLOBAL_CALL_COUNT & 0x7FFFFFFF) >> 10) < device_operation_id_end
+```
+
+Comparing `GLOBAL CALL COUNT` directly against the range matches nothing: on a 2-chip run the smallest encoded value is already `1 << 10`. Each dispatched operation contributes one row per device, so a capture of N operations on a D-device mesh selects N×D rows.
+
+Upload the two directories as usual. The session ID identifies the matching report; each range then indexes into that report. The session ID is intentionally not repeated on every row of `ops_perf_results*.csv`.
+
+A process that captures more than once (several pytest cases, successive model iterations, or repeated manual captures) produces one row per capture, each with its own range, so a capture is paired with its own interval rather than with everything the process did.
+
+Across a multi-host run every rank runs the same program, so the Nth capture carries the same `capture_index` on every rank with no configuration; `rank` keeps the merged rows apart, and each rank's range refers to its own performance report. Ranks must open the same captures in the same order for the indices to line up — `world_size` is recorded so a consumer can check it received one row per rank.
 
 ---
 

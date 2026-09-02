@@ -11,6 +11,7 @@ This tests the decoupled workflow:
 """
 
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -2601,16 +2602,33 @@ class TestReportVersion:
         assert report["version"] == ttnn.graph.REPORT_VERSION
 
 
-class TestRunId:
-    """The ``run_id`` that pairs a memory report with the performance report from the same run.
+def _minimal_capture_graph():
+    return [
+        {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+        {"counter": 1, "node_type": "capture_end", "params": {}, "connections": []},
+    ]
 
-    The value originates in tt-metal (``tt::tt_metal::get_or_create_run_id``) and is written into
-    the capture metadata by ``GraphProcessor::get_report()``; the profiler writes the same value
-    into the ``profile_log_device.csv`` preamble.
+
+def _write_report_with_correlation(directory, name, correlation, rank=0, world_size=1):
+    """Write a capture JSON plus its correlation sidecar into ``directory``."""
+    report_path = directory / name
+    with open(report_path, "w") as f:
+        json.dump(_make_report(_minimal_capture_graph(), metadata={"rank": rank, "world_size": world_size}), f)
+    with open(report_path.with_suffix(graph_report.CAPTURE_CORRELATION_SIDECAR_SUFFIX), "w") as f:
+        json.dump(correlation, f)
+    return report_path
+
+
+class TestCaptureCorrelation:
+    """Correlating one graph capture with the slice of a performance report covering the same work.
+
+    ``ttnn.graph`` stamps a ``.capture_correlation.json`` sidecar beside each report, holding the capture's
+    index and the device operation id range it spans. That range is the performance report's
+    GLOBAL CALL COUNT column, so ``[begin, end)`` selects exactly the captured operations.
     """
 
-    def test_capture_metadata_has_run_id(self, device, tmp_report_dir):
-        """A real capture stamps a non-empty run_id into the report metadata."""
+    def test_capture_writes_correlation_sidecar(self, device, tmp_report_dir):
+        """A real capture writes a sidecar whose interval covers the operations it dispatched."""
         report_path = tmp_report_dir / "report.json"
 
         torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
@@ -2620,44 +2638,258 @@ class TestRunId:
         _ = ttnn.relu(tt_input)
         _ = ttnn.graph.end_graph_capture_to_file(report_path)
 
-        with open(report_path) as f:
-            report = json.load(f)
+        sidecar_path = report_path.with_suffix(graph_report.CAPTURE_CORRELATION_SIDECAR_SUFFIX)
+        assert sidecar_path.is_file()
+        with open(sidecar_path) as f:
+            correlation = json.load(f)
 
-        assert report["metadata"]["run_id"]
+        assert correlation["capture_index"] >= 0
+        # relu dispatched at least one device operation inside the capture.
+        assert correlation["device_operation_id_end"] > correlation["device_operation_id_begin"]
+        assert correlation["rank"] == 0
 
-    def test_run_id_is_stable_across_captures(self, device, tmp_report_dir):
-        """Two captures in one process share a run_id, so both pair with the same perf report."""
+    def test_capture_index_differs_across_captures(self, device, tmp_report_dir):
+        """Two captures in one process get distinct, increasing indices.
+
+        This is the point of the feature: a process-wide identifier would give both captures
+        the same value and so could not say which performance interval belonged to which.
+        """
         torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
         tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
 
-        run_ids = []
+        indices = []
         for index in range(2):
             report_path = tmp_report_dir / f"report_{index}.json"
             ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
             _ = ttnn.relu(tt_input)
             _ = ttnn.graph.end_graph_capture_to_file(report_path)
-            with open(report_path) as f:
-                run_ids.append(json.load(f)["metadata"]["run_id"])
+            with open(report_path.with_suffix(graph_report.CAPTURE_CORRELATION_SIDECAR_SUFFIX)) as f:
+                indices.append(json.load(f)["capture_index"])
 
-        assert run_ids[0] == run_ids[1]
+        assert indices[1] == indices[0] + 1
 
-    def test_import_carries_run_id_into_report_metadata(self, tmp_path):
-        """The importer surfaces run_id in ``report_metadata`` for the visualizer to read."""
-        graph = [
-            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
-            {"counter": 1, "node_type": "capture_end", "params": {}, "connections": []},
-        ]
-        report = _make_report(graph, metadata={"run_id": "0123456789abcdef0123456789abcdef"})
+    def test_intervals_of_successive_captures_do_not_overlap(self, device, tmp_report_dir):
+        """The second capture's interval starts at or after the first one's end."""
+        torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
 
-        conn, cursor = _import_to_db(report, tmp_path)
+        intervals = []
+        for index in range(2):
+            report_path = tmp_report_dir / f"report_{index}.json"
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            _ = ttnn.relu(tt_input)
+            _ = ttnn.graph.end_graph_capture_to_file(report_path)
+            with open(report_path.with_suffix(graph_report.CAPTURE_CORRELATION_SIDECAR_SUFFIX)) as f:
+                c = json.load(f)
+            intervals.append((c["device_operation_id_begin"], c["device_operation_id_end"]))
+
+        assert intervals[1][0] >= intervals[0][1]
+
+    def test_internal_per_operation_sessions_do_not_consume_an_index(self, device, tmp_report_dir):
+        """``_internal=True`` sessions are not reporting captures and must not take an index.
+
+        The operation decorator opens one of these around every top-level operation, so without
+        the ``_internal`` gate the index would advance per operation rather than per capture.
+        """
+        torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+        def capture_index(name):
+            report_path = tmp_report_dir / name
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            _ = ttnn.relu(tt_input)
+            _ = ttnn.graph.end_graph_capture_to_file(report_path)
+            with open(report_path.with_suffix(graph_report.CAPTURE_CORRELATION_SIDECAR_SUFFIX)) as f:
+                return json.load(f)["capture_index"]
+
+        first = capture_index("first.json")
+
+        # Stand in for the decorator's per-operation session; it writes no report.
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL, _internal=True)
+        _ = ttnn.relu(tt_input)
+        _ = ttnn.graph.end_graph_capture()
+
+        assert capture_index("second.json") == first + 1
+
+    def test_session_id_is_always_set(self, device, tmp_report_dir, monkeypatch):
+        """A capture records a session id even with nothing in the environment.
+
+        Without one, two runs of the same program are indistinguishable: the device
+        operation id counter restarts per process, so both record the same interval under
+        the same ``capture_index``, and nothing says which reports belong together.
+        """
+        monkeypatch.delenv(ttnn.graph.RUN_SESSION_ID_ENV, raising=False)
+        monkeypatch.setattr(ttnn.graph, "_generated_session_id", None)
+
+        report_path = tmp_report_dir / "report.json"
+        torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        _ = ttnn.relu(tt_input)
+        _ = ttnn.graph.end_graph_capture_to_file(report_path)
+
+        with open(report_path.with_suffix(graph_report.CAPTURE_CORRELATION_SIDECAR_SUFFIX)) as f:
+            session_id = json.load(f)["session_id"]
+
+        assert session_id
+        assert session_id != graph_report.UNKNOWN_SESSION_ID
+        assert os.environ[ttnn.graph.RUN_SESSION_ID_ENV] == session_id
+
+    def test_session_id_comes_from_the_environment_when_set(self, device, tmp_report_dir, monkeypatch):
+        """``TTNN_RUN_SESSION_ID`` wins, so a launcher can stamp one id across processes."""
+        monkeypatch.setenv(ttnn.graph.RUN_SESSION_ID_ENV, "job-42")
+
+        report_path = tmp_report_dir / "report.json"
+        torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        _ = ttnn.relu(tt_input)
+        _ = ttnn.graph.end_graph_capture_to_file(report_path)
+
+        with open(report_path.with_suffix(graph_report.CAPTURE_CORRELATION_SIDECAR_SUFFIX)) as f:
+            assert json.load(f)["session_id"] == "job-42"
+
+    def test_generated_session_id_is_the_same_for_every_capture_in_a_process(
+        self, device, tmp_report_dir, monkeypatch
+    ):
+        """The generated id identifies the run, so successive captures must share it.
+
+        ``capture_index`` distinguishes captures within the run; the session id is what
+        groups them, and a fresh id per capture would defeat that.
+        """
+        monkeypatch.delenv(ttnn.graph.RUN_SESSION_ID_ENV, raising=False)
+        monkeypatch.setattr(ttnn.graph, "_generated_session_id", None)
+
+        torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+        session_ids, indices = [], []
+        for index in range(2):
+            report_path = tmp_report_dir / f"report_{index}.json"
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            _ = ttnn.relu(tt_input)
+            _ = ttnn.graph.end_graph_capture_to_file(report_path)
+            with open(report_path.with_suffix(graph_report.CAPTURE_CORRELATION_SIDECAR_SUFFIX)) as f:
+                c = json.load(f)
+            session_ids.append(c["session_id"])
+            indices.append(c["capture_index"])
+
+        assert session_ids[0] == session_ids[1]
+        assert indices[1] == indices[0] + 1
+
+    def test_import_marks_a_sidecar_that_has_no_session_id(self, tmp_path):
+        """A sidecar without a session id still imports, flagged rather than dropped.
+
+        The interval remains usable against the performance report it shipped with; only
+        grouping with the rest of the run is lost.
+        """
+        _write_report_with_correlation(
+            tmp_path,
+            "graph_capture.json",
+            {
+                "capture_index": 0,
+                "world_size": 1,
+                "device_operation_id_begin": 5,
+                "device_operation_id_end": 9,
+            },
+        )
+
+        db_path = graph_report.import_report(tmp_path, tmp_path / "output")
+        conn = sqlite3.connect(db_path)
         try:
-            cursor.execute("SELECT value FROM report_metadata WHERE key = 'run_id'")
-            row = cursor.fetchone()
+            row = conn.execute(
+                "SELECT session_id, device_operation_id_begin, device_operation_id_end FROM graph_captures"
+            ).fetchone()
         finally:
             conn.close()
 
-        assert row is not None
-        assert row[0] == "0123456789abcdef0123456789abcdef"
+        assert row == (graph_report.UNKNOWN_SESSION_ID, 5, 9)
+
+    def test_import_writes_graph_captures_row(self, tmp_path):
+        """The importer turns the sidecar into a ``graph_captures`` row."""
+        _write_report_with_correlation(
+            tmp_path,
+            "graph_capture.json",
+            {
+                "capture_index": 3,
+                "session_id": "job-7",
+                "world_size": 1,
+                "device_operation_id_begin": 12,
+                "device_operation_id_end": 40,
+                "start_timestamp_ns": 100,
+                "end_timestamp_ns": 900,
+            },
+        )
+
+        db_path = graph_report.import_report(tmp_path, tmp_path / "output")
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT capture_index, rank, session_id, device_operation_id_begin, "
+                "device_operation_id_end FROM graph_captures"
+            ).fetchone()
+        finally:
+            conn.close()
+
+        assert row == (3, 0, "job-7", 12, 40)
+
+    def test_import_gives_each_rank_its_own_row_for_one_capture(self, tmp_path):
+        """Ranks agree on ``capture_index``; ``rank`` keeps their rows apart in the merged DB.
+
+        This is what replaces a single metadata value: a multi-host run merges into one
+        database, and each rank's capture needs its own interval because each rank counts
+        device operations independently.
+        """
+        for rank in (0, 1):
+            _write_report_with_correlation(
+                tmp_path,
+                f"graph_capture_{rank + 1}_of_2.json",
+                {
+                    "capture_index": 0,
+                    # Ranks of one job share a session id; the launcher stamps it via
+                    # TTNN_RUN_SESSION_ID so every rank agrees.
+                    "session_id": "job-7",
+                    "world_size": 2,
+                    "device_operation_id_begin": 1,
+                    "device_operation_id_end": 20 + rank,
+                },
+                rank=rank,
+                world_size=2,
+            )
+
+        db_path = graph_report.import_report(tmp_path, tmp_path / "output")
+        conn = sqlite3.connect(db_path)
+        try:
+            rows = conn.execute(
+                "SELECT capture_index, rank, session_id, world_size, device_operation_id_end "
+                "FROM graph_captures ORDER BY rank"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        assert rows == [(0, 0, "job-7", 2, 20), (0, 1, "job-7", 2, 21)]
+
+    def test_correlation_sidecar_is_not_imported_as_a_report(self, tmp_path):
+        """The sidecar sits beside the report and must not be mistaken for one."""
+        _write_report_with_correlation(
+            tmp_path,
+            "graph_capture.json",
+            {"capture_index": 0, "device_operation_id_begin": 1, "device_operation_id_end": 2},
+        )
+
+        discovered = graph_report._discover_report_json_files(tmp_path)
+
+        assert [p.name for p in discovered] == ["graph_capture.json"]
+
+    def test_import_without_a_sidecar_leaves_the_table_empty(self, tmp_path):
+        """A report captured with no correlation still imports; it just has no interval."""
+        conn, cursor = _import_to_db(_make_report(_minimal_capture_graph()), tmp_path)
+        try:
+            assert cursor.execute("SELECT COUNT(*) FROM graph_captures").fetchone()[0] == 0
+        finally:
+            conn.close()
 
 
 class TestBufferChunksSchemaAndAggregation:

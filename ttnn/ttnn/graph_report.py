@@ -129,6 +129,9 @@ def run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
                 if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:
                     import_report(report_path, report_path)
                     (report_path / "graph_capture.json").unlink(missing_ok=True)
+                    (report_path / f"graph_capture{CAPTURE_CORRELATION_SIDECAR_SUFFIX}").unlink(missing_ok=True)
+                    # Also matches the per-rank correlation sidecars
+                    # (graph_capture_<rank>_of_<world>.capture_correlation.json).
                     for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
                         p.unlink(missing_ok=True)
                 if ttnn.distributed_context_is_initialized():
@@ -232,11 +235,17 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 # 3.1 — buffer_chunks (#46376) plus rank on buffer_chunks for multi-host merges.
 # 3.2 - git hash and remote URL in report_metadata (#43830)
 # 3.3 - rank on local/global_tensor_comparison_records (#45448)
-# 3.4 - run_id in report_metadata, pairing this report with a performance report (#51066)
-DATABASE_SCHEMA_VERSION = "3.4"
+# 3.4 - graph_captures table, tying each capture to its slice of a performance report (#51066)
+DATABASE_SCHEMA_VERSION = "3.5"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
+CAPTURE_CORRELATION_SIDECAR_SUFFIX = ".capture_correlation.json"
+
+# Stand-in written when a correlation sidecar carries no session_id. The producer always
+# sets one, so this marks a sidecar that is malformed or predates that guarantee: the
+# interval stays usable, but the capture cannot be grouped with the rest of its run.
+UNKNOWN_SESSION_ID = "unknown"
 
 # Second and later JSON files for the same rank get operation ids shifted by this stride
 # so they do not collide (each capture must have fewer than this many ops).
@@ -287,7 +296,8 @@ def _discover_report_json_files(report_path: Path) -> list[Path]:
     ``graph_capture_0_of_1.python_io.json`` (a list, not a report dict), so we
     keep only names that match the main capture file pattern.
 
-    Otherwise all ``*.json`` except ``config.json`` and ``*.python_io.json``.
+    Otherwise all ``*.json`` except ``config.json`` and the sidecars written beside
+    a report (``*.python_io.json``, comparison records, ``*.capture_correlation.json``).
     """
     if report_path.is_file():
         return [report_path]
@@ -307,6 +317,7 @@ def _discover_report_json_files(report_path: Path) -> list[Path]:
         if p.name not in skip
         and not p.name.endswith(PYTHON_IO_SIDECAR_SUFFIX)
         and not p.name.endswith(COMPARISON_RECORDS_SIDECAR_SUFFIX)
+        and not p.name.endswith(CAPTURE_CORRELATION_SIDECAR_SUFFIX)
         and p.name != COMPARISON_RECORDS_FALLBACK_NAME
     )
 
@@ -626,6 +637,32 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
         CREATE TABLE IF NOT EXISTS report_metadata (
             key text UNIQUE,
             value text
+        )
+    """
+    )
+
+    # One row per graph capture per rank, tying that capture to the slice of a
+    # performance report covering the same work: the captured operations are the
+    # rows whose GLOBAL CALL COUNT falls in
+    # [device_operation_id_begin, device_operation_id_end) for the matching rank.
+    #
+    # capture_index counts reporting captures within a process. Ranks of one job run
+    # the same program, so the Nth capture is the same capture on every rank without
+    # any configuration, and (capture_index, rank) is unique in a merged database.
+    # session_id identifies the run and is always written; it is what tells apart two runs
+    # of the same program, whose intervals and capture indices are otherwise identical.
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS graph_captures (
+            capture_index int NOT NULL,
+            rank int NOT NULL DEFAULT 0,
+            session_id text NOT NULL,
+            world_size int,
+            device_operation_id_begin int,
+            device_operation_id_end int,
+            start_timestamp_ns int,
+            end_timestamp_ns int,
+            PRIMARY KEY (capture_index, rank)
         )
     """
     )
@@ -1852,6 +1889,59 @@ def _load_comparison_records_sidecar(report_file: Path) -> dict | None:
     return None
 
 
+def _load_capture_correlation_sidecar(report_file: Path) -> dict | None:
+    """Read the correlation sidecar written beside ``report_file``, if present."""
+    sidecar_path = report_file.with_suffix(CAPTURE_CORRELATION_SIDECAR_SUFFIX)
+    if not sidecar_path.exists():
+        return None
+    try:
+        with open(sidecar_path, "r") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        logger.warning(f"Ignoring unreadable graph capture correlation sidecar {sidecar_path}: {e}")
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def import_graph_capture(cursor: sqlite3.Cursor, correlation: dict, rank: int) -> bool:
+    """Insert one ``graph_captures`` row from a correlation sidecar. Returns True if written.
+
+    ``rank`` comes from the report being imported rather than the sidecar, so the row
+    lands under the same rank as every other table for this file even if the two ever
+    disagree. A capture with no ``capture_index`` is skipped rather than defaulted,
+    since a wrong index would correlate against the wrong performance interval.
+
+    ``session_id`` is always written by the producer. A sidecar without one is imported
+    as ``UNKNOWN_SESSION_ID`` with a warning rather than dropped, since the interval is
+    still usable against the performance report it shipped with -- it just cannot be
+    grouped with the other captures of its run.
+    """
+    capture_index = correlation.get("capture_index")
+    if capture_index is None:
+        return False
+    session_id = str(correlation.get("session_id") or "")
+    if not session_id:
+        session_id = UNKNOWN_SESSION_ID
+        logger.warning(
+            f"Graph capture {capture_index} (rank {rank}) has no session_id; "
+            f"importing as {UNKNOWN_SESSION_ID}. It cannot be grouped with its run."
+        )
+    cursor.execute(
+        """INSERT OR REPLACE INTO graph_captures VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            int(capture_index),
+            rank,
+            session_id,
+            correlation.get("world_size"),
+            correlation.get("device_operation_id_begin"),
+            correlation.get("device_operation_id_end"),
+            correlation.get("start_timestamp_ns"),
+            correlation.get("end_timestamp_ns"),
+        ),
+    )
+    return True
+
+
 def import_metadata(cursor: sqlite3.Cursor, metadata: dict) -> None:
     """Import report metadata using batch insert."""
     if not metadata:
@@ -1963,6 +2053,7 @@ def import_report(
             "tensor_lifetime_records": 0,
             "tensor_consumer_rows": 0,
             "tensor_producer_rows": 0,
+            "graph_captures": 0,
         }
 
         git_meta = get_tt_metal_git_report_metadata()
@@ -2088,6 +2179,10 @@ def import_report(
 
             if "metadata" in report:
                 import_metadata(cursor, report["metadata"])
+
+            correlation = _load_capture_correlation_sidecar(rpath)
+            if correlation and import_graph_capture(cursor, correlation, rank):
+                total_stats["graph_captures"] += 1
 
             # Save cluster descriptor YAML if present
             if "cluster_descriptor" in report and report["cluster_descriptor"]:

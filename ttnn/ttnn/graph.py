@@ -4,7 +4,10 @@
 
 import contextlib
 import json
+import os
+import time
 import traceback
+import uuid
 from typing import Callable, Union
 from loguru import logger
 import pathlib
@@ -54,6 +57,105 @@ _python_stack_traces_auto_for_session: bool = False
 _comparison_records_data: dict = {}
 
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
+
+
+# ---------------------------------------------------------------------------
+# Report correlation
+# ---------------------------------------------------------------------------
+# One graph capture needs to be tied to the slice of a performance report that
+# covers the same work.  The link is the device operation id counter, which is
+# what the performance report calls GLOBAL CALL COUNT: reading it either side of
+# a capture brackets exactly the operations dispatched inside that capture.
+#
+# The identity is `capture_index`, a count of reporting captures in this process.
+# Ranks of one job run the same program, so the Nth capture is the same capture on
+# every rank and they agree without any configuration; `rank` on each record keeps
+# the merged rows apart.  This does assume ranks open the same captures in the same
+# order -- `world_size` is recorded so a consumer can check it got one row per rank.
+#
+# `session_id` identifies the run and is always set.  It is what tells two runs of the
+# same program apart: the device operation id counter restarts every process, so two runs
+# record identical intervals and `capture_index`/`rank` alone cannot say which memory
+# report pairs with which performance report.  `TTNN_RUN_SESSION_ID` takes precedence so
+# a launcher can stamp one id across several processes -- notably the ranks of one job,
+# which must agree for `rank` to merge them.  Without it an id is generated once per
+# process, which identifies that process only.
+CAPTURE_CORRELATION_SIDECAR_SUFFIX = ".capture_correlation.json"
+RUN_SESSION_ID_ENV = "TTNN_RUN_SESSION_ID"
+
+_capture_index: int = 0
+# Session id generated for this process, created on first use when the environment does
+# not supply one.  Cached so every capture in the process reports the same id.
+_generated_session_id: Union[str, None] = None
+# Correlation record for the reporting capture currently open, else None.  Only
+# outermost user-initiated captures get one: the per-operation sessions started by
+# the operation decorator (_internal=True) and captures started from C++ produce no
+# report, so there is nothing to correlate.
+_capture_correlation: Union[dict, None] = None
+
+
+def _run_session_id() -> str:
+    """Session id for this run.  Never empty.
+
+    ``TTNN_RUN_SESSION_ID`` wins so a launcher can stamp one id across the processes of
+    a job; an unset or empty variable falls back to an id generated once per process.
+    """
+    global _generated_session_id
+    from_env = os.environ.get(RUN_SESSION_ID_ENV)
+    if from_env:
+        return from_env
+    if _generated_session_id is None:
+        _generated_session_id = uuid.uuid4().hex
+        # The device profiler reads the same environment variable when it writes
+        # profile_log_device.csv, giving both reports one shared session identifier.
+        os.environ[RUN_SESSION_ID_ENV] = _generated_session_id
+    return _generated_session_id
+
+
+def _begin_capture_correlation() -> None:
+    """Open a correlation record for an outermost reporting capture."""
+    global _capture_index, _capture_correlation
+    import ttnn
+
+    _capture_correlation = {
+        "capture_index": _capture_index,
+        "session_id": _run_session_id(),
+        "device_operation_id_begin": int(ttnn._ttnn.get_device_operation_id()),
+        "start_timestamp_ns": time.time_ns(),
+    }
+    _capture_index += 1
+
+
+def _end_capture_correlation(report_path=None) -> None:
+    """Close the open correlation record, writing a sidecar when a report was written.
+
+    ``device_operation_id_end`` is exclusive, so the captured operations are
+    ``[begin, end)`` in the performance report's GLOBAL CALL COUNT column. Always
+    clears the record, so a capture that wrote no report still leaves nothing behind.
+    """
+    global _capture_correlation
+    correlation = _capture_correlation
+    _capture_correlation = None
+    if correlation is None or report_path is None:
+        return
+
+    import ttnn
+
+    correlation["device_operation_id_end"] = int(ttnn._ttnn.get_device_operation_id())
+    correlation["end_timestamp_ns"] = time.time_ns()
+    if ttnn.distributed_context_is_initialized():
+        correlation["rank"] = int(ttnn.distributed_context_get_rank())
+        correlation["world_size"] = int(ttnn.distributed_context_get_size())
+    else:
+        correlation["rank"], correlation["world_size"] = 0, 1
+
+    sidecar_path = pathlib.Path(report_path).with_suffix(CAPTURE_CORRELATION_SIDECAR_SUFFIX)
+    try:
+        with open(sidecar_path, "w") as f:
+            json.dump(correlation, f)
+    except OSError as e:
+        # Losing the correlation must not fail a capture that otherwise succeeded.
+        logger.warning(f"Could not write graph capture correlation sidecar to {sidecar_path}: {e}")
 
 
 def _new_comparison_records_data() -> dict:
@@ -248,6 +350,10 @@ def begin_graph_capture(run_mode=None, *, _internal=False):
         # without enable_graph_report, later drained by flush_comparison_records_to_db).
         if not _internal:
             _comparison_records_data = _new_comparison_records_data()
+            # Only a user-initiated outermost capture produces a report, so only that
+            # one gets a correlation record. Without the _internal check the first
+            # per-operation session would take this branch and mint one per operation.
+            _begin_capture_correlation()
         elif not _comparison_records_data:
             _comparison_records_data = _new_comparison_records_data()
         _python_io_recording_enabled = True
@@ -275,6 +381,8 @@ def end_graph_capture():
     global _python_io_recording_enabled, _python_stack_traces_auto_for_session
     result = _cpp_end_graph_capture()
     if not is_graph_capture_active():
+        # No report path, so nothing to correlate against; just release the record.
+        _end_capture_correlation()
         _python_io_recording_enabled = False
         if _python_stack_traces_auto_for_session:
             disable_python_stack_traces()
@@ -292,6 +400,7 @@ def end_graph_capture_to_file(report_path):
         _write_comparison_records_sidecar(report_path)
         reset_comparison_records_data()
     if not is_graph_capture_active():
+        _end_capture_correlation(report_path)
         _python_io_recording_enabled = False
         if _python_stack_traces_auto_for_session:
             disable_python_stack_traces()

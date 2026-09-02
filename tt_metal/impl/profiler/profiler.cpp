@@ -49,7 +49,7 @@
 #include "profiler_types.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "common/filesystem_utils.hpp"
-#include <tt-metalium/run_id.hpp>
+#include <tt-metalium/session_id.hpp>
 #include "context/metal_context.hpp"
 #include "context/context_types.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -1233,12 +1233,12 @@ void dumpJsonNocTraces(
 
 void writeCSVHeader(
     std::ofstream& log_file_ofs, tt::ARCH device_architecture, int device_core_frequency, uint32_t max_compute_cores) {
-    // RUN_ID is appended last so that readers indexing the earlier comma-separated fields by
+    // SESSION_ID is appended last so that readers indexing the earlier comma-separated fields by
     // position are unaffected. It lets TT-NN Visualizer pair this report with the memory report
     // written by the same run.
     log_file_ofs << "ARCH: " << get_string_lowercase(device_architecture)
                  << ", CHIP_FREQ[MHz]: " << device_core_frequency << ", Max Compute Cores: " << max_compute_cores
-                 << ", RUN_ID: " << get_or_create_run_id() << std::endl;
+                 << ", SESSION_ID: " << get_or_create_session_id() << std::endl;
     log_file_ofs << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run "
                     "host ID, trace id, trace id counter, zone name, type, source line, source file, meta data"
                  << std::endl;

@@ -24,7 +24,6 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/run_id.hpp>
 #include <unordered_map>
 
 using namespace tt::tt_metal;
@@ -824,10 +823,6 @@ nlohmann::json GraphProcessor::get_report() const {
     const auto& world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     metadata[kReportRank] = *world_ctx->rank();
     metadata[kReportWorldSize] = *world_ctx->size();
-
-    // Shared with the profiler device log preamble, so TT-NN Visualizer can pair this memory
-    // report with the performance report captured by the same run.
-    metadata[kReportRunId] = tt::tt_metal::get_or_create_run_id();
 
     report[kReportMetadata] = metadata;
 
