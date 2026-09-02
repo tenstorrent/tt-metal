@@ -57,3 +57,16 @@ def test_common_prefill_runtime_traced(mesh_device, tmp_path):
     table_path = runtime.build_kv_chunk_table(caches, path=str(tmp_path / "gemma4_kv.pb"))
     assert os.path.getsize(table_path) > 0
     runtime.release_trace()
+
+    class AckCounter:
+        count = 0
+
+        def inject(self, delta):
+            self.count += delta
+
+    acknowledgements = AckCounter()
+    runtime.set_layer_ack_channel(acknowledgements)
+    runtime.capture_trace(caches)
+    runtime.prefill_chunk(socket_shaped_tokens(3), caches, slot_id=1, actual_start=8192, actual_end=16384)
+    assert acknowledgements.count == 60
+    runtime.release_trace()
