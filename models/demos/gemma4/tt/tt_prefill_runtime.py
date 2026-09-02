@@ -278,3 +278,6 @@ class TtPrefillRuntime:
             self.model.set_prefill_trace_controller(None)
             self._trace_controller = None
             self._trace_captured = False
+        if self._trace_output is not None:
+            self._trace_output.deallocate(True)
+            self._trace_output = None
