@@ -69,13 +69,22 @@ def _up(device, t):
     return ttnn.from_torch(t.float().contiguous(), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
 
 
+def _up_x(device, x):
+    """Reference stream tensor [1,T,n,C] -> the device packing [1,1,T,n*C].
+
+    Row-major identical, so every output below still compares element for element flattened.
+    """
+    _, T, n, C = x.shape
+    return _up(device, x.reshape(1, 1, T, n * C))
+
+
 @pytest.mark.parametrize("T", [1, 32], ids=["T1", "T32"])
 def test_mhc_expand(device, T):
     torch.manual_seed(0)
     C, n = 256, 4
     h = torch.randn(1, 1, T, C)
     r_out = mhc_expand(h.reshape(1, T, C), n)  # [1,T,n,C]
-    d_out = ttnn.to_torch(tt_mhc_expand(_up(device, h), n))
+    d_out = ttnn.to_torch(tt_mhc_expand(_up(device, h), n))  # [1,1,T,n*C], same order flattened
     _check("expand", r_out, d_out)
 
 
@@ -91,7 +100,7 @@ def test_project(device, T, C):
     rsqrt = torch.rsqrt(xf.square().mean(-1, keepdim=True) + cfg.norm_eps)
     r_mixes = (F.linear(xf, fn) * rsqrt).reshape(1, 1, T, cfg.mix_hc)
 
-    d_mixes = TtMHCWrap(device, cfg, fn, base, scale).project(_up(device, x))
+    d_mixes = TtMHCWrap(device, cfg, fn, base, scale).project(_up_x(device, x))
     _check("mixes", r_mixes, ttnn.to_torch(d_mixes), PCC_PROJ)
 
 
@@ -105,7 +114,7 @@ def test_hc_pre(device, T, C, scale_val):
 
     r_y, r_post, r_comb = _ref_wrap(cfg, fn, base, scale).hc_pre(x)  # [1,T,C], [1,T,n], [1,T,n,n]
 
-    d_y, d_post, d_comb = TtMHCWrap(device, cfg, fn, base, scale).hc_pre(_up(device, x))
+    d_y, d_post, d_comb = TtMHCWrap(device, cfg, fn, base, scale).hc_pre(_up_x(device, x))
     _check("y", r_y, ttnn.to_torch(d_y))
     _check("post", r_post, ttnn.to_torch(d_post))
     _check("comb", r_comb, ttnn.to_torch(d_comb))
@@ -125,10 +134,10 @@ def test_hc_post(device, T, C):
     r_out = _ref_wrap(cfg, fn, base, scale).hc_post(f_out, x, post, comb)  # [1,T,n,C]
 
     d_out = TtMHCWrap(device, cfg, fn, base, scale).hc_post(
-        _up(device, f_out.reshape(1, T, 1, C)),
-        _up(device, x),
+        _up(device, f_out.reshape(1, 1, T, C)),
+        _up_x(device, x),
         _up(device, post.reshape(1, 1, T, cfg.n)),
-        _up(device, comb.reshape(1, T, cfg.n, cfg.n)),
+        _up(device, comb.reshape(1, 1, T, cfg.n * cfg.n)),
     )
     _check("out", r_out, ttnn.to_torch(d_out))
 
@@ -148,7 +157,7 @@ def test_hc_head(device, T, C):
     head.fn.data, head.base.data, head.scale.data = fn, base, scale
     r_y = head(x)  # [1,T,C]
 
-    d_y = TtMHCHead(device, cfg, fn, base, scale)(_up(device, x))
+    d_y = TtMHCHead(device, cfg, fn, base, scale)(_up_x(device, x))
     _check("head_y", r_y, ttnn.to_torch(d_y))
 
 
@@ -171,24 +180,12 @@ def test_mhc_wrap(device, T, C, scale_val, f_kind):
         dev_f = lambda z: ttnn.matmul(z, w_t_tt)
 
     ref_out = _ref_wrap(cfg, fn, base, scale)(x, ref_f)  # [1,T,n,C]
-    d_out = ttnn.to_torch(TtMHCWrap(device, cfg, fn, base, scale)(_up(device, x), dev_f))
+    d_out = ttnn.to_torch(TtMHCWrap(device, cfg, fn, base, scale)(_up_x(device, x), dev_f))
     _check(f"wrap[{f_kind}] C={C} T={T}", ref_out, d_out)
 
 
 # ---- real sublayers F (issue #40726 acceptance: "Attention, MLP") ----
 # Small C so F's own matmuls stay fp32-precise, isolating the mHC wiring.
-def _to_seq(z):  # [1,T,1,C] -> [1,1,T,C] so F can contract over the sequence
-    T, C = z.shape[1], z.shape[3]
-    z = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT)
-    return ttnn.to_layout(ttnn.reshape(z, [1, 1, T, C]), ttnn.TILE_LAYOUT)
-
-
-def _from_seq(z, T):  # [1,1,T,C] -> [1,T,1,C]
-    C = z.shape[3]
-    z = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT)
-    return ttnn.to_layout(ttnn.reshape(z, [1, T, 1, C]), ttnn.TILE_LAYOUT)
-
-
 def _mlp_fns(device, C, H, seed):
     """SwiGLU FFN: down(silu(gate(z)) * up(z))."""
     g = torch.Generator().manual_seed(seed)
@@ -215,12 +212,10 @@ def _attn_fns(device, C, seed):
 
     Wq_t, Wk_t, Wv_t, Wo_t = _up(device, Wq), _up(device, Wk), _up(device, Wv), _up(device, Wo)
 
-    def dev(z):  # [1,T,1,C]
-        T = z.shape[1]
-        z2 = _to_seq(z)
-        q, k, v = ttnn.matmul(z2, Wq_t), ttnn.matmul(z2, Wk_t), ttnn.matmul(z2, Wv_t)
+    def dev(z):  # [1,1,T,C] -- the packed layout hands F the shape it already wants
+        q, k, v = ttnn.matmul(z, Wq_t), ttnn.matmul(z, Wk_t), ttnn.matmul(z, Wv_t)
         scores = ttnn.softmax(ttnn.mul(ttnn.matmul(q, ttnn.transpose(k, -2, -1)), s), dim=-1)
-        return _from_seq(ttnn.matmul(ttnn.matmul(scores, v), Wo_t), T)
+        return ttnn.matmul(ttnn.matmul(scores, v), Wo_t)
 
     return ref, dev
 
@@ -242,5 +237,5 @@ def test_mhc_wrap_real_sublayer(device, T, f_kind):
         ref_f, dev_f = _attn_fns(device, C, seed=8)
 
     ref_out = _ref_wrap(cfg, fn, base, scale)(x, ref_f)
-    d_out = ttnn.to_torch(TtMHCWrap(device, cfg, fn, base, scale)(_up(device, x), dev_f))
+    d_out = ttnn.to_torch(TtMHCWrap(device, cfg, fn, base, scale)(_up_x(device, x), dev_f))
     _check(f"wrap-real[{f_kind}] T={T}", ref_out, d_out)

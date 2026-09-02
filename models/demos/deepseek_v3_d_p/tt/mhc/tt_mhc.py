@@ -13,12 +13,16 @@ The implementation splits along the design boundary:
   - Parametrization (X -> the H matrices, including the Sinkhorn projection of H_res onto the
     doubly-stochastic manifold) is the fused kernel
     ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn, fed by `project`.
-  - Computation (apply the H matrices around the sublayer F) stays composite ttnn; see hc_post
-    for why.
+  - Computation (apply the H matrices around the sublayer F) stays composite ttnn.
 
-Tensor convention: the n residual streams occupy their own dim, x [1, T, n, C], with the
-T = B*S tokens down the tile rows. F is any callable [1,T,1,C] -> [1,T,1,C] (attention,
-MLP, ...) and owns its own pre-norm, exactly like DeepSeek's Block.
+Tensor convention: the n residual streams are packed along the last dim, x [1, 1, T, n*C] with
+stream i at columns [i*C, (i+1)*C) and the T = B*S tokens down the tile rows. Both tiled dims
+are then tile-aligned, which is the point: giving n a dim of its own pads it 4 -> 32, so every
+stage tensor costs 8x its logical size (587 MB against 73.4 MB at T=640, C=7168, fp32) and the
+single stream handed to F pads 1 -> 32 for 32x. These stages are bandwidth-bound, so that
+padding is the cost. F is any callable [1,1,T,C] -> [1,1,T,C] (attention, MLP, ...) and owns
+its own pre-norm, exactly like DeepSeek's Block -- and [1,1,T,C] is already what every other
+ttnn sublayer takes, so F needs no reshape to contract over the sequence.
 """
 
 from __future__ import annotations
@@ -116,40 +120,40 @@ def _upload(device, t, shape, dtype):
     return ttnn.from_torch(t.contiguous().reshape(shape), layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
 
 
-def _flatten_streams(x):
-    """[1,T,n,C] -> [1,1,T,n*C] via a row-major reinterpret (n is sub-tile)."""
-    _, T, n, C = x.shape
-    rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-    rm = ttnn.reshape(rm, [1, 1, T, n * C])
-    return ttnn.to_layout(rm, ttnn.TILE_LAYOUT)
+def _streams(x, n):
+    """The n per-stream slices of a packed [1,1,T,n*C] tensor."""
+    T, C = x.shape[-2], x.shape[-1] // n
+    return [ttnn.slice(x, [0, 0, 0, i * C], [1, 1, T, (i + 1) * C]) for i in range(n)]
 
 
-def _row_to_batch(t, shape):
-    """Move the token dim from tile-rows to a batch dim (row-major reinterpret)."""
-    t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
-    t = ttnn.reshape(t, shape)
-    return ttnn.to_layout(t, ttnn.TILE_LAYOUT)
+def _cols(t, k):
+    """The k single-column slices of [1,1,T,k], each broadcastable across a stream's C."""
+    T = t.shape[-2]
+    return [ttnn.slice(t, [0, 0, 0, j], [1, 1, T, j + 1]) for j in range(k)]
+
+
+def _mix(streams, coeffs):
+    """sum_i coeffs[i] * streams[i], with each [1,1,T,1] coefficient broadcast down its stream."""
+    y = ttnn.multiply(coeffs[0], streams[0])
+    for s, c in zip(streams[1:], coeffs[1:]):
+        y = ttnn.mac(s, c, y)
+    return y
 
 
 def _project(x, fn_T, norm_eps, ckc):
-    """[1,T,n,C] -> [1,1,T,K] = RMSNorm(flatten(x)) @ fn_T.
+    """[1,1,T,n*C] -> [1,1,T,K] = RMSNorm(x) @ fn_T.
 
     RMSNorm carries no learned weight, so its rsqrt commutes with the linear and is applied
     after it -- one [T,1] broadcast instead of a full [T,n*C] scale.
     """
-    xf = _flatten_streams(x)
-    mixes_un = ttnn.matmul(xf, fn_T, compute_kernel_config=ckc)
-    ms = ttnn.mean(ttnn.multiply(xf, xf), dim=-1, keepdim=True)
-    rsqrt = ttnn.rsqrt(ttnn.add(ms, norm_eps))
-    return ttnn.multiply(mixes_un, rsqrt)
+    mixes_un = ttnn.matmul(x, fn_T, compute_kernel_config=ckc)
+    ms = ttnn.mean(ttnn.multiply(x, x), dim=-1, keepdim=True)
+    return ttnn.multiply(mixes_un, ttnn.rsqrt(ttnn.add(ms, norm_eps)))
 
 
 def mhc_expand(h, n: int):
-    """Embedding [1,1,T,C] -> n identical residual streams [1,T,n,C]."""
-    T, C = h.shape[-2], h.shape[-1]
-    rm = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
-    rm = ttnn.repeat(ttnn.reshape(rm, [1, T, 1, C]), [1, 1, n, 1])
-    return ttnn.to_layout(rm, ttnn.TILE_LAYOUT)
+    """Embedding [1,1,T,C] -> n identical residual streams [1,1,T,n*C]."""
+    return ttnn.repeat(h, [1, 1, 1, n])
 
 
 class TtMHCWrap(LightweightModule):
@@ -177,42 +181,40 @@ class TtMHCWrap(LightweightModule):
         self.consts = _upload(device, build_consts(cfg, scale, base), (8, W, W), dtype)
 
     def project(self, x):
-        """[1,T,n,C] -> mixes [1,1,T,mix_hc], the fused kernel's input."""
+        """[1,1,T,n*C] -> mixes [1,1,T,mix_hc], the fused kernel's input."""
         return _project(x, self.fn_T, self.norm_eps, self.ckc)
 
     def hc_pre(self, x):
-        """[1,T,n,C] -> (y [1,T,1,C], post [T,n], comb [1,T,n,n]).
+        """[1,1,T,n*C] -> (y [1,1,T,C], post [1,1,T,n], comb [1,1,T,n*n]).
 
         y = sum_i pre_i * x_i is the single stream handed to F. The reduction uses the raw
         stream values; only the projection input is normalised.
         """
-        T = x.shape[1]
+        T = x.shape[-2]
         mixes = self.project(x)
         pre, post, comb = ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn(
             mixes, self.consts, self.n, self.iters, self.eps
         )
-        pre_row = _row_to_batch(pre, [1, T, 1, self.n])
-        y = ttnn.matmul(pre_row, x, compute_kernel_config=self.ckc)
-        return y, post, _row_to_batch(comb, [1, T, self.n, self.n])
+        # the kernel emits rank 2, [T,k]; prepending unit dims is a view, not data movement
+        r4 = lambda t: ttnn.reshape(t, [1, 1, T, t.shape[-1]])
+        return _mix(_streams(x, self.n), _cols(r4(pre), self.n)), r4(post), r4(comb)
 
     def hc_post(self, x, residual, post, comb):
-        """x: F's output [1,T,1,C]; residual: [1,T,n,C] -> [1,T,n,C].
+        """x: F's output [1,1,T,C]; residual: [1,1,T,n*C] -> [1,1,T,n*C].
 
         Per output stream j:  new_j = post_j * x + sum_i comb[i,j] * residual_i,
         i.e. the residual mixing applies comb^T (still doubly-stochastic).
         """
-        T = residual.shape[1]
-        post_col = _row_to_batch(post, [1, T, self.n, 1])
-        # Both matmuls are shape-bound, not bandwidth-bound: n=4 pads to a full tile row and the
-        # contraction axis is 1 here and 4 below, so they hold 0.005% FPU and 213 GB/s while the
-        # add over the same tensors reaches 445 GB/s. A fused kernel would inherit that padding --
-        # the win is packing the n axis, which is a layout change rather than a kernel.
-        term1 = ttnn.matmul(post_col, x, compute_kernel_config=self.ckc)  # outer product
-        term2 = ttnn.matmul(ttnn.transpose(comb, -2, -1), residual, compute_kernel_config=self.ckc)
-        return ttnn.add(term1, term2)
+        n = self.n
+        res, cmb = _streams(residual, n), _cols(comb, n * n)
+        out = [ttnn.multiply(p, x) for p in _cols(post, n)]
+        for i in range(n):
+            for j in range(n):
+                out[j] = ttnn.mac(res[i], cmb[i * n + j], out[j])
+        return ttnn.concat(out, dim=-1)
 
     def forward(self, x, sublayer):
-        """x: [1,T,n,C]; sublayer: [1,T,1,C] -> [1,T,1,C]. Returns [1,T,n,C]."""
+        """x: [1,1,T,n*C]; sublayer: [1,1,T,C] -> [1,1,T,C]. Returns [1,1,T,n*C]."""
         residual = x
         h, post, comb = self.hc_pre(x)
         h = sublayer(h)
@@ -237,9 +239,7 @@ class TtMHCHead(LightweightModule):
         self.base = _upload(device, base, (1, 1, 1, cfg.n), dtype)
 
     def forward(self, x):
-        """[1,T,n,C] -> [1,T,1,C]."""
-        T = x.shape[1]
+        """[1,1,T,n*C] -> [1,1,T,C]."""
         mixes = _project(x, self.fn_T, self.norm_eps, self.ckc)
         pre = ttnn.add(ttnn.sigmoid(ttnn.add(ttnn.mul(mixes, self.a), self.base)), self.eps)
-        pre_row = _row_to_batch(pre, [1, T, 1, self.n])
-        return ttnn.matmul(pre_row, x, compute_kernel_config=self.ckc)
+        return _mix(_streams(x, self.n), _cols(pre, self.n))

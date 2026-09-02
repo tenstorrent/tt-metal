@@ -18,6 +18,7 @@ One test per question:
     it scales with the core grid (MHC_MAX_CORES=1 pins the single-core arm).
   - kernel_sharded: whether the zero-copy L1-sharded path beats DRAM-interleaved at equal work.
   - block: how the kernel compares to the composite ttnn half it sits in, at V4-Pro C=7168.
+  - wrap_e2e: what one whole mHC-wrapped sublayer costs, the number a model estimate uses.
 """
 
 import os
@@ -30,7 +31,9 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import MHCConfig
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import TtMHCWrap, build_consts
 
-ITERS = 10  # measured dispatches per region, after a warmup that compiles and fills the cache
+# measured dispatches per region, after a warmup that compiles and fills the cache. Tracy's
+# per-core marker buffer holds ~12k events; lower this when a run reports dropped markers.
+ITERS = int(os.environ.get("MHC_PERF_ITERS", 10))
 
 
 def _consts(device, cfg, scale, base):
@@ -140,15 +143,13 @@ def test_mhc_kernel_sharded(device, tiles_per_core):
         ttnn.synchronize_device(device)
 
 
-# n=4 is the tile-row dim of [1,T,n,C], so every stage tensor is padded to n=32 and costs 8x its
-# logical size -- 587 MB per tensor at T=640/C=7168/fp32, and DRAM is exhausted by T=4096.
 @pytest.mark.parametrize("T", [640, 2048], ids=["T640", "T2048"])
 def test_mhc_block_perf(device, T):
     """The four stages of an mHC-wrapped sublayer at V4-Pro C, each in its own region.
 
-    project and hc_post move [1,T,n,C] data and are bandwidth-bound; the fused kernel and the
-    hc_pre reduction touch only [T,32] and [1,T,n,C] respectively. Splitting them is what shows
-    whether the parametrization is worth optimising further or already lost in the noise.
+    project, hc_pre and hc_post all stream the full [1,1,T,n*C] and are bandwidth-bound; the
+    fused kernel touches only [T,32]. Splitting them is what shows whether the parametrization
+    is worth optimising further or already lost in the noise.
     """
     torch.manual_seed(0)
     cfg = MHCConfig(dim=7168, n=4)
@@ -162,10 +163,10 @@ def test_mhc_block_perf(device, T):
     def up(t):
         return ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
 
-    x = up(torch.randn(1, T, n, C, generator=g))
-    f_out = up(torch.randn(1, T, 1, C, generator=g))
+    x = up(torch.randn(1, 1, T, n * C, generator=g))
+    f_out = up(torch.randn(1, 1, T, C, generator=g))
     post = up(2.0 * torch.sigmoid(torch.randn(1, 1, T, n, generator=g)))
-    comb = up(torch.rand(1, T, n, n, generator=g))  # perf only; need not be doubly-stochastic
+    comb = up(torch.rand(1, 1, T, n * n, generator=g))  # perf only; need not be doubly-stochastic
 
     mixes = wrap.project(x)
 
@@ -181,6 +182,45 @@ def test_mhc_block_perf(device, T):
         ("mhc-hc-post", lambda: wrap.hc_post(f_out, x, post, comb)),
     )
     for header, fn_ in stages:
+        fn_()  # compile + program cache
+        ttnn.synchronize_device(device)
+        signpost(header)
+        for _ in range(ITERS):
+            fn_()
+        ttnn.synchronize_device(device)
+
+
+@pytest.mark.parametrize("T", [640], ids=["T640"])
+def test_mhc_wrap_e2e(device, T):
+    """One mHC-wrapped sublayer end to end: X' = H_res.X + H_post^T . F(H_pre.X).
+
+    F is the identity, so the region is mHC and nothing else -- a decoder layer holds two of
+    these (attn_hc, ffn_hc), so the per-layer mHC cost is twice what this reports. The kernel
+    is signposted a second time on its own to keep its share of the whole visible in the same
+    trace; test_mhc_block_perf attributes the rest.
+    """
+    torch.manual_seed(0)
+    cfg = MHCConfig(dim=7168, n=4)
+    C, n = cfg.dim, cfg.n
+    g = torch.Generator().manual_seed(1)
+    fn = torch.randn(cfg.mix_hc, n * C, generator=g) * 0.02
+    wrap = TtMHCWrap(device, cfg, fn, torch.randn(cfg.mix_hc, generator=g), torch.full((3,), 1.0))
+
+    x = ttnn.from_torch(
+        torch.randn(1, 1, T, n * C, generator=g), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32
+    )
+    mixes = wrap.project(x)
+
+    regions = (
+        ("mhc-e2e", lambda: wrap.forward(x, lambda h: h)),
+        (
+            "mhc-e2e-kernel",
+            lambda: ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn(
+                mixes, wrap.consts, wrap.n, wrap.iters, wrap.eps
+            ),
+        ),
+    )
+    for header, fn_ in regions:
         fn_()  # compile + program cache
         ttnn.synchronize_device(device)
         signpost(header)
