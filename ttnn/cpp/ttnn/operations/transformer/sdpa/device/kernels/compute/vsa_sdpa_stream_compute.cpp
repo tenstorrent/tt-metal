@@ -181,10 +181,14 @@ void kernel_main() {
         }
         stream_pack_to_unpack_sync();  // the chunk's probs must be visible (usually free by now)
         reconfig_data_format(cb_v_stream, cb_qk);
+        uint32_t init_cols = 0;  // sparse listings make same-width (usually 1-block) visits common
         for (uint32_t i = 0; i < pend_n; ++i) {
             const Visit& v = pend_v[i];
             const uint32_t qk_cols = v.n * Skt;
-            mm_no_mop_init_short(cb_qk, cb_v_stream, /*transpose=*/false, 1, Sqt, qk_cols);
+            if (qk_cols != init_cols) {
+                mm_no_mop_init_short(cb_qk, cb_v_stream, /*transpose=*/false, 1, Sqt, qk_cols);
+                init_cols = qk_cols;
+            }
             tile_regs_acquire();
             for (uint32_t vd = 0; vd < vDHt; ++vd) {
                 for (uint32_t b = 0; b < v.n; ++b) {

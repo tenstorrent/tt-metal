@@ -481,7 +481,7 @@ void kernel_main() {
             }
             // chunk-cyclic placement: 4-row chunks dealt round-robin (row_stride = workers * 4)
             const uint32_t ri = pass_row_base + r;
-            const uint32_t q_tile = row_start + (ri >> 2) * row_stride + (ri & 3);
+            const uint32_t q_tile = row_start + (ri >> VSA_ROW_CHUNK_LOG2) * row_stride + (ri & ((1u << VSA_ROW_CHUNK_LOG2) - 1));
             noc.async_read(idx, idx_cb, idx_row_bytes, {.page_id = head * n_q_tiles + q_tile}, {.offset_bytes = 0});
             noc.async_read_barrier();
             for (uint32_t e = 0; e < W; ++e) {

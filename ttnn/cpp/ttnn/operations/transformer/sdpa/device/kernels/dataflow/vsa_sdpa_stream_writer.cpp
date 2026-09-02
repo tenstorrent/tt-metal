@@ -203,7 +203,7 @@ void kernel_main() {
             const uint32_t pass_rows = (row_count - pass_base < R_MAX) ? (row_count - pass_base) : R_MAX;
             for (uint32_t r = 0; r < pass_rows; ++r) {
                 const uint32_t ri = pass_base + r;  // chunk-cyclic (see reader)
-                const uint32_t q_tile = row_start + (ri >> 2) * row_stride + (ri & 3);
+                const uint32_t q_tile = row_start + (ri >> VSA_ROW_CHUNK_LOG2) * row_stride + (ri & ((1u << VSA_ROW_CHUNK_LOG2) - 1));
                 const uint32_t page0 = (head * n_q_tiles + q_tile) * q_tiles_per_row;
                 for (uint32_t i = 0; i < q_tiles_per_row; ++i) {
                     // cb_q_res is RAM-mode: never reserved/pushed here, offsets from the base.

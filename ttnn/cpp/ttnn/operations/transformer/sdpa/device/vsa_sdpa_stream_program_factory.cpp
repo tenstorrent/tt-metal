@@ -255,6 +255,8 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     if (const char* probe = std::getenv("TT_VSA_PROBE"); probe != nullptr && probe[0] != '\0' && probe[0] != '0') {
         probe_defines["VSA_PROBE"] = probe;
     }
+    static_assert((kRowChunk & (kRowChunk - 1)) == 0, "kernel chunk math shifts by log2(kRowChunk)");
+    probe_defines["VSA_ROW_CHUNK_LOG2"] = std::to_string(std::bit_width(kRowChunk) - 1);
 
     tt::tt_metal::KernelDescriptor reader_desc;
     reader_desc.kernel_source = kdir + "dataflow/vsa_sdpa_stream_reader.cpp";
