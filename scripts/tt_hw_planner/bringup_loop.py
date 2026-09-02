@@ -343,6 +343,20 @@ def _model_param_dtype(model):
     return torch.float32
 
 
+def _forward_param(torch_module, arg_name):
+    """The `inspect.Parameter` a module's forward declares for `arg_name`, or None.
+
+    One place asks the signature, so "does the module give this a default" and "does the module
+    require it" cannot answer from two different readings of it.
+    """
+    if torch_module is None or not hasattr(torch_module, "forward"):
+        return None
+    try:
+        return inspect.signature(torch_module.forward).parameters.get(arg_name)
+    except (TypeError, ValueError):
+        return None
+
+
 def _make_arg_for(arg_name, *, model, torch_module):
     """Return a plausible tensor/value for one forward-arg, based on its name.
 
@@ -407,48 +421,37 @@ def _make_arg_for(arg_name, *, model, torch_module):
         return True
     if arg_name.startswith("output_"):
         return False
-    if arg_name in ("past_key_values", "cache_position", "use_cache",
-                    "return_dict", "head_mask", "encoder_hidden_states",
-                    "encoder_attention_mask", "labels"):
-        return None
+    # Anything the module itself gives a default to is left to the module. This was a typed list
+    # of names -- past_key_values, cache_position, use_cache, return_dict, head_mask, encoder_*,
+    # labels -- forced to None. A list only ever covers the models whoever wrote it had in mind,
+    # forces a value on args the module would have defaulted better itself, and goes stale the
+    # moment a model spells one of them differently. Reading the default off the signature covers
+    # every one of those names and keeps covering them after a rename.
+    param = _forward_param(torch_module, arg_name)
+    if param is not None and param.default is not inspect.Parameter.empty:
+        return _OMIT
 
-    # 2026-06-04 Tier-1b enhancement: introspection-based fallback for
-    # arg names not in the well-known list. Many HF modules have
-    # required args with non-obvious names (e.g. `input_features` for
-    # speech encoders, `decoder_inputs_embeds` for t2u). Before giving
-    # up with _OMIT, check if `forward()`'s signature flags the arg as
-    # required AND if introspection can produce a sensible tensor. This
-    # catches the "missing required arg" failure shape (code_hifi_gan
-    # `spkr_id`/`lang_id`, hifi_gan `input_embeds`) that previously
+    # Introspection-based fallback for REQUIRED args with non-obvious names (e.g. `input_features`
+    # for speech encoders, `decoder_inputs_embeds` for t2u). Before giving up with _OMIT, see
+    # whether introspection can produce a sensible tensor. This catches the "missing required arg"
+    # failure shape (code_hifi_gan `spkr_id`/`lang_id`, hifi_gan `input_embeds`) that previously
     # required hand-patching `_make_arg_for` per component.
     try:
-        import inspect as _inspect
-
-        if torch_module is not None and hasattr(torch_module, "forward"):
-            sig = _inspect.signature(torch_module.forward)
-            param = sig.parameters.get(arg_name)
-            # Only synthesize for REQUIRED args (no default value); for
-            # optional args, _OMIT lets HF apply its own default.
-            if (
-                param is not None
-                and param.default is _inspect.Parameter.empty
-                and param.kind
-                in (
-                    _inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                    _inspect.Parameter.KEYWORD_ONLY,
-                )
-            ):
-                # Heuristic: if the arg name suggests an integer ID
-                # (ends with "_id" / "_ids" / contains "spkr"/"lang"),
-                # generate a small int. Otherwise, generate a tensor
-                # shaped by _detect_hidden_shape (which handles
-                # per-component channel introspection — see Tier-1b
-                # enhancement to that function).
-                _lc = arg_name.lower()
-                if _lc.endswith("_id") or _lc.endswith("_ids") or "spkr" in _lc or "lang" in _lc:
-                    return torch.zeros(1, dtype=torch.long)
-                shape, _ = _detect_hidden_shape(torch_module, model=model)
-                return torch.randn(*shape).to(md)
+        if param is not None and param.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            # Heuristic: if the arg name suggests an integer ID
+            # (ends with "_id" / "_ids" / contains "spkr"/"lang"),
+            # generate a small int. Otherwise, generate a tensor
+            # shaped by _detect_hidden_shape (which handles
+            # per-component channel introspection — see Tier-1b
+            # enhancement to that function).
+            _lc = arg_name.lower()
+            if _lc.endswith("_id") or _lc.endswith("_ids") or "spkr" in _lc or "lang" in _lc:
+                return torch.zeros(1, dtype=torch.long)
+            shape, _ = _detect_hidden_shape(torch_module, model=model)
+            return torch.randn(*shape).to(md)
     except Exception:
         # Introspection is best-effort; don't break _make_arg_for if it
         # hits an edge case (e.g., builtins without a useful signature).
@@ -754,21 +757,21 @@ def test_{component_safe}(device_params, device):
         print("[bringup] stage=torch_forward", flush=True)
         _set_stage_timeout(stage_budget_s)
         try:
-            with torch.no_grad():
-                try:
-                    torch_out = torch_module(**sample_kwargs)
-                except Exception as exc:
-                    pytest.skip(
-                        f"HF reference forward({{list(sample_kwargs.keys())}}) raised "
-                        f"{{type(exc).__name__}} for {{COMPONENT_NAME}}: {{exc}} -- "
-                        f"the synthetic inputs from _make_arg_for() are incompatible "
-                        f"with this submodule's expected shapes. Either edit the test "
-                        f"to provide model-specific kwargs, or skip this Phase-2 PCC "
-                        f"and validate via the top-level demo instead."
-                    )
+            try:
+                torch_out, sample_kwargs = _reference_forward(torch_module, sample_kwargs)
+            except Exception as exc:
+                pytest.skip(
+                    f"HF reference forward({{list(sample_kwargs.keys())}}) raised "
+                    f"{{type(exc).__name__}} for {{COMPONENT_NAME}}: {{exc}} -- "
+                    f"the synthetic inputs from _make_arg_for() are incompatible "
+                    f"with this submodule's expected shapes. Either edit the test "
+                    f"to provide model-specific kwargs, or skip this Phase-2 PCC "
+                    f"and validate via the top-level demo instead."
+                )
         finally:
             _clear_stage_timeout()
         torch_out = _normalize_out(torch_out)
+        _check_captured_fidelity(torch_out)
         if _module_level and _golden_cache_file:
             try:
                 from models.common.golden_cache import save_golden_cache
@@ -1233,12 +1236,12 @@ def test_{component_safe}_sharded(mesh_device):
     if isinstance(_pt, torch.Tensor) and _pt.is_floating_point():
         primary = (_pn, _pt.to(torch.float32))
 
-    with torch.no_grad():
-        try:
-            torch_out = torch_module(**sample_kwargs)
-        except Exception as exc:
-            pytest.skip(f"HF reference forward raised {{type(exc).__name__}}: {{exc}}")
+    try:
+        torch_out, sample_kwargs = _sd._reference_forward(torch_module, sample_kwargs)
+    except Exception as exc:
+        pytest.skip(f"HF reference forward raised {{type(exc).__name__}}: {{exc}}")
     torch_out = _sd._normalize_out(torch_out)
+    _sd._check_captured_fidelity(torch_out)
 
     ttnn_module = _sd._build_ttnn_port(mesh_device, torch_module)
     primary_name, primary_tensor = primary

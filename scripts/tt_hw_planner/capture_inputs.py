@@ -832,6 +832,107 @@ def _maybe_load_captured(component_name):
     except Exception as _e:
         print(f"[bringup] captured-inputs load failed for {component_name}: {_e}", flush=True)
         return None
+
+
+# What the captured short-circuit learned, for the forward stage to use. A dict rather than
+# globals so the short-circuit can fill it in without `global` declarations at every write.
+_CAPTURED_STATE = {"golden_out": None, "stateful_keys": ()}
+
+
+def _is_plain_input(value):
+    """True for values a module forward takes as data rather than as live state.
+
+    Used to tell captured tensors/flags apart from objects like a KV cache WITHOUT naming any of
+    them. A name list only ever covers the models whoever wrote it had in mind; asking the value
+    what it is keeps working when a model ships a cache class nobody here has heard of.
+    """
+    import torch as _torch
+
+    if value is None or isinstance(value, (bool, int, float, str, _torch.Tensor)):
+        return True
+    if isinstance(value, (list, tuple)):
+        return all(_is_plain_input(_v) for _v in value)
+    return False
+
+
+def _reference_forward(torch_module, sample_kwargs):
+    """Run the reference forward, preferring the captured state and falling back without it.
+
+    Returns `(output, kwargs_actually_used)`. Raises the last exception if nothing worked, so each
+    caller phrases its own skip. Passing the captured state is what makes the reference reproduce
+    the forward the model really ran; a module that rebuilds its state internally rejects it, and
+    those components stay testable instead of skipping.
+
+    Shared because the sharded test runs the SAME reference: if only one of them knew how to retry,
+    a component needing the fallback would pass in one and skip in the other for no visible reason.
+    """
+    import torch as _torch
+
+    candidates = [sample_kwargs]
+    stateful = tuple(_k for _k in _CAPTURED_STATE["stateful_keys"] if _k in sample_kwargs)
+    if stateful:
+        candidates.append({_k: _v for _k, _v in sample_kwargs.items() if _k not in stateful})
+    last_exc = None
+    for cand in candidates:
+        try:
+            with _torch.no_grad():
+                out = torch_module(**cand)
+            if cand is not sample_kwargs:
+                print(
+                    f"[bringup] reference forward rejected captured state {list(stateful)}; "
+                    f"retried without it",
+                    flush=True,
+                )
+            return out, cand
+        except Exception as exc:
+            last_exc = exc
+    raise last_exc
+
+
+def _check_captured_fidelity(torch_out):
+    """Fail if the reference forward did not reproduce the output that capture recorded.
+
+    `output.pt` was loaded and then dropped on the floor. It is the one thing that can say whether
+    the inputs this test rebuilt drive the module the way the real forward did. If the reference
+    cannot reproduce it, then whatever PCC the test prints afterwards describes a computation the
+    model never performed, and a green result means nothing.
+
+    Held to the SAME bar the component itself must meet: a reconstruction we would not accept from
+    the TT port is not good enough to be the yardstick that judges it.
+    """
+    golden = _CAPTURED_STATE.get("golden_out")
+    if golden is None or torch_out is None:
+        return
+    _g = globals()
+    _normalize, _pcc_fn, _target = _g.get("_normalize_out"), _g.get("comp_pcc"), _g.get("PCC_TARGET")
+    if _normalize is None or _pcc_fn is None or _target is None:
+        return
+    import torch as _torch
+
+    try:
+        golden = _normalize(golden)
+    except Exception:
+        return
+    if not (isinstance(golden, _torch.Tensor) and isinstance(torch_out, _torch.Tensor)):
+        return
+    if tuple(golden.shape) != tuple(torch_out.shape):
+        print(
+            f"[bringup] captured golden shape {tuple(golden.shape)} != reference "
+            f"{tuple(torch_out.shape)}; fidelity not checked",
+            flush=True,
+        )
+        return
+    _ok, _pcc = _pcc_fn(golden.to(_torch.float32), torch_out.to(_torch.float32), _target)
+    print(f"[bringup] captured-golden fidelity pcc={_pcc}", flush=True)
+    if not _ok:
+        import pytest as _pytest
+
+        _pytest.fail(
+            f"the reference forward does not reproduce the captured output for "
+            f"{_g.get('COMPONENT_NAME', '?')}: fidelity pcc={_pcc} below {_target}. The inputs "
+            f"this test rebuilt do not drive the module the way the captured forward did, so any "
+            f"PCC measured against this reference would not describe the real computation."
+        )
 '''
 
 
@@ -843,17 +944,19 @@ _CAPTURED_SHORT_CIRCUIT_BLOCK = """
     _captured = _maybe_load_captured(COMPONENT_NAME)
     if _captured is not None:
         _cap_args, _cap_kwargs, _cap_output = _captured
-        # Drop stateful / cache kwargs that capture saved as live
-        # objects (DynamicCache, etc.) -- they carry dtypes that don't
-        # round-trip through torch.save/load reliably and cause
-        # query/key/value dtype mismatch inside the attention forward.
-        # The model will rebuild them internally from `hidden_states`.
-        _cap_kwargs = {
-            _k: _v for _k, _v in (_cap_kwargs or {}).items()
-            if _k not in ("past_key_values", "past_key_value", "use_cache",
-                          "cache_position", "output_attentions",
-                          "output_hidden_states", "return_dict")
-        }
+        # Keep EVERY captured kwarg, including the cache. These used to be dropped by name because
+        # live cache objects carry dtypes that don't round-trip through torch.save/load, which cost
+        # a dtype mismatch inside attention. But dropping them means the reference forward runs
+        # without the state the real forward had, so the number the test reports describes a
+        # computation the model never performed. The dtype problem is fixed properly below by
+        # casting into the objects, and anything the live module still rejects is retried without
+        # -- recorded by ASKING the value what it is, not by matching names that only cover the
+        # models someone happened to list.
+        _cap_kwargs = dict(_cap_kwargs or {})
+        _CAPTURED_STATE["stateful_keys"] = tuple(
+            _k for _k, _v in _cap_kwargs.items() if not _is_plain_input(_v)
+        )
+        _CAPTURED_STATE["golden_out"] = _cap_output
         # Cast captured float tensors to match the live torch_module's
         # parameter dtype. Capture was usually run in float32; the
         # test's HF model often loads in bfloat16 (transformers default
@@ -877,6 +980,19 @@ _CAPTURED_SHORT_CIRCUIT_BLOCK = """
             if isinstance(_x, (list, tuple)):
                 _seq = [_cast_to_target(_v) for _v in _x]
                 return type(_x)(_seq) if not isinstance(_x, tuple) else tuple(_seq)
+            # Cache-like objects hold their tensors in attributes, so casting only the top level
+            # left those tensors at the capture dtype -- the mismatch that made dropping the cache
+            # look like the only option. Walking whatever the object actually holds needs no
+            # knowledge of the class or its attribute names.
+            _held = getattr(_x, "__dict__", None)
+            if isinstance(_held, dict) and _held:
+                for _attr, _val in list(_held.items()):
+                    _cast = _cast_to_target(_val)
+                    if _cast is not _val:
+                        try:
+                            setattr(_x, _attr, _cast)
+                        except Exception:
+                            pass
             return _x
         _cap_args = tuple(_cast_to_target(_v) for _v in _cap_args) if _cap_args else _cap_args
         _cap_kwargs = {_k: _cast_to_target(_v) for _k, _v in (_cap_kwargs or {}).items()}

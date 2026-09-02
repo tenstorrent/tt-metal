@@ -134,8 +134,11 @@ def test_make_arg_for_introspects_required_args_via_signature() -> None:
     make_arg_end = body.find("class _Omit", make_arg_start)
     make_arg = body[make_arg_start:make_arg_end]
 
-    assert "inspect" in make_arg, "Tier-1b: must import inspect for signature inspection"
-    assert "signature" in make_arg, "Tier-1b: must call inspect.signature"
+    # The signature read itself lives in `_forward_param` so the "has a default" and "is required"
+    # questions cannot drift apart; `_make_arg_for` must go through it rather than re-reading.
+    assert "_forward_param(" in make_arg, "Tier-1b: must consult the forward signature helper"
+    assert "def _forward_param(" in body, "Tier-1b: the signature helper must be defined in the test"
+    assert "signature" in body[: body.find("def _make_arg_for(arg_name")], "helper must read the signature"
     assert "Parameter.empty" in make_arg, "Tier-1b: must check default is Parameter.empty (required arg test)"
 
 
@@ -162,8 +165,10 @@ def test_make_arg_for_synthesizes_tensor_for_unknown_required_args() -> None:
     make_arg_start = body.find("def _make_arg_for(arg_name")
     make_arg_end = body.find("class _Omit", make_arg_start)
     make_arg = body[make_arg_start:make_arg_end]
-    # Tier-1b's tensor-synth fallback uses _detect_hidden_shape
-    introspect_block = make_arg[make_arg.find("inspect.signature") :] if "inspect.signature" in make_arg else ""
+    # Tier-1b's tensor-synth fallback uses _detect_hidden_shape. Anchored on the required-arg
+    # branch (`param.kind`) rather than the signature call, which now lives in `_forward_param`.
+    assert "param.kind" in make_arg, "Tier-1b: must branch on the parameter kind for required args"
+    introspect_block = make_arg[make_arg.find("param.kind") :]
     assert (
         "_detect_hidden_shape" in introspect_block
     ), "Tier-1b: required-arg fallback must call _detect_hidden_shape for tensor synthesis"
@@ -177,13 +182,13 @@ def test_make_arg_for_introspection_is_best_effort() -> None:
     make_arg_start = body.find("def _make_arg_for(arg_name")
     make_arg_end = body.find("class _Omit", make_arg_start)
     make_arg = body[make_arg_start:make_arg_end]
-    # Must have try/except around the introspection block
-    introspect_idx = make_arg.find("inspect.signature")
-    if introspect_idx != -1:
-        # Check there's a 'try:' before introspect.signature within the
-        # same function — i.e., the introspection lives inside a try block.
-        before_introspect = make_arg[:introspect_idx]
-        assert "try:" in before_introspect, "Tier-1b introspection must be guarded by try/except"
+    # Must have try/except around the introspection block. Asserted unconditionally: this used to
+    # be skipped when the anchor was missing, so a refactor that moved the block turned the test
+    # green by finding nothing rather than by the guard still being there.
+    introspect_idx = make_arg.find("param.kind")
+    assert introspect_idx != -1, "Tier-1b: required-arg introspection branch must exist"
+    before_introspect = make_arg[:introspect_idx]
+    assert "try:" in before_introspect, "Tier-1b introspection must be guarded by try/except"
 
 
 def test_make_arg_for_returns_omit_for_optional_unknown() -> None:
@@ -195,3 +200,36 @@ def test_make_arg_for_returns_omit_for_optional_unknown() -> None:
     make_arg = body[make_arg_start:make_arg_end]
     # The function still ends with `return _OMIT`
     assert "return _OMIT" in make_arg, "Tier-1b: _OMIT fallback must remain for non-required unknown args"
+
+
+def test_defaulted_args_are_left_to_the_module_not_a_typed_list() -> None:
+    """Args the module gives a default to must be omitted, decided from the signature.
+
+    This was a literal tuple of names -- past_key_values, cache_position, use_cache, return_dict,
+    head_mask, encoder_hidden_states, encoder_attention_mask, labels -- forced to None. A typed
+    list only covers the models whoever wrote it had in mind: a model that spells its cache
+    differently got a value forced on an arg it would have defaulted better itself, and nothing
+    said so. Reading the default off the signature covers those names and survives a rename.
+    """
+    body = _template_body()
+    make_arg_start = body.find("def _make_arg_for(arg_name")
+    make_arg_end = body.find("class _Omit", make_arg_start)
+    make_arg = body[make_arg_start:make_arg_end]
+
+    # The decision is made from the signature, before the required-arg synthesis branch.
+    assert "param.default is not inspect.Parameter.empty" in make_arg, "must omit args that have defaults"
+    omit_idx = make_arg.find("param.default is not inspect.Parameter.empty")
+    assert omit_idx < make_arg.find("param.kind"), "the default check must come before synthesis"
+
+    # None of the old names may be back as a forced-None branch.
+    for name in (
+        "past_key_values",
+        "cache_position",
+        "use_cache",
+        "return_dict",
+        "head_mask",
+        "encoder_hidden_states",
+        "encoder_attention_mask",
+        "labels",
+    ):
+        assert f'"{name}"' not in make_arg, f"{name} is decided by the signature now, not by name"
