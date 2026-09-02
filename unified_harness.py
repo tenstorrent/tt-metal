@@ -193,7 +193,9 @@ class Dfb:
     OUTPUT = "output"
     INTERMED = "intermed"
 
-    def __init__(self, name, num_entries=2, *, dtype=ttnn.bfloat16, kind=None, thread=None, entry_bytes=None):
+    def __init__(
+        self, name, num_entries=2, *, dtype=ttnn.bfloat16, kind=None, thread=None, entry_bytes=None, tile=None
+    ):
         self.name = name
         self.num_entries = num_entries
         self.dtype = dtype
@@ -203,28 +205,75 @@ class Dfb:
         # check_entry_format asserts the buffer and the tensor agree, so it has to be said
         # here rather than inferred.
         self.entry_bytes = entry_bytes
+        # The TILE GEOMETRY of an entry, when it is not a full 32x32. entry_bytes alone is
+        # not enough and was actively misleading: it sizes the allocation while the JIT still
+        # emits the 32x32 defaults into chlkc_descriptors.h -- unpack_tile_face_r_dim 16,
+        # num_faces 4, tile_size 2048 -- so a 64-byte page gets unpacked as a 2048-byte tile
+        # and the unpacker strides out of the buffer. Nothing checks the two agree.
+        self.tile = tile
         self.kind = kind
         self.thread = thread
 
 
-def dfb(name, num_entries=2, *, dtype=ttnn.bfloat16, entry_bytes=None):
+def _tile_entry_bytes(dtype, tile):
+    """Bytes one entry of `tile` geometry occupies, or None if it cannot be derived."""
+    rows, cols = tile.tile_shape[0], tile.tile_shape[1]
+    per_element = {ttnn.bfloat16: 2, ttnn.float32: 4}.get(dtype)
+    if per_element is None:
+        # A BLOCK format (bfloat8_b and friends) is not rows*cols*n: it carries a shared
+        # exponent section, so a sub-tile size is not proportional. State entry_bytes.
+        return None
+    return rows * cols * per_element
+
+
+def _entry_size_of(d):
+    """One entry in bytes, with the geometry and the size held to agree.
+
+    These two have to be consistent and NOTHING downstream checks them. The device is built
+    against the tile geometry -- unpack_tile_face_r_dim, num_faces, tile_size, emitted into
+    chlkc_descriptors.h -- while the allocation follows entry_size. Declare a 64-byte entry
+    and no tile and the kernel is compiled for 2048-byte 32x32 tiles: the unpacker strides
+    out of the buffer and returns wrong data with no error anywhere. That cost a long
+    debugging detour, so it is refused here instead.
+    """
+    derived = _tile_entry_bytes(d.dtype, d.tile) if d.tile is not None else None
+    full = DTYPE_TILE_BYTES[d.dtype]
+
+    if d.entry_bytes is None:
+        return derived if derived is not None else full
+
+    if derived is not None and d.entry_bytes != derived:
+        raise ValueError(
+            f"dfb {d.name!r}: entry_bytes={d.entry_bytes} disagrees with tile={d.tile} "
+            f"({derived} bytes for {d.dtype}). Drop entry_bytes and let the tile size it."
+        )
+    if d.tile is None and d.entry_bytes != full:
+        raise ValueError(
+            f"dfb {d.name!r}: entry_bytes={d.entry_bytes} is not a full {full}-byte tile but no "
+            f"tile= was given, so the compute kernel would still be built for 32x32 tiles and "
+            f"the unpacker would stride past the entry. Pass tile=ttnn.Tile([rows, cols])."
+        )
+    return d.entry_bytes
+
+
+def dfb(name, num_entries=2, *, dtype=ttnn.bfloat16, entry_bytes=None, tile=None):
     """A buffer whose endpoints the harness reads off the kernel. The usual form."""
-    return Dfb(name, num_entries, dtype=dtype, entry_bytes=entry_bytes)
+    return Dfb(name, num_entries, dtype=dtype, entry_bytes=entry_bytes, tile=tile)
 
 
-def dfb_input(name, thread, *, dtype=ttnn.bfloat16, num_entries=2, entry_bytes=None):
+def dfb_input(name, thread, *, dtype=ttnn.bfloat16, num_entries=2, entry_bytes=None, tile=None):
     """Filled by DM thread `thread`, read by compute. Stated rather than derived."""
-    return Dfb(name, num_entries, dtype=dtype, kind=Dfb.INPUT, thread=thread, entry_bytes=entry_bytes)
+    return Dfb(name, num_entries, dtype=dtype, kind=Dfb.INPUT, thread=thread, entry_bytes=entry_bytes, tile=tile)
 
 
-def dfb_output(name, thread, *, dtype=ttnn.bfloat16, num_entries=2, entry_bytes=None):
+def dfb_output(name, thread, *, dtype=ttnn.bfloat16, num_entries=2, entry_bytes=None, tile=None):
     """Filled by compute, drained by DM thread `thread`. Stated rather than derived."""
-    return Dfb(name, num_entries, dtype=dtype, kind=Dfb.OUTPUT, thread=thread, entry_bytes=entry_bytes)
+    return Dfb(name, num_entries, dtype=dtype, kind=Dfb.OUTPUT, thread=thread, entry_bytes=entry_bytes, tile=tile)
 
 
-def dfb_intermed(name, *, dtype=ttnn.bfloat16, num_entries=2, entry_bytes=None):
+def dfb_intermed(name, *, dtype=ttnn.bfloat16, num_entries=2, entry_bytes=None, tile=None):
     """Compute on both ends: an accumulator, a retained value, a scratch block."""
-    return Dfb(name, num_entries, dtype=dtype, kind=Dfb.INTERMED, thread=None, entry_bytes=entry_bytes)
+    return Dfb(name, num_entries, dtype=dtype, kind=Dfb.INTERMED, thread=None, entry_bytes=entry_bytes, tile=tile)
 
 
 # tt/unified/api.h's Storage declarations and data-movement calls, as patterns. The kernel is
@@ -607,7 +656,9 @@ def unified_program_spec(
             d.kind, d.thread = derived[d.name]
         spec = ps.DataflowBufferSpec()
         spec.unique_id = d.name
-        spec.entry_size = d.entry_bytes if d.entry_bytes is not None else DTYPE_TILE_BYTES[d.dtype]
+        spec.entry_size = _entry_size_of(d)
+        if d.tile is not None:
+            spec.tile_format_metadata = d.tile
         spec.num_entries = d.num_entries
         spec.data_format_metadata = d.dtype
         dfb_specs.append(spec)
