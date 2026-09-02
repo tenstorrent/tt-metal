@@ -305,6 +305,10 @@ class TtSWA(LightweightModule):
             is_causal=False,
             scale=self.scaling,
             attention_sink=self._hca.sinks_sdpa,
+            # 128/128 is not inherited from HCA, it is the only good split here: a provided mask makes
+            # the reader stream a [q_chunk, k_chunk] tile per iteration, so anything wider blows L1
+            # (k_chunk=256 asks 1.93 MB of a 1.57 MB budget). Swept on 8x4 -- 96/128 costs 5% and
+            # 64/128 costs 38% on this op, everything above 128 fails to allocate.
             program_config=ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
                 q_chunk_size=128,
