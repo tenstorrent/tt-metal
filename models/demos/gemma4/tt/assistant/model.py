@@ -182,7 +182,17 @@ class Gemma4AssistantModel:
             emb = ttnn.unsqueeze_to_4D(emb)
         return ttnn.to_layout(emb, ttnn.TILE_LAYOUT)
 
-    def step(self, token_tt, target_hidden, shared_kv, page_tables, pos_uint32, pos_int32, return_logits=True):
+    def step(
+        self,
+        token_tt,
+        target_hidden,
+        shared_kv,
+        page_tables,
+        pos_uint32,
+        pos_int32,
+        return_logits=True,
+        gather_logits=True,
+    ):
         """One drafter step.
 
         Args:
@@ -198,9 +208,13 @@ class Gemma4AssistantModel:
             return_logits: when False, skip the lm_head + its TP all-gather and
                 return ``(None, next_hidden)`` (used to isolate the lm_head/CCL
                 cost in timing harnesses).
+            gather_logits: when False (and ``return_logits``), skip the vocab
+                all-gather and return TP-sharded logits. Greedy fused decode
+                reduces those with a local argmax + tiny gather instead of
+                moving the full 262k row.
 
         Returns:
-            (logits [1,1,1,vocab], next_hidden [1,1,1,backbone]).
+            (logits [1,1,1,vocab or vocab/tp], next_hidden [1,1,1,backbone]).
         """
         tok_embed = self._raw_token_embed(token_tt)
         inp = ttnn.concat([tok_embed, target_hidden], dim=-1)
@@ -230,7 +244,7 @@ class Gemma4AssistantModel:
         logits = None
         if return_logits:
             logits = ttnn.linear(normed, self.lm_head)
-            if self.mesh_config is not None and self.mesh_config.tp > 1:
+            if gather_logits and self.mesh_config is not None and self.mesh_config.tp > 1:
                 logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
 
         next_hidden = ttnn.linear(normed, self.post_projection)
