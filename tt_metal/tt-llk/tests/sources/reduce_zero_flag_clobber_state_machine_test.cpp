@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Regression guard for the Src zero-substitution flag (ALU_ACC_CTRL_Zero_Flag_disabled_src) across a
-// REDUCE_ROW MAX.
+// STATE-MACHINE guard for the Src zero-substitution flag (ALU_ACC_CTRL_Zero_Flag_disabled_src) across
+// a REDUCE_ROW MAX. Named for what it actually proves: the clobber lands and the reduce still matches
+// golden. It does NOT fail if the execute-path re-assert is removed -- see WHAT THIS DOES AND DOES NOT
+// PROVE below. test_reduce.py is the correctness backstop for the flag hoist.
 //
 // That reduce's mov phase is reduce_row_perform_transpose: it moves the pooled row DEST -> SrcB
 // (MOVD2B/TRNSPSRCB) and adds it back with ELWADD. ELWADD is a flag reader, and the documented hazard
@@ -23,7 +25,7 @@
 // forced-flush mode included. On this path the flag turns out to have no observable effect for the
 // float formats REDUCE_ROW MAX supports, so the hazard is currently unfalsifiable here and no
 // arrangement of this kernel can make it bite. See the MEASURED STATUS note in
-// python_tests/test_reduce_zero_flag_clobber.py for the full evidence and for the two things that
+// python_tests/test_reduce_zero_flag_clobber_state_machine.py for the full evidence and for the two things that
 // would make it observable (integer operands; a ttnn-level layernorm repro).
 //
 // ZERO_FLAG_CLOBBER selects the pollution (see the ZERO_FLAG_CLOBBER docstring in

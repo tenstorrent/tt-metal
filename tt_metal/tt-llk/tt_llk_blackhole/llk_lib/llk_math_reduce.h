@@ -520,7 +520,7 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
     // to alter that. Whether it *should* be PRESERVE is an open question and is not currently decidable
     // from a test: on Blackhole the flag has no observable effect on the float formats reduce supports,
     // measured both ways -- see the MEASURED STATUS note in
-    // tests/python_tests/test_reduce_zero_flag_clobber.py. Do not "fix" scalar on the strength of the
+    // tests/python_tests/test_reduce_zero_flag_clobber_state_machine.py. Do not "fix" scalar on the strength of the
     // reader list alone; it needs the HW definition or a ttnn-level repro first.
     //
     // Setting the value here is the fast path, NOT the guarantee: _llk_math_reduce_ re-asserts it per

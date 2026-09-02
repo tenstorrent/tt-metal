@@ -1,7 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Regression guard: a REDUCE_ROW MAX must survive a Src zero-substitution flag clobber.
+"""STATE-MACHINE guard: a REDUCE_ROW MAX must survive a Src zero-substitution flag clobber.
+
+Named for what it actually proves. It asserts that the clobber LANDS and that the reduce still
+matches golden -- it does NOT fail if the execute-path re-assert is removed (measured; see
+MEASURED STATUS below). test_reduce.py is the correctness backstop for the flag hoist.
 
 REDUCE_ROW MAX is the reduce path the flag hoist changed, and reduce_row_perform_transpose is its
 mov phase: it moves the pooled row DEST -> SrcB (MOVD2B/TRNSPSRCB) and adds it back with ELWADD.
@@ -100,7 +104,7 @@ CLOBBER_MODES = (0, 1, 2, 3, 4)
     clobber_per_tile=[False, True],
     tile_dimensions=[[32, 32]],
 )
-def test_reduce_row_max_zero_flag_clobber(
+def test_reduce_row_max_zero_flag_clobber_state_machine(
     formats,
     fill_constant,
     clobber,
@@ -139,7 +143,7 @@ def test_reduce_row_max_zero_flag_clobber(
     )
 
     configuration = TestConfig(
-        "sources/reduce_zero_flag_clobber_test.cpp",
+        "sources/reduce_zero_flag_clobber_state_machine_test.cpp",
         formats,
         templates=[
             MATH_OP(mathop=MathOperation.ReduceRow, pool_type=ReducePool.Max),
