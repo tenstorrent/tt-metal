@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 import shlex
 import subprocess
@@ -556,6 +557,9 @@ def _mxfp_block_aware_compare(
     each 32-element block's E8M0 scale from its largest decoded value and clamp
     the local step to the scaled element-format minimum subnormal. This makes
     zero and the smallest nonzero subnormal adjacent values, as they are in MX.
+    The inferred scale uses the packer's own rule, floor(log2(block_max)) minus
+    the element format's max unbiased exponent, so the clamp sits on the lattice
+    the hardware actually wrote.
     """
     g = golden.float().flatten()
     r = result.float().flatten()
@@ -581,9 +585,13 @@ def _mxfp_block_aware_compare(
         [a[start : start + block_size].max() for start in range(0, n, block_size)]
     )
     has_nonzero = block_max > 0
+    # E8M0 = floor(log2(block_max)) - elem_exp_max_unbiased, and the element
+    # format's max unbiased exponent is floor(log2(element_max_normal))
+    # (15 for E5M2's 57344, 8 for E4M3's 448, 2 for E2M1's 6.0).
+    elem_exp_max_unbiased = math.floor(math.log2(element_max_normal))
     scale_exp = torch.zeros_like(block_max)
-    scale_exp[has_nonzero] = torch.ceil(
-        torch.log2(block_max[has_nonzero] / element_max_normal)
+    scale_exp[has_nonzero] = (
+        torch.floor(torch.log2(block_max[has_nonzero])) - elem_exp_max_unbiased
     )
     block_min_ulp = (
         torch.pow(2.0, scale_exp) * element_min_subnormal
