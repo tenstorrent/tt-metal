@@ -25,6 +25,11 @@ struct ActivationInitHelper {
             ACT == KernelActivation::HARDSIGMOID || ACT == KernelActivation::HARDTANH ||
             ACT == KernelActivation::SELU || ACT == KernelActivation::SOFTPLUS,
         "Unsupported KernelActivation type for fused activation init");
+#ifdef ARCH_QUASAR
+    static_assert(
+        ACT == KernelActivation::NONE,
+        "Fused SFPU activations run on the packer; Quasar SFPU from pack is not supported.");
+#endif
 
     FORCE_INLINE static void init() {
         if constexpr (ACT == KernelActivation::SILU) {
@@ -66,6 +71,11 @@ struct ActivationApplyHelper {
     static_assert(
         ACT != KernelActivation::SOFTPLUS || PARAM0 != 0,
         "SOFTPLUS PARAM0 (beta) must be non-zero to avoid division by zero");
+#ifdef ARCH_QUASAR
+    static_assert(
+        ACT == KernelActivation::NONE,
+        "Fused SFPU activations run on the packer; Quasar SFPU from pack is not supported.");
+#endif
 
     FORCE_INLINE static void apply(uint32_t tile_index) {
         if constexpr (ACT == KernelActivation::SILU) {
@@ -103,6 +113,12 @@ struct ActivationApplyHelper {
 
 template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0, uint32_t PARAM2 = 0>
 FORCE_INLINE void apply_activation_from_pack(uint32_t out_subblock_num_tiles) {
+#ifdef ARCH_QUASAR
+    static_assert(
+        ACT == KernelActivation::NONE,
+        "Fused SFPU activations run on the packer; Quasar SFPU from pack is not supported.");
+    (void)out_subblock_num_tiles;
+#else
     PACK(TTI_SEMWAIT(
         p_stall::STALL_TDMA | p_stall::STALL_CFG, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO));
 
@@ -115,4 +131,5 @@ FORCE_INLINE void apply_activation_from_pack(uint32_t out_subblock_num_tiles) {
 
     // Wait for SFPU completion before packing
     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+#endif
 }
