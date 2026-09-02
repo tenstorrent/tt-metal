@@ -96,11 +96,13 @@ FORCE_INLINE void offset_clamp_pack(uint32_t cb_in, uint32_t cb_off, uint32_t cb
 }
 
 // SFPU typecast: bf16 -> uint8 on a row-major page (32x32 elements).
+// The Blackhole DEST remap (remap_addrs + swizzle_32b) that tilize/untilize enable is left
+// enabled here: BH LLKs address DEST by logical tile index across copy_tile, the SFPU typecast
+// and pack_tile, so the datacopy below reads the same rows either way (see the "no uninit --
+// leaving the bits set is benign for subsequent ops" note in _llk_math_fast_tilize_init_).
+// Toggling it back off cost a full tensix_sync + pack drain per output tile for no effect.
 FORCE_INLINE void typecast_and_pack(uint32_t cb_bf16, uint32_t cb_u8) {
     CircularBuffer bf16(cb_bf16), u8(cb_u8);
-#ifdef ARCH_BLACKHOLE
-    MATH((llk_math_reconfig_remap(false)));
-#endif
     // Mid-kernel re-init (startup already done in kernel_main): datacopy unpack+math via copy_init,
     // pack format via pack_reconfig -- the call-once init_sfpu was migrated off.
     copy_init(cb_bf16);
