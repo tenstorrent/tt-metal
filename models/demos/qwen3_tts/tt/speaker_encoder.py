@@ -101,12 +101,7 @@ class SpeakerEncoder(LightweightModule):
         # Fuse the host-side ECAPA glue (Res2Net cascade, TDNN ReLU, ASP ReLU/tanh)
         # into the host convs it sits between. QWEN3_TTS_SE_HOST_FUSE=0 restores
         # the per-op device path.
-        # DEFAULT OFF. The fusion is a 12-14 ms win and only shifts the embedding by
-        # 0.74 % relRMS, but that is enough to break generation: on the English demo
-        # text it never emits EOS and runs to the 256-frame cap (20.5 s of garbled
-        # audio) at both seed 42 and seed 7, where the unfused path stops at 86
-        # frames / 6.9 s. See PERF_NOTES 3.4.
-        self._se_host_fuse = os.environ.get("QWEN3_TTS_SE_HOST_FUSE", "0") != "0"
+        self._se_host_fuse = os.environ.get("QWEN3_TTS_SE_HOST_FUSE", "1") != "0"
         # ASP's two convs are k=1 in HF ECAPA, i.e. plain matmuls. Run them on
         # device. QWEN3_TTS_SE_DEVICE_ASP=0 falls back to the host conv path.
         self._se_device_asp = os.environ.get("QWEN3_TTS_SE_DEVICE_ASP", "1") != "0"
