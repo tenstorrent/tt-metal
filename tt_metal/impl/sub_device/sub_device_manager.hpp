@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "allocator.hpp"
+#include "impl/allocator/persistent_l1_arena.hpp"
 #include "hal_types.hpp"
 #include "sub_device.hpp"
 #include "sub_device_types.hpp"
@@ -82,10 +83,6 @@ private:
     void populate_num_cores();
     void populate_sub_allocators();
     void populate_noc_data();
-    // Release this manager's persistent-L1 seals so those cores may take new
-    // PrefetcherPipe (or other arena) allocations. See PersistentL1Arena for the
-    // per-core L1 layout. No-op if this manager never placed a local L1 slab.
-    void unseal_persistent_l1();
 
     static std::atomic<uint64_t> next_sub_device_manager_id_;
 
@@ -101,9 +98,10 @@ private:
     DeviceAddr local_l1_size_;
     DeviceAddr global_l1_bottom_reservation_size_ = 0;
     std::vector<std::unique_ptr<AllocatorImpl>> sub_device_allocators_;
-    // Cores this manager sealed in populate_sub_allocators; unseal_persistent_l1
-    // walks this list. Empty when local_l1_size_ == 0.
-    std::vector<CoreRangeSet> persistent_l1_seals_;
+    // One seal per sub-device Tensix grid carved in populate_sub_allocators.
+    // Empty when local_l1_size_ == 0. Destructors unseal even during MeshDevice
+    // tracker teardown, when device_->allocator_impl() is no longer usable.
+    std::vector<PersistentL1Arena::Seal> persistent_l1_seals_;
 
     std::array<uint32_t, NumHalProgrammableCoreTypes> num_cores_{};
 

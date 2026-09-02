@@ -42,14 +42,32 @@ namespace tt::tt_metal {
 //   0
 //
 // Seal a core after program-local or subdevice L1 is placed on it so a later
-// persistent allocation cannot overlap that snapshot. Unseal when that holder
-// is destroyed.
+// persistent allocation cannot overlap that snapshot. Hold the returned Seal
+// until that placement is gone; its destructor unseals.
 class PersistentL1Arena {
 public:
     struct Allocation {
         uint64_t id = 0;
         DeviceAddr address = 0;
         DeviceAddr size = 0;
+    };
+
+    class Seal {
+    public:
+        Seal() = default;
+        Seal(Seal&& other) noexcept;
+        Seal& operator=(Seal&& other) noexcept;
+        ~Seal();
+
+        Seal(const Seal&) = delete;
+        Seal& operator=(const Seal&) = delete;
+
+    private:
+        friend class PersistentL1Arena;
+        Seal(PersistentL1Arena* arena, CoreRangeSet cores);
+
+        PersistentL1Arena* arena_ = nullptr;
+        CoreRangeSet cores_;
     };
 
     PersistentL1Arena(DeviceAddr base, DeviceAddr limit, const CoreRangeSet& worker_grid);
@@ -62,8 +80,7 @@ public:
 
     // Persistent allocations must be established before program-local L1 is
     // placed. Once a core is sealed, no new persistent allocation may use it.
-    void seal(const CoreRangeSet& cores);
-    void unseal(const CoreRangeSet& cores);
+    [[nodiscard]] Seal seal(const CoreRangeSet& cores);
 
 private:
     struct Region {
@@ -79,6 +96,8 @@ private:
     };
 
     size_t seal_index(const CoreCoord& core) const;
+    void increment_seals(const CoreRangeSet& cores);
+    void decrement_seals(const CoreRangeSet& cores);
 
     DeviceAddr base_;
     DeviceAddr limit_;

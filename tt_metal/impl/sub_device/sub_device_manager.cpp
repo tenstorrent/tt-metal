@@ -57,13 +57,8 @@ SubDeviceManager::SubDeviceManager(ttsl::Span<const SubDevice> sub_devices, Devi
     this->validate_sub_devices();
     this->populate_sub_device_ids();
     this->populate_num_cores();
-    try {
-        this->populate_sub_allocators();
-        this->populate_noc_data();
-    } catch (...) {
-        unseal_persistent_l1();
-        throw;
-    }
+    this->populate_sub_allocators();
+    this->populate_noc_data();
 }
 
 SubDeviceManager::SubDeviceManager(
@@ -94,7 +89,6 @@ SubDeviceManager::~SubDeviceManager() {
             allocator->clear();
         }
     }
-    unseal_persistent_l1();
 }
 
 SubDeviceManagerId SubDeviceManager::id() const { return id_; }
@@ -272,26 +266,13 @@ void SubDeviceManager::populate_num_cores() {
     }
 }
 
-void SubDeviceManager::unseal_persistent_l1() {
-    // Custom managers seal Tensix cores when they carve a private slab above the
-    // persistent arena. Drop those refcounts on teardown (and constructor unwind)
-    // so a later pipe can allocate on the same cores.
-    if (persistent_l1_seals_.empty()) {
-        return;
-    }
-    auto& arena = device_->allocator_impl()->persistent_l1();
-    for (const CoreRangeSet& cores : persistent_l1_seals_) {
-        arena.unseal(cores);
-    }
-    persistent_l1_seals_.clear();
-}
-
 void SubDeviceManager::populate_sub_allocators() {
     sub_device_allocators_.resize(this->num_sub_devices());
     if (local_l1_size_ == 0) {
         return;
     }
     const auto& global_allocator_config = device_->allocator_impl()->get_config();
+    auto& persistent_l1 = device_->allocator_impl()->persistent_l1();
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
@@ -310,7 +291,6 @@ void SubDeviceManager::populate_sub_allocators() {
             // These are compute cores, so they should have a single bank
             l1_bank_remap.push_back(device_->allocator()->get_bank_ids_from_logical_core(BufferType::L1, core)[0]);
         }
-        auto& persistent_l1 = device_->allocator_impl()->persistent_l1();
         const DeviceAddr local_l1_base = tt::align(
             persistent_l1.high_water_mark(compute_cores),
             std::max(global_allocator_config.l1_alignment, global_allocator_config.dram_alignment));
@@ -326,8 +306,7 @@ void SubDeviceManager::populate_sub_allocators() {
             local_l1_base,
             local_l1_base + local_l1_size_,
             global_allocator_config.worker_l1_size - global_allocator_config.l1_small_size);
-        persistent_l1.seal(compute_cores);
-        persistent_l1_seals_.push_back(compute_cores);
+        persistent_l1_seals_.push_back(persistent_l1.seal(compute_cores));
         AllocatorConfig config(
             {.num_dram_channels = global_allocator_config.num_dram_channels,
              .dram_bank_size = 0,

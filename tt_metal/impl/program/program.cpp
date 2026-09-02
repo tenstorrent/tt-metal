@@ -379,11 +379,7 @@ detail::ProgramImpl::ProgramImpl(ContextId context_id) :
 detail::ProgramImpl::~ProgramImpl() noexcept {
     // Deallocate circular buffers and unregister from devices
     deallocate_circular_buffers();
-    for (auto& [arena, cores] : persistent_l1_seals_) {
-        for (const CoreCoord& core : cores) {
-            arena->unseal(CoreRangeSet(CoreRange(core)));
-        }
-    }
+    persistent_l1_seals_.clear();
     Inspector::program_destroyed(this);
 }
 
@@ -391,9 +387,10 @@ DeviceAddr detail::ProgramImpl::reserve_program_local_l1(const IDevice* device, 
     auto& arena = device->allocator_impl()->persistent_l1();
     auto& sealed_cores = persistent_l1_seals_[&arena];
     for (const CoreCoord& core : corerange_to_cores(cores)) {
-        if (sealed_cores.insert(core).second) {
-            arena.seal(CoreRangeSet(CoreRange(core)));
+        if (sealed_cores.find(core) != sealed_cores.end()) {
+            continue;
         }
+        sealed_cores.emplace(core, arena.seal(CoreRangeSet(CoreRange(core))));
     }
     return arena.high_water_mark(cores);
 }
@@ -2605,10 +2602,9 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device));
 
-    uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(mesh_device))
-            .get_device_build_env(mesh_device->build_id())
-            .build_key();
+    uint64_t device_hash = BuildEnvManager::get_instance(extract_context_id(mesh_device))
+                               .get_device_build_env(mesh_device->build_id())
+                               .build_key();
     if (not metal_ctx.hal().is_coordinate_virtualization_enabled()) {
         ttsl::hash::hash_combine(device_hash, mesh_device->id());
     }
@@ -2647,10 +2643,9 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device));
 
-    uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(mesh_device))
-            .get_device_build_env(mesh_device->build_id())
-            .build_key();
+    uint64_t device_hash = BuildEnvManager::get_instance(extract_context_id(mesh_device))
+                               .get_device_build_env(mesh_device->build_id())
+                               .build_key();
     if (not metal_ctx.hal().is_coordinate_virtualization_enabled()) {
         device_hash = (device_hash << 32) | (mesh_device->id());
     }

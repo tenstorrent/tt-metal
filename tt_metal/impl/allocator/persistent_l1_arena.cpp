@@ -153,7 +153,12 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> PersistentL1Arena::occupied_range
     return ranges;
 }
 
-void PersistentL1Arena::seal(const CoreRangeSet& cores) {
+PersistentL1Arena::Seal PersistentL1Arena::seal(const CoreRangeSet& cores) {
+    increment_seals(cores);
+    return Seal(this, cores);
+}
+
+void PersistentL1Arena::increment_seals(const CoreRangeSet& cores) {
     std::lock_guard lock(mutex_);
     for (const CoreCoord& core : corerange_to_cores(cores)) {
         uint32_t& refcount = seal_refcounts_[seal_index(core)];
@@ -163,12 +168,31 @@ void PersistentL1Arena::seal(const CoreRangeSet& cores) {
     }
 }
 
-void PersistentL1Arena::unseal(const CoreRangeSet& cores) {
+void PersistentL1Arena::decrement_seals(const CoreRangeSet& cores) {
     std::lock_guard lock(mutex_);
     for (const CoreCoord& core : corerange_to_cores(cores)) {
         uint32_t& refcount = seal_refcounts_[seal_index(core)];
         TT_FATAL(refcount > 0, "Persistent L1 core {} is not sealed", core.str());
         --refcount;
+    }
+}
+
+PersistentL1Arena::Seal::Seal(PersistentL1Arena* arena, CoreRangeSet cores) : arena_(arena), cores_(std::move(cores)) {}
+
+PersistentL1Arena::Seal::Seal(Seal&& other) noexcept :
+    arena_(std::exchange(other.arena_, nullptr)), cores_(std::move(other.cores_)) {}
+
+PersistentL1Arena::Seal& PersistentL1Arena::Seal::operator=(Seal&& other) noexcept {
+    if (this != &other) {
+        std::swap(arena_, other.arena_);
+        std::swap(cores_, other.cores_);
+    }
+    return *this;
+}
+
+PersistentL1Arena::Seal::~Seal() {
+    if (arena_ != nullptr) {
+        arena_->decrement_seals(cores_);
     }
 }
 

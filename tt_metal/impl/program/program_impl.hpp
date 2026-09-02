@@ -17,6 +17,7 @@
 #include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"          // ProgramTransferInfo
 #include "impl/buffers/semaphore.hpp"
+#include "impl/allocator/persistent_l1_arena.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
@@ -46,7 +47,6 @@ namespace tt::tt_metal {
 class CircularBufferConfig;
 class IDevice;
 class JitBuildOptions;
-class PersistentL1Arena;
 
 class HWCommandQueue;
 class EnqueueProgramCommand;
@@ -596,7 +596,7 @@ private:
     tt::tt_metal::experimental::dfb::detail::TxnIdAllocator txn_id_allocator_;
     std::unordered_map<CoreCoord, uint8_t> per_core_num_dfbs_;
     std::vector<CircularBufferAllocator> dfb_allocators_;
-    std::unordered_map<PersistentL1Arena*, std::unordered_set<CoreCoord>> persistent_l1_seals_;
+    std::unordered_map<PersistentL1Arena*, std::unordered_map<CoreCoord, PersistentL1Arena::Seal>> persistent_l1_seals_;
 
     // Initial Metal 2.0 implementation uses a name registry to map names to handles.
     // This indirection is simple and non-invasive, but less efficient than a direct mapping.
