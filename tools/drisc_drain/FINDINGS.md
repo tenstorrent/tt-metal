@@ -7219,3 +7219,40 @@ Same 200 ns ECHO_DELAY that shifted single-stamp closure by -217 ns moved two-st
 injected delay is measured by the stamp pair on every round and subtracted on that round, exactly
 as designed. The residual ~+5 ns sits near the edge of the run-to-run band and is unresolved at
 n=1 -- noted, not chased.
+
+---
+
+## Sync capture, before/after + rate, and DEFAULT MOVED TO 1 kHz (ARC-matched)
+
+Two Tracy captures on the shipped two-stamp method (`fabric_1grp.yaml`, single session, FORCE_AICLK
+1350, degraded box so absolutes are boot-local), copied to the Mac:
+
+    ~/captures/sync_new_method.tracy   100 Hz
+    ~/captures/sync_1k.tracy          1000 Hz
+
+| | single-stamp (old) | 100 Hz two-stamp | 1000 Hz two-stamp |
+|--------------------|--------------------|------------------|-------------------|
+| closure mean       | ~-47 ns            | -2.5 ns (n=8)    | **-0.7 ns (n=62)**|
+| rounds/link        | ~370               | 368              | ~3643             |
+| partial/dropped/stray | 0/0/0           | 0/0/0            | 0/0/0             |
+| rtt_min            | 843 cy             | 779-788 cy       | 779-784 cy        |
+| scatter RMS        | --                 | 3.9-4.8 ns       | 3.7-4.3 ns        |
+| echoes in RTT box  | --                 | 2944/2944 100%   | 29146/29146 100%  |
+
+Rate does not improve accuracy -- -0.7 vs -2.5 ns is inside the +-1-2 ns run-to-run band. What 1 kHz
+adds is STATISTICS (62 closure evals vs 8; 29k rendered rounds vs 3k) and, crucially, LOSSLESSNESS
+AT 10x TRAFFIC: 3643 rounds/link with 0 dropped and geomean unmoved, so the drain/rings absorb the
+higher rate for free. This is the whole rate-sweep conclusion, now visible in a capture.
+
+### Default changed 100 Hz -> 1 kHz
+Rationale is RESPONSIVENESS, not accuracy: the ARC firmware runs its DVFS/clock-governance loop at
+~1 kHz, so the anchored device frequency moves on that timescale (pinned by FORCE_AICLK in tests,
+free-running in production). A 1 kHz sync tracks each ARC control step round-for-round instead of
+aliasing it. It is affordable precisely because this session's two fixes removed what used to make
+high rates costly: the responder-turnaround bias is measured/subtracted per round (two-stamp), and
+the per-iteration doorbell killed the phase lottery -- so 1 kHz is lossless, bandwidth-neutral, and
+carries no accuracy penalty. Override with TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ=N (0 opts out).
+
+The prior "100 Hz is the operating point / rate buys accuracy to ~100 Hz" text is SUPERSEDED: that
+was the old-design phase-lottery era, and its forward/return-asymmetry story is retracted above. The
+default is no longer an accuracy-driven choice; it is set to match the control loop it observes.

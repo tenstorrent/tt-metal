@@ -2088,18 +2088,24 @@ void PerfDebugProfiler::check_sync_drift_at_close() {
 // instruments on each shared link.
 
 namespace {
-// DEFAULT CADENCE. 100 Hz, chosen by measurement -- see tools/drisc_drain/FINDINGS.md. Rate buys
-// accuracy only up to about here: the paired echo residual is 83 / 44 / 38 ns at 20 / 100 / 500 Hz,
-// and the ~40 ns floor below that is NOT a sampling limit (it is a systematic -47 ns ring-closure
-// bias from eth forward/return asymmetry, plus the fixed 40 ms correction republish), so a faster
-// rate cannot reach it. The cost of rate is fabric bandwidth, and it is a cliff at num_links=4:
-// 100 Hz keeps ~8.8 points of golden-tolerance headroom there, 250 Hz keeps 0.8 (inside this
-// harness's own run-to-run variance) and 300 Hz fails outright.
+// DEFAULT CADENCE. 1 kHz, to MATCH THE ARC CONTROL LOOP. The ARC firmware runs its DVFS/clock
+// governance loop at ~1 kHz, so the device frequency this sync anchors against moves on that
+// timescale (FORCE_AICLK pins it in tests, but not in production). Sampling at 1 kHz lets a round
+// track each ARC control step round-for-round instead of aliasing it -- a RESPONSIVENESS argument,
+// distinct from static accuracy.
 //
-// Set TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ=0 to opt out. Keep this in step with the compile-time
-// gate in compute_mesh_router_builder.cpp: a nonzero cadence here with no hook in the router
-// means the host waits on rounds nothing will ever serve.
-constexpr double kDefaultFabricSyncHz = 100.0;
+// Rate does NOT buy static accuracy on this design: measured closure is flat at low-single-digit ns
+// from 100 Hz to 1 kHz (the residual is bias + round noise, not a staleness/sampling limit), so the
+// old "100 Hz is the operating point" reasoning -- and its since-retracted forward/return-asymmetry
+// story -- no longer sets the default. Two things made 1 kHz free where it was not before: the
+// responder-turnaround bias is now measured and subtracted per round (kFlagTwoStamp), and the
+// per-iteration doorbell removed the phase lottery, so higher rates neither drift nor cost bandwidth
+// (measured lossless at ~3640 rounds/link, geomean unmoved, 0 golden failures; see FINDINGS.md).
+//
+// Set TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ=N to override (0 opts out). Keep this in step with the
+// compile-time gate in compute_mesh_router_builder.cpp: a nonzero cadence here with no hook in the
+// router means the host waits on rounds nothing will ever serve.
+constexpr double kDefaultFabricSyncHz = 1000.0;
 
 // Samples per sync round. DEFAULT 2: this link is measured stable (rtt_min spread 839-846 cy
 // across ten runs, solver residual ~2.7 cy median) and rate comes from ROUND deltas, never from
