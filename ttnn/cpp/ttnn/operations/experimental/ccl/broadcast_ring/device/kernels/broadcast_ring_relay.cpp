@@ -2,15 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// broadcast_ring relay kernel (v1: single sender, one-way around the ring, FABRIC_1D / _RING).
+// broadcast_ring relay kernel: single sender, bidirectional around the ring (FABRIC_1D / _RING).
 //
-// Data flow: the sender's shard is relayed shard -> +1 -> +2 -> ... around the ring. Each hop fabric-writes
-// the chunk into the DOWNSTREAM device's OUTPUT tensor (same tile ids), then atomic-incs the downstream
-// recv-semaphore. A receiver waits on its recv-sem (chunk landed in its output), then forwards from its own
-// output to the next device. Runs per orthogonal (tp) line, so each tp row broadcasts its own heads.
-//
-// Fabric calls mirror ring_attention_all_gather_writer.cpp. Marked spots (addrgen build, packet-header CB,
-// downstream sem noc addr) still need on-device confirmation.
+// Sender sends both ways; the ring splits into a forward arc (ring_size/2 hops) and backward arc
+// ((ring_size-1)/2 hops). Each hop fabric-writes the chunk into the downstream OUTPUT + atomic-incs its
+// recv-sem; a receiver waits, reads its output back to L1, forwards onward. Runs per orthogonal-axis line;
+// payload split across links (tile_start/tile_count). PERF TODO (OPTIMIZATION_NOTES.md): the output re-read
+// is a per-hop DRAM round-trip an L1 relay would remove.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
@@ -151,31 +149,39 @@ void kernel_main() {
 
         // 3) Forward the chunk to each active neighbour's OUTPUT, then bump its recv-sem. The downstream
         //    worker core is the same logical core on every device, so the sem noc coords are shared; only
-        //    the fabric route (and connection) differ per direction.
+        //    the fabric route (and connection) differ per direction. Two tiles per scatter packet (half the
+        //    fabric writes), with a single-tile tail for an odd chunk.
         const uint64_t ds_sem_noc = safe_get_noc_addr(ds_sem_noc_x, ds_sem_noc_y, ds_sem_addr, 0);
-        if constexpr (send_fwd) {
-            for (uint32_t t = 0; t < chunk_tiles; ++t) {
-                fabric_write_unidir(
-                    tiles_done + t, out_addrgen, pkt_hdr_fwd, *fwd_conn, cb_rd + t * page_size, page_size);
+        auto send_dir = [&](volatile PACKET_HEADER_TYPE* pkt_hdr,
+                            volatile PACKET_HEADER_TYPE* pkt_hdr_sem,
+                            tt::tt_fabric::WorkerToFabricEdmSender* conn,
+                            const ccl_routing_utils::line_unicast_route_info_t& route) {
+            uint32_t t = 0;
+            for (; t + 1 < chunk_tiles; t += 2) {
+                scatter_fabric_write_unidir(
+                    tiles_done + t,
+                    tiles_done + t + 1,
+                    out_addrgen,
+                    pkt_hdr,
+                    *conn,
+                    cb_rd + t * page_size,
+                    static_cast<uint16_t>(page_size));
             }
-            pkt_hdr_fwd_sem->to_noc_unicast_atomic_inc(
+            if (t < chunk_tiles) {  // odd tail
+                fabric_write_unidir(tiles_done + t, out_addrgen, pkt_hdr, *conn, cb_rd + t * page_size, page_size);
+            }
+            pkt_hdr_sem->to_noc_unicast_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{ds_sem_noc, static_cast<uint32_t>(1)});
-            fwd_conn->wait_for_empty_write_slot();
-            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_fwd_sem, fwd_route);
-            fwd_conn->send_payload_flush_blocking_from_address(
-                reinterpret_cast<uint32_t>(pkt_hdr_fwd_sem), sizeof(PACKET_HEADER_TYPE));
+            conn->wait_for_empty_write_slot();
+            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem, route);
+            conn->send_payload_flush_blocking_from_address(
+                reinterpret_cast<uint32_t>(pkt_hdr_sem), sizeof(PACKET_HEADER_TYPE));
+        };
+        if constexpr (send_fwd) {
+            send_dir(pkt_hdr_fwd, pkt_hdr_fwd_sem, fwd_conn, fwd_route);
         }
         if constexpr (send_bwd) {
-            for (uint32_t t = 0; t < chunk_tiles; ++t) {
-                fabric_write_unidir(
-                    tiles_done + t, out_addrgen, pkt_hdr_bwd, *bwd_conn, cb_rd + t * page_size, page_size);
-            }
-            pkt_hdr_bwd_sem->to_noc_unicast_atomic_inc(
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{ds_sem_noc, static_cast<uint32_t>(1)});
-            bwd_conn->wait_for_empty_write_slot();
-            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_bwd_sem, bwd_route);
-            bwd_conn->send_payload_flush_blocking_from_address(
-                reinterpret_cast<uint32_t>(pkt_hdr_bwd_sem), sizeof(PACKET_HEADER_TYPE));
+            send_dir(pkt_hdr_bwd, pkt_hdr_bwd_sem, bwd_conn, bwd_route);
         }
 
         cb.pop_front(chunk_tiles);

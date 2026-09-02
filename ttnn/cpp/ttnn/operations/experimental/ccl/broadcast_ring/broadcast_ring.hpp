@@ -24,6 +24,7 @@ ttnn::Tensor broadcast_ring(
     std::optional<uint32_t> num_links = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
+    uint32_t chunk_size_tiles = 0);  // tiles per relay chunk; 0 = auto (one fabric packet). Tuning knob.
 
 }  // namespace ttnn

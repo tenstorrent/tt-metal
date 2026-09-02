@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// broadcast_ring program factory. Per-device program for a one-sender, one-way, pipelined ring relay on
-// FABRIC_1D_RING. Framework structure mirrors ccl/broadcast; the fabric connection + route + semaphore RT
-// args are marked TODO(on-device) — adapt from ring_attention_all_gather_writer.cpp, which does the same
-// 1-hop unicast forward + atomic-inc on FABRIC_1D.
+// broadcast_ring program factory: per-device program for a one-sender, bidirectional, pipelined ring relay
+// on FABRIC_1D_RING. Fabric routes/connections mirror ring_attention_all_gather_writer.cpp.
 
 #include "ttnn/operations/experimental/ccl/broadcast_ring/device/broadcast_ring_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -100,9 +98,12 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
     // Staging CB: depth >= 2-3 chunks so receive(k+1) overlaps forward(k). Page = input aligned page.
     const uint32_t page_size = input_tensor.buffer()->aligned_page_size();
     const uint32_t input_num_pages = input_tensor.buffer()->num_pages();
-    // v1: one chunk = one packet's worth of pages; tune on-device for pipeline overlap vs overhead.
+    // Chunk size: the requested chunk_size_tiles if set, else one fabric packet's worth of pages.
+    // Tuning knob for pipeline overlap (smaller) vs per-chunk sem overhead (larger).
     const uint32_t fabric_packet_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    const uint32_t chunk_num_pages = std::max<uint32_t>(1, fabric_packet_bytes / page_size);
+    const uint32_t auto_chunk_pages = std::max<uint32_t>(1, fabric_packet_bytes / page_size);
+    const uint32_t chunk_num_pages =
+        operation_attributes.chunk_size_tiles > 0 ? operation_attributes.chunk_size_tiles : auto_chunk_pages;
     const uint32_t num_chunks = (input_num_pages + chunk_num_pages - 1) / chunk_num_pages;
     const uint32_t cb_depth_pages = 3 * chunk_num_pages;
 

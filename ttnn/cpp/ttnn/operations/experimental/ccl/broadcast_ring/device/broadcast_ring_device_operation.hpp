@@ -33,6 +33,7 @@ Tensor broadcast_ring(
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     tt::tt_fabric::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    uint32_t chunk_size_tiles = 0);
 
 }  // namespace ttnn::prim
