@@ -194,10 +194,12 @@ PYTESTS = {
             "50",
             "-s",
             # pytest.ini sets a repo-wide 300s pytest-timeout; this run always
-            # exceeds it. Disable it; the health-check harness enforces its own
-            # wall-clock timeout around the whole diag run.
+            # exceeds it (~545s measured). 1200s keeps >2x headroom while still
+            # bounding a standalone deploy run if a device test wedges (the
+            # test-infrastructure wrapper adds its own wall-clock timeout, but
+            # run_diag.sh / container entrypoints invoke this script directly).
             "--timeout",
-            "0",
+            "1200",
         ],
     },
 }
@@ -1296,9 +1298,21 @@ GTEST_FAIL_RE = re.compile(r"\[\s*FAILED\s*\]\s+(\S+\.\S+)")
 
 # pytest progress markers. Counts come from the end-of-run summary line
 # ("===== 3 passed, 1 failed, 2 deselected in 600.12s ====="); failing node ids
-# from the short-summary "FAILED tests/..." lines.
+# from the short-summary "FAILED tests/..." lines and, for fixture/collection
+# errors, the "ERROR tests/..." lines.
 PYTEST_COUNT_RE = re.compile(r"(\d+) (passed|failed|error)")
-PYTEST_FAILED_LINE_RE = re.compile(r"^FAILED\s+(\S+)")
+PYTEST_FAILED_LINE_RE = re.compile(r"^(?:FAILED|ERROR)\s+(\S+)")
+
+
+def parse_pytest_summary_counts(line: str) -> tuple[int, int] | None:
+    """Extract (passed, failed) from a pytest end-of-run summary line, or None
+    if the line isn't one. Fixture/collection `error` counts fold into failed.
+    A "no tests ran" summary carries no counts and returns None — callers'
+    zero-initialized counts then record the run as FAIL, not a silent PASS."""
+    if not line.startswith("=") or not (" passed" in line or " failed" in line or " error" in line):
+        return None
+    counts = {word: int(num) for num, word in PYTEST_COUNT_RE.findall(line)}
+    return counts.get("passed", 0), counts.get("failed", 0) + counts.get("error", 0)
 
 
 def resolve_pytest(tt_metal: Path) -> str | None:
@@ -1330,6 +1344,9 @@ def run_pytest_test(
             )
             return
 
+    # cmd is built exclusively from the hardcoded PYTESTS table and the
+    # repo-resolved pytest binary — no user-controlled input — and is executed
+    # as an argv list (no shell).
     target = spec["target"]
     cmd = [pytest_bin, target, *spec["args"]]
     test_env = env.copy()
@@ -1383,11 +1400,11 @@ def run_pytest_test(
             logf.write(line)
             if m := PYTEST_FAILED_LINE_RE.match(line):
                 failures.append(m.group(1))
-            elif line.startswith("=") and (" passed" in line or " failed" in line or " error" in line):
-                counts = {word: int(num) for num, word in PYTEST_COUNT_RE.findall(line)}
-                passed = counts.get("passed", 0)
-                failed = counts.get("failed", 0) + counts.get("error", 0)
+            elif (counts := parse_pytest_summary_counts(line)) is not None:
+                passed, failed = counts
         rc = proc.wait()
+    # A node can appear in both a live FAILED line and the short summary.
+    failures = list(dict.fromkeys(failures))
     dt = time.time() - t0
 
     # Require passed > 0 so an over-narrow -k expression (0 tests collected,

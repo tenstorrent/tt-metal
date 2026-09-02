@@ -48,8 +48,9 @@ test: 1000 matmul iterations on the full (8, 4) mesh with a determinism
 re-check every 50, via the repo venv's pytest. Measured ~9 min on a BH galaxy
 (mostly cold bring-up + the 20 output readbacks); bump
 `--didt-workload-iterations` when triaging a suspect unit — a marginal chip
-that passed 1000 iterations failed under a 5000-iteration soak. `--timeout 0`
-is required (the repo-wide 300 s pytest-timeout kills the run otherwise), and
+that passed 1000 iterations failed under a 5000-iteration soak. `--timeout
+1200` overrides the repo-wide 300 s pytest-timeout (too short for this run)
+while still bounding a wedged run in standalone invocations, and
 zero-collected runs are recorded as FAIL, same trap as the zero-match gtest
 filters above. Needs the venv (`./create_venv.sh`) and standard mesh cabling —
 on torus-cabled units set `TT_MESH_GRAPH_DESC_PATH` to the matching descriptor
