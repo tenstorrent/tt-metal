@@ -60,6 +60,7 @@ it is classified differently on different systems.
 | Whisper | WH N150, BH P150 |
 | Flux.1-schnell | BH QuietBox 2 |
 | Flux.1-dev | BH QuietBox 2, BH Single Galaxy |
+| Flux.2-dev | BH QuietBox 2 |
 | Wan2.2-T2V-A14B | WH Galaxy, BH SC4 |
 | Wan2.2-I2V-A14B | WH Galaxy, BH SC4 |
 | Z-Image-Turbo | BH QuietBox 2 |

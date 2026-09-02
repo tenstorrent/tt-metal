@@ -44,13 +44,20 @@ class ModelLocationGenerator(Protocol):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, topology, num_links, device_params",
+    "mesh_device, sp_axis, tp_axis, topology, num_links, fsdp, device_params",
     [
-        [(1, 8), 0, 1, ttnn.Topology.Linear, 1, line_params_flux2_transformer],
-        [(2, 4), 0, 1, ttnn.Topology.Linear, 1, line_params_flux2_transformer],
-        [(4, 8), 0, 1, ttnn.Topology.Ring, 2, ring_params_8k_flux2],
+        # 2x2 is the only geometry a 4-chip Blackhole box can run, and it is the mesh the
+        # bh_quietbox_2 CI leg exercises. FSDP is on because tensor parallelism alone shards
+        # the weights across the TP axis and REPLICATES them across SP, so 64 GB of weights
+        # occupy 129 GB of the 137 GB the four chips have. Sharding on both axes puts the
+        # same weights back in 64 GB, which is what the pipeline already does at this shape.
+        [(2, 2), 0, 1, ttnn.Topology.Linear, 2, True, line_params_flux2_transformer],
+        [(1, 8), 0, 1, ttnn.Topology.Linear, 1, False, line_params_flux2_transformer],
+        [(2, 4), 0, 1, ttnn.Topology.Linear, 1, False, line_params_flux2_transformer],
+        [(4, 8), 0, 1, ttnn.Topology.Ring, 2, False, ring_params_8k_flux2],
     ],
     ids=[
+        "bh_2x2_linear",
         "1x8_linear",
         "wh_2x4_linear",
         "bh_4x8_ring",
@@ -76,6 +83,7 @@ def test_transformer(
     tp_axis: int,
     topology: ttnn.Topology,
     num_links: int,
+    fsdp: bool,
     batch_size: int,
     height: int,
     width: int,
@@ -89,7 +97,7 @@ def test_transformer(
 
     logger.info(
         f"test_transformer: mesh={tuple(mesh_device.shape)}, sp={sp_factor}, tp={tp_factor}, "
-        f"topology={topology}, num_links={num_links}"
+        f"topology={topology}, num_links={num_links}, fsdp={fsdp}"
     )
 
     model_name = model_location_generator("black-forest-labs/FLUX.2-dev", model_subdir="transformer")
@@ -136,6 +144,7 @@ def test_transformer(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
+        is_fsdp=fsdp,
     )
 
     cache.load_model(
@@ -146,6 +155,9 @@ def test_transformer(
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
         mesh_device=mesh_device,
+        # Also part of the cache key: an FSDP-sharded weight tree and a TP-only one hold
+        # different tensors, and reading one as the other fails on a missing weight.
+        is_fsdp=fsdp,
     )
 
     spatial_seq_len = height * width // 16**2

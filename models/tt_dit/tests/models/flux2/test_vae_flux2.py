@@ -103,6 +103,8 @@ def prep_data(
     "mesh_device",
     [
         pytest.param((1, 1), id="1x1"),
+        # The mesh a 4-chip Blackhole box (bh_quietbox_2) runs; tp on axis 0, h on axis 1.
+        pytest.param((2, 2), id="2x2"),
         pytest.param((1, 8), id="1x8"),
         pytest.param((4, 8), id="4x8"),
     ],

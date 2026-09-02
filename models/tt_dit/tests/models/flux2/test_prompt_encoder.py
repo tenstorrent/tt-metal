@@ -17,6 +17,8 @@ from ....utils.check import assert_quality
 @pytest.mark.parametrize(
     "mesh_device",
     [
+        # The mesh a 4-chip Blackhole box (bh_quietbox_2) runs; tp_axis=1 gives a factor of 2.
+        pytest.param((2, 2), id="2x2"),
         pytest.param((4, 8), id="4x8"),
     ],
     indirect=True,
@@ -65,6 +67,8 @@ def test_encode(mesh_device: ttnn.MeshDevice) -> None:
 @pytest.mark.parametrize(
     "mesh_device",
     [
+        # The mesh a 4-chip Blackhole box (bh_quietbox_2) runs; tp_axis=1 gives a factor of 2.
+        pytest.param((2, 2), id="2x2"),
         pytest.param((4, 8), id="4x8"),
     ],
     indirect=True,

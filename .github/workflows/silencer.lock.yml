@@ -1775,6 +1775,7 @@ jobs:
                           "llama3.3-70b-galaxy",
                           "flux.1-schnell",
                           "flux.1-dev",
+                          "flux.2-dev",
                           "ltx-2.3",
                           "z-image-turbo",
                           "resnet50",
