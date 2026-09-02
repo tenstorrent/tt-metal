@@ -31,6 +31,11 @@ skipped; the rest still go.
 
 Examples::
 
+    # Check the credentials first. Nothing else works until this does.
+    python3 -m helpers.perf.backfill --check \
+        --host s-xxxx.server.transfer.us-east-2.amazonaws.com \
+        --user llk-perf-run --key ~/.ssh/id_ed25519
+
     # Rehearse offline: stage the last 5 nightlies, upload nothing.
     python3 -m helpers.perf.backfill --last 5 --stage-dir /tmp/stage --dry-run
 
@@ -56,6 +61,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 # The workflow that produces the nightly perf artifacts, and the artifact name
 # prefix it uploads them under. Both live in .github/workflows/llk-perf-impl.yaml.
@@ -316,23 +322,20 @@ def batchfile_lines(names, *, remote_dir=None):
     return lines
 
 
-def upload(stage_dir, names, *, host, user, key, remote_dir=None, dry_run=False):
-    """Upload the named files from ``stage_dir`` over SFTP. Returns the batchfile.
+def _require_credentials(host, user, key, what):
+    """Fail before any work when a credential is missing. ``what`` is the action."""
+    for value, flag in ((host, "--host"), (user, "--user"), (key, "--key")):
+        if not value:
+            raise BackfillError(f"backfill: {flag} is required to {what}")
 
-    ``-o BatchMode=yes`` makes a missing or unauthorised key fail immediately
-    instead of hanging on a password prompt in CI.
+
+def _sftp_command(batchfile, *, host, user, key):
+    """The sftp argv. ``BatchMode=yes`` fails at once instead of prompting.
+
+    Without it an unauthorised key waits for a password, which in CI is a job
+    that hangs until its timeout rather than a job that fails with a reason.
     """
-    if not names:
-        raise BackfillError("backfill: nothing to upload")
-    for required, what in ((host, "--host"), (user, "--user"), (key, "--key")):
-        if not required:
-            raise BackfillError(f"backfill: {what} is required to upload")
-
-    batchfile = os.path.join(stage_dir, "sftp_batchfile.txt")
-    with open(batchfile, "w") as fh:
-        fh.write("\n".join(batchfile_lines(names, remote_dir=remote_dir)) + "\n")
-
-    command = [
+    return [
         "sftp",
         "-o",
         "BatchMode=yes",
@@ -344,6 +347,68 @@ def upload(stage_dir, names, *, host, user, key, remote_dir=None, dry_run=False)
         batchfile,
         f"{user}@{host}",
     ]
+
+
+def key_fingerprint(key):
+    """The SHA256 fingerprint of ``key``, or None if ssh-keygen cannot read it.
+
+    This is the one value the warehouse owner needs to answer "is the key you
+    installed the key I am sending?", so the failure path prints it.
+    """
+    done = subprocess.run(
+        ["ssh-keygen", "-lf", os.path.expanduser(key)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return done.stdout.strip() if done.returncode == 0 else None
+
+
+def check_connection(*, host, user, key, remote_dir=None):
+    """Log in, print the remote listing, and return 0. Raises BackfillError if not.
+
+    Run this first. Authentication is the leg that fails, and it fails for
+    reasons outside this repo: a key the server has not installed, the wrong
+    user, the wrong server. Learning that in one second beats learning it after
+    staging thirty files.
+    """
+    _require_credentials(host, user, key, "check the connection")
+
+    work = tempfile.mkdtemp(prefix="llk-perf-check-")
+    batchfile = os.path.join(work, "sftp_batchfile.txt")
+    lines = ([f"cd {remote_dir}"] if remote_dir else []) + ["pwd", "ls -hal"]
+    with open(batchfile, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+    print(f"backfill: checking {user}@{host}")
+    done = subprocess.run(
+        _sftp_command(batchfile, host=host, user=user, key=key), cwd=work, text=True
+    )
+    shutil.rmtree(work, ignore_errors=True)
+    if done.returncode != 0:
+        fingerprint = key_fingerprint(key) or f"(ssh-keygen cannot read {key})"
+        raise BackfillError(
+            f"backfill: cannot log in to {user}@{host} (sftp exited {done.returncode}).\n"
+            "  Either the server has not installed this key for that user, or the\n"
+            "  host or the user name is wrong. Send the warehouse owner this\n"
+            "  fingerprint and ask which key they installed:\n"
+            f"    {fingerprint}"
+        )
+    print("backfill: login OK")
+    return 0
+
+
+def upload(stage_dir, names, *, host, user, key, remote_dir=None, dry_run=False):
+    """Upload the named files from ``stage_dir`` over SFTP. Returns the batchfile."""
+    if not names:
+        raise BackfillError("backfill: nothing to upload")
+    _require_credentials(host, user, key, "upload")
+
+    batchfile = os.path.join(stage_dir, "sftp_batchfile.txt")
+    with open(batchfile, "w") as fh:
+        fh.write("\n".join(batchfile_lines(names, remote_dir=remote_dir)) + "\n")
+
+    command = _sftp_command(batchfile, host=host, user=user, key=key)
     if dry_run:
         print("backfill: would run:", " ".join(command))
         return batchfile
@@ -359,6 +424,13 @@ def upload(stage_dir, names, *, host, user, key, remote_dir=None, dry_run=False)
 
 def run(args):
     """Do the collect -> stage -> upload sequence the parsed args ask for."""
+    if args.check:
+        return check_connection(
+            host=args.host, user=args.user, key=args.key, remote_dir=args.remote_dir
+        )
+    if not args.stage_dir:
+        raise BackfillError("backfill: --stage-dir is required")
+
     runs_dir = args.from_dir or os.path.join(args.stage_dir, "runs")
 
     if not args.from_dir:
@@ -434,7 +506,8 @@ def main(argv=None):
         help="skip the download and read already-downloaded runs from here",
     )
     ap.add_argument(
-        "--stage-dir", required=True, help="working dir for the staged copies"
+        "--stage-dir",
+        help="working dir for the staged copies (not needed with --check)",
     )
     ap.add_argument(
         "--remote-prefix",
@@ -442,6 +515,11 @@ def main(argv=None):
         help=f"prefix for the uploaded object names (default {DEFAULT_REMOTE_PREFIX!r})",
     )
     dest = ap.add_argument_group("where to send it")
+    dest.add_argument(
+        "--check",
+        action="store_true",
+        help="only test the login and list the remote directory, then stop",
+    )
     dest.add_argument("--upload", action="store_true", help="actually upload")
     dest.add_argument(
         "--dry-run",

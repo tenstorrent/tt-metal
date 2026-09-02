@@ -31,6 +31,10 @@ The tool takes those artifacts. It does not run tests and does not need a chip.
 All paths below are relative to `tests/python_tests/`.
 
 ```bash
+# 0. Check the credentials. Nothing else works until this does.
+python3 -m helpers.perf.backfill --check \
+    --host "$LLK_PERF_SFTP_HOST" --user llk-perf-run --key ~/.ssh/id_ed25519
+
 # 1. Rehearse. Stage the last 5 nightlies and print the sftp command. No upload.
 python3 -m helpers.perf.backfill --last 5 --stage-dir /tmp/stage --dry-run \
     --host "$LLK_PERF_SFTP_HOST" --user llk-perf-run --key ~/.ssh/id_ed25519
@@ -48,6 +52,12 @@ python3 -m helpers.perf.backfill --from-dir /tmp/stage/runs \
 
 `--host`, `--user` and `--key` also read `LLK_PERF_SFTP_HOST`,
 `LLK_PERF_SFTP_USER` and `LLK_PERF_SFTP_KEY`.
+
+Always start with `--check`. It logs in and lists the remote directory, and it
+needs no data and no `--stage-dir`. When it fails, it prints your key
+fingerprint. Send that fingerprint to the warehouse owner and ask which key
+they installed for the user; a refused key is the one failure this repo cannot
+fix.
 
 `--last N` counts **successful scheduled** runs only. A `workflow_dispatch` run
 is somebody testing, and it must not enter the baseline history.

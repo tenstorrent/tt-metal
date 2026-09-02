@@ -11,8 +11,10 @@ external legs (``gh`` and ``sftp``) are exercised through ``--from-dir`` and
 
 import csv
 import os
+import subprocess
 
 import pandas as pd
+from helpers.perf import backfill
 from helpers.perf.backfill import (
     bare_run_id,
     batchfile_lines,
@@ -215,6 +217,65 @@ def test_upload_without_credentials_fails_before_touching_the_network(tmp_path):
     code = main(["--from-dir", str(runs), "--stage-dir", str(out), "--upload"])
 
     assert code == 1  # --host/--user/--key are missing
+
+
+def test_check_runs_sftp_and_needs_no_stage_dir(monkeypatch, capsys):
+    # --check is the first thing anyone runs, so it must not require the rest
+    # of the pipeline's arguments.
+    seen = {}
+
+    def fake_run(command, **kwargs):
+        seen["command"] = command
+        seen["batchfile"] = open(command[command.index("-b") + 1]).read()
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(backfill.subprocess, "run", fake_run)
+
+    code = main(
+        [
+            "--check",
+            "--host",
+            "h",
+            "--user",
+            "u",
+            "--key",
+            "/dev/null",
+            "--remote-dir",
+            "inbox",
+        ]
+    )
+
+    assert code == 0
+    assert "login OK" in capsys.readouterr().out
+    assert seen["command"][0] == "sftp"
+    assert "BatchMode=yes" in seen["command"]
+    assert seen["batchfile"].splitlines() == ["cd inbox", "pwd", "ls -hal"]
+
+
+def test_check_failure_reports_the_key_fingerprint(monkeypatch, capsys):
+    # The fingerprint is what the warehouse owner needs to answer "is the key
+    # you installed the key I am sending?".
+    monkeypatch.setattr(
+        backfill.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 255),
+    )
+    monkeypatch.setattr(
+        backfill, "key_fingerprint", lambda key: "SHA256:abc user (ED25519)"
+    )
+
+    code = main(["--check", "--host", "h", "--user", "u", "--key", "/dev/null"])
+
+    assert code == 1
+    assert "SHA256:abc" in capsys.readouterr().err
+
+
+def test_check_without_credentials_is_an_error():
+    assert main(["--check"]) == 1
+
+
+def test_stage_dir_is_required_without_check(tmp_path):
+    assert main(["--from-dir", str(tmp_path)]) == 1
 
 
 def test_no_parquets_is_an_error(tmp_path):
