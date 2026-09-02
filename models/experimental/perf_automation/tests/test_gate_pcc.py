@@ -54,6 +54,56 @@ def test_run_pcc_high_pcc_nonzero_exit_is_ok(monkeypatch, tmp_path):
     assert v["status"] == "ok" and v["pcc"] == 0.999
 
 
+# Verbatim pytest -sv output for a device fatal raised INSIDE the compare helper
+# (assert_with_pcc calls ttnn.to_torch, which OOMs). No PCC is ever computed, yet the
+# traceback echoes the THRESHOLD three ways: the `>` failing line, the def signature, and
+# pytest's frame-argument header. Scraping any of them banked pcc=0.99 -> ok on a crash.
+_CRASH_ECHOING_THRESHOLD = """t.py::test_e2e_pcc FAILED
+
+=================================== FAILURES ===================================
+_________________________________ test_e2e_pcc _________________________________
+
+    def test_e2e_pcc():
+>       assert_with_pcc([1.0], [1.0], pcc=0.99)
+
+t.py:5:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+expected = [1.0], actual = [1.0], pcc = 0.99
+
+    def assert_with_pcc(expected, actual, pcc=0.99):
+>       raise RuntimeError("TT_FATAL @ allocator.cc:142: Out of Memory")
+E       RuntimeError: TT_FATAL @ allocator.cc:142: Out of Memory
+
+t.py:3: RuntimeError
+=========================== short test summary info ============================
+FAILED t.py::test_e2e_pcc - RuntimeError: TT_FATAL @ allocator.cc:142
+1 failed in 0.03s
+"""
+
+
+def test_run_pcc_threshold_echoed_in_traceback_is_crash(monkeypatch, tmp_path):
+    # The run computed NOTHING -- banking it as ok (pcc_verified=True) let the optimizer keep
+    # an edit on a model that never ran. This is the boundary of the nonzero-exit carve-out
+    # above: that carve-out may only fire on a REAL measured value, never on an echoed one.
+    v = _patch_run(monkeypatch, tmp_path, _CRASH_ECHOING_THRESHOLD, 1)
+    assert v["status"] == "crash", f"crash banked as {v['status']} with pcc={v.get('pcc')}"
+    assert "TT_FATAL" in v["error"]
+
+
+def test_parse_pcc_keeps_value_reported_in_assertion_message():
+    # A genuine sub-threshold PCC often survives only in the assertion message under the
+    # FAILURES banner. It must stay visible so the run routes to pcc_low (repairable) rather
+    # than crash -- the traceback filter drops echoes, not reported values.
+    out = (
+        "=================================== FAILURES ===================================\n"
+        "    def test_e2e_pcc():\n"
+        ">       assert_with_pcc(golden, tt_out, pcc=0.99)\n"
+        "E       AssertionError: PCC: 0.3120 is below required 0.99\n"
+    )
+    assert parse_pcc(out) == 0.3120
+
+
 def test_run_pcc_below_threshold_is_pcc_low(monkeypatch, tmp_path):
     v = _patch_run(monkeypatch, tmp_path, "e2e PCC=0.40\n1 failed", 1)
     assert v["status"] == "pcc_low" and v["pcc"] == 0.40

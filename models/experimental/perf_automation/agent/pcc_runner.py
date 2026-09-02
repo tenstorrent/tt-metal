@@ -21,6 +21,9 @@ _DEPTH_GUARD = "models.experimental.perf_automation.agent.depth_guard_plugin"
 
 _PCC_RE = re.compile(r"(?i)pcc[^\n]*?[:=]\s*(-?\d+\.\d+)")
 
+_TRACEBACK_BANNER = re.compile(r"^=+ (?:FAILURES|ERRORS) =+$", re.MULTILINE)
+_REPORTED_ERROR_LINE = re.compile(r"^E\s")
+
 
 def parse_pcc(text: str):
     """WORST 'pcc ... <float>' in the test output, or None.
@@ -29,8 +32,24 @@ def parse_pcc(text: str):
     tests print the THRESHOLD as `pcc: 0.99` (if that line came last it was recorded as the
     measured value), and a per-layer sweep prints many values (only the last was judged). For a
     correctness gate the worst observed PCC is the one that has to clear the threshold.
+
+    Below pytest's FAILURES banner a `pcc = <float>` is an ECHO of the THRESHOLD, not a
+    measurement. When a device fatal lands AT or INSIDE the compare (assert_with_pcc calls
+    ttnn.to_torch internally, which OOMs), pytest echoes `pcc=0.99` three ways -- the `>`
+    failing line, the def signature, and its frame-argument header -- so a run that computed
+    NOTHING scraped 0.99, cleared the threshold and banked pcc_verified=True on a crash. The
+    `min` fix above only covers the case where a REAL value is also present to be lower.
+    Since the runner passes -s, the test's own prints stream BEFORE the banner; below it only
+    pytest's `E ` lines carry a value the test actually reported (a real sub-threshold PCC
+    raised in the assertion message), which must stay visible so it routes to pcc_low and gets
+    repaired rather than being misread as a crash.
     """
-    matches = _PCC_RE.findall(text or "")
+    text = text or ""
+    banner = _TRACEBACK_BANNER.search(text)
+    if banner:
+        reported = [ln for ln in text[banner.start() :].splitlines() if _REPORTED_ERROR_LINE.match(ln)]
+        text = text[: banner.start()] + "\n".join(reported)
+    matches = _PCC_RE.findall(text)
     return min(float(m) for m in matches) if matches else None
 
 
