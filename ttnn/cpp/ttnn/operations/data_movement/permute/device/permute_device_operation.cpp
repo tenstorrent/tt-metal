@@ -72,20 +72,25 @@ PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_outp
     // ND-sharded fallback: permute is a dimension reorder, so the shard follows the
     // same permutation. Keep ND provenance instead of dropping into legacy synthesis,
     // otherwise the output loses created_with_nd_shard_spec for 4D / rank-greater-4.
-    if (output_mem_config.created_with_nd_shard_spec() &&
-        input_tensor.memory_config().created_with_nd_shard_spec() &&
-        output_mem_config.nd_shard_spec().has_value() && input_tensor.nd_shard_spec().has_value()) {
-        ttsl::SmallVector<uint32_t> shard_shape_vec(attributes.dims.size());
-        std::transform(attributes.dims.begin(), attributes.dims.end(), shard_shape_vec.begin(), [&](auto dim) {
-            return input_tensor.nd_shard_spec()->shard_shape[dim];
-        });
-        auto reordered = output_mem_config.nd_shard_spec()->with_shard_shape(Shape(std::move(shard_shape_vec)));
+    if (output_mem_config.created_with_nd_shard_spec() && output_mem_config.nd_shard_spec().has_value()) {
+        auto nd_spec = *output_mem_config.nd_shard_spec();
+        if (input_tensor.memory_config().created_with_nd_shard_spec() && input_tensor.nd_shard_spec().has_value()) {
+            // The config was defaulted from the ND-sharded input, so it is expressed in the
+            // input's frame and its shard shape follows the same permutation.
+            ttsl::SmallVector<uint32_t> shard_shape_vec(attributes.dims.size());
+            std::transform(attributes.dims.begin(), attributes.dims.end(), shard_shape_vec.begin(), [&](auto dim) {
+                return input_tensor.nd_shard_spec()->shard_shape[dim];
+            });
+            nd_spec = nd_spec.with_shard_shape(Shape(std::move(shard_shape_vec)));
+        }
+        // Otherwise a non-ND input cannot have supplied this config, so it came from an
+        // explicit caller request already expressed in the output frame: honor it verbatim.
         return tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(),
                 tt::tt_metal::PageConfig(input_tensor.layout()),
-                MemoryConfig(output_mem_config.buffer_type(), reordered)));
+                MemoryConfig(output_mem_config.buffer_type(), nd_spec)));
     }
 
     // Derive shard_spec when sharded output lacks one.
