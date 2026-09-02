@@ -52,6 +52,13 @@ uint32_t max_chunk_start(const operation_attributes_t& attrs, const Tensor& q, u
 
 // Miss-only checks: hash-pinned (placement, non-indexed k batch shape) so they can't differ on a hit. The
 // slot/kv_len values that do differ on a hit live in validate_runtime_values.
+// Indexed mode = a cache slot is selected, by EITHER the host scalar or the trace-safe tensor. Every
+// structural contract that depends on "one slot gathered into a batch-1 scratch" must use this rather than
+// cache_batch_idx.has_value(), or the metadata path falls into the non-indexed equal-batch contract.
+bool selects_cache_slot(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    return attrs.cache_batch_idx.has_value() || t.has_cache_slot_metadata();
+}
+
 void validate_static(const operation_attributes_t& attrs, const tensor_args_t& t) {
     const auto& q = t.q;
     const auto& k = t.k;
@@ -70,9 +77,9 @@ void validate_static(const operation_attributes_t& attrs, const tensor_args_t& t
         q.device() == k.device() && q.device() == w.device(), "indexer_score q, k, weights must be on the same device");
 
     // Non-indexed k must be single-slot [1,1,T,D] (the indexed slot < B check is runtime -> below).
-    if (!attrs.cache_batch_idx.has_value()) {
+    if (!selects_cache_slot(attrs, t)) {
         const uint32_t kB = k.logical_shape()[0];
-        TT_FATAL(kB == 1, "indexer_score k batch must be 1 unless cache_batch_idx is set (got {})", kB);
+        TT_FATAL(kB == 1, "indexer_score k batch must be 1 unless a cache slot is selected (got {})", kB);
     }
 }
 
@@ -82,11 +89,20 @@ void validate_runtime_values(const operation_attributes_t& attrs, const tensor_a
 
     // Indexed KV cache: on the fused path the full multi-slot cache is k_local while k is the batch-1
     // gathered scratch. On the classic path k itself is the cache.
-    if (attrs.cache_batch_idx.has_value()) {
+    if (selects_cache_slot(attrs, t)) {
         TT_FATAL(
             !attrs.has_fused_ring() || t.k_local.has_value(), "indexer_score fused indexed cache requires k_local");
         const auto& indexed_k = attrs.has_fused_ring() ? *t.k_local : k;
         const uint32_t kB = indexed_k.logical_shape()[0];
+        if (!attrs.cache_batch_idx.has_value()) {
+            // Metadata path: the slot is a device word, so only the recomposition stride is checkable.
+            TT_FATAL(
+                attrs.index_cache_num_layers <= kB && kB % attrs.index_cache_num_layers == 0,
+                "indexer_score index_cache_num_layers {} must divide the index cache's {} slots (user-major)",
+                attrs.index_cache_num_layers,
+                kB);
+            return;
+        }
         TT_FATAL(
             attrs.cache_batch_idx.value() < kB,
             "indexer_score cache_batch_idx ({}) must be < k batch slots ({})",
@@ -269,6 +285,42 @@ void validate_chunk_start_metadata(const operation_attributes_t& attrs, const te
     TT_FATAL(
         m.memory_config().buffer_type() == BufferType::DRAM, "indexer_score: chunk_start_idx_tensor must be in DRAM");
 }
+// Structural checks for the trace-safe cache-slot tensor. Mirrors validate_chunk_start_metadata: the
+// value is read on-device, so only the container and the recomposition terms can be checked here.
+void validate_cache_slot_metadata(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (!t.has_cache_slot_metadata()) {
+        return;
+    }
+    TT_FATAL(
+        attrs.has_fused_ring(),
+        "indexer_score: cache_batch_idx_tensor is supported only on the fused ring path (the classic factory "
+        "has no indexed persistent cache to select a slot from)");
+    TT_FATAL(
+        !attrs.cache_batch_idx.has_value(),
+        "indexer_score: cache_batch_idx and cache_batch_idx_tensor are mutually exclusive -- pass the scalar "
+        "OR the 1-element user-id tensor (the tensor is the trace-safe form)");
+    TT_FATAL(
+        attrs.index_cache_layer_idx < attrs.index_cache_num_layers,
+        "indexer_score: index_cache_layer_idx {} must be < index_cache_num_layers {}",
+        attrs.index_cache_layer_idx,
+        attrs.index_cache_num_layers);
+    const auto& m = *t.cache_batch_idx_tensor;
+    TT_FATAL(m.storage_type() == StorageType::DEVICE, "indexer_score: cache_batch_idx_tensor must be on device");
+    TT_FATAL(m.device() == t.q.device(), "indexer_score: cache_batch_idx_tensor must be on the same mesh device as q");
+    TT_FATAL(m.dtype() == DataType::UINT32, "indexer_score: cache_batch_idx_tensor must be UINT32 (got {})", m.dtype());
+    TT_FATAL(
+        m.layout() == Layout::ROW_MAJOR,
+        "indexer_score: cache_batch_idx_tensor must be ROW_MAJOR (got {})",
+        m.layout());
+    TT_FATAL(
+        m.logical_volume() == 1,
+        "indexer_score: cache_batch_idx_tensor must hold exactly 1 element (got {})",
+        m.logical_volume());
+    TT_FATAL(
+        m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "indexer_score: cache_batch_idx_tensor must be interleaved");
+}
+
 }  // namespace
 
 IndexerScoreDeviceOperation::program_factory_t IndexerScoreDeviceOperation::select_program_factory(
@@ -319,6 +371,15 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         attrs.has_runtime_kv_len(),
         // Metadata presence selects kernels with additional CBs and accessor arguments. Its value remains dynamic.
         tensor_args.has_chunk_start_metadata(),
+        // Reading the slot on-device changes the reader binary, so the PRESENCE is hashed. The layer terms
+        // are NOT: cache_batch_idx is hash-excluded so one program serves every slot and layer, and hashing
+        // the layer index would fork it per layer (21 programs at L78), each fork allocating two more
+        // global semaphores than a tight L1_SMALL region affords. ring_joint_sdpa takes the opposite trade
+        // and hashes them. Consequence of not hashing: the fused all-gather reader's layer_idx runtime
+        // argument must be re-patched on every dispatch in override_runtime_arguments (see
+        // ring_indexer_score_dsa_program_factory.cpp), since a cached program otherwise keeps the value
+        // written at the cache-miss layer.
+        tensor_args.has_cache_slot_metadata(),
         // The block-cyclic layout bakes invP divisors into the reader as compile-time arguments, so sp/chunk_local
         // must be hashed (a contiguous vs block-cyclic read, or a different layout shape, is a different binary).
         attrs.has_block_cyclic(),
@@ -341,6 +402,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_hit(
     validate_chunk_start(attrs, tensor_args);
     validate_fused_runtime_values(attrs, tensor_args);
     validate_chunk_start_metadata(attrs, tensor_args);
+    validate_cache_slot_metadata(attrs, tensor_args);
 }
 
 void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
@@ -385,12 +447,13 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(kls.rank() == 4 && kls[1] == 1, "indexer_score fused: k_local must be [B,1,sll,D]");
         // Indexed fused mode gathers exactly one selected k_local slot into slot 0 of a batch-1 scratch.
         // Non-indexed mode retains the original equal-batch contract.
-        if (attrs.cache_batch_idx.has_value()) {
+        if (selects_cache_slot(attrs, tensor_args)) {
             TT_FATAL(ks[0] == 1, "indexer_score fused indexed cache requires gathered k batch 1 (got {})", ks[0]);
         } else {
             TT_FATAL(
                 kls[0] == ks[0],
-                "indexer_score fused: k_local batch {} must equal gathered k batch {} when cache_batch_idx is unset",
+                "indexer_score fused: k_local batch {} must equal gathered k batch {} when no cache slot is "
+                "selected (neither cache_batch_idx nor cache_batch_idx_tensor)",
                 kls[0],
                 ks[0]);
         }
@@ -718,7 +781,12 @@ ttnn::Tensor launch_indexer_score(
     std::optional<ttnn::operations::experimental::indexer_score::FusedRingConfig> fused_ring = std::nullopt,
     // Trace-safe metadata: 1-element uint32 chunk_start_idx read on-device (see tensor_args_t). nullopt =
     // the host-scalar path, byte-identical to before.
-    std::optional<ttnn::Tensor> chunk_start_idx_tensor = std::nullopt) {
+    std::optional<ttnn::Tensor> chunk_start_idx_tensor = std::nullopt,
+    // Trace-safe cache-slot select: 1-element uint32 USER id read on-device, recomposed with the two
+    // layer terms below (see tensor_args_t::cache_batch_idx_tensor). nullopt = the scalar path.
+    std::optional<ttnn::Tensor> cache_batch_idx_tensor = std::nullopt,
+    uint32_t index_cache_num_layers = 1,
+    uint32_t index_cache_layer_idx = 0) {
     // Decompose the seq-shard axes into the SP/TP roles the validation + causal geometry below reason about.
     const auto [cluster_axis, seq_subshard_axis] = split_seq_shard_axes(seq_shard_axes, allow_subshard);
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
@@ -880,6 +948,9 @@ ttnn::Tensor launch_indexer_score(
     operation_attributes.fused_ring = std::move(fused_ring);
     tensor_args.k_local = std::move(k_local);
     tensor_args.chunk_start_idx_tensor = std::move(chunk_start_idx_tensor);
+    tensor_args.cache_batch_idx_tensor = std::move(cache_batch_idx_tensor);
+    operation_attributes.index_cache_num_layers = index_cache_num_layers;
+    operation_attributes.index_cache_layer_idx = index_cache_layer_idx;
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
@@ -977,7 +1048,10 @@ ttnn::Tensor ring_indexer_score_dsa(
     std::optional<uint32_t> seq_subshard_axis,
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local,
-    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor) {
+    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor,
+    const std::optional<ttnn::Tensor>& cache_batch_idx_tensor,
+    uint32_t index_cache_num_layers,
+    uint32_t index_cache_layer_idx) {
     // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
     // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
     ttnn::operations::experimental::indexer_score::FusedRingConfig fused_ring;
@@ -1009,7 +1083,10 @@ ttnn::Tensor ring_indexer_score_dsa(
         block_cyclic_chunk_local,
         k_local,
         fused_ring,
-        chunk_start_idx_tensor);
+        chunk_start_idx_tensor,
+        cache_batch_idx_tensor,
+        index_cache_num_layers,
+        index_cache_layer_idx);
 }
 
 }  // namespace ttnn::experimental

@@ -1741,6 +1741,7 @@ class ttMLA:
 
         storage = kvpe_cache.storage
         slot_lo = cache_batch_idx if storage.shape[0] > 1 else 0
+        multi_slot = storage.shape[0] > 1
         assert metadata is None or self.sp_factor > 1, (
             "trace-safe sparse prefill requires sp_factor > 1: the sp==1 fallback selects the cache slot with a "
             "host ttnn.slice, whose bounds a capture would freeze at the captured slot"
@@ -1764,29 +1765,47 @@ class ttMLA:
             # rank's active local prefix into its fixed worst-case slot, retaining the allocation and
             # the natural-to-physical stride expected by sparse SDPA for the next chunk/layer.
             slab_global = block_cyclic_chunk_local * self.sp_factor
-            if metadata is not None:
-                # Trace-safe: populated_global grows per chunk, but a capture would bake THIS chunk's value
-                # into the gather's runtime args and every replay would then re-gather only the captured
-                # prefix -- later chunks would attend against an unpopulated tail. gathered_dim_size controls
-                # bytes moved, NOT shapes (the output is the model-owned worst-case scratch), so pinning it to
-                # the full cache is correct and costs only transport on early chunks. Making it runtime-driven
-                # needs an on-device page-count clamp in high_bw_all_gather -- a follow-up, not a blocker.
-                gathered_dim_size = storage.shape[2] * self.sp_factor
-            else:
-                gathered_dim_size = min(
-                    storage.shape[2] * self.sp_factor,
-                    ((populated_global + slab_global - 1) // slab_global) * slab_global,
-                )
-            assert gathered_dim_size > 0
+            # Trace-safe: populated_global GROWS per chunk, so a capture would bake this chunk's value into
+            # the gather's runtime args and every replay would re-gather only the captured prefix, leaving
+            # later chunks attending an unpopulated tail. Hand over the chunk start instead and let the
+            # reader derive the extent (and its own page partition) on-device from the same closed form the
+            # host uses. Earlier revisions pinned this to the full cache: correct, since the output is the
+            # model-owned worst-case scratch, but it moved ~1.8x the bytes over an 11-chunk request.
+            extent_kwargs = (
+                {"gathered_prefix_tensor": metadata[1], "gathered_slab_global": slab_global}
+                if metadata is not None
+                else {
+                    "gathered_dim_size": min(
+                        storage.shape[2] * self.sp_factor,
+                        ((populated_global + slab_global - 1) // slab_global) * slab_global,
+                    )
+                }
+            )
+            assert metadata is not None or extent_kwargs["gathered_dim_size"] > 0
             assert self._sparse_kv_gather_buffer is not None
+            # Trace-safe slot select: hand over the 1-element slot_id (USER id) tensor instead of the host
+            # scalar, and let the reader recompose user_id * layer_num + layer_idx on-device. A host
+            # input_batch_index is re-patched per dispatch and a replay never re-runs that patch, so every
+            # replay would gather the slot that was live at capture time -- while the KV WRITE above, being
+            # metadata-driven, lands in the correct slot. Wrong-slot attention, with no error.
+            # Single-slot caches keep the scalar form: there is no slot to get wrong.
+            slot_meta_kwargs = (
+                {
+                    "input_batch_index_tensor": metadata[0],
+                    "batch_slot_num_layers": self.layer_num,
+                    "batch_slot_layer_idx": cache_batch_idx % self.layer_num,
+                }
+                if metadata is not None and multi_slot
+                else {"input_batch_index": slot_lo}
+            )
             gathered = ttnn.experimental.high_bw_all_gather(
                 storage,
                 dim=2,
                 output_tensor=self._sparse_kv_gather_buffer,
                 num_links=self.ccl_num_links,
                 cluster_axis=self.sp_axis,
-                input_batch_index=slot_lo,
-                gathered_dim_size=gathered_dim_size,
+                **slot_meta_kwargs,
+                **extent_kwargs,
             )
 
         return MlaKvCache(

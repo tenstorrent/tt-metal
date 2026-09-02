@@ -219,11 +219,13 @@ UNTRACED_PERF_MARGIN = 0.05
 # Recalibrate from the per-chunk median across several independent green Galaxy runs, not from one run.
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_glm_prefill_transformer_chunked_no_pcc[...-L78-preload0-chunks_eleven-ten_iters-traced]
-    (78, 11, 10): [0.0] * 11,
+    (78, 11, 10): [0.0]
+    * 11,
 }
 GLM_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_glm_prefill_transformer_chunked_no_pcc[...-L78-preload0-chunks_eleven-ten_iters-notrace]
-    (78, 11, 10): [0.0] * 11,
+    (78, 11, 10): [0.0]
+    * 11,
 }
 # Provisional bands, carried over from the Kimi defaults until the GLM baselines are cut. GLM's measured
 # spread is much tighter than Kimi's (traced per-chunk stddev 0.000-0.002 s, untraced 0.009-0.026 s at
@@ -1645,7 +1647,13 @@ def run_chunked_transformer_updated(
                 chunk_start = time.time()
                 trace_controller.replay()
                 ttnn.synchronize_device(mesh_device)
-                chunk_times.append(time.time() - chunk_start)
+                chunk_seconds = time.time() - chunk_start
+                chunk_times.append(chunk_seconds)
+                # Per-(iter, chunk) sample. print_duration_table only reports the median over
+                # iterations[1:], so at num_iters=2 iteration 0's per-chunk times would otherwise be
+                # unrecoverable (only its total is logged) -- and the traced path reaches no other
+                # timing log at all. Emitted identically in both modes so the two are comparable.
+                logger.info(f"[chunk timing] iter={it} chunk={c} {chunk_seconds * 1000:.2f} ms")
                 continue
             tt_tokens = ttnn.from_torch(
                 chunk_tok_host[c],
@@ -1700,6 +1708,7 @@ def run_chunked_transformer_updated(
             ttnn.deallocate(tt_tokens)
             chunk_seconds = time.time() - chunk_start
             chunk_times.append(chunk_seconds)
+            logger.info(f"[chunk timing] iter={it} chunk={c} {chunk_seconds * 1000:.2f} ms")
             if fused_host_calls:
                 logger.info(
                     f"[fused-indexer host timing] iter={it} chunk={c} calls={fused_host_calls} "
@@ -1800,14 +1809,27 @@ def run_chunked_transformer_updated(
     # golden trace, and enabling it makes one mandatory.
 
     if check_layer_pcc:
-        # Empty would mean the comparison silently never ran (e.g. every key missing) and the assert
-        # below would vacuously pass on an empty min().
-        assert layer_min_pcc, "check_layer_pcc=True but no layer output was compared"
+        # kv_only_last_layer strips the LAST layer's output, so exactly num_layers - 1 layers can be
+        # compared -- which is ZERO at num_layers == 1, where the only layer is also the last one. That is
+        # a structural property of the configuration, not a silently skipped comparison, so it must not
+        # assert. Anything between those two cases IS a real gap (a missing intermediate key) and does.
+        expected_compared = max(num_layers - 1, 0)
+        assert len(layer_min_pcc) == expected_compared, (
+            f"check_layer_pcc=True compared {len(layer_min_pcc)} layers but expected {expected_compared} "
+            f"(num_layers={num_layers} minus the kv_only last layer) -- an intermediate layer's output is "
+            f"missing, which would otherwise let the threshold check pass on a partial set"
+        )
+        if not layer_min_pcc:
+            logger.info(
+                f"Per-layer PCC skipped: num_layers={num_layers} and kv_only_last_layer leaves no layer "
+                "with a decoder output. The cache PCCs below still cover this run."
+            )
         logger.info(f"Per-layer min PCC across chunks ({len(layer_min_pcc)}/{num_layers} layers compared):")
         for i in sorted(layer_min_pcc):
             logger.info(f"  layer {i}: {layer_min_pcc[i]:.6f}")
-        overall_min = min(layer_min_pcc.values())
-        assert overall_min >= LAYER_PCC_THRESHOLD, f"min per-layer PCC {overall_min:.6f} < {LAYER_PCC_THRESHOLD}"
+        if layer_min_pcc:
+            overall_min = min(layer_min_pcc.values())
+            assert overall_min >= LAYER_PCC_THRESHOLD, f"min per-layer PCC {overall_min:.6f} < {LAYER_PCC_THRESHOLD}"
 
     if check_pcc:
         assert (
@@ -1889,9 +1911,7 @@ def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_i
     return baseline, (default_margin if perf_margin is None else perf_margin)
 
 
-def glm_chunked_perf_gate(
-    variant, use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin=None
-):
+def glm_chunked_perf_gate(variant, use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin=None):
     """GLM counterpart of kimi_chunked_perf_gate: returns ``(baseline_chunk_times_s, margin)``.
 
     Same two conditions as the Kimi gate -- use_trace picks WHICH table and WHICH default band (a traced

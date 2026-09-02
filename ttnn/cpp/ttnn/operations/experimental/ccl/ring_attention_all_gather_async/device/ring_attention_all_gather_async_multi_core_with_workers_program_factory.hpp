@@ -73,6 +73,28 @@ constexpr uint32_t kNeighborWriterInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborWriterInputTileEndFieldOffset = 3;
 constexpr uint32_t kNeighborWriterInputOriginPageFieldOffset = 4;
 
+// Trace-safe metadata block (present only when the caller passes slot_id), appended to the READER's
+// args after the per-input tensor descriptors AND the input/output tensor-accessor address words --
+// one accessor word each per input, consumed by make_tensor_accessor_tuple.
+//   [+0] slot_id buffer address        [+1] kv_actual_isl buffer address
+//   [+2] chunk_local_tiles             [+3] kv_cache_num_layers      [+4] kv_cache_layer_idx
+// The reader recomposes the gathered slot on-device as slot_id[0] * num_layers + layer_idx.
+//
+// Buffer addresses are auto-patched on cache hits by the descriptor framework, but the two LAYER
+// scalars are plain values: a caller that shares ONE cached program across layers (rather than
+// hashing the layer index, as ring_joint_sdpa does) MUST re-patch kReaderMetadataLayerIdxOffset per
+// dispatch, or every layer gathers the slot of whichever layer took the cache miss.
+constexpr uint32_t kReaderAccessorWordsPerInput = 2;
+constexpr uint32_t kReaderMetadataSlotIdOffset = 0;
+constexpr uint32_t kReaderMetadataKvActualOffset = 1;
+constexpr uint32_t kReaderMetadataChunkLocalTilesOffset = 2;
+constexpr uint32_t kReaderMetadataNumLayersOffset = 3;
+constexpr uint32_t kReaderMetadataLayerIdxOffset = 4;
+
+inline uint32_t reader_metadata_base(uint32_t num_inputs) {
+    return kReaderRuntimeArgHeaderCount + num_inputs * (kTensorDescriptorFieldCount + kReaderAccessorWordsPerInput);
+}
+
 inline uint32_t input_batch_base_pages(uint32_t batch_idx, uint32_t num_heads, uint32_t Ht, uint32_t Wt) {
     return batch_idx * num_heads * Ht * Wt;
 }

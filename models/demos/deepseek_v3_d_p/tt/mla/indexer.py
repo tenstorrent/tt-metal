@@ -823,9 +823,21 @@ class TtIndexer:
             # scalar path passes). Both scalars are host runtime args that a replay would freeze.
             chunk_start_idx=None if metadata is not None else start_pos,
             chunk_start_idx_tensor=metadata[1] if metadata is not None else None,
+            # Trace-safe cache slot. cache_batch_idx below is a host runtime arg the program-cache override
+            # re-patches per dispatch; a replay cannot re-run that patch, so a captured program keeps
+            # scoring against the slot live at CAPTURE time -- and the runtime captures with
+            # cache_user_id=0. The KV write IS metadata-driven, so a multi-user traced request would write
+            # user N's index-K and then score it against user 0's: wrong top-k, no error. Hand over the
+            # 1-element user id and let the reader recompose user*layers + layer_idx on-device.
+            cache_batch_idx_tensor=metadata[0] if metadata is not None else None,
+            index_cache_num_layers=self._index_cache_layers,
+            # The REMAPPED local (self._cache_slot(...) above), which is exactly the term the scalar
+            # cache_batch_idx is built from. self._index_layer_idx is only the same value when
+            # _is_index_compact; using it unconditionally made every layer read another layer's slot.
+            index_cache_layer_idx=cache_layer_idx,
             program_config=cfg,
             seq_subshard_axis=self.tp_axis if tpsp else None,
-            cache_batch_idx=cache_batch_idx,
+            cache_batch_idx=None if metadata is not None else cache_batch_idx,
             block_cyclic_sp_axis=self.sp_axis,
             block_cyclic_chunk_local=seq_len,
             # Metadata path: kv_len is derived on-device as chunk_start + sp*chunk_local -- exactly the

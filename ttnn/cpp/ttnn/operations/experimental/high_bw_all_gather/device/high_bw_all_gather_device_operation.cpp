@@ -120,12 +120,108 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         args.sub_core_grid,
         args.input_batch_index.has_value(),
         args.gathered_dim_size.has_value(),
+        // Slot select via metadata changes the reader binary (it reads the page base on-device instead of
+        // taking it as a runtime argument), so the PRESENCE is hashed. The value is not: it lives in a
+        // tensor the kernel reads each dispatch, which is the whole point.
+        tensor_args.has_batch_index_metadata(),
+        // batch_slot_num_layers / batch_slot_layer_idx are deliberately NOT hashed. They are RUNTIME
+        // arguments: this op is shape-identical across layers, so every layer shares ONE cached program
+        // (that is why input_batch_index is hash-excluded too). Hashing the layer index would give one
+        // program PER LAYER, and each program allocates two global semaphores -- which exhausts a
+        // tightly budgeted L1_SMALL region (GLM: 1152 B total) at the second or third layer.
+        // Freezing them into a captured program is still correct: they are layer-constant, and each
+        // layer is its own op instance in the captured graph. Only the per-REQUEST user id needs a tensor.
+        // Same reasoning as the slot-select flag: reading the extent on-device changes the reader binary,
+        // so the PRESENCE is hashed while the per-chunk value stays in the tensor. gathered_slab_global IS
+        // hashed -- it is structural (chunk_local * sp), identical for every chunk and layer.
+        tensor_args.has_gathered_prefix_metadata(),
+        args.gathered_slab_global,
         tensor_args);
 }
+
+namespace {
+
+// Structural checks for the trace-safe slot-select tensor. Mirrors the metadata validation on the other
+// per-element-tensor ops (ring_indexer_score_dsa, topk_large_indices, update_padded_kv_cache): the value
+// is read on-device, so only the container can be checked here.
+void validate_batch_index_metadata(const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
+    if (!tensor_args.has_batch_index_metadata()) {
+        return;
+    }
+    TT_FATAL(
+        !args.input_batch_index.has_value(),
+        "high_bw_all_gather: input_batch_index and input_batch_index_tensor are mutually exclusive -- pass the "
+        "scalar OR the 1-element tensor, never both (the tensor is the trace-safe form)");
+    const auto& meta = *tensor_args.input_batch_index_tensor;
+    TT_FATAL(
+        meta.storage_type() == StorageType::DEVICE,
+        "high_bw_all_gather input_batch_index_tensor must be on device (the reader NoC-reads it)");
+    TT_FATAL(
+        meta.dtype() == DataType::UINT32,
+        "high_bw_all_gather input_batch_index_tensor must be UINT32, got {}",
+        meta.dtype());
+    TT_FATAL(
+        meta.layout() == Layout::ROW_MAJOR,
+        "high_bw_all_gather input_batch_index_tensor must be ROW_MAJOR, got {}",
+        meta.layout());
+    TT_FATAL(
+        meta.logical_volume() == 1,
+        "high_bw_all_gather input_batch_index_tensor must hold exactly one element, got volume {}",
+        meta.logical_volume());
+    TT_FATAL(
+        meta.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "high_bw_all_gather input_batch_index_tensor must be INTERLEAVED");
+}
+
+// Structural checks for the trace-safe active-extent tensor.
+void validate_gathered_prefix_metadata(const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
+    if (!tensor_args.has_gathered_prefix_metadata()) {
+        TT_FATAL(
+            args.gathered_slab_global == 0,
+            "high_bw_all_gather gathered_slab_global is only meaningful with gathered_prefix_tensor");
+        return;
+    }
+    TT_FATAL(
+        !args.gathered_dim_size.has_value(),
+        "high_bw_all_gather: gathered_dim_size and gathered_prefix_tensor are mutually exclusive -- pass the "
+        "scalar extent OR the 1-element start-position tensor (the tensor is the trace-safe form)");
+    TT_FATAL(
+        args.gathered_slab_global > 0,
+        "high_bw_all_gather gathered_prefix_tensor requires gathered_slab_global > 0 (the block-cyclic slab "
+        "width in gathered-dim elements); the reader rounds the populated prefix up to whole slabs");
+    TT_FATAL(
+        args.gathered_slab_global % args.num_devices == 0,
+        "high_bw_all_gather gathered_slab_global {} must divide evenly across {} devices",
+        args.gathered_slab_global,
+        args.num_devices);
+    const auto& meta = *tensor_args.gathered_prefix_tensor;
+    TT_FATAL(
+        meta.storage_type() == StorageType::DEVICE,
+        "high_bw_all_gather gathered_prefix_tensor must be on device (the reader NoC-reads it)");
+    TT_FATAL(
+        meta.dtype() == DataType::UINT32,
+        "high_bw_all_gather gathered_prefix_tensor must be UINT32, got {}",
+        meta.dtype());
+    TT_FATAL(
+        meta.layout() == Layout::ROW_MAJOR,
+        "high_bw_all_gather gathered_prefix_tensor must be ROW_MAJOR, got {}",
+        meta.layout());
+    TT_FATAL(
+        meta.logical_volume() == 1,
+        "high_bw_all_gather gathered_prefix_tensor must hold exactly one element, got volume {}",
+        meta.logical_volume());
+    TT_FATAL(
+        meta.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "high_bw_all_gather gathered_prefix_tensor must be INTERLEAVED");
+}
+
+}  // namespace
 
 void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
+    validate_batch_index_metadata(args, tensor_args);
+    validate_gathered_prefix_metadata(args, tensor_args);
 
     // Constraints on input tensor
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must to be on device!");
@@ -196,13 +292,34 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
             output_shape.size() == input_padded_shape.size(),
             "Output tensor shape should have same number of dimensions as input tensor but has {}",
             output_shape.size());
-        if (args.input_batch_index.has_value()) {
+        // The scalar and metadata slot-select paths share every STRUCTURAL constraint (they address the
+        // same contiguous [1, ...] slot); only the value bound differs, since the metadata value is not
+        // known host-side.
+        if (args.input_batch_index.has_value() || tensor_args.has_batch_index_metadata()) {
             TT_FATAL(args.dim != 0, "high_bw_all_gather input_batch_index cannot be used when gathering dim 0");
-            TT_FATAL(
-                *args.input_batch_index < input_padded_shape[0],
-                "high_bw_all_gather input_batch_index {} must be < input batch {}",
-                *args.input_batch_index,
-                input_padded_shape[0]);
+            if (args.input_batch_index.has_value()) {
+                TT_FATAL(
+                    *args.input_batch_index < input_padded_shape[0],
+                    "high_bw_all_gather input_batch_index {} must be < input batch {}",
+                    *args.input_batch_index,
+                    input_padded_shape[0]);
+            } else {
+                // Metadata path: the kernel recomposes user_id * num_layers + layer_idx, so bound what
+                // the host CAN see. The user id itself is only known on-device; the caller is responsible
+                // for keeping it < num_users, exactly as it is for the scalar form.
+                TT_FATAL(
+                    args.batch_slot_layer_idx < args.batch_slot_num_layers,
+                    "high_bw_all_gather batch_slot_layer_idx {} must be < batch_slot_num_layers {}",
+                    args.batch_slot_layer_idx,
+                    args.batch_slot_num_layers);
+                TT_FATAL(
+                    args.batch_slot_num_layers <= input_padded_shape[0] &&
+                        input_padded_shape[0] % args.batch_slot_num_layers == 0,
+                    "high_bw_all_gather batch_slot_num_layers {} must divide the input batch {} (the cache batch "
+                    "dim is user-major: num_users * num_layers)",
+                    args.batch_slot_num_layers,
+                    input_padded_shape[0]);
+            }
             TT_FATAL(
                 output_shape[0] == 1,
                 "high_bw_all_gather selected-batch output must have batch 1, got {}",
@@ -255,6 +372,9 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_hit(
     const auto& input_shape = tensor_args.input_tensor.padded_shape();
     const auto& output_tensor = tensor_args.output_tensor;
     TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor must be allocated in buffers on device!");
+    // Metadata slot select has NO host-side value to recheck -- the reader reads it per dispatch. The
+    // container was proven on the miss path, and the presence flag is hashed, so a hit cannot arrive here
+    // with a different form than it compiled for.
     if (args.input_batch_index.has_value()) {
         TT_FATAL(args.dim != 0, "high_bw_all_gather input_batch_index cannot be used when gathering dim 0");
         TT_FATAL(
@@ -309,7 +429,12 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     const std::optional<CoreRangeSet>& sub_core_grid,
     std::optional<uint32_t> num_links,
     std::optional<uint32_t> input_batch_index,
-    std::optional<uint32_t> gathered_dim_size) {
+    std::optional<uint32_t> gathered_dim_size,
+    const std::optional<Tensor>& input_batch_index_tensor,
+    uint32_t batch_slot_num_layers,
+    uint32_t batch_slot_layer_idx,
+    const std::optional<Tensor>& gathered_prefix_tensor,
+    uint32_t gathered_slab_global) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -411,8 +536,15 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .subdevice_id = subdevice_id,
             .sub_core_grid = sub_core_grid,
             .input_batch_index = input_batch_index,
-            .gathered_dim_size = gathered_dim_size},
-        HighBwAllGatherInputs{.input_tensor = input_tensor, .output_tensor = output_tensor}};
+            .gathered_dim_size = gathered_dim_size,
+            .batch_slot_num_layers = batch_slot_num_layers,
+            .batch_slot_layer_idx = batch_slot_layer_idx,
+            .gathered_slab_global = gathered_slab_global},
+        HighBwAllGatherInputs{
+            .input_tensor = input_tensor,
+            .output_tensor = output_tensor,
+            .input_batch_index_tensor = input_batch_index_tensor,
+            .gathered_prefix_tensor = gathered_prefix_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
@@ -428,7 +560,12 @@ Tensor high_bw_all_gather(
     const std::optional<CoreRangeSet>& sub_core_grid,
     std::optional<uint32_t> num_links,
     std::optional<uint32_t> input_batch_index,
-    std::optional<uint32_t> gathered_dim_size) {
+    std::optional<uint32_t> gathered_dim_size,
+    const std::optional<Tensor>& input_batch_index_tensor,
+    uint32_t batch_slot_num_layers,
+    uint32_t batch_slot_layer_idx,
+    const std::optional<Tensor>& gathered_prefix_tensor,
+    uint32_t gathered_slab_global) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
@@ -438,7 +575,12 @@ Tensor high_bw_all_gather(
         sub_core_grid,
         num_links,
         input_batch_index,
-        gathered_dim_size);
+        gathered_dim_size,
+        input_batch_index_tensor,
+        batch_slot_num_layers,
+        batch_slot_layer_idx,
+        gathered_prefix_tensor,
+        gathered_slab_global);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }

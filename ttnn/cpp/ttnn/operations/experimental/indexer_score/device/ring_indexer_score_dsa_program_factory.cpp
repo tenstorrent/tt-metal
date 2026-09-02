@@ -63,7 +63,10 @@ constexpr uint32_t reader_fused_rt_base = reader_kv_len_tiles + 1;              
 constexpr uint32_t reader_k_local_addr = reader_fused_rt_base + fused_rt_width;                              // 36
 constexpr uint32_t reader_k_local_batch_offset = reader_k_local_addr + 1;                                    // 37
 constexpr uint32_t reader_metadata_base = reader_k_local_batch_offset + 1;                                   // 38
-constexpr uint32_t reader_band_perm_base = reader_metadata_base + 3;                                         // 41
+// Cache-slot select block (slot_id address, index_cache_num_layers, index_cache_layer_idx). Fixed width,
+// always present (zeroed when unused), so the kernel consumes it unconditionally and band_perm stays const.
+constexpr uint32_t reader_slot_base = reader_metadata_base + 3;                                              // 41
+constexpr uint32_t reader_band_perm_base = reader_slot_base + 3;                                             // 44
 // Compute RT: schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, then perm.
 constexpr uint32_t compute_band_perm_base = 6 + 4;  // 10
 // Writer RT: out addr, schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, perm.
@@ -73,7 +76,8 @@ constexpr uint32_t writer_band_perm_base = 1 + 6 + 4;  // 11
 static_assert(
     reader_k_batch_offset == 25 && reader_kv_len_tiles == 26 && reader_fused_rt_base == 27 &&
         reader_k_local_addr == 36 && reader_k_local_batch_offset == 37 && reader_metadata_base == 38 &&
-        reader_band_perm_base == 41 && compute_band_perm_base == 10 && writer_band_perm_base == 11,
+        reader_slot_base == 41 && reader_band_perm_base == 44 && compute_band_perm_base == 10 &&
+        writer_band_perm_base == 11,
     "indexer_score fused rt_arg slot layout drifted from the kernel-side expectations");
 }  // namespace rt_arg
 
@@ -361,8 +365,9 @@ ProgramDescriptor build_ring_program_descriptor(
     // The reader publishes one copy of the derived geometry to each single-consumer mailbox. Allocate these
     // after the shared CB slots so the classic factory's indices remain unchanged.
     const bool has_meta = tensors.has_chunk_start_metadata();
-    uint32_t cb_meta_derived = 0, cb_meta_writer = 0;
-    if (has_meta) {
+    const bool has_slot_meta_cb = tensors.has_cache_slot_metadata();
+    uint32_t cb_meta_derived = 0, cb_meta_writer = 0, cb_meta_slot = 0;
+    if (has_meta || has_slot_meta_cb) {
         const auto make_meta_cb = [&](uint32_t& slot) {
             slot = next_cb_index++;
             desc.cbs.push_back(CBDescriptor{
@@ -373,8 +378,17 @@ ProgramDescriptor build_ring_program_descriptor(
                     .data_format = tt::DataFormat::UInt32,
                     .page_size = 64}}}});
         };
-        make_meta_cb(cb_meta_derived);
-        make_meta_cb(cb_meta_writer);
+        if (has_meta) {
+            make_meta_cb(cb_meta_derived);
+            make_meta_cb(cb_meta_writer);
+        }
+        if (has_slot_meta_cb) {
+            // A DEDICATED landing slot for the 1-element user-id read. It cannot share cb_meta_derived:
+            // that CB is the reader->compute mailbox and has already been pushed by the time the fused
+            // block runs, so reserving it again would block on compute popping it -- a deadlock, not a
+            // wrong result.
+            make_meta_cb(cb_meta_slot);
+        }
     }
 
     // Fused-op signal semaphores + consumer signaler (inlined init_fused_op against desc; MULTI). ring_size / rw
@@ -455,6 +469,18 @@ ProgramDescriptor build_ring_program_descriptor(
     reader_ct.push_back(has_meta && args.sp_axis().has_value() ? 1u : 0u);
     tt::tt_metal::TensorAccessorArgs(has_meta ? *tensors.chunk_start_idx_tensor->buffer() : *q.buffer())
         .append_to(reader_ct);
+    // Cache-slot select, same fixed-width discipline as the block above (one kernel binary serves both
+    // forms). local_slot_pages is shape-derived, and therefore already hashed: it is the per-(user, layer)
+    // page stride the reader multiplies its on-device recomposed slot by.
+    const bool has_slot_meta = tensors.has_cache_slot_metadata();
+    const uint32_t local_slot_pages_ct = (k_local.logical_shape()[2] / tt::constants::TILE_HEIGHT) *
+                                         (k_local.logical_shape()[3] / tt::constants::TILE_WIDTH);
+    reader_ct.push_back(has_slot_meta ? 1u : 0u);
+    reader_ct.push_back(rt_arg::reader_slot_base);
+    reader_ct.push_back(has_slot_meta ? local_slot_pages_ct : 0u);
+    reader_ct.push_back(has_slot_meta ? cb_meta_slot : 0u);
+    tt::tt_metal::TensorAccessorArgs(has_slot_meta ? *tensors.cache_batch_idx_tensor->buffer() : *q.buffer())
+        .append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(1u);  // fused_ring on
@@ -511,10 +537,15 @@ ProgramDescriptor build_ring_program_descriptor(
     const auto pcache = persistent_cache_args(args, k);  // kv_len derivation shared with the classic factory
     // Indexed fused mode gathers the selected cache slot into slot 0 of batch-1 k. Keep the gathered and
     // local offsets independent: remote reads start at zero, own-shard reads select the original k_local slot.
-    const uint32_t k_batch_page_offset = args.cache_batch_idx.has_value() ? 0u : pcache.k_batch_page_offset;
+    // Indexed mode (scalar OR metadata) gathers one slot into slot 0 of a batch-1 scratch, so remote
+    // reads start at zero; only the non-indexed contract keeps the shape-derived base.
+    const uint32_t k_batch_page_offset =
+        (args.cache_batch_idx.has_value() || tensors.has_cache_slot_metadata()) ? 0u : pcache.k_batch_page_offset;
     const uint32_t local_slot_pages = (k_local.logical_shape()[2] / tt::constants::TILE_HEIGHT) *
                                       (k_local.logical_shape()[3] / tt::constants::TILE_WIDTH);
-    const uint32_t k_local_batch_page_offset = args.cache_batch_idx.value_or(0) * local_slot_pages;
+    // Metadata path: leave the offset at 0 and let the reader derive it from the on-device user id.
+    const uint32_t k_local_batch_page_offset =
+        tensors.has_cache_slot_metadata() ? 0u : args.cache_batch_idx.value_or(0) * local_slot_pages;
     const uint32_t kv_len_tiles = pcache.kv_len_tiles;
 
     std::vector<uint32_t> fused_rt;
@@ -604,6 +635,18 @@ ProgramDescriptor build_ring_program_descriptor(
                 reader_rt.push_back(0u);
                 reader_rt.push_back(0u);
             }
+            // Cache-slot block: three fixed slots, always pushed (zeroed when off) exactly like the
+            // chunk-start block above, so the kernel consumes them unconditionally and band_perm_base
+            // stays a compile-time constant on every path.
+            if (tensors.has_cache_slot_metadata()) {
+                reader_rt.push_back(tensors.cache_batch_idx_tensor->buffer());
+                reader_rt.push_back(args.index_cache_num_layers);
+                reader_rt.push_back(args.index_cache_layer_idx);
+            } else {
+                reader_rt.push_back(0u);
+                reader_rt.push_back(0u);
+                reader_rt.push_back(0u);
+            }
             reader_rt.append(band_perm);
             reader_kernel.emplace_runtime_args(core, reader_rt);
 
@@ -647,6 +690,16 @@ ProgramDescriptor build_ring_program_descriptor(
         const auto backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
             q, coord, /*offset=*/-1, fused.topology, args.sp_axis());
 
+        // The helper's `input_batch_slice_idx` is a STRUCTURAL switch, not a value: nullopt selects a
+        // FULL-BATCH gather (batch_head_size = every slot's heads), while any value selects the
+        // single-slot structure whose page base the AG reader then recomputes on-device from slot_id.
+        // So the metadata path must still pass a placeholder 0 -- passing args.cache_batch_idx raw
+        // (nullopt there) silently gathers all slots into a batch-1 scratch, which no amount of correct
+        // slot arithmetic downstream can repair. Same construction as ring_joint_sdpa's gather_slice_idx.
+        const bool ag_indexed = args.cache_batch_idx.has_value() || tensors.has_cache_slot_metadata();
+        const std::optional<uint32_t> gather_slice_idx =
+            ag_indexed ? std::optional<uint32_t>(args.cache_batch_idx.value_or(0)) : std::nullopt;
+
         std::vector<Tensor> ag_in = {k_local};
         std::vector<Tensor> ag_out = {k};
         // The gather concatenates the SP shards along the seq axis (dim 2); the reader's block-cyclic permutation
@@ -671,14 +724,22 @@ ProgramDescriptor build_ring_program_descriptor(
             // COL_MAJOR so the reserved-column offset lays the workers DOWN the free column ((compute_cols_x,0),
             // (compute_cols_x,1), ...) instead of running off the right grid edge as row-major would.
             ttnn::ccl::CoreAllocationStrategy::COL_MAJOR,
-            args.cache_batch_idx,
+            gather_slice_idx,
             gather_valid_height_tiles(args, k_local),
-            /*slot_id=*/std::nullopt,
+            // The fused all-gather selects the SAME cache slot as the reader's local reads -- it gathers
+            // k_local's selected slot into the batch-1 scratch. On the metadata path cache_batch_idx is
+            // nullopt, so without these the gather would take slot 0 for every layer while the reader's own
+            // local shard came from the correct slot: invisible at layer 0, where both agree.
+            // All FIVE trace-safe arguments together, not three: the helper's metadata path derives the
+            // slot AND the valid length on-device, and an absent kv_actual_isl_tensor resolves to a
+            // default (HOST-storage) Tensor rather than being treated as "unused": a partial wiring fails
+            // with "Expected Tensor with DeviceStorage, got StorageType::HOST".
+            /*slot_id=*/tensors.cache_batch_idx_tensor,
             /*kv_actual_isl=*/tensors.chunk_start_idx_tensor,
             /*chunk_local_tiles=*/
             has_meta ? args.block_cyclic->chunk_local / tt::constants::TILE_HEIGHT : 0,
-            /*kv_cache_num_layers=*/1,
-            /*kv_cache_layer_idx=*/0,
+            /*kv_cache_num_layers=*/args.index_cache_num_layers,
+            /*kv_cache_layer_idx=*/args.index_cache_layer_idx,
             // This consumer's FusedRingGate has no split-shard second-half wait; keep the gather unsplit.
             /*split_forwarding_enabled=*/false);
     }
@@ -753,11 +814,15 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     const auto& k = tensors.k;
     const auto& k_local = *tensors.k_local;
     const auto pcache = persistent_cache_args(args, k);
-    const uint32_t k_batch_page_offset = args.cache_batch_idx.has_value() ? 0u : pcache.k_batch_page_offset;
+    // Indexed mode (scalar OR metadata) gathers one slot into slot 0 of a batch-1 scratch, so remote
+    // reads start at zero; only the non-indexed contract keeps the shape-derived base.
+    const uint32_t k_batch_page_offset =
+        (args.cache_batch_idx.has_value() || tensors.has_cache_slot_metadata()) ? 0u : pcache.k_batch_page_offset;
     const auto& k_local_shape = k_local.logical_shape();
     const uint32_t local_slot_pages =
         (k_local_shape[2] / tt::constants::TILE_HEIGHT) * (k_local_shape[3] / tt::constants::TILE_WIDTH);
-    const uint32_t k_local_batch_page_offset = args.cache_batch_idx.value_or(0) * local_slot_pages;
+    const uint32_t k_local_batch_page_offset =
+        tensors.has_cache_slot_metadata() ? 0u : args.cache_batch_idx.value_or(0) * local_slot_pages;
 
     for (auto& [range, program] : cached.workload.get_programs()) {
         const uint32_t device_index = device_index_for(args, range.start_coord(), q);
@@ -788,8 +853,24 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         // (reader_k_batch_offset=25, reader_kv_len_tiles=26, reader_k_local_batch_offset=37 — past the
         // 9-wide fused block at 27..35 and k_local_addr at 36).
         patch_field(0, 25u, k_batch_page_offset);
-        // Cache slot offsets remain host runtime arguments on both paths.
+        // Slot offset: host-owned on the SCALAR path (re-patched every dispatch), and 0 on the metadata
+        // path, where the reader adds its own base from the on-device user id. Patching it either way keeps
+        // one code path -- the metadata value is a constant 0, so re-writing it is harmless.
         patch_field(0, 37u, k_local_batch_page_offset);
+        // The trace-safe slot block is hash-EXCLUDED, exactly like the scalars below, so one cached program
+        // serves every (user, layer). Every later layer therefore arrives as a cache HIT where only this
+        // override runs, so its runtime args MUST be re-patched here or the program keeps the FIRST layer's
+        // values. Omitting this made all four GLM full layers score against layer 0's index-K slot
+        // (li=0 everywhere): 0.950 KV PCC instead of 0.9988. Under capture this is also what bakes each
+        // layer's own value into that layer's recorded commands.
+        if (tensors.has_cache_slot_metadata()) {
+            // Literal, like the ones around it: the rt_arg namespace is ambiguous in this unity build
+            // (the classic factory declares a same-named namespace). Kept honest by rt_arg's static_assert.
+            constexpr uint32_t slot_rt_base = 41u;  // rt_arg::reader_slot_base
+            patch_field(0, slot_rt_base + 0u, tensors.cache_batch_idx_tensor->buffer()->address());
+            patch_field(0, slot_rt_base + 1u, args.index_cache_num_layers);
+            patch_field(0, slot_rt_base + 2u, args.index_cache_layer_idx);
+        }
         // Metadata kernels derive causal fields on-device; scalar kernels receive them as runtime arguments.
         if (!tensors.has_chunk_start_metadata()) {
             patch_field(0, 26u, pcache.kv_len_tiles);
@@ -841,6 +922,48 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         patch_ag_field(/*writer forward=*/4, /*out_ready_sem=*/4, forward_semaphore);
         patch_ag_field(/*reader backward=*/5, /*out_ready_sem=*/2, backward_semaphore);
         patch_ag_field(/*writer backward=*/6, /*out_ready_sem=*/4, backward_semaphore);
+
+        // The gathered slot's LAYER term. On the metadata path input_batch_base above is a 0 placeholder
+        // and the AG reader recomposes the slot on-device as slot_id[0] * num_layers + layer_idx -- so the
+        // user id is trace-safe, but layer_idx is a plain runtime scalar written at CREATE time. This op
+        // shares ONE cached program across all layers (the layer terms are hash-excluded on purpose; see
+        // the note in indexer_score_device_operation_types.hpp -- hashing them forks the program per layer
+        // and each fork allocates more global semaphores than L1_SMALL has room for). ring_joint_sdpa takes
+        // the opposite trade and HASHES them, which is why the dense path needs no patch here.
+        //
+        // Without this patch every layer but the one that took the cache miss gathers layer 0's keys:
+        // deterministic, silent, and correct at layer 0, where the stale value happens to be right. It
+        // shows up as KV PCC degrading smoothly with depth (0.9978 -> 0.9501 at L10), never as a failure.
+        //
+        // patch_ag_field tolerates an out-of-range slot (the grid includes cores with no args for this
+        // kernel), so a layout drift here would silently patch NOTHING and restore the bug above. Count
+        // the cores actually written and fail loudly on zero.
+        if (tensors.has_cache_slot_metadata()) {
+            const uint32_t ag_meta_base = ag_rt::reader_metadata_base(/*num_inputs=*/1);  // gathers k_local alone
+            uint32_t layer_idx_patched = 0;
+            for (const uint32_t ag_reader_kernel : {3u, 5u}) {
+                patch_ag_field(
+                    ag_reader_kernel,
+                    ag_meta_base + ag_rt::kReaderMetadataNumLayersOffset,
+                    args.index_cache_num_layers);
+                auto& grid_args = GetRuntimeArgs(program, ag_reader_kernel);
+                for (auto& col_args : grid_args) {
+                    for (auto& core_args : col_args) {
+                        const uint32_t slot = ag_meta_base + ag_rt::kReaderMetadataLayerIdxOffset;
+                        if (core_args.size() > slot) {
+                            core_args[slot] = args.index_cache_layer_idx;
+                            ++layer_idx_patched;
+                        }
+                    }
+                }
+            }
+            TT_FATAL(
+                layer_idx_patched > 0,
+                "indexer_score fused override: the all-gather reader's metadata layer_idx slot ({}) is out "
+                "of range on every core, so the gathered cache slot would stay frozen at the cache-miss "
+                "layer's value. The reader runtime-arg layout changed; re-derive reader_metadata_base.",
+                ag_meta_base + ag_rt::kReaderMetadataLayerIdxOffset);
+        }
 
         constexpr uint32_t ag_reader_input_base =
             ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kInputBatchBaseFieldOffset;

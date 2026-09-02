@@ -158,6 +158,11 @@ ttnn::Tensor ring_indexer_score_dsa(
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
     // For trace replay, supplies chunk_start_idx on-device. Mutually exclusive with chunk_start_idx and kv_len.
-    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor = std::nullopt,
+    // Trace-safe cache-slot select: 1-element uint32 USER id; the reader recomposes
+    // user_id * index_cache_num_layers + index_cache_layer_idx. Mutually exclusive with cache_batch_idx.
+    const std::optional<ttnn::Tensor>& cache_batch_idx_tensor = std::nullopt,
+    uint32_t index_cache_num_layers = 1,
+    uint32_t index_cache_layer_idx = 0);
 
 }  // namespace ttnn::experimental

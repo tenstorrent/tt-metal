@@ -199,6 +199,12 @@ void bind_indexer_score(nb::module_& mod) {
         scoring; the reader gates each K band on ONLY the SP shards that band touches, so it scores already-
         arrived shards while farther slabs are still in flight. DSA only -- there is no fused MSA variant.
 
+        Trace-safe capture: pass ``cache_batch_idx_tensor`` (a 1-element uint32 ROW_MAJOR DRAM tensor holding
+        the USER id) instead of ``cache_batch_idx``, together with ``index_cache_num_layers`` /
+        ``index_cache_layer_idx``; the reader recomposes the flat slot on-device. A host ``cache_batch_idx``
+        is re-patched per dispatch and a replay never re-runs that patch, so every replay would score
+        against the slot that was live at capture time.
+
         For trace replay, ``chunk_start_idx_tensor`` supplies the dynamic chunk position on-device. It must
         be a 1-element UINT32 row-major DRAM tensor and requires block-cyclic layout. Do not also provide
         ``chunk_start_idx`` or ``kv_len``; the kernel derives ``kv_len`` from the tensor value.
@@ -255,7 +261,10 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("seq_subshard_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none(),
-        nb::arg("chunk_start_idx_tensor") = nb::none());
+        nb::arg("chunk_start_idx_tensor") = nb::none(),
+        nb::arg("cache_batch_idx_tensor") = nb::none(),
+        nb::arg("index_cache_num_layers") = 1,
+        nb::arg("index_cache_layer_idx") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

@@ -97,6 +97,13 @@ struct operation_attributes_t {
     // cache_batch_idx * Tt * Dt). NOT hashed, re-applied each dispatch, so switching slots does NOT recompile.
     std::optional<uint32_t> cache_batch_idx{std::nullopt};
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
+    // Recomposition terms for the trace-safe slot select (see tensor_args::cache_batch_idx_tensor).
+    // RUNTIME args, deliberately NOT hashed: cache_batch_idx is already hash-excluded so ONE cached
+    // program serves every slot AND every layer, and hashing the layer index would fork it 78 ways.
+    // Freezing them in a capture is still correct -- they are layer-constant, and each layer is its own
+    // captured op instance. Only the per-REQUEST user id needs a tensor.
+    uint32_t index_cache_num_layers{1};
+    uint32_t index_cache_layer_idx{0};
     // Runtime KV length: the valid prefix this dispatch (rest masked). NOT hashed, so growing kv_len <= T
     // reuses ONE program. grid/work-split/output width stay keyed on the hashed T. nullopt == T.
     std::optional<uint32_t> kv_len{std::nullopt};
@@ -123,6 +130,16 @@ struct tensor_args_t {
     // derives kv_len from this value so the causal position and valid prefix remain consistent.
     std::optional<Tensor> chunk_start_idx_tensor{std::nullopt};
     bool has_chunk_start_metadata() const { return chunk_start_idx_tensor.has_value(); }
+    // TRACE-SAFE cache-slot select (fused indexed mode). `cache_batch_idx` is a host runtime arg that
+    // selects which (user, layer) slot of the persistent index-K cache this dispatch reads. A trace REPLAY
+    // never re-runs that patch, so a captured program keeps reading the slot that was live at capture time
+    // -- and capture warms user 0. The KV write is metadata-driven and lands in the right slot, so a
+    // multi-user traced request scores user N's queries against user 0's index-K cache: wrong top-k, no
+    // error. Hand over the 1-element uint32 USER id instead and the reader recomposes
+    //     cache_batch_idx = user_id * index_cache_num_layers + index_cache_layer_idx
+    // mirroring TtIndexer's own host formula. Mutually exclusive with the scalar cache_batch_idx.
+    std::optional<Tensor> cache_batch_idx_tensor{std::nullopt};
+    bool has_cache_slot_metadata() const { return cache_batch_idx_tensor.has_value(); }
 };
 
 using tensor_return_value_t = Tensor;

@@ -66,6 +66,30 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                     slot; bytes outside those prefixes are left unchanged. ``gathered_dim_size``
                     is the total valid extent, not a contiguous output prefix: consumers must
                     preserve the fixed per-rank stride when locating every rank's valid data.
+                input_batch_index_tensor: TRACE-SAFE form of ``input_batch_index``. A 1-element
+                    uint32 ROW_MAJOR DRAM tensor holding the USER id; the reader reads it on-device
+                    and recomposes the flat cache slot as
+                    ``user_id * batch_slot_num_layers + batch_slot_layer_idx`` (the cache batch dim is
+                    user-major). Use this instead of ``input_batch_index`` whenever the call is captured
+                    into a ttnn trace: a host scalar is patched per dispatch, and a replay never re-runs
+                    that patch, so every replay would re-read the slot live at capture time. Mutually
+                    exclusive with ``input_batch_index``.
+                batch_slot_num_layers: Layers per user in the input cache's batch dim. Compile-time
+                    (hashed) and only read on the ``input_batch_index_tensor`` path.
+                batch_slot_layer_idx: This call's layer index within a user's slots. Runtime (not
+                    hashed, so all layers share one program) and only read on the
+                    ``input_batch_index_tensor`` path.
+                gathered_prefix_tensor: TRACE-SAFE form of ``gathered_dim_size``. A 1-element uint32
+                    ROW_MAJOR DRAM tensor holding this chunk's START position in the gathered dim; the
+                    reader derives the active extent on-device as
+                    ``min(round_up(start + gathered_slab_global, gathered_slab_global), full_extent)``
+                    and recomputes its own page partition from it. Use this instead of
+                    ``gathered_dim_size`` whenever the call is captured into a ttnn trace: the scalar
+                    grows every chunk, and a replay would re-gather only the captured chunk's prefix.
+                    Mutually exclusive with ``gathered_dim_size``.
+                gathered_slab_global: Block-cyclic slab width in gathered-dim elements
+                    (``chunk_local * num_devices``). Required with ``gathered_prefix_tensor`` and hashed,
+                    being structural rather than per-chunk.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -77,7 +101,12 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("sub_core_grids") = nb::none(),
         nb::arg("num_links") = nb::none(),
         nb::arg("input_batch_index") = nb::none(),
-        nb::arg("gathered_dim_size") = nb::none());
+        nb::arg("gathered_dim_size") = nb::none(),
+        nb::arg("input_batch_index_tensor") = nb::none(),
+        nb::arg("batch_slot_num_layers") = 1,
+        nb::arg("batch_slot_layer_idx") = 0,
+        nb::arg("gathered_prefix_tensor") = nb::none(),
+        nb::arg("gathered_slab_global") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail
