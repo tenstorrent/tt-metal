@@ -97,24 +97,35 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
         tt::tt_metal::CircularBufferConfig(cb_depth_pages * page_size, {{cb_id, df}}).set_page_size(cb_id, page_size);
     CreateCircularBuffer(program, worker_core_range, cb_config);
 
+    // Packet-header CB: two headers (payload write + semaphore inc), like the all-gather writer.
+    const uint32_t packet_header_cb_id = tt::CB::c_in1;
+    const uint32_t packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    auto packet_header_cb_config =
+        tt::tt_metal::CircularBufferConfig(2 * packet_header_size, {{packet_header_cb_id, tt::DataFormat::UInt32}})
+            .set_page_size(packet_header_cb_id, packet_header_size);
+    CreateCircularBuffer(program, worker_core_range, packet_header_cb_config);
+
     // TODO(on-device): forward-neighbour fabric route args (dst_mesh_id, dst_chip_id) for the 1-hop
     //   unicast. Derive from forward_coord via the fabric node id, as ring_attention_all_gather does.
     const uint32_t fabric_route_arg0 = 0;  // placeholder
     const uint32_t fabric_route_arg1 = 0;  // placeholder
 
+    // CT layout must match broadcast_ring_relay.cpp exactly.
     std::vector<uint32_t> ct_args = {
         ring_size,
         operation_attributes.sender_ring_index,
         ring_index,
-        num_chunks,
-        chunk_num_pages,
+        input_num_pages,  // num_tiles (total per-device shard tiles; kernel chunks internally)
         page_size,
+        chunk_num_pages,  // packet_size_in_pages (tiles per chunk)
         cb_id,
-        fabric_route_arg0,
-        fabric_route_arg1,
+        packet_header_cb_id,
+        fabric_route_arg0,  // unicast_route_arg0
+        fabric_route_arg1,  // unicast_route_arg1
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(ct_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(ct_args);
+    (void)num_chunks;
 
     auto relay_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -125,19 +136,25 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .compile_args = ct_args});
 
-    // Runtime args (per worker core). Buffer addresses + semaphore addresses + the fabric connection args.
-    // TODO(on-device): append the FabricConnectionManager args for the forward connection (only when this
-    //   device forwards, i.e. !is_last), mirroring ring_attention_all_gather_writer.cpp's arg layout, and
-    //   pass the downstream device's recv-semaphore + CB write addr for the completion atomic-inc + payload
-    //   target. override_runtime_arguments below refreshes the buffer addresses on cache hit.
+    // Downstream worker core noc coords (target for the completion atomic-inc). The relay forwards to the
+    // same logical worker core on the forward-neighbour device, so translate this core to noc coords.
+    // TODO(on-device): confirm the downstream core is the same logical core on forward_coord's device.
+    const CoreCoord ds_core_noc = mesh_device->worker_core_from_logical_core(worker_cores.front());
+
+    // Runtime args (per worker core), matching broadcast_ring_relay.cpp:
+    //   input_addr, output_addr, recv_sem_addr, ds_sem_noc_x, ds_sem_noc_y, ds_sem_addr, then fabric args.
+    // TODO(on-device): append the FabricConnectionManager args for the forward connection (only when
+    //   !is_last), via append_worker_to_fabric_edm_sender_rt_args (see ring_attention_all_gather).
     for (uint32_t link = 0; link < operation_attributes.num_links; ++link) {
         const CoreCoord core = worker_cores[link];
         std::vector<uint32_t> rt = {
             input_tensor.buffer()->address(),
             output_tensor.buffer()->address(),
             recv_semaphore.address(),
-            recv_semaphore.address(),  // forward neighbour's recv-sem shares the same L1 offset (global sem)
-            // TODO(on-device): + fabric connection args here (built_from_args on the kernel side).
+            static_cast<uint32_t>(ds_core_noc.x),
+            static_cast<uint32_t>(ds_core_noc.y),
+            recv_semaphore.address(),  // downstream recv-sem: same L1 offset (global semaphore)
+            // TODO(on-device): + fabric connection args here (FabricConnectionManager::build_from_args).
         };
         (void)is_last;
         tt::tt_metal::SetRuntimeArgs(program, relay_kernel_id, core, rt);
@@ -155,7 +172,7 @@ BroadcastRingProgramFactory::cached_program_t BroadcastRingProgramFactory::creat
 
 void BroadcastRingProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const BroadcastRingParams& operation_attributes,
+    const BroadcastRingParams& /*operation_attributes*/,
     const BroadcastRingInputs& tensor_args,
     Tensor& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {

@@ -50,9 +50,12 @@ void kernel_main() {
     const uint32_t ds_sem_addr = get_arg_val<uint32_t>(arg_idx++);  // downstream recv-sem L1 addr
     size_t fab_arg = arg_idx;                                       // remaining args -> fabric connection
 
-    // Output addrgen (fabric write target on the downstream device) — same output spec on every device.
-    // TODO(on-device): build from the output TensorAccessorArgs at tensor_args_base, as the all-gather writer does.
-    auto output_addrgen = /* make_output_addrgen(tensor_args_base, output_addr, page_size) */ 0;
+    // Input + output addrgens. Input CT args start at tensor_args_base; output args follow immediately.
+    // Same output spec on every device, so the output addrgen also names the downstream fabric-write target.
+    constexpr auto in_args = TensorAccessorArgs<tensor_args_base>();
+    constexpr auto out_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
+    const auto in_addrgen = TensorAccessor(in_args, input_addr, page_size);
+    const auto out_addrgen = TensorAccessor(out_args, output_addr, page_size);
 
     volatile tt_l1_ptr uint32_t* recv_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_sem_addr);
     CircularBuffer cb(cb_id);
@@ -82,18 +85,21 @@ void kernel_main() {
     while (tiles_done < num_tiles) {
         const uint32_t chunk_tiles = std::min(num_tiles - tiles_done, packet_size_in_pages);
 
-        // 1) Get this chunk into the CB (sender reads local input; receivers wait for it in their output).
+        // 1) Get this chunk into the CB. Sender reads its local input; receivers wait for upstream's fabric
+        //    write to land it in their OUTPUT, then read it back to L1 so they can forward it.
         cb.reserve_back(chunk_tiles);
-        const uint32_t cb_wr = cb.get_write_ptr();
+        uint32_t l1_wr = cb.get_write_ptr();
         if constexpr (is_sender) {
             for (uint32_t t = 0; t < chunk_tiles; ++t) {
-                // noc_async_read(input tile (tiles_done+t) -> cb_wr + t*page_size, page_size);
+                noc_async_read_page(tiles_done + t, in_addrgen, l1_wr);
+                l1_wr += page_size;
             }
             noc_async_read_barrier();
         } else {
             noc_semaphore_wait_min(recv_sem, chunk + 1);  // upstream wrote this chunk into our output
             for (uint32_t t = 0; t < chunk_tiles; ++t) {
-                // noc_async_read(output tile (tiles_done+t) -> cb_wr + t*page_size, page_size);
+                noc_async_read_page(tiles_done + t, out_addrgen, l1_wr);
+                l1_wr += page_size;
             }
             noc_async_read_barrier();
         }
@@ -105,7 +111,8 @@ void kernel_main() {
         // 2) Sender persists its own output locally (receivers already have it in output via the fabric write).
         if constexpr (is_sender) {
             for (uint32_t t = 0; t < chunk_tiles; ++t) {
-                // noc_async_write(cb_rd + t*page_size -> output tile (tiles_done+t), page_size);
+                const uint64_t dst = get_noc_addr(tiles_done + t, out_addrgen);
+                noc_async_write(cb_rd + t * page_size, dst, page_size);
             }
             noc_async_write_barrier();
         }
@@ -113,8 +120,7 @@ void kernel_main() {
         // 3) Forward each tile of the chunk to the downstream device's OUTPUT, then bump its recv-sem.
         if constexpr (forwards) {
             for (uint32_t t = 0; t < chunk_tiles; ++t) {
-                fabric_write_unidir(
-                    tiles_done + t, output_addrgen, pkt_hdr, *fwd_conn, cb_rd + t * page_size, page_size);
+                fabric_write_unidir(tiles_done + t, out_addrgen, pkt_hdr, *fwd_conn, cb_rd + t * page_size, page_size);
             }
             const uint64_t ds_sem_noc = safe_get_noc_addr(ds_sem_noc_x, ds_sem_noc_y, ds_sem_addr, 0);
             pkt_hdr_sem->to_noc_unicast_atomic_inc(
@@ -133,5 +139,4 @@ void kernel_main() {
     if constexpr (forwards) {
         fabric_connection.close();
     }
-    (void)output_addrgen;
 }
