@@ -206,6 +206,12 @@ parity so no carry copy is needed. Measured skip rate 40% (a visit spans 64 quer
 unchanged) ~ e^{-64/k}), net neutral (16.5/16.4 vs 16.2/16.2) -- reverted, variant kept in
 scratchpad notes. Per-row granularity would skip ~95% but the rescale is per-tile anyway.
 
+Lever 2 (MOP-path PV, 2026-09-02): matmul_block per (block, inner) with kt_dim = probs row stride
+(V slot layout is already the MOP's [kt x ct] block); row-major DEST -> blocked O packs. Correct,
+neutral (16.10/16.03), kept. Post-lever profile: PACK 93% busy, MATH 89%, UNPACK 87% -- the threads
+alternate waits (MATH-heavy QK vs PACK-heavy exp) and the deferred-PV region is the DEST half-sync
+handoff, not issue work. Practical ceiling of this design ~26-28%.
+
 Measured hard floors (per worker, 15s topk median, probe 9 MATH timers + probes 1/3/5/7):
 - SFPU exp (lossless, pack-thread): ~6.5 ms -- sets util ceiling ~60% ALONE if everything else hides under it
 - PACK thread total (exp + ~30 packs/visit): ~10 ms
