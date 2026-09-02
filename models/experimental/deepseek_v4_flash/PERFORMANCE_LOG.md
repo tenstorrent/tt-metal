@@ -8,7 +8,8 @@ produced the gain.
 
 All numbers are per-user (tok/s/u) tokens/second at batch=1 unless a batch
 size is explicitly called out. Steps 1–18 are the 8-chip PP-only path; from
-step 20 the headline number is 32-chip Galaxy (8 pipeline stages × TP4).
+step 20 the headline number is 32-chip Galaxy (TP4). Pipeline depth was
+eight 1×4 stages through step 23, then two stages from step 26.
 
 ## Summary chart
 
@@ -37,6 +38,10 @@ step 20 the headline number is 32-chip Galaxy (8 pipeline stages × TP4).
 | 21 | 2026-08-31 | `c67f46aa` | — | — | **Working Sinkhorn LLK** — SFPU sinkhorn path in the hyper-connection kernel (`ckernel_sfpu_sinkhorn` / `sinkhorn.cpp`) instead of a reduce-based fallback. |
 | 22 | 2026-08-31 | `6c96b4c` | **24 tok/s/u** | +20% | **TP4, SP8** — eight 1×4 stages with a **private `HC_FN_GCB`** so hyper-connection `fn` (and, at the time, balanced q_a/kv) can prefetch on an 8-tile page that cannot share the 32-tile decode ring. Hyper-connections themselves join the prefetch FIFO. |
 | 23 | 2026-09-01 | `db9f622` | — (unmeasured) | — | **Replicated q_a and kv** — galaxy32 `qkv_tp_strategy` switched from `balanced` (N-shard + all-gather, `HC_FN_GCB`) to full-width replicas on every TP rank that join the shared 32-tile decode GCB. `q_b` stays head-sharded TP4. |
+| 24 | 2026-09-01 | `b363ec5` | — | — | **`LinearDecode` for the MoE router matmul** — router projection uses the decode matmul path instead of a generic linear. |
+| 25 | 2026-09-02 | `f6174c6` | **25.3 tok/s/u** | +5% vs 24 | **Attention cleanup** — removed leftover decode-path copies/reshapes in `attention.py` after replicated q_a/kv. |
+| 26 | 2026-09-02 | `2b40e68` | **27 tok/s/u** | +7% | **Galaxy32 pipeline depth 8 → 2** — two 1×4 stages instead of eight, cutting pipeline-socket hops on the 32-chip mesh. |
+| 27 | 2026-09-02 | `f891d67` | **28 tok/s/u** | +4% | **Single-user fused hyperconnection** — one program for T=1: cores 0–7 width-sharded collapse, core 8 post, core 9 comb+Sinkhorn; `fused_w` multicast from core 0. |
 
 ## Overall trajectory
 
@@ -61,14 +66,16 @@ step 20 the headline number is 32-chip Galaxy (8 pipeline stages × TP4).
   circular buffer (GCB) reusable, extending prefetching to MoE matmuls,
   optimizing the MoE router, and finally combining batched `MatmulDecode`
   with the prefetcher so both optimizations compound.
-- The **TP / Galaxy push** (steps 19-23, 16.2 → **24 tok/s/u**) moved the
-  headline number onto **32 chips** (8 pipeline stages × TP4). Ring-gather
-  PWS `matmul_decode` made intra-stage TP legal; wiring the prefetcher through
-  that layout landed **20 tok/s/u**; a second GCB for hyper-connection `fn`
-  plus SP8 staging landed **24 tok/s/u**. Replicated (unfused) q_a/kv is in
-  tree as of 2026-09-01 but has no new demo number yet. This is not a like-
-  for-like 8-chip comparison: per-layer compute is split across four ranks,
-  and the extra chips also cut layers-per-stage / socket hops.
+- The **TP / Galaxy push** (steps 19-27, 16.2 → **28 tok/s/u**) moved the
+  headline number onto **32 chips** (TP4). Ring-gather PWS `matmul_decode`
+  made intra-stage TP legal; wiring the prefetcher through that layout landed
+  **20 tok/s/u**; a second GCB for hyper-connection `fn` plus SP8 staging
+  landed **24 tok/s/u**. Attention cleanup after replicated q_a/kv reached
+  **25.3 tok/s/u**; collapsing Galaxy pipeline depth from 8 stages to 2
+  reached **27 tok/s/u**; fusing single-user hyperconnection (collapse /
+  post / Sinkhorn in one program) reached **28 tok/s/u**. This is not a
+  like-for-like 8-chip comparison: per-layer compute is split across four
+  ranks, and fewer pipeline stages cut socket hops.
 
 ## Commit reference
 
@@ -96,6 +103,10 @@ ed591086501  TP4 with prefetcher. 20 toks/s/u
 c67f46aa07a  Working sinkhorn llk
 6c96b4c132d  TP4, SP8 24tok/s/u
 db9f622bbc1  Replicated q_a & kv
+b363ec5f8ce  LinearDecode for Router Matmul
+f6174c63382  Clean up attention. 25.3 tok/s/u
+2b40e68f811  From 8 to 2 Pipeline stages for galaxy32. 27 tok/s/u
+f891d678381  Fused hyperconnection optimized. 28tok/s/u
 ```
 
 *(Generated from `git log --oneline -- models/experimental/deepseek_v4_flash`
