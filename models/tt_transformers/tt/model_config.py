@@ -126,6 +126,8 @@ class MathFidelitySetting(Enum):
     HIFI2_NA = "hifi2na"  # na specified `packer_l1_acc=False` and `fp32_dest_acc_en=False` in compute kernel config
     HIFI2_FP16 = "hifi2fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
     HIFI2_NOL1ACC = "hifi2nol1acc"  # fp32_dest_acc_en=True but packer_l1_acc=False (issue #36378)
+    HIFI2_NOFP32 = "hifi2nofp32"  # like HIFI2 but fp32_dest_acc_en=False; halves the
+    # destination-register footprint per tile, so twice as many tiles fit per pass
     HIFI4 = "hifi4"
     HIFI4_FP16 = "hifi4fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
     HIFI4_FP32 = "hifi4fp32"
@@ -313,9 +315,13 @@ class ModelOptimizations:
                 OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
                 OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
                 # Attention operators -- linear and scaled_dot_product_attention, in decode and prefill modes
-                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
-                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2,
-                OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
+                # Decode only: fp32_dest_acc_en=False. A 32-bit running total occupies twice the
+                # destination-register space, so 4 tiles fit per pass where 8 otherwise would.
+                # Measured 27.942 -> 27.794 and 27.812 ms/token (two runs, 0.018 ms apart) on
+                # wormhole_b0 at 32k. Prefill deliberately keeps HIFI2 -- see LI_O_PREFILL below.
+                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2_NOFP32,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NOFP32,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2_NOFP32,
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
                 OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,  # FP32 accumulate is important here
@@ -882,6 +888,12 @@ class ModelArgs:
                 math_approx_mode=False,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=False,
+            )
+            self.compute_kernel_config_hifi2_nofp32 = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
             )
             self.compute_kernel_config_hifi2_nol1acc = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -4869,6 +4881,7 @@ class DecodersPrecision:
             MathFidelitySetting.HIFI2: configuration.compute_kernel_config_hifi2,
             MathFidelitySetting.HIFI2_NA: configuration.compute_kernel_config_hifi2_na,
             MathFidelitySetting.HIFI2_FP16: configuration.compute_kernel_config_hifi2_fp16,
+            MathFidelitySetting.HIFI2_NOFP32: configuration.compute_kernel_config_hifi2_nofp32,
             MathFidelitySetting.HIFI2_NOL1ACC: configuration.compute_kernel_config_hifi2_nol1acc,
             MathFidelitySetting.HIFI4: configuration.compute_kernel_config_hifi4,
             MathFidelitySetting.HIFI4_FP16: configuration.compute_kernel_config_hifi4_fp16,
