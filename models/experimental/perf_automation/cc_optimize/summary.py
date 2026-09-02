@@ -3215,7 +3215,14 @@ def render_summary(
 
     if by_op:
         _cols = list(_LEVEL_COLS) + (["other"] if any(o.get("other") for o in by_op.values()) else [])
-        hdr = f"{'op':<34} " + "  ".join(f"{_disp_level(c):<8}" for c in _cols) + f"  {'best ms':>9}"
+        # ONE WIDTH FOR THE HEADER AND THE CELLS. `:<8` pads to a minimum but never truncates, so a
+        # column whose name is longer than 8 -- `structural` at 10, `tp-fracture` at 11 -- pushed the
+        # header right while the cells stayed on the 8-wide grid. Everything after the first long name
+        # drifted, by 2 characters and then 5, and a reader following a column upward from a ✓win
+        # arrived at the wrong lever's name. Widened to fit the longest heading actually rendered, so
+        # adding a column can never silently shear the table again.
+        _w = max(8, *(len(_disp_level(c)) for c in _cols))
+        hdr = f"{'op':<34} " + "  ".join(f"{_disp_level(c):<{_w}}" for c in _cols) + f"  {'best ms':>9}"
         lines.append(hdr)
         lines.append("-" * len(hdr))
         for sig in sorted(by_op):
@@ -3225,11 +3232,11 @@ def render_summary(
             for c in _cols:
                 cell = op.get(c)
                 if cell is None:
-                    cells.append(f"{'—':<8}")
+                    cells.append(f"{'—':<{_w}}")
                 else:
                     st, ms = cell
                     mark = "✓win" if st == "win" else ("·wedge" if st == "wedge" else "·try")
-                    cells.append(f"{mark:<8}")
+                    cells.append(f"{mark:<{_w}}")
                     if ms is not None and (best is None or ms < best):
                         best = ms
             best_s = f"{best:.2f}" if best is not None else "—"
