@@ -1297,7 +1297,7 @@ re_run_command:
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     // Upstream relays this command by NoC write, which does not snoop, so the header must be dropped before
     // it is read cached. Sized to CQDispatchCmdLarge because the variant is unknown until cmd_id is read.
-    // Sub-command arrays past the header are covered by careful_copy's own invalidate.
+    // CPU reads past this window carry their own invalidate; payload handed to the NIU needs none.
     invalidate_l2_cache_range(cmd_ptr, sizeof(CQDispatchCmdLarge));
 #endif
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
