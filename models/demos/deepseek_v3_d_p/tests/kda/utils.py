@@ -372,22 +372,17 @@ def kimi_k3_tensor_cache_path(
 
 def make_config(
     *,
-    num_heads: int = 2,
     use_full_rank_gate: bool = False,
 ) -> KDAConfig:
     return KDAConfig(
         hidden_size=64,
-        num_heads=num_heads,
+        num_heads=2,
         head_k_dim=32,
         head_v_dim=32,
         conv_kernel_size=4,
         norm_eps=1e-5,
         use_full_rank_gate=use_full_rank_gate,
     )
-
-
-def make_program_config() -> KDAProgramConfig:
-    return KDAProgramConfig()
 
 
 def random_weights(config: KDAConfig) -> dict[str, torch.Tensor]:

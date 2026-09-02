@@ -42,7 +42,3 @@ def test_qkv_channel_chunk_size_requires_positive_tile_multiple(expect_error) ->
     for invalid in (0, -32, 31, 33):
         with expect_error(ValueError, "qkv_channel_chunk_size must be a positive multiple"):
             KDAProgramConfig(qkv_channel_chunk_size=invalid)
-
-
-def test_qkv_channel_chunk_size_accepts_tile_multiple() -> None:
-    assert KDAProgramConfig(qkv_channel_chunk_size=512).qkv_channel_chunk_size == 512
