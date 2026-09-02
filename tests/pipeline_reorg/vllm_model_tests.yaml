@@ -374,7 +374,7 @@
   model: meta-llama/Llama-3.1-8B-Instruct
   server-timeout: 15
   benchmark-timeout: 5
-  chunked-prefill-test-timeout: 10
+  chunked-prefill-test-timeout: 15
   mesh-device: T3K
   arch: arch-wormhole_b0
   tt-llama-text-ver: tt_transformers

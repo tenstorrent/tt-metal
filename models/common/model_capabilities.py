@@ -18,11 +18,15 @@ class ModelCapabilitiesMixin:
     unified with the corresponding vLLM scheduler configuration so that both
     paths derive from the same source of truth.
 
-    Generator classes also carry a class-level ``model_capabilities`` dict that
-    the vLLM TT plugin reads off the resolved bridge class at config time. A
-    subclass dict replaces the inherited one rather than merging into it, so an
-    absent key means "not supported" and no reader assumes otherwise. Recognized
-    keys:
+    Generator classes also carry a class-level ``model_capabilities`` dict.
+    The vLLM TT plugin snapshots that class attribute during
+    ``check_and_update_config``, before any generator instance exists, so a
+    capability narrowed on ``self.model_capabilities`` inside ``__init__`` does
+    not reach the scheduler configuration. A subclass dict replaces the
+    inherited one rather than merging into it, so an absent key means "not
+    supported" and no reader assumes otherwise.
+
+    Keys:
 
     ``supports_prefix_caching`` (bool)
         The generator accepts a nonzero ``start_pos`` for a prompt whose prefix
@@ -44,6 +48,12 @@ class ModelCapabilitiesMixin:
         ``get_attn_sdpa_program_config`` for the generator to read it from, and
         read only by the generator: the plugin never needs it, because the
         generator floors every resume offset itself.
+    ``output_tokens_per_step`` (positive int)
+        Tokens committed per engine step. The plugin treats a value greater
+        than 1 as a block-output model. Defaults to 1 when absent.
+    ``accepts_trace_mode`` (bool)
+        The generator honours a ``trace_mode`` argument. Used by the common
+        LLM runtime, not by the vLLM TT plugin.
     """
 
     @classmethod

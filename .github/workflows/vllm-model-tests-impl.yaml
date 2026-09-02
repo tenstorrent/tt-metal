@@ -659,7 +659,7 @@ jobs:
               exit 1
             fi
             RESOLVED=$(grep "$EXPECTED" "${FILE_SERVER_LOG}" | tail -1 \
-              | grep -o "max_num_batched_tokens=[0-9]\+" | cut -d= -f2)
+              | grep -o "max_num_batched_tokens=[0-9]\+" | cut -d= -f2 || true)
             if [ "$RESOLVED" != "$BUDGET" ]; then
               echo "❌ server resolved max_num_batched_tokens=$RESOLVED, tests were told $BUDGET"
               exit 1

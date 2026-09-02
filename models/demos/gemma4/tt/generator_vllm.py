@@ -227,7 +227,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     #
     # Default ON for non-PLI. Token-doubling under async is mitigated by
     # ``merge_async_ahead_decode_tokens`` + vLLM preempt bookkeeping. Kill-switch:
-    # ``GEMMA4_SUPPORTS_ASYNC_DECODE=0``. PLI models force False in ``__init__``.
+    # ``GEMMA4_SUPPORTS_ASYNC_DECODE=0``. PLI models narrow the instance dict
+    # in ``__init__``; that does not reach the platform, so PLI still needs
+    # the kill-switch to disable async_scheduling.
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": os.environ.get("GEMMA4_SUPPORTS_ASYNC_DECODE", "1").lower() in ("1", "true", "yes"),
@@ -303,8 +305,11 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             _bounded_default = "1" if self._HYBRID_KV_CACHE_GROUPS_ENABLED else "0"
             self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", _bounded_default) != "0"
         # PLI models must restage decode inputs from host every step; async lag
-        # would restage a stale token. Force capability off even if env default
-        # is on (platform then disables async_scheduling).
+        # would restage a stale token. Narrow the instance dict so runtime
+        # readers (the decode-sync default below) see False. The vLLM TT plugin
+        # snapshots the class attribute during check_and_update_config, before
+        # this runs, so this does not disable scheduler_config.async_scheduling;
+        # set GEMMA4_SUPPORTS_ASYNC_DECODE=0 for that.
         if model0 is not None and (
             bool(getattr(model0, "hidden_size_per_layer_input", 0))
             or bool(getattr(model0, "_tt_vllm_always_refresh_decode_trace_inputs", False))
@@ -317,11 +322,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # SamplingGenerator. That needs the per-device vocab shard to fit ttnn's
         # 64k topk width: Gemma4's vocab is 262144, so TP>=4 shards to <=65536 and
         # works, but TP=2 (WH N300 1x2) shards to 131072 and Gemma4Model leaves
-        # ``self.sampling = None``. Advertising the capability anyway made vLLM
-        # request on-device decode logits and the engine died on the
-        # ``self.sampling is not None`` assert in ``ttnn_decode_forward``. Report
-        # what the model can really do so the platform falls back to host
-        # sampling (which all-gathers the full vocab and is correct, just slower).
+        # ``self.sampling = None``. Narrow the instance dict so runtime readers
+        # see False. The platform already snapshot the class attribute, so this
+        # does not revise sample_on_device_mode.
         if model0 is not None and not bool(getattr(model0, "_supports_on_device_sampling", True)):
             self.model_capabilities = {
                 **self.model_capabilities,
