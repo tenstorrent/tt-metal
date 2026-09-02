@@ -2576,8 +2576,16 @@ class UnarySFPUGolden:
             )
 
         window = slice(start, start + elements_to_process)
+        # Whole-tile path where the op has one (see _VECTOR_TORCH_FNS); the per-element
+        # loop below otherwise. Both produce the same fp32 values -- proven bit-exact by
+        # test_unary_sfpu_golden_vectorised.py -- so everything downstream of op_tensor
+        # is shared and only the evaluation strategy differs.
+        vector_op = self._vector_op(operation)
         if whole_tensor_res is not None:
             op_res = whole_tensor_res.tolist()[window]
+            op_tensor = torch.tensor(op_res, dtype=torch.float32)
+        elif vector_op is not None:
+            op_tensor = vector_op(result[window]).to(torch.float32)
         else:
             op_res = [
                 (
@@ -2587,13 +2595,13 @@ class UnarySFPUGolden:
                 )
                 for x in result.tolist()[window]
             ]
+            op_tensor = torch.tensor(op_res, dtype=torch.float32)
 
         op_dtype = (
             torch.float32
             if data_format in (DataFormat.Bfp4_b, DataFormat.Bfp2_b)
             else format_dict[dst_format]
         )
-        op_tensor = torch.tensor(op_res, dtype=torch.float32)
         if operation not in self._NAN_SIGN_TRANSPARENT_OPS:
             # abs() clears the sign bit without disturbing the NaN payload, which is exactly
             # the canonicalisation wanted here. See _NAN_SIGN_TRANSPARENT_OPS.
@@ -2698,6 +2706,202 @@ class UnarySFPUGolden:
             return expected
         else:  # self.data_format == DataFormat.Float16:
             return math.nan
+
+    def _torch_unary_vec(self, t, torch_fn):
+        """Whole-tile ``_torch_unary``: apply *torch_fn* once, then the same NaN rule.
+
+        The scalar version below builds a 0-d tensor and calls ``.item()`` per element,
+        which over the unary sweep is ~51M tensor constructions. This is the same
+        arithmetic in one call.
+
+        The scalar path is kept as the oracle, not replaced:
+        ``test_unary_sfpu_golden_vectorised.py`` asserts the two agree **bit-exactly**
+        for every op in ``_VECTOR_TORCH_FNS``, and an op is only allowed into that table
+        once it does. That is what makes it safe for the two to coexist -- torch is free
+        to pick a different code path for a 1-element tensor than for a 1024-element one,
+        and for a few ops it does, so membership is a measured fact rather than a
+        judgement.
+        """
+        r = torch_fn(t.to(torch.float32))
+        if not self.data_format.is_exponent_B():
+            r = torch.where(r.isinf(), torch.full_like(r, torch.nan), r)
+        return r
+
+    def _torch_dst_vec(self, t, torch_fn):
+        """Whole-tile form of the ops that evaluate in the Dest dtype.
+
+        Mirrors ``torch_fn(torch.tensor(x, dtype=format_dict[self.dst_format])).item()``:
+        the op sees the Dest dtype, not fp32, because that is the precision the SFPU
+        actually works at. No inf->NaN substitution here -- unlike ``_torch_unary``,
+        these methods never had one.
+        """
+        return torch_fn(t.to(format_dict[self.dst_format]))
+
+    def _python_vec(self, t, fn):
+        """Whole-tile form of the ops whose scalar method is plain Python arithmetic.
+
+        Evaluated in **float64**, because that is what the scalar path does:
+        ``result.tolist()`` hands each element to the method as a Python float (a
+        double), so the op's own arithmetic happens in double and is rounded to fp32
+        exactly once, by the shared cast at the end of ``__call__``. Computing in fp32
+        here instead would round twice and diverge in the last bit -- which the
+        agreement test catches, so this is a measured requirement rather than a
+        precaution.
+        """
+        return fn(t.to(torch.float64))
+
+    def _vec_square(self, t):
+        """Vectorised ``_square``, keeping both of its non-finite branches.
+
+        Note what the scalar method does *not* do: x*x is evaluated in double, so an
+        fp32-representable 1e30 squares to a finite 1e60 and takes the ordinary return
+        path, only becoming an infinity later when the result is cast to fp32 --
+        without handle_infinite_numbers ever seeing it. Working in float64 reproduces
+        that; working in fp32 would route it through the infinity branch instead and
+        return NaN for a Float16 dest.
+        """
+        d = t.to(torch.float64)
+        r = d * d
+        infinite = self.handle_infinite_numbers(torch.inf)
+        r = torch.where(torch.isfinite(r), r, torch.full_like(r, infinite))
+        return torch.where(d.isnan(), d, r)
+
+    def _vec_relu_max(self, t, threshold):
+        """Vectorised ``sfpu_relu_max``: total-order min, then a sign-bit relu clamp.
+
+        Uses ``sfpu_order_key_elementwise`` -- the same remap the scalar
+        ``sfpu_total_order_key`` applies -- so a NaN outranks the threshold and is
+        replaced by it, and -0.0 clamps to +0.0. Both are properties of the kernel's
+        SFPSWAP/SFPSETCC pair, not of IEEE min/max, so torch.clamp is not a substitute.
+
+        The *values* stay in float64 while only the *keys* go through fp32, which is
+        what the scalar pair does: sfpu_total_order_key struct-packs an fp32 to rank the
+        operand, but sfpu_min/sfpu_relu_max then return the original double. Ranking in
+        fp32 and carrying the value in fp32 too costs a last-bit divergence on
+        Hardsigmoid, whose input is an affine expression evaluated in double.
+        """
+        d = t.to(torch.float64)
+        thresh = torch.full_like(d, threshold)
+        clamped = torch.where(
+            sfpu_order_key_elementwise(d) <= sfpu_order_key_elementwise(thresh),
+            d,
+            thresh,
+        )
+        return torch.where(
+            sfpu_order_key_elementwise(clamped) < 0, torch.zeros_like(clamped), clamped
+        )
+
+    @staticmethod
+    def _vec_sfpu_min(d, scalar):
+        """``sfpu_min`` over a tile: rank under the SFPU total order, keep the value.
+
+        As in ``_vec_relu_max``, the comparison is on the fp32 order key while the
+        returned value stays in *d*'s dtype -- the scalar ``sfpu_min`` ranks via
+        ``sfpu_total_order_key`` (which struct-packs an fp32) but returns its operand
+        untouched.
+        """
+        other = torch.full_like(d, scalar)
+        return torch.where(
+            sfpu_order_key_elementwise(d) <= sfpu_order_key_elementwise(other), d, other
+        )
+
+    @staticmethod
+    def _vec_sfpu_max(d, scalar):
+        """``sfpu_max`` over a tile. See ``_vec_sfpu_min``."""
+        other = torch.full_like(d, scalar)
+        return torch.where(
+            sfpu_order_key_elementwise(d) >= sfpu_order_key_elementwise(other), d, other
+        )
+
+    def _vec_sfpu_clamp(self, t, low, high):
+        """``sfpu_clamp``: max-then-min under the total order, the kernel's order.
+
+        Not ``torch.clamp``: a +NaN outranks every value, so the max leaves it and the
+        min lands it on *high*, where torch.clamp would keep IEEE semantics and return
+        NaN. See the scalar ``sfpu_clamp`` docstring.
+        """
+        d = t.to(torch.float64)
+        return self._vec_sfpu_min(self._vec_sfpu_max(d, low), high)
+
+    def _vec_cast_fp32_to_fp16a(self, t):
+        """Vectorised ``_cast_fp32_to_fp16a``: round the fp32 mantissa to 10 bits, RNE.
+
+        Reproduces the scalar bit-twiddle in torch integer ops. The exponent is left
+        alone -- this models sfpi::convert<vFloat16a>, which reduces mantissa precision
+        without clamping to the fp16 exponent range, so 1e30 stays finite.
+        """
+        bits = t.to(torch.float32).contiguous().view(torch.int32).to(torch.int64)
+        bits = bits & 0xFFFFFFFF
+        drop, halfway = 13, 1 << 12
+        lower_mask = (1 << drop) - 1
+        remainder = bits & lower_mask
+        truncated = bits & ~lower_mask
+        round_up = (remainder > halfway) | (
+            (remainder == halfway) & (((truncated >> drop) & 1) == 1)
+        )
+        rounded = torch.where(round_up, truncated + (1 << drop), truncated)
+        # A non-finite input passes through unchanged, carry and all.
+        non_finite = ((bits >> 23) & 0xFF) == 0xFF
+        out = torch.where(non_finite, bits, rounded)
+        return (out & 0xFFFFFFFF).to(torch.int32).view(torch.float32)
+
+    @staticmethod
+    def _drop_zero_sign(t):
+        """Map -0.0 to +0.0, leaving everything else alone.
+
+        ``math.floor``/``ceil``/``trunc`` return a Python **int**, so the scalar path
+        cannot preserve a negative zero: floor(-0.5) arrives as int 0 and becomes +0.0.
+        torch's float versions do preserve it. Reproduce the int behaviour rather than
+        the float one -- the golden's job is to say what the current oracle says, and a
+        signed zero is visible downstream (the pack path reads the sign bit).
+        """
+        return torch.where(t == 0, torch.zeros_like(t), t)
+
+    def _vec_sign(self, t):
+        """Vectorised ``_sign``: fp32 like the scalar method, and no inf->NaN rule."""
+        return torch.sign(t.to(torch.float32))
+
+    def _vec_i0(self, t):
+        """Vectorised ``_i0``, including its pre-check for the non-finite inputs.
+
+        torch.special.i0 returns NaN at +/-inf where the mathematics (and the kernel)
+        give +inf, so the scalar path intercepts those before calling torch. Mirror the
+        interception rather than the torch answer.
+        """
+        r = self._torch_unary_vec(t, torch.special.i0)
+        infinite = self.handle_infinite_numbers(torch.inf)
+        r = torch.where(t.isinf(), torch.full_like(r, infinite), r)
+        # NaN passes straight through in the scalar path (``return x``), payload and all.
+        return torch.where(t.isnan(), t.to(r.dtype), r)
+
+    def _vec_i1(self, t):
+        """Vectorised ``_i1_bessel``. Same interception as ``_vec_i0``, sign kept: I1 is
+        odd, so I1(+/-inf) = +/-inf."""
+        r = self._torch_unary_vec(t, torch.special.i1)
+        infinite = self.handle_infinite_numbers(torch.inf)
+        signed = torch.copysign(torch.full_like(r, infinite), t.to(r.dtype))
+        r = torch.where(t.isinf(), signed, r)
+        return torch.where(t.isnan(), t.to(r.dtype), r)
+
+    def _vector_op(self, operation):
+        """The whole-tile implementation of *operation*, or None if it has none.
+
+        Ops with no entry keep the per-element path in ``__call__``. Adding one here is
+        opt-in and gated on the bit-exactness test, so the fallback is always correct
+        and never silently worse than the scalar answer.
+        """
+        if operation in self._VECTOR_SPECIAL_OPS:
+            return self._VECTOR_SPECIAL_OPS[operation](self)
+        torch_fn = self._VECTOR_TORCH_FNS.get(operation)
+        if torch_fn is not None:
+            return lambda t: self._torch_unary_vec(t, torch_fn(self))
+        torch_fn = self._VECTOR_DST_TORCH_FNS.get(operation)
+        if torch_fn is not None:
+            return lambda t: self._torch_dst_vec(t, torch_fn(self))
+        py_fn = self._VECTOR_PY_FNS.get(operation)
+        if py_fn is not None:
+            return lambda t: self._python_vec(t, py_fn(self))
+        return None
 
     def _torch_unary(self, x, torch_fn) -> float:
         """Apply torch_fn to scalar x in fp32, then enforce the
@@ -3248,6 +3452,308 @@ class UnarySFPUGolden:
     _HARDSHRINK_LAMBDA = HARDSHRINK_LAMBDA
     _SOFTPLUS_BETA = SOFTPLUS_BETA
     _SOFTPLUS_THRESHOLD = SOFTPLUS_THRESHOLD
+
+    # sqrt(2) and sqrt(2*pi) as float64, for the vectorised _gelu_derivative. Computed
+    # with torch rather than math so the golden has a single numerics dependency; the
+    # agreement test confirms they are the same doubles the scalar method's math.sqrt
+    # produces, which is the only thing that matters here.
+    _SQRT_2 = float(torch.sqrt(torch.tensor(2.0, dtype=torch.float64)))
+    _SQRT_2PI = float(torch.sqrt(torch.tensor(2.0, dtype=torch.float64) * torch.pi))
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Whole-tile op table (idea D)
+    #
+    # Every entry names the *same* torch function its per-element method passes to
+    # _torch_unary, so the two paths are one edit apart and cannot drift in what they
+    # compute -- only in how many elements they compute at once. The values are
+    # `lambda self: ...` rather than bare functions so an op can read its dispatch
+    # constant off the instance, exactly as the scalar method does.
+    #
+    # Membership is not a judgement about which ops "should" vectorise: it is the set
+    # that test_unary_sfpu_golden_vectorised.py has shown to be bit-identical to the
+    # scalar path. Ops absent from this table fall back to the per-element loop, which
+    # stays correct -- just slower. Do not add an entry without running that test.
+    #
+    # MEASURED EXCLUSIONS -- these seven were tried and rejected, do not re-add them:
+    #
+    #   Atanh, Cbrt, Mish, Rpow, Selu, SigmoidAppx, Softplus
+    #
+    # torch evaluates each of them through a different kernel for a 1024-element tensor
+    # than for the 0-d tensor the scalar path builds, and the answers differ in the last
+    # fp32 bit (e.g. atanh(0.6318548) -> 0.7444976 vs 0.74449766; up to 419/1024
+    # elements affected for Cbrt). One ULP is far inside the tolerance passed_test
+    # applies, which is exactly why it must not be accepted here: it would make the
+    # sweep's pass/fail boundary depend on which kernel torch happened to select, and
+    # the golden's whole job is to be a stable oracle. They keep the per-element path.
+    # ─────────────────────────────────────────────────────────────────────────
+    _VECTOR_TORCH_FNS = {
+        MathOperation.Acos: lambda self: torch.acos,
+        MathOperation.Acosh: lambda self: torch.acosh,
+        MathOperation.Asin: lambda self: torch.asin,
+        MathOperation.Cos: lambda self: torch.cos,
+        MathOperation.Digamma: lambda self: torch.digamma,
+        MathOperation.Erf: lambda self: torch.erf,
+        MathOperation.Erfc: lambda self: torch.erfc,
+        MathOperation.Erfinv: lambda self: torch.erfinv,
+        MathOperation.Expm1: lambda self: torch.expm1,
+        MathOperation.Expm1Cw: lambda self: torch.expm1,
+        MathOperation.Fmod: lambda self: (
+            lambda t: torch.fmod(t, torch.tensor(self._FMOD_DIVISOR))
+        ),
+        MathOperation.Hardmish: lambda self: (
+            lambda t: t * torch.clamp(0.5 * t + 1.0, 0.0, 1.0)
+        ),
+        MathOperation.Lgamma: lambda self: torch.lgamma,
+        MathOperation.Log1p: lambda self: torch.log1p,
+        MathOperation.LogWithBase: lambda self: torch.log2,
+        MathOperation.Polygamma: lambda self: (
+            lambda t: torch.polygamma(self._POLYGAMMA_ORDER, t)
+        ),
+        MathOperation.Rdiv: lambda self: (lambda t: 2.0 / t),
+        MathOperation.Log: lambda self: torch.log,
+        MathOperation.Reciprocal: lambda self: torch.reciprocal,
+        MathOperation.ReciprocalCompat: lambda self: torch.reciprocal,
+        MathOperation.Remainder: lambda self: (
+            lambda t: torch.remainder(t, torch.tensor(self._REMAINDER_DIVISOR))
+        ),
+        MathOperation.Rsqrt: lambda self: torch.rsqrt,
+        MathOperation.RsqrtCompat: lambda self: torch.rsqrt,
+        MathOperation.Sin: lambda self: torch.sin,
+        MathOperation.Sqrt: lambda self: torch.sqrt,
+        MathOperation.SqrtCustom: lambda self: torch.sqrt,
+        MathOperation.Tan: lambda self: torch.tan,
+        MathOperation.UnaryPower: lambda self: (
+            lambda t: torch.pow(t, self._UNARY_POWER_EXP)
+        ),
+    }
+
+    # Ops whose per-element method does NOT go through _torch_unary but still builds a
+    # torch tensor per element -- `torch_fn(torch.tensor(x, dtype=format_dict[dst_format]))`
+    # -- so they evaluate in the Dest dtype and carry no inf->NaN substitution. Same
+    # bit-exactness rule and same test gate as _VECTOR_TORCH_FNS above.
+    #
+    # Fill is deliberately absent: its scalar method uses an in-place fill_ and __call__
+    # passes it a second argument, so it is not a plain unary map.
+    #
+    # MEASURED EXCLUSIONS -- tried and rejected, do not re-add:
+    #
+    #   Celu, Elu, Exp2, Gelu, GeluAppx, GeluTanh, Sigmoid, Silu   (last-bit ULP)
+    #   Softshrink                                                 (signed zero!)
+    #
+    # The first group is the same 0-d-vs-N-d kernel split as in _VECTOR_TORCH_FNS above.
+    # Softshrink is worse than a ULP and worth spelling out: torch.nn.functional
+    # .softshrink(-0.0) returns -0.0 for a 0-d tensor and +0.0 for a 1024-element one.
+    # The golden asserts the signed zero, and the pack path turns a sign bit into a
+    # visible result, so taking the vectorised answer would change what the sweep tests
+    # rather than just how fast it gets there.
+    _VECTOR_DST_TORCH_FNS = {
+        MathOperation.Exp: lambda self: torch.exp,
+        MathOperation.ExpWithBase: lambda self: (lambda t: torch.exp(0.5 * t)),
+        MathOperation.Lrelu: lambda self: (
+            lambda t: torch.nn.functional.leaky_relu(
+                t, negative_slope=LRELU_NEGATIVE_SLOPE
+            )
+        ),
+        MathOperation.ReluMin: lambda self: (
+            lambda t: torch.max(t, torch.tensor(RELU_MIN_THRESHOLD).to(t.dtype))
+        ),
+        MathOperation.Softsign: lambda self: torch.nn.functional.softsign,
+        MathOperation.Threshold: lambda self: (
+            lambda t: torch.nn.functional.threshold(t, THRESHOLD_T, THRESHOLD_V)
+        ),
+    }
+
+    # Ops whose scalar method is plain Python arithmetic on a double. Evaluated in
+    # float64 by _python_vec so the single fp32 rounding stays where it was; see that
+    # method. Same bit-exactness rule and same test gate as the tables above.
+    _VECTOR_PY_FNS = {
+        MathOperation.Abs: lambda self: torch.abs,
+        MathOperation.Add1: lambda self: (lambda d: d + 1.0),
+        MathOperation.Asinh: lambda self: torch.asinh,
+        MathOperation.Atan: lambda self: torch.atan,
+        MathOperation.Ceil: lambda self: (
+            lambda d: UnarySFPUGolden._drop_zero_sign(torch.ceil(d))
+        ),
+        MathOperation.Cosh: lambda self: torch.cosh,
+        MathOperation.Floor: lambda self: (
+            lambda d: UnarySFPUGolden._drop_zero_sign(torch.floor(d))
+        ),
+        # x - trunc(x), except that a non-finite input is returned unchanged: inf - inf
+        # would be NaN where the scalar method short-circuits on isfinite.
+        MathOperation.Frac: lambda self: (
+            lambda d: torch.where(
+                torch.isfinite(d),
+                d - UnarySFPUGolden._drop_zero_sign(torch.trunc(d)),
+                d,
+            )
+        ),
+        MathOperation.Identity: lambda self: (lambda d: d.clone()),
+        MathOperation.Isfinite: lambda self: (lambda d: torch.isfinite(d).to(d.dtype)),
+        MathOperation.Isinf: lambda self: (lambda d: torch.isinf(d).to(d.dtype)),
+        MathOperation.Isnan: lambda self: (lambda d: torch.isnan(d).to(d.dtype)),
+        MathOperation.Isneginf: lambda self: (
+            lambda d: (torch.isinf(d) & (d < 0)).to(d.dtype)
+        ),
+        MathOperation.Isposinf: lambda self: (
+            lambda d: (torch.isinf(d) & (d > 0)).to(d.dtype)
+        ),
+        MathOperation.Neg: lambda self: torch.neg,
+        MathOperation.Sinh: lambda self: torch.sinh,
+        MathOperation.Tanh: lambda self: torch.tanh,
+        MathOperation.Tanhshrink: lambda self: (lambda d: d - torch.tanh(d)),
+        MathOperation.TanhDerivative: lambda self: (
+            lambda d: 1.0 - torch.tanh(d) * torch.tanh(d)
+        ),
+        # Python's max(0.0, x) returns the *first* argument unless x compares greater,
+        # so a NaN and a -0.0 both come back as +0.0. torch.clamp(min=0) propagates the
+        # NaN instead, hence the explicit comparison.
+        MathOperation.Relu: lambda self: (
+            lambda d: torch.where(d > 0.0, d, torch.zeros_like(d))
+        ),
+        MathOperation.Signbit: lambda self: (lambda d: torch.signbit(d).to(d.dtype)),
+        MathOperation.LogicalNotUnary: lambda self: (lambda d: (d == 0).to(d.dtype)),
+        MathOperation.EqualZero: lambda self: (lambda d: (d == 0.0).to(d.dtype)),
+        MathOperation.NotEqualZero: lambda self: (lambda d: (d != 0.0).to(d.dtype)),
+        MathOperation.LessThanZero: lambda self: (lambda d: (d < 0.0).to(d.dtype)),
+        MathOperation.GreaterThanZero: lambda self: (lambda d: (d > 0.0).to(d.dtype)),
+        MathOperation.LessThanEqualZero: lambda self: (
+            lambda d: (d <= 0.0).to(d.dtype)
+        ),
+        MathOperation.GreaterThanEqualZero: lambda self: (
+            lambda d: (d >= 0.0).to(d.dtype)
+        ),
+        # x if x >= 0 else slope * x -- the comparison keeps -0.0 on the negative arm,
+        # matching the scalar method.
+        MathOperation.Prelu: lambda self: (
+            lambda d: torch.where(d >= 0.0, d, self._PRELU_SLOPE * d)
+        ),
+        MathOperation.Heaviside: lambda self: (
+            lambda d: torch.where(
+                d < 0.0,
+                torch.zeros_like(d),
+                torch.where(d > 0.0, torch.ones_like(d), torch.full_like(d, 0.5)),
+            )
+        ),
+        MathOperation.Trunc: lambda self: (
+            lambda d: UnarySFPUGolden._drop_zero_sign(torch.trunc(d))
+        ),
+        # float(round(x)) for a finite x. Python's round() returns an int, so -0.4
+        # rounds to +0.0 -- the same signed-zero loss as floor/ceil/trunc.
+        MathOperation.Round: lambda self: (
+            lambda d: torch.where(
+                torch.isfinite(d),
+                UnarySFPUGolden._drop_zero_sign(torch.round(d)),
+                d,
+            )
+        ),
+        MathOperation.Typecast: lambda self: (lambda d: d.clone()),
+        # Phi(x) + x * phi(x), the erf-based exact-gelu derivative.
+        MathOperation.GeluDerivative: lambda self: (
+            lambda d: 0.5 * (1.0 + torch.erf(d / self._SQRT_2))
+            + d * (torch.exp(-0.5 * d * d) / self._SQRT_2PI)
+        ),
+        # The legacy 3-region SFPLUT tanh, then 1 - t^2. Piecewise-linear, so the
+        # arithmetic is exact and only the bucket boundaries matter.
+        MathOperation.TanhDerivativeLut: lambda self: (
+            lambda d: 1.0
+            - torch.where(
+                d.abs() < 1.0,
+                0.90625 * d.abs(),
+                torch.where(d.abs() < 2.0, 0.09375 * d.abs() + 0.8125, 1.0),
+            )
+            ** 2
+        ),
+        # x where |x| > lambda, else 0 -- and a NaN fails that comparison, so it takes
+        # the 0 arm in the scalar method only after an explicit isnan pass-through.
+        MathOperation.Hardshrink: lambda self: (
+            lambda d: torch.where(
+                d.isnan(),
+                d,
+                torch.where(d.abs() > self._HARDSHRINK_LAMBDA, d, torch.zeros_like(d)),
+            )
+        ),
+        MathOperation.UnaryEq: lambda self: (
+            lambda d: (d == self._UNARY_COMP_THRESHOLD).to(d.dtype)
+        ),
+        MathOperation.UnaryNe: lambda self: (
+            lambda d: (d != self._UNARY_COMP_THRESHOLD).to(d.dtype)
+        ),
+        # The four ordered comparisons rank under the SFPU total order, not IEEE, so a
+        # NaN participates instead of making every compare false.
+        MathOperation.UnaryGt: lambda self: (
+            lambda d: (
+                sfpu_order_key_elementwise(d)
+                > sfpu_order_key_elementwise(
+                    torch.full_like(d, self._UNARY_COMP_THRESHOLD)
+                )
+            ).to(d.dtype)
+        ),
+        MathOperation.UnaryLt: lambda self: (
+            lambda d: (
+                sfpu_order_key_elementwise(d)
+                < sfpu_order_key_elementwise(
+                    torch.full_like(d, self._UNARY_COMP_THRESHOLD)
+                )
+            ).to(d.dtype)
+        ),
+        MathOperation.UnaryGe: lambda self: (
+            lambda d: (
+                sfpu_order_key_elementwise(d)
+                >= sfpu_order_key_elementwise(
+                    torch.full_like(d, self._UNARY_COMP_THRESHOLD)
+                )
+            ).to(d.dtype)
+        ),
+        MathOperation.UnaryLe: lambda self: (
+            lambda d: (
+                sfpu_order_key_elementwise(d)
+                <= sfpu_order_key_elementwise(
+                    torch.full_like(d, self._UNARY_COMP_THRESHOLD)
+                )
+            ).to(d.dtype)
+        ),
+        MathOperation.UnaryMax: lambda self: (
+            lambda d: UnarySFPUGolden._vec_sfpu_max(d, self._UNARY_MAX_MIN_VALUE)
+        ),
+        MathOperation.UnaryMin: lambda self: (
+            lambda d: UnarySFPUGolden._vec_sfpu_min(d, self._UNARY_MAX_MIN_VALUE)
+        ),
+        MathOperation.Xielu: lambda self: (
+            lambda d: torch.where(
+                d > 0.0,
+                self._XIELU_ALPHA_P * d * d + self._XIELU_BETA * d,
+                self._XIELU_ALPHA_N * (torch.expm1(d) - d) + self._XIELU_BETA * d,
+            )
+        ),
+    }
+
+    # Ops whose scalar method wraps a torch call in extra per-element handling, so the
+    # whole-tile version is a named method rather than a bare torch function.
+    _VECTOR_SPECIAL_OPS = {
+        MathOperation.I0: lambda self: self._vec_i0,
+        MathOperation.I1: lambda self: self._vec_i1,
+        MathOperation.Sign: lambda self: self._vec_sign,
+        MathOperation.Square: lambda self: self._vec_square,
+        MathOperation.CastFp32ToFp16a: lambda self: self._vec_cast_fp32_to_fp16a,
+        MathOperation.Clamp: lambda self: (
+            lambda t: self._vec_sfpu_clamp(t, CLAMP_MIN, CLAMP_MAX)
+        ),
+        MathOperation.Hardtanh: lambda self: (
+            lambda t: self._vec_sfpu_clamp(t, CLAMP_MIN, CLAMP_MAX)
+        ),
+        MathOperation.ReluMax: lambda self: (
+            lambda t: self._vec_relu_max(t, RELU_MAX_THRESHOLD)
+        ),
+        # The affine part is evaluated in float64 because the scalar method does it on a
+        # Python double before handing the result to sfpu_relu_max.
+        MathOperation.Hardsigmoid: lambda self: (
+            lambda t: self._vec_relu_max(
+                t.to(torch.float64) * self._HARDSIGMOID_SLOPE
+                + self._HARDSIGMOID_OFFSET,
+                1.0,
+            )
+        ),
+    }
 
     def _prelu(self, x):
         return x if x >= 0.0 else self._PRELU_SLOPE * x
