@@ -225,43 +225,63 @@ class SrcRegBank(Check):
         for fn in fb.functions:
             if not registry.is_dest_reuse_publisher_fn(fn.name):
                 continue
-            guarded = False
+            # Ownership of the unpacker's own bank, tracked PER Src register. A guard
+            # on SrcA says nothing about SrcB.
+            owned = {"A": False, "B": False}
             for f in fb.facts_in(fn, ("macro",)):
                 name = f.get("name", "")
                 up = name.upper()
                 text = f.get("text", "")
+                src = registry.src_reg_of(text)
+
                 if any(t in up for t in registry.STALL_MACRO_SUBSTR):
-                    guarded = registry.condition_drains_unit(
-                        registry.stallwait_wait_operand(text),
-                        registry.SRC_BANK_CLR_TOKENS,
-                    )
+                    cond = registry.stallwait_wait_operand(text)
+                    if registry.condition_drains_unit(cond, ("SRCA_CLR",)):
+                        owned["A"] = True
+                    if registry.condition_drains_unit(cond, ("SRCB_CLR",)):
+                        owned["B"] = True
                     continue
+
                 if "UNPACR" in up and "UNPACR_NOP" not in up:
-                    # A real UNPACR fills the unpacker's own bank and waits for it,
-                    # so a publication sequenced after one inherits a correct wait.
-                    guarded = True
+                    # A real UNPACR fills the unpacker's own bank and waits for it.
+                    if src:
+                        owned[src] = True
                     continue
+
                 if "UNPACR_NOP" not in up or name.startswith("TT_OP_"):
                     continue
-                if not any(t in text for t in ("ZEROSRC", "SET_DVALID")):
+                is_publish = any(t in text for t in ("ZEROSRC", "SET_DVALID"))
+                if not is_publish:
                     continue
-                if guarded or registry.publication_waits_own_bank(text):
-                    continue
-                out.append(
-                    Finding(
-                        file=f["file"],
-                        line=f.get("line", 0),
-                        function=fn.name,
-                        kind="dvalid:DUMMY_PUBLISH",
-                        hint="DUMMY_PUBLISH_UNGUARDED",
-                        detail=(
-                            f"{name} publishes a dummy Src bank without gating on "
-                            "Unpackers[i].SrcBank (no wait-like-UNPACR bit, no "
-                            "preceding STALLWAIT on SRCA_CLR/SRCB_CLR, no preceding "
-                            "UNPACR) — it can clear a bank it never waited for. "
-                            "Confirm whether a Dest->Src move consumes this bank"
-                        ),
-                        evidence=[self._ev(f, text or name)],
+
+                waits_own = registry.publication_waits_own_bank(text)
+                if waits_own and src:
+                    # Establishes ownership for whatever is sequenced after it — this
+                    # is how a wait-like ZEROSRC guards a following bare SET_DVALID.
+                    owned[src] = True
+
+                if not (waits_own or (src and owned[src]) or (src is None)):
+                    out.append(
+                        Finding(
+                            file=f["file"],
+                            line=f.get("line", 0),
+                            function=fn.name,
+                            kind="dvalid:DUMMY_PUBLISH",
+                            hint="DUMMY_PUBLISH_UNGUARDED",
+                            detail=(
+                                f"{name} publishes a dummy Src bank without gating on "
+                                "Unpackers[i].SrcBank (no wait-like-UNPACR bit, no "
+                                "preceding STALLWAIT on SRCA_CLR/SRCB_CLR, no preceding "
+                                "UNPACR or wait-like publication) — it can clear a bank "
+                                "it never waited for. Confirm whether a Dest->Src move "
+                                "consumes this bank"
+                            ),
+                            evidence=[self._ev(f, text or name)],
+                        )
                     )
-                )
+
+                # SET_DVALID hands the bank over and flips Unpackers[i].SrcBank, so
+                # ownership of the NEW bank is not established by anything so far.
+                if "SET_DVALID" in text and src:
+                    owned[src] = False
         return out
