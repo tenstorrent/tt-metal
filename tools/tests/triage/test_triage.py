@@ -6,6 +6,7 @@
 # You also need to install everything needed to run tt-triage.py in that environment
 # Run manually ./tools/tt-triage.py --help to see if it works and install requirements
 
+from dataclasses import fields
 from datetime import timedelta
 import os
 import sys
@@ -347,6 +348,14 @@ class TestTriage:
                 timedelta(seconds=0) < check.result.uptime < timedelta(days=8 * 365)
             ), f"Invalid ARC uptime: {check.result.uptime}"
 
+    def test_device_telemetry(self):
+        result = self.run_triage_script("device_telemetry.py")
+        self.assert_no_errors_or_none_in_result(result)
+
+    def test_firmware_versions(self):
+        result = self.run_triage_script("firmware_versions.py")
+        self.assert_no_errors_or_none_in_result(result)
+
     def test_check_binary_integrity(self):
         self.run_triage_script("check_binary_integrity.py")
 
@@ -586,6 +595,20 @@ class TestTriage:
                         f"{risc_name}: Expected file '{expected_file}' at line {expected_line} not found. "
                         f"Found {expected_file} at lines: {[entry.file_info.line for entry in matching_entries]}"
                     )
+
+    def assert_no_errors_or_none_in_result(self, result: list | None):
+        assert result is not None, "Expected non-None result"
+        assert len(result) > 0, "Expected at least one row"
+
+        for check in result:
+            device_id = check.device_description.device.id
+            assert check.result is not None, f"No result for device {device_id}"
+
+            for field in fields(check.result):
+                value = str(getattr(check.result, field.name))
+                assert (
+                    "none" not in value.lower() and "error" not in value.lower()
+                ), f"Device {device_id} field '{field.name}' is {value!r}"
 
     def run_triage_script(
         self,
