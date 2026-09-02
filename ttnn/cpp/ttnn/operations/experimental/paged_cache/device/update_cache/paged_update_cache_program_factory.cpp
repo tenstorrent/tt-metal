@@ -914,20 +914,36 @@ ttnn::device_operation::ProgramArtifacts PagedUpdateCacheProgramFactory::create_
     // enable_32_bit_dest carries across; routing the resolved TTNN config through
     // to_compute_hardware_config would substitute that helper's high-performance defaults for the
     // knobs this op never applied.
-    ComputeGen1Config compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeGen1Config compute_gen1{.enable_32_bit_dest = fp32_dest_acc_en};
     if (fp32_dest_acc_en) {
         // Metal 2.0 requires an explicit unpack mode for every Float32 DFB a compute kernel consumes
         // while enable_32_bit_dest is set. Legacy left unpack_to_dest_mode empty (all Default), which
         // is UnpackToSrc.
         if (cache_data_format == tt::DataFormat::Float32) {
-            compute_hw.unpack_modes.emplace(UC_CACHE_DFB, UnpackMode::UnpackToSrc);
+            compute_gen1.unpack_modes.emplace(UC_CACHE_DFB, UnpackMode::UnpackToSrc);
         }
         if (input_data_format == tt::DataFormat::Float32) {
-            compute_hw.unpack_modes.emplace(UC_INPUT_DFB, UnpackMode::UnpackToSrc);
+            compute_gen1.unpack_modes.emplace(UC_INPUT_DFB, UnpackMode::UnpackToSrc);
         }
         if (interm_data_format == tt::DataFormat::Float32) {
-            compute_hw.unpack_modes.emplace(UC_UNTILIZED_CACHE2_DFB, UnpackMode::UnpackToSrc);
+            compute_gen1.unpack_modes.emplace(UC_UNTILIZED_CACHE2_DFB, UnpackMode::UnpackToSrc);
         }
+    }
+
+    // Gen2 (Quasar) hardware config. The Metal 2.0 port authored only the Gen1 config above; a
+    // compute kernel whose hw_config carries only a Gen1 config cannot run on Quasar. This branch is
+    // the gen2_hardware_configs.md shape-4-compute pass: it is never taken on WH/BH (so the Gen1 path
+    // is byte-identical), and on Quasar it copies across exactly the fields the Gen1 config sets —
+    // enable_32_bit_dest and unpack_modes. fpu_math_fidelity / sfpu_precision_mode / double_buffer_dest
+    // are left at their (identical) defaults; bfp_pack_precision_mode has no Gen2 equivalent and is
+    // dropped; enable_2x_src_register is never set.
+    ComputeHardwareConfig compute_hw = compute_gen1;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+        compute_hw = ComputeGen2Config{
+            .enable_32_bit_dest = compute_gen1.enable_32_bit_dest,
+            .unpack_modes = compute_gen1.unpack_modes,
+        };
     }
 
     KernelSpec compute{

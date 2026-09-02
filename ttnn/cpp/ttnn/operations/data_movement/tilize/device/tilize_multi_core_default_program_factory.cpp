@@ -149,6 +149,17 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
         if (fp32_llk_acc && a.dtype() != DataType::UINT8) {
             compute_cfg.unpack_modes.emplace(INPUT_DFB, UnpackMode::UnpackToDest);
         }
+        // Gen2 (Quasar) hardware config. A KernelSpec's hw_config holds exactly one generation, so a
+        // Gen1-only config cannot run on Quasar. Mirror the resolved Gen1 fields into a Gen2 config on
+        // Quasar; WH/BH keep the Gen1 config untouched (this branch is not taken there).
+        ComputeHardwareConfig compute_hw = compute_cfg;
+        if (device->arch() == tt::ARCH::QUASAR) {
+            ComputeGen2Config compute_cfg_gen2;
+            compute_cfg_gen2.enable_32_bit_dest = compute_cfg.enable_32_bit_dest;
+            // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+            compute_cfg_gen2.unpack_modes = compute_cfg.unpack_modes;
+            compute_hw = compute_cfg_gen2;
+        }
         return KernelSpec{
             .unique_id = id,
             .source = "ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp",
@@ -166,7 +177,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
                  }},
             .compile_time_args =
                 {{"per_core_block_cnt", nblocks_per_core_arg}, {"per_core_block_tile_cnt", ntiles_per_block}},
-            .hw_config = ComputeHardwareConfig{compute_cfg},
+            .hw_config = std::move(compute_hw),
         };
     };
 
