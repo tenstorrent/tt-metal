@@ -289,13 +289,9 @@ struct SpoolPump {
         }
     }
 
-    __attribute__((always_inline)) void pass() {
-        if (wr == rd && both_empty()) {
-            return;
-        }
-        bool did = false;
-        // SHIPPING -> EMPTY on write-ack, not on sent: the bounce's next writer is the DMA engine, which a
-        // sent-only gate does not fence.
+    // SHIPPING -> EMPTY on write-ack, not on sent: the bounce's next writer is the DMA engine, which a
+    // sent-only gate does not fence.
+    __attribute__((always_inline)) void reclaim_shipped(bool& did) {
         if (b[0].state == kShipping || b[1].state == kShipping) {
             const uint32_t acked = NOC_STATUS_READ_REG(NOC_INDEX, NIU_MST_WR_ACK_RECEIVED);
             for (uint32_t i = 0; i < 2; i++) {
@@ -305,7 +301,10 @@ struct SpoolPump {
                 }
             }
         }
-        // Stream completion is FIFO, so one outstanding count gives each bounce its own line.
+    }
+
+    // Stream completion is FIFO, so one outstanding count gives each bounce its own line.
+    __attribute__((always_inline)) void retire_reads(bool& did) {
         if (b[0].state == kReading || b[1].state == kReading) {
             const uint32_t rd_out = experimental::dma_get_reads_outstanding(kDmaDrain);
             for (uint32_t i = 0; i < 2; i++) {
@@ -318,8 +317,11 @@ struct SpoolPump {
                 }
             }
         }
-        // Refill before shipping so the read runs under the ship's NoC issue; a second concurrent refill only at
-        // full pressure, where the deeper bank queue pays for itself.
+    }
+
+    // Refill before shipping so the read runs under the ship's NoC issue; a second concurrent refill only at
+    // full pressure, where the deeper bank queue pays for itself.
+    __attribute__((always_inline)) void refill(bool& did) {
         const uint32_t emp = first_empty();
         const bool want_refill = emp != kNone && (level >= kLevelInline || b[emp ^ 1u].state != kReading);
         // Only ship-completed bytes are readable: nothing short of a write's completion orders a read of the same
@@ -350,6 +352,9 @@ struct SpoolPump {
             b[emp].state = kReading;
             did = true;
         }
+    }
+
+    __attribute__((always_inline)) void ship(bool& did) {
         const uint32_t rdy = oldest_ready();
         if (rdy != kNone) {
             invalidate_l1_cache();
@@ -372,6 +377,17 @@ struct SpoolPump {
                 did = true;
             }
         }
+    }
+
+    __attribute__((always_inline)) void pass() {
+        if (wr == rd && both_empty()) {
+            return;
+        }
+        bool did = false;
+        reclaim_shipped(did);
+        retire_reads(did);
+        refill(did);
+        ship(did);
         if (did) {
             rebalance();
         }
@@ -541,19 +557,7 @@ __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n,
     return min_peak;
 }
 
-void kernel_main() {
-    const uint32_t num_cores = get_arg_val<uint32_t>(0);
-    const uint32_t cv_src = get_arg_val<uint32_t>(1);  // profiler_msg_t base on every worker
-    volatile tt_l1_ptr uint32_t* coords = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(2));
-    for (uint32_t i = 0; i < num_cores; i++) {
-        const uint32_t xy = coords[i];
-        core_noc[i] = get_noc_addr(xy & 0xFFFFu, xy >> 16, cv_src);
-    }
-    // The NoC counter mirrors persist across launches on this never-reset core; a previous run's unacked
-    // writes would wedge the first barrier.
-    noc_local_state_init(NOC_INDEX);
-    noc_local_state_init(kReadNoc);
-    ring_base = cv_src + kCtrlWords * 4u;
+__attribute__((always_inline)) static inline void program_command_buffers(uint32_t cv_src) {
     // Both read buffers use transaction id 0: the NIU's outstanding count for that id is the batch barrier.
     while (!noc_cmd_buf_ready(kReadNoc, read_cmd_buf)) {
     }
@@ -579,20 +583,12 @@ void kernel_main() {
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kHeadCmdBuf, NOC_RET_ADDR_LO, cv_src + kernel_profiler::SPSC_RING_HEAD_0 * 4u);
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kHeadCmdBuf, NOC_RET_ADDR_MID, 0);
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kHeadCmdBuf, NOC_AT_LEN_BE, kNumRisc * 4u);
-
-    SocketSenderInterface sender = create_sender_socket_interface(kSocketConfigAddr);
-    set_sender_socket_page_size(sender, kPageBytes);
     // Programmed once: nothing else on this core touches write_cmd_buf on the egress NoC.
     noc_write_init_state<write_cmd_buf, CQ_NOC_mkp>(NOC_INDEX, kWriteVc);
+}
 
-    volatile tt_l1_ptr uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStopAddr);
-    *stop = 0;
-    // The host's launch check polls this; a DRISC that never leaves reset would otherwise wedge every producer
-    // silently.
-    volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 4);
-    *hb = 0;
-
-    // Only heads, tails and the core identity are staged per frame; the rest must read zero on the wire.
+// Only heads, tails and the core identity are staged per frame; the rest must read zero on the wire.
+__attribute__((always_inline)) static inline void zero_stage_prefixes() {
     for (uint32_t sl = 0; sl < kNStage; sl++) {
         volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase + sl * kSlotBytes);
         pfx[0] = kernel_profiler::spsc_span_w0();
@@ -600,17 +596,12 @@ void kernel_main() {
             pfx[k] = 0;
         }
     }
+}
 
-    // Statics persist across launches, so everything the loop trusts is re-initialised. tails_seen is the sum of
-    // a core's tails at its last scan; tails are monotonic, so its delta is one interval's production.
-    static uint32_t tails_seen[kMaxCores];
-    static uint8_t hot[kMaxCores];        // shipped real words last scan; hot + empty scan = publish lag
-    static uint8_t ship_list[kMaxCores];  // this sweep's ship set, dense core indices
-    for (uint32_t i = 0; i < num_cores; i++) {
-        hot[i] = 0;
-    }
-    // Heads seed from the current tails: everything published before this launch predates the capture. The
-    // scratch is the only copy of the heads.
+// Heads seed from the current tails: everything published before this launch predates the capture. The
+// scratch is the only copy of the heads.
+__attribute__((always_inline)) static inline void seed_heads(
+    uint32_t num_cores, volatile tt_l1_ptr uint32_t* coords, uint32_t* tails_seen) {
     const uint32_t rd_seed = NOC_STATUS_READ_REG(kReadNoc, NIU_MST_RD_RESP_RECEIVED);
     cv_issue(core_noc, 0, num_cores);
     cv_wait(rd_seed, num_cores);
@@ -624,6 +615,92 @@ void kernel_main() {
         rec[kXyWord] = coords[c];
         tails_seen[c] = tsum;
     }
+}
+
+// Drain the spool, barrier the socket, publish done, then hand the NIU back on the host's word.
+__attribute__((always_inline)) static inline void finish(
+    SpoolPump& pump, SocketSenderInterface& sender, volatile tt_l1_ptr uint32_t* stop, bool killed) {
+    // Bounded: a consumer that stopped acking strands bytes instead of wedging teardown.
+    if constexpr (kSpool) {
+        while (!pump.drained()) {
+            pump.pass_cold();
+            // Notify per pass: with a FIFO smaller than the backlog, credit only returns after the host has seen the
+            // bytes.
+            pump.notify();
+            // The host escalates stop to 2 after its own timeout.
+            if (host_released(stop)) {
+                killed = true;
+                break;
+            }
+        }
+        pump.notify();
+    }
+
+    // socket_barrier waits for the host to ack everything, so it would hang on a dead consumer.
+    if (!killed) {
+        socket_barrier(sender);
+    }
+    while (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
+    }
+    // The posted head write-backs are outside that barrier's predicate; drain their sent counter too.
+    const uint64_t t_ps = get_timestamp() + kPostedDrainCycles;
+    while (!(ncrisc_noc_posted_writes_sent(NOC_INDEX) && ncrisc_noc_posted_writes_sent(kReadNoc)) &&
+           get_timestamp() < t_ps) {
+    }
+    // Only for a live consumer: after an abandoned batch the socket's bytes_sent is already out of sync with
+    // the host.
+    if (!killed) {
+        update_socket_config(sender);
+    }
+
+    // Published last, after the socket barrier, so the host only sees `done` once every page is out.
+    volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr);
+    *done = kernel_profiler::kRelayDoneWord;
+
+    // NIU_CFG_0 persists until chip reset, so whoever set stream mode restores it; it goes last because NOC2AXI
+    // takes this L1 out of the host's view.
+    const uint64_t t_end = get_timestamp() + kNiuRestoreWaitCycles;
+    while (!host_released(stop) && get_timestamp() < t_end) {
+    }
+    experimental::drisc_set_noc2axi_mode_all();
+}
+
+void kernel_main() {
+    const uint32_t num_cores = get_arg_val<uint32_t>(0);
+    const uint32_t cv_src = get_arg_val<uint32_t>(1);  // profiler_msg_t base on every worker
+    volatile tt_l1_ptr uint32_t* coords = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(2));
+    for (uint32_t i = 0; i < num_cores; i++) {
+        const uint32_t xy = coords[i];
+        core_noc[i] = get_noc_addr(xy & 0xFFFFu, xy >> 16, cv_src);
+    }
+    // The NoC counter mirrors persist across launches on this never-reset core; a previous run's unacked
+    // writes would wedge the first barrier.
+    noc_local_state_init(NOC_INDEX);
+    noc_local_state_init(kReadNoc);
+    ring_base = cv_src + kCtrlWords * 4u;
+    program_command_buffers(cv_src);
+
+    SocketSenderInterface sender = create_sender_socket_interface(kSocketConfigAddr);
+    set_sender_socket_page_size(sender, kPageBytes);
+
+    volatile tt_l1_ptr uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStopAddr);
+    *stop = 0;
+    // The host's launch check polls this; a DRISC that never leaves reset would otherwise wedge every producer
+    // silently.
+    volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 4);
+    *hb = 0;
+
+    zero_stage_prefixes();
+
+    // Statics persist across launches, so everything the loop trusts is re-initialised. tails_seen is the sum of
+    // a core's tails at its last scan; tails are monotonic, so its delta is one interval's production.
+    static uint32_t tails_seen[kMaxCores];
+    static uint8_t hot[kMaxCores];        // shipped real words last scan; hot + empty scan = publish lag
+    static uint8_t ship_list[kMaxCores];  // this sweep's ship set, dense core indices
+    for (uint32_t i = 0; i < num_cores; i++) {
+        hot[i] = 0;
+    }
+    seed_heads(num_cores, coords, tails_seen);
 
     uint32_t relieved = 0;
     uint32_t sweeps = 0;
@@ -959,47 +1036,5 @@ void kernel_main() {
         }
     }
 
-    // Bounded: a consumer that stopped acking strands bytes instead of wedging teardown.
-    if constexpr (kSpool) {
-        while (!pump.drained()) {
-            pump.pass_cold();
-            // Notify per pass: with a FIFO smaller than the backlog, credit only returns after the host has seen the
-            // bytes.
-            pump.notify();
-            // The host escalates stop to 2 after its own timeout.
-            if (host_released(stop)) {
-                killed = true;
-                break;
-            }
-        }
-        pump.notify();
-    }
-
-    // socket_barrier waits for the host to ack everything, so it would hang on a dead consumer.
-    if (!killed) {
-        socket_barrier(sender);
-    }
-    while (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
-    }
-    // The posted head write-backs are outside that barrier's predicate; drain their sent counter too.
-    const uint64_t t_ps = get_timestamp() + kPostedDrainCycles;
-    while (!(ncrisc_noc_posted_writes_sent(NOC_INDEX) && ncrisc_noc_posted_writes_sent(kReadNoc)) &&
-           get_timestamp() < t_ps) {
-    }
-    // Only for a live consumer: after an abandoned batch the socket's bytes_sent is already out of sync with
-    // the host.
-    if (!killed) {
-        update_socket_config(sender);
-    }
-
-    // Published last, after the socket barrier, so the host only sees `done` once every page is out.
-    volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr);
-    *done = kernel_profiler::kRelayDoneWord;
-
-    // NIU_CFG_0 persists until chip reset, so whoever set stream mode restores it; it goes last because NOC2AXI
-    // takes this L1 out of the host's view.
-    const uint64_t t_end = get_timestamp() + kNiuRestoreWaitCycles;
-    while (!host_released(stop) && get_timestamp() < t_end) {
-    }
-    experimental::drisc_set_noc2axi_mode_all();
+    finish(pump, sender, stop, killed);
 }
