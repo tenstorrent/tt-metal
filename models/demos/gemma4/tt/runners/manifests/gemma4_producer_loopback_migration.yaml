@@ -1,0 +1,43 @@
+# Gemma 4 31B — golden-free Gate 2 loopback migration.
+#
+# Prefill source slot 0 through the full 64K cache, migrate it to slot 1 through endpoint 1's
+# local A-to-B worker path, then require every migrated raw KV chunk to be byte-identical.
+# Pair with gemma4_binding_loopback_migration_1rank.yaml and run with migration_driver.
+
+model:
+  variant: gemma4_31b
+  num_layers: 60
+  max_seq_len: 65536
+  chunk_size: 8192
+
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: gemma4_prefill
+  connect_timeout_s: 120
+
+workload:
+  num_users: 1
+  chunks: "8"
+  max_requests: 1
+  interleave: round_robin
+  check_pcc: false
+  # Token input only. No kv_cache/ golden is needed by dst-bytes verification.
+  trace_dir: models/demos/gemma4/tests/test_data/loopback_tokens
+
+migration:
+  issue: true
+  dest_endpoint_id: 1
+  dst_slot_offset: 1
+  timeout_ms: 3600000
+  done_file: /tmp/gemma4_migration_done.sentinel
+  table_path: /tmp/gemma4_kv_chunk_table.pb
+  device_map_path: /tmp/gemma4_kv_device_map.json
+  cmd_queue: /mig_ep1_cmd
+  table_queue: /mig_ep1_table
+  resp_queue: /mig_ep1_resp
+
+env:
+  PREFILL_VERIFY_MIGRATION: "dst-bytes"
+  # Shutdown is sent only after destination read-back, so the runner keeps DRAM alive for validation.
+  PREFILL_SEND_SHUTDOWN: "1"

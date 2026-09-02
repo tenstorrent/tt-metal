@@ -1,0 +1,44 @@
+# Gemma 4 31B — Gate 2 loopback migration, one rank on one Blackhole galaxy.
+#
+# The runner owns the device, publishes the mixed global/sliding KV chunk table, and serves
+# H2D requests. The migration driver performs both the loopback copy and destination read-back.
+# Pair with gemma4_producer_loopback_migration.yaml.
+#
+# GEMMA4_MODEL_PATH and PREFILL_MIGRATION_CLIENT_DIR are deliberately supplied by the launch
+# environment because they are checkout/deployment specific.
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_x_graph_descriptor.textproto
+
+global_env:
+  PREFILL_MANIFEST: "models/demos/gemma4/tt/runners/manifests/gemma4_31b.json"
+  GEMMA4_MODEL_PATH: "${GEMMA4_MODEL_PATH}"
+  # Adapter prefers PREFILL_HF_MODEL; basename must be gemma-4-31B-it so bfp8 precision hits the existing cache.
+  PREFILL_HF_MODEL: "${GEMMA4_MODEL_PATH}"
+  HF_HOME: "${HF_HOME}"
+  HF_HUB_OFFLINE: "1"
+
+  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_SP: "8"
+  PREFILL_TP: "4"
+  PREFILL_CHUNK_SIZE: "8192"
+  PREFILL_MAX_SEQ_LEN: "65536"
+  PREFILL_GEMMA4_SLIDING_CACHE_LEN: "65536"
+  PREFILL_H2D_SERVICE_ID: "gemma4_prefill"
+  # Source slot 0 and destination slot 1 must both be represented in the table.
+  PREFILL_NUM_USERS: "2"
+  PREFILL_USE_TRACE: "0"
+  PREFILL_KV_ONLY_LAST_LAYER: "0"
+
+  PREFILL_ENABLE_MIGRATION: "1"
+  PREFILL_ENABLE_LAYER_ACK: "1"
+  PREFILL_MIGRATION_WAIT_READY_MS: "120000"
+  PREFILL_MIGRATION_TABLE_PATH: "/tmp/gemma4_kv_chunk_table.pb"
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/gemma4_kv_device_map.json"
+  PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"
+  PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
+  PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
+  PREFILL_MIGRATION_CLIENT_DIR: "${PREFILL_MIGRATION_CLIENT_DIR}"
+
+  LOGURU_LEVEL: "INFO"

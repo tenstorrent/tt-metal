@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+import yaml
 
 try:
     from ttnn.device import is_blackhole
@@ -62,6 +63,48 @@ def test_migration_manifest_temporarily_caps_advertised_context_at_64k():
     assert manifest["env"]["PREFILL_GEMMA4_SLIDING_CACHE_LEN"] == "65536"
     comment = " ".join(manifest["_comment"])
     assert "TEMPORARY" in comment and "memory" in comment
+
+
+def test_loopback_manifests_are_a_matching_golden_free_full_cache_pair():
+    gemma4_root = Path(__file__).resolve().parents[2]
+    manifests = gemma4_root / "tt/runners/manifests"
+    model = json.loads((manifests / "gemma4_31b.json").read_text())["env"]
+    binding = yaml.safe_load((manifests / "gemma4_binding_loopback_migration_1rank.yaml").read_text())
+    producer = yaml.safe_load((manifests / "gemma4_producer_loopback_migration.yaml").read_text())
+    runner = binding["global_env"]
+
+    assert producer["model"] == {
+        "variant": model["PREFILL_MODEL"],
+        "num_layers": int(model["PREFILL_NUM_LAYERS"]),
+        "max_seq_len": int(model["PREFILL_MAX_SEQ_LEN"]),
+        "chunk_size": int(model["PREFILL_CHUNK_SIZE"]),
+    }
+    assert producer["transport"]["sp"] == int(runner["PREFILL_SP"])
+    assert producer["transport"]["tp"] == int(runner["PREFILL_TP"])
+    assert producer["transport"]["h2d_service_id"] == runner["PREFILL_H2D_SERVICE_ID"]
+
+    migration = producer["migration"]
+    assert migration["table_path"] == runner["PREFILL_MIGRATION_TABLE_PATH"]
+    assert migration["device_map_path"] == runner["PREFILL_MIGRATION_DEVICE_MAP_PATH"]
+    assert migration["cmd_queue"] == runner["PREFILL_MIGRATION_CMD_QUEUE"]
+    assert migration["table_queue"] == runner["PREFILL_MIGRATION_TABLE_QUEUE"]
+    assert migration["resp_queue"] == runner["PREFILL_MIGRATION_RESP_QUEUE"]
+
+    source_slots = producer["workload"]["num_users"]
+    assert int(runner["PREFILL_NUM_USERS"]) == 2
+    assert source_slots == 1
+    assert migration["dest_endpoint_id"] == 1
+    assert migration["dst_slot_offset"] == source_slots
+    assert producer["workload"]["chunks"] == str(producer["model"]["max_seq_len"] // producer["model"]["chunk_size"])
+    assert producer["workload"]["check_pcc"] is False
+    assert producer["env"]["PREFILL_VERIFY_MIGRATION"] == "dst-bytes"
+    assert producer["env"]["PREFILL_SEND_SHUTDOWN"] == "1"
+
+    token_trace = gemma4_root / "tests/test_data/loopback_tokens"
+    assert Path(producer["workload"]["trace_dir"]) == token_trace.relative_to(Path(__file__).resolve().parents[5])
+    metadata = json.loads((token_trace / "metadata.json").read_text())
+    assert metadata["token_ids"] and all(isinstance(token, int) and token >= 0 for token in metadata["token_ids"])
+    assert not (token_trace / "kv_cache").exists()
 
 
 def test_source_table_uses_legacy_worker_crc_host_key():
