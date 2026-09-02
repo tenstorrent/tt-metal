@@ -26,8 +26,8 @@ Verified hardware limits on Wormhole B0 (L1 = 1,499,136 B):
   Bluestein bf16: N ≤ 130,048 (127×1024, M=2^18)
 
 Aggressive (large N) cases are gated behind TT_FFT_AGGRESSIVE=1 to keep
-the default CI run fast.  Run:
-    TT_FFT_AGGRESSIVE=1 pytest test_fft_all_n.py -v
+the default L2-nightly run bounded.  Run:
+    TT_FFT_AGGRESSIVE=1 pytest tests/ttnn/nightly/unit_tests/operations/experimental/fft/test_fft_all_n.py -v
 to verify the full N envelope.
 
 Tolerances:

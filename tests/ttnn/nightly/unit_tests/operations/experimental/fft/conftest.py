@@ -34,13 +34,17 @@ def _isolate_fft_device_state(device):
     All three clears are best-effort: the `getattr` guards make the
     fixture inert on older builds that predate the C++ bindings.
 
-    Known limitation: the L2-nightly multi-pass suite
-    (`tests/ttnn/nightly/unit_tests/operations/experimental/fft/`) can still
-    fail when the whole directory is run in one pytest session, because
-    pytest's session-scoped device fixture outlives all of the above
-    teardown hooks and some LLK-level state is not reachable from the
-    Python API.  Every affected test passes in isolation and per-file.
-    For CI or a green full-suite run, invoke with `pytest --forked`.
+    Known limitation: even with these mitigations, a small subset of the
+    multi-pass tests (`test_fft_two_pass`, `test_fft_three_pass`,
+    `test_fft_radix_pass_native`, and a few large-N `test_fft_all_n`
+    parametrisations) can still fail when the whole directory is run in
+    one pytest session, because pytest's session-scoped device fixture
+    outlives all of the above teardown hooks and some LLK-level state
+    (unpacker/packer datatype registers, tile-dim reconfig cache) is not
+    reachable from the Python API.  Every affected test passes in
+    isolation and per-file.  For CI or a green full-suite run, invoke
+    with `pytest --forked`, which puts each test in its own subprocess
+    and eliminates the shared state entirely.
     """
     clear_program_cache = getattr(device, "clear_program_cache", None)
     if clear_program_cache is not None:
