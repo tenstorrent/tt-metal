@@ -33,8 +33,6 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
     uint16_t tiles_received = get_local_cb_interface(output).tiles_received;
 
     std::int32_t free_tiles;
-    // The PACK thread blocked on a FULL CB -- the back-pressure direction. Same reasoning as
-    // llk_wait_tiles: this is the common bottom of cb_api.h and the DataflowBuffer API.
     {
         SYNC_WAIT("SYNC-CB-RESERVE", operand);
         do {

@@ -19,13 +19,8 @@ namespace tt::llrt {
 
 namespace {
 
-// The on-wire record, mirroring TT_ZONE_DEFINE_ID in hostdevcommon/profiler_zone_id.h. FOUR u32s,
-// SIXTEEN BYTES, and the host walks the section with THAT as its stride -- no parsing, no per-record
-// length, nothing to round up to an alignment. That matters: a variable-length record (id + inline
-// NUL-terminated string) has to round each advance up to the section's alignment by hand, and getting
-// that wrong by one does not fail, it DESYNCHRONISES -- reading the tail of one record as the head of the
-// next and minting plausible-looking ids bound to the wrong names. A fixed stride makes that class of bug
-// unrepresentable.
+// The on-wire record, mirroring TT_ZONE_DEFINE_ID in hostdevcommon/profiler_zone_id.h. The host walks the
+// section at a fixed 16-byte stride and does no parsing, so these records must stay fixed-length.
 struct ZoneMetaRecord {
     uint32_t zone_id;
     uint32_t name_ptr;  // VMA into .tt_zone_str
@@ -37,12 +32,12 @@ static_assert(
 
 struct State {
     mutable std::shared_mutex mtx;
-    std::unordered_set<std::string> ingested;              // ELF paths already read
-    std::vector<ZoneMetaEntry> log;                        // append-only; the consumer's delta source
-    std::unordered_map<uint32_t, uint32_t> id_to_log_idx;  // dedup + collision detection
+    std::unordered_set<std::string> ingested;
+    std::vector<ZoneMetaEntry> log;  // append-only; the consumer's delta source
+    std::unordered_map<uint32_t, uint32_t> id_to_log_idx;
     uint64_t collisions = 0;
     uint64_t records = 0;
-    uint64_t foreign_sections = 0;  // ELFs whose .tt_zone_meta failed a format guard
+    uint64_t foreign_sections = 0;
     bool collision_logged = false;
 };
 
@@ -51,11 +46,9 @@ State& state() {
     return s;
 }
 
-// Resolve a device VMA in .tt_zone_str to a NUL-terminated string inside the mapped section bytes.
-// Returns nullptr if the pointer lands outside the section or the string is unterminated -- the same
-// rebase trick the DPRINT string table uses: file_bytes + (device_ptr - sh_addr). This also handles the
-// case where the linker script does not mention the section and it lands as a non-ALLOC orphan at
-// sh_addr 0: the rebase is by the section's OWN address, so 0 is just another base.
+// Resolve a device VMA in .tt_zone_str to a NUL-terminated string inside the mapped section bytes, or
+// nullptr if it lands outside the section or is unterminated. Rebasing by the section's own address (as
+// the DPRINT string table does) also covers the linker leaving it a non-ALLOC orphan at sh_addr 0.
 const char* resolve(std::span<std::byte> str_bytes, uint64_t str_vma, uint32_t ptr) {
     if (ptr < str_vma) {
         return nullptr;
@@ -67,7 +60,7 @@ const char* resolve(std::span<std::byte> str_bytes, uint64_t str_vma, uint32_t p
     const char* base = reinterpret_cast<const char*>(str_bytes.data());
     const size_t avail = str_bytes.size() - off;
     if (::strnlen(base + off, avail) == avail) {
-        return nullptr;  // unterminated: refuse rather than run off the end
+        return nullptr;  // no NUL within the section
     }
     return base + off;
 }
@@ -98,18 +91,10 @@ void ZoneMetaRegistry::ingest_elf(const std::string& elf_path) {
         if (!meta.empty()) {
             uint64_t str_vma = 0;
             auto strs = elf.GetSectionContents(".tt_zone_str", str_vma);
-            // ---- Format guards. Both of these REJECT the section whole rather than parse part of it.
-            //
-            // They exist because the JIT cache is keyed on the build recipe, not on this section's layout,
-            // so a cache root written by a DIFFERENT layout of .tt_zone_meta can still be sitting on disk
-            // and be reused. Parsing one of those as a fixed-stride array is exactly the failure mode a
-            // stride is supposed to prevent -- it would not error, it would read the middle of one record
-            // as the head of the next and mint plausible-looking ids bound to the wrong names.
-            //
-            // Guard 1: our emitter ALWAYS writes both sections, so .tt_zone_meta without .tt_zone_str is
-            // by definition not our format.
-            // Guard 2: every record is exactly 16 bytes, so our size is always a multiple of 16. A
-            // remainder means the records are not ours.
+            // The JIT cache key does not cover this section's layout, so a root written by an older
+            // layout can still be reused, and walking one at our stride would mint plausible ids bound to
+            // the wrong names. Our emitter always writes both sections and every record is 16 bytes, so
+            // either guard failing means the section is not ours; reject it whole.
             if (strs.empty()) {
                 log_debug(
                     tt::LogLLRuntime,
@@ -135,21 +120,20 @@ void ZoneMetaRegistry::ingest_elf(const std::string& elf_path) {
                 const char* name = resolve(strs, str_vma, rec.name_ptr);
                 const char* file = resolve(strs, str_vma, rec.file_ptr);
                 if (name == nullptr) {
-                    continue;  // a record we cannot name is worth nothing; skip it, keep the rest
+                    continue;
                 }
                 parsed.push_back(
                     ZoneMetaEntry{rec.zone_id & TT_ZONE_ID_MASK, name, file != nullptr ? file : "", rec.line});
             }
         }
     } catch (const std::exception& e) {
-        // Deliberately non-fatal. A kernel whose zones cannot be named still profiles correctly; the
-        // consumer falls back to "Zone_<id>" for it, and the run continues.
+        // Non-fatal: a kernel whose zones cannot be named still profiles, rendering as "Zone_<id>".
         log_debug(tt::LogLLRuntime, "zone-meta: could not read '{}': {}", elf_path, e.what());
     }
 
     std::unique_lock wr(s.mtx);
     if (!s.ingested.insert(elf_path).second) {
-        return;  // another thread got here first
+        return;
     }
     if (skipped_foreign) {
         s.foreign_sections++;
@@ -180,7 +164,7 @@ void ZoneMetaRegistry::ingest_elf(const std::string& elf_path) {
                         e.line);
                 }
             }
-            continue;  // first writer wins, so a name never changes under a consumer that already saw it
+            continue;  // first writer wins: a name never changes under a consumer that already read it
         }
         s.id_to_log_idx.emplace(e.zone_id, static_cast<uint32_t>(s.log.size()));
         s.log.push_back(std::move(e));

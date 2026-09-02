@@ -2,19 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-perf-debug op-perf CSV consumer test.
+"""Streaming profiler op-perf CSV consumer test.
 
-Runs a TTNN matmul loop with the streaming profiler (TT_METAL_STREAMING_PROFILER=1, which implies
-TT_METAL_DEVICE_PROFILER) and TT_METAL_PERF_DEBUG_OPS_CSV set, then checks the CSV the ops-csv
-consumer wrote at process exit: one row per program launch keyed by runtime host-id, with the classic
-device-profiler report's device columns (see perf_debug_ops_csv.hpp). The Tracy sink is opt-in
-(TT_METAL_STREAMING_PROFILER_TRACY) and not opted into, so this also exercises the register_consumer
-path as the sole record sink.
-
-Hardware-gated like test_perf_debug_profiler.py: needs a Blackhole box with DRAM programmable cores;
-skips cleanly when the profiler reports it cannot run. Device work runs in a subprocess so the pytest
-parent never takes the PCIe lock.
+Runs a TTNN matmul loop with ``TT_METAL_STREAMING_PROFILER_OPS_CSV`` set and checks the CSV the ops-csv
+consumer writes at process exit: one row per program launch, with the device-profiler report's device columns
+(see streaming_profiler_ops_csv.hpp). The Tracy sink is left off, so the ops-csv consumer is the sole record
+sink. Needs a Blackhole box with DRAM programmable cores; device work runs in a subprocess so the pytest parent
+never takes the PCIe lock.
 """
 
 from __future__ import annotations
@@ -29,7 +23,7 @@ import pytest
 
 from tools.tracy.common import PROFILER_ARTIFACTS_DIR, TT_METAL_HOME
 
-ARTIFACTS = PROFILER_ARTIFACTS_DIR / "perf_debug_ops_csv_tests"
+ARTIFACTS = PROFILER_ARTIFACTS_DIR / "streaming_profiler_ops_csv_tests"
 
 N_MATMULS = 20
 
@@ -47,7 +41,7 @@ ttnn.close_device(device)
 """
 
 
-def test_perf_debug_ops_csv():
+def test_streaming_profiler_ops_csv():
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     csv_path = ARTIFACTS / "ops_perf.csv"
     csv_path.unlink(missing_ok=True)
@@ -56,11 +50,10 @@ def test_perf_debug_ops_csv():
     env.update(
         {
             "TT_METAL_HOME": str(TT_METAL_HOME),
-            # One switch: implies TT_METAL_DEVICE_PROFILER; the Tracy sink is opt-in and deliberately
-            # NOT opted into here, so the ops-csv consumer is the sole record sink.
+            # Implies TT_METAL_DEVICE_PROFILER.
             "TT_METAL_STREAMING_PROFILER": "1",
-            "TT_METAL_PERF_DEBUG_ROLE_SPLIT": "1",
-            "TT_METAL_PERF_DEBUG_OPS_CSV": str(csv_path),
+            "TT_METAL_STREAMING_PROFILER_ROLE_SPLIT": "1",
+            "TT_METAL_STREAMING_PROFILER_OPS_CSV": str(csv_path),
         }
     )
     proc = subprocess.run(
@@ -73,8 +66,8 @@ def test_perf_debug_ops_csv():
     )
     log = proc.stdout + proc.stderr
     assert proc.returncode == 0, f"workload failed (rc={proc.returncode}):\n{log[-2000:]}"
-    if "[perf-debug profiler] active" not in log:
-        pytest.skip("perf-debug profiler did not activate on this part")
+    if "[streaming profiler] active" not in log:
+        pytest.skip("streaming profiler did not activate on this part")
 
     assert csv_path.exists(), "ops CSV was not written"
     with open(csv_path) as f:

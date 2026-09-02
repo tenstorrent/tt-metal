@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tools/profiler/perf_debug_ops_csv.hpp"
+#include "tools/profiler/streaming_profiler_ops_csv.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -10,10 +10,10 @@
 #include <cstdlib>
 #include <string_view>
 
-namespace tt::tt_metal::perf_debug {
+namespace tt::tt_metal::streaming_profiler {
 
-void PerfDebugOpsCsvConsumer::operator()(const PerfDebugRecordBatch& batch) {
-    const PerfDebugCaptureContext* ctx = batch.context;
+void StreamingProfilerOpsCsvConsumer::operator()(const StreamingProfilerRecordBatch& batch) {
+    const StreamingProfilerCaptureContext* ctx = batch.context;
     if (devices_.size() < ctx->devices.size()) {
         devices_.clear();
         for (const auto& d : ctx->devices) {
@@ -21,8 +21,8 @@ void PerfDebugOpsCsvConsumer::operator()(const PerfDebugRecordBatch& batch) {
         }
     }
     names_.refresh();
-    for (const PerfDebugRec& rec : batch.records) {
-        if (rec.meta.type != PerfDebugRecType::Zone || rec.prog == 0) {
+    for (const StreamingProfilerRec& rec : batch.records) {
+        if (rec.meta.type != StreamingProfilerRecType::Zone || rec.prog == 0) {
             continue;
         }
         ZoneClass cls = ZoneClass::Unseen;
@@ -36,14 +36,13 @@ void PerfDebugOpsCsvConsumer::operator()(const PerfDebugRecordBatch& batch) {
             continue;
         }
         const auto& lanes = ctx->devices[rec.meta.dev].lanes;
-        if (rec.meta.lane >= lanes.size() || lanes[rec.meta.lane].role != PerfDebugLaneRole::Worker) {
+        if (rec.meta.lane >= lanes.size() || lanes[rec.meta.lane].role != StreamingProfilerLaneRole::Worker) {
             continue;
         }
         constexpr uint32_t kLaneShift = 32;
-        constexpr uint32_t kDevShift = kLaneShift + std::bit_width(kPerfDebugMaxLanes - 1u);
-        // Execution splitting: a Zone record IS one completed kernel-wrapper pair, so counting Zones per
-        // (dev, lane, prog) is exactly the old completed-pairs counter -- the wrapper zone never
-        // self-nests, so the k-th Zone on a lane for a given prog is execution k.
+        constexpr uint32_t kDevShift = kLaneShift + std::bit_width(kStreamingProfilerMaxLanes - 1u);
+        // A Zone record is one completed kernel-wrapper pair and the wrapper zone never self-nests, so
+        // the k-th Zone on a lane for a given prog is execution k.
         uint32_t& completed = pair_count_
             [(static_cast<uint64_t>(rec.meta.dev) << kDevShift) | (static_cast<uint64_t>(rec.meta.lane) << kLaneShift) |
              rec.prog];
@@ -66,7 +65,7 @@ void PerfDebugOpsCsvConsumer::operator()(const PerfDebugRecordBatch& batch) {
     }
 }
 
-void PerfDebugOpsCsvConsumer::write_csv(const std::string& path) const {
+void StreamingProfilerOpsCsvConsumer::write_csv(const std::string& path) const {
     FILE* f = std::fopen(path.c_str(), "w");
     if (f == nullptr) {
         return;
@@ -126,24 +125,25 @@ void PerfDebugOpsCsvConsumer::write_csv(const std::string& path) const {
 
 namespace {
 
-// TT_METAL_PERF_DEBUG_OPS_CSV=<path>: register at load, write at exit. The atexit handler runs after
-// the profiler has torn down (receiver shutdown delivers every buffered batch before returning), so
-// the file is complete; it unregisters first so no batch can race the write. The state is leaked on
-// purpose -- an exit-time destructor would be ordered against other statics.
+// TT_METAL_STREAMING_PROFILER_OPS_CSV=<path>: register at load, write at exit. The atexit handler runs
+// after receiver shutdown has delivered every buffered batch, and unregisters first so no batch can race
+// the write. State is leaked on purpose: an exit-time destructor would be ordered against other
+// statics.
 struct OpsCsvState {
     std::string path;
-    PerfDebugOpsCsvConsumer consumer;
-    PerfDebugConsumerHandle handle = 0;
+    StreamingProfilerOpsCsvConsumer consumer;
+    StreamingProfilerConsumerHandle handle = 0;
 };
 OpsCsvState* g_ops_csv = nullptr;
 
 const bool g_ops_csv_registered = [] {
-    const char* p = std::getenv("TT_METAL_PERF_DEBUG_OPS_CSV");
+    const char* p = std::getenv("TT_METAL_STREAMING_PROFILER_OPS_CSV");
     if (p == nullptr || *p == '\0') {
         return false;
     }
     g_ops_csv = new OpsCsvState{p, {}, 0};
-    g_ops_csv->handle = register_consumer("ops-csv", [](const PerfDebugRecordBatch& b) { g_ops_csv->consumer(b); });
+    g_ops_csv->handle = register_consumer(
+        "ops-csv", [](const StreamingProfilerRecordBatch& b) { g_ops_csv->consumer(b); });
     std::atexit([] {
         unregister_consumer(g_ops_csv->handle);
         g_ops_csv->consumer.write_csv(g_ops_csv->path);
@@ -153,4 +153,4 @@ const bool g_ops_csv_registered = [] {
 
 }  // namespace
 
-}  // namespace tt::tt_metal::perf_debug
+}  // namespace tt::tt_metal::streaming_profiler

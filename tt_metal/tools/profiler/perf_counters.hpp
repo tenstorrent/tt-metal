@@ -408,9 +408,6 @@ FORCE_INLINE const std::pair<PerfCounterType, uint16_t>* get_counters_for_counte
     return counters_for_group[static_cast<uint32_t>(g)];
 }
 
-// Ordinary structural zone id + ELF record, named "PERF-COUNTERS" on the host. Replaces the magic
-// PERF_COUNTER_PROFILER_ID (9090) as the STREAMING wire's id for these samples; the DRAM decoder in
-// impl/profiler/profiler.cpp still uses the old constant, which is why it is left defined.
 TT_ZONE_DEFINE_ID(kPerfCounterZoneId, "PERF-COUNTERS");
 
 __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group) {

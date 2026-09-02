@@ -2,20 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// SINGLE SOURCE OF TRUTH for the host-side decode of the DRISC drainer's wire
-// (producer: tt_metal/tools/profiler/kernels/drisc_profiler_filler.cpp).
+// The host-side decode of the DRISC relay's wire (producer:
+// tt_metal/tools/profiler/kernels/streaming_profiler_relay.cpp), and the only definition of it.
 //
 // The wire carries only whole variable-length BULK_SPAN frames (layout and geometry rules in
 // profiler_common.h): a 16-word prefix whose word 1 is the payload length, the worker's 64-word control
-// vector verbatim, then each RISC's live ring window packed flat -- congruence-padded, wrap resolved
+// vector verbatim, then each RISC's live ring window packed flat, congruence-padded, wrap resolved
 // device-side. Frames with SPSC_SPAN_RAW_FLAG in word 0 instead carry the whole raw span (five full
-// rings at fixed offsets, windows circular) -- the drainer's high-fill fallback, where packing would
-// cost write issues to save almost nothing. Inside each window is a packet run (spsc_packet.h):
-// ZONE_START/END/TOTAL markers
-// (2 words), STICKY_TIMER (1 word, per-lane wall-clock high half), STICKY_PROG (1 word, per-lane
-// runtime host-id in low27; 2-word PROG_EXT escape past 2^27), EVENT (2 words, a payload-less flag)
-// and DATA (3 + size words, self-describing -- the length lives in its word2). The producer publishes
-// its tail only on packet boundaries, so a window never ends mid-packet.
+// rings at fixed offsets, windows circular), the relay's high-fill fallback. Inside each window is a
+// packet run (spsc_packet.h): ZONE_START/END/TOTAL markers (2 words), STICKY_TIMER (1 word, per-lane
+// wall-clock high half), STICKY_PROG (1 word, per-lane runtime host-id in low27; 2-word PROG_EXT escape
+// past 2^27), EVENT (2 words, a payload-less flag) and DATA (3 + size words, whose length lives in its
+// word2). The producer publishes its tail only on packet boundaries, so a window never ends mid-packet.
 #pragma once
 
 #include <algorithm>
@@ -40,7 +38,7 @@
 
 static_assert(
     PP_BULK_SPAN == kernel_profiler::SPSC_SPAN_PACKET_TYPE,
-    "spsc_packet.h (plain C, drainer firmware) and profiler_common.h (C++, metal kernels) must agree on the "
+    "spsc_packet.h (plain C, relay firmware) and profiler_common.h (C++, metal kernels) must agree on the "
     "BULK_SPAN wire code -- they cannot include each other, so this is the only thing holding them together");
 // Same argument for the three codes the DRISC self-profiling packer in profiler_common.h emits directly.
 static_assert(PP_ZONE_START == kernel_profiler::SPSC_TYPE_ZONE_START, "ZONE_START wire code disagrees");
@@ -48,11 +46,11 @@ static_assert(PP_ZONE_END == kernel_profiler::SPSC_TYPE_ZONE_END, "ZONE_END wire
 static_assert(PP_STICKY_TIMER == kernel_profiler::SPSC_TYPE_STICKY_TIMER, "STICKY_TIMER wire code disagrees");
 static_assert(PP_ZONE_L == kernel_profiler::SPSC_TYPE_ZONE_L, "ZONE_L wire code disagrees");
 static_assert(PP_TYPE_SHIFT == kernel_profiler::SPSC_SPAN_TYPE_SHIFT, "packet type field moved");
-// The DRISC drain kernel keeps its OWN copy of the PP_DATA packer (it cannot include kernel_profiler.hpp),
-// so its layout constants have to be pinned against this header's. Widening the id and moving the size
-// word without updating that copy is not a crash -- it renders every one of its markers perfectly, with
-// correct timestamps and nesting, under the WRONG identity. This translation unit is the only one that
-// sees both headers, which makes it the only place the two can be held together.
+// The DRISC relay kernel keeps its own copy of the PP_DATA packer (it cannot include
+// kernel_profiler.hpp), so its layout constants have to be pinned against this header's. Widening the id
+// and moving the size word without updating that copy is not a crash: it renders every one of its
+// markers perfectly, with correct timestamps and nesting, under the wrong identity. This translation
+// unit is the only one that sees both headers.
 static_assert(PP_DATA == kernel_profiler::SPSC_TYPE_DATA, "PP_DATA wire code disagrees");
 static_assert(PP_DATA_SIZE_SHIFT == kernel_profiler::SPSC_DATA_SIZE_SHIFT, "PP_DATA size field moved");
 
@@ -66,7 +64,7 @@ inline constexpr uint32_t kSpscNRiscDecode = kernel_profiler::PROFILER_SPSC_TENS
 inline constexpr uint32_t kSpscMaxDataWords = 127;
 
 // Worst case: five full rings, each behind a maximal congruence pad. Larger than the raw 2,640-word span
-// the drainer stages, so this bounds the bounce buffer and frame validation, not any device layout.
+// the relay stages, so this bounds the bounce buffer and frame validation, not any device layout.
 inline constexpr uint32_t kSpscMaxPayloadWords =
     kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE +
     kSpscNRiscDecode * (kSpscRingCap + kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS - 1);
@@ -77,11 +75,10 @@ static_assert(kSpscMaxFrameWords == 2656 && kSpscMaxFramePages == 166);
 // Decode state for one socket's frame stream. Written only by that socket's decode thread.
 struct SpanDecodeState {
     std::vector<uint32_t> timer_hi;  // per lane: sticky wall-clock high half
-    // Per lane: the end of the last ZONE_S/ZONE_ATOMIC zone -- the base a ZONE_S's 16-bit end delta
-    // counts from. Mirrors the producer's g_cursor exactly: only those two types move it, and the
-    // producer guarantees the first zone after any launch/rewind is an absolute ZONE_ATOMIC, so a
-    // ZONE_S is never decoded against a cursor the producer didn't set (resync is the one exception;
-    // timestamps recover at the next ZONE_ATOMIC, and resyncs are already counted and flagged).
+    // Per lane: the end of the last ZONE_S/ZONE_ATOMIC zone, the base a ZONE_S's 16-bit end delta counts
+    // from. Mirrors the producer's g_cursor: only those two types move it, and the producer guarantees
+    // the first zone after any launch or rewind is an absolute ZONE_ATOMIC. A resync is the one
+    // exception; timestamps recover at the next ZONE_ATOMIC, and resyncs are counted and flagged.
     std::vector<uint64_t> cursor;
     std::vector<uint32_t> prog;      // per lane: sticky runtime host-id (every RISC emits its own at launch)
     std::vector<uint32_t> head;      // per lane: monotonic words-consumed mirror; head(N) == tail(N-1)
@@ -93,9 +90,8 @@ struct SpanDecodeState {
     uint64_t head_lag = 0;
     uint64_t anomalies = 0;  // torn run / truncated run / undecodable word
     uint64_t unknown_core_frames = 0;
-    // Vector-block accounting (diagnostic): records taken by the 8-wide zone/atomic paths vs the scalar
-    // fallback, and how often a would-be vector block was rejected by the per-lane type screen -- i.e. how
-    // much the 2-word/3-word record mix on a stall-heavy wire is fragmenting the SIMD path.
+    // Diagnostic: records taken by the wide zone/atomic paths vs the scalar fallback, and how often the
+    // per-lane type screen rejected a would-be vector block.
     uint64_t vec_zone_recs = 0, vec_atomic_recs = 0, scalar_recs = 0, vec_block_rejects = 0;
     uint64_t vec_atomic_calls = 0;
     uint64_t vec_zone_s_recs = 0, vec_zone_s_calls = 0;
@@ -121,26 +117,20 @@ struct SpscNoAtomic16 {};
 struct SpscNoZoneS16 {};
 
 #if defined(__AVX2__)
-// Deinterleave EIGHT consecutive 3-word atomic records (24 contiguous words) into vectors of word0
-// (type|id27), word1 (ts low) and word2 (duration). Output lane j belongs to record j; the stride-3
-// scatter across three source vectors costs 9 lane permutes + 6 blends, against 24 scalar loads.
-// ---- AVX-512 atomic block -------------------------------------------------------------------------
+// Deinterleave eight consecutive 3-word atomic records (24 contiguous words) into vectors of word0
+// (type|id27), word1 (ts low) and word2 (duration). Output lane j belongs to record j.
 //
-// Attributed, NOT built with -march: raising the whole build's baseline to x86-64-v4 to reach these
-// intrinsics was measured as a 2.4x regression on an EVENT/DATA-interleaved profiler stream (23 -> 9.6
-// GB/s), because every one of the ~450 other translation units gets different codegen too. The pragma
-// below confines the ISA to this block; every function in it shares the attribute, which is what lets them
-// still inline into EACH OTHER (clang only refuses to inline across DIFFERING target attributes).
+// Attributed rather than built with -march: raising the whole build's baseline to x86-64-v4 changes
+// codegen in every other translation unit too. The pragma below confines the ISA to this block, and
+// every function in it shares the attribute, which is what lets them still inline into each other
+// (clang only refuses to inline across differing target attributes). The kernels take plain arguments
+// because the caller is compiled for the baseline ISA and cannot form a __m512i; everything a record
+// needs beyond its own three words (th, prog, lane, dev) is block-invariant.
 //
-// The signature takes PLAIN arguments on purpose: the caller is compiled for the baseline ISA and cannot
-// form a __m512i, so the loads happen in here. Everything a record needs beyond its own three words --
-// th, prog, lane, dev -- is block-invariant, which is what makes the 64-bit fields composable by unpack
-// and the whole block layable-out in registers.
-// Shuffle/permute operands as plain aligned data at file scope, so the attributed block loads them from
-// L1 instead of rebuilding the vectors on every call (it cannot be inlined into a baseline-ISA caller,
-// so nothing is hoisted for it).
+// Shuffle/permute operands live at file scope as plain aligned data, so the attributed block loads them
+// from L1 instead of rebuilding the vectors on every call.
 //
-// vpermt2d index rows composing output lines STRAIGHT from the packed wire. Record r's 24 B is six
+// vpermt2d index rows composing output lines straight from the packed wire. Record r's 24 B is six
 // dwords {ts, th, id, meta, prog, dur} drawn from wire words {3r+1, -, 3r, -, -, 3r+2}; indices 0-15
 // select the source vector's 16 wire words, 16/17/18 select th/meta/prog from the constant operand.
 // Eight records = 24 words = 1.5 vectors, so the layout repeats every three lines and every 1.5 source
@@ -152,7 +142,7 @@ alignas(64) inline constexpr uint32_t kA16Lines[4][16] = {
     {9, 16, 8, 17, 18, 10, 12, 16, 11, 17, 18, 13, 15, 16, 14, 17},     // line 3 from v1 (words 16-31)
 };
 
-// ZONE_S block operands, same L1-not-rebuilt argument as kA16Lines. Even/odd deinterleave a 16-record
+// ZONE_S block operands, file-scope for the same reason as kA16Lines. Even/odd deinterleave a 16-record
 // (32-word) load pair into w0s/w1s; the EM/D rows compose output lines from three COMPUTED 8-qword
 // sources E (ends), M (meta|id), D (dur|prog) -- record r is qwords {E_r, M_r, D_r} -- via one
 // two-source qword permute (indices 0-7 = E, 8-15 = M) plus one masked permute pulling D into the
@@ -171,17 +161,15 @@ alignas(64) inline constexpr uint64_t kZS16D[3][8] = {
 };
 inline constexpr uint8_t kZS16DMask[3] = {0x24, 0x49, 0x92};
 
-// ---- Runtime ISA gate -------------------------------------------------------------------------------
-//
-// The build baseline is x86-64-v3 (AVX2), so AVX-512 may exist ONLY inside explicitly attributed
-// functions -- the two block kernels and the cached sink's line stores below -- and every call into one
-// sits behind this check. Keeping the attribute off the walk, the emitters and ingest is what makes the
-// guarantee structural: outside the kernels the compiler cannot emit AVX-512 at all, so a host without
-// it (Rome/Milan, post-ADL Intel client) runs the AVX2/scalar tier instead of faulting.
-// TT_METAL_PERF_DEBUG_NO_AVX512=1 forces the fallback tier, for testing it on capable hosts.
+// The build baseline is x86-64-v3 (AVX2), so AVX-512 may exist only inside explicitly attributed
+// functions (the two block kernels and the cached sink's line stores below) and every call into one sits
+// behind this check. Keeping the attribute off the walk, the emitters and ingest makes the guarantee
+// structural: outside the kernels the compiler cannot emit AVX-512 at all, so a host without it
+// (Rome/Milan, post-ADL Intel client) runs the AVX2/scalar tier instead of faulting.
+// TT_METAL_STREAMING_PROFILER_NO_AVX512=1 forces the fallback tier, for testing it on capable hosts.
 inline bool spsc_host_avx512() {
     static const bool v = [] {
-        if (std::getenv("TT_METAL_PERF_DEBUG_NO_AVX512") != nullptr) {
+        if (std::getenv("TT_METAL_STREAMING_PROFILER_NO_AVX512") != nullptr) {
             return false;
         }
         return __builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512bw") &&
@@ -190,13 +178,11 @@ inline bool spsc_host_avx512() {
     return v;
 }
 
-// ---- Record sinks for the vector blocks ------------------------------------------------------------
-//
 // The blocks compose 24 B records as whole 64 B lines and hand them to a Sink. Delivery decodes into a
-// consumer-private scratch buffer, so stores are CACHED (the buffer is re-read immediately by the same
-// thread; an NT store here would evict the line and turn the read-back into a DRAM round trip). The
-// audit path only wants the endpoints and counts, so its sink stores nothing and the blocks skip the
-// compose entirely (Sink::kStores is a compile-time gate).
+// consumer-private scratch buffer, so stores are cached: the buffer is re-read immediately by the same
+// thread, and an NT store would evict the line and turn the read-back into a DRAM round trip. The audit
+// path only wants the endpoints and counts, so its sink stores nothing and the blocks skip the compose
+// entirely (Sink::kStores is a compile-time gate).
 //
 // put(lines, nq) writes nq qwords taken from lines[0..ceil(nq/8)-1]; a put may over-store up to a full
 // vector past its nq qwords (overwritten by the next put), so the buffer needs 64 B of slack past cap.
@@ -231,10 +217,10 @@ struct SpscNullRecSink {
     inline void put_lines(const __m512i*, uint32_t) {}
 };
 
-// Public-record sink: the ZONE_S blocks compose the consumer-facing 32 B record DIRECTLY -- four
-// qwords {start, duration, meta<<32|id, prog} -- so a complete zone never round-trips through the
-// 24 B raw form plus a scalar re-transform (measured at ~2.5x the decode itself). Only genuine
-// start/end pairs need pairing state, and those take the scalar arm.
+// Public-record sink: the ZONE_S blocks compose the consumer-facing 32 B record directly, four qwords
+// {start, duration, meta<<32|id, prog}, so a complete zone never round-trips through the 24 B raw form
+// plus a scalar re-transform. Only genuine start/end pairs need pairing state, and those take the
+// scalar arm.
 struct SpscZone32Sink {
     static constexpr bool kStores = true;
     static constexpr bool kZone32 = true;
@@ -268,9 +254,9 @@ struct SpscA16Result {
     uint64_t ts_last;
 };
 
-// Any n from 1 to 16, so run tails need no narrower path. Same masked loads as before; each output
-// line then comes straight off the wire words through ONE two-source permute (kA16Lines), with
-// th/meta/prog riding the constant operand -- no SoA deinterleave and no unpack/re-interleave stage.
+// Any n from 1 to 16, so run tails need no narrower path. Each output line comes straight off the wire
+// words through one two-source permute (kA16Lines), with th/meta/prog riding the constant operand, so
+// there is no SoA deinterleave and no unpack/re-interleave stage.
 template <typename Sink>
 inline SpscA16Result spsc_atomic16_avx512(
     const uint32_t* p,
@@ -300,7 +286,7 @@ inline SpscA16Result spsc_atomic16_avx512(
     const uint64_t k0 = _mm512_cmpeq_epi32_mask(_mm512_srli_epi32(v0, PP_TYPE_SHIFT), atype);
     const uint64_t k1 = _mm512_cmpeq_epi32_mask(_mm512_srli_epi32(v1, PP_TYPE_SHIFT), atype);
     const uint64_t k2 = _mm512_cmpeq_epi32_mask(_mm512_srli_epi32(v2, PP_TYPE_SHIFT), atype);
-    // The compare sees all 48 words, and any ts/dur word can land on the type pattern -- only every
+    // The compare sees all 48 words and any ts/dur word can land on the type pattern, so only every
     // third bit (bit 3r = record r's w0) is meaningful. Bit 48 terminates an all-hit scan.
     constexpr uint64_t kW0Bits = 0x249249249249ull;
     const uint64_t miss = (~(k0 | (k1 << 16) | (k2 << 32)) & kW0Bits) | (1ull << 48);
@@ -313,8 +299,8 @@ inline SpscA16Result spsc_atomic16_avx512(
     }
     const uint64_t th_hi = static_cast<uint64_t>(th) << 32;
     out.n = n;
-    // Endpoints as scalar reloads of L1-hot source lines: unlike the spill-and-index this replaced,
-    // a plain load has no store to forward from, and it competes with nothing on the shuffle ports.
+    // Endpoints as scalar reloads of L1-hot source lines: no store to forward from, and no contention
+    // on the shuffle ports.
     out.ts_first = th_hi | p[1];
     out.ts_last = th_hi | p[3u * n - 2u];
     if constexpr (Sink::kStores) {
@@ -351,11 +337,11 @@ struct SpscZoneS16Result {
 
 // The ZONE_S counterpart of the atomic block above, for the wire's dense-zone hot type. A ZONE_S end is
 // cursor-relative (end_r = cursor + sum of deltas 0..r), which looks serial but is an inclusive prefix
-// sum -- four shifted adds for 16 lanes -- after which the block composes exactly like the atomic one:
-// records normalized to ZONE_ATOMIC form (type Zone, absolute end, duration), so downstream never sees
-// wire size classes. Same load contract as spsc_atomic16_avx512: any n from 1 to 16, `avail` authorizes
-// vector LOADS (never emits) past the live run; the scalar endpoint read stays inside it because windows
-// never end mid-packet.
+// sum, four shifted adds for 16 lanes. The block then composes exactly like the atomic one: records
+// normalized to ZONE_ATOMIC form (type Zone, absolute end, duration), so downstream never sees wire size
+// classes. Same load contract as spsc_atomic16_avx512: any n from 1 to 16, and `avail` authorizes vector
+// loads, never emits, past the live run; the scalar endpoint read stays inside it because windows never
+// end mid-packet.
 template <typename Sink>
 inline SpscZoneS16Result spsc_zone_s16_avx512(
     const uint32_t* p,
@@ -408,7 +394,7 @@ inline SpscZoneS16Result spsc_zone_s16_avx512(
         const __m512i w0s = _mm512_permutex2var_epi32(v0, _mm512_load_si512(kZS16Even), v1);
         const __m512i durs = _mm512_and_si512(w1s, _mm512_set1_epi32(0xFFFF));
         const __m512i ids = _mm512_and_si512(w0s, _mm512_set1_epi32(0x07FFFFFF));
-        // Public meta: type = PerfDebugRecType::Zone (1).
+        // Public meta: type = StreamingProfilerRecType::Zone (1).
         const uint64_t meta64 = static_cast<uint64_t>((lane << 16) | (dev << 26) | (1u << 29)) << 32;
         const __m512i mv = _mm512_set1_epi64(static_cast<long long>(meta64));
         const __m512i pv = _mm512_set1_epi64(prog);
@@ -481,10 +467,9 @@ inline SpscZoneS16Result spsc_zone_s16_avx512(
 
 #pragma clang attribute pop
 
-// AVX2 tier of the ZONE_S block, for hosts without AVX-512 (spsc_host_avx512() false): same contract,
-// up to EIGHT records (16 words). Everything here is baseline x86-64-v3, guaranteed executable on any
-// host this binary runs on. The compose spills to aligned scratch and emits through put3 -- three
-// scalar stores per record, which is what the zones8 sink already pays.
+// AVX2 tier of the ZONE_S block, for hosts without AVX-512 (spsc_host_avx512() false): same contract, up
+// to eight records (16 words). Everything here is baseline x86-64-v3, executable on any host this binary
+// runs on. The compose spills to aligned scratch and emits through put3, three scalar stores per record.
 template <typename Sink>
 inline SpscZoneS16Result spsc_zone_s8_avx2(
     const uint32_t* p,
@@ -526,9 +511,11 @@ inline SpscZoneS16Result spsc_zone_s8_avx2(
     const __m256i idx_even = _mm256_setr_epi32(0, 2, 4, 6, 0, 2, 4, 6);
     const __m256i idx_odd = _mm256_setr_epi32(1, 3, 5, 7, 1, 3, 5, 7);
     const __m256i w0s =
-        _mm256_permute2x128_si256(_mm256_permutevar8x32_epi32(v0, idx_even), _mm256_permutevar8x32_epi32(v1, idx_even), 0x20);
+        _mm256_permute2x128_si256(
+            _mm256_permutevar8x32_epi32(v0, idx_even), _mm256_permutevar8x32_epi32(v1, idx_even), 0x20);
     const __m256i w1s =
-        _mm256_permute2x128_si256(_mm256_permutevar8x32_epi32(v0, idx_odd), _mm256_permutevar8x32_epi32(v1, idx_odd), 0x20);
+        _mm256_permute2x128_si256(
+            _mm256_permutevar8x32_epi32(v0, idx_odd), _mm256_permutevar8x32_epi32(v1, idx_odd), 0x20);
     // Hillis-Steele prefix sum: cross-lane shift via permutevar, low lanes zeroed by blend.
     const __m256i z = _mm256_setzero_si256();
     __m256i pfx = _mm256_srli_epi32(w1s, 16);
@@ -603,31 +590,29 @@ inline void spsc_prefetch(const void* p) {
 //     ZONE_START/END: full_ts is the marker's time, duration 0. ZONE_TOTAL: full_ts is the sum, duration 0.
 //     ZONE_ATOMIC: full_ts is the zone's END and duration is its length, so start = full_ts - duration.
 //     Duration is its own arg rather than riding the prog slot because op attribution keys on prog
-//     (perf_debug_ops_csv drops records with prog == 0), so an atomic zone must keep both.
-// where zone_id27 is the FULL 27-bit structural zone id (tu_id << TT_ZONE_LOCAL_BITS | local --
-// hostdevcommon/profiler_zone_id.h; it was a 16-bit source-location hash before, and the mask that
-// truncated it here is gone),
-// and for each PP_DATA/PP_EVENT
+//     (streaming_profiler_ops_csv drops records with prog == 0), so an atomic zone must keep both.
+// where zone_id27 is the full 27-bit structural zone id (tu_id << TT_ZONE_LOCAL_BITS | local,
+// hostdevcommon/profiler_zone_id.h), and for each PP_DATA/PP_EVENT
 //   emit_data(lane, wire_type, id, full_ts, prog, payload_words, n)   (payload in place, hi-word first)
 // and emit_prog(lane, prog) whenever a lane's sticky host-id changes.
 //
 // Returns the payload words the control vector implies -- the caller checks it against the frame's own
-// length field, since a pack-rule disagreement with the drainer desynchronizes every lane after the
+// length field, since a pack-rule disagreement with the relay desynchronizes every lane after the
 // first -- or 0 for an unknown-core frame (decoded as nothing; the caller still owns the advance).
 //
-// Head adoption: the mirror and the extent's start are both monotonic and can each run behind -- the
-// mirror after a frame was lost upstream (device credit-timeout drop), the extent when the drainer's
-// head write-back lagged its snapshot, making the frame re-ship words the mirror already consumed -- so
-// decode begins at the larger of the two: adopt-and-count on a loss, skip the overlap on a lag.
-// The optional emit_zones8(lane, timer_hi, prog, w0s, w1s) sink receives EIGHT consecutive 2-word zone
+// Head adoption: the mirror and the extent's start are both monotonic and can each run behind. The
+// mirror runs behind after a frame was lost upstream (device credit-timeout drop); the extent runs
+// behind when the relay's head write-back lagged its snapshot, so the frame re-ships words the mirror
+// already consumed. Decode therefore begins at the larger of the two: adopt-and-count on a loss, skip
+// the overlap on a lag.
+//
+// The optional emit_zones8(lane, timer_hi, prog, w0s, w1s) sink receives eight consecutive 2-word zone
 // markers at once, deinterleaved into AVX2 vectors of word0s and word1s, whenever a 16-word block passes
-// the all-zone type screen -- the dominant case in a busy frame, and where the scalar walk's per-record
-// cost lives. emit_atomic8(lane, timer_hi, prog, w0s, w1s, w2s, n) is the same idea for up to EIGHT
-// 3-word PP_ZONE_ATOMIC records (w2s = durations): n <= 8 leading lanes are valid, the rest are
-// speculative over-read and must not be emitted. Without it the atomic wire decodes entirely scalar.
-// The walk is BASELINE code on purpose: the 512-bit kernels are called once per block (a real call per
-// <=16 records, not per record), and keeping the attribute off the walk means no AVX-512 can be emitted
-// outside the spsc_host_avx512()-gated kernels -- the portability guarantee is structural, not by audit.
+// the all-zone type screen. emit_atomic8(lane, timer_hi, prog, w0s, w1s, w2s, n) is the same for up to
+// eight 3-word PP_ZONE_ATOMIC records (w2s = durations): the n leading lanes are valid and the rest are
+// speculative over-read that must not be emitted. Without it the atomic wire decodes entirely scalar.
+// The walk itself is baseline code: keeping the attribute off it means no AVX-512 can be emitted outside
+// the spsc_host_avx512()-gated kernels, so the portability guarantee is structural rather than audited.
 template <
     typename EmitMarker,
     typename EmitData,
@@ -651,7 +636,7 @@ inline uint32_t spsc_decode_frame(
     // run-tails and sticky-split blocks go through the vector path with a partial count.
     uint32_t frame_words = 0) {
     (void)emit_atomic16;
-    (void)emit_atomic8;  // the atomic arm is 512-bit only; the 8-wide tier is gone
+    (void)emit_atomic8;  // the atomic arm is 512-bit only
     (void)emit_zone_s16;
     const uint32_t* ctrl = frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
     const bool raw = (frame[0] & kernel_profiler::SPSC_SPAN_RAW_FLAG) != 0;
@@ -663,11 +648,12 @@ inline uint32_t spsc_decode_frame(
     }
     const uint32_t core = xy_it->second;
     // Frame-local counters, folded into st once at the end: the emitters store through casted ring
-    // pointers, so a SpanDecodeState field update here is a forced load-add-store per record -- the
-    // compiler must assume the NT stores alias it.
+    // pointers, so the compiler must assume the NT stores alias a SpanDecodeState field and would turn
+    // each update here into a load-add-store per record.
     uint64_t vz = 0, va = 0, vac = 0, sr = 0, lw = 0, vzs = 0, vzsc = 0;
     uint32_t off = kernel_profiler::SPSC_SPAN_PREFIX_WORDS +
-                   (raw ? kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE : kernel_profiler::SPSC_SPAN_WIRE_CTRL_WORDS);
+                   (raw ? kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE
+                        : kernel_profiler::SPSC_SPAN_WIRE_CTRL_WORDS);
     for (uint32_t r = 0; r < kSpscNRiscDecode; r++) {
         const uint32_t lane = core * kSpscNRiscDecode + r;
         const uint32_t tail = ctrl[(raw ? +kernel_profiler::SPSC_RING_TAIL_0 : +kernel_profiler::SPSC_WIRE_TAIL_0) + r];
@@ -679,11 +665,10 @@ inline uint32_t spsc_decode_frame(
         }
         const uint32_t start = tail - extent;
         const uint32_t* p = nullptr;
-        // A packed lane whose NEAR-FULL run wraps the ring arrives as the WHOLE RING IMAGE,
-        // ring-ordered, in one device read; a small wrapping run arrives as the two-piece split,
-        // already in run order. The predicate is shared with the device (spsc_span_wrap_image), the
-        // pad is then phased for ring offset 0, and the payload advance is the full ring, not the
-        // extent.
+        // A packed lane whose near-full run wraps the ring arrives as the whole ring image,
+        // ring-ordered, in one device read; a small wrapping run arrives as the two-piece split, already
+        // in run order. The predicate is shared with the device (spsc_span_wrap_image), the pad is then
+        // phased for ring offset 0, and the payload advance is the full ring, not the extent.
         const bool ring_ordered =
             !raw && extent != 0 && kernel_profiler::spsc_span_wrap_image(start, extent, kSpscRingCap);
         if (!raw && extent != 0) {
@@ -719,12 +704,10 @@ inline uint32_t spsc_decode_frame(
         uint32_t th = st.timer_hi[lane];
         uint32_t pg = st.prog[lane];
         uint64_t cur = st.cursor[lane];
-        // ONE DECODE PATH FOR BOTH FRAME LAYOUTS. A raw frame carries whole 512-word rings and is read
-        // circularly; a packed frame is already contiguous. That is a difference in ADDRESSING, not in
-        // decoding, and keeping two copies of the walk meant every improvement had to be made twice -- the
-        // 16-wide path went into the packed copy only, so DRISC self zones (raw frames) kept decoding
-        // scalar: 96 K records per stream on kimi. Linearise instead and share the walk. Raw frames are the
-        // drainers' own self frames, so the copy is off the workload's path.
+        // One decode path for both frame layouts: a raw frame carries whole 512-word rings and is read
+        // circularly, a packed frame is already contiguous, and that is a difference in addressing rather
+        // than in decoding. Linearise and share the walk. Raw frames are the relays' own self frames, so
+        // the copy is off the workload's path.
         uint32_t lin[kSpscRingCap];
         if (raw || ring_ordered) {
             const uint32_t* ring = raw ? frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS +
@@ -740,17 +723,16 @@ inline uint32_t spsc_decode_frame(
         } else {
             p += extent - run;
         }
-        // The over-read gates below vouch for words past a lane's run using the FRAME buffer's extent. A
-        // linearised run lives in `lin` instead, where no such slack exists and `frame + frame_words` is not
-        // even a comparable pointer -- so the frame vouch must be withdrawn here, or the gates admit reads
-        // past the scratch and the decode picks up garbage records (measured: 1290 order regressions).
+        // The over-read gates below vouch for words past a lane's run using the frame buffer's extent. A
+        // linearised run lives in `lin` instead, where no such slack exists and `frame + frame_words` is
+        // not even a comparable pointer, so the frame vouch must be withdrawn here or the gates admit
+        // reads past the scratch and the decode picks up garbage records.
         [[maybe_unused]] const uint32_t fw_eff = (raw || ring_ordered) ? 0u : frame_words;
         // Just-in-time prefetch of this lane's live window: small bursts consumed immediately fit the
-        // core's fill-buffer budget -- issuing whole frames ahead was measured 30-40% SLOWER (the bulk
-        // cold-line prefetches starve the walk's own demand loads). The second stream mirrors the same
-        // offsets ONE FRAME ahead (the device DMA lands in DRAM, not cache, so the just-in-time stream
-        // alone eats the full miss latency); spread across the lane walks it stays inside the same
-        // fill-buffer budget the bulk variant blew.
+        // core's fill-buffer budget, where issuing whole frames ahead is slower because the bulk cold-line
+        // prefetches starve the walk's own demand loads. The second stream mirrors the same offsets one
+        // frame ahead, since the device DMA lands in DRAM rather than cache and the just-in-time stream
+        // alone would eat the full miss latency.
         for (uint32_t o = 0; o < run; o += 16) {
             spsc_prefetch(p + o);
             if (fw_eff != 0) {
@@ -780,8 +762,8 @@ inline uint32_t spsc_decode_frame(
             }
 #endif
 #if defined(__AVX2__)
-            // See the ring-path copy above: screening matches 2-word markers only, so gate on the leading
-            // type rather than letting an atomic stream fail the scan once per record.
+            // The screen matches 2-word markers only, so gate on the leading type rather than letting an
+            // atomic stream fail the scan once per record.
             if constexpr (!std::is_same_v<std::decay_t<EmitZones8>, SpscNoZones8>) {
                 if (t <= PP_ZONE_END && i + 16 <= run) {
                     const __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + i));
@@ -804,8 +786,8 @@ inline uint32_t spsc_decode_frame(
             }
 #endif  // __AVX2__
 #if defined(__AVX2__)
-            // THE atomic arm. Any run length from 1 up goes through here -- the block emits n records for
-            // any n, so there is no tail case and no narrower path behind it.
+            // The atomic arm. The block emits n records for any n, so there is no tail case and no
+            // narrower path behind it.
             if constexpr (!std::is_same_v<std::decay_t<EmitAtomic16>, SpscNoAtomic16>) {
                 if (t == PP_ZONE_ATOMIC) {
                     const size_t readable = fw_eff != 0 ? static_cast<size_t>(frame + fw_eff - (p + i))
@@ -817,7 +799,7 @@ inline uint32_t spsc_decode_frame(
                         va += got;
                         vac++;
                         // The block is atomics only (a sticky ends it), so th is constant across it and
-                        // the LAST atomic's absolute end re-anchors the lane cursor.
+                        // the last atomic's absolute end re-anchors the lane cursor.
                         cur = pp_full_ts(th, p[i + 3u * (got - 1u) + 1u]);
                         i += 3 * got;
                         continue;
@@ -825,17 +807,14 @@ inline uint32_t spsc_decode_frame(
                 }
             }
 #endif
-            // Everything reaching here is a packet the vector paths above CANNOT take, and not for want of
-            // a wider instruction: PP_STICKY_TIMER redefines `th` and PP_STICKY_PROG/_EXT redefine `pg` for
-            // every record after them, so a lane cannot be decoded before its predecessors are; PP_DATA
-            // carries its length in its own word 2, so the next record's offset is unknown until it is read.
-            // A gather walk over the width chain was built and measured for the fixed-width types instead --
-            // it never fired, because a pure type never reaches this line. Measured on kimi: 99.6% of
-            // records take the 16-wide path, and the remainder is one state transition per iteration.
+            // Everything reaching here is a packet the vector paths above cannot take, and not for want
+            // of a wider instruction: PP_STICKY_TIMER redefines `th` and PP_STICKY_PROG/_EXT redefine `pg`
+            // for every record after them, so a lane cannot be decoded before its predecessors are, and
+            // PP_DATA carries its length in its own word 2, so the next record's offset is unknown until
+            // it is read.
             sr++;
             st.scalar_by_type[t & 15u]++;
             if (t == PP_EVENT) {
-                // PP_EVENT: exactly 2 words -- a flag with a compile-time structural id, no payload.
                 if (i + 2 > run) {
                     st.anomalies++;
                     break;
@@ -864,7 +843,7 @@ inline uint32_t spsc_decode_frame(
                 const uint64_t lend = (static_cast<uint64_t>(p[i + 2]) << 32) | p[i + 1];
                 const uint64_t ldur = (static_cast<uint64_t>(p[i + 4]) << 32) | p[i + 3];
                 // A 64-bit duration cannot ride the 32-bit dur argument: normalize to a synthetic
-                // START/END pair for the downstream pairing stack. Does NOT move the cursor.
+                // START/END pair for the downstream pairing stack. Does not move the cursor.
                 emit(lane, PP_ZONE_START, pp_low27(w0), lend - ldur, pg, 0);
                 emit(lane, PP_ZONE_END, pp_low27(w0), lend, pg, 0);
                 i += 5;

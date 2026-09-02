@@ -914,11 +914,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_STREAMING_PROFILER
-        // Boots the streaming device-zone profiler (resident DRISC drainers + host receiver) at
-        // MeshDevice bring-up, and IMPLIES TT_METAL_DEVICE_PROFILER -- one switch arms both the
-        // producers (kernels emit markers) and the consumer. The Tracy sink is NOT implied: opt in
-        // with TT_METAL_STREAMING_PROFILER_TRACY=1; without it, records go only to registered
-        // consumers (register_consumer / TT_METAL_PERF_DEBUG_OPS_CSV).
+        // Boots the streaming device-zone profiler (resident DRISC relays + host receiver) at MeshDevice
+        // bring-up, and implies TT_METAL_DEVICE_PROFILER. The Tracy sink is not implied: opt into that with
+        // TT_METAL_STREAMING_PROFILER_TRACY=1, otherwise records go only to registered consumers.
         // Default: false
         // Usage: export TT_METAL_STREAMING_PROFILER=1
         case EnvVarID::TT_METAL_STREAMING_PROFILER:
@@ -975,10 +973,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_DEVICE_PROFILER_SYNC_EVENTS
-        // Enables synchronization-event profiling (CB wait/push, semaphore wait/set markers) for the
-        // critical-path tool. Opt-in: these hooks sit in per-tile hot paths (cb_wait_front, semaphore
-        // spins), so they are compiled in only when asked for. Requires the device profiler to be on
-        // (streaming or DRAM); without it the JIT define is never emitted.
+        // Enables CB wait/push and semaphore wait/set markers for the critical-path tool. Opt-in because
+        // the hooks sit in per-tile hot paths. Requires the device profiler (streaming or DRAM) to be on;
+        // without it the JIT define is never emitted.
         // Default: false
         // Usage: export TT_METAL_DEVICE_PROFILER_SYNC_EVENTS=1
         case EnvVarID::TT_METAL_DEVICE_PROFILER_SYNC_EVENTS:

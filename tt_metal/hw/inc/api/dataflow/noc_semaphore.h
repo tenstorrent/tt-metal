@@ -82,8 +82,6 @@ public:
      */
     void down(uint32_t value) {
         auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
-        // down() is a wait followed by a set, so it emits both: the wait zone explains a
-        // stall, and the set is a real state change another core may be waiting on.
         WAYPOINT("NSDW");
         {
             SYNC_WAIT("SYNC-SEM-WAIT", local_l1_addr_);

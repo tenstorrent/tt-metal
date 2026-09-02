@@ -115,12 +115,6 @@ void add_program_sub_device_meta_data(nlohmann::json& meta_data, uint32_t encode
 }
 
 #if defined(TRACY_ENABLE)
-// make_noc_debug_event() lived here: it turned a KernelProfilerNocEventMetadata payload into a
-// NOCDebugEvent for NOCDebugState. Its only caller was the NOC_TRACING_STATIC_ID id-value branch in
-// readTsData16BMarkerData, which was deleted when marker identification moved from id VALUES to
-// ELF-resolved NAMES -- so this went with it rather than being left as dead code. DRAM readback path,
-// disabled by default; see the notes at the deletion sites below.
-
 uint32_t risc_type_to_control_buffer_dram_address_offset(tracy::RiscType risc_type) {
     kernel_profiler::ControlBuffer offset;
     switch (risc_type) {
@@ -1892,14 +1886,6 @@ void DeviceProfiler::readDeviceMarkerData(
     updateFirstTimestamp(timestamp);
 
 #if defined(TRACY_ENABLE)
-    // The NoC-debug event dispatch that used to live here compared `timer_id` against the magic constant
-    // kernel_profiler::NOC_DEBUGGING_STATIC_ID (23456) -- i.e. it recognised a marker by the VALUE of its
-    // id. Structural zone ids make that unsound in principle (every value in the space is a legitimate
-    // source location) and unnecessary in practice: a marker is identified by its NAME, which now travels
-    // in the kernel's own ELF. This is the DRAM readback path, which is disabled by default and is not
-    // being carried forward; the dispatch was DELETED rather than re-expressed. Consequence: the DRAM path
-    // no longer feeds NOCDebugState. See the streaming path (tools/profiler/perf_debug_profiler.cpp),
-    // which names "NOC-DEBUG" from the ELF like any other zone.
 #endif
 }
 
@@ -1920,11 +1906,6 @@ void DeviceProfiler::readTsData16BMarkerData(
     nlohmann::json meta_data;
     [[maybe_unused]] std::optional<NOCDebugEvent> noc_debug_event;
 #if defined(TRACY_ENABLE)
-    // Same deletion as in readTsDataMarkerData above: this recognised a NoC-trace marker by comparing
-    // `timer_id` against the magic kernel_profiler::NOC_TRACING_STATIC_ID (12345). Identification by id
-    // VALUE is gone from the profiler; markers are identified by ELF-resolved name. DRAM path, disabled by
-    // default, deliberately not carried forward -- the metadata this used to unpack into meta_data /
-    // NOCDebugState is no longer produced here.
 #endif
 
     const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
@@ -2569,7 +2550,6 @@ void DeviceProfiler::pushTracyDeviceResults(
             marker_to_push.marker_type == tracy::TTDeviceMarkerType::TS_EVENT ||
             marker_to_push.marker_type == tracy::TTDeviceMarkerType::TS_DATA ||
             marker_to_push.marker_type == tracy::TTDeviceMarkerType::TS_DATA_16B) {
-            // Point-in-time device events; they render as markers on the RISC lane rather than zones.
             TracyTTPushMarker(device_tracy_contexts[device_core], marker_to_push);
         }
     }
@@ -2976,14 +2956,10 @@ void DeviceProfiler::pollDebugDumpResults(
 #endif
 }
 
-// When an external streaming consumer OWNS the worker profiler rings and drains them continuously, the
-// standard DRAM device profiler must stand down -- its per-program control-buffer reset (see the readback
-// path) rewinds the ring TAIL and breaks the continuous drain (~30x duplicate zones).
-//
-// Two such consumers exist and both are affected identically, because the hazard is the rewind, not who
-// is reading: TT_METAL_STREAMING_PROFILER (the DRISC drainer) and TT_METAL_DRISC_PROFILER (the
-// DRISC drainer). Read once.
-static bool external_ring_drainer_active() {
+// True when an external consumer is draining the worker profiler rings itself. The DRAM profiler's
+// per-program control-buffer reset rewinds the ring tail, which duplicates zones for such a consumer, so
+// it stands down whenever one of these relays is enabled.
+static bool external_ring_relay_active() {
     static const bool active = [] {
         for (const char* var : {"TT_METAL_STREAMING_PROFILER", "TT_METAL_DRISC_PROFILER"}) {
             const char* s = std::getenv(var);
@@ -3004,10 +2980,9 @@ bool getDeviceProfilerState(ContextId context_id) {
         return false;
     }
 
-    // NOTE: PROFILE_KERNEL (marker emission) keys off get_profiler_enabled()
-    // DIRECTLY (build.cpp / build_env_manager.cpp), so disabling the DRAM profiler here does NOT stop the
-    // kernels emitting markers -- it only stands down the DRAM readback/reset.
-    return ctx.rtoptions().get_profiler_enabled() && !external_ring_drainer_active();
+    // Kernel marker emission keys off get_profiler_enabled() directly (build.cpp / build_env_manager.cpp
+    // set PROFILE_KERNEL from it), so a false here stands down only the DRAM readback and reset.
+    return ctx.rtoptions().get_profiler_enabled() && !external_ring_relay_active();
 }
 
 bool getDeviceDebugDumpEnabled(ContextId context_id) {

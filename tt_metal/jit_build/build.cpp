@@ -64,35 +64,20 @@ namespace tt::tt_metal {
 
 namespace {
 
-// ---- Persistent zone translation-unit id registry ---------------------------------------------------
+// Hands out the tu_id half of a structural device zone id (hostdevcommon/profiler_zone_id.h) as
+// -DTT_PROFILER_TU_ID. Ids must be unique across translation units, since the local half is only unique
+// within one, and stable across runs, since a cached ELF keeps the id baked into its .tt_zone_meta
+// records -- hence a file rather than an in-memory counter.
 //
-// Hands out the tu_id half of a structural device zone id (hostdevcommon/profiler_zone_id.h), injected
-// into the kernel compile as -DTT_PROFILER_TU_ID. Two properties make it necessary:
+// The key is source identity plus build target: the local half is a __COUNTER__ position, and one source
+// compiled for BRISC vs NCRISC pulls in different preprocessor-gated headers and can number its zones
+// differently. Compile-time args are left out to keep the registry bounded; the cost is that two
+// define-variants of one source share a tu_id, which the host reports as a zone-id collision
+// (llrt/zone_meta.cpp) rather than silently mis-naming.
 //
-//  * IDS MUST BE UNIQUE ACROSS TUs. That is the entire reason structural ids are collision-free: the
-//    local half is unique within a TU, so the TU half has to be unique between them.
-//  * IDS MUST BE STABLE ACROSS RUNS. The JIT caches objects and ELFs, so an ELF compiled by an earlier
-//    run keeps the id baked into its .tt_zone_meta records. If the next run reassigned ids, a cached ELF
-//    would alias a freshly-compiled one. Hence a file, not an in-memory counter.
-//
-// The KEY is source identity, deliberately NOT the build variant: kernel source path (or a hash of
-// inline source) plus the build target, i.e. the RISC. The target belongs in the key because the local
-// index is a __COUNTER__ position, and a kernel source compiled for BRISC vs NCRISC pulls in a different
-// set of preprocessor-gated headers and can therefore number its zones differently. Compile-time
-// ARGUMENTS are deliberately left out: including them would mint a fresh id per op instance and grow the
-// registry without bound. The residual risk that buys is a kernel with #if-gated zone macros compiled
-// twice with different defines in one run -- its two variants would share a tu_id and disagree on what a
-// local index means. The host reports that as a zone-id collision rather than silently mis-naming (see
-// llrt/zone_meta.cpp), which is why the tradeoff is takeable.
-//
-// EVERY id in the space is allocatable. There is no reserved band: the producer stall zone, the DRISC
-// self-profiling zones and the NoC event tags are ordinary source locations in ordinary TUs now, so
-// nothing here has to be held back for them.
-//
-// Format: append-only text, one "<source_id>\t<tu_id>" line per TU. Allocation is lowest-free-id, so the
-// space stays dense and a deleted registry rebuilds compactly. Guarded by flock() for the whole
-// read-modify-write so parallel builds sharing a cache root cannot hand out the same id twice, plus a
-// process-local mutex because the JIT compiles many kernels on a thread pool.
+// Append-only "<source_id>\t<tu_id>" lines, allocated lowest-free-id so a deleted registry rebuilds
+// compactly. flock() covers the whole read-modify-write against parallel builds sharing a cache root; the
+// process-local mutex covers the JIT's own thread pool.
 uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const std::string& source_id) {
     static std::mutex mtx;
     std::lock_guard<std::mutex> lk(mtx);
@@ -120,7 +105,7 @@ uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const st
         while (std::getline(in, line)) {
             auto tab = line.rfind('\t');
             if (tab == std::string::npos) {
-                continue;  // malformed line: ignore rather than fail the build
+                continue;
             }
             uint32_t entry_id = 0;
             try {
@@ -129,7 +114,7 @@ uint32_t get_or_assign_profiler_tu_id(const std::string& registry_path, const st
                 continue;
             }
             if (entry_id >= TT_ZONE_TU_COUNT) {
-                continue;  // e.g. an id assigned under a wider split
+                continue;  // assigned when the tu split was wider
             }
             if (line.compare(0, tab, source_id) == 0) {
                 return entry_id;
@@ -321,9 +306,8 @@ void JitBuildEnv::init(
         this->defines_ += "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" +
                           std::to_string(config.profiler_dram_bank_size_per_risc_bytes) + " ";
 
-        // Critical-path tool: sync-event markers in cb_wait_front/semaphore paths. A distinct define
-        // (not a PROFILER_OPT bit) so the hook headers can gate without parsing PROFILE_KERNEL's value;
-        // it lands in defines_ and therefore in the JIT cache key like every other profiler option.
+        // A define of its own rather than a PROFILER_OPT bit, so the sync-event hook headers can gate on
+        // it without parsing PROFILE_KERNEL's value.
         if (rtoptions.get_profiler_sync_events_enabled()) {
             this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
         }
@@ -754,15 +738,13 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         cflags += " -save-temps=obj -fdump-tree-all -fdump-rtl-all";
     }
 
-    // Per-TU half of the structural device zone id. Kept out of `defines_`/`build_key_` on purpose: a
-    // tu_id is a property of the SOURCE, not of the build recipe, so folding it into the cache key would
-    // split the cache for no reason. It is stable for a given source identity, so a cached object never
-    // disagrees with a freshly compiled one.
+    // Per-TU half of the structural device zone id. Kept out of `defines_`/`build_key_`: a tu_id is a
+    // property of the source, not of the build recipe, so folding it into the cache key would split the
+    // cache for no reason.
     std::vector<std::string> defines = recipe.defines;
     if (env_.get_rtoptions().get_profiler_enabled()) {
-        // Firmware has no JitBuildSettings; its source identity is the source path itself plus the target,
-        // which is stable across build configs (out_dir is not -- it carries the build key, and keying on it
-        // would mint a fresh tu_id per config for the same source).
+        // Firmware has no JitBuildSettings, so its identity is the source path plus the target. Not
+        // out_dir: that carries the build key and would mint a fresh tu_id per config for one source.
         const std::string source_id = (settings != nullptr)
                                           ? settings->get_profiler_zone_src_id() + '\x1f' + this->target_name_
                                           : "fw\x1f" + this->srcs_[src_index] + '\x1f' + this->target_name_;

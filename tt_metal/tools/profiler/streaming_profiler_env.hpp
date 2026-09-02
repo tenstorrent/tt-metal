@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Shared truthiness/parsing for the TT_METAL_PERF_DEBUG_* knobs. Numbers decide by value
-// ("0"/"0x0" off, "01" on) and falsy words are honoured -- the old `*s != '0'` idiom read
-// "=false" and "=off" as enabled.
+// Shared truthiness/parsing for the TT_METAL_STREAMING_PROFILER_* knobs. A numeric value decides by
+// value ("0"/"0x0" off, "01" on); anything else is a word, and the falsy words below are honoured.
 #pragma once
 
 #include <cctype>
@@ -12,7 +11,7 @@
 #include <cstdlib>
 #include <string>
 
-namespace tt::tt_metal::perf_debug {
+namespace tt::tt_metal::streaming_profiler {
 
 inline bool env_flag(const char* name, bool default_value = false) {
     const char* s = std::getenv(name);
@@ -46,4 +45,4 @@ inline uint32_t env_u32(const char* name, uint32_t default_value) {
     return static_cast<uint32_t>(env_u64(name, default_value));
 }
 
-}  // namespace tt::tt_metal::perf_debug
+}  // namespace tt::tt_metal::streaming_profiler

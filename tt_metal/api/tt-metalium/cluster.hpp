@@ -66,15 +66,12 @@ std::string SerializeClusterDescriptor();
 /**
  * @brief Translate a core coordinate between coordinate systems on one chip.
  *
- * Systems are named as in UMD's CoordSystem: "LOGICAL", "NOC0", "NOC1", "TRANSLATED".
- * Strings rather than the enum so this header stays free of UMD includes.
+ * Systems are named as in UMD's CoordSystem: "LOGICAL", "NOC0", "NOC1", "TRANSLATED". Strings rather than
+ * the enum so this header stays free of UMD includes.
  *
- * The mapping is per-chip, not a fixed offset: it depends on the harvesting
- * configuration (Blackhole harvests tensix columns, Wormhole rows), so the delta
- * between TRANSLATED and NOC0 differs between boards with different harvesting.
- * Exposed mainly so host-side tooling can join data recorded in one space against
- * data recorded in another -- e.g. NoC addresses captured on device are TRANSLATED,
- * while the device profiler reports core coordinates in NOC0.
+ * The mapping is per-chip rather than a fixed offset: it depends on the harvesting configuration
+ * (Blackhole harvests tensix columns, Wormhole rows). Host tooling needs it to join data recorded in
+ * different spaces, e.g. device-captured NoC addresses (TRANSLATED) against profiler core coords (NOC0).
  *
  * @param device_id Chip to resolve the mapping for.
  * @param x, y Coordinate in @p from_system.

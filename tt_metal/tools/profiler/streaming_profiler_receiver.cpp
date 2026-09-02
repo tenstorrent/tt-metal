@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tools/profiler/perf_debug_receiver.hpp"
+#include "tools/profiler/streaming_profiler_receiver.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -25,10 +25,10 @@
 #include "tt_metal/common/broadcast_ring.hpp"
 #include "impl/threading/thread_pool.hpp"
 #include "llrt/zone_meta.hpp"
-#include "tools/profiler/perf_debug_env.hpp"
+#include "tools/profiler/streaming_profiler_env.hpp"
 #include "tools/profiler/spsc_packet.h"
 
-namespace tt::tt_metal::perf_debug {
+namespace tt::tt_metal::streaming_profiler {
 
 void StallIdMirror::refresh() {
     std::vector<llrt::ZoneMetaEntry> delta;
@@ -41,7 +41,7 @@ void StallIdMirror::refresh() {
         }
     }
     if (grew) {
-        // Rebuild at <= 25% load so the miss path is one probe. Sized generously: a few dozen ids.
+        // Rebuild at <= 25% load so the miss path is one probe.
         uint32_t cap = 64;
         while (cap < ids.size() * 4) {
             cap *= 2;
@@ -60,11 +60,11 @@ void StallIdMirror::refresh() {
 
 namespace {
 
-// Credit-return quantum: pop+ack every 8 decoded frames (about one mover push) instead of once per pass,
-// so the device sees credit at decode pace rather than in whole-pass steps.
+// Credit-return quantum: pop+ack every 8 decoded frames (about one relay push) rather than once per
+// pass, so the device sees credit at decode pace.
 constexpr uint32_t kAckBatchFrames = 8;
-// Per-pass peek window (~680 KB). Every complete frame inside it is consumed -- pages peeked but not
-// consumed are clflushed again by the next peek, so the only re-flush waste is a partial tail frame.
+// Per-pass peek window (~680 KB). Pages peeked but not consumed are clflushed again by the next peek,
+// so the only re-flush waste is a partial tail frame.
 constexpr uint32_t kMaxPagesPerPass = 64 * profiler::kSpscMaxFramePages;
 constexpr uint32_t kPageBytes = kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4;
 constexpr size_t kConsumerScratchRecs = 1 << 16;
@@ -75,11 +75,9 @@ constexpr size_t kMaxFrameRecs = 2048;
 constexpr uint32_t kEmptyPollsBeforeSleep = 1000;
 // Decode threads probe the FIFO at least this often when idle; consumers are latency-tolerant and may
 // sleep longer. Anything under ~50 us needs the timer slack shrunk or sleep_for quietly rounds up to it.
-// Load-bearing, and the wakeup cost is the point: at 5 us each thread churns ~80 K context switches/s
-// (1.3 M/s across 16 streams, ~6 cores) but credit keeps flowing through the micro-gaps mid-burst where
-// avail briefly hits 0. Raising it to 200 us to reclaim those cores doubled the movers' worst credit wait
-// (1.3 -> 2.7 ms), took producer stalls from 600-1257 to 1178-4732 and filled five DRAM rings instead of
-// two -- the sleep becomes a window in which no credit is returned at all.
+// Deliberately tiny despite the wakeup cost: the sleep is a window in which no credit is returned at all,
+// and raising it to 200 us to reclaim cores doubled the relays' worst credit wait and multiplied producer
+// stalls several-fold.
 constexpr uint32_t kProbeSleepCapUs = 5;
 
 namespace {
@@ -133,26 +131,34 @@ struct IdleBackoff {
 
 }  // namespace
 
-PerfDebugReceiver::PerfDebugReceiver(std::vector<ReceiverDeviceConfig> devices) : devices_(std::move(devices)) {
-    TT_FATAL(devices_.size() <= kPerfDebugMaxDevices, "record dev field holds {} devices", kPerfDebugMaxDevices);
+StreamingProfilerReceiver::StreamingProfilerReceiver(std::vector<ReceiverDeviceConfig> devices) :
+    devices_(std::move(devices)) {
+    TT_FATAL(
+        devices_.size() <= kStreamingProfilerMaxDevices,
+        "record dev field holds {} devices",
+        kStreamingProfilerMaxDevices);
     // The scalar decode packs meta through the bit-field; the AVX2 path packs it by hand, so pin the layout.
-    const PerfDebugRawRecMeta meta_probe{0, 5, 2, PerfDebugRawRecType::ZoneEnd};
+    const StreamingProfilerRawRecMeta meta_probe{0, 5, 2, StreamingProfilerRawRecType::ZoneEnd};
     TT_FATAL(
         std::bit_cast<uint32_t>(meta_probe) == ((5u << 16) | (2u << 26) | (2u << 29)),
-        "PerfDebugRawRecMeta bit-field layout does not match the vectorized packer");
-    no_decode_ = env_flag("TT_METAL_PERF_DEBUG_NO_DECODE");
-    read_only_ = env_flag("TT_METAL_PERF_DEBUG_READ_ONLY");
-    die_after_ = env_u32("TT_METAL_PERF_DEBUG_WRITER_DIE_AFTER", 0);
-    watchdog_ = std::chrono::seconds(env_u32("TT_METAL_PERF_DEBUG_WRITER_TIMEOUT_S", 120));
-    // The ring is the capture's elastic buffer (the FIFO only lands frames), so its size bounds how much
+        "StreamingProfilerRawRecMeta bit-field layout does not match the vectorized packer");
+    no_decode_ = env_flag("TT_METAL_STREAMING_PROFILER_NO_DECODE");
+    read_only_ = env_flag("TT_METAL_STREAMING_PROFILER_READ_ONLY");
+    die_after_ = env_u32("TT_METAL_STREAMING_PROFILER_WRITER_DIE_AFTER", 0);
+    watchdog_ = std::chrono::seconds(env_u32("TT_METAL_STREAMING_PROFILER_WRITER_TIMEOUT_S", 120));
+    // The ring is the capture's elastic buffer (the FIFO only lands frames), so its size bounds how far
     // a capture can outrun its consumers before per-consumer drops start: at ~9.8 wire bytes per zone,
     // the 512 MiB default holds ~55 M zones per stream. Rounded up to a power of two lines.
-    const uint64_t ring_mb = env_u64("TT_METAL_PERF_DEBUG_RING_MB", 512);
+    const uint64_t ring_mb = env_u64("TT_METAL_STREAMING_PROFILER_RING_MB", 512);
     const uint64_t ring_lines = std::bit_ceil(std::max<uint64_t>(ring_mb, 1) << 14);
     for (uint32_t d = 0; d < devices_.size(); d++) {
         auto& dev = devices_[d];
         const uint32_t nl = dev.num_cores * profiler::kSpscNRiscDecode;
-        TT_FATAL(nl <= kPerfDebugMaxLanes, "record lane field holds {} lanes, device has {}", kPerfDebugMaxLanes, nl);
+        TT_FATAL(
+            nl <= kStreamingProfilerMaxLanes,
+            "record lane field holds {} lanes, device has {}",
+            kStreamingProfilerMaxLanes,
+            nl);
         TT_FATAL(dev.lane_table.size() == nl, "lane table size mismatch");
         auto& cd = ctx_.devices.emplace_back();
         cd.chip_id = dev.chip_id;
@@ -165,8 +171,8 @@ PerfDebugReceiver::PerfDebugReceiver(std::vector<ReceiverDeviceConfig> devices) 
             s->dev = d;
             s->sock_idx = sk;
             // Slots are faulted by prefault_rings() below, not by the decode thread.
-            s->ring = std::make_unique<BroadcastRing<PerfDebugRingLine>>(
-                ring_lines, BroadcastRing<PerfDebugRingLine>::DeferSlotInit{});
+            s->ring = std::make_unique<BroadcastRing<StreamingProfilerRingLine>>(
+                ring_lines, BroadcastRing<StreamingProfilerRingLine>::DeferSlotInit{});
             s->ring_node = dev.numa_node;
             s->decode.reset(dev.num_cores);
             s->decode.core_of_xy = dev.core_of_xy;
@@ -177,14 +183,13 @@ PerfDebugReceiver::PerfDebugReceiver(std::vector<ReceiverDeviceConfig> devices) 
     prefault_rings();
 }
 
-PerfDebugReceiver::~PerfDebugReceiver() { shutdown(); }
+StreamingProfilerReceiver::~StreamingProfilerReceiver() { shutdown(); }
 
-// Pin each ring's pages to its device's node and fault them HERE, before the workload can produce. The
-// fault is ~400 MB per stream: left on the decode thread it lands after the producers are already running
-// (invisible on a model, where setup hides it; a burst of first-iteration producer stalls on a synthetic
-// that starts immediately). numa_tonode_memory makes placement independent of the touching thread, so the
-// prefault can run anywhere -- one thread per stream, bound to that node so the zeroing is local.
-void PerfDebugReceiver::prefault_rings() {
+// Pin each ring's pages to its device's node and fault them here, before the workload can produce: the
+// ~400 MB per stream would otherwise be faulted by the decode thread with the producers already running.
+// numa_tonode_memory makes placement independent of the touching thread, so the prefault can run
+// anywhere -- one thread per stream, bound to that node so the zeroing is local.
+void StreamingProfilerReceiver::prefault_rings() {
     std::vector<std::thread> pf;
     pf.reserve(streams_.size());
     for (auto& s : streams_) {
@@ -200,22 +205,22 @@ void PerfDebugReceiver::prefault_rings() {
     }
 }
 
-void PerfDebugReceiver::start() {
+void StreamingProfilerReceiver::start() {
     TT_FATAL(!started_, "receiver already started");
     started_ = true;
-    // Two decode threads per device is the design point (matches the WH port's two fillers); sockets
-    // round-robin across them via the strided partition below. Env-overridable for capacity probes.
-    const uint32_t nthreads = std::clamp<uint32_t>(env_u32("TT_METAL_PERF_DEBUG_DECODE_THREADS", 2), 1, streams_.size());
+    // Two decode threads per device is the design point, one per relay; sockets round-robin across them
+    // via the strided partition below.
+    const uint32_t nthreads = std::clamp<uint32_t>(
+        env_u32("TT_METAL_STREAMING_PROFILER_DECODE_THREADS", 2), 1, streams_.size());
     nthreads_ = nthreads;
-    // The audit attaches BEFORE ingest starts so its readers see the ring from line 0 -- it owns the
-    // per-stream wire-integrity report that ingest (a pure copier) can no longer produce.
-    if (!no_decode_ && !read_only_ && env_u32("TT_METAL_PERF_DEBUG_AUDIT", 1) != 0) {
+    // The audit attaches before ingest starts so its readers see the ring from line 0.
+    if (!no_decode_ && !read_only_ && env_u32("TT_METAL_STREAMING_PROFILER_AUDIT", 1) != 0) {
         std::lock_guard<std::mutex> lk(consumers_mu_);
         auto c = std::make_unique<Consumer>();
         c->name = "audit";
         c->audit = true;
         c->handle = next_handle_++;
-        c->thread = std::thread(&PerfDebugReceiver::consumer_thread, this, std::ref(*c));
+        c->thread = std::thread(&StreamingProfilerReceiver::consumer_thread, this, std::ref(*c));
         consumers_.push_back(std::move(c));
     }
     for (uint32_t t = 0; t < nthreads; t++) {
@@ -223,18 +228,17 @@ void PerfDebugReceiver::start() {
         for (uint32_t i = t; i < streams_.size(); i += nthreads) {
             owned.push_back(streams_[i].get());
         }
-        decode_threads_.emplace_back(&PerfDebugReceiver::decode_thread, this, std::move(owned));
+        decode_threads_.emplace_back(&StreamingProfilerReceiver::decode_thread, this, std::move(owned));
     }
 }
 
 namespace {
-// Whole aligned lines, each written once by one NT store: the ring is written at wire rate and read
-// back cold by consumers, so cached stores would only pollute both sides' caches. The source is cold
-// DRAM, so the distance prefetch keeps lines in flight -- it runs into the NEXT frame's bytes, which
-// sit contiguously behind this one in the FIFO. The 512-bit variant is the only attributed function on
-// the ingest path and is called only when spsc_host_avx512(); the AVX2 twin is baseline.
+// Whole aligned lines, each written once by one NT store: the ring is written at wire rate and read back
+// cold by consumers, so cached stores would only pollute both sides' caches. The source is cold DRAM, so
+// the distance prefetch keeps lines in flight -- it runs into the next frame's bytes, which sit
+// contiguously behind this one in the FIFO.
 __attribute__((target("avx512f"))) void ingest_copy_lines_512(
-    BroadcastRing<PerfDebugRingLine>::Writer& w, uint64_t lpos, const uint32_t* frame, uint32_t nlines) {
+    BroadcastRing<StreamingProfilerRingLine>::Writer& w, uint64_t lpos, const uint32_t* frame, uint32_t nlines) {
     for (uint32_t k = 0; k < nlines; k++) {
         _mm_prefetch(reinterpret_cast<const char*>(frame + 16ull * k) + 4096, _MM_HINT_T0);
         _mm512_stream_si512(
@@ -242,7 +246,7 @@ __attribute__((target("avx512f"))) void ingest_copy_lines_512(
     }
 }
 void ingest_copy_lines_256(
-    BroadcastRing<PerfDebugRingLine>::Writer& w, uint64_t lpos, const uint32_t* frame, uint32_t nlines) {
+    BroadcastRing<StreamingProfilerRingLine>::Writer& w, uint64_t lpos, const uint32_t* frame, uint32_t nlines) {
     for (uint32_t k = 0; k < nlines; k++) {
         _mm_prefetch(reinterpret_cast<const char*>(frame + 16ull * k) + 4096, _MM_HINT_T0);
         uint8_t* dst = reinterpret_cast<uint8_t*>(w.emit_slot_ptr(lpos + k));
@@ -255,7 +259,7 @@ void ingest_copy_lines_256(
 }
 }  // namespace
 
-bool PerfDebugReceiver::ingest_pass(Stream& s) {
+bool StreamingProfilerReceiver::ingest_pass(Stream& s) {
     const uint32_t avail = s.sock->pages_available();
     if (avail == 0) {
         if (s.producers_done.load(std::memory_order_acquire)) {
@@ -367,7 +371,7 @@ bool PerfDebugReceiver::ingest_pass(Stream& s) {
                 s.desync_warned = true;
                 log_warning(
                     tt::LogMetal,
-                    "[perf-debug receiver] d{}/s{}: {} pages (a partial frame) remain after the drainers "
+                    "[streaming profiler receiver] d{}/s{}: {} pages (a partial frame) remain after the relays "
                     "finished -- flow control desynchronized; dropping them",
                     s.dev,
                     s.sock_idx,
@@ -385,16 +389,11 @@ bool PerfDebugReceiver::ingest_pass(Stream& s) {
     return true;
 }
 
-void PerfDebugReceiver::decode_thread(std::vector<Stream*> streams) {
-    // FIRST-TOUCH OUR OWN RING. First touch fixes a page's NUMA node for the life of the mapping, and this
-    // thread NT-stores into the ring at tens of GB/s while reading the FIFO at tens more. Constructed on
-    // the main thread instead, every stream's ring landed on whichever node built the receiver, so the
-    // decode threads the scheduler placed on the other node crossed the interconnect on every store --
-    // measured as one stream taking 172 ms of frame time against a peer's 111 ms for the same work, and
-    // that slowest stream is what gates the pipeline: its mover blocks on credit, its ring fills, its
-    // producers stall. Faulting here makes the memory follow the thread, with no affinity policy at all.
-    // Bound to the node FIRST, or first touch pins the ring wherever the scheduler happened to start us and
-    // a later migration turns every ring store into an interconnect crossing.
+void StreamingProfilerReceiver::decode_thread(std::vector<Stream*> streams) {
+    // Run on the node the ring was bound to: this thread NT-stores into the ring at tens of GB/s while
+    // reading the FIFO at tens more, so a cross-node ring puts every store on the interconnect -- one
+    // stream took 172 ms of frame time against a peer's 111 ms for the same work, and the slowest stream
+    // gates the pipeline: its relay blocks on credit, its ring fills, its producers stall.
     if (!streams.empty() && streams.front()->ring_node >= 0) {
         bind_current_thread_to_numa_node(streams.front()->ring_node);
     }
@@ -430,7 +429,7 @@ void PerfDebugReceiver::decode_thread(std::vector<Stream*> streams) {
                 s->watchdog_fired = true;
                 log_warning(
                     tt::LogMetal,
-                    "[perf-debug receiver] d{}/s{}: no data for {} s while producers are live",
+                    "[streaming profiler receiver] d{}/s{}: no data for {} s while producers are live",
                     s->dev,
                     s->sock_idx,
                     watchdog_.count());
@@ -442,7 +441,7 @@ void PerfDebugReceiver::decode_thread(std::vector<Stream*> streams) {
         if (die_after_ != 0 && data_passes >= die_after_) {
             log_warning(
                 tt::LogMetal,
-                "[perf-debug receiver] {}: TEST HOOK exiting after {} passes; acks stop here",
+                "[streaming profiler receiver] {}: TEST HOOK exiting after {} passes; acks stop here",
                 name,
                 data_passes);
             break;
@@ -463,31 +462,33 @@ void PerfDebugReceiver::decode_thread(std::vector<Stream*> streams) {
     }
 }
 
-PerfDebugConsumerHandle PerfDebugReceiver::add_consumer(std::string name, PerfDebugRecordCallback cb) {
+StreamingProfilerConsumerHandle StreamingProfilerReceiver::add_consumer(
+    std::string name, StreamingProfilerRecordCallback cb) {
     TT_FATAL(!t_in_consumer, "add_consumer must not be called from a consumer callback");
     std::lock_guard<std::mutex> lk(consumers_mu_);
     auto c = std::make_unique<Consumer>();
     c->name = std::move(name);
     c->cb = std::move(cb);
     c->handle = next_handle_++;
-    c->thread = std::thread(&PerfDebugReceiver::consumer_thread, this, std::ref(*c));
+    c->thread = std::thread(&StreamingProfilerReceiver::consumer_thread, this, std::ref(*c));
     consumers_.push_back(std::move(c));
     return consumers_.back()->handle;
 }
 
-PerfDebugConsumerHandle PerfDebugReceiver::add_raw_consumer(std::string name, PerfDebugRawRecordCallback cb) {
+StreamingProfilerConsumerHandle StreamingProfilerReceiver::add_raw_consumer(
+    std::string name, StreamingProfilerRawRecordCallback cb) {
     TT_FATAL(!t_in_consumer, "add_raw_consumer must not be called from a consumer callback");
     std::lock_guard<std::mutex> lk(consumers_mu_);
     auto c = std::make_unique<Consumer>();
     c->name = std::move(name);
     c->raw_cb = std::move(cb);
     c->handle = next_handle_++;
-    c->thread = std::thread(&PerfDebugReceiver::consumer_thread, this, std::ref(*c));
+    c->thread = std::thread(&StreamingProfilerReceiver::consumer_thread, this, std::ref(*c));
     consumers_.push_back(std::move(c));
     return consumers_.back()->handle;
 }
 
-void PerfDebugReceiver::remove_consumer(PerfDebugConsumerHandle handle) {
+void StreamingProfilerReceiver::remove_consumer(StreamingProfilerConsumerHandle handle) {
     TT_FATAL(!t_in_consumer, "remove_consumer must not be called from a consumer callback");
     std::unique_ptr<Consumer> victim;
     {
@@ -503,21 +504,21 @@ void PerfDebugReceiver::remove_consumer(PerfDebugConsumerHandle handle) {
     if (victim->dropped != 0) {
         log_warning(
             tt::LogMetal,
-            "[perf-debug receiver] consumer \"{}\" removed having dropped {} records",
+            "[streaming profiler receiver] consumer \"{}\" removed having dropped {} records",
             victim->name,
             victim->dropped);
     }
 }
 
-// Baseline code: the AVX-512 kernels are separate attributed functions called once per block, gated on
-// spsc_host_avx512(); nothing here may carry the attribute or the compiler could emit AVX-512 into
-// paths that run on any host.
+// Baseline code: nothing here may carry an AVX-512 target attribute or the compiler could emit AVX-512
+// into paths that run on any host. The 512-bit kernels are separate attributed functions, called once
+// per block and gated on spsc_host_avx512().
 namespace {
 
-// One stream's decode, owned by ONE consumer thread. The Sink type decides what a decoded record
+// One stream's decode, owned by one consumer thread. The Sink type decides what a decoded record
 // becomes: SpscCachedRecSink composes 24 B records into the consumer's scratch (cached stores -- the
-// scratch is re-read immediately by the same thread), SpscNullRecSink composes nothing and the vector
-// blocks skip their compose entirely -- that is the audit, which only wants the wire-integrity
+// scratch is re-read immediately by the same thread), while SpscNullRecSink composes nothing and the
+// vector blocks skip their compose entirely -- that is the audit, which only wants the wire-integrity
 // accounting. `st`/`last_ts` are externally owned so the audit can decode straight into the Stream's
 // report fields while user consumers keep private copies.
 template <typename Sink>
@@ -525,7 +526,7 @@ struct StreamDecoder {
     using SinkT = Sink;
     tt::tt_metal::profiler::SpanDecodeState* st = nullptr;
     uint64_t* last_ts = nullptr;
-    tt::tt_metal::perf_debug::StallIdMirror stall_ids;
+    tt::tt_metal::streaming_profiler::StallIdMirror stall_ids;
     uint32_t dev = 0;
     Sink sink{};
     uint64_t recs = 0, zone_markers = 0, stall_zones = 0, order_regressions = 0, bad_frames = 0;
@@ -538,11 +539,11 @@ struct StreamDecoder {
 template <typename Sink>
 uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
     namespace profiler = tt::tt_metal::profiler;
-    using tt::tt_metal::perf_debug::PerfDebugRawRecType;
+    using tt::tt_metal::streaming_profiler::StreamingProfilerRawRecType;
     stall_ids.refresh();
     // Raw locals for the per-marker probe and tallies: the emitters store through casted pointers, so
-    // anything reached via `this` would be reloaded after every store (the compiler must assume
-    // aliasing). Locals whose address never escapes stay in registers.
+    // anything reached via `this` would be reloaded after every store. Locals whose address never
+    // escapes stay in registers.
     const uint32_t* const stall_tab = stall_ids.table.empty() ? nullptr : stall_ids.table.data();
     const uint32_t stall_mask = stall_ids.mask;
     auto is_stall = [stall_tab, stall_mask](uint32_t id) -> bool {
@@ -567,25 +568,24 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
     uint64_t zm = 0, sz = 0, oreg = 0, rc = 0;
     uint64_t mn = min_ts, mx = max_ts;
     uint64_t* const lts = last_ts;
-    const auto meta_hi = [d](uint32_t lane, PerfDebugRawRecType rt) {
+    const auto meta_hi = [d](uint32_t lane, StreamingProfilerRawRecType rt) {
         return static_cast<uint64_t>((lane << 16) | (d << 26) | (static_cast<uint32_t>(rt) << 29)) << 32;
     };
 
     auto emit = [&](uint32_t lane, uint32_t type, uint32_t zone_id, uint64_t ts, uint32_t prog, uint32_t duration) {
-        PerfDebugRawRecType rt = PerfDebugRawRecType::ZoneTotal;
+        StreamingProfilerRawRecType rt = StreamingProfilerRawRecType::ZoneTotal;
         if (type == PP_ZONE_ATOMIC) {
-            rt = PerfDebugRawRecType::Zone;
+            rt = StreamingProfilerRawRecType::Zone;
         } else if (type != PP_ZONE_TOTAL) {
-            rt = type == PP_ZONE_START ? PerfDebugRawRecType::ZoneStart : PerfDebugRawRecType::ZoneEnd;
+            rt = type == PP_ZONE_START ? StreamingProfilerRawRecType::ZoneStart : StreamingProfilerRawRecType::ZoneEnd;
         }
         if (type != PP_ZONE_TOTAL) {
-            // In HALVES: a ZONE_ATOMIC record is a whole zone, a START/END is half of one, and every
-            // consumer of this counter divides by two. Counting records instead halved every atomic-path
-            // zone tally (measured: 27.6 M reported against 55.0 M ZONE_ATOMIC records captured).
+            // Counted in halves: a ZONE_ATOMIC record is a whole zone, a START/END is half of one, and
+            // every reader of this counter divides by two.
             zm += type == PP_ZONE_ATOMIC ? 2 : 1;
-            // PRODUCER-STALL, matched by ELF-resolved NAME via the id table: a producer RISC blocked on
-            // a FULL ring. Stall zones ship as single ZONE_ATOMIC packets (one per stall event); the
-            // START probe stays for wires older than that change.
+            // PRODUCER-STALL, matched by ELF-resolved name via the id table: a producer RISC blocked on
+            // a full ring. Stall zones ship as single ZONE_ATOMIC packets, one per stall event; the START
+            // probe covers the non-atomic path.
             sz += ((type == PP_ZONE_ATOMIC || type == PP_ZONE_START) && is_stall(zone_id)) ? 1 : 0;
             if (ts < lts[lane]) {
                 oreg++;
@@ -610,28 +610,27 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
                          const uint32_t* payload,
                          uint32_t n) {
         const uint64_t pg = prog;
-        // PP_EVENT is payload-less by wire shape, so its Ext record carried nothing the Event record
-        // does not: one record IS the whole packet, and no Ext/Cont ever follows an Event.
+        // PP_EVENT is payload-less by wire shape: one record is the whole packet, and no Ext or Cont
+        // ever follows an Event.
         if (type != PP_DATA) {
             rc++;
             if constexpr (Sink::kStores) {
-                sk.put3(ts, meta_hi(lane, PerfDebugRawRecType::Event) | id, pg);
+                sk.put3(ts, meta_hi(lane, StreamingProfilerRawRecType::Event) | id, pg);
             }
             return;
         }
         rc += 2 + (n > 2 ? (n - 1) / 2 : 0);
         if constexpr (Sink::kStores) {
-            // Ext carries the payload COUNT in its id field and payload words 1-2 in its ts field: the id
-            // repetition it used to carry is already in the head record, so the common short DATA is two
-            // records, not three.
+            // Ext carries the payload count in its id field and payload words 1-2 in its ts field, so a
+            // short DATA is two records.
             const uint64_t hi0 = n >= 1 ? payload[0] : 0;
             const uint64_t lo0 = n >= 2 ? payload[1] : 0;
-            sk.put3(ts, meta_hi(lane, PerfDebugRawRecType::Data) | id, pg);
-            sk.put3((hi0 << 32) | lo0, meta_hi(lane, PerfDebugRawRecType::Ext) | n, pg);
+            sk.put3(ts, meta_hi(lane, StreamingProfilerRawRecType::Data) | id, pg);
+            sk.put3((hi0 << 32) | lo0, meta_hi(lane, StreamingProfilerRawRecType::Ext) | n, pg);
             for (uint32_t k = 2; k < n; k += 2) {
                 const uint64_t hi = payload[k];
                 const uint64_t lo = (k + 1 < n) ? payload[k + 1] : 0;
-                sk.put3((hi << 32) | lo, meta_hi(lane, PerfDebugRawRecType::Cont), pg);
+                sk.put3((hi << 32) | lo, meta_hi(lane, StreamingProfilerRawRecType::Cont), pg);
             }
         } else {
             (void)payload;
@@ -642,8 +641,8 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
     auto emit_zones8 = [&](uint32_t lane, uint32_t th, uint32_t prog, __m256i w0s, __m256i w1s) {
         zm += 8;
         // Order invariant at block endpoints only: the producer guarantees monotonicity inside a run, so
-        // in-block inversions would need a producer bug, while the boundary compare still catches every
-        // head-mirror/resync error class. th is block-constant, so comparing on it is exact.
+        // the boundary compare still catches every head-mirror/resync error class. th is block-constant,
+        // so comparing on it is exact.
         const uint64_t ts_first =
             (static_cast<uint64_t>(th) << 32) | static_cast<uint32_t>(_mm256_extract_epi32(w1s, 0));
         const uint64_t ts_last =
@@ -684,8 +683,6 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
             (void)prog;
         }
     };
-    // Forwards into the block and keeps ring/bookkeeping state here. No wrap bailout and no alignment
-    // gate: the block emits any n, so there is nothing to fall back to.
     auto emit_atomic16 = [&](uint32_t lane, uint32_t th, uint32_t prog, const uint32_t* src, uint32_t avail,
                              uint32_t max_recs) -> uint32_t {
         if (!k512) {
@@ -696,8 +693,8 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
             return 0;
         }
         zm += a.n * 2;  // halves: every record in an atomic block is a whole zone
-        // Stall zones ride the atomic wire now, so the block pays the id probe -- on the miss path one
-        // L1 load per record, and atomic runs are rare outside stalls on this wire.
+        // Stall zones ride the atomic wire, so the block pays the id probe: one L1 load per record on
+        // the miss path.
         if (stall_tab != nullptr) {
             for (uint32_t k = 0; k < a.n; k++) {
                 sz += is_stall(src[3u * k] & 0x07FFFFFFu) ? 1 : 0;
@@ -720,8 +717,8 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
             return z;
         }
         zm += z.n * 2;
-        // Endpoint order check is EXACT here, not a sampling: in-block ends are cursor + positive
-        // deltas, monotonic by construction.
+        // Exact here, not sampled: in-block ends are cursor + positive deltas, monotonic by
+        // construction.
         oreg += z.ts_first < lts[lane] ? 1 : 0;
         lts[lane] = z.ts_last;
         if (mn == 0) {
@@ -759,23 +756,22 @@ uint32_t StreamDecoder<Sink>::decode_frame(const uint32_t* frame, uint32_t fw) {
 
 }  // namespace
 
-void PerfDebugReceiver::consumer_thread(Consumer& c) {
+void StreamingProfilerReceiver::consumer_thread(Consumer& c) {
     const std::string name = "pd-con:" + c.name;
     tracy::SetThreadName(name.c_str());
     set_os_thread_name(name);
     t_in_consumer = true;
     const bool audit = c.audit;
-    std::vector<BroadcastRing<PerfDebugRingLine>::Reader> readers;
+    std::vector<BroadcastRing<StreamingProfilerRingLine>::Reader> readers;
     readers.reserve(streams_.size());
     for (auto& s : streams_) {
         readers.push_back(s->ring->make_reader());
     }
-    std::vector<PerfDebugRingLine> lines(kConsumerLineBatch);
+    std::vector<StreamingProfilerRingLine> lines(kConsumerLineBatch);
     std::vector<uint64_t> last_dropped(readers.size(), 0);
-    // Frame re-assembly, per ring: ring lines accumulate here until a whole frame is present (frames
-    // start on lines; the wire's own prefix does the framing). After a drop the stream position is
-    // arbitrary, so scan line by line for the next plausible frame head -- the decoder's head-adoption
-    // path then counts the gap as a resync, exactly as it does for a device-side loss.
+    // Frame re-assembly, per ring: ring lines accumulate here until a whole frame is present. After a
+    // drop the stream position is arbitrary, so scan line by line for the next plausible frame head --
+    // the decoder's head-adoption path then counts the gap as a resync, as for a device-side loss.
     struct Assembly {
         std::vector<uint32_t> pending;
         bool scanning = false;
@@ -785,7 +781,7 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
     std::vector<StreamDecoder<profiler::SpscCachedRecSink>> udecs;
     std::vector<profiler::SpanDecodeState> ustates;
     std::vector<std::vector<uint64_t>> ults;
-    std::vector<PerfDebugRawRec> scratch;
+    std::vector<StreamingProfilerRawRec> scratch;
     if (audit) {
         adecs.resize(streams_.size());
         for (size_t i = 0; i < streams_.size(); i++) {
@@ -809,12 +805,11 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
             udecs[i].sink.buf = reinterpret_cast<uint8_t*>(scratch.data());
         }
     }
-    // ---- The pairing stage (public consumers only) ------------------------------------------------
-    // Zones are RAII scopes on the device, so per lane the raw stream obeys strict stack discipline:
-    // push on ZoneStart, pop on ZoneEnd, and the pop's mate is the matching open. One stack per
-    // (dev, lane), owned by THIS thread -- every consumer thread reads the whole ring independently,
-    // so there is no sharing and no lock. A Zone record is emitted at END time; everything else
-    // converts 1:1. All pairing cost lands here, on the consumer's own thread, never on ingest.
+    // The pairing stage (public consumers only). Zones are RAII scopes on the device, so per lane the
+    // raw stream obeys strict stack discipline: push on ZoneStart, pop on ZoneEnd, and the pop's mate is
+    // the matching open. One stack per (dev, lane), owned by this thread -- every consumer thread reads
+    // the whole ring independently, so there is no sharing and no lock. A Zone record is emitted at END
+    // time; everything else converts 1:1.
     struct OpenZone {
         uint64_t ts;
         uint32_t id;
@@ -822,19 +817,19 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
     };
     std::vector<std::vector<OpenZone>> stacks;
     if (!audit && c.raw_cb == nullptr) {
-        stacks.resize(ctx_.devices.size() * kPerfDebugMaxLanes);
+        stacks.resize(ctx_.devices.size() * kStreamingProfilerMaxLanes);
     }
-    std::vector<PerfDebugRec> out;
+    std::vector<StreamingProfilerRec> out;
     out.reserve(kConsumerScratchRecs);
     uint64_t unmatched_ends = 0;  // ZoneEnd with an empty stack (only possible after ring drops)
     uint64_t id_mismatches = 0;   // ZoneEnd whose id differs from the matching open: trust neither, drop
-    auto pair_batch = [&](std::span<const PerfDebugRawRec> got) {
+    auto pair_batch = [&](std::span<const StreamingProfilerRawRec> got) {
         out.clear();
-        for (const PerfDebugRawRec& r : got) {
-            const uint32_t si = r.meta.dev * kPerfDebugMaxLanes + r.meta.lane;
+        for (const StreamingProfilerRawRec& r : got) {
+            const uint32_t si = r.meta.dev * kStreamingProfilerMaxLanes + r.meta.lane;
             switch (r.meta.type) {
-                case PerfDebugRawRecType::ZoneStart: stacks[si].push_back({r.ts, r.id, r.prog}); break;
-                case PerfDebugRawRecType::ZoneEnd: {
+                case StreamingProfilerRawRecType::ZoneStart: stacks[si].push_back({r.ts, r.id, r.prog}); break;
+                case StreamingProfilerRawRecType::ZoneEnd: {
                     if (stacks[si].empty()) {
                         unmatched_ends++;
                         break;
@@ -845,42 +840,41 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
                         id_mismatches++;  // corrupt pair: emitting under either id would mislabel it
                         break;
                     }
-                    PerfDebugRec& o = out.emplace_back();
+                    StreamingProfilerRec& o = out.emplace_back();
                     o.data.zone = {open.ts, r.ts - open.ts};
                     o.id = open.id;
-                    o.meta = {0, r.meta.lane, r.meta.dev, PerfDebugRecType::Zone};
+                    o.meta = {0, r.meta.lane, r.meta.dev, StreamingProfilerRecType::Zone};
                     o.prog = open.prog;
                     break;
                 }
-                case PerfDebugRawRecType::Zone: {
-                    // Already a complete zone (the device's atomic-zone path): ts is the END and duration
-                    // is set, so it converts 1:1 with no stack.
-                    PerfDebugRec& o = out.emplace_back();
+                case StreamingProfilerRawRecType::Zone: {
+                    // The device's atomic-zone path: ts is the END and duration is set, so no stack.
+                    StreamingProfilerRec& o = out.emplace_back();
                     o.data.zone = {r.ts - r.duration, r.duration};
                     o.id = r.id;
-                    o.meta = {0, r.meta.lane, r.meta.dev, PerfDebugRecType::Zone};
+                    o.meta = {0, r.meta.lane, r.meta.dev, StreamingProfilerRecType::Zone};
                     o.prog = r.prog;
                     break;
                 }
-                case PerfDebugRawRecType::ZoneTotal: {
-                    PerfDebugRec& o = out.emplace_back();
+                case StreamingProfilerRawRecType::ZoneTotal: {
+                    StreamingProfilerRec& o = out.emplace_back();
                     o.data.sum = r.ts;
                     o.id = r.id;
-                    o.meta = {0, r.meta.lane, r.meta.dev, PerfDebugRecType::ZoneTotal};
+                    o.meta = {0, r.meta.lane, r.meta.dev, StreamingProfilerRecType::ZoneTotal};
                     o.prog = r.prog;
                     break;
                 }
                 default: {  // Data / Event / Ext / Cont: 1:1
-                    PerfDebugRec& o = out.emplace_back();
+                    StreamingProfilerRec& o = out.emplace_back();
                     o.data.ts = r.ts;
                     o.id = r.id;
-                    PerfDebugRecType t = PerfDebugRecType::Data;
-                    if (r.meta.type == PerfDebugRawRecType::Event) {
-                        t = PerfDebugRecType::Event;
-                    } else if (r.meta.type == PerfDebugRawRecType::Ext) {
-                        t = PerfDebugRecType::Ext;
-                    } else if (r.meta.type == PerfDebugRawRecType::Cont) {
-                        t = PerfDebugRecType::Cont;
+                    StreamingProfilerRecType t = StreamingProfilerRecType::Data;
+                    if (r.meta.type == StreamingProfilerRawRecType::Event) {
+                        t = StreamingProfilerRecType::Event;
+                    } else if (r.meta.type == StreamingProfilerRawRecType::Ext) {
+                        t = StreamingProfilerRecType::Ext;
+                    } else if (r.meta.type == StreamingProfilerRawRecType::Cont) {
+                        t = StreamingProfilerRecType::Cont;
                     }
                     o.meta = {0, r.meta.lane, r.meta.dev, t};
                     o.prog = r.prog;
@@ -890,32 +884,32 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
         }
     };
     // Hand the scratch records (plus the ring-drop and stall deltas) to the callback, then reset the
-    // scratch. For the audit there is no callback: publish the tallies into the Stream's report fields
-    // instead -- the audit is their only writer once ingest stops decoding.
+    // scratch. The audit has no callback: it publishes its tallies into the Stream's report fields
+    // instead, and is their only writer.
     auto deliver = [&](auto& dec, size_t r, uint64_t& dd) {
         using DT = std::decay_t<decltype(dec)>;
         if constexpr (std::is_same_v<typename DT::SinkT, profiler::SpscCachedRecSink>) {
-            const size_t nrec = dec.sink.off / sizeof(PerfDebugRawRec);
+            const size_t nrec = dec.sink.off / sizeof(StreamingProfilerRawRec);
             const uint64_t sd = dec.stall_zones - dec.stall_mark;
             dec.stall_mark = dec.stall_zones;
             dec.sink.off = 0;
             if (nrec == 0 && dd == 0 && sd == 0) {
                 return;
             }
-            const std::span<const PerfDebugRawRec> got(scratch.data(), nrec);
+            const std::span<const StreamingProfilerRawRec> got(scratch.data(), nrec);
             try {
                 if (c.raw_cb != nullptr) {
                     c.delivered += nrec;
-                    c.raw_cb(PerfDebugRawRecordBatch{got, dd, &ctx_, sd});
+                    c.raw_cb(StreamingProfilerRawRecordBatch{got, dd, &ctx_, sd});
                 } else {
                     pair_batch(got);
                     if (!out.empty() || dd != 0 || sd != 0) {
                         c.delivered += out.size();
-                        c.cb(PerfDebugRecordBatch{std::span<const PerfDebugRec>(out), dd, &ctx_, sd});
+                        c.cb(StreamingProfilerRecordBatch{std::span<const StreamingProfilerRec>(out), dd, &ctx_, sd});
                     }
                 }
             } catch (const std::exception& e) {
-                log_warning(tt::LogMetal, "[perf-debug receiver] consumer \"{}\" threw: {}", c.name, e.what());
+                log_warning(tt::LogMetal, "[streaming profiler receiver] consumer \"{}\" threw: {}", c.name, e.what());
             }
             dd = 0;
         } else {
@@ -934,7 +928,7 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
         }
     };
     auto pass_ring = [&](auto& dec, size_t r) -> bool {
-        const auto got = readers[r].read_batch(std::span<PerfDebugRingLine>(lines));
+        const auto got = readers[r].read_batch(std::span<StreamingProfilerRingLine>(lines));
         const uint64_t dropped_total = readers[r].dropped();
         uint64_t dd = dropped_total - last_dropped[r];
         last_dropped[r] = dropped_total;
@@ -949,7 +943,7 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
         const size_t oldw = a.pending.size();
         a.pending.resize(oldw + got.size() * 16);
         if (!got.empty()) {
-            std::memcpy(a.pending.data() + oldw, got.data(), got.size() * sizeof(PerfDebugRingLine));
+            std::memcpy(a.pending.data() + oldw, got.data(), got.size() * sizeof(StreamingProfilerRingLine));
         }
         size_t off = 0;
         while (a.pending.size() - off >= kernel_profiler::SPSC_SPAN_PREFIX_WORDS) {
@@ -970,7 +964,7 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
             }
             using DT = std::decay_t<decltype(dec)>;
             if constexpr (std::is_same_v<typename DT::SinkT, profiler::SpscCachedRecSink>) {
-                if (dec.sink.off / sizeof(PerfDebugRawRec) + kMaxFrameRecs > kConsumerScratchRecs) {
+                if (dec.sink.off / sizeof(StreamingProfilerRawRec) + kMaxFrameRecs > kConsumerScratchRecs) {
                     deliver(dec, r, dd);
                 }
             }
@@ -1007,9 +1001,9 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
     for (auto& r : readers) {
         c.dropped += r.dropped();
     }
-    // A lossless capture ends with every stack empty: the producers close every scope they open, and
-    // the quiesce path drains to the last marker. Leftover opens mean records were lost (ring drops
-    // for THIS consumer) or a start/end pair was corrupted -- say so rather than ending silently.
+    // A lossless capture ends with every stack empty: the producers close every scope they open and the
+    // quiesce path drains to the last marker. Leftover opens mean records were lost (ring drops for this
+    // consumer) or a start/end pair was corrupted.
     uint64_t leftover_opens = 0;
     for (const auto& st : stacks) {
         leftover_opens += st.size();
@@ -1017,7 +1011,7 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
     if (leftover_opens != 0 || unmatched_ends != 0 || id_mismatches != 0) {
         log_warning(
             tt::LogMetal,
-            "[perf-debug receiver] consumer \"{}\" pairing: {} zones left OPEN at shutdown, {} unmatched ends, "
+            "[streaming profiler receiver] consumer \"{}\" pairing: {} zones left OPEN at shutdown, {} unmatched ends, "
             "{} start/end id mismatches [all MUST be 0 on a lossless capture]",
             c.name,
             leftover_opens,
@@ -1026,7 +1020,7 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
     }
 }
 
-void PerfDebugReceiver::notify_producers_done(uint32_t device_index, uint32_t socket_index) {
+void StreamingProfilerReceiver::notify_producers_done(uint32_t device_index, uint32_t socket_index) {
     for (auto& s : streams_) {
         if (s->dev == device_index && s->sock_idx == socket_index) {
             s->producers_done.store(true, std::memory_order_release);
@@ -1034,7 +1028,7 @@ void PerfDebugReceiver::notify_producers_done(uint32_t device_index, uint32_t so
     }
 }
 
-void PerfDebugReceiver::shutdown() {
+void StreamingProfilerReceiver::shutdown() {
     if (shutdown_done_.exchange(true)) {
         return;
     }
@@ -1060,7 +1054,7 @@ void PerfDebugReceiver::shutdown() {
     consumers_report_ = std::move(consumers);
 }
 
-std::vector<uint32_t> PerfDebugReceiver::final_lane_heads(uint32_t device_index) const {
+std::vector<uint32_t> StreamingProfilerReceiver::final_lane_heads(uint32_t device_index) const {
     const uint32_t nl = devices_[device_index].num_cores * profiler::kSpscNRiscDecode;
     std::vector<uint32_t> heads(nl, 0);
     for (const auto& s : streams_) {
@@ -1076,12 +1070,12 @@ std::vector<uint32_t> PerfDebugReceiver::final_lane_heads(uint32_t device_index)
     return heads;
 }
 
-void PerfDebugReceiver::log_report() const {
+void StreamingProfilerReceiver::log_report() const {
     uint64_t total_pages = 0, total_wire_words = 0, total_zone_markers = 0, total_resync_words = 0;
     uint64_t busy_ticks = 0, order_regressions = 0;
     uint64_t first_tsc = 0, last_tsc = 0;
-    // Busy = the busiest THREAD, so ticks group by owning thread (stream i -> thread i % nthreads_),
-    // not by stream -- with fewer threads than sockets a per-stream max understates busy several-fold.
+    // Busy is the busiest thread, so ticks group by owning thread (stream i -> thread i % nthreads_) and
+    // not by stream: with fewer threads than sockets a per-stream max understates busy several-fold.
     std::vector<uint64_t> thread_ticks(std::max<uint32_t>(nthreads_, 1), 0);
     for (size_t i = 0; i < streams_.size(); i++) {
         const Stream& s = *streams_[i];
@@ -1098,7 +1092,8 @@ void PerfDebugReceiver::log_report() const {
         last_tsc = std::max(last_tsc, s.last_commit_tsc);
         log_info(
             tt::LogMetal,
-            "[perf-debug receiver] d{}/s{}: {} frames ({:.1f} MB) in {} passes | decode {:.1f} ms (frame {:.1f} + "
+            "[streaming profiler receiver] d{}/s{}: {} frames ({:.1f} MB) in {} passes | decode {:.1f} ms "
+            "(frame {:.1f} + "
             "ack {:.1f} + other {:.1f}) | {} records "
             "({} zones, {} stall-zones) | resyncs {} ({} words) | head-lag {} | anomalies {} | bad frames {} | "
             "unknown-core frames {} | order regressions {} [MUST be 0]",
@@ -1125,7 +1120,8 @@ void PerfDebugReceiver::log_report() const {
         const uint64_t allrec = vrec + s.decode.scalar_recs;
         log_info(
             tt::LogMetal,
-            "[perf-debug receiver] d{}/s{} decode paths: {:.1f}% vectorized ({} zoneS16 + {} zone8 + {} atomic16), "
+            "[streaming profiler receiver] d{}/s{} decode paths: {:.1f}% vectorized "
+            "({} zoneS16 + {} zone8 + {} atomic16), "
             "{} scalar, {} vec-block rejects",
             s.dev,
             s.sock_idx,
@@ -1145,7 +1141,8 @@ void PerfDebugReceiver::log_report() const {
             }
             log_info(
                 tt::LogMetal,
-                "[perf-debug receiver] d{}/s{} zoneS16 blocks: {} calls, {} recs, {:.2f} recs/call | atomic blocks: "
+                "[streaming profiler receiver] d{}/s{} zoneS16 blocks: {} calls, {} recs, {:.2f} recs/call "
+                "| atomic blocks: "
                 "{} calls, {} recs, {:.2f} recs/call (max 16) | scalar by type: {}",
                 s.dev, s.sock_idx, d.vec_zone_s_calls, d.vec_zone_s_recs,
                 d.vec_zone_s_calls ? double(d.vec_zone_s_recs) / double(d.vec_zone_s_calls) : 0.0,
@@ -1158,7 +1155,7 @@ void PerfDebugReceiver::log_report() const {
         consumer_drops += c->dropped;
         log_info(
             tt::LogMetal,
-            "[perf-debug receiver] consumer \"{}\": {} delivered, {} dropped, busy {:.1f} ms",
+            "[streaming profiler receiver] consumer \"{}\": {} delivered, {} dropped, busy {:.1f} ms",
             c->name,
             c->delivered,
             c->dropped,
@@ -1172,7 +1169,7 @@ void PerfDebugReceiver::log_report() const {
     auto rate = [](double num, double ms) { return ms > 0.0 ? num / (ms / 1e3) : 0.0; };
     log_info(
         tt::LogMetal,
-        "[perf-debug receiver] SUSTAINED THROUGHPUT: busy {:.1f} ms (max ingest thread) -> {:.2f} GB/s D2H | "
+        "[streaming profiler receiver] SUSTAINED THROUGHPUT: busy {:.1f} ms (max ingest thread) -> {:.2f} GB/s D2H | "
         "{:.2f} GB/s marker-wire | {:.2f} Mzones/s || wall {:.1f} ms (first data -> last commit) -> {:.2f} GB/s "
         "D2H | {:.2f} Mzones/s",
         busy_ms,
@@ -1196,7 +1193,7 @@ void PerfDebugReceiver::log_report() const {
             const double dev_ms = (hi - lo) / freq / 1e6;
             log_info(
                 tt::LogMetal,
-                "[perf-debug receiver] device {} zone window {:.1f} ms (first->last zone @ {:.6f} GHz): {:.2f} "
+                "[streaming profiler receiver] device {} zone window {:.1f} ms (first->last zone @ {:.6f} GHz): {:.2f} "
                 "GB/s D2H | {:.2f} Mzones/s",
                 devices_[d].chip_id,
                 dev_ms,
@@ -1207,11 +1204,11 @@ void PerfDebugReceiver::log_report() const {
     }
     log_info(
         tt::LogMetal,
-        "[perf-debug receiver] loss: decode resyncs {} words | consumer ring drops {} | order regressions {} "
+        "[streaming profiler receiver] loss: decode resyncs {} words | consumer ring drops {} | order regressions {} "
         "[device credit-timeout drops reported by the profiler above; all zero = lossless capture]",
         total_resync_words,
         consumer_drops,
         order_regressions);
 }
 
-}  // namespace tt::tt_metal::perf_debug
+}  // namespace tt::tt_metal::streaming_profiler

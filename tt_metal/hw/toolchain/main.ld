@@ -152,11 +152,10 @@ SECTIONS
     . = ALIGN(4);
   }
 
-  /* KERNEL_PROFILER zone names + __FILE__ strings – file-only section, VMA = 0x6600000.
-     Mergeable strings ("MS"), so the linker stores each distinct __FILE__ / zone name once
-     however many zones reference it. Records in .tt_zone_meta hold VMAs into here; the host
-     rebases them by this section's own sh_addr. (INFO) strips SHF_ALLOC so this never enters
-     a PT_LOAD and costs no device memory. */
+  /* Zone names + __FILE__ strings for the kernel profiler. Mergeable strings, so each distinct
+     string is stored once however many zones reference it. .tt_zone_meta holds VMAs into here,
+     which the host rebases by this section's sh_addr. (INFO) strips SHF_ALLOC, so the section
+     never enters a PT_LOAD and costs no device memory. */
   .tt_zone_str 0x6600000 (INFO) :
   {
     __tt_zone_str_start = .;
@@ -165,10 +164,9 @@ SECTIONS
     . = ALIGN(4);
   }
 
-  /* KERNEL_PROFILER zone source-location records – file-only section, VMA = 0x6700000.
-     A fixed-stride array of 16-byte {zone_id, name_ptr, file_ptr, line} records emitted by
-     TT_ZONE_DEFINE_ID (hostdevcommon/profiler_zone_id.h); the host walks it by that stride, so
-     nothing here has to be parsed to find the next record. (INFO) for the same reason as above. */
+  /* Zone source locations: a fixed-stride array of 16-byte {zone_id, name_ptr, file_ptr, line}
+     records emitted by TT_ZONE_DEFINE_ID (hostdevcommon/profiler_zone_id.h), which the host walks
+     by that stride. (INFO) for the same reason as above. */
   .tt_zone_meta 0x6700000 (INFO) :
   {
     __tt_zone_meta_start = .;

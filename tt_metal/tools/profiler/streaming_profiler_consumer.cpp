@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tools/profiler/perf_debug_consumer.hpp"
+#include "tools/profiler/streaming_profiler_consumer.hpp"
 
 #include <algorithm>
 #include <mutex>
@@ -14,9 +14,9 @@
 
 #include "hostdevcommon/profiler_zone_id.h"
 #include "llrt/zone_meta.hpp"
-#include "tools/profiler/perf_debug_receiver.hpp"
+#include "tools/profiler/streaming_profiler_receiver.hpp"
 
-namespace tt::tt_metal::perf_debug {
+namespace tt::tt_metal::streaming_profiler {
 
 void ZoneNameMirror::refresh() {
     std::vector<llrt::ZoneMetaEntry> delta;
@@ -37,7 +37,7 @@ void log_unnamed_ids(std::string_view consumer_name, const ZoneNameMirror& mirro
     }
     log_warning(
         tt::LogMetal,
-        "[perf-debug receiver] consumer \"{}\": {} unnamed marker rows [MUST be 0 -- a binary loaded without "
+        "[streaming profiler receiver] consumer \"{}\": {} unnamed marker rows [MUST be 0 -- a binary loaded without "
         ".tt_zone_meta, or two TUs share a tu_id]; ids (up to {} distinct): {}",
         consumer_name,
         mirror.unnamed(),
@@ -49,15 +49,15 @@ namespace {
 
 struct Registry {
     struct Entry {
-        PerfDebugConsumerHandle handle = 0;
+        StreamingProfilerConsumerHandle handle = 0;
         std::string name;
-        PerfDebugRecordCallback cb;
-        PerfDebugConsumerHandle live = 0;  // receiver-side handle while a capture is active
+        StreamingProfilerRecordCallback cb;
+        StreamingProfilerConsumerHandle live = 0;  // receiver-side handle while a capture is active
     };
     std::mutex mu;
     std::vector<Entry> entries;
-    PerfDebugConsumerHandle next_handle = 1;
-    PerfDebugReceiver* receiver = nullptr;
+    StreamingProfilerConsumerHandle next_handle = 1;
+    StreamingProfilerReceiver* receiver = nullptr;
 };
 
 Registry& registry() {
@@ -67,30 +67,30 @@ Registry& registry() {
 
 }  // namespace
 
-PerfDebugConsumerHandle register_consumer(std::string name, PerfDebugRecordCallback cb) {
+StreamingProfilerConsumerHandle register_consumer(std::string name, StreamingProfilerRecordCallback cb) {
     Registry& r = registry();
     std::lock_guard<std::mutex> lk(r.mu);
     Registry::Entry e{r.next_handle++, std::move(name), std::move(cb)};
     if (r.receiver != nullptr) {
         e.live = r.receiver->add_consumer(e.name, e.cb);
     }
-    const PerfDebugConsumerHandle handle = e.handle;
+    const StreamingProfilerConsumerHandle handle = e.handle;
     r.entries.push_back(std::move(e));
     return handle;
 }
 
-void unregister_consumer(PerfDebugConsumerHandle handle) {
+void unregister_consumer(StreamingProfilerConsumerHandle handle) {
     Registry& r = registry();
     std::lock_guard<std::mutex> lk(r.mu);
     auto it = std::find_if(r.entries.begin(), r.entries.end(), [&](const auto& e) { return e.handle == handle; });
-    TT_FATAL(it != r.entries.end(), "unknown perf-debug consumer handle {}", handle);
+    TT_FATAL(it != r.entries.end(), "unknown streaming profiler consumer handle {}", handle);
     if (it->live != 0 && r.receiver != nullptr) {
         r.receiver->remove_consumer(it->live);
     }
     r.entries.erase(it);
 }
 
-void attach_registered_consumers(PerfDebugReceiver& receiver) {
+void attach_registered_consumers(StreamingProfilerReceiver& receiver) {
     Registry& r = registry();
     std::lock_guard<std::mutex> lk(r.mu);
     r.receiver = &receiver;
@@ -108,4 +108,4 @@ void detach_registered_consumers() {
     }
 }
 
-}  // namespace tt::tt_metal::perf_debug
+}  // namespace tt::tt_metal::streaming_profiler

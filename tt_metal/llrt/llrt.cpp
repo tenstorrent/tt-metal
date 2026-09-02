@@ -57,11 +57,8 @@ const ll_api::memory& get_risc_binary(
         if (update_callback) {
             update_callback(*mutable_ptr);
         }
-        // Harvest this binary's streaming-profiler zone source locations (.tt_zone_meta). This is the
-        // right hook precisely because it is the funnel EVERY device-executed image passes through --
-        // kernels and firmware, cache hits included -- and because it runs before the image can execute,
-        // so a zone's name is registered strictly before that zone can appear on the wire. See
-        // llrt/zone_meta.hpp for why a one-shot snapshot taken by the consumer is not equivalent.
+        // Every device-executed image, kernel or firmware, passes through here before it can run, so
+        // harvesting .tt_zone_meta registers a zone's name strictly before that zone can reach the host.
         if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled()) {
             ZoneMetaRegistry::instance().ingest_elf(path);
         }

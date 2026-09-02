@@ -14,8 +14,6 @@
 
 namespace noc_debugging_profiler {
 
-// Ordinary structural zone id + ELF record, named "NOC-DEBUG" on the host. Replaces the magic
-// kernel_profiler::NOC_DEBUGGING_STATIC_ID (23456) the host used to compare against by value.
 TT_ZONE_DEFINE_ID(kNocDebugZoneId, "NOC-DEBUG");
 
 template <NocDebuggingEventMetadata::NocDebugEventType event_type>

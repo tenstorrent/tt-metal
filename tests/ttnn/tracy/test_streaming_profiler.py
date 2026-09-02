@@ -2,23 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-perf-debug profiler test (DRISC drain path).
+"""Streaming profiler end-to-end test over the DRISC relay path.
 
-Runs the ``test_perf_debug_zones`` workload -- which emits 10 differently-named DeviceZoneScopedN zones
-(with increasing durations) on all 5 RISCs of a small core grid -- with the perf-debug profiler enabled
-(``TT_METAL_STREAMING_PROFILER=1`` + ``TT_METAL_STREAMING_PROFILER_TRACY=1``) under a connected ``tracy-capture``. Verifies:
-
-  * the module leaves DRISC drainers resident at MeshDevice bring-up ("DRISC FILLER/MOVER ... resident
-    on logical (x,y)" log lines), and
-  * the resulting Tracy capture holds device (GPU) zones across many per-core contexts.
-
-Requires ``tools/drisc_drain/tracy_ctx_inspect`` to be built -- the second check is the substantive
-one and the test fails rather than skipping it if the tool is missing.
-
-Hardware-gated: needs a Blackhole box with DRAM programmable cores enabled. Skips cleanly when the
-workload reports it is not on Blackhole / no DRISC was available. Device work runs in a
-subprocess so the pytest parent never takes the PCIe lock (mirrors test_realtime_profiler.py).
+Runs the ``test_streaming_profiler_zones`` workload with ``TT_METAL_STREAMING_PROFILER=1`` and
+``TT_METAL_STREAMING_PROFILER_TRACY=1`` under a connected ``tracy-capture``, and checks that the relays go
+resident at bring-up and that the capture holds device zones across the workload's per-core contexts. Needs a
+Blackhole box with DRAM programmable cores and a built ``tools/drisc_drain/tracy_ctx_inspect``; device work runs
+in a subprocess so the pytest parent never takes the PCIe lock.
 """
 
 from __future__ import annotations
@@ -35,9 +25,9 @@ import pytest
 from tools.tracy.common import PROFILER_ARTIFACTS_DIR, PROFILER_BIN_DIR, TT_METAL_HOME
 
 CAPTURE_TOOL = PROFILER_BIN_DIR / "tracy-capture"
-WORKLOAD_BIN = Path(TT_METAL_HOME) / "build_Release" / "programming_examples" / "test_perf_debug_zones"
+WORKLOAD_BIN = Path(TT_METAL_HOME) / "build_Release" / "programming_examples" / "test_streaming_profiler_zones"
 CTX_INSPECT = Path(TT_METAL_HOME) / "tools" / "drisc_drain" / "tracy_ctx_inspect" / "tracy_ctx_inspect"
-ARTIFACTS = PROFILER_ARTIFACTS_DIR / "perf_debug_profiler_tests"
+ARTIFACTS = PROFILER_ARTIFACTS_DIR / "streaming_profiler_tests"
 
 
 def _free_port() -> str:
@@ -63,14 +53,14 @@ def _gpu_context_stats(tracy_file: Path) -> tuple[int, int]:
 
 
 @pytest.mark.parametrize("gx,gy,iters", [(2, 2, 50)])
-def test_perf_debug_zones_capture(gx, gy, iters):
+def test_streaming_profiler_zones_capture(gx, gy, iters):
     if not WORKLOAD_BIN.exists():
-        pytest.skip(f"workload not built: {WORKLOAD_BIN} (build target test_perf_debug_zones)")
+        pytest.skip(f"workload not built: {WORKLOAD_BIN} (build target test_streaming_profiler_zones)")
     if not CAPTURE_TOOL.exists():
         pytest.skip(f"tracy-capture not found: {CAPTURE_TOOL}")
 
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
-    out_tracy = ARTIFACTS / "perf_debug_zones.tracy"
+    out_tracy = ARTIFACTS / "streaming_profiler_zones.tracy"
     out_tracy.unlink(missing_ok=True)
     port = _free_port()
 
@@ -84,12 +74,11 @@ def test_perf_debug_zones_capture(gx, gy, iters):
     env = dict(os.environ)
     env["TRACY_PORT"] = port
     env["TT_METAL_STREAMING_PROFILER"] = "1"  # boot the module at bring-up; implies TT_METAL_DEVICE_PROFILER
-    env["TT_METAL_STREAMING_PROFILER_TRACY"] = "1"  # the Tracy sink is opt-in; this test verifies via tracy-capture
+    env["TT_METAL_STREAMING_PROFILER_TRACY"] = "1"  # the Tracy sink is opt-in
     try:
         proc = subprocess.run(
-            # --markers 1: the point-marker trio is opt-in (off by default so knee sweeps run a pure
-            # zone stream), and PP_EVENT / Data payload records have no other emitter in the tree, so
-            # the markers must be on here or that layout goes untested.
+            # --markers 1: nothing else in the tree emits PP_EVENT / Data payload records, so without it
+            # those wire layouts go untested.
             [str(WORKLOAD_BIN), "--gx", str(gx), "--gy", str(gy), "--iters", str(iters), "--markers", "1"],
             env=env,
             cwd=str(TT_METAL_HOME),
@@ -105,24 +94,15 @@ def test_perf_debug_zones_capture(gx, gy, iters):
             cap.communicate()
 
     log = proc.stdout + proc.stderr
-    # Match the ROLE-SPLIT log lines the profiler actually emits ("DRISC FILLER ... resident on
-    # logical (x,y)" / "DRISC MOVER ... resident on logical (x,y)"), not the pre-role-split phrase
-    # "DRISC drainer resident". That phrase has not existed in the source since the role split became
-    # the default, so this guard skipped unconditionally on every box -- the test was permanently green
-    # while asserting nothing. Gate on the role-agnostic substring so both roles satisfy it.
+    # Match only the role-agnostic substring of the residency log line: a guard tied to fuller wording
+    # skips unconditionally the moment the message is reworded, leaving the test green and asserting nothing.
     if "not Blackhole" in log or "resident on logical" not in log:
-        pytest.skip("perf-debug profiler did not start the DRISC drainer (not Blackhole / no DRAM programmable cores)")
+        pytest.skip("streaming profiler did not start the DRISC relay (not Blackhole / no DRAM programmable cores)")
 
     assert proc.returncode == 0, f"workload failed (rc={proc.returncode}):\n{log[-2000:]}"
-    assert "active on 1 device(s)" in log, "perf-debug profiler did not report active"
+    assert "active on 1 device(s)" in log, "streaming profiler did not report active"
     assert out_tracy.exists() and out_tracy.stat().st_size > 4096, "no/empty Tracy capture produced"
 
-    # tracy_ctx_inspect is REQUIRED, not optional. The device-zone assertions below are the only thing
-    # this test verifies that a broken drain path could not also satisfy -- without them the test
-    # degrades to "the capture is larger than 4096 bytes", which a capture containing zero device zones
-    # passes comfortably. Guarding them behind `if CTX_INSPECT.exists()` meant a missing dev tool
-    # silently narrowed what the test checked, which is the same failure class as the skip-guard bug
-    # this test just exhibited. Fail loudly with the build command instead of quietly checking less.
     if not CTX_INSPECT.exists():
         pytest.fail(
             f"tracy_ctx_inspect not built at {CTX_INSPECT} -- the device-zone assertions cannot run and "
@@ -133,6 +113,6 @@ def test_perf_debug_zones_capture(gx, gy, iters):
         )
 
     n_ctx, n_with_zones = _gpu_context_stats(out_tracy)
-    # A small grid still pre-creates all per-core contexts; assert the workload's cores captured zones.
+    # All per-core contexts are pre-created, so the substantive check is how many captured zones.
     assert n_ctx >= gx * gy, f"too few GPU contexts: {n_ctx}"
     assert n_with_zones >= gx * gy, f"expected >= {gx * gy} contexts with zones, got {n_with_zones}"

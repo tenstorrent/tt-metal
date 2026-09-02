@@ -75,14 +75,11 @@ public:
         writer_(&shared_state_, view()) {}
 
     /**
-     * @brief Constructs the ring but leaves its slots UNTOUCHED, for a caller that will call
+     * @brief Constructs the ring but leaves its slots unconstructed, for a caller that will call
      *        construct_slots() from the thread that is going to write them.
      *
-     * First touch decides a page's NUMA node for the life of the mapping. Constructing the slots here binds
-     * every page to whichever thread happened to build the ring -- for a multi-GB ring written by a
-     * different thread at tens of GB/s, that is an interconnect crossing on every store. Deferring lets the
-     * writing thread fault its own pages, so the memory follows the thread rather than the constructor, with
-     * no affinity policy required.
+     * First touch decides a page's NUMA node for the life of the mapping, so constructing the slots here
+     * would bind a multi-GB ring to whichever thread built it rather than the one streaming into it.
      */
     struct DeferSlotInit {};
     BroadcastRing(size_t capacity, DeferSlotInit) :
@@ -93,12 +90,12 @@ public:
     /**
      * @brief The anonymous mapping backing the slots, or {nullptr, 0} when the slots are heap-backed.
      *
-     * Exposed so a caller can set a NUMA policy on the pages BEFORE construct_slots() faults them, which
-     * makes placement independent of which thread touches them first.
+     * Exposed so a caller can set a NUMA policy on the pages before construct_slots() faults them, making
+     * placement independent of which thread touches them first.
      */
     std::pair<void*, size_t> raw_mapping() const noexcept { return {storage_.map_base, storage_.map_bytes}; }
 
-    /** @brief Constructs the deferred slots. Call ONCE, before any reader or writer runs. */
+    /** @brief Constructs the deferred slots. Call once, before any reader or writer runs. */
     void construct_slots() noexcept {
         for (size_t i = 0; i < capacity_; i++) {
             new (storage_.slots + i) Slot();
@@ -169,22 +166,20 @@ public:
         /** @brief Direct emit, step 2: store one item at @p pos, which must be below the reserved bound. */
         void emit_store(uint64_t pos, const T& item) noexcept {
 #if defined(__x86_64__)
-            // Non-temporal stores for small trivially-copyable slots: the ring is written far beyond cache
-            // capacity and the writer never re-reads it, so the read-for-ownership a normal store pays is
-            // pure waste. Bypassing the slot's atomic words is outside the C++ abstract machine but sound
-            // here: x86 stores are not observed torn across the slot in practice worse than the
-            // claim-recheck already tolerates, and emit_commit's sfence orders every NT store before the
-            // head release. It also matters that EVERY writer path is non-temporal: mixing cached and NT
-            // stores into the same lines forces a WC-buffer flush + RFO per collision, which measured ~4x
-            // on the perf-debug decode when the 24 B record silently missed this path.
+            // Non-temporal stores: the ring is written far beyond cache capacity and the writer never
+            // re-reads it, so a normal store's read-for-ownership is pure waste, and emit_commit's sfence
+            // orders these before the head release. They bypass the slot's atomic words, which leaves
+            // tearing bounded by the claim-recheck readers already tolerate. Every writer path must stay
+            // non-temporal: mixing cached and NT stores into the same lines forces a WC-buffer flush plus an
+            // RFO per collision, worth ~4x on the streaming profiler decode.
             if constexpr (kTriviallyCopyable && sizeof(T) == 16 && sizeof(Slot) == 16) {
                 _mm_stream_si128(
                     reinterpret_cast<__m128i*>(&view_.slot_at(pos)),
                     _mm_loadu_si128(reinterpret_cast<const __m128i*>(&item)));
                 return;
             }
-            // 8-byte-multiple slots (e.g. the 24 B perf-debug record): movnti per quadword. Slots are
-            // 8-aligned by AtomicSlot's layout, which is all movnti needs.
+            // 8-byte-multiple slots (the 24 B streaming profiler record): movnti per quadword, on the
+            // 8-byte alignment AtomicSlot's layout already gives.
             if constexpr (kTriviallyCopyable && sizeof(T) % 8 == 0 && sizeof(Slot) == sizeof(T)) {
                 auto* q = reinterpret_cast<long long*>(&view_.slot_at(pos));
                 const auto* src = reinterpret_cast<const long long*>(&item);
@@ -509,13 +504,11 @@ private:
         size_t map_bytes = 0;
     };
 
-    // mmap-backed at EVERY size, not just the huge-page tier: a page-aligned base is what guarantees the
-    // cache-line alignment that direct emitters stream 64 B non-temporal stores against (via
-    // emit_slot_ptr) -- the new[] fallback's 16 B alignment general-protection-faulted such a store, which
-    // presents as a SIGSEGV at a nil address, on any ring small enough to have skipped the mmap. Large
-    // slot arrays are additionally walked far beyond TLB reach, so they get 2 MiB pages; THP is
-    // madvise-opt-in on typical deployments, hence the explicit MADV_HUGEPAGE (over-mapped by one huge
-    // page to guarantee an aligned start, which the huge-page fault path requires).
+    // mmap-backed at every size: direct emitters stream 64 B non-temporal stores at emit_slot_ptr
+    // addresses, which fault unless the base is cache-line aligned, and the new[] fallback only guarantees
+    // 16 B. Large slot arrays are also walked far beyond TLB reach, so they ask for 2 MiB pages explicitly
+    // (THP is madvise-opt-in on typical deployments), over-mapped by one huge page because the huge-page
+    // fault path requires an aligned start.
     static SlotStorage allocate_slots(size_t n, bool construct_slots) {
         SlotStorage storage;
 #if defined(__linux__)

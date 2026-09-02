@@ -105,12 +105,10 @@ void loop_and_wait_with_timeout(
             std::this_thread::yield();
         }
     } else {
-        // TT_METAL_CQ_POLL_YIELD=1 yields between polls on the NO-TIMEOUT path. Arming
-        // TT_METAL_OPERATION_TIMEOUT_SECONDS changes two things at once -- it adds this per-iteration yield
-        // AND a periodic device progress read -- and that combination was measured to suppress the DRISC
-        // PCIe endpoint wedge (0 hangs/179 armed vs 5/125 unarmed). This knob isolates the yield alone, so
-        // "host poll pressure on the hugepage" can be tested without the device read riding along.
-        // Default off = stock behaviour, byte-for-byte.
+        // TT_METAL_CQ_POLL_YIELD=1 yields between polls on the no-timeout path. Arming
+        // TT_METAL_OPERATION_TIMEOUT_SECONDS adds both this yield and a periodic device progress read, and
+        // that pair suppresses the DRISC PCIe endpoint wedge; this knob isolates the yield alone. Default
+        // off is stock behaviour.
         static const bool poll_yield = [] {
             const char* s = std::getenv("TT_METAL_CQ_POLL_YIELD");
             return s != nullptr && *s != '\0' && *s != '0';

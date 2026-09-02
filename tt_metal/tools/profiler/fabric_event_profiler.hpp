@@ -4,8 +4,7 @@
 
 #pragma once
 
-// Dispatch kernels never profile on the streaming backend (see kernel_profiler.hpp); fabric events
-// come from fabric-router kernels, so the old dispatch-enabled clause guarded nothing real.
+// The streaming backend never profiles dispatch kernels (see kernel_profiler.hpp).
 #if defined(PROFILE_NOC_EVENTS) && !defined(DISPATCH_KERNEL)
 
 #include "tools/profiler/noc_event_profiler.hpp"
@@ -16,9 +15,6 @@
 using MeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;
 
 namespace kernel_profiler {
-
-// Fabric NoC events ride the same POINT-marker path as ordinary NoC trace events, so they take the same
-// ELF-named structural id (see noc_event_profiler::kNocTraceZoneId) rather than the old magic 12345.
 
 // For Unicasts
 template <typename NocAddrU64, uint32_t STATIC_ID = noc_event_profiler::kNocTraceZoneId>

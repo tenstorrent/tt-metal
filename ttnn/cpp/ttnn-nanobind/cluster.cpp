@@ -81,11 +81,10 @@ void bind_ttnn_cluster(nb::module_& mod) {
 
             Systems: "LOGICAL", "NOC0", "NOC1", "TRANSLATED".
 
-            device_id is required and not inferred. The mapping is built from that chip's
-            harvesting configuration, so translating with another chip's mapping is
-            silently wrong -- and on a multi-chip host the harvesting can differ per chip.
-            Pass the id of the chip the coordinate actually came from (for profiler data,
-            the CSV's PCIe slot).
+            device_id is required and not inferred: the mapping is built from that chip's harvesting
+            configuration, which can differ per chip on a multi-chip host, so translating with another
+            chip's mapping is silently wrong. Pass the id of the chip the coordinate came from (for
+            profiler data, the CSV's PCIe slot).
 
             Returns:
                 tuple[int, int]: The (x, y) pair in `to_system`.

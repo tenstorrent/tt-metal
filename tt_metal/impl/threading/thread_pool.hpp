@@ -38,12 +38,12 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
     ContextId context_id, const std::vector<tt::tt_metal::IDevice*>& physical_devices);
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId context_id);
 
-// Binds the CALLING thread to every CPU core on `numa_node`. Node granularity, not one core: this is for
-// long-lived data-path threads whose first-touched memory must stay on the node they run on, and pinning
-// such a thread to a single core serializes it against everything else placed there.
+// Binds the calling thread to every CPU core on `numa_node`. Node granularity rather than one core: these
+// are long-lived data-path threads whose first-touched memory must stay on the node they run on, and
+// pinning one to a single core serializes it against everything else placed there.
 void bind_current_thread_to_numa_node(int numa_node);
 
-// Binds `bytes` at `base` to `numa_node`. Call BEFORE the pages are faulted: placement then does not
-// depend on which thread touches them first, so a prefault can run anywhere.
+// Binds `bytes` at `base` to `numa_node`. Call before the pages are faulted, so placement does not depend
+// on which thread touches them first.
 void bind_memory_to_numa_node(void* base, size_t bytes, int numa_node);
 }  // namespace tt::tt_metal

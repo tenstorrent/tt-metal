@@ -16,11 +16,6 @@
 
 namespace noc_event_profiler {
 
-// The NoC trace marker's identity. It is an ORDINARY structural zone id with an ordinary .tt_zone_meta
-// record, so the host names it "NOC-TRACE" straight out of the ELF -- the same way it names a kernel zone.
-// It used to be the magic constant kernel_profiler::NOC_TRACING_STATIC_ID (12345), which the host had to
-// compare against by VALUE to know what it was looking at. Nothing about what NoC tracing MEASURES changes:
-// this is still a POINT marker (PP_DATA) carrying the same KernelProfilerNocEventMetadata payload.
 TT_ZONE_DEFINE_ID(kNocTraceZoneId, "NOC-TRACE");
 
 constexpr bool shouldRecordEvent([[maybe_unused]] KernelProfilerNocEventMetadata::NocEventType event_type) {
@@ -87,8 +82,7 @@ FORCE_INLINE void recordNocEvent(
     local_noc_event.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
 
-    // One self-describing PP_DATA packet. (The DRAM backend's non-dropping dst-trailer mode is not
-    // supported here; local_addr/dst_local_addr survive in the signature for call-site compatibility.)
+    // local_addr/dst_local_addr are dead here; kept in the signature so call sites need not change.
     (void)local_addr;
     (void)dst_local_addr;
     kernel_profiler::time_stamped_data<STATIC_ID>(ev_md.asU64());
@@ -121,7 +115,6 @@ FORCE_INLINE void recordMulticastNocEvent(
     local_noc_event.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
 
-    // One self-describing PP_DATA packet -- see recordNocEvent above.
     (void)local_addr;
     (void)dst_noc_addr;
     kernel_profiler::time_stamped_data<STATIC_ID>(ev_md.asU64());
@@ -215,8 +208,7 @@ FORCE_INLINE void recordNocEventWithAddr(
         }                                                                  \
     }
 
-// The "quick push before a linked transaction sequence" was a DRAM-backend concept; the streaming
-// backend has no DRAM push. The macro survives only to swallow its callers' args.
+// No-op: there is no push to pre-empt. Kept so its call sites still compile.
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked) \
     {                                                   \
         (void)(cmd_buf);                                \

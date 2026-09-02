@@ -11,7 +11,7 @@ Use these names. Confusing them has already cost real debugging time.
 | **L1 marker ring** | worker L1, one per RISC | 2-word markers | the worker RISC (producer) | the FILLER's bulk span read |
 | **DRAM frame ring** | device DRAM, one per FILLER | whole frames | its FILLER | its MOVER |
 | **socket FIFO** | host RAM, one per MOVER | 64 B pages | its MOVER, over PCIe | the host writer thread |
-| **host record ring** | host RAM, one shared | 24 B `PerfDebugRec` | the decoder threads | the consumer thread -> Tracy |
+| **host record ring** | host RAM, one shared | 24 B `StreamingProfilerRec` | the decoder threads | the consumer thread -> Tracy |
 
 So: `ring_ensure_room` / `PROFILER_STALL_ZONE` / `SPSC_STALL_COUNT_0` are about the **L1 marker ring**.
 `ring-room waits` and `head`/`tail` are about the **DRAM frame ring**. `reserve_pages` / credit-wait /
@@ -31,7 +31,7 @@ A DRISC only exists on a DRAM core, and metal exposes exactly ONE per core
 | 4 | MOVER | 0 | `0-0` | **y==0** | rings of fillers **0 and 2** -> socket FIFO 0 -> host |
 | 5 | MOVER | 3 | `9-0` | **y==0** | rings of fillers **1 and 3** -> socket FIFO 1 -> host |
 
-With `TT_METAL_PERF_DEBUG_DRISC_ZONES=N` **every one of the six also becomes a PRODUCER of its own zones**,
+With `TT_METAL_STREAMING_PROFILER_DRISC_ZONES=N` **every one of the six also becomes a PRODUCER of its own zones**,
 framed as a worker span and pushed down the path it already owns -- a filler into its own DRAM frame ring, a
 mover into its socket FIFO. Each therefore gets its own Tracy row at its own NoC coords, and the lane space
 grows by `n_drisc * 5` (lanes `[600,630)` at 120 cores). Default OFF; see "Self-profiling" below and
@@ -78,7 +78,7 @@ one L1 would overlap staging, socket config, results and handshake with no count
 | **DRAM frame ring** | device DRAM | one frame | **64 MiB = 6,355 frames** | 1 per FILLER (**4**) |
 | **socket FIFO** | host RAM | 64 B page | 196,608 pages = **12 MiB** | 1 per MOVER (2) |
 | host read chunk | host RAM | pooled buffer | <= 1,024 pages = **64 KB** per read | pool <= 4,096 |
-| **host record ring** | host RAM | 24 B `PerfDebugRec` | 4 Mi default = 96 MiB (runs use 16 Mi = **384 MiB**) | 1 shared |
+| **host record ring** | host RAM | 24 B `StreamingProfilerRec` | 4 Mi default = 96 MiB (runs use 16 Mi = **384 MiB**) | 1 shared |
 
 Geometry notes that are load-bearing, not incidental:
 - 2,640 words is a whole number of 64 B pages, so a frame never needs padding, and the bulk span read
@@ -200,7 +200,7 @@ Measured, not estimated -- see FINDINGS §N+39 for the two sweeps and §N+40 for
 **The rings live in the HAL's per-bank DRAM PROFILER region** (channel-relative `0x40`), not in a
 `MeshBuffer`. That region is reserved at the same offset in EVERY bank, and
 `get_profiler_dram_bank_size_for_hal_allocation()` sizes it to
-`max(old_profiler_size, perf_debug_dram_region_bytes_per_risc())` -- so `TT_METAL_PERF_DEBUG_ROLE_RING_MB`
+`max(old_profiler_size, streaming_profiler_dram_region_bytes_per_risc())` -- so `TT_METAL_STREAMING_PROFILER_ROLE_RING_MB`
 is one knob for both the region and the ring, and the ring adapts to whatever was actually reserved
 (`frames = region_bytes / 10,560`).
 
@@ -213,7 +213,7 @@ ring would also be free. For scale, the OLD profiler's region is 4.58 MiB/bank =
 MiB puts us at **14x** the profiler we are replacing.
 
 Which bank a ring lives in is IRRELEVANT to footprint. The only lever is
-`TT_METAL_PERF_DEBUG_ROLE_RING_MB` itself.
+`TT_METAL_STREAMING_PROFILER_ROLE_RING_MB` itself.
 
 **The earlier claim here -- that the ring "should come down a long way" because under a fifth is ever
 used -- was wrong, and wrong for an instructive reason.** The 8.4%-18.9% high-water it rested on was

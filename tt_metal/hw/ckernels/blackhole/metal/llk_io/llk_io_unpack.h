@@ -25,9 +25,6 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     std::uint16_t tiles_received;
 
     uint16_t num_tiles_recv;
-    // The UNPACK thread starved on an empty CB. The hook is HERE and not in cb_api.h's
-    // cb_wait_front because the DataflowBuffer API calls llk_wait_tiles directly on TRISC
-    // (internal/tt-1xx/dataflow_buffer.inl) -- this is the common bottom of both paths.
     {
         SYNC_WAIT("SYNC-CB-WAIT", operand);
         do {

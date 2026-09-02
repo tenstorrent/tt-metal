@@ -80,11 +80,10 @@ public:
     // Returns the full kernel name
     virtual const std::string& get_full_kernel_name() const = 0;
 
-    // Stable identity of this kernel's SOURCE, for the profiler zone tu-id registry
-    // (see get_or_assign_profiler_tu_id in jit_build/build.cpp). Must be the same string across runs
-    // and across compile-time-arg variants of the same source, so the registry does not mint a new
-    // translation-unit id per op instance. get_full_kernel_name() is deliberately NOT usable here: it
-    // is "name + hash", so it differs per variant.
+    // Stable identity of this kernel's source, for the profiler zone tu-id registry (see
+    // get_or_assign_profiler_tu_id in jit_build/build.cpp). Must be identical across runs and across
+    // compile-time-arg variants of the same source; get_full_kernel_name() cannot serve, it embeds a
+    // per-variant hash.
     virtual std::string get_profiler_zone_src_id() const { return this->get_full_kernel_name(); }
     // Returns the compiler optimization level
     virtual std::string_view get_compiler_opt_level() const = 0;

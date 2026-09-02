@@ -43,10 +43,8 @@ namespace ckernel {
  * */
 // clang-format on
 ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) {
-    // NOT a sync-event hook site. On TRISC this is a pass-through to llk_wait_tiles, which the
-    // DataflowBuffer API also calls directly (internal/tt-1xx/dataflow_buffer.inl) -- so the hook
-    // lives there, once, and covers both. Hooking here as well would emit a second nested zone for
-    // every legacy compute call while a DFB call emitted one. Same for cb_push_back below.
+    // No sync-event hook here (nor in cb_push_back below): llk_wait_tiles carries it and the
+    // DataflowBuffer API reaches that directly, so a hook here would nest a second zone.
     UNPACK((llk_wait_tiles(cbid, ntiles)));
 }
 

@@ -24,12 +24,10 @@ std::string serialize_cluster_descriptor();
 // collides across the meshes on a host.
 std::uint64_t get_chip_unique_id_from_fabric_node_id(std::uint32_t mesh_id, std::uint32_t chip_id);
 
-// Translate a core coordinate between coordinate systems ("LOGICAL", "NOC0", "NOC1",
-// "TRANSLATED") for ONE chip. device_id is explicit and required: the mapping is built
-// from that chip's harvesting configuration, so a coordinate translated with the wrong
-// chip's mapping is silently wrong. Takes a device id rather than hanging off a
-// MeshDevice for exactly that reason -- the caller usually knows which chip its data
-// came from (e.g. the profiler CSV's PCIe slot), not which mesh happens to be open.
+// Translate a core coordinate between coordinate systems ("LOGICAL", "NOC0", "NOC1", "TRANSLATED") for one
+// chip. The mapping is built from that chip's harvesting configuration, so translating with another chip's
+// mapping is silently wrong; hence an explicit device id rather than a MeshDevice, since a caller knows
+// which chip its data came from (a profiler CSV's PCIe slot, say) and not which mesh happens to be open.
 std::pair<std::uint32_t, std::uint32_t> translate_core_coord(
     int device_id, std::uint32_t x, std::uint32_t y, const std::string& from_system, const std::string& to_system);
 

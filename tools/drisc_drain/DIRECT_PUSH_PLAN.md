@@ -25,7 +25,7 @@ The socket's host FIFO is a plain `mmap` pinned through the IOMMU
 (`D2HSocket::init_host_buffer`), reached by a full 64-bit NoC/PCIe address. There is
 no window budget and no channel-size cap on this path -- those belong to the Wormhole
 hugepage fallback (`init_host_buffer_hugepage`), which BH never takes. So socket count
-and FIFO size are both free parameters, and the comment in perf_debug_profiler.hpp
+and FIFO size are both free parameters, and the comment in streaming_profiler.hpp
 about `SOCKET_WIN_BASE` / 16 windows / "2 is the ceiling" does not describe BH.
 
 That matters because the DRAM ring exists precisely to provide elasticity the WH host
@@ -77,7 +77,7 @@ it costs host FIFO space and a smaller PCIe write. The old measurement does not 
 
 ## Risks to size first
 
-- **Six DRAM cores doing host-facing writes.** perf_debug_profiler.hpp records that
+- **Six DRAM cores doing host-facing writes.** streaming_profiler.hpp records that
   "exactly two DRAM cores measure safe to host a drainer (row y == 0)". Establish whether
   that constrains PCIe-facing work or only the mover's former role -- it caps socket count
   if the former.
