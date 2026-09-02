@@ -414,10 +414,14 @@ void kernel_main() {
                     mul_tiles_bcast_cols(cb_sum_res, cb_corr, old_st + sr, i * Sqt + sr, vDHt);
                     tile_regs_commit();
                     tile_regs_wait();
-                    configure_row_pack_width(cb_o_res, 1);
+                    const bool blocked_o = configure_row_pack_width(cb_o_res, vDHt);
                     PACK((llk_pack_reconfig_l1_acc(0)));
-                    for (uint32_t j = 0; j < vDHt; ++j) {
-                        pack_tile<true>(j, cb_o_res, o_base + sr * vDHt + j);
+                    if (blocked_o) {
+                        sdpa_pack_tile_ooo(0, cb_o_res, o_base + sr * vDHt);
+                    } else {
+                        for (uint32_t j = 0; j < vDHt; ++j) {
+                            pack_tile<true>(j, cb_o_res, o_base + sr * vDHt + j);
+                        }
                     }
                     configure_single_tile_pack(cb_sum_res);
                     pack_tile<true>(vDHt, cb_sum_res, new_st + sr);
@@ -453,11 +457,15 @@ void kernel_main() {
                     exp_packthread_tile<true, false, InputClamping::None, 32>(t, VectorMode::None);
                 }
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-                configure_row_pack_width(cb_qk, 1);
+                const bool blocked_p = configure_row_pack_width(cb_qk, w);
                 PACK((llk_pack_reconfig_l1_acc(0)));
                 for (uint32_t sr = 0; sr < Sqt; ++sr) {
-                    for (uint32_t c = 0; c < w; ++c) {
-                        pack_tile<true>(sr * w + c, cb_qk, qk_base + v.tile_base + sr * qk_cols + kc + c);
+                    if (blocked_p) {
+                        sdpa_pack_tile_ooo(sr * w, cb_qk, qk_base + v.tile_base + sr * qk_cols + kc);
+                    } else {
+                        for (uint32_t c = 0; c < w; ++c) {
+                            pack_tile<true>(sr * w + c, cb_qk, qk_base + v.tile_base + sr * qk_cols + kc + c);
+                        }
                     }
                 }
                 configure_single_tile_pack(cb_sum_res);
