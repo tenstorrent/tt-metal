@@ -112,27 +112,36 @@ class TtPrefillRuntime:
         self._trace_input = self.make_chunk_input([0] * self.config.chunk_size)
 
     def make_chunk_input(self, token_ids: list[int]):
+        """Create the same CP-major local shape produced by H2DStreamService."""
         if len(token_ids) != self.config.chunk_size:
             raise ValueError(f"expected {self.config.chunk_size} token ids, got {len(token_ids)}")
-        tokens = torch.tensor(token_ids, dtype=torch.int32).reshape(1, -1)
-        return ttnn.to_device(
-            _host_tensor(
-                self.mesh_device,
-                tokens,
-                ttnn.uint32,
-                ttnn.ROW_MAJOR_LAYOUT,
-                self.mesh_config,
-                seq_dim=-1,
-            ),
+        tokens = torch.tensor(token_ids, dtype=torch.int32).reshape(
+            self.config.sp_factor, 1, self.config.chunk_size // self.config.sp_factor
+        )
+        mapper = ttnn.create_mesh_mapper(
+            self.mesh_device,
+            ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()]),
+        )
+        return ttnn.from_torch(
+            tokens,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
         )
 
     def _normalize_input(self, input_tensor):
-        if tuple(input_tensor.shape) == (1, self.config.chunk_size):
-            return input_tensor
-        if input_tensor.shape[-1] * self.config.sp_factor != self.config.chunk_size:
-            raise ValueError(f"unexpected Gemma 4 chunk tensor shape {tuple(input_tensor.shape)}")
-        return ttnn.reshape(input_tensor, (1, self.config.chunk_size))
+        local_tokens = 1
+        for dim in input_tensor.shape:
+            local_tokens *= int(dim)
+        expected_local = self.config.chunk_size // self.config.sp_factor
+        if local_tokens != expected_local:
+            raise ValueError(
+                f"unexpected Gemma 4 local chunk shape {tuple(input_tensor.shape)}; "
+                f"expected {expected_local} tokens per CP rank"
+            )
+        return input_tensor
 
     def _stage_metadata(self, slot_id: int, actual_start: int):
         positions = torch.arange(actual_start, actual_start + self.config.chunk_size, dtype=torch.int32).reshape(1, -1)
