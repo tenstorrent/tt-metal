@@ -3,6 +3,10 @@
 Cycle-level audit of the Blackhole FPU (matrix-unit) math LLKs: where the math thread has headroom,
 where it is already at the hardware limit, and what was changed as a result.
 
+Only **F1** (`REDUCE_ROW` + `MAX`) is implemented in the PR that carries this document. The other
+findings are recorded here with their measurements so the audit stays whole; each one's status line
+says whether it landed, was split into its own PR, or was deliberately left alone and why.
+
 Companion document: [blackhole_fpu_math_kernel_measurements.md](blackhole_fpu_math_kernel_measurements.md)
 holds the before/after numbers, the correctness evidence and the reproduction commands.
 
@@ -81,7 +85,9 @@ Budget cfg writes by where they sit, not by counting them.
 
 ## Findings
 
-Ranked by cycles recoverable. Status records what was actually done.
+Ranked by cycles recoverable. Status records what was actually done, and — for a finding that was
+prototyped but sent separately — says so, so this document is never read as a claim about code that is
+not in the same diff.
 
 ### F1 — REDUCE_ROW MAX paid four pipe drains per tile to flip one config bit — **IMPLEMENTED, −39.88 cyc/tile (−40.7%)**
 
@@ -114,7 +120,7 @@ ordinary bf16 values such as `0x4400` (768.0) would have been corrupted across t
 now returns the denormal instead of zero. No test can distinguish this; it is called out here for a
 reviewer with the HW definition to confirm.
 
-### F2 — every format reconfig spent a drain on a bit that usually does not move — **IMPLEMENTED, −2.76 cyc per reconfig (−39.6%)**
+### F2 — every format reconfig spent a drain on a bit that usually does not move — **NOT IMPLEMENTED HERE, measured at −2.76 cyc per reconfig (−39.6%) — split into its own PR**
 
 `_llk_math_reconfig_data_format_srca_ / _srcb_ / _` each issued `STALLWAIT(STALL_CFG, MATH)` + an
 `RMWCIB` for `ALU_ACC_CTRL_INT8_math_enabled`, then called `_configure_default_zero_flag_state_()`,
@@ -126,7 +132,9 @@ The asymmetry mattered because the bit's *driver* is coarser than its *value*: c
 operand format change, but the bit only moves across an Int8/UInt8/Int32 boundary. A `bf16 -> fp32`
 reconfig rewrote `0 -> 0` and paid a full MATH drain to do it.
 
-**Fix:** mirror the zero-flag pattern — `int8_math_enabled_hw` tracker, out-of-line
+**Proposed fix** (prototyped and measured, but *not* part of this PR — it touches the shared math
+state used by every FPU kernel, so it carries a different blast radius from the reduce change and
+belongs in its own review): mirror the zero-flag pattern — `int8_math_enabled_hw` tracker, out-of-line
 `_apply_int8_math_enabled_`, inlined `_configure_int8_math_enabled_` guard, and a
 `_seed_int8_math_enabled_state_` for `_llk_math_hw_configure_`, which writes the bit directly (batched
 with the other `ALU_ACC_CTRL` fields under one STALLWAIT). Safe to cache: the math thread is the sole
@@ -137,7 +145,7 @@ writer — the unpacker's `ALU_FORMAT_SPEC_REG0_SrcA_ADDR32` RMW masks
 MATH_ISOLATE loop): a reconfig cost 6.97 cyc, now costs 4.21 cyc. In a context with a deeper math pipe
 the saving is proportionally larger — see the drain-cost note above.
 
-### F6 — matmul recorded half a replay buffer for one legal tiny-tile shape — **IMPLEMENTED (correctness, no perf change)**
+### F6 — matmul recorded half a replay buffer for one legal tiny-tile shape — **NOT IMPLEMENTED HERE (correctness, no perf change) — split into its own PR**
 
 In `matmul_configure_mop`, `replay_buf_len` collapsed all four narrow-shape flags into
 `partial_face ? 4 : 8`, but the recording lambda emits 8 MVMULs in the `is_in1_32x16` and plain
@@ -152,8 +160,10 @@ dimensionally valid (in0 cols = in1 rows = 16) and is **not** covered by
 The `is_in1_32x16 && partial_face` variant needs in0 cols = 16 with in1 rows = 32, so that one is
 dimensionally unreachable.
 
-**Fix:** the length expression now mirrors the lambda's branch structure exactly. Values are unchanged
-for every shape the suite exercises; `test_matmul.py` 6784/6784 pass.
+**Proposed fix** (prototyped and verified, but *not* part of this PR — it is a matmul correctness
+change, unrelated to the reduce work here, and is being sent separately): make the length expression
+mirror the lambda's branch structure exactly. Values are unchanged for every shape the suite
+exercises; `test_matmul.py` 6784/6784 pass with that change applied.
 
 Its address mods also fall through to the full-32x32 defaults for this shape, which the file's own
 `LLK_ASSERT` warns about for the 16x16-by-16x16 case. Not addressed here — flagged for whoever adds

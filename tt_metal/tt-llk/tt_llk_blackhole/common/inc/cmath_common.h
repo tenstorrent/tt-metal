@@ -117,7 +117,8 @@ inline void _configure_preserve_zero_flag_state_()
 inline void _configure_copy_zero_flag_state_(const std::uint32_t src_dst_format)
 {
     const std::uint32_t fmt = src_dst_format & 0x1F;
-    const bool flush_fp8    = (fmt == static_cast<std::uint32_t>(DataFormat::Fp8_e4m3)) || (fmt == static_cast<std::uint32_t>(DataFormat::Lf8));
+    const bool flush_fp8 =
+        (fmt == static_cast<std::uint32_t>(DataFormat::Fp8_e4m3)) || (fmt == static_cast<std::uint32_t>(DataFormat::Lf8));
     _configure_src_zero_flag_(!flush_fp8);
 }
 
@@ -126,53 +127,6 @@ inline void _configure_copy_zero_flag_state_(const std::uint32_t src_dst_format)
 inline void _invalidate_src_zero_flag_state_()
 {
     src_zero_flag_hw = 0xff;
-}
-
-// ---------------------------------------------------------------------------------------------
-// INT8 math enable (ALU_ACC_CTRL_INT8_math_enabled).
-//
-// Same ownership story as the zero-substitution flag above: FPU-only (the SFPU never reads it), moved
-// only by an explicit cfg_reg_rmw from the math thread, so track the physical value and skip the
-// pipe-draining write when it already holds it. Worth tracking because the bit's driver is coarser than
-// its value: the reconfig sites fire on any operand *format* change, but the bit only moves across an
-// Int8/UInt8/Int32 boundary -- a bf16 -> fp32 reconfig rewrote 0 -> 0 and paid a full MATH drain to do
-// it. 0xff = unknown (power-on, or after a raw write that bypassed the setter).
-// ---------------------------------------------------------------------------------------------
-static std::uint32_t int8_math_enabled_hw = 0xff; // last value written to the bit; 0xff = unknown
-
-// The one writer. Out-of-line for the same code-size reason as _apply_src_zero_flag_.
-inline __attribute__((noinline)) void _apply_int8_math_enabled_(const std::uint32_t value)
-{
-    int8_math_enabled_hw = value;
-    // FPU-only bit, so draining the FPU (MATH) suffices -- no WAIT_SFPU. (Wormhole's twin needs
-    // WAIT_SFPU because there the same reconfig also rewrites the SFPU-read SrcB format.)
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(value);
-}
-
-// Set the bit to `enable`; skip if it already holds that value. The check is inlined at every call site
-// so a reconfig that does not cross an int8 boundary stays call-free.
-inline void _configure_int8_math_enabled_(const bool enable)
-{
-    const std::uint32_t value = enable ? 1u : 0u;
-    if (int8_math_enabled_hw == value)
-    {
-        return;
-    }
-    _apply_int8_math_enabled_(value);
-}
-
-// Seed the tracked value from a code path that writes the bit directly (_llk_math_hw_configure_ batches
-// it with the other ALU_ACC_CTRL fields under a single STALLWAIT, so it does not route through the
-// setter). Anything that writes it without seeding must invalidate instead.
-inline void _seed_int8_math_enabled_state_(const std::uint32_t value)
-{
-    int8_math_enabled_hw = value;
-}
-
-inline void _invalidate_int8_math_enabled_state_()
-{
-    int8_math_enabled_hw = 0xff;
 }
 
 inline void reset_counters(const std::uint32_t setrwc)

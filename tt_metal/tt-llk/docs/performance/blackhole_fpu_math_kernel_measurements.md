@@ -17,12 +17,21 @@ Before/after numbers, correctness evidence and reproduction commands for the cha
 
 ## What Changed
 
+In the PR that carries this document:
+
 | # | Change | File | Kind |
 |---|---|---|---|
-| F1 | Hoist the Src zero-substitution flag out of the per-face-row transpose into `_llk_math_reduce_init_`, for `REDUCE_ROW` + `MAX`; restore the baseline in `_llk_math_reduce_uninit_` | [llk_math_reduce.h](../../tt_llk_blackhole/llk_lib/llk_math_reduce.h) | perf |
+| F1 | Hoist the Src zero-substitution flag out of the per-face-row transpose into `_llk_math_reduce_init_`, for `REDUCE_ROW` + `MAX`; re-assert it per tile in the execute path; restore the baseline in `_llk_math_reduce_uninit_` | [llk_math_reduce.h](../../tt_llk_blackhole/llk_lib/llk_math_reduce.h) | perf |
+| — | Take `MATH_FIDELITY` from the harness instead of hard-coding HiFi4; sweep `[LoFi, HiFi4]` for SUM/AVG | [reduce_perf.cpp](../../tests/sources/reduce_perf.cpp), [perf_reduce.py](../../tests/python_tests/perf_reduce.py) | instrumentation |
+| — | Zero-flag clobber guard test for the row-MAX mov phase | [test_reduce_zero_flag_clobber.py](../../tests/python_tests/test_reduce_zero_flag_clobber.py), [reduce_zero_flag_clobber_test.cpp](../../tests/sources/reduce_zero_flag_clobber_test.cpp) | test |
+
+Measured during the same audit but **split into separate PRs** — the numbers below are kept because
+they are what the audit concluded, not because the code is in this diff:
+
+| # | Change | File | Kind |
+|---|---|---|---|
 | F2 | Track `ALU_ACC_CTRL_INT8_math_enabled` and skip the write when the bit does not move | [cmath_common.h](../../tt_llk_blackhole/common/inc/cmath_common.h), [llk_math_common.h](../../tt_llk_blackhole/llk_lib/llk_math_common.h) | perf |
 | F6 | Make `replay_buf_len` mirror the recording lambda's branch structure | [llk_math_matmul.h](../../tt_llk_blackhole/llk_lib/llk_math_matmul.h) | correctness |
-| — | Take `MATH_FIDELITY` from the harness instead of hard-coding HiFi4; sweep `[LoFi, HiFi4]` for SUM/AVG | [reduce_perf.cpp](../../tests/sources/reduce_perf.cpp), [perf_reduce.py](../../tests/python_tests/perf_reduce.py) | instrumentation |
 
 ## Results
 
@@ -59,7 +68,7 @@ residual notes in the audit.
 
 The 39.88 cycles came from four writes, so **one cfg write plus its pipe drain costs 9.97 cycles here**.
 
-### F2 — reconfig cost
+### F2 — reconfig cost (measured here, shipped separately)
 
 No in-tree perf harness exercises `_llk_math_reconfig_data_format_*` on the math thread, so this was
 measured with a **temporary probe**: one `_llk_math_reconfig_data_format_<is_fp32_dest_acc_en>(formats.math, formats.math)`
@@ -78,7 +87,7 @@ The absolute saving is context-dependent, because what is removed is a pipe drai
 an 8-instruction eltwise body, 9.97 cycles behind a dense reduce body (F1, same instruction pair). A
 kernel that reconfigs between two deep math phases should expect the higher figure.
 
-### F6
+### F6 (measured here, shipped separately)
 
 Correctness only. `replay_buf_len` is unchanged for every shape the test suite generates, so no perf
 delta is expected and none was observed (matmul rows above are flat).
@@ -90,9 +99,9 @@ Every suite run with a fresh `RUNNER_TEMP`, two-phase producer/consumer, on the 
 | Suite | Result | What it covers for these changes |
 |---|---|---|
 | `test_reduce.py` | **3528 passed** | F1. 8 tile dims x {Float32, Float16_b, Bfp8_b, Bfp4_b} x 3 reduce dims x 3 pool types x fidelities x reduce-to-one |
-| `test_matmul.py` | **6784 passed** | F6. Full format/fidelity/dest-acc/dimension sweep |
-| `test_experimental_reconfig_escape.py`, `test_matmul_and_unary_sfpu.py`, `test_sdpa_reinits.py`, `test_tilize_transition_reconfig.py`, `test_eltwise_binary.py`, `test_bcast.py`, `test_dest_copy.py` | **4464 passed, 87 skipped** | F2. Reconfig escapes, re-inits, and Int8/UInt8/Int32 boundary crossings |
-| Broad math-thread sweep — `test_eltwise_unary_datacopy.py`, `test_transpose_dest.py`, `test_math_matmul.py`, `test_reduce_block_max.py`, `test_sdpa_reduce_row.py`, `test_sdpa_weighted_reduce.py`, `test_sum_reduce_scalar.py`, `test_mul_reduce_scalar.py`, `test_unpack_tilize.py`, `test_matmul_pack_untilize.py`, `test_matmul_unpack_tilize.py`, `test_pack_untilize.py`, `test_tilize_polluter_matmul.py`, `test_tilize_polluter_tiny_matmul.py`, `test_dest_copy.py` | **151775 passed, 164 skipped** | `cmath_common.h` is included by every math kernel, so the F2 tracker is exercised library-wide |
+| `test_matmul.py` | **6784 passed** | F6 (separate PR), and a control for this one — matmul is untouched here. Full format/fidelity/dest-acc/dimension sweep |
+| `test_experimental_reconfig_escape.py`, `test_matmul_and_unary_sfpu.py`, `test_sdpa_reinits.py`, `test_tilize_transition_reconfig.py`, `test_eltwise_binary.py`, `test_bcast.py`, `test_dest_copy.py` | **4464 passed, 87 skipped** | F2 (separate PR). Reconfig escapes, re-inits, and Int8/UInt8/Int32 boundary crossings |
+| Broad math-thread sweep — `test_eltwise_unary_datacopy.py`, `test_transpose_dest.py`, `test_math_matmul.py`, `test_reduce_block_max.py`, `test_sdpa_reduce_row.py`, `test_sdpa_weighted_reduce.py`, `test_sum_reduce_scalar.py`, `test_mul_reduce_scalar.py`, `test_unpack_tilize.py`, `test_matmul_pack_untilize.py`, `test_matmul_unpack_tilize.py`, `test_pack_untilize.py`, `test_tilize_polluter_matmul.py`, `test_tilize_polluter_tiny_matmul.py`, `test_dest_copy.py` | **151775 passed, 164 skipped** | Library-wide control for F1, and the F2 tracker's cover in its own PR (`cmath_common.h` is included by every math kernel) |
 
 | `test_reduce.py`, `test_reduce_block_max.py`, `test_sum_reduce_scalar.py` (re-run) | **3628 passed, 14 skipped** | Re-verification after `_llk_math_reduce_uninit_` was given the paired flag restore, which landed after the broad sweep's ELFs were built |
 
