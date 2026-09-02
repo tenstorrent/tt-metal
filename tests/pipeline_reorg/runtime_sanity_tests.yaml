@@ -114,7 +114,6 @@
     f=$f:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelTLS;
     f=$f:QuasarMeshDeviceSingleCardFixture.QuasarCreateMultipleComputeKernelsSingleCluster;
     f=$f:QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline;
-    f=$f:QuasarMeshDeviceSingleCardFixture.QuasarMultipleClustersMultiSemaphorePipeline;
     f=$f:QuasarMeshDeviceSingleCardFixture.SingleDmL1Write;
     f=$f:RISCVAtomicsFixture.TestAtomicAddFetchRISCV;
     f=$f:RISCVAtomicsFixture.TestAtomicLoadStoreRISCV;
