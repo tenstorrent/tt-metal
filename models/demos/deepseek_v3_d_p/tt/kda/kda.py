@@ -56,16 +56,6 @@ class _ProjectedInputs:
 
 
 @dataclass(frozen=True)
-class _KDAInputs:
-    q: ttnn.Tensor
-    k: ttnn.Tensor
-    v: ttnn.Tensor
-    decay: ttnn.Tensor
-    beta: ttnn.Tensor
-    output_gate: ttnn.Tensor
-
-
-@dataclass(frozen=True)
 class KdaState:
     """Caller-owned KDA carries.
 
@@ -101,7 +91,6 @@ class ttKDA:
             raise ValueError(f"KDA requires distinct 2D SP/TP axes, got SP={sp_axis}, TP={tp_axis}")
         program_config = program_config or KDAProgramConfig()
         self.device = mesh_device
-        self.layer_idx = layer_idx
         self.tensor_parallel_axis = tp_axis
         self.sequence_parallel_axis = sp_axis
         self.sequence_parallel_size = (
@@ -225,11 +214,11 @@ class ttKDA:
         self,
         qkv: ttnn.Tensor,
         convolution_state: ttnn.Tensor,
-        sequence: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Run depthwise convolution and emit Q/K/V without post-convolution slices."""
         config = self.config
         channels = self._convolution_width
+        sequence = qkv.shape[1]
         qkv_row_major = ttnn.to_layout(
             qkv,
             ttnn.ROW_MAJOR_LAYOUT,
@@ -297,15 +286,11 @@ class ttKDA:
 
     def _compute_gates(
         self,
-        q: ttnn.Tensor,
-        k: ttnn.Tensor,
-        v: ttnn.Tensor,
         *,
         beta: ttnn.Tensor,
         decay_rank: ttnn.Tensor,
-        output_gate: ttnn.Tensor,
-    ) -> _KDAInputs:
-        """Evaluate decay and write gates while preserving the output gate for the epilogue."""
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Evaluate the decay and write gates consumed by the recurrence."""
         config, weights = self.config, self.weights
         # Preserve the sigmoid result at the FP32 precision required by chunk preparation.
         beta_for_recurrence = ttnn.sigmoid(
@@ -340,30 +325,7 @@ class ttKDA:
             )
             gate = ttnn.sigmoid(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             gate = ttnn.multiply(gate, config.gate_lower_bound, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return _KDAInputs(
-            q=q,
-            k=k,
-            v=v,
-            decay=gate,
-            beta=beta_for_recurrence,
-            output_gate=output_gate,
-        )
-
-    def _kda_prefill(
-        self,
-        inputs: _KDAInputs,
-        recurrent_state: ttnn.Tensor,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Run the KDA recurrence and return its raw output and updated state."""
-        new_state, output = self.recurrence(
-            q=inputs.q,
-            k=inputs.k,
-            v=inputs.v,
-            gate=inputs.decay,
-            beta=inputs.beta,
-            initial_state=recurrent_state,
-        )
-        return output, new_state
+        return gate, beta_for_recurrence
 
     def _kda_rms_norm(
         self,
@@ -424,18 +386,20 @@ class ttKDA:
         the hidden dimension; TP == 1 returns the full hidden dimension.
         """
         self._validate_forward(hidden_states, state)
-        sequence = hidden_states.shape[1]
         projected = self._project_inputs(hidden_states)
-        q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution, sequence=sequence)
-        inputs = self._compute_gates(
-            q,
-            k,
-            v,
+        q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution)
+        gate, beta = self._compute_gates(
             beta=projected.beta,
             decay_rank=projected.decay_rank,
-            output_gate=projected.output_gate,
         )
-        output, new_recurrent = self._kda_prefill(inputs, state.recurrent)
-        output = self._kda_rms_norm(output, inputs.output_gate)
+        new_recurrent, output = self.recurrence(
+            q=q,
+            k=k,
+            v=v,
+            gate=gate,
+            beta=beta,
+            initial_state=state.recurrent,
+        )
+        output = self._kda_rms_norm(output, projected.output_gate)
         output = self._project_output(output)
         return output, KdaState(recurrent=new_recurrent, convolution=new_convolution)
